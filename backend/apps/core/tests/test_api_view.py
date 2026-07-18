@@ -27,13 +27,15 @@ class EchoOut(BaseModel):
     title: str
     created_at: datetime
     amount: Decimal
+    payload: bytes
 
 
 @api_view(methods=("GET",), auth=None)
 def model_view(request):
     return EchoOut(title="hi",
                    created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-                   amount=Decimal("12.50"))
+                   amount=Decimal("12.50"),
+                   payload=b"raw-bytes")
 
 
 @api_view(methods=("GET",), auth=None)
@@ -92,6 +94,17 @@ def test_wrong_method_405():
 
 
 def test_model_response_serialized_with_mode_json():
+    """Guards `result.model_dump(mode="json")` in htqweb/http.py.
+
+    datetime/Decimal alone don't prove this: DjangoJSONEncoder (JsonResponse's
+    default encoder) serializes raw datetime/Decimal itself, so those fields
+    pass identically under mode="python" too. `payload: bytes` is the field
+    that actually bites: under mode="python" it stays a `bytes` instance
+    inside the dumped dict, and neither `json.dumps` nor DjangoJSONEncoder can
+    encode bytes -> the view raises and api_view's except turns it into a 500.
+    Only mode="json" converts it to a plain str first, so this test fails
+    without mode="json" and passes with it.
+    """
     rf = RequestFactory()
     resp = model_view(rf.get("/model/"))
     assert resp.status_code == 200
@@ -99,6 +112,7 @@ def test_model_response_serialized_with_mode_json():
         "title": "hi",
         "created_at": "2024-01-01T00:00:00Z",
         "amount": "12.50",
+        "payload": "raw-bytes",
     }
 
 
