@@ -22,7 +22,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django_q",
     "apps.core",
-    # "apps.users",  # включается в Task 0.2 вместе с AUTH_USER_MODEL
+    "apps.users",
 ]
 
 MIDDLEWARE = [
@@ -67,7 +67,7 @@ DATABASES = {
     }
 }
 
-# AUTH_USER_MODEL = "users.User"  ← раскомментируется в Task 0.2 вместе с моделью
+AUTH_USER_MODEL = "users.User"
 
 CACHES = {
     "default": {
