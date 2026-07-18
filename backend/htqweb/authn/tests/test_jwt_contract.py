@@ -34,7 +34,7 @@ def test_fastapi_issued_token_is_accepted(user):
         {"sub": str(user.id), "user_id": user.id, "username": user.username,
          "email": user.email, "is_staff": True, "is_superuser": False,
          "is_admin": True, "token_type": "access",
-         "iat": 1_800_000_000, "exp": 9_999_999_999, "iss": "htqweb-auth"},
+         "iat": 1_700_000_000, "exp": 9_999_999_999, "iss": "htqweb-auth"},
         settings.JWT_SECRET, algorithm="HS256")
     payload = decode_token(foreign)
     assert payload.user_id == user.id

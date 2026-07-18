@@ -45,19 +45,7 @@ def decode_token(token: str) -> TokenPayload:
     try:
         raw = jwt.decode(token, settings.JWT_SECRET,
                          algorithms=[settings.JWT_ALGORITHM],
-                         issuer=settings.JWT_ISSUER,
-                         # PyJWT >=2.10 defaults verify_iat=True and rejects
-                         # a future `iat`. `iat` is informational here, not a
-                         # security boundary (exp/iss already enforce that),
-                         # and cross-service clock skew is a known operational
-                         # reality in this platform (see CLAUDE.md) — so we
-                         # don't want a skewed clock silently invalidating
-                         # otherwise-legitimate tokens. The original FastAPI
-                         # `_decode` (libs/htqweb_auth/dependencies.py) only
-                         # ever set `verify_exp` explicitly and inherits the
-                         # same PyJWT default for `verify_iat`; it is not part
-                         # of the documented platform JWT contract.
-                         options={"verify_iat": False})
+                         issuer=settings.JWT_ISSUER)
     except jwt.PyJWTError as exc:
         raise AuthError(str(exc)) from exc
     return TokenPayload(**raw)
