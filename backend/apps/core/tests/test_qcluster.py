@@ -1,19 +1,8 @@
 import pytest
-from django.core.cache import cache
 from django_q.tasks import async_task, result
 
 from apps.core.models import ServiceStatus
 from apps.core.services import ServiceDisabled
-
-
-@pytest.fixture(autouse=True)
-def clear_service_status_cache():
-    # LocMemCache (settings/test.py) persists across tests in the same
-    # process; the 5s TTL in services._status() can otherwise leak a
-    # cached value from a previous test's DB state into this one.
-    cache.clear()
-    yield
-    cache.clear()
 
 
 @pytest.mark.django_db

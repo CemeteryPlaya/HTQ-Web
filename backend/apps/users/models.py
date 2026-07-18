@@ -1,7 +1,11 @@
+import logging
+
 import bcrypt as bcrypt_lib
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
 from django.db import models
+
+logger = logging.getLogger(__name__)
 
 
 class UserStatus(models.TextChoices):
@@ -76,6 +80,8 @@ class User(AbstractBaseUser, PermissionsMixin):
                 ok = bcrypt_lib.checkpw(raw_password.encode(),
                                         self.password.encode())
             except ValueError:
+                logger.warning("bcrypt.checkpw rejected stored hash for user_id=%s "
+                               "(malformed hash, not a wrong password)", self.id)
                 return False
             if ok:  # прозрачный апгрейд до PBKDF2, как делал auth_service.py
                 self.set_password(raw_password)

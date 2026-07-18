@@ -9,10 +9,12 @@ import json
 import logging
 from functools import wraps
 
-from django.http import JsonResponse
+from django.core.exceptions import PermissionDenied, SuspiciousOperation
+from django.http import Http404, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import BaseModel, ValidationError
 
+from apps.core.services import ServiceDisabled, disabled_payload
 from htqweb.authn.jwt import AuthError, decode_token
 
 
@@ -39,6 +41,8 @@ def _authenticate_admin_session(request):
         payload = decode_token(raw)
     except (AuthError, ValidationError):
         return None
+    if payload.token_type != "access":  # 7-дневный refresh-токен не должен пускать в admin-панель
+        return None
     return payload if payload.is_elevated else None
 
 
@@ -46,7 +50,8 @@ _AUTHENTICATORS = {"jwt": _authenticate_jwt,
                    "admin_session": _authenticate_admin_session}
 
 
-def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None):
+def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
+            status: int = 200):
     def deco(fn):
         @csrf_exempt
         @wraps(fn)
@@ -58,6 +63,8 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None):
                 if payload is None:
                     return json_error("Not authenticated", 401)
                 request.token = payload
+            else:
+                request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
             if body is not None:
                 try:
                     kwargs["data"] = body.model_validate_json(request.body or b"{}")
@@ -67,10 +74,21 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None):
             try:
                 result = fn(request, *args, **kwargs)
                 if isinstance(result, BaseModel):
-                    return JsonResponse(result.model_dump(mode="json"))
+                    return JsonResponse(result.model_dump(mode="json"), status=status)
                 if isinstance(result, (dict, list)):
-                    return JsonResponse(result, safe=False)
-                return result  # готовый HttpResponse (файлы, 302, кастомные статусы)
+                    return JsonResponse(result, safe=False, status=status)
+                return result  # готовый HttpResponse (файлы, 302, кастомные статусы) — status игнорируется
+            except ServiceDisabled as exc:
+                # require_service() у выключенного соседа — та же 503-envelope,
+                # что и внешний HTTP-гейт (ServiceGateMiddleware), иначе
+                # межаппная деградация видна как голый 500.
+                return JsonResponse(disabled_payload(exc.service, exc.message), status=503)
+            except Http404:
+                return json_error("Not Found", 404)
+            except PermissionDenied:
+                return json_error("Forbidden", 403)
+            except SuspiciousOperation:
+                return json_error("Bad Request", 400)
             except Exception:  # контракт: 500 всегда в envelope
                 logging.getLogger("htqweb").exception("unhandled API error")
                 return json_error("Internal Server Error", 500)

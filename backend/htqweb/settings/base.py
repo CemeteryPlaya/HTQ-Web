@@ -69,10 +69,17 @@ DATABASES = {
 
 AUTH_USER_MODEL = "users.User"
 
+# Fail-open: ServiceGateMiddleware дёргает кэш на КАЖДЫЙ запрос — недоступный
+# Redis не должен ронять весь трафик платформы (в отличие от старого стека,
+# там кэш не стоял в критическом пути роутинга). apps/core/services.py
+# дополнительно оборачивает cache.get/set в try/except как вторую линию.
+DJANGO_REDIS_IGNORE_EXCEPTIONS = True
+
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": env("REDIS_URL", "redis://localhost:6379/8"),
+        "OPTIONS": {"IGNORE_EXCEPTIONS": True},
     }
 }
 

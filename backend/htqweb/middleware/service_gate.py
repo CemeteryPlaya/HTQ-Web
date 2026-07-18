@@ -1,6 +1,6 @@
 from django.http import JsonResponse
 
-from apps.core.services import _status
+from apps.core.services import disabled_payload, service_status
 
 # Префикс URL → имя сервиса в реестре. Единственное место маппинга.
 PREFIX_TO_SERVICE = {
@@ -24,11 +24,8 @@ class ServiceGateMiddleware:
     def __call__(self, request):
         for prefix, name in PREFIX_TO_SERVICE.items():
             if request.path.startswith(prefix):
-                enabled, message = _status(name)
+                enabled, message = service_status(name)
                 if not enabled:
-                    return JsonResponse(
-                        {"detail": message or "Сервис в данный момент недоступен",
-                         "code": "service_disabled", "service": name},
-                        status=503)
+                    return JsonResponse(disabled_payload(name, message), status=503)
                 break
         return self.get_response(request)

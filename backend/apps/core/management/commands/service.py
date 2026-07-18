@@ -1,7 +1,7 @@
 from django.core.cache import cache
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
-from apps.core.models import ServiceStatus
+from apps.core.models import KNOWN_SERVICES, ServiceStatus
 
 
 class Command(BaseCommand):
@@ -20,6 +20,11 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         name = options["name"]
+        if name not in KNOWN_SERVICES:
+            raise CommandError(
+                f"Неизвестный сервис '{name}'. Допустимые имена: "
+                f"{', '.join(KNOWN_SERVICES)}"
+            )
         enabled = bool(options["on"])
         message = options.get("message")
 

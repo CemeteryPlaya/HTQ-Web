@@ -5,10 +5,12 @@ from decimal import Decimal
 import jwt as pyjwt
 import pytest
 from django.conf import settings
-from django.http import HttpResponse
+from django.core.exceptions import PermissionDenied, SuspiciousOperation
+from django.http import Http404, HttpResponse
 from django.test import Client, RequestFactory
 from pydantic import BaseModel
 
+from apps.core.models import ServiceStatus
 from htqweb.http import api_view
 
 
@@ -46,6 +48,38 @@ def raw_response_view(request):
 @api_view(methods=("GET",), auth="admin_session")
 def admin_only_view(request):
     return {"user_id": request.token.user_id}
+
+
+@api_view(methods=("GET",), auth=None)
+def no_auth_view(request):
+    return {"token_is_none": request.token is None}
+
+
+@api_view(methods=("GET",), auth=None)
+def disabled_service_view(request):
+    from apps.core.services import require_service
+    require_service("hr")
+    return {"ok": True}
+
+
+@api_view(methods=("GET",), auth=None)
+def http404_view(request):
+    raise Http404("not here")
+
+
+@api_view(methods=("GET",), auth=None)
+def permission_denied_view(request):
+    raise PermissionDenied("nope")
+
+
+@api_view(methods=("GET",), auth=None)
+def suspicious_operation_view(request):
+    raise SuspiciousOperation("bad")
+
+
+@api_view(methods=("POST",), auth=None, status=201)
+def created_view(request):
+    return {"created": True}
 
 
 def _token(**over):
@@ -173,3 +207,66 @@ def test_malformed_claims_401_not_500():
     resp = _post({"title": "hi"}, token=token)
     assert resp.status_code == 401
     assert "detail" in json.loads(resp.content)
+
+
+def test_no_auth_view_gets_token_none_not_attributeerror():
+    """Finding 9: auth=None must set request.token = None, not leave it unset."""
+    rf = RequestFactory()
+    resp = no_auth_view(rf.get("/no-auth/"))
+    assert resp.status_code == 200
+    assert json.loads(resp.content) == {"token_is_none": True}
+
+
+def test_admin_session_refresh_token_rejected():
+    """Finding 4: admin_session must require token_type == 'access', not just
+    is_elevated — otherwise a 7-day refresh token placed in the cookie
+    authenticates as admin."""
+    rf = RequestFactory()
+    token = _admin_token(is_staff=True, token_type="refresh")
+    resp = admin_only_view(rf.get("/admin-x/", HTTP_COOKIE=f"admin_session={token}"))
+    assert resp.status_code == 401
+    assert "detail" in json.loads(resp.content)
+
+
+@pytest.mark.django_db
+def test_require_service_disabled_returns_503_envelope():
+    """Finding 1: ServiceDisabled raised inside a view body (require_service
+    against a disabled neighbour app) must surface as the same 503 envelope
+    the HTTP gate uses, not the generic 500 from api_view's blanket except."""
+    ServiceStatus.objects.update_or_create(app_label="hr", defaults={"enabled": False})
+    rf = RequestFactory()
+    resp = disabled_service_view(rf.get("/disabled/"))
+    assert resp.status_code == 503
+    body = json.loads(resp.content)
+    assert body["code"] == "service_disabled"
+    assert body["service"] == "hr"
+    assert "detail" in body
+
+
+def test_http404_mapped_to_404_envelope():
+    rf = RequestFactory()
+    resp = http404_view(rf.get("/404/"))
+    assert resp.status_code == 404
+    assert json.loads(resp.content) == {"detail": "Not Found"}
+
+
+def test_permission_denied_mapped_to_403_envelope():
+    rf = RequestFactory()
+    resp = permission_denied_view(rf.get("/403/"))
+    assert resp.status_code == 403
+    assert json.loads(resp.content) == {"detail": "Forbidden"}
+
+
+def test_suspicious_operation_mapped_to_400_envelope():
+    rf = RequestFactory()
+    resp = suspicious_operation_view(rf.get("/400/"))
+    assert resp.status_code == 400
+    assert json.loads(resp.content) == {"detail": "Bad Request"}
+
+
+def test_custom_status_returned_with_body_intact():
+    """Finding 3: api_view(status=201) must apply to dict/BaseModel bodies."""
+    rf = RequestFactory()
+    resp = created_view(rf.post("/created/"))
+    assert resp.status_code == 201
+    assert json.loads(resp.content) == {"created": True}
