@@ -18,7 +18,9 @@ def clear_service_status_cache():
 
 @pytest.mark.django_db
 def test_unknown_service_enabled_by_default():
-    assert service_enabled("cms") is True
+    assert service_enabled("not-a-real-service") is True
+    # require_service must be a no-op (not raise) for names absent from the registry
+    require_service("not-a-real-service")
 
 
 @pytest.mark.django_db
