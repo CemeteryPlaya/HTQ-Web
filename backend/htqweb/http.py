@@ -6,6 +6,7 @@
 только этот модуль и объявления в views/urls.
 """
 import json
+import logging
 from functools import wraps
 
 from django.http import JsonResponse
@@ -65,14 +66,13 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None):
                                         status=422)
             try:
                 result = fn(request, *args, **kwargs)
+                if isinstance(result, BaseModel):
+                    return JsonResponse(result.model_dump(mode="json"))
+                if isinstance(result, (dict, list)):
+                    return JsonResponse(result, safe=False)
+                return result  # готовый HttpResponse (файлы, 302, кастомные статусы)
             except Exception:  # контракт: 500 всегда в envelope
-                import logging
                 logging.getLogger("htqweb").exception("unhandled API error")
                 return json_error("Internal Server Error", 500)
-            if isinstance(result, BaseModel):
-                return JsonResponse(result.model_dump(mode="json"))
-            if isinstance(result, (dict, list)):
-                return JsonResponse(result, safe=False)
-            return result  # готовый HttpResponse (файлы, 302, кастомные статусы)
         return view
     return deco

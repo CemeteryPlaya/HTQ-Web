@@ -1,8 +1,11 @@
 import json
+from datetime import datetime, timezone
+from decimal import Decimal
 
 import jwt as pyjwt
 import pytest
 from django.conf import settings
+from django.http import HttpResponse
 from django.test import Client, RequestFactory
 from pydantic import BaseModel
 
@@ -18,6 +21,29 @@ class EchoIn(BaseModel):
 def echo(request, data: EchoIn):
     return {"title": data.title, "count": data.count,
             "user_id": request.token.user_id}
+
+
+class EchoOut(BaseModel):
+    title: str
+    created_at: datetime
+    amount: Decimal
+
+
+@api_view(methods=("GET",), auth=None)
+def model_view(request):
+    return EchoOut(title="hi",
+                   created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                   amount=Decimal("12.50"))
+
+
+@api_view(methods=("GET",), auth=None)
+def raw_response_view(request):
+    return HttpResponse(b"raw", status=204)
+
+
+@api_view(methods=("GET",), auth="admin_session")
+def admin_only_view(request):
+    return {"user_id": request.token.user_id}
 
 
 def _token(**over):
@@ -62,6 +88,56 @@ def test_wrong_method_405():
     rf = RequestFactory()
     resp = echo(rf.get("/x/"))
     assert resp.status_code == 405
+    assert "detail" in json.loads(resp.content)
+
+
+def test_model_response_serialized_with_mode_json():
+    rf = RequestFactory()
+    resp = model_view(rf.get("/model/"))
+    assert resp.status_code == 200
+    assert json.loads(resp.content) == {
+        "title": "hi",
+        "created_at": "2024-01-01T00:00:00Z",
+        "amount": "12.50",
+    }
+
+
+def test_raw_http_response_passed_through_untouched():
+    rf = RequestFactory()
+    resp = raw_response_view(rf.get("/raw/"))
+    assert resp.status_code == 204
+    assert resp.content == b"raw"
+
+
+def _admin_token(**over):
+    claims = {"user_id": 9, "username": "a", "email": "a@htq.test",
+              "is_staff": False, "is_superuser": False, "is_admin": False,
+              "token_type": "access", "iat": 1, "exp": 9_999_999_999,
+              "iss": "htqweb-auth", "sub": "9", **over}
+    return pyjwt.encode(claims, settings.JWT_SECRET, algorithm="HS256")
+
+
+def test_admin_session_elevated_authenticates():
+    rf = RequestFactory()
+    token = _admin_token(is_staff=True)
+    resp = admin_only_view(rf.get("/admin-x/", HTTP_COOKIE=f"admin_session={token}"))
+    assert resp.status_code == 200
+    assert json.loads(resp.content) == {"user_id": 9}
+
+
+def test_admin_session_non_elevated_401():
+    rf = RequestFactory()
+    token = _admin_token()  # is_admin/is_staff/is_superuser all false
+    resp = admin_only_view(rf.get("/admin-x/", HTTP_COOKIE=f"admin_session={token}"))
+    assert resp.status_code == 401
+    assert "detail" in json.loads(resp.content)
+
+
+def test_admin_session_missing_cookie_401():
+    rf = RequestFactory()
+    resp = admin_only_view(rf.get("/admin-x/"))
+    assert resp.status_code == 401
+    assert "detail" in json.loads(resp.content)
 
 
 def test_request_id_middleware_echoes(client):
