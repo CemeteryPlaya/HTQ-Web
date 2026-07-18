@@ -26,7 +26,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    # "htqweb.middleware.request_id.RequestIDMiddleware",   # TODO(Task 0.4): enable
+    "htqweb.middleware.request_id.RequestIDMiddleware",
     # "htqweb.middleware.service_gate.ServiceGateMiddleware",  # TODO(Task 0.5): enable
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
