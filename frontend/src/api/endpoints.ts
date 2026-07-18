@@ -8,6 +8,10 @@ export const API_ENDPOINTS = {
   messenger: 'messenger/v1',
   requests: 'requests/v1',
   admin: 'admin/v1',
+  // Django "core" app (Phase 0) — service on/off registry (Task 0.5/0.7).
+  // Not fronted by nginx yet; see hooks/useServiceStatus.ts for the
+  // graceful-degradation contract while the Django backend isn't in traffic.
+  core: 'core/v1',
 } as const;
 
 export const apiPath = (

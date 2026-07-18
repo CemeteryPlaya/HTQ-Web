@@ -42,7 +42,9 @@ import { useTranslation } from 'react-i18next';
 import api from '@/api/client';
 import { apiPath } from '@/api/endpoints';
 import { Badge } from '@/components/ui/badge';
+import { ServiceUnavailableDialog } from '@/components/ServiceUnavailableDialog';
 import { useHRLevel } from '@/hooks/useHRLevel';
+import { useServiceStatus } from '@/hooks/useServiceStatus';
 import { hasEmployeeTaskAccessFromParts } from '@/lib/auth/roles';
 import { grafanaSsoUrl } from '@/lib/monitoring';
 import { cn } from '@/lib/utils';
@@ -75,9 +77,10 @@ type ItemProps = {
     label: string;
     badge?: React.ReactNode;
     external?: boolean;
+    onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
 };
 
-const SidebarItem: React.FC<ItemProps> = ({ to, icon: Icon, label, badge, external }) => {
+const SidebarItem: React.FC<ItemProps> = ({ to, icon: Icon, label, badge, external, onClick }) => {
     const linkClasses = ({ isActive }: { isActive: boolean }) =>
         cn(
             'group flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors',
@@ -98,14 +101,14 @@ const SidebarItem: React.FC<ItemProps> = ({ to, icon: Icon, label, badge, extern
             <a href={to} className={cn(
                 'flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors',
                 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-            )}>
+            )} onClick={onClick}>
                 {content}
             </a>
         );
     }
 
     return (
-        <NavLink to={to} end className={linkClasses}>
+        <NavLink to={to} end className={linkClasses} onClick={onClick}>
             {content}
         </NavLink>
     );
@@ -136,6 +139,17 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     const { level, hasHrAccess } = useHRLevel({ enabled: Boolean(roles?.length) });
     const showHrItem = (levels: string[]) => admin || !hasHrAccess || (level ? levels.includes(level) : false);
 
+    // ── Service on/off registry (Task 0.5/0.7) — gate the conference entry
+    // point client-side while the SFU/webtransport stack isn't wired up. ──────
+    const { isDisabled } = useServiceStatus();
+    const [blockedService, setBlockedService] = React.useState<string | null>(null);
+    const gateService = (service: string) => (e: React.MouseEvent<HTMLAnchorElement>) => {
+        if (isDisabled(service)) {
+            e.preventDefault();
+            setBlockedService(service);
+        }
+    };
+
     return (
         <aside className="bg-card rounded-lg border p-3 space-y-5">
             {/* ── Профиль (user-service) ─────────────────────────────────── */}
@@ -147,9 +161,24 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
             {/* ── Коммуникации (messenger + email) ───────────────────────── */}
             <SidebarSection title={t('profile.sidebar.sectionCommunications', 'Коммуникации')}>
                 <SidebarItem to="/messenger" icon={MessageSquare} label={t('profile.sidebar.messenger', 'Мессенджер')} />
-                <SidebarItem to="/conference" icon={Video} label={t('profile.sidebar.conference', 'Видеоконференция')} />
+                <SidebarItem
+                    to="/conference"
+                    icon={Video}
+                    label={t('profile.sidebar.conference', 'Видеоконференция')}
+                    onClick={gateService('conference')}
+                />
                 <SidebarItem to="/email" icon={Mail} label={t('profile.sidebar.email', 'Почта')} />
             </SidebarSection>
+
+            {blockedService && (
+                <ServiceUnavailableDialog
+                    service={blockedService}
+                    open={Boolean(blockedService)}
+                    onOpenChange={(open) => {
+                        if (!open) setBlockedService(null);
+                    }}
+                />
+            )}
 
             {/* ── Работа (task + media) ──────────────────────────────────── */}
             <SidebarSection title={t('profile.sidebar.sectionWork', 'Работа')}>

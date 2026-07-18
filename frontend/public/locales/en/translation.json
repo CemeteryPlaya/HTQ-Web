@@ -1366,5 +1366,21 @@
         "delete": "Delete",
         "saving": "Saving...",
         "loading": "Loading..."
+    },
+    "serviceUnavailable": {
+        "title": "This feature is temporarily disabled",
+        "description": "\"{{service}}\" is currently unavailable. Please try again later.",
+        "close": "Got it",
+        "services": {
+            "conference": "Video conference",
+            "messenger": "Messenger",
+            "mail": "Mail",
+            "hr": "HR",
+            "tasks": "Tasks",
+            "approvals": "Requests",
+            "cms": "News & projects",
+            "media": "Files",
+            "users": "Profile"
+        }
     }
 }

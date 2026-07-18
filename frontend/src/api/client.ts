@@ -19,6 +19,7 @@ import {
   setAuthTokens,
 } from '@/lib/auth/profileStorage';
 import { apiPath } from '@/api/endpoints';
+import { emitServiceDisabled } from '@/lib/serviceUnavailableBus';
 
 // ---------------------------------------------------------------------------
 // Конфигурация
@@ -186,6 +187,16 @@ client.interceptors.response.use(
     const url = config?.url ?? '';
     const isAuthEndpoint = AUTH_ENDPOINTS.some((ep) => url.includes(ep));
     const status = error.response?.status;
+
+    // ── 503 с envelope service_disabled: аппка выключена в реестре (Task 0.5/0.7) ──
+    // Только уведомляем UI (ServiceUnavailableListener открывает диалог) — без
+    // ретраев и без 401/403-логики ниже. Продолжает падать в общую ветку 5xx.
+    if (status === 503) {
+      const data = error.response?.data as { code?: string; service?: string } | undefined;
+      if (data?.code === 'service_disabled') {
+        emitServiceDisabled(data.service ?? 'unknown');
+      }
+    }
 
     // ── 5xx: сервер упал — не повторяем запрос, возвращаем понятную ошибку ──
     // Важно: это предотвращает каскад 401-циклов после 500 на auth endpoint

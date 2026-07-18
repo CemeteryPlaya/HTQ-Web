@@ -13,6 +13,7 @@ import { protectedRoutes, publicRoutes } from '@/app/routing/routeDefinitions';
 import type { RouteConfig } from '@/app/routing/types';
 import { getAccessToken } from '@/lib/auth/profileStorage';
 import { ConferenceNotifier } from '@/components/ConferenceNotifier';
+import { ServiceUnavailableListener } from '@/components/ServiceUnavailableListener';
 
 registerRoutePrefetch();
 
@@ -97,6 +98,7 @@ const App = () => {
             </Suspense>
           )}
           <AppRoutes />
+          <ServiceUnavailableListener />
           {hasAccessToken && (
             <Suspense fallback={null}>
               <BottomNav />
