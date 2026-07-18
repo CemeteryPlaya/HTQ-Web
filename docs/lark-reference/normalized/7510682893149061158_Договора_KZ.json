@@ -1,0 +1,271 @@
+{
+  "id": "7510682893149061158",
+  "name": "Договора KZ",
+  "group": "7513944876916932639",
+  "icon": "https://sf16-scmcdn.larksuitecdn.com/obj/lark-static-sg/ee/approval/approval-admin/image/iconLib/v5/contract.svg",
+  "status": 0,
+  "fieldCount": 11,
+  "fields": [
+    {
+      "id": "widget17494743059370001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Наименование договора",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17526439788750001",
+      "type": "mutableGroup",
+      "widget": "Data from Base (lookup table)",
+      "name": "Data from Base",
+      "required": true,
+      "baseTable": {
+        "tableName": "Формирование бюджета проекта",
+        "appToken": "K0GvbXSLIaJoXnsWYb0lJTGjgUc",
+        "tableID": "tblaVipFj2vrvF3w"
+      },
+      "children": [
+        {
+          "id": "widget17526440065800001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Наименование администратора программы",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        },
+        {
+          "id": "widget17526440065800002",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Бюджет проекта_Программа бюджета",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        }
+      ]
+    },
+    {
+      "id": "widget17526440120450001",
+      "type": "mutableGroup",
+      "widget": "Data from Base (lookup table)",
+      "name": "Data from Base-Copy",
+      "required": true,
+      "baseTable": {
+        "tableName": "Специфика",
+        "appToken": "K0GvbXSLIaJoXnsWYb0lJTGjgUc",
+        "tableID": "tblwKtANOp4Ia4Jh"
+      },
+      "children": [
+        {
+          "id": "widget17526440268300001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Номер специфики",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        }
+      ]
+    },
+    {
+      "id": "widget17490185305330001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Договор на поставку",
+      "required": true,
+      "placeholder": "Выбрать",
+      "options": [
+        "ТМЦ",
+        "РиУ"
+      ]
+    },
+    {
+      "id": "widget17490188056960001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "НДС",
+      "required": true,
+      "placeholder": "Выбрать",
+      "options": [
+        "С НДС",
+        "Без НДС"
+      ]
+    },
+    {
+      "id": "widget17490187852670001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Общая сумма договора",
+      "required": true,
+      "placeholder": "Ввести"
+    },
+    {
+      "id": "widget17490188386130001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Валюта",
+      "required": true,
+      "placeholder": "Select",
+      "options": [
+        "KZT",
+        "UZS",
+        "USD",
+        "RUB"
+      ]
+    },
+    {
+      "id": "widget17490192145740001",
+      "type": "date",
+      "widget": "Date",
+      "name": "Срок договора",
+      "required": true,
+      "placeholder": "Выбрать"
+    },
+    {
+      "id": "widget17487166646170001",
+      "type": "attachmentV2",
+      "widget": "Attachment",
+      "name": "Договор + приложение",
+      "required": true
+    },
+    {
+      "id": "widget17507019674380001",
+      "type": "attachmentV2",
+      "widget": "Attachment",
+      "name": "Справка о благонадежности поставщика",
+      "required": false
+    },
+    {
+      "id": "widget17494645186530001",
+      "type": "serialNumber",
+      "widget": "Serial no.",
+      "name": "Системный номер договора",
+      "required": false,
+      "placeholder": "@i18n@serial-number-place-holder"
+    }
+  ],
+  "conditionalVisibility": [
+    {
+      "target": "widget17490192145740001",
+      "showWhen": [
+        "widget17490185305330001 is mbhkh3ad-ma9tr5kr9a-0"
+      ]
+    }
+  ],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_365827_1042314",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7522022043097890855"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_808646_1043996",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515326484446429215"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_520280_316742",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Утверждение ГД",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515395913389457447"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 1
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_365827_1042314",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_365827_1042314",
+        "to": "APPROVAL_808646_1043996",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_808646_1043996",
+        "to": "APPROVAL_520280_316742",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_520280_316742",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

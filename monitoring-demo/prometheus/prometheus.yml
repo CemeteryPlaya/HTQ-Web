@@ -1,0 +1,71 @@
+# ─── Prometheus Configuration ───────────────────────────────────
+# Файл конфигурации Prometheus для сбора метрик с микросервисов.
+#
+# Ключевые параметры:
+#   scrape_interval — как часто Prometheus опрашивает таргеты
+#   scrape_timeout  — таймаут на один запрос к /metrics
+#   evaluation_interval — как часто пересчитываются recording/alerting rules
+
+global:
+  scrape_interval: 15s        # Стандарт: 15s. Для highload: 5-10s.
+  scrape_timeout: 10s         # Не должен превышать scrape_interval.
+  evaluation_interval: 15s    # Интервал пересчёта правил.
+
+# ─── Scrape Configs ─────────────────────────────────────────────
+# Каждый job соответствует логической группе таргетов.
+# Best Practice: один job = один тип сервиса.
+
+scrape_configs:
+
+  # --- Prometheus сам себя мониторит ---
+  - job_name: "prometheus"
+    # Prometheus запущен с --web.external-url=/prometheus, из-за чего
+    # --web.route-prefix по умолчанию становится /prometheus и собственные
+    # метрики отдаются по /prometheus/metrics, а не по дефолтному /metrics.
+    # Без этого пути self-scrape получает 404 и таргет висит как DOWN.
+    metrics_path: /prometheus/metrics
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          app_name: "prometheus"
+          environment: "development"
+
+  # --- API Gateway (app1) ---
+  # Метрики доступны на :8000/metrics
+  - job_name: "api-gateway"
+    metrics_path: /metrics        # Путь по умолчанию, указан для наглядности
+    scheme: http                  # В проде с TLS — https
+    static_configs:
+      - targets: ["app1:8000"]    # Имя контейнера из docker-compose
+        labels:
+          # Best Practice: добавляем labels для фильтрации в Grafana.
+          # Эти labels автоматически прицепляются ко ВСЕМ метрикам с этого таргета.
+          app_name: "api-gateway"
+          team: "backend"
+          environment: "development"
+
+  # --- User Service (app2) ---
+  - job_name: "user-service"
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets: ["app2:8000"]
+        labels:
+          app_name: "user-service"
+          team: "backend"
+          environment: "development"
+
+  # ─── Масштабирование ────────────────────────────────────────
+  # Для добавления нового микросервиса достаточно добавить ещё один job:
+  #
+  # - job_name: "order-service"
+  #   metrics_path: /metrics
+  #   static_configs:
+  #     - targets: ["app3:8000"]
+  #       labels:
+  #         app_name: "order-service"
+  #         team: "commerce"
+  #         environment: "development"
+  #
+  # В продакшене используй service_discovery (Consul, Kubernetes SD)
+  # вместо static_configs для автоматического обнаружения таргетов.

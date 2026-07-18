@@ -1,0 +1,159 @@
+{
+  "id": "7562059376870064166",
+  "name": "Отчет Варваринское",
+  "group": "7515398545566875679",
+  "icon": "https://lf-package-sg.larksuitecdn.com/obj/lark-static-sgsaas/ee/approval/approval-admin/image/iconLib/v5/contract.svg",
+  "status": 0,
+  "fieldCount": 1,
+  "fields": [
+    {
+      "id": "widget17606790134080001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "Суточный отчет",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17606789297410001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base",
+          "required": true,
+          "baseTable": {
+            "tableName": "ППР 2.0",
+            "appToken": "ClwWb7VvYaDBLSsAnOVlZAG5g5Z",
+            "tableID": "tblyxYj4vM27Ocff"
+          },
+          "children": [
+            {
+              "id": "widget17606789793740001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Группа",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17606789793750001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Подгруппа",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17606789793760001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Объект",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17606789793770001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Ед.Изм.",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            }
+          ]
+        },
+        {
+          "id": "widget17606790469350001",
+          "type": "number",
+          "widget": "Number",
+          "name": "Объем работ",
+          "required": true,
+          "placeholder": "Enter"
+        },
+        {
+          "id": "widget17606790858970001",
+          "type": "date",
+          "widget": "Date",
+          "name": "Дата",
+          "required": true,
+          "placeholder": "Select"
+        },
+        {
+          "id": "widget17606791061850001",
+          "type": "textarea",
+          "widget": "Paragraph",
+          "name": "Комментарий",
+          "required": false,
+          "placeholder": "Enter"
+        }
+      ]
+    }
+  ],
+  "conditionalVisibility": [],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_203632_384248",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Auto-approve",
+        "method": "sequential/notify",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_203632_384248",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_203632_384248",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

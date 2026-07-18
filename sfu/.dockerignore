@@ -1,0 +1,11 @@
+node_modules
+dist
+*.log
+.env
+.runtime
+*.exe
+*.md
+docker-compose.sfu.yml
+ngrok.tcp.yml
+turnserver.conf
+tmp_*

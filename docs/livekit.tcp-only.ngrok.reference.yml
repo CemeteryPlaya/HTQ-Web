@@ -1,0 +1,19 @@
+port: 7880
+
+rtc:
+  # TCP ICE endpoint.
+  tcp_port: 7881
+
+  # Disable UDP host candidates.
+  port_range_start: 0
+  port_range_end: 0
+
+  # Keep explicit node IP under operator control.
+  use_external_ip: false
+  node_ip: 203.0.113.10
+
+  # Avoid mDNS candidates.
+  use_mdns: false
+
+  # Keep TCP fallback enabled.
+  allow_tcp_fallback: true

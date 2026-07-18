@@ -1,0 +1,140 @@
+{
+  "id": "7515438109266591776",
+  "name": "Формирование бюджета проекта",
+  "group": "7515398545566875679",
+  "icon": "https://sf16-scmcdn.larksuitecdn.com/obj/lark-static-sg/ee/approval/approval-admin/image/iconLib/v5/wallet.svg",
+  "status": 0,
+  "fieldCount": 3,
+  "fields": [
+    {
+      "id": "widget17509376987510001",
+      "type": "serialNumber",
+      "widget": "Serial no.",
+      "name": "Системный номер бюджета",
+      "required": false,
+      "placeholder": "@i18n@serial-number-place-holder"
+    },
+    {
+      "id": "widget17505903029910001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Наименование администратора программы",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17498233464120001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "Бюджет проекта",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17511925833300001",
+          "type": "input",
+          "widget": "Short answer",
+          "name": "Программа бюджета",
+          "required": true,
+          "placeholder": "Enter"
+        },
+        {
+          "id": "widget17511935328850001",
+          "type": "amount",
+          "widget": "Amount (money)",
+          "name": "Заложенная сумма",
+          "required": true,
+          "placeholder": "Enter amount",
+          "currencies": [
+            "USD",
+            "UZS",
+            "RUB",
+            "KZT",
+            "EUR"
+          ],
+          "amountInWords": false,
+          "decimals": 2
+        },
+        {
+          "id": "widget17511932361640001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Файл",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "conditionalVisibility": [],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_822809_5944310",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Утверждение ГД",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7506444885889646631"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 3
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_822809_5944310",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_822809_5944310",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

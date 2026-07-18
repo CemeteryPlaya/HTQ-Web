@@ -1,0 +1,20 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    # Prometheus is started with --web.external-url=/prometheus (see
+    # infra/logging/prometheus/Dockerfile), which sets a route-prefix of
+    # /prometheus on ALL endpoints — including the API. The prefix MUST be
+    # part of the URL here or Grafana will 404 on /api/v1/query.
+    url: http://prometheus:9090/prometheus
+    # Loki stays the default datasource; Prometheus is explicit-select.
+    isDefault: false
+    version: 1
+    editable: false
+    jsonData:
+      httpMethod: POST
+      # Match the global scrape_interval so $__rate_interval is sane.
+      timeInterval: 15s

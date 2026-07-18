@@ -1,0 +1,73 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    metrics_path: /prometheus/metrics
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          app_name: "prometheus"
+
+  # ─── FastAPI Microservices ─────────────────────────────────────
+  - job_name: "fastapi-services"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["user-service:8005"]
+        labels: { app_name: "user-service" }
+      - targets: ["hr-service:8006"]
+        labels: { app_name: "hr-service" }
+      - targets: ["task-service:8007"]
+        labels: { app_name: "task-service" }
+      - targets: ["messenger-service:8008"]
+        labels: { app_name: "messenger-service" }
+      - targets: ["media-service:8009"]
+        labels: { app_name: "media-service" }
+      - targets: ["admin-service:8012"]
+        labels: { app_name: "admin-service" }
+      - targets: ["cms-service:8011"]
+        labels: { app_name: "cms-service" }
+      - targets: ["email-service:8010"]
+        labels: { app_name: "email-service" }
+      - targets: ["requests-service:8013"]
+        labels: { app_name: "requests-service" }
+
+  # ─── Database Exporters ────────────────────────────────────────
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels: { component: "postgres" }
+
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+        labels: { component: "redis" }
+
+  - job_name: "mongodb"
+    static_configs:
+      - targets: ["mongodb-exporter:9216"]
+        labels: { component: "mongodb" }
+
+  # ─── MinIO Built-in Metrics ────────────────────────────────────
+  # Requires MINIO_PROMETHEUS_AUTH_TYPE=public on the minio container,
+  # otherwise the endpoint answers 403.
+  - job_name: "minio"
+    metrics_path: /minio/v2/metrics/cluster
+    static_configs:
+      - targets: ["minio:9000"]
+        labels: { component: "minio" }
+
+  # ─── Logging / observability stack itself ─────────────────────
+  - job_name: "loki"
+    static_configs:
+      - targets: ["loki:3100"]
+        labels: { component: "loki" }
+
+  # serve_from_sub_path=true mounts everything (incl. /metrics) under /grafana.
+  - job_name: "grafana"
+    metrics_path: /grafana/metrics
+    static_configs:
+      - targets: ["grafana:3000"]
+        labels: { component: "grafana" }

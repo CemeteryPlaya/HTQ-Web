@@ -1,0 +1,294 @@
+{
+  "id": "7525098240606470175",
+  "name": "Договора UZ",
+  "group": "7513944876916932639",
+  "icon": "https://sf16-scmcdn.larksuitecdn.com/obj/lark-static-sg/ee/approval/approval-admin/image/iconLib/v5/contract.svg",
+  "status": 1,
+  "fieldCount": 14,
+  "fields": [
+    {
+      "id": "widget17494743059370001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Наименование договора",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17490185305330001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Договор на поставку",
+      "required": true,
+      "placeholder": "Выбрать",
+      "options": [
+        "ТМЦ",
+        "РиУ"
+      ]
+    },
+    {
+      "id": "widget17490194662490001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Тип договора",
+      "required": true,
+      "placeholder": "Select",
+      "options": [
+        "Рамочный договор поставки",
+        "Типовой договор поставки"
+      ]
+    },
+    {
+      "id": "widget17490185763100001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Условия оплаты",
+      "required": true,
+      "placeholder": "Выбрать",
+      "options": [
+        "Постоплата/АВР",
+        "Предоплата"
+      ]
+    },
+    {
+      "id": "widget17490188056960001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "НДС",
+      "required": true,
+      "placeholder": "Выбрать",
+      "options": [
+        "С НДС",
+        "Без НДС"
+      ]
+    },
+    {
+      "id": "widget17490187852670001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Общая сумма договора",
+      "required": true,
+      "placeholder": "Ввести"
+    },
+    {
+      "id": "widget17490188386130001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Валюта",
+      "required": true,
+      "placeholder": "Select",
+      "options": [
+        "KZT",
+        "USD",
+        "UZS",
+        "KGS",
+        "RUB",
+        "CNY",
+        "EUR"
+      ]
+    },
+    {
+      "id": "widget17490190793290001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Условие поставки (Инкотермс)",
+      "required": true,
+      "placeholder": "Select",
+      "options": [
+        "DDP – Delivered Duty Paid (поставка с пошлиной)",
+        "DAP – Delivered At Place (поставка в пункте)",
+        "DPU – Delivered at Place Unloaded (с разгрузкой)",
+        "EXW – Ex Works (самовывоз с завода)",
+        "FCA – Free Carrier (свободно у перевозчика)",
+        "CPT – Carriage Paid To (перевозка оплачена до)",
+        "CIP – Carriage and Insurance Paid To (перевозка и страхование оплачены до)"
+      ]
+    },
+    {
+      "id": "widget17490197507300001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Описание условия поставки (Инкотермс)",
+      "required": false,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17490192145740001",
+      "type": "date",
+      "widget": "Date",
+      "name": "Срок поставки",
+      "required": true,
+      "placeholder": "Выбрать"
+    },
+    {
+      "id": "widget17487166646170001",
+      "type": "attachmentV2",
+      "widget": "Attachment",
+      "name": "Договор + приложение",
+      "required": true
+    },
+    {
+      "id": "widget17507019674380001",
+      "type": "attachmentV2",
+      "widget": "Attachment",
+      "name": "Справка о благонадежности поставщика",
+      "required": false
+    },
+    {
+      "id": "widget17494645186530001",
+      "type": "serialNumber",
+      "widget": "Serial no.",
+      "name": "Системный номер договора",
+      "required": false,
+      "placeholder": "@i18n@serial-number-place-holder"
+    },
+    {
+      "id": "widget17497326355330001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Системный номер СТ",
+      "required": true,
+      "placeholder": "Enter"
+    }
+  ],
+  "conditionalVisibility": [
+    {
+      "target": "widget17490185763100001",
+      "showWhen": [
+        "widget17490185305330001 is mbhkh3ad-0bdkpeawj5zg-0"
+      ]
+    },
+    {
+      "target": "widget17490190793290001",
+      "showWhen": [
+        "widget17490185305330001 is mbhkh3ad-ma9tr5kr9a-0"
+      ]
+    },
+    {
+      "target": "widget17490197507300001",
+      "showWhen": [
+        "widget17490185305330001 is mbhkh3ad-ma9tr5kr9a-0"
+      ]
+    },
+    {
+      "target": "widget17490192145740001",
+      "showWhen": [
+        "widget17490185305330001 is mbhkh3ad-ma9tr5kr9a-0"
+      ]
+    }
+  ],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_63141_1138628",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7522022043097890855"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_118338_1146861",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515326484446429215"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_520280_316742",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Утверждение ГД",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515395913389457447"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 1
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_63141_1138628",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_63141_1138628",
+        "to": "APPROVAL_118338_1146861",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_118338_1146861",
+        "to": "APPROVAL_520280_316742",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_520280_316742",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

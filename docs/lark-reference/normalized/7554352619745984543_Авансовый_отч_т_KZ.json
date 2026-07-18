@@ -1,0 +1,234 @@
+{
+  "id": "7554352619745984543",
+  "name": "Авансовый отчёт KZ",
+  "group": "7515398545566875679",
+  "icon": "https://lf-package-sg.larksuitecdn.com/obj/lark-static-sgsaas/ee/approval/approval-admin/image/iconLib/v5/contract.svg",
+  "status": 0,
+  "fieldCount": 3,
+  "fields": [
+    {
+      "id": "widget17588823770200001",
+      "type": "mutableGroup",
+      "widget": "Data from Base (lookup table)",
+      "name": "Data from Base",
+      "required": true,
+      "baseTable": {
+        "tableName": "Заявка на подотчётные средства",
+        "appToken": "Z60TbPjTfammo2sgkkZlvWURg2f",
+        "tableID": "tblZwfK26vavtTAr"
+      },
+      "children": [
+        {
+          "id": "widget17616237794230001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Наименование администратора программы",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        },
+        {
+          "id": "widget17588845925260001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Цель",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        },
+        {
+          "id": "widget17588845925230001",
+          "type": "number",
+          "widget": "Number",
+          "name": "Сумма, запрашиваемая",
+          "required": true,
+          "placeholder": "Select"
+        },
+        {
+          "id": "widget17588845925240001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Сумма, запрашиваемая-Currency",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        },
+        {
+          "id": "widget17588832357550001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Системный номер заявки",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        },
+        {
+          "id": "widget17616237794210001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Status",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        }
+      ]
+    },
+    {
+      "id": "widget17588830584470001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "Отчет",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17588833435220001",
+          "type": "input",
+          "widget": "Short answer",
+          "name": "Наименование затрат",
+          "required": true,
+          "placeholder": "Enter"
+        },
+        {
+          "id": "widget17588833671450001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base",
+          "required": true,
+          "baseTable": {
+            "tableName": "Формирование бюджета проекта",
+            "appToken": "Z60TbPjTfammo2sgkkZlvWURg2f",
+            "tableID": "tblbiH5q7DVHQLkE"
+          },
+          "children": [
+            {
+              "id": "widget17588835315660001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Бюджет проекта_Программа бюджета",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            }
+          ]
+        },
+        {
+          "id": "widget17588835425400001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base",
+          "required": true,
+          "baseTable": {
+            "tableName": "Специфика",
+            "appToken": "K0GvbXSLIaJoXnsWYb0lJTGjgUc",
+            "tableID": "tblwKtANOp4Ia4Jh"
+          },
+          "children": [
+            {
+              "id": "widget17588835787260001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Номер специфики",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            }
+          ]
+        },
+        {
+          "id": "widget17588842144870001",
+          "type": "amount",
+          "widget": "Amount (money)",
+          "name": "Сумма расходов",
+          "required": true,
+          "placeholder": "Enter amount",
+          "currencies": [
+            "KZT",
+            "UZS"
+          ],
+          "amountInWords": false,
+          "decimals": 2
+        },
+        {
+          "id": "widget17588846773240001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Подтверждающие документы",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "widget17588846238420001",
+      "type": "formula",
+      "widget": "Formula",
+      "name": "Остаток",
+      "required": true
+    }
+  ],
+  "conditionalVisibility": [],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_11736_4437767",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Auto-approve",
+        "method": "sequential/notify",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 1
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_11736_4437767",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_11736_4437767",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

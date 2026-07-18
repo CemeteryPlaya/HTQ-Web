@@ -1,0 +1,32 @@
+# ─── Grafana Datasource Provisioning ────────────────────────────
+# Этот файл автоматически добавляет Prometheus как источник данных
+# при первом запуске Grafana. Никакой ручной настройки через UI.
+#
+# Docs: https://grafana.com/docs/grafana/latest/administration/provisioning/
+
+apiVersion: 1
+
+# deleteDatasources — удалить существующие DS с таким именем перед созданием.
+# Полезно, если нужно гарантировать чистую конфигурацию при рестарте.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy                  # proxy = запросы через Grafana-бэкенд (рекомендуется)
+    orgId: 1
+    url: http://prometheus:9090    # Имя контейнера из docker-compose сети
+    isDefault: true                # Этот DS будет выбран по умолчанию в новых панелях
+    editable: true                 # Можно редактировать через UI (для dev-окружения)
+
+    jsonData:
+      # Интервал опроса совпадает с scrape_interval из prometheus.yml
+      timeInterval: "15s"
+      httpMethod: POST             # POST эффективнее для длинных PromQL-запросов
+
+      # Exemplars — связь метрик с трейсами (для будущей интеграции с Tempo/Jaeger)
+      # exemplarTraceIdDestinations:
+      #   - name: traceID
+      #     datasourceUid: tempo

@@ -1,0 +1,205 @@
+// ─────────────────────────────────────────────────────────
+// Signaling Protocol — Protobuf Schema
+// WebRTC SFU Platform (HTQWeb Conferencing)
+//
+// All signaling messages between Client ↔ SFU are serialized
+// as binary Protobuf frames over WSS for speed and security.
+// ─────────────────────────────────────────────────────────
+
+syntax = "proto3";
+
+package signaling;
+
+// ═══════════════════════════════════════════════════════════
+// Top-level message wrapper (multiplexed over single WS)
+// ═══════════════════════════════════════════════════════════
+
+message SignalingMessage {
+  uint32 id = 1;           // Request ID for req/response correlation
+  bool is_response = 2;    // true = response to a previous request
+
+  oneof payload {
+    // ── Room lifecycle ──
+    JoinRoom join_room = 10;
+    JoinRoomResponse join_room_response = 11;
+    LeaveRoom leave_room = 12;
+
+    // ── Transport ──
+    CreateTransport create_transport = 20;
+    CreateTransportResponse create_transport_response = 21;
+    ConnectTransport connect_transport = 22;
+
+    // ── Produce (send media) ──
+    Produce produce = 30;
+    ProduceResponse produce_response = 31;
+
+    // ── Consume (receive media) ──
+    NewConsumer new_consumer = 40;
+    ConsumerResume consumer_resume = 41;
+    ConsumerPause consumer_pause = 42;
+    ConsumerClose consumer_close = 43;
+
+    // ── Active Speaker ──
+    ActiveSpeakerUpdate active_speaker_update = 50;
+
+    // ── Bitrate / Quality ──
+    BitrateUpdate bitrate_update = 60;
+    QualityReport quality_report = 61;
+
+    // ── Participant events ──
+    ParticipantJoined participant_joined = 70;
+    ParticipantLeft participant_left = 71;
+
+    // ── Errors ──
+    ErrorMessage error = 100;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Room Lifecycle
+// ═══════════════════════════════════════════════════════════
+
+message JoinRoom {
+  string room_id = 1;
+  string display_name = 2;
+  string auth_token = 3;    // Django JWT/session token for auth
+}
+
+message JoinRoomResponse {
+  // Mediasoup Router RTP capabilities (JSON-serialized)
+  string router_rtp_capabilities = 1;
+  repeated ParticipantInfo existing_participants = 2;
+}
+
+message LeaveRoom {
+  string reason = 1;        // "user_action", "timeout", "kicked"
+}
+
+// ═══════════════════════════════════════════════════════════
+// WebRTC Transport
+// ═══════════════════════════════════════════════════════════
+
+message CreateTransport {
+  TransportDirection direction = 1;
+}
+
+enum TransportDirection {
+  SEND = 0;
+  RECV = 1;
+}
+
+message CreateTransportResponse {
+  string transport_id = 1;
+  string ice_parameters = 2;     // JSON: { usernameFragment, password, iceLite }
+  string ice_candidates = 3;     // JSON array of RTCIceCandidate
+  string dtls_parameters = 4;    // JSON: { role, fingerprints }
+}
+
+message ConnectTransport {
+  string transport_id = 1;
+  string dtls_parameters = 2;    // JSON: client DTLS params
+}
+
+// ═══════════════════════════════════════════════════════════
+// Produce / Consume
+// ═══════════════════════════════════════════════════════════
+
+message Produce {
+  string transport_id = 1;
+  MediaKind kind = 2;
+  string rtp_parameters = 3;     // JSON: Mediasoup RtpParameters
+}
+
+enum MediaKind {
+  AUDIO = 0;
+  VIDEO = 1;
+}
+
+message ProduceResponse {
+  string producer_id = 1;
+}
+
+message NewConsumer {
+  string consumer_id = 1;
+  string producer_id = 2;
+  MediaKind kind = 3;
+  string rtp_parameters = 4;     // JSON
+  string peer_id = 5;
+  string display_name = 6;
+  bool paused = 7;               // Initially paused (caller resumes after ready)
+}
+
+message ConsumerResume {
+  string consumer_id = 1;
+}
+
+message ConsumerPause {
+  string consumer_id = 1;
+}
+
+message ConsumerClose {
+  string consumer_id = 1;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Active Speaker & Quality
+// ═══════════════════════════════════════════════════════════
+
+message ActiveSpeakerUpdate {
+  repeated ActiveSpeaker speakers = 1;
+}
+
+message ActiveSpeaker {
+  string peer_id = 1;
+  float audio_level = 2;        // 0.0 (silence) to 1.0 (max)
+  bool is_primary = 3;          // Gets full 1080p stream
+}
+
+message BitrateUpdate {
+  string producer_id = 1;
+  uint32 target_bitrate_bps = 2;
+}
+
+message QualityReport {
+  uint32 rtt_ms = 1;
+  float packet_loss_rate = 2;   // 0.0 to 1.0
+  uint32 jitter_ms = 3;
+  uint32 current_bitrate_bps = 4;
+  string codec = 5;              // "H265", "H264", "opus"
+  uint32 width = 6;
+  uint32 height = 7;
+  uint32 fps = 8;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Participant
+// ═══════════════════════════════════════════════════════════
+
+message ParticipantInfo {
+  string peer_id = 1;
+  string display_name = 2;
+  repeated ProducerInfo producers = 3;
+}
+
+message ProducerInfo {
+  string producer_id = 1;
+  MediaKind kind = 2;
+}
+
+message ParticipantJoined {
+  ParticipantInfo participant = 1;
+}
+
+message ParticipantLeft {
+  string peer_id = 1;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Error
+// ═══════════════════════════════════════════════════════════
+
+message ErrorMessage {
+  uint32 code = 1;
+  string message = 2;
+  string request_id_ref = 3;    // Reference to original request
+}

@@ -1,0 +1,82 @@
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# SQLite (legacy Django dev DB — retained as a guard against re-introducing it)
+*.sqlite3
+
+# ─── Environment / Secrets ───────────────────────────────────────────────────
+# Keep .env.example (template), ignore actual .env files with real secrets
+.env
+.env.example
+.env.production
+.env.local
+.env.*.local
+!.env.example
+!frontend/.env.example
+
+# ─── TLS Certificates ────────────────────────────────────────────────────────
+# Local-dev TLS material — never commit private keys
+infra/certs/
+webtransport/certs/
+
+# ─── Local tools cache ───────────────────────────────────────────────────────
+# Per-machine binaries (ngrok, bore, etc.) — install via PATH instead
+tools/
+
+# ─── Frontend ────────────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.env
+**/dist/
+**/.tsbuildinfo
+
+# ─── Docker ──────────────────────────────────────────────────────────────────
+# Nothing to ignore — docker-compose.yml and Dockerfiles are committed
+
+# ─── IDE ─────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.qwen/
+
+# ─── Sync clients ────────────────────────────────────────────────────────────
+.stfolder/
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── pytest / coverage ───────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.claude
+
+# ─── Brainstorming / planning artifacts (kept local) ──────────────────────────
+docs/superpowers/*
+# Exception: HR migration roadmap is tracked during the refactor (remove before deploy)
+!docs/superpowers/HR-MIGRATION-ROADMAP.md
+backups/
+
+for tasks
+.remember
+.superpowers
+.stignore

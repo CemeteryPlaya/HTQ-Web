@@ -1,0 +1,182 @@
+# Grafana alerting rules (provisioned).
+#
+# Datasource: Loki (the only observability backend currently provisioned —
+# Prometheus + node/redis/postgres exporters are not installed; system-level
+# alerts that need those (Postgres disk %, Redis memory %) are deferred and
+# tracked in Phase 7.3.c follow-up).
+#
+# Apply: provisioned automatically by grafana on startup via the bind-mount
+# `infra/logging/grafana-provisioning:/etc/grafana/provisioning`.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: htqweb-loki
+    folder: HTQWeb
+    interval: 1m
+    rules:
+      # ── Error rate per service ────────────────────────────────────────────
+      - uid: htqweb-error-rate-5m
+        title: "ERROR log rate per service > 10/5m"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: loki
+            model:
+              datasource: { type: loki, uid: loki }
+              editorMode: code
+              expr: 'sum by (service) (count_over_time({level="ERROR"}[5m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [10], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Service {{ $labels.service }} emitted >10 ERROR log lines in last 5m"
+          description: |
+            count_over_time({level="ERROR"}[5m]) > 10 for service {{ $labels.service }}.
+            Investigate via Grafana Explore → Loki → {service="{{ $labels.service }}", level="ERROR"}.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── nginx gateway 5xx ratio ──────────────────────────────────────────
+      - uid: htqweb-gateway-5xx-1m
+        title: "Nginx gateway 5xx burst (>5% in 1m)"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: loki
+            model:
+              datasource: { type: loki, uid: loki }
+              editorMode: code
+              # Promtail scrapes nginx with `service=nginx`. We approximate the
+              # 5xx ratio as: (5xx count) / (all count). 5xx tagged by the
+              # `status` extracted in promtail-config (or grep here).
+              expr: |
+                (sum(rate({service="nginx"} |~ " 5\\d\\d " [1m]))
+                 /
+                 sum(rate({service="nginx"} [1m])))
+              queryType: instant
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0.05], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: "Nginx 5xx ratio > 5% in last 1m"
+          description: |
+            Sustained 5xx rate at the gateway. Likely an upstream service
+            outage or a regression. Check upstream-by-status in the
+            "htqweb-services-overview" dashboard.
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Postgres / pgbouncer connectivity errors ─────────────────────────
+      - uid: htqweb-db-connection-errors
+        title: "Postgres connection errors (>3 in 5m)"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: loki
+            model:
+              datasource: { type: loki, uid: loki }
+              editorMode: code
+              expr: |
+                sum(count_over_time(
+                  {service=~".+"} |~ "(?i)connection refused|password authentication failed|too many connections|FATAL.*postgres"
+                  [5m]
+                ))
+              queryType: instant
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [3], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "More than 3 Postgres connection errors in last 5m"
+          description: |
+            Connection failures to Postgres / pgbouncer. Check db + pgbouncer
+            container status; verify max_connections / pool_size headroom.
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Frontend client-error spike ──────────────────────────────────────
+      - uid: htqweb-frontend-errors
+        title: "Frontend client error spike (>20 in 5m)"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: loki
+            model:
+              datasource: { type: loki, uid: loki }
+              editorMode: code
+              expr: 'sum(count_over_time({service="user-service"} |= "frontend_client_error" [5m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [20], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "SPA reported >20 client errors in last 5m"
+          description: |
+            telemetry.installGlobalErrorHandlers() forwards uncaught errors
+            from browsers via POST /api/users/v1/client-errors → user-service
+            structlog. A spike means a regression hit users. Inspect via
+            {service="user-service"} |= "frontend_client_error".
+        labels:
+          severity: warning
+          team: frontend

@@ -1,0 +1,22 @@
+# Conference runtime configuration — single source of truth.
+# Read by GET /api/cms/v1/conference/config
+#
+# Ported from backend/mainView/views.py:ConferenceConfigView.
+# Values reference env-level settings from docker-compose;
+# the endpoint normalises them (ws:// ↔ wss://, localhost filtering, etc.).
+
+# SFU WebSocket URL (mediasoup signaling server)
+sfu_url: "ws://sfu:4443"
+
+# WebSocket path for Socket.IO / SFU handshake
+sfu_path: "/ws/sfu/"
+
+# ICE servers for WebRTC peer connections
+# Format follows RTCIceServer:
+#   - urls: "stun:stun.l.google.com:19302"
+#   - urls: "turn:turn.example.com:3478"
+#     username: "user"
+#     credential: "pass"
+ice_servers:
+  - urls: "stun:stun.l.google.com:19302"
+  - urls: "stun:stun1.l.google.com:19302"

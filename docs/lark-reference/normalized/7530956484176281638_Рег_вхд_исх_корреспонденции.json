@@ -1,0 +1,272 @@
+{
+  "id": "7530956484176281638",
+  "name": "Рег. вхд /исх корреспонденции",
+  "group": "7515398545566875679",
+  "icon": "https://lf-package-sg.larksuitecdn.com/obj/lark-static-sgsaas/ee/approval/approval-admin/image/iconLib/v5/toolbox.svg",
+  "status": 0,
+  "fieldCount": 15,
+  "fields": [
+    {
+      "id": "widget17534369435840001",
+      "type": "serialNumber",
+      "widget": "Serial no.",
+      "name": "Системный номер",
+      "required": false,
+      "placeholder": "@i18n@serial-number-place-holder"
+    },
+    {
+      "id": "widget17534368645660001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Тип корреспонденции",
+      "required": true,
+      "placeholder": "Select",
+      "options": [
+        "Входящая",
+        "Исходящая"
+      ]
+    },
+    {
+      "id": "widget17534368576110001",
+      "type": "date",
+      "widget": "Date",
+      "name": "Дата получения",
+      "required": true,
+      "placeholder": "Select"
+    },
+    {
+      "id": "widget17534370769630001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Входящий №",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534370887290001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "От кого поступило",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534370955760001",
+      "type": "textarea",
+      "widget": "Paragraph",
+      "name": "Краткое содержание письма",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534371027730001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Адресат / кому направлено",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534371134260001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Резолюция / Примечание",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534371996400001",
+      "type": "date",
+      "widget": "Date",
+      "name": "Дата отправки",
+      "required": true,
+      "placeholder": "Select"
+    },
+    {
+      "id": "widget17534372175050001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Исходящий №",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534372365780001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Кому отправлено",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534372485210001",
+      "type": "textarea",
+      "widget": "Paragraph",
+      "name": "Краткое содержание",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534372633200001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Подписал",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534372809420001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Способ отправки",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534373551890001",
+      "type": "attachmentV2",
+      "widget": "Attachment",
+      "name": "Attachment",
+      "required": false
+    }
+  ],
+  "conditionalVisibility": [
+    {
+      "target": "widget17534368576110001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-wykz0xabtgg-0"
+      ]
+    },
+    {
+      "target": "widget17534370769630001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-wykz0xabtgg-0"
+      ]
+    },
+    {
+      "target": "widget17534370887290001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-wykz0xabtgg-0"
+      ]
+    },
+    {
+      "target": "widget17534370955760001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-wykz0xabtgg-0"
+      ]
+    },
+    {
+      "target": "widget17534371027730001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-wykz0xabtgg-0"
+      ]
+    },
+    {
+      "target": "widget17534371134260001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-wykz0xabtgg-0"
+      ]
+    },
+    {
+      "target": "widget17534371996400001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-0empb99nvaa-0"
+      ]
+    },
+    {
+      "target": "widget17534372175050001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-0empb99nvaa-0"
+      ]
+    },
+    {
+      "target": "widget17534372365780001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-0empb99nvaa-0"
+      ]
+    },
+    {
+      "target": "widget17534372485210001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-0empb99nvaa-0"
+      ]
+    },
+    {
+      "target": "widget17534372633200001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-0empb99nvaa-0"
+      ]
+    },
+    {
+      "target": "widget17534372809420001",
+      "showWhen": [
+        "widget17534368645660001 is mdin1bnb-0empb99nvaa-0"
+      ]
+    }
+  ],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_85130_4659126",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Auto-approve",
+        "method": "sequential/notify",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_85130_4659126",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_85130_4659126",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

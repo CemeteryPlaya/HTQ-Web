@@ -1,0 +1,112 @@
+{
+  "id": "7642655704599252700",
+  "name": "Код транзакции",
+  "group": "7515398545566875679",
+  "icon": "https://lf-package-sg.larksuitecdn.com/obj/lark-static-sgsaas/ee/approval/approval-admin/image/iconLib/v3/person.png",
+  "status": 0,
+  "fieldCount": 2,
+  "fields": [
+    {
+      "id": "widget17794441700850001",
+      "type": "mutableGroup",
+      "widget": "Data from Base (lookup table)",
+      "name": "Data from Base",
+      "required": true,
+      "baseTable": {
+        "tableName": "Оплата РиУ по договору",
+        "appToken": "QqcPbfADXax6Xhs5nz4lOLCbgsf",
+        "tableID": "tblo3JcyXHGh2ZZf"
+      },
+      "children": [
+        {
+          "id": "widget17794444080000001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Номер АВР",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        }
+      ]
+    },
+    {
+      "id": "widget17794444136390001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Код транзакции",
+      "required": true,
+      "placeholder": "ввод"
+    }
+  ],
+  "conditionalVisibility": [],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_596042_126539",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Approval",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "role/acknowledgers",
+            "ids": []
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_596042_126539",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_596042_126539",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

@@ -1,0 +1,487 @@
+[
+  {
+    "group": "Документы для снабжения",
+    "id": "7515398545566875679",
+    "count": 22,
+    "approvals": [
+      {
+        "id": "7642655704599252700",
+        "name": "Код транзакции",
+        "description": "@i18n@08ddcddc-55c6-11f1-adfe-0224a9e44d97",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "person.png"
+      },
+      {
+        "id": "7640083251897339612",
+        "name": "Оплата РиУ по договору",
+        "description": "АВР",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": true,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "person.png"
+      },
+      {
+        "id": "7640066660166012635",
+        "name": "Тестовый проект Договор",
+        "description": "@i18n@7d1aa5e7-55a3-11f1-98ec-0204397469c2",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": true,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "person.png"
+      },
+      {
+        "id": "7571026356234915548",
+        "name": "Договор UZ",
+        "description": "@i18n@ba56d4d2-be33-11f0-801d-ea852119af22",
+        "status": 1,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "7a97c3f2-0788-4661-b395-a9b6993afe6a.png~tplv-w44fd0ssk5-preview-image.image?lk3s=d810e0ef&x-expires=1784083205&x-signature=46SYExSQirB6wcvYeZ0mPN5ByMA%3D#.png"
+      },
+      {
+        "id": "7566119675847839452",
+        "name": "Авансовый отчёт UZ",
+        "description": "@i18n@cfbd828a-57ed-11f1-a154-027ee1f01ac8",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "21c61f3d-394b-4564-967d-5c260b365ab3.png~tplv-w44fd0ssk5-preview-image.image?lk3s=d810e0ef&x-expires=1784083205&x-signature=iRxStBhf221mtOkPIE%2BTZRdOd0I%3D#.png"
+      },
+      {
+        "id": "7566112857931140833",
+        "name": "Доп. соглашение к договору UZ",
+        "description": "@i18n@13048b3a-b3b0-11f0-bcc6-0205e0364b26",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "checklist.svg"
+      },
+      {
+        "id": "7565884072694648539",
+        "name": "Заявка на cash UZ",
+        "description": "Заявление на выдачу денежных средств под отчёт",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "2785c731-8ddd-4290-9738-09165ef1d79a.png~tplv-w44fd0ssk5-preview-image.image?lk3s=d810e0ef&x-expires=1784083205&x-signature=JXpXKStZ%2B3j9t66dXanOfRKffLc%3D#.png"
+      },
+      {
+        "id": "7562059376870064166",
+        "name": "Отчет Варваринское",
+        "description": "Суточный отчет по исполнению работ",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "contract.svg"
+      },
+      {
+        "id": "7561005490554060839",
+        "name": "Заявка на ФОТ",
+        "description": "@i18n@819deb94-7a21-11f1-9f7a-02e56caf9343",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "toolbox.svg"
+      },
+      {
+        "id": "7556541876162068511",
+        "name": "Журнал регистрации подрядчиков",
+        "description": "@i18n@65d384c7-b3b8-11f0-a819-0221f49ef3f6",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "toolbox.svg"
+      },
+      {
+        "id": "7554352619745984543",
+        "name": "Авансовый отчёт KZ",
+        "description": "@i18n@2f07b700-b3b2-11f0-9b8e-022f7368fb36",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "contract.svg"
+      },
+      {
+        "id": "7554341416055373862",
+        "name": "Заявка на подотчётные средства KZ",
+        "description": "Заявление на выдачу денежных средств под отчёт",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "contract.svg"
+      },
+      {
+        "id": "7546173103924084768",
+        "name": "Протокол собрания",
+        "description": "@i18n@e2efa8b9-b3b0-11f0-9fbe-02f2707a031a",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "toolbox.svg"
+      },
+      {
+        "id": "7546168781114966048",
+        "name": "Доп. соглашение к договору KZ",
+        "description": "@i18n@a160688c-b3af-11f0-9308-0273c6924672",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "contract.svg"
+      },
+      {
+        "id": "7533204527382593568",
+        "name": "Журнал регистрации инцидентов, происшествий и несчастных случаев",
+        "description": "@i18n@6ee40f29-6e00-11f0-8c51-0284a06eb51e",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "person.png"
+      },
+      {
+        "id": "7530956484176281638",
+        "name": "Рег. вхд /исх корреспонденции",
+        "description": "@i18n@9b23ac00-b3b1-11f0-931e-02ddc319a906",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "toolbox.svg"
+      },
+      {
+        "id": "7530897115451555871",
+        "name": "Приказы / Распоряжения",
+        "description": "ОРД",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "toolbox.svg"
+      },
+      {
+        "id": "7525112660631748646",
+        "name": "Счет на оплату UZ",
+        "description": "@i18n@cd356400-be66-11f0-824b-4a880f0e74c1",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": false,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "checklist.svg"
+      },
+      {
+        "id": "7525098825531310118",
+        "name": "Платежные документы UZ",
+        "description": "АВР/ТТН/СО/ЭСФ",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "3ba02961-ffb8-4d12-a9ee-676af832dec9.png~tplv-w44fd0ssk5-preview-image.image?lk3s=d810e0ef&x-expires=1784083205&x-signature=s7jSQmPMdln28E2xQEuxQ5cfkf8%3D#.png"
+      },
+      {
+        "id": "7521379935940804640",
+        "name": "Счет на оплату KZ",
+        "description": "@i18n@1886fc57-1620-11f1-b756-0277fe7dc400",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "contract.svg"
+      },
+      {
+        "id": "7515438109266591776",
+        "name": "Формирование бюджета проекта",
+        "description": "@i18n@f83b84db-7381-11f1-8109-02fdde7d5f95",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "wallet.svg"
+      },
+      {
+        "id": "7511316585089400863",
+        "name": "АВР / Накладная KZ",
+        "description": "АКТ выполненных работ / Накладная",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": true,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "contract.svg"
+      }
+    ]
+  },
+  {
+    "group": "Документы для проектного менеджера",
+    "id": "7515398495705137183",
+    "count": 2,
+    "approvals": [
+      {
+        "id": "7525117256662024230",
+        "name": "Наличные расходы UZ",
+        "description": "@i18n@ff35eed7-b005-11f0-aad4-96e0ae1f4f4d",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "cart.svg"
+      },
+      {
+        "id": "7513947271126384678",
+        "name": "Наличные расходы KZ",
+        "description": "@i18n@019f453e-896b-11f0-bdc6-3225dc46dbe3",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "cart.svg"
+      }
+    ]
+  },
+  {
+    "group": "Финансы/Бюджет",
+    "id": "7513944876916932639",
+    "count": 3,
+    "approvals": [
+      {
+        "id": "7551490798764752934",
+        "name": "Договор UZ (главный)",
+        "description": "Создать договор",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "dd59672f-76e7-4281-bc3c-8456e23d31b8.png~tplv-w44fd0ssk5-preview-image.image?lk3s=d810e0ef&x-expires=1784083205&x-signature=dLoJ3JJVXluM35YB%2B%2Bjdv0iGFac%3D#.png"
+      },
+      {
+        "id": "7525098240606470175",
+        "name": "Договора UZ",
+        "description": "Создать договор",
+        "status": 1,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "contract.svg"
+      },
+      {
+        "id": "7510682893149061158",
+        "name": "Договора KZ",
+        "description": "Создать договор",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "contract.svg"
+      }
+    ]
+  },
+  {
+    "group": "План закупок",
+    "id": "7512031857551179815",
+    "count": 2,
+    "approvals": [
+      {
+        "id": "7525097713642274847",
+        "name": "Сравнительная таблица UZ",
+        "description": "@i18n@35b2f46c-b333-11f0-9e49-027367280356",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "checklist.svg"
+      },
+      {
+        "id": "7510671910229934118",
+        "name": "Сравнительная таблица KZ",
+        "description": "@i18n@2a505673-b333-11f0-9b22-6ed90d872ced",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "contract.svg"
+      }
+    ]
+  },
+  {
+    "group": "Проектная документация",
+    "id": "7509206788835672095",
+    "count": 1,
+    "approvals": [
+      {
+        "id": "7525097307071578150",
+        "name": "Заявка на закупку UZ",
+        "description": "@i18n@305f0651-b003-11f0-86d2-8e995a59544e",
+        "status": 0,
+        "hasDraft": false,
+        "allVisible": true,
+        "canEdit": true,
+        "isExternal": false,
+        "isSecret": false,
+        "managers": [
+          "Берик"
+        ],
+        "icon": "checklist.svg"
+      }
+    ]
+  }
+]

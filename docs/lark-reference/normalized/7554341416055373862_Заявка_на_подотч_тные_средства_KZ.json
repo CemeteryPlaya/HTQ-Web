@@ -1,0 +1,214 @@
+{
+  "id": "7554341416055373862",
+  "name": "Заявка на подотчётные средства KZ",
+  "group": "7515398545566875679",
+  "icon": "https://lf-package-sg.larksuitecdn.com/obj/lark-static-sgsaas/ee/approval/approval-admin/image/iconLib/v5/contract.svg",
+  "status": 0,
+  "fieldCount": 6,
+  "fields": [
+    {
+      "id": "widget17588812285270001",
+      "type": "mutableGroup",
+      "widget": "Data from Base (lookup table)",
+      "name": "Data from Base",
+      "required": true,
+      "baseTable": {
+        "tableName": "Формирование бюджета проекта",
+        "appToken": "Z60TbPjTfammo2sgkkZlvWURg2f",
+        "tableID": "tblbiH5q7DVHQLkE"
+      },
+      "children": [
+        {
+          "id": "widget17588812463280001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Наименование администратора программы",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        }
+      ]
+    },
+    {
+      "id": "widget17588813061090001",
+      "type": "amount",
+      "widget": "Amount (money)",
+      "name": "Сумма, запрашиваемая",
+      "required": true,
+      "placeholder": "Enter amount",
+      "currencies": [
+        "KZT"
+      ],
+      "amountInWords": false,
+      "decimals": 2
+    },
+    {
+      "id": "widget17588814673220001",
+      "type": "textarea",
+      "widget": "Paragraph",
+      "name": "Цель",
+      "required": true,
+      "placeholder": "(командировка, хоз.нужды, представительские и т.д.)"
+    },
+    {
+      "id": "widget17588831109970001",
+      "type": "serialNumber",
+      "widget": "Serial no.",
+      "name": "Системный номер заявки",
+      "required": false,
+      "placeholder": "@i18n@serial-number-place-holder"
+    },
+    {
+      "id": "widget17650442922680001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Референс операции АБИС/ Рег. номер",
+      "required": false,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17650442927490001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Код назначения платежа",
+      "required": false,
+      "placeholder": "Enter"
+    }
+  ],
+  "conditionalVisibility": [],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_77677_250430",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7522022043097890855"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_154725_1248698",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515326484446429215"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_805218_2053828",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Утверждение",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515395913389457447"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_493858_2120404",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Этап оплаты",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7517186333371269159"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_77677_250430",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_77677_250430",
+        "to": "APPROVAL_154725_1248698",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_154725_1248698",
+        "to": "APPROVAL_805218_2053828",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_805218_2053828",
+        "to": "APPROVAL_493858_2120404",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_493858_2120404",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

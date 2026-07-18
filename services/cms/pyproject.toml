@@ -1,0 +1,17 @@
+[project]
+name = "cms-service"
+version = "0.1.0"
+description = "HTQWeb cms microservice"
+requires-python = ">=3.14"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["tests/*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"

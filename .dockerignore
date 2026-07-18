@@ -1,0 +1,76 @@
+# ── Git ──
+.git
+.gitignore
+
+# ── Python ──
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+
+# ── Node ──
+frontend/node_modules
+sfu/node_modules
+node_modules
+.npm-cache
+
+# ── Build artifacts ──
+frontend/dist
+sfu/dist
+
+# ── Database ──
+*.sqlite3
+
+# ── Logs ──
+*.log
+tmp_*
+backend_run.*.log
+
+# ── Docs (not needed in image) ──
+*.md
+docs/
+API.md
+README.md
+SUMMARY.md
+WEBRTC_*.md
+QUICK_FIX.md
+READY_TO_RUN.md
+CHEATSHEET.md
+
+# ── Misc ──
+infra/certs/
+tools/
+firewall_*
+*.exe
+.stfolder*
+.qwen/
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
+.DS_Store
+bundle-report.html
+**/.tsbuildinfo
+**/dist/
+
+# ── Root build-context (post-shared-auth migration) ──
+# Each service Dockerfile now builds with `context: .` (repo root) so it can
+# COPY both `services/<name>/` and `libs/htqweb_auth/`. Exclude everything not
+# needed by Python services to keep the context tarball small.
+frontend/
+sfu/
+webtransport/
+node_modules/
+services/adminjs/
+services/_template/
+**/tests/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/htmlcov/
+**/.coverage
+**/coverage.xml
+**/*.egg-info/

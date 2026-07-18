@@ -1,0 +1,340 @@
+{
+  "id": "7525097713642274847",
+  "name": "Сравнительная таблица UZ",
+  "group": "7512031857551179815",
+  "icon": "https://lf-package-sg.larksuitecdn.com/obj/lark-static-sgsaas/ee/approval/approval-admin/image/iconLib/v5/checklist.svg",
+  "status": 0,
+  "fieldCount": 3,
+  "fields": [
+    {
+      "id": "widget17612193946600001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "Бюджет",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17612193821080001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base",
+          "required": true,
+          "baseTable": {
+            "tableName": "Бюджет проекта",
+            "appToken": "MOJ3bzkXYaB6dBsYUirlwtVygug",
+            "tableID": "tblE0dHC6NkMsL9I"
+          },
+          "children": [
+            {
+              "id": "widget17612194255310001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Администратор бюджета",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17612194255320001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Бюджетная программа",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17612194255340001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Пояснение",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17612194255300001",
+              "type": "number",
+              "widget": "Number",
+              "name": "ID программы",
+              "required": true,
+              "placeholder": "Select"
+            }
+          ]
+        },
+        {
+          "id": "widget17612194719740001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base-Copy",
+          "required": true,
+          "baseTable": {
+            "tableName": "Специфика бюджета проекта",
+            "appToken": "MOJ3bzkXYaB6dBsYUirlwtVygug",
+            "tableID": "tblsghVkGBbNyqsA"
+          },
+          "children": [
+            {
+              "id": "widget17612194833510001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Специфика",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17612194833540001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Определение",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17612194833500001",
+              "type": "number",
+              "widget": "Number",
+              "name": "#",
+              "required": true,
+              "placeholder": "Select"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "widget17487141295820001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "Сравнительная таблица",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17487141350800001",
+          "type": "input",
+          "widget": "Short answer",
+          "name": "Наименование поставщика",
+          "required": true,
+          "placeholder": "Enter"
+        },
+        {
+          "id": "widget17487142225120001",
+          "type": "input",
+          "widget": "Short answer",
+          "name": "ИИН/БИН",
+          "required": true,
+          "placeholder": "Enter"
+        },
+        {
+          "id": "widget17487143564600001",
+          "type": "date",
+          "widget": "Date",
+          "name": "Дата КП",
+          "required": true,
+          "placeholder": "Select"
+        },
+        {
+          "id": "widget17487143770940001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Условия поставки",
+          "required": true,
+          "placeholder": "Select",
+          "options": [
+            "С доставкой",
+            "Самовывоз"
+          ]
+        },
+        {
+          "id": "widget17487144318290001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Условия оплаты",
+          "required": true,
+          "placeholder": "Select",
+          "options": [
+            "Предоплата",
+            "Постоплата"
+          ]
+        },
+        {
+          "id": "widget17490367850210001",
+          "type": "amount",
+          "widget": "Amount (money)",
+          "name": "Сумма поставщика",
+          "required": true,
+          "placeholder": "Введите сумму",
+          "currencies": [
+            "UZS"
+          ],
+          "amountInWords": false,
+          "decimals": 2
+        },
+        {
+          "id": "widget17516327382440001",
+          "type": "textarea",
+          "widget": "Paragraph",
+          "name": "Примечение",
+          "required": false,
+          "placeholder": "Enter"
+        },
+        {
+          "id": "widget17582190353400001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base",
+          "required": true,
+          "baseTable": {
+            "tableName": "Заявка на закупку UZ",
+            "appToken": "OWfKbX4VCaNgpEsInUBl3ttFg1f",
+            "tableID": "tblnsLuRtZdw9CS1"
+          },
+          "children": [
+            {
+              "id": "widget17582190836340001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Системный номер заявки",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            }
+          ]
+        },
+        {
+          "id": "widget17497243938100001",
+          "type": "input",
+          "widget": "Short answer",
+          "name": "Номер заявки на закупку",
+          "required": true,
+          "placeholder": "Enter"
+        }
+      ]
+    },
+    {
+      "id": "widget17492147326290001",
+      "type": "serialNumber",
+      "widget": "Serial no.",
+      "name": "Системный номер СТ",
+      "required": false,
+      "placeholder": "@i18n@serial-number-place-holder"
+    }
+  ],
+  "conditionalVisibility": [],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_293315_834500",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7522022043097890855"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_522150_838968",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515326484446429215"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_185501_50273",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Утверждение ГД",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515395913389457447"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 1
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_293315_834500",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_293315_834500",
+        "to": "APPROVAL_522150_838968",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_522150_838968",
+        "to": "APPROVAL_185501_50273",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_185501_50273",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

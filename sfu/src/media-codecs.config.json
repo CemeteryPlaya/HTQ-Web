@@ -1,0 +1,34 @@
+[
+  {
+    "kind": "audio",
+    "mimeType": "audio/opus",
+    "clockRate": 48000,
+    "channels": 2,
+    "parameters": {
+      "maxaveragebitrate": 192000,
+      "stereo": 1,
+      "cbr": 1,
+      "useinbandfec": 1,
+      "usedtx": 0,
+      "sprop-stereo": 1,
+      "minptime": 10,
+      "maxptime": 40
+    }
+  },
+  {
+    "kind": "video",
+    "mimeType": "video/VP8",
+    "clockRate": 90000,
+    "parameters": {}
+  },
+  {
+    "kind": "video",
+    "mimeType": "video/H264",
+    "clockRate": 90000,
+    "parameters": {
+      "packetization-mode": "1",
+      "profile-level-id": "42e01f",
+      "level-asymmetry-allowed": "1"
+    }
+  }
+]

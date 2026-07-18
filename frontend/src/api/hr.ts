@@ -1,0 +1,396 @@
+/* ------------------------------------------------------------------ */
+/*  HR module — API helpers                                            */
+/* ------------------------------------------------------------------ */
+import api from '@/api/client';
+import { API_ENDPOINTS } from '@/api/endpoints';
+import type {
+  Department, Position, Employee, EmployeeStats, HRUserOption,
+  Vacancy, Application, TimeRecord, HRDocument, HRActionLog,
+} from '@/types/hr';
+
+const HR = `${API_ENDPOINTS.hr}/`;
+
+/* Unwrap paginated or plain array response */
+function unwrap<T>(data: any): T[] {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.items)) return data.items;
+  return [];
+}
+
+const EMPLOYEE_FIELD_ALIASES: Record<string, string> = {
+  user: 'user_id',
+  position: 'position_id',
+  department: 'department_id',
+  date_hired: 'hire_date',
+  date_dismissed: 'termination_date',
+  notes: 'bio',
+};
+
+function toBackendRecord(data: Record<string, any>, aliases: Record<string, string>): Record<string, any> {
+  const payload: Record<string, any> = {};
+  Object.entries(data).forEach(([key, value]) => {
+    if (value === undefined || value === '') return;
+    payload[aliases[key] ?? key] = value;
+  });
+  return payload;
+}
+
+function normalizeEmployee(raw: any): Employee {
+  const firstName = raw.first_name ?? '';
+  const lastName = raw.last_name ?? '';
+  const middleName = raw.middle_name ?? '';
+  const fullName = raw.full_name ?? [lastName, firstName, middleName].filter(Boolean).join(' ');
+
+  return {
+    ...raw,
+    user: raw.user ?? raw.user_id ?? null,
+    user_id: raw.user_id ?? raw.user ?? null,
+    full_name: fullName,
+    position: raw.position ?? raw.position_id ?? null,
+    position_id: raw.position_id ?? raw.position ?? null,
+    position_title: raw.position_title ?? raw.position?.title ?? null,
+    department: raw.department ?? raw.department_id ?? null,
+    department_id: raw.department_id ?? raw.department ?? null,
+    department_name: raw.department_name ?? raw.department?.name ?? null,
+    date_hired: raw.date_hired ?? raw.hire_date ?? null,
+    hire_date: raw.hire_date ?? raw.date_hired ?? null,
+    date_dismissed: raw.date_dismissed ?? raw.termination_date ?? null,
+    termination_date: raw.termination_date ?? raw.date_dismissed ?? null,
+    notes: raw.notes ?? raw.bio ?? '',
+    bio: raw.bio ?? raw.notes ?? '',
+  };
+}
+
+/* ---------- Departments ---------- */
+export const fetchDepartments = async (): Promise<Department[]> => {
+  const res = await api.get(`${HR}departments/`);
+  return unwrap<Department>(res.data);
+};
+
+export const createDepartment = async (data: Partial<Department>): Promise<Department> => {
+  const res = await api.post(`${HR}departments/`, data);
+  return res.data;
+};
+
+export const updateDepartment = async (id: number, data: Partial<Department>): Promise<Department> => {
+  const res = await api.patch(`${HR}departments/${id}/`, data);
+  return res.data;
+};
+
+export const deleteDepartment = async (id: number): Promise<void> => {
+  await api.delete(`${HR}departments/${id}/`);
+};
+
+/* ---------- Positions ---------- */
+export const fetchPositions = async (): Promise<Position[]> => {
+  const res = await api.get(`${HR}positions/`);
+  return unwrap<Position>(res.data);
+};
+
+export const createPosition = async (data: Partial<Position>): Promise<Position> => {
+  const res = await api.post(`${HR}positions/`, data);
+  return res.data;
+};
+
+export const updatePosition = async (id: number, data: Partial<Position>): Promise<Position> => {
+  const res = await api.patch(`${HR}positions/${id}/`, data);
+  return res.data;
+};
+
+export const deletePosition = async (id: number): Promise<void> => {
+  await api.delete(`${HR}positions/${id}/`);
+};
+
+/* ---------- Employees ---------- */
+export const fetchEmployees = async (params?: Record<string, string>): Promise<Employee[]> => {
+  const query = params ? '?' + new URLSearchParams(params).toString() : '';
+  const res = await api.get(`${HR}employees/${query}`);
+  return unwrap<Employee>(res.data).map(normalizeEmployee);
+};
+
+export const fetchEmployee = async (id: number): Promise<Employee> => {
+  const res = await api.get(`${HR}employees/${id}/`);
+  return normalizeEmployee(res.data);
+};
+
+export const fetchEmployeeStats = async (): Promise<EmployeeStats> => {
+  const res = await api.get(`${HR}employees/stats/`);
+  return res.data;
+};
+
+export const fetchEmployeeUsers = async (params?: Record<string, string>): Promise<HRUserOption[]> => {
+  const query = params ? '?' + new URLSearchParams(params).toString() : '';
+  const res = await api.get(`${HR}employees/users/${query}`);
+  return unwrap<HRUserOption>(res.data);
+};
+
+export const createEmployeeUser = async (data: {
+  first_name: string;
+  last_name: string;
+  patronymic?: string;
+  email: string;
+}): Promise<HRUserOption> => {
+  const res = await api.post(`${HR}employees/users/`, data);
+  return res.data;
+};
+
+export const createEmployee = async (data: Partial<Employee>): Promise<Employee> => {
+  const res = await api.post(`${HR}employees/`, toBackendRecord(data as Record<string, any>, EMPLOYEE_FIELD_ALIASES));
+  return normalizeEmployee(res.data);
+};
+
+export const updateEmployee = async (id: number, data: Partial<Employee>): Promise<Employee> => {
+  const res = await api.put(`${HR}employees/${id}/`, toBackendRecord(data as Record<string, any>, EMPLOYEE_FIELD_ALIASES));
+  return normalizeEmployee(res.data);
+};
+
+export const deleteEmployee = async (id: number): Promise<void> => {
+  await api.delete(`${HR}employees/${id}/`);
+};
+
+/* ---------- Employee Card ---------- */
+export interface EmployeePmoEntry {
+  pmo_id: number;
+  pmo_name: string;
+  pmo_code: string;
+  pmo_status?: string;
+  membership_type: string;
+  position_in_pmo: string | null;
+  allocation_percent: number;
+  is_primary: boolean;
+  from_date?: string | null;
+  to_date?: string | null;
+}
+
+export interface EmployeeCardBrief {
+  id: number;
+  full_name: string;
+  first_name: string | null;
+  last_name: string | null;
+  middle_name: string | null;
+  avatar_url: string | null;
+  position_title: string | null;
+  department_name: string | null;
+  status: string;
+  email?: string | null;
+  phone?: string | null;
+}
+
+export interface EmployeeCard {
+  id: number;
+  user_id: number | null;
+  first_name: string | null;
+  last_name: string | null;
+  middle_name: string | null;
+  full_name: string;
+  avatar_url: string | null;
+  bio: string | null;
+  status: string;
+  hire_date: string | null;
+  termination_date: string | null;
+  email: string | null;
+  phone: string | null;
+  department: { id: number; name: string; path: string } | null;
+  position: { id: number; title: string; grade: number; level: number } | null;
+  manager: EmployeeCardBrief | null;
+  subordinates: EmployeeCardBrief[];
+  pmos: EmployeePmoEntry[];
+}
+
+export const fetchEmployeeCard = async (id: number): Promise<EmployeeCard> => {
+  const res = await api.get<EmployeeCard>(`${HR}employees/${id}/card`);
+  return res.data;
+};
+
+export const fetchMyEmployeeCard = async (): Promise<EmployeeCard> => {
+  const res = await api.get<EmployeeCard>(`${HR}employees/me/card`);
+  return res.data;
+};
+
+export interface CardT2 {
+  financial?: { salary: string | null; bonus: string | null; bank_account: string | null };
+  personal?: { passport_data: string | null; inn: string | null; birth_date: string | null; birth_place: string | null; citizenship: string | null };
+  certs?: { sro_permit_number: string | null; sro_permit_expiry: string | null; safety_cert_number: string | null; safety_cert_expiry: string | null };
+}
+
+export const fetchCardT2 = async (employeeId: number): Promise<CardT2> => {
+  const res = await api.get(`${HR}employees/${employeeId}/card/t2`);
+  return res.data;
+};
+
+/* ---------- Employee Share Links ---------- */
+export interface EmployeeShareLinkCreateInput {
+  employee_id: number;
+  label?: string | null;
+  viewer_label?: string | null;
+  watermark_text?: string | null;
+  link_type?: 'one_time' | 'time_limited' | 'permanent_with_expiry';
+  expires_at?: string | null;
+  default_language?: 'ru' | 'en';
+}
+
+export interface ShareLinkCreated {
+  id: string;
+  token: string;
+  url: string;
+  expires_at: string | null;
+  link_type: string;
+  target_type: string;
+  target_employee_id: number | null;
+}
+
+export const createEmployeeShareLink = async (
+  input: EmployeeShareLinkCreateInput,
+): Promise<ShareLinkCreated> => {
+  const res = await api.post<ShareLinkCreated>(`${HR}share-links/`, {
+    target_type: 'employee',
+    target_employee_id: input.employee_id,
+    label: input.label ?? null,
+    viewer_label: input.viewer_label ?? null,
+    watermark_text: input.watermark_text ?? null,
+    link_type: input.link_type ?? 'one_time',
+    expires_at: input.expires_at ?? null,
+    default_language: input.default_language ?? 'ru',
+    max_level: 10,
+  });
+  return res.data;
+};
+
+/* ---------- Vacancies ---------- */
+export const fetchVacancies = async (): Promise<Vacancy[]> => {
+  const res = await api.get(`${HR}vacancies/`);
+  return unwrap<Vacancy>(res.data);
+};
+
+export const createVacancy = async (data: Partial<Vacancy>): Promise<Vacancy> => {
+  const res = await api.post(`${HR}vacancies/`, data);
+  return res.data;
+};
+
+export const updateVacancy = async (id: number, data: Partial<Vacancy>): Promise<Vacancy> => {
+  const res = await api.patch(`${HR}vacancies/${id}/`, data);
+  return res.data;
+};
+
+export const deleteVacancy = async (id: number): Promise<void> => {
+  await api.delete(`${HR}vacancies/${id}/`);
+};
+
+/* ---------- Applications ---------- */
+export const fetchApplications = async (params?: Record<string, string>): Promise<Application[]> => {
+  const query = params ? '?' + new URLSearchParams(params).toString() : '';
+  const res = await api.get(`${HR}applications/${query}`);
+  return unwrap<Application>(res.data);
+};
+
+export const createApplication = async (data: FormData): Promise<Application> => {
+  const res = await api.post(`${HR}applications/`, data, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data;
+};
+
+export const updateApplication = async (id: number, data: Partial<Application>): Promise<Application> => {
+  const res = await api.patch(`${HR}applications/${id}/`, data);
+  return res.data;
+};
+
+export const deleteApplication = async (id: number): Promise<void> => {
+  await api.delete(`${HR}applications/${id}/`);
+};
+
+/* ---------- Time Tracking ---------- */
+export const fetchTimeRecords = async (params?: Record<string, string>): Promise<TimeRecord[]> => {
+  const query = params ? '?' + new URLSearchParams(params).toString() : '';
+  const res = await api.get(`${HR}time-tracking/${query}`);
+  return unwrap<TimeRecord>(res.data);
+};
+
+export const createTimeRecord = async (data: Partial<TimeRecord>): Promise<TimeRecord> => {
+  const res = await api.post(`${HR}time-tracking/`, data);
+  return res.data;
+};
+
+export const updateTimeRecord = async (id: number, data: Partial<TimeRecord>): Promise<TimeRecord> => {
+  const res = await api.patch(`${HR}time-tracking/${id}/`, data);
+  return res.data;
+};
+
+export const approveTimeRecord = async (id: number): Promise<TimeRecord> => {
+  const res = await api.post(`${HR}time-tracking/${id}/approve/`);
+  return res.data;
+};
+
+export const rejectTimeRecord = async (id: number): Promise<TimeRecord> => {
+  const res = await api.post(`${HR}time-tracking/${id}/reject/`);
+  return res.data;
+};
+
+export const deleteTimeRecord = async (id: number): Promise<void> => {
+  await api.delete(`${HR}time-tracking/${id}/`);
+};
+
+/* ---------- Documents ---------- */
+export const fetchDocuments = async (params?: Record<string, string>): Promise<HRDocument[]> => {
+  const query = params ? '?' + new URLSearchParams(params).toString() : '';
+  const res = await api.get(`${HR}documents/${query}`);
+  return unwrap<HRDocument>(res.data);
+};
+
+export const uploadDocument = async (data: FormData): Promise<HRDocument> => {
+  const res = await api.post(`${HR}documents/`, data, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data;
+};
+
+export const deleteDocument = async (id: number): Promise<void> => {
+  await api.delete(`${HR}documents/${id}/`);
+};
+
+/* ---------- Action Logs ---------- */
+export const fetchActionLogs = async (params?: Record<string, string>): Promise<HRActionLog[]> => {
+  const query = params ? '?' + new URLSearchParams(params).toString() : '';
+  const res = await api.get(`${HR}logs/${query}`);
+  return unwrap<HRActionLog>(res.data);
+};
+
+/* ---------- Production Calendar ---------- */
+export interface WeekTemplate { id: number; name: string; is_default: boolean; days: Record<string, { type: string; hours: number }>; }
+export interface CalendarDay { day: string; type: string; hours: number; note?: string | null; }
+
+export const fetchWeekTemplates = async (): Promise<WeekTemplate[]> =>
+  (await api.get(`${HR}calendar/templates`)).data;
+export const createWeekTemplate = async (name: string, days: WeekTemplate['days']): Promise<WeekTemplate> =>
+  (await api.post(`${HR}calendar/templates`, { name, days })).data;
+export const setDefaultTemplate = async (id: number): Promise<WeekTemplate> =>
+  (await api.post(`${HR}calendar/templates/${id}/default`)).data;
+export const fetchCalendarYear = async (year: number): Promise<CalendarDay[]> =>
+  (await api.get(`${HR}calendar/`, { params: { year } })).data;
+export const upsertCalendarDay = async (day: string, data: { day_type: string; norm_hours: number; note?: string | null }) =>
+  (await api.put(`${HR}calendar/${day}`, data)).data;
+export const assignEmployeeTemplate = async (employeeId: number, week_template_id: number | null) =>
+  (await api.put(`${HR}employees/${employeeId}/calendar-template`, { week_template_id })).data;
+
+/* ---------- Shift Patterns ---------- */
+export interface ShiftPattern { id: number; name: string; holidays_off: boolean; slots: { type: string; hours: number }[]; }
+
+export const fetchShiftPatterns = async (): Promise<ShiftPattern[]> =>
+  (await api.get(`${HR}calendar/shift-patterns`)).data;
+export const createShiftPattern = async (name: string, slots: ShiftPattern['slots'], holidays_off: boolean): Promise<ShiftPattern> =>
+  (await api.post(`${HR}calendar/shift-patterns`, { name, slots, holidays_off })).data;
+export const deleteShiftPattern = async (id: number): Promise<void> => { await api.delete(`${HR}calendar/shift-patterns/${id}`); };
+export const assignEmployeeShift = async (employeeId: number, shift_pattern_id: number, anchor_date: string) =>
+  (await api.put(`${HR}employees/${employeeId}/shift`, { shift_pattern_id, anchor_date })).data;
+export const setEmployeeDayOverride = async (employeeId: number, day: string, data: { day_type: string; norm_hours: number; note?: string | null }) =>
+  (await api.put(`${HR}employees/${employeeId}/calendar/${day}`, data)).data;
+
+/* ---------- Staffing ---------- */
+export interface StaffingLine { id: number; position_id: number; department_id: number; grade: number | null; headcount: string; salary: string; fot: string; note?: string | null; }
+export interface StaffingSummary { by_department: { department_id: number; department_name: string | null; fot: string }[]; total_fot: string; total_budgeted: string; total_filled: number; total_vacant: string; }
+
+export const fetchStaffingLines = async (): Promise<StaffingLine[]> => (await api.get(`${HR}staffing/`)).data;
+export const fetchStaffingSummary = async (): Promise<StaffingSummary> => (await api.get(`${HR}staffing/summary`)).data;
+export const deleteStaffingLine = async (id: number): Promise<void> => { await api.delete(`${HR}staffing/${id}`); };
+

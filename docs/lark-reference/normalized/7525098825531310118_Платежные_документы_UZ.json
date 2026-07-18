@@ -1,0 +1,929 @@
+{
+  "id": "7525098825531310118",
+  "name": "Платежные документы UZ",
+  "group": "7515398545566875679",
+  "icon": "https://p16-approval-sign.larksuitecdn.com/lark-approval-sgsaas/image/20251110/0/3ba02961-ffb8-4d12-a9ee-676af832dec9.png~tplv-w44fd0ssk5-preview-image.image?lk3s=d810e0ef&x-expires=1784138007&x-signature=U8XDw9rsyIkRPndzukIQbvnrtx4%3D#.png",
+  "status": 0,
+  "fieldCount": 10,
+  "fields": [
+    {
+      "id": "widget17627792531160001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Тип оплаты",
+      "required": true,
+      "placeholder": "выбрать",
+      "options": [
+        "Постоплата",
+        "Предоплата"
+      ]
+    },
+    {
+      "id": "widget17627807085770001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Документ предоплаты",
+      "required": true,
+      "placeholder": "выбрать",
+      "options": [
+        "Договор ТМЦ/РиУ без Счета на оплату",
+        "Договор ТМЦ/РиУ со Счетом на оплату",
+        "Счет на оплату без договора"
+      ]
+    },
+    {
+      "id": "widget17627820896900001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Документ постоплаты",
+      "required": true,
+      "placeholder": "выбрать",
+      "options": [
+        "Акт выполненных работ/услуг",
+        "Товарно-транспортная накладная"
+      ]
+    },
+    {
+      "id": "widget17627809798410001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "АВР",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17488633392230001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base",
+          "required": true,
+          "baseTable": {
+            "tableName": "Договор UZ (главный)",
+            "appToken": "MOJ3bzkXYaB6dBsYUirlwtVygug",
+            "tableID": "tblQ77QAzcLd3BsK"
+          },
+          "children": [
+            {
+              "id": "widget17680672774940001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Наименование договора",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680672775000001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Системный номер договора",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680672774900001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Status",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680672774950001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Администратор бюджета",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680672774970001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Бюджетная программа",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680672774990001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Специфика",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            }
+          ]
+        },
+        {
+          "id": "widget17512017395110001",
+          "type": "amount",
+          "widget": "Amount (money)",
+          "name": "Сумма АВР",
+          "required": true,
+          "placeholder": "Enter amount",
+          "currencies": [
+            "UZS"
+          ],
+          "amountInWords": false,
+          "decimals": 2
+        },
+        {
+          "id": "widget17488633535310001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Акт выполненных работ",
+          "required": true
+        },
+        {
+          "id": "widget17627824138110001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Счет фактура",
+          "required": false
+        },
+        {
+          "id": "widget17627993769330001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Платежное поручение",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "widget17627810427730001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "Накладная",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17627810427750001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base",
+          "required": true,
+          "baseTable": {
+            "tableName": "Договор UZ (главный)",
+            "appToken": "MOJ3bzkXYaB6dBsYUirlwtVygug",
+            "tableID": "tblQ77QAzcLd3BsK"
+          },
+          "children": [
+            {
+              "id": "widget17680674900240001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Наименование договора",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680674900330001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Системный номер договора",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680674900190001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Status",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680674900270001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Администратор бюджета",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680674900290001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Бюджетная программа",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680674900310001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Специфика",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            }
+          ]
+        },
+        {
+          "id": "widget17627810428130001",
+          "type": "amount",
+          "widget": "Amount (money)",
+          "name": "Сумма накладной",
+          "required": true,
+          "placeholder": "Enter amount",
+          "currencies": [
+            "UZS"
+          ],
+          "amountInWords": false,
+          "decimals": 2
+        },
+        {
+          "id": "widget17627810428170001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Товарно-транспортная накладная",
+          "required": true
+        },
+        {
+          "id": "widget17627825658370001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Счет фактура",
+          "required": false
+        },
+        {
+          "id": "widget17627993978980001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Платежное поручение",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "widget17628003483820001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "По договору со Счетом на оплату",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17628003483830001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base",
+          "required": true,
+          "baseTable": {
+            "tableName": "Договор UZ (главный)",
+            "appToken": "MOJ3bzkXYaB6dBsYUirlwtVygug",
+            "tableID": "tblQ77QAzcLd3BsK"
+          },
+          "children": [
+            {
+              "id": "widget17680675980410001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Наименование договора",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680675980510001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Системный номер договора",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680675980350001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Status",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680675980440001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Администратор бюджета",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680675980470001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Бюджетная программа",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680675980490001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Специфика",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            }
+          ]
+        },
+        {
+          "id": "widget17628003484360001",
+          "type": "amount",
+          "widget": "Amount (money)",
+          "name": "Сумма счета на оплату",
+          "required": true,
+          "placeholder": "Enter amount",
+          "currencies": [
+            "UZS"
+          ],
+          "amountInWords": false,
+          "decimals": 2
+        },
+        {
+          "id": "widget17628003484410001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Счет на оплату",
+          "required": true
+        },
+        {
+          "id": "widget17628004222970001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Товарно-транспортная накладная.",
+          "required": true
+        },
+        {
+          "id": "widget17628003484460001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Счет фактура",
+          "required": false
+        },
+        {
+          "id": "widget17628003484510001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Платежное поручение",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "widget17628000152130001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "По договору без счета на оплату",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17628000152150001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base",
+          "required": true,
+          "baseTable": {
+            "tableName": "Договор UZ (главный)",
+            "appToken": "MOJ3bzkXYaB6dBsYUirlwtVygug",
+            "tableID": "tblQ77QAzcLd3BsK"
+          },
+          "children": [
+            {
+              "id": "widget17680676408090001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Наименование договора",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680676557480001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Системный номер договора",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680676408040001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Status",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680676738830001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Администратор бюджета",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680676408110001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Бюджетная программа",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17680676408140001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Специфика",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            }
+          ]
+        },
+        {
+          "id": "widget17628000152620001",
+          "type": "amount",
+          "widget": "Amount (money)",
+          "name": "Сумма авансового платежа",
+          "required": true,
+          "placeholder": "Enter amount",
+          "currencies": [
+            "UZS"
+          ],
+          "amountInWords": false,
+          "decimals": 2
+        },
+        {
+          "id": "widget17628000152700001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Счет фактура",
+          "required": false
+        },
+        {
+          "id": "widget17628000152740001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Платежное поручение",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "widget17628005690860001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "Счет на оплату без договора",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17628007173880001",
+          "type": "input",
+          "widget": "Short answer",
+          "name": "Наименование потребности",
+          "required": true,
+          "placeholder": "Enter"
+        },
+        {
+          "id": "widget17628006822360001",
+          "type": "textarea",
+          "widget": "Paragraph",
+          "name": "Пояснительная записка",
+          "required": true,
+          "placeholder": "обоснование потребности"
+        },
+        {
+          "id": "widget17628005690880001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base",
+          "required": true,
+          "baseTable": {
+            "tableName": "Бюджет проекта",
+            "appToken": "MOJ3bzkXYaB6dBsYUirlwtVygug",
+            "tableID": "tblE0dHC6NkMsL9I"
+          },
+          "children": [
+            {
+              "id": "widget17628006210340001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Администратор бюджета",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17628006210370001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Бюджетная программа",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17628006210390001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Пояснение",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            }
+          ]
+        },
+        {
+          "id": "widget17628584239830001",
+          "type": "connect",
+          "widget": "Link approvals",
+          "name": "Связать служебную записку на закупку",
+          "required": false,
+          "placeholder": "Please select"
+        },
+        {
+          "id": "widget17628006277030001",
+          "type": "mutableGroup",
+          "widget": "Data from Base (lookup table)",
+          "name": "Data from Base-Copy",
+          "required": true,
+          "baseTable": {
+            "tableName": "Специфика бюджета проекта",
+            "appToken": "MOJ3bzkXYaB6dBsYUirlwtVygug",
+            "tableID": "tblsghVkGBbNyqsA"
+          },
+          "children": [
+            {
+              "id": "widget17628006388620001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Специфика",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            },
+            {
+              "id": "widget17628006388650001",
+              "type": "radioV2",
+              "widget": "Single select",
+              "name": "Определение",
+              "required": true,
+              "placeholder": "Select",
+              "options": []
+            }
+          ]
+        },
+        {
+          "id": "widget17628005691530001",
+          "type": "amount",
+          "widget": "Amount (money)",
+          "name": "Сумма аванса",
+          "required": true,
+          "placeholder": "Enter amount",
+          "currencies": [
+            "UZS"
+          ],
+          "amountInWords": false,
+          "decimals": 2
+        },
+        {
+          "id": "widget17628007476700001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Счет на оплату",
+          "required": false
+        },
+        {
+          "id": "widget17628007763380001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Накладная",
+          "required": false
+        },
+        {
+          "id": "widget17628005691580001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Счет фактура",
+          "required": false
+        },
+        {
+          "id": "widget17628005691630001",
+          "type": "attachmentV2",
+          "widget": "Attachment",
+          "name": "Платежное поручение",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "widget17650443991060001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Референс операции АБИС/ Рег. номер",
+      "required": false,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17650443993510001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Код назначения платежа",
+      "required": false,
+      "placeholder": "Enter"
+    }
+  ],
+  "conditionalVisibility": [
+    {
+      "target": "widget17627807085770001",
+      "showWhen": [
+        "widget17627792531160001 is mht594t1-m56btyhfm8-3"
+      ]
+    },
+    {
+      "target": "widget17627820896900001",
+      "showWhen": [
+        "widget17627792531160001 is mht594sd-z093o4secaj-0"
+      ]
+    },
+    {
+      "target": "widget17627809798410001",
+      "showWhen": [
+        "widget17627820896900001 is mht6xxi3-b0ik5syct6-0"
+      ]
+    },
+    {
+      "target": "widget17627810427730001",
+      "showWhen": [
+        "widget17627820896900001 is mht6xxi3-s2i21lt65y-0"
+      ]
+    },
+    {
+      "target": "widget17628000152130001",
+      "showWhen": [
+        "widget17627807085770001 is mht6essc-pl6h481rr1a-3"
+      ]
+    },
+    {
+      "target": "widget17628003483820001",
+      "showWhen": [
+        "widget17627807085770001 is mhthnwhh-n1w17oqyd8r-1"
+      ]
+    },
+    {
+      "target": "widget17628005690860001",
+      "showWhen": [
+        "widget17627807085770001 is mht6essc-3u46nb42cim-1"
+      ]
+    }
+  ],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "ROUTE_643037_3052470",
+        "nodeType": 4,
+        "kind": "Condition/branch",
+        "name": "",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_824095_3052470",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "TUTIY-Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515326484446429215",
+              "7525095913329688607",
+              "7522022043097890855",
+              "7607445647129579227"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_408874_3054818",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "OLGA-Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7522022043097890855",
+              "7520235427677126687",
+              "7602519460045393633",
+              "7515326484446429215",
+              "7525095913329688607"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_585091_3052474",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "SAZAGAN-Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7602519460045393633",
+              "7520235427677126687",
+              "7515326484446429215",
+              "7525095913329688607",
+              "7522022043097890855"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_902604_124580",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Утверждение ГД",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515395913389457447"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_731921_223243",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Обработка бухгалтерией",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7525095913329688607"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_132334_3144415",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Обработка заявителем",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "role/other",
+            "ids": []
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_97807_3213625",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Завершение бухгалтерия",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7525095913329688607"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 1
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "ROUTE_643037_3052470",
+        "conditional": false
+      },
+      {
+        "from": "ROUTE_643037_3052470",
+        "to": "APPROVAL_824095_3052470",
+        "conditional": true
+      },
+      {
+        "from": "ROUTE_643037_3052470",
+        "to": "APPROVAL_408874_3054818",
+        "conditional": true
+      },
+      {
+        "from": "ROUTE_643037_3052470",
+        "to": "APPROVAL_585091_3052474",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_824095_3052470",
+        "to": "APPROVAL_902604_124580",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_408874_3054818",
+        "to": "APPROVAL_902604_124580",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_585091_3052474",
+        "to": "APPROVAL_902604_124580",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_902604_124580",
+        "to": "APPROVAL_731921_223243",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_731921_223243",
+        "to": "APPROVAL_132334_3144415",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_132334_3144415",
+        "to": "APPROVAL_97807_3213625",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_97807_3213625",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 0,
+    "rejectOption": 0,
+    "removeRepeatOption": 1,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

@@ -1,0 +1,1 @@
+"""HR service Pydantic schemas."""

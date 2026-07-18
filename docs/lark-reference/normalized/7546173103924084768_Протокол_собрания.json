@@ -1,0 +1,199 @@
+{
+  "id": "7546173103924084768",
+  "name": "Протокол собрания",
+  "group": "7515398545566875679",
+  "icon": "https://lf-package-sg.larksuitecdn.com/obj/lark-static-sgsaas/ee/approval/approval-admin/image/iconLib/v5/toolbox.svg",
+  "status": 0,
+  "fieldCount": 8,
+  "fields": [
+    {
+      "id": "widget17569796375520001",
+      "type": "text",
+      "widget": "Description (static)",
+      "name": "Description 1",
+      "required": true
+    },
+    {
+      "id": "widget17569818754130001",
+      "type": "text",
+      "widget": "Description (static)",
+      "name": "Description 2",
+      "required": true
+    },
+    {
+      "id": "widget17569819052740001",
+      "type": "text",
+      "widget": "Description (static)",
+      "name": "-Copy",
+      "required": true
+    },
+    {
+      "id": "widget17573958258740001",
+      "type": "text",
+      "widget": "Description (static)",
+      "name": "-Copy-Copy",
+      "required": true
+    },
+    {
+      "id": "widget17569835585910001",
+      "type": "serialNumber",
+      "widget": "Serial no.",
+      "name": "Номер протокола",
+      "required": false,
+      "placeholder": "@i18n@serial-number-place-holder"
+    },
+    {
+      "id": "widget17569796895340001",
+      "type": "date",
+      "widget": "Date",
+      "name": "Дата и время собрания",
+      "required": true,
+      "placeholder": "Select"
+    },
+    {
+      "id": "widget17569801021370001",
+      "type": "textarea",
+      "widget": "Paragraph",
+      "name": "Повестка дня",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17569809378430001",
+      "type": "fieldList",
+      "widget": "Widget group (repeatable)",
+      "name": "Решения и задачи",
+      "required": true,
+      "children": [
+        {
+          "id": "widget17569809378440001",
+          "type": "input",
+          "widget": "Short answer",
+          "name": "Задача",
+          "required": true,
+          "placeholder": "@i18n@e2efa92f-b3b0-11f0-9fbe-02f2707a031a"
+        },
+        {
+          "id": "widget17573953327690001",
+          "type": "contact",
+          "widget": "contact",
+          "name": "Ответственный",
+          "required": true,
+          "placeholder": "Enter"
+        },
+        {
+          "id": "widget17569817118590001",
+          "type": "date",
+          "widget": "Date",
+          "name": "Срок исполнения",
+          "required": true,
+          "placeholder": "Select"
+        }
+      ]
+    }
+  ],
+  "conditionalVisibility": [],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_21500_5344408",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Утверждение протокола",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "role/acknowledgers",
+            "ids": []
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "HANDLER_924352_5954350",
+        "nodeType": 6,
+        "kind": "Acknowledge (Ознакомление)",
+        "name": "Ознакомление",
+        "method": "all",
+        "approvers": [
+          {
+            "type": "role/acknowledgers",
+            "ids": []
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "CC_226478_311625",
+        "nodeType": 5,
+        "kind": "Notify (CC)",
+        "name": "Уведомление",
+        "method": "sequential/notify",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_21500_5344408",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_21500_5344408",
+        "to": "HANDLER_924352_5954350",
+        "conditional": false
+      },
+      {
+        "from": "HANDLER_924352_5954350",
+        "to": "CC_226478_311625",
+        "conditional": false
+      },
+      {
+        "from": "CC_226478_311625",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

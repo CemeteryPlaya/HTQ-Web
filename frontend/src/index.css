@@ -1,0 +1,570 @@
+
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Core brand colors - green energy theme */
+    --background: 0 0% 100%;
+    --foreground: 210 20% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 210 20% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 20% 12%;
+
+    /* Primary - Deep forest green */
+    --primary: 145 45% 22%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary - Warm gold */
+    --secondary: 42 85% 55%;
+    --secondary-foreground: 210 20% 12%;
+
+    /* Accent - Light sage */
+    --accent: 145 30% 94%;
+    --accent-foreground: 145 45% 22%;
+
+    --muted: 210 15% 96%;
+    --muted-foreground: 210 10% 45%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 210 15% 90%;
+    --input: 210 15% 90%;
+    --ring: 145 45% 22%;
+
+    --radius: 0.75rem;
+
+    /* Custom tokens */
+    --gradient-hero: linear-gradient(135deg, hsl(145 45% 22%) 0%, hsl(160 40% 28%) 50%, hsl(42 85% 45%) 100%);
+    --gradient-gold: linear-gradient(135deg, hsl(42 85% 55%) 0%, hsl(38 90% 45%) 100%);
+    --gradient-dark: linear-gradient(180deg, hsl(210 20% 8%) 0%, hsl(210 25% 12%) 100%);
+    --gradient-card: linear-gradient(145deg, hsl(0 0% 100%) 0%, hsl(145 20% 98%) 100%);
+    
+    --shadow-soft: 0 4px 20px -4px hsl(145 45% 22% / 0.1);
+    --shadow-card: 0 8px 30px -8px hsl(210 20% 12% / 0.12);
+    --shadow-elevated: 0 20px 50px -12px hsl(210 20% 12% / 0.2);
+    --shadow-gold: 0 8px 30px -8px hsl(42 85% 55% / 0.4);
+
+    /* Sidebar */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    /* Soft dark theme (emerald-tinted, not too dark) */
+    --background: 210 16% 13%;
+    --foreground: 210 20% 90%;
+
+    --card: 210 18% 16%;
+    --card-foreground: 210 20% 92%;
+
+    --popover: 210 18% 16%;
+    --popover-foreground: 210 20% 92%;
+
+    --primary: 145 45% 45%;
+    --primary-foreground: 210 20% 8%;
+
+    --secondary: 42 85% 55%;
+    --secondary-foreground: 210 20% 10%;
+
+    --accent: 145 28% 22%;
+    --accent-foreground: 210 20% 94%;
+
+    --muted: 210 18% 20%;
+    --muted-foreground: 210 12% 70%;
+
+    --destructive: 0 62.8% 34%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 210 18% 24%;
+    --input: 210 18% 24%;
+    --ring: 145 45% 45%;
+
+    --shadow-soft: 0 6px 26px -8px hsl(210 20% 8% / 0.4);
+    --shadow-card: 0 10px 30px -10px hsl(210 20% 8% / 0.45);
+    --shadow-elevated: 0 22px 54px -14px hsl(210 20% 8% / 0.5);
+
+    --sidebar-background: 210 16% 15%;
+    --sidebar-foreground: 210 20% 92%;
+    --sidebar-primary: 145 45% 45%;
+    --sidebar-primary-foreground: 210 20% 8%;
+    --sidebar-accent: 210 15% 20%;
+    --sidebar-accent-foreground: 210 20% 92%;
+    --sidebar-border: 210 15% 24%;
+    --sidebar-ring: 145 45% 45%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Outfit', system-ui, sans-serif;
+  }
+
+  /*
+   * Radix Dialog + portaled Popover/Select interaction fix.
+   *
+   * When a Radix Dialog is open, react-remove-scroll briefly applies
+   * ``pointer-events: none`` to the body to prevent clicks on the page
+   * behind the modal. Popover/Select contents are portaled to body, so
+   * they inherit the disabled pointer-events — keyboard navigation still
+   * works (Radix uses focus state) but mouse clicks on Combobox / Select
+   * items are silently swallowed.
+   *
+   * Restoring pointer-events on the popper wrapper unblocks the click
+   * without re-enabling clicks on the page underneath (Dialog overlay
+   * still covers it).
+   */
+  [data-radix-popper-content-wrapper] {
+    pointer-events: auto !important;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-white/80 backdrop-blur-xl border border-white/20;
+  }
+
+  .glass-dark {
+    @apply bg-black/40 backdrop-blur-xl border border-white/10;
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: var(--gradient-hero);
+  }
+
+  .text-gradient-gold {
+    @apply bg-clip-text text-transparent;
+    background-image: var(--gradient-gold);
+  }
+
+  .btn-primary {
+    @apply bg-primary text-primary-foreground px-6 py-3 rounded-lg font-medium transition-all duration-300;
+    @apply hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0;
+  }
+
+  .btn-secondary {
+    @apply bg-secondary text-secondary-foreground px-6 py-3 rounded-lg font-medium transition-all duration-300;
+    @apply hover:shadow-gold hover:-translate-y-0.5 active:translate-y-0;
+  }
+
+  .btn-outline {
+    @apply border-2 border-primary text-primary px-6 py-3 rounded-lg font-medium transition-all duration-300;
+    @apply hover:bg-primary hover:text-primary-foreground;
+  }
+
+  .card-hover {
+    @apply transition-all duration-500 ease-out;
+    @apply hover:shadow-elevated hover:-translate-y-2;
+  }
+
+  .section-padding {
+    @apply py-20 md:py-28 lg:py-32;
+  }
+
+  .container-custom {
+    @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  /* Smooth page transition when switching language */
+  .language-transition {
+    transition: opacity 320ms ease, filter 320ms ease, transform 320ms ease;
+  }
+
+  .language-changing {
+    will-change: opacity, filter, transform, box-shadow;
+    opacity: 0.94;
+    filter: blur(1.5px);
+    box-shadow: 0 0 30px hsl(var(--primary) / 0.45), 0 0 60px hsl(var(--primary) / 0.25);
+  }
+
+  /* Animated underline */
+  .link-underline {
+    @apply relative;
+  }
+
+  .link-underline::after {
+    @apply absolute bottom-0 left-0 w-0 h-0.5 bg-secondary transition-all duration-300;
+    content: '';
+  }
+
+  .link-underline:hover::after {
+    @apply w-full;
+  }
+
+  /* Stats counter animation */
+  .stat-number {
+    @apply text-5xl md:text-6xl lg:text-7xl font-bold;
+    font-family: 'Outfit', sans-serif;
+  }
+
+  /* Floating animation */
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  /* Fade in up animation */
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fade-in-up {
+    animation: fadeInUp 0.6s ease-out forwards;
+  }
+
+  /* Pulse glow (uses theme primary color) */
+  @keyframes pulseGlow {
+    /* Use the --primary H S% L% token (e.g. "145 45% 22%") and apply alpha for glow */
+    0%, 100% { box-shadow: 0 0 20px hsl(var(--primary) / 0.28); }
+    50% { box-shadow: 0 0 40px hsl(var(--primary) / 0.48); }
+  }
+
+  .animate-pulse-glow {
+    /* apply the animation and make sure it doesn't affect layout */
+    animation: pulseGlow 2s ease-in-out infinite;
+    /* ensure the glow is visible beyond the element's bounds */
+    will-change: box-shadow;
+  }
+
+  /* Scroll indicator */
+  @keyframes scrollBounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(8px); }
+  }
+
+  .animate-scroll-bounce {
+    animation: scrollBounce 1.5s ease-in-out infinite;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-muted;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-primary/30 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-primary/50;
+}
+
+/* ====== Jodit Editor Styles ====== */
+
+/* Editor wrapper */
+.news-editor-wrapper {
+  @apply rounded-xl overflow-hidden border border-border/50;
+}
+
+/* Container */
+.jodit-container {
+  border: none !important;
+  border-radius: 0.75rem !important;
+  overflow: hidden !important;
+}
+
+/* Toolbar */
+.jodit-toolbar__box {
+  background: hsl(var(--muted) / 0.3) !important;
+  border-bottom: 1px solid hsl(var(--border) / 0.5) !important;
+}
+
+/* Toolbar buttons */
+.jodit-toolbar-button__button {
+  border-radius: 0.5rem !important;
+  transition: all 0.15s ease !important;
+  min-width: 32px !important;
+  height: 32px !important;
+}
+
+.jodit-toolbar-button__button:hover {
+  background: hsl(var(--primary) / 0.1) !important;
+  color: hsl(var(--primary)) !important;
+}
+
+.jodit-toolbar-button__button[aria-pressed="true"] {
+  background: hsl(var(--primary) / 0.15) !important;
+  color: hsl(var(--primary)) !important;
+  box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.3) !important;
+}
+
+/* Tooltip styling */
+.jodit-ui-tooltip,
+.jodit-tooltip {
+  background: hsl(var(--foreground)) !important;
+  color: hsl(var(--background)) !important;
+  border-radius: 0.5rem !important;
+  padding: 0.375rem 0.75rem !important;
+  font-size: 0.75rem !important;
+  font-weight: 500 !important;
+  font-family: 'Inter', system-ui, sans-serif !important;
+  box-shadow: 0 4px 12px hsl(var(--foreground) / 0.2) !important;
+  max-width: 220px !important;
+  line-height: 1.4 !important;
+  z-index: 100000 !important;
+}
+
+/* Editor writing area */
+.jodit-wysiwyg {
+  font-family: 'Inter', system-ui, sans-serif !important;
+  font-size: 15px !important;
+  line-height: 1.75 !important;
+  color: hsl(var(--foreground)) !important;
+  padding: 1.25rem 1.5rem !important;
+  min-height: 200px !important;
+}
+
+.jodit-wysiwyg:focus {
+  outline: none !important;
+}
+
+/* Content elements inside editor */
+.jodit-wysiwyg p {
+  margin: 0 0 0.75rem 0 !important;
+}
+
+.jodit-wysiwyg h1 {
+  font-family: 'Outfit', system-ui, sans-serif !important;
+  font-size: 2rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.02em !important;
+  color: hsl(var(--foreground)) !important;
+  margin: 1.5rem 0 0.75rem !important;
+}
+
+.jodit-wysiwyg h2 {
+  font-family: 'Outfit', system-ui, sans-serif !important;
+  font-size: 1.5rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em !important;
+  color: hsl(var(--foreground)) !important;
+  margin: 1.25rem 0 0.5rem !important;
+}
+
+.jodit-wysiwyg h3 {
+  font-family: 'Outfit', system-ui, sans-serif !important;
+  font-size: 1.25rem !important;
+  font-weight: 700 !important;
+  color: hsl(var(--foreground)) !important;
+  margin: 1rem 0 0.5rem !important;
+}
+
+.jodit-wysiwyg h4 {
+  font-family: 'Outfit', system-ui, sans-serif !important;
+  font-size: 1.125rem !important;
+  font-weight: 600 !important;
+  color: hsl(var(--foreground)) !important;
+  margin: 1rem 0 0.5rem !important;
+}
+
+.jodit-wysiwyg ul {
+  list-style-type: disc !important;
+  padding-left: 1.5rem !important;
+  margin: 0.5rem 0 !important;
+}
+
+.jodit-wysiwyg ol {
+  list-style-type: decimal !important;
+  padding-left: 1.5rem !important;
+  margin: 0.5rem 0 !important;
+}
+
+.jodit-wysiwyg li {
+  margin: 0.25rem 0 !important;
+}
+
+.jodit-wysiwyg b,
+.jodit-wysiwyg strong {
+  font-weight: 700 !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.jodit-wysiwyg i,
+.jodit-wysiwyg em {
+  font-style: italic !important;
+}
+
+.jodit-wysiwyg u {
+  text-decoration: underline !important;
+}
+
+.jodit-wysiwyg s,
+.jodit-wysiwyg strike,
+.jodit-wysiwyg del {
+  text-decoration: line-through !important;
+}
+
+.jodit-wysiwyg a {
+  color: hsl(var(--primary)) !important;
+  font-weight: 500 !important;
+  text-decoration: underline !important;
+  text-underline-offset: 4px !important;
+}
+
+.jodit-wysiwyg a:hover {
+  opacity: 0.8 !important;
+}
+
+.jodit-wysiwyg blockquote {
+  border-left: 4px solid hsl(var(--primary)) !important;
+  background: hsl(var(--primary) / 0.05) !important;
+  padding: 0.75rem 1rem !important;
+  margin: 0.75rem 0 !important;
+  border-radius: 0 0.5rem 0.5rem 0 !important;
+  font-style: italic !important;
+  color: hsl(var(--foreground) / 0.9) !important;
+}
+
+.jodit-wysiwyg hr {
+  border: none !important;
+  border-top: 2px solid hsl(var(--border)) !important;
+  margin: 1.5rem 0 !important;
+}
+
+.jodit-wysiwyg table {
+  border-collapse: collapse !important;
+  width: 100% !important;
+  margin: 0.75rem 0 !important;
+}
+
+.jodit-wysiwyg table td,
+.jodit-wysiwyg table th {
+  border: 1px solid hsl(var(--border)) !important;
+  padding: 0.5rem 0.75rem !important;
+}
+
+.jodit-wysiwyg table th {
+  background: hsl(var(--muted)) !important;
+  font-weight: 600 !important;
+}
+
+.jodit-wysiwyg img {
+  max-width: 100% !important;
+  border-radius: 0.75rem !important;
+  border: 1px solid hsl(var(--border) / 0.5) !important;
+  margin: 0.75rem 0 !important;
+}
+
+.jodit-wysiwyg sup {
+  vertical-align: super !important;
+  font-size: 0.75em !important;
+}
+
+.jodit-wysiwyg sub {
+  vertical-align: sub !important;
+  font-size: 0.75em !important;
+}
+
+/* Status bar */
+.jodit-status-bar {
+  background: hsl(var(--muted) / 0.2) !important;
+  border-top: 1px solid hsl(var(--border) / 0.5) !important;
+}
+
+/* Popup dialogs (link, image, etc.) */
+.jodit-popup {
+  border-radius: 0.75rem !important;
+  border: 1px solid hsl(var(--border) / 0.5) !important;
+  box-shadow: 0 8px 30px hsl(var(--foreground) / 0.12) !important;
+  overflow: hidden !important;
+}
+
+.jodit-popup__content {
+  background: hsl(var(--background)) !important;
+}
+
+/* Jodit renders popups/dialogs/tooltips into document.body. When the editor
+ * lives inside a Radix Dialog, Radix sets pointer-events: none on the body
+ * and elevates only DialogContent above its overlay (z-index 50). Without
+ * this override, the font/color/link/image popups are unclickable. */
+.jodit-popup,
+.jodit-dialog,
+.jodit-toolbar-popup,
+.jodit-ui-tooltip,
+.jodit-tooltip {
+  pointer-events: auto !important;
+  z-index: 100000 !important;
+}
+
+.jodit-dialog .jodit-dialog__panel,
+.jodit-popup__content,
+.jodit-popup .jodit-toolbar-button__button,
+.jodit-popup input,
+.jodit-popup textarea,
+.jodit-popup select,
+.jodit-popup button {
+  pointer-events: auto !important;
+}
+
+/* Fullsize (полноэкранный режим).
+ * The editor lives inside a Radix DialogContent that is centred with
+ * `transform: translate(-50%, -50%)`. A transformed ancestor becomes the
+ * containing block for the editor's fullsize box (`position: absolute; inset: 0`),
+ * so "fullscreen" was being trapped inside the off-screen, transform-shifted
+ * dialog — the user just saw a blank white screen.
+ *
+ * Jodit (globalFullSize) tags every ancestor up to <body> with
+ * `jodit_fullsize-box_true`; clearing the containing-block-establishing
+ * properties on them while fullsize is active lets the editor escape to the
+ * real viewport. Besides `transform`, the dialog also uses `backdrop-blur`
+ * (`backdrop-filter`) — and filter/backdrop-filter/perspective/contain ALSO
+ * create a containing block for `position: fixed`, so all must be cleared.
+ * NB: the Jodit class is `jodit_fullsize` with an UNDERSCORE — the previous
+ * `.jodit-fullsize` rule (hyphen) matched nothing. */
+.jodit_fullsize-box_true {
+  transform: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  perspective: none !important;
+  will-change: auto !important;
+  contain: none !important;
+}
+
+.jodit-container.jodit_fullsize {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 100000 !important;
+}
+

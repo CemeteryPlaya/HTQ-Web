@@ -1,0 +1,53 @@
+# Core
+fastapi==0.136.1
+starlette==0.49.1
+uvicorn[standard]==0.34.0
+pydantic==2.12.4
+pydantic-settings==2.11.0
+
+# HTTP Client
+httpx==0.28.1
+
+# JWT Authentication
+PyJWT==2.12.0
+
+# Database (async)
+asyncpg==0.31.0
+alembic==1.14.1
+sqlalchemy[asyncio]==2.0.41
+
+# Redis
+redis[hiredis]==5.2.1
+
+# Background workers
+dramatiq[redis,watch]==1.17.1
+apscheduler==3.10.4
+
+# Crypto (for OAuth tokens)
+cryptography==46.0.7
+
+# IMAP (Mailcow corporate sync, supervisor)
+aioimaplib==1.1.0
+
+# SMTP submission (Mailcow corporate send pipeline)
+aiosmtplib==3.0.2
+
+# Google auth (for verifying Pub/Sub Bearer JWTs on /webhooks/gmail)
+google-auth==2.36.0
+
+# S3 / MinIO (attachment storage)
+aioboto3==13.2.0
+aiofiles==24.1.0
+
+# Admin panel (per-service)
+sqladmin==0.20.1
+itsdangerous==2.2.0
+
+# Observability
+structlog==24.4.0
+
+# Testing
+pytest==9.0.3
+pytest-asyncio==1.3.0
+pytest-cov==6.0.0
+testcontainers[postgres]==4.9.0

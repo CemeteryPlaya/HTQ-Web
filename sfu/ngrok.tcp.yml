@@ -1,0 +1,7 @@
+version: 2
+authtoken: ${NGROK_AUTHTOKEN}
+web_addr: 127.0.0.1:4040
+tunnels:
+  sfu-media:
+    proto: tcp
+    addr: 44444

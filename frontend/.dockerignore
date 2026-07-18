@@ -1,0 +1,9 @@
+node_modules
+dist
+*.log
+.env.local
+.env.*.local
+bundle-report.html
+build-output.log
+build.log
+build_error.log

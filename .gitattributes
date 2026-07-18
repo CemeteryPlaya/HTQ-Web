@@ -1,0 +1,17 @@
+# Ensure shell scripts always have Unix line endings (LF)
+# Critical for Docker containers running on Linux
+*.sh text eol=lf
+*.bash text eol=lf
+
+# SQL init scripts
+*.sql text eol=lf
+
+# Docker config
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+
+# Nginx config
+*.conf text eol=lf
+
+# Default: auto-detect
+* text=auto

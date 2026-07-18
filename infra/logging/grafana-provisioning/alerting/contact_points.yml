@@ -1,0 +1,35 @@
+# Grafana alerting — contact points + notification policies (provisioned).
+#
+# Default contact point routes to Grafana's built-in `grafana-default-email`,
+# which is a no-op until SMTP env vars (GF_SMTP_*) are configured. For now
+# this keeps alerts visible inside the Grafana UI (Alerting → State); add a
+# real Slack/email/webhook contact point when the environment is ready.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: htqweb-default
+    receivers:
+      - uid: htqweb-default-receiver
+        type: email
+        # Falls back to the no-op email integration if SMTP isn't configured.
+        # Replace with slack/webhook/PagerDuty when an integration is wired.
+        settings:
+          addresses: oncall@htqweb.local
+          singleEmail: false
+        disableResolveMessage: false
+
+policies:
+  - orgId: 1
+    receiver: htqweb-default
+    group_by: [grafana_folder, alertname]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 12h
+    routes:
+      - receiver: htqweb-default
+        matchers:
+          - severity = critical
+        group_wait: 0s
+        repeat_interval: 1h

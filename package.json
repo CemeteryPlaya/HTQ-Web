@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "selfsigned": "^5.5.0"
+  }
+}

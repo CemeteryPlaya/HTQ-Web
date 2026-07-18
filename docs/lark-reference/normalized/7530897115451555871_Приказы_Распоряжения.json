@@ -1,0 +1,155 @@
+{
+  "id": "7530897115451555871",
+  "name": "Приказы / Распоряжения",
+  "group": "7515398545566875679",
+  "icon": "https://lf-package-sg.larksuitecdn.com/obj/lark-static-sgsaas/ee/approval/approval-admin/image/iconLib/v5/toolbox.svg",
+  "status": 0,
+  "fieldCount": 5,
+  "fields": [
+    {
+      "id": "widget17534234102090001",
+      "type": "serialNumber",
+      "widget": "Serial no.",
+      "name": "Системный номер приказа",
+      "required": false,
+      "placeholder": "@i18n@serial-number-place-holder"
+    },
+    {
+      "id": "widget17534233630110001",
+      "type": "date",
+      "widget": "Date",
+      "name": "Дата",
+      "required": false,
+      "placeholder": "Select"
+    },
+    {
+      "id": "widget17534233762250001",
+      "type": "textarea",
+      "widget": "Paragraph",
+      "name": "Краткое содержание",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17534233904050001",
+      "type": "attachmentV2",
+      "widget": "Attachment",
+      "name": "Вложения",
+      "required": true
+    },
+    {
+      "id": "widget17534235897490001",
+      "type": "connect",
+      "widget": "Link approvals",
+      "name": "Связанные документы",
+      "required": false,
+      "placeholder": "Please select"
+    }
+  ],
+  "conditionalVisibility": [],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_693705_5813242",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Этап согласования",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "role/acknowledgers",
+            "ids": []
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_116680_2228412",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Утверждение и подписание",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515395913389457447"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "CC_162526_2523828",
+        "nodeType": 5,
+        "kind": "Notify (CC)",
+        "name": "Уведомления",
+        "method": "sequential/notify",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "APPROVAL_693705_5813242",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_693705_5813242",
+        "to": "APPROVAL_116680_2228412",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_116680_2228412",
+        "to": "CC_162526_2523828",
+        "conditional": false
+      },
+      {
+        "from": "CC_162526_2523828",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": false,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 0,
+    "customSummaryWidgets": [],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 1,
+    "rejectOption": 0,
+    "removeRepeatOption": 0,
+    "revertInterval": 2678400,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}

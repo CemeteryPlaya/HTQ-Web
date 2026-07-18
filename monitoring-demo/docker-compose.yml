@@ -1,0 +1,133 @@
+# ═══════════════════════════════════════════════════════════════
+#  Docker Compose: FastAPI Microservices + Prometheus + Grafana
+# ═══════════════════════════════════════════════════════════════
+#
+#  Архитектура:
+#  ┌──────────┐     ┌──────────┐
+#  │   app1   │────▶│   app2   │   FastAPI-микросервисы
+#  │ Gateway  │     │  Users   │   (порты 8001, 8002)
+#  └────┬─────┘     └────┬─────┘
+#       │                │
+#       │   /metrics     │   /metrics
+#       ▼                ▼
+#  ┌─────────────────────────┐
+#  │      Prometheus         │   Сбор метрик (порт 9090)
+#  └────────────┬────────────┘
+#               │
+#               ▼
+#  ┌─────────────────────────┐
+#  │        Grafana          │   Визуализация (порт 3000)
+#  └─────────────────────────┘
+#
+#  Запуск: docker compose up -d --build
+#  Остановка: docker compose down -v
+
+services:
+
+  # ─── API Gateway (app1) ───────────────────────────────────────
+  app1:
+    build:
+      context: ./app1
+      dockerfile: Dockerfile
+    container_name: app1-gateway
+    ports:
+      - "8001:8000"              # Хост:Контейнер
+    environment:
+      - APP_NAME=api-gateway     # Имя для тегирования метрик
+      - INTERNAL_SERVICE_URL=http://app2:8000  # DNS-имя app2 в bridge-сети
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ─── User Service (app2) ─────────────────────────────────────
+  app2:
+    build:
+      context: ./app2
+      dockerfile: Dockerfile
+    container_name: app2-user-service
+    ports:
+      - "8002:8000"
+    environment:
+      - APP_NAME=user-service
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ─── Prometheus ──────────────────────────────────────────────
+  prometheus:
+    build:
+      context: ./prometheus
+      dockerfile: Dockerfile
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      # Persistent storage для данных метрик
+      - prometheus-data:/prometheus
+    command:
+      # Стандартные флаги запуска
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"    # Хранить метрики 15 дней
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"                # Позволяет reload конфига через HTTP
+      - "--web.external-url=/prometheus"        # Поддержка работы за reverse proxy
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+
+  # ─── Grafana ─────────────────────────────────────────────────
+  grafana:
+    build:
+      context: ./grafana
+      dockerfile: Dockerfile
+    container_name: grafana
+    ports:
+      - "3100:3000"
+    environment:
+      # Credentials по умолчанию (сменить в проде!)
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Разрешить анонимный доступ для dev-окружения
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      # Отключить требование смены пароля при первом входе
+      - GF_USERS_ALLOW_SIGN_UP=false
+      # Настройки для работы за reverse-proxy (например, Nginx или Vite proxy)
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s:%(http_port)s/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    volumes:
+      # Persistent storage для дашбордов и настроек
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitoring-net
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+# ─── Единая bridge-сеть ───────────────────────────────────────
+# Все контейнеры видят друг друга по имени сервиса (DNS).
+networks:
+  monitoring-net:
+    driver: bridge
+    name: monitoring-net
+
+# ─── Persistent Volumes ──────────────────────────────────────
+volumes:
+  prometheus-data:
+    name: prometheus-data
+  grafana-data:
+    name: grafana-data

@@ -1,0 +1,399 @@
+{
+  "id": "7551490798764752934",
+  "name": "Договор UZ (главный)",
+  "group": "7513944876916932639",
+  "icon": "https://p19-approval-sign.larksuitecdn.com/lark-approval-sgsaas/image/20251110/0/dd59672f-76e7-4281-bc3c-8456e23d31b8.png~tplv-w44fd0ssk5-preview-image.image?lk3s=d810e0ef&x-expires=1784138011&x-signature=CpxysyrU2RpiAQ1nqzBLLKydwWI%3D#.png",
+  "status": 0,
+  "fieldCount": 12,
+  "fields": [
+    {
+      "id": "widget17494743059370001",
+      "type": "input",
+      "widget": "Short answer",
+      "name": "Наименование договора",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17526439788750001",
+      "type": "mutableGroup",
+      "widget": "Data from Base (lookup table)",
+      "name": "Data from Base",
+      "required": true,
+      "baseTable": {
+        "tableName": "Бюджет проекта",
+        "appToken": "MOJ3bzkXYaB6dBsYUirlwtVygug",
+        "tableID": "tblE0dHC6NkMsL9I"
+      },
+      "children": [
+        {
+          "id": "widget17612198244600001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Администратор бюджета",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        },
+        {
+          "id": "widget17612198244620001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Бюджетная программа",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        },
+        {
+          "id": "widget17612198244640001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Пояснение",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        }
+      ]
+    },
+    {
+      "id": "widget17526440120450001",
+      "type": "mutableGroup",
+      "widget": "Data from Base (lookup table)",
+      "name": "Data from Base-Copy",
+      "required": true,
+      "baseTable": {
+        "tableName": "Специфика бюджета проекта",
+        "appToken": "MOJ3bzkXYaB6dBsYUirlwtVygug",
+        "tableID": "tblsghVkGBbNyqsA"
+      },
+      "children": [
+        {
+          "id": "widget17612198496210001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Специфика",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        },
+        {
+          "id": "widget17612198496230001",
+          "type": "radioV2",
+          "widget": "Single select",
+          "name": "Определение",
+          "required": true,
+          "placeholder": "Select",
+          "options": []
+        }
+      ]
+    },
+    {
+      "id": "widget17490188056960001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "НДС",
+      "required": true,
+      "placeholder": "Выбрать",
+      "options": [
+        "С НДС",
+        "Без НДС"
+      ]
+    },
+    {
+      "id": "widget17618315875800001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Тип договора",
+      "required": true,
+      "placeholder": "Select",
+      "options": [
+        "Рамочный договор",
+        "Фиксированный договор"
+      ]
+    },
+    {
+      "id": "widget17627775042540001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Тип поставки",
+      "required": true,
+      "placeholder": "Select",
+      "options": [
+        "ТМЦ",
+        "РиУ"
+      ]
+    },
+    {
+      "id": "widget17627773307830001",
+      "type": "radioV2",
+      "widget": "Single select",
+      "name": "Форма оплаты",
+      "required": true,
+      "placeholder": "Select",
+      "options": [
+        "Предоплата",
+        "Постоплата"
+      ]
+    },
+    {
+      "id": "widget17618326111630001",
+      "type": "number",
+      "widget": "Number",
+      "name": "ИНН Поставщика",
+      "required": true,
+      "placeholder": "Enter"
+    },
+    {
+      "id": "widget17613116518680001",
+      "type": "amount",
+      "widget": "Amount (money)",
+      "name": "Общая сумма договора",
+      "required": true,
+      "placeholder": "Enter amount",
+      "currencies": [
+        "UZS"
+      ],
+      "amountInWords": false,
+      "decimals": 2
+    },
+    {
+      "id": "widget17627785155420001",
+      "type": "attachmentV2",
+      "widget": "Attachment",
+      "name": "Проект договора",
+      "required": true
+    },
+    {
+      "id": "widget17487166646170001",
+      "type": "attachmentV2",
+      "widget": "Attachment",
+      "name": "Подписанный договор + приложение",
+      "required": false
+    },
+    {
+      "id": "widget17494645186530001",
+      "type": "serialNumber",
+      "widget": "Serial no.",
+      "name": "Системный номер договора",
+      "required": false,
+      "placeholder": "@i18n@serial-number-place-holder"
+    }
+  ],
+  "conditionalVisibility": [],
+  "workflow": {
+    "nodes": [
+      {
+        "id": "START",
+        "nodeType": 1,
+        "kind": "Start/Submit",
+        "name": "Submit",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "ROUTE_678385_5046887",
+        "nodeType": 4,
+        "kind": "Condition/branch",
+        "name": "",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_894952_5046887",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "TUTIY-Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7522022043097890855",
+              "7515326484446429215",
+              "7525095913329688607",
+              "7607445647129579227"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_634474_5116301",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "OLGA-Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7522022043097890855",
+              "7515326484446429215",
+              "7525095913329688607",
+              "7602519460045393633",
+              "7520235427677126687"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_161670_5046888",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "SAZAGAN-Согласование",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515326484446429215",
+              "7525095913329688607",
+              "7602519460045393633",
+              "7520235427677126687",
+              "7522022043097890855"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_520280_316742",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Согласование ГД",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515395913389457447"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_435399_3625684",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Прикрепить подписанный договор",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "role/other",
+            "ids": []
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "APPROVAL_811804_465986",
+        "nodeType": 3,
+        "kind": "Approval",
+        "name": "Утверждение ГД",
+        "method": "any-one/single",
+        "approvers": [
+          {
+            "type": "specific users",
+            "ids": [
+              "7515395913389457447"
+            ]
+          }
+        ],
+        "cc": 0
+      },
+      {
+        "id": "END",
+        "nodeType": 2,
+        "kind": "End",
+        "name": "End",
+        "method": "any-one/single",
+        "approvers": [],
+        "cc": 1
+      }
+    ],
+    "edges": [
+      {
+        "from": "START",
+        "to": "ROUTE_678385_5046887",
+        "conditional": false
+      },
+      {
+        "from": "ROUTE_678385_5046887",
+        "to": "APPROVAL_894952_5046887",
+        "conditional": true
+      },
+      {
+        "from": "ROUTE_678385_5046887",
+        "to": "APPROVAL_634474_5116301",
+        "conditional": true
+      },
+      {
+        "from": "ROUTE_678385_5046887",
+        "to": "APPROVAL_161670_5046888",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_894952_5046887",
+        "to": "APPROVAL_520280_316742",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_634474_5116301",
+        "to": "APPROVAL_520280_316742",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_161670_5046888",
+        "to": "APPROVAL_520280_316742",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_520280_316742",
+        "to": "APPROVAL_435399_3625684",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_435399_3625684",
+        "to": "APPROVAL_811804_465986",
+        "conditional": false
+      },
+      {
+        "from": "APPROVAL_811804_465986",
+        "to": "END",
+        "conditional": false
+      }
+    ]
+  },
+  "otherSettings": {
+    "allowBatchOperate": true,
+    "allowCustomPrint": false,
+    "allowCustomPrintType": 0,
+    "allowInsteadCreate": false,
+    "allowReApprove": 1,
+    "customSummaryWidgets": [
+      "widget17494743059370001",
+      "widget17612198244600001",
+      "widget17494645186530001",
+      "widget17618326111630001",
+      "widget17487166646170001"
+    ],
+    "customTitle": {},
+    "disableShareToNonStakeholders": 0,
+    "enableOpAuth": {},
+    "excludeEfficiencyOption": false,
+    "instanceShareOption": "ALL",
+    "modifyInterval": 2678400,
+    "quickApprovalOption": 0,
+    "rejectOption": 0,
+    "removeRepeatOption": 1,
+    "revertInterval": 259200,
+    "revertOption": 1,
+    "rollbackOption": 0,
+    "secondApprovalOption": 0,
+    "supportBatchRead": true
+  }
+}
