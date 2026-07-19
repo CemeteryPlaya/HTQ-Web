@@ -9,11 +9,11 @@ apps.cms.models / apps.cms.services из другой аппки запрещё�
 (а не в 500) — см. htqweb/http.py.
 """
 from apps.core.services import require_service
+from apps.cms.models import News
 
 
 def get_published_news(limit: int = 10) -> list[dict]:
     require_service("cms")
-    from apps.cms.models import News
     rows = (News.objects.filter(published=True)
             .order_by("-published_at")[:limit]
             .values("id", "title", "slug", "published_at"))
