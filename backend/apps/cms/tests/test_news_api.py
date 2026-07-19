@@ -246,6 +246,23 @@ def test_get_news_by_slug_trailing_slash_alias():
     assert resp.status_code == 200
 
 
+@pytest.mark.django_db
+def test_get_news_by_slug_elapsed_scheduled_visible_to_anonymous():
+    """``GET /news/by-slug/{slug}`` shares the LOOSE visibility gate with
+    the list route — unlike ``GET /news/{id}``, which is deliberately
+    stricter (see ``test_get_news_by_id_elapsed_scheduled_404_for_anonymous``
+    below). An elapsed ``scheduled`` item must be visible to anonymous
+    callers here, mirroring ``test_list_news_shows_elapsed_scheduled_to_anonymous``."""
+    news = _make_news(
+        slug="live-now", status="scheduled",
+        scheduled_at=timezone.now() - timedelta(minutes=1),
+    )
+    resp = Client().get(f"{BASE}/news/by-slug/live-now")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == news.id
+    assert resp.json()["slug"] == "live-now"
+
+
 # ── GET /news/{id} ────────────────────────────────────────────────────────
 
 
@@ -580,6 +597,46 @@ def test_update_news_writes_audit_log():
     assert log.resource_id == str(news.id)
     assert log.user_id == 9
     assert log.changes == {"title": "Updated"}
+
+
+@pytest.mark.django_db
+def test_update_news_scheduled_at_survives_audit_log_as_iso_string():
+    """``_json_safe`` (``views.py``) exists specifically so a raw
+    ``datetime`` (e.g. ``scheduled_at``) landing in the PATCH audit
+    ``changes`` dict doesn't hit ``AuditLog.changes`` — a plain
+    ``JSONField`` with no custom encoder — and raise ``TypeError``. No
+    other test PATCHes a datetime-bearing field, so without this the fix
+    could silently regress and the AuditLog write would start 500ing."""
+    news = _make_news(slug="hello", status="draft")
+    resp = _patch_json(
+        Client(), f"{BASE}/news/{news.id}", {"scheduled_at": "2026-01-01T10:00:00Z"},
+        **_auth_header(_admin_token()),
+    )
+    assert resp.status_code == 200
+    log = AuditLog.objects.get(action="news_updated", resource_id=str(news.id))
+    assert isinstance(log.changes["scheduled_at"], str)
+    assert log.changes["scheduled_at"].startswith("2026-01-01T10:00:00")
+
+
+@pytest.mark.django_db
+def test_update_news_sets_category():
+    """``update_news`` translates the incoming ``category_id`` to Django's
+    actual FK attribute ``category_ref_id`` (``news_service.py``) — the
+    exact bug class that broke serialization on first implementation. Only
+    the CREATE path (``test_create_news_with_category``) had a regression
+    test; this covers PATCH."""
+    cat = Category.objects.create(slug="tech", name="Tech")
+    news = _make_news(slug="hello", status="draft")
+    resp = _patch_json(
+        Client(), f"{BASE}/news/{news.id}", {"category_id": cat.id},
+        **_auth_header(_admin_token()),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["category"]["slug"] == "tech"
+    assert body["category_id"] == cat.id
+    news.refresh_from_db()
+    assert news.category_ref_id == cat.id
 
 
 # ── DELETE /news/{id} ─────────────────────────────────────────────────────
