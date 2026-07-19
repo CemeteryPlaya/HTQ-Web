@@ -182,6 +182,57 @@ def test_saving_service_status_through_admin_busts_cache_immediately(superuser):
 
 
 @pytest.mark.django_db
+def test_deleting_service_status_through_admin_busts_cache_immediately(superuser):
+    """FINDING 1 regression test: ServiceStatusAdmin overrode save_model to
+    bust the cache but not delete_model, so a single-object delete left the
+    cache holding the pre-delete value for up to _CACHE_TTL (5s) instead of
+    immediately reflecting the fall-open "enabled" default."""
+    row, _ = ServiceStatus.objects.update_or_create(
+        app_label="cms", defaults={"enabled": False})
+    # Prime the cache with the disabled value, the way a normal request would.
+    assert service_enabled("cms") is False
+
+    client = _client_as(superuser)
+    resp = client.post(f"/django-admin/core/servicestatus/{row.id}/delete/",
+                        data={"post": "yes"})
+    assert resp.status_code == 302  # successful admin delete redirects
+
+    assert not ServiceStatus.objects.filter(app_label="cms").exists()
+    # No 5s TTL wait: delete_model must have busted svc-status:cms
+    # immediately. With no row left, service_status() falls open to enabled.
+    assert service_enabled("cms") is True
+
+
+@pytest.mark.django_db
+def test_bulk_delete_service_status_through_admin_busts_cache_immediately(superuser):
+    """FINDING 1 regression test, bulk path: the "Delete selected" action
+    goes through delete_queryset, not delete_model, so it needed its own
+    override collecting app_labels BEFORE the queryset is deleted."""
+    row_cms, _ = ServiceStatus.objects.update_or_create(
+        app_label="cms", defaults={"enabled": False})
+    row_users, _ = ServiceStatus.objects.update_or_create(
+        app_label="users", defaults={"enabled": False})
+    assert service_enabled("cms") is False
+    assert service_enabled("users") is False
+
+    client = _client_as(superuser)
+    resp = client.post(
+        "/django-admin/core/servicestatus/",
+        data={
+            "action": "delete_selected",
+            "_selected_action": [str(row_cms.id), str(row_users.id)],
+            "post": "yes",
+        },
+    )
+    assert resp.status_code == 302  # successful bulk action redirects
+
+    assert not ServiceStatus.objects.filter(app_label__in=["cms", "users"]).exists()
+    # No 5s TTL wait for either row.
+    assert service_enabled("cms") is True
+    assert service_enabled("users") is True
+
+
+@pytest.mark.django_db
 def test_non_superuser_staff_sees_nothing(staff_user):
     ServiceStatus.objects.update_or_create(app_label="cms", defaults={"enabled": True})
     client = _client_as(staff_user)

@@ -33,3 +33,22 @@ class ServiceStatusAdmin(admin.ModelAdmin):
         # or a flip here would still take up to _CACHE_TTL (5s) to take
         # effect instead of applying immediately.
         cache.delete(f"svc-status:{obj.app_label}")
+
+    def delete_model(self, request, obj):
+        # Single-object delete view. A deleted row falls back to fail-open
+        # "enabled" per service_status()'s ``row is None`` branch, so a
+        # stale cached "disabled" would wrongly keep the service gated (or
+        # vice versa) for up to _CACHE_TTL. Read app_label before super()
+        # deletes the row (obj is a Python object, still readable after, but
+        # do it up front for symmetry with delete_queryset below).
+        app_label = obj.app_label
+        super().delete_model(request, obj)
+        cache.delete(f"svc-status:{app_label}")
+
+    def delete_queryset(self, request, queryset):
+        # Bulk "Delete selected" action. Must collect app_labels BEFORE
+        # deleting — the rows (and thus obj.app_label) are gone after.
+        app_labels = list(queryset.values_list("app_label", flat=True))
+        super().delete_queryset(request, queryset)
+        for app_label in app_labels:
+            cache.delete(f"svc-status:{app_label}")

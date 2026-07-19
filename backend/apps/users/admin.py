@@ -36,6 +36,15 @@ class UserAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
             db_models.JSONField: {"widget": JSONEditorWidget},
         }
 
+    def has_add_permission(self, request):
+        # `password` is a required CharField with no default and is excluded
+        # from this form (see above), so an admin-created User would
+        # silently save with password="" — an unusable-password account
+        # with no warning. Rather than duplicate password hashing here,
+        # route creation through the API, which already hashes properly:
+        # POST /api/users/v1/admin/users/.
+        return False
+
 
 @admin.register(Item)
 class ItemAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):

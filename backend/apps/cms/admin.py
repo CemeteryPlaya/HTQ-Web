@@ -71,5 +71,9 @@ class AuditLogAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
         }
 
     def has_add_permission(self, request):
-        # Audit log rows are written by the app, not authored by hand.
+        # Intentionally hardcoded False, NOT `super().has_add_permission(...)
+        # and self._service_enabled()`: audit rows are written by code only,
+        # never authored by hand, so this is unconditionally stricter than
+        # the service gate (denying add regardless of cms's enabled state)
+        # rather than a stand-in for it.
         return False

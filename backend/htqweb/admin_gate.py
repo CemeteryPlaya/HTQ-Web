@@ -34,37 +34,16 @@ see ``apps/core/admin.py`` for the anti-lockout reasoning.
 """
 
 from apps.core.services import service_enabled
-
-# Django app_label -> service-registry name (the name apps.core.services.
-# service_enabled()/ServiceStatus.app_label expect), for the handful of apps
-# whose Django app_label doesn't match the registry's service name 1:1.
-#
-# Keep this literally next to htqweb.middleware.service_gate.PREFIX_TO_SERVICE
-# (imported nowhere here on purpose — importing it would suggest the two
-# dicts are keyed the same way, but PREFIX_TO_SERVICE is keyed by URL prefix
-# while this one is keyed by Django app_label) so a reader auditing one
-# always finds the other in the same breath. If you add a prefix there for a
-# service whose future Django app_label won't match the service name,
-# add the app_label entry here too.
-#
-# Known divergences, per PREFIX_TO_SERVICE's prefix -> service mapping:
-#   "/api/requests/" -> service "approvals"
-#   "/api/email/"    -> service "mail"
-#   "/api/media/"    -> service "media"
-# Whatever exact app_label those not-yet-ported apps land on, register it
-# here so ServiceGatedAdminMixin asks the registry about the right name.
-# Anything absent from this map falls back to using the app_label itself as
-# the service name — true today for apps.core/apps.users/apps.cms, whose
-# app_labels (core/users/cms) already match their KNOWN_SERVICES entry.
-APP_LABEL_TO_SERVICE = {
-    "approvals": "approvals",
-    "mail": "mail",
-    "media_files": "media",
-}
-
-
-def service_name_for_app_label(app_label: str) -> str:
-    return APP_LABEL_TO_SERVICE.get(app_label, app_label)
+# APP_LABEL_TO_SERVICE lives in htqweb.middleware.service_gate, directly
+# below PREFIX_TO_SERVICE — both maps describe the same service topology and
+# must be updated together, so they're kept in the same file rather than
+# duplicated here. Re-exported (not redefined) so existing importers of
+# htqweb.admin_gate.APP_LABEL_TO_SERVICE / .service_name_for_app_label keep
+# working.
+from htqweb.middleware.service_gate import (  # noqa: F401
+    APP_LABEL_TO_SERVICE,
+    service_name_for_app_label,
+)
 
 
 class ServiceGatedAdminMixin:
