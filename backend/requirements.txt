@@ -16,3 +16,4 @@ boto3==1.43.51
 uvicorn[standard]==0.34.0   # локальный ASGI-запуск (SSE/socketio позже)
 pytest==9.0.3
 pytest-django==4.12.0
+django-json-widget==2.1.1   # JSONField editing in django-admin (task 2.6)
