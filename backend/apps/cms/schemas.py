@@ -5,9 +5,11 @@ field names are kept identical because the React frontend parses them as-is.
 """
 
 from datetime import datetime
-from typing import Optional, Union
+from typing import Generic, Optional, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+from apps.cms.models import NewsStatus
 
 
 class ContactRequestCreate(BaseModel):
@@ -82,3 +84,135 @@ class ContactRequestListQuery(BaseModel):
     handled: Optional[bool] = None
     limit: int = Field(50, ge=1, le=500)
     offset: int = Field(0, ge=0)
+
+
+# --- Taxonomy (categories, tags) --------------------------------------------
+#
+# Ported 1:1 from ``services/cms/app/schemas/news.py`` — field names/limits
+# kept identical (frontend types: ``frontend/src/types/news.ts``).
+
+
+class CategoryBase(BaseModel):
+    slug: str = Field(..., max_length=120, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(..., max_length=160, min_length=1)
+    description: str = Field("", max_length=500)
+
+
+class CategoryCreate(CategoryBase):
+    pass
+
+
+class CategoryUpdate(BaseModel):
+    slug: Optional[str] = Field(None, max_length=120, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: Optional[str] = Field(None, max_length=160, min_length=1)
+    description: Optional[str] = Field(None, max_length=500)
+
+
+class CategoryRead(CategoryBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+
+
+class TagBase(BaseModel):
+    slug: str = Field(..., max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(..., max_length=80, min_length=1)
+
+
+class TagCreate(TagBase):
+    pass
+
+
+class TagUpdate(BaseModel):
+    slug: Optional[str] = Field(None, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: Optional[str] = Field(None, max_length=80, min_length=1)
+
+
+class TagRead(TagBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+
+
+# --- News --------------------------------------------------------------------
+#
+# Ported 1:1 from ``services/cms/app/schemas/news.py``. Unlike
+# ``CategoryRead``/``TagRead`` (validated straight off the ORM instance),
+# ``NewsRead`` is always built from a plain dict assembled by
+# ``apps.cms.services.news_service.serialize_news`` — the Django ``News``
+# model has both a legacy ``category`` string column AND a ``category_ref``
+# FK, the same name clash the FastAPI original has between its ``category``
+# string column and ``category_ref`` relationship. The FastAPI schema
+# resolves it with ``validation_alias="category_ref"``; the Django port
+# resolves it by having the service put the *category_ref* object under the
+# dict key ``"category"`` directly, so no alias is needed here.
+
+
+class NewsBase(BaseModel):
+    title: str = Field(..., max_length=300, min_length=1)
+    slug: str = Field(..., max_length=320, min_length=1)
+    excerpt: str = Field("", max_length=500)
+    content: str = ""
+    image: Optional[str] = Field(None, max_length=500)
+    category_id: Optional[int] = None
+    author_id: Optional[int] = None
+    status: NewsStatus = NewsStatus.DRAFT
+    scheduled_at: Optional[datetime] = None
+
+
+class NewsCreate(NewsBase):
+    tag_ids: list[int] = Field(default_factory=list)
+
+
+class NewsUpdate(BaseModel):
+    title: Optional[str] = Field(None, max_length=300, min_length=1)
+    slug: Optional[str] = Field(None, max_length=320, min_length=1)
+    excerpt: Optional[str] = Field(None, max_length=500)
+    content: Optional[str] = None
+    image: Optional[str] = Field(None, max_length=500)
+    category_id: Optional[int] = None
+    author_id: Optional[int] = None
+    status: Optional[NewsStatus] = None
+    scheduled_at: Optional[datetime] = None
+    tag_ids: Optional[list[int]] = None
+    # Legacy compatibility — accepted but mapped onto `status`.
+    published: Optional[bool] = None
+
+
+class NewsRead(NewsBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    published: bool
+    published_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    category: Optional[CategoryRead] = None
+    tags: list[TagRead] = Field(default_factory=list)
+    # Legacy denormalized field for transitional clients.
+    summary: str = ""
+
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    items: list[T]
+    page: int
+    page_size: int
+    total: int
+    has_next: bool
+
+
+class NewsListQuery(BaseModel):
+    """Validates ``GET /news/`` query params.
+
+    Mirrors the FastAPI original's ``Query(...)`` declarations
+    (``services/cms/app/api/v1/news.py::list_news``).
+    """
+
+    category: Optional[str] = Field(None, max_length=120)
+    tag: Optional[str] = Field(None, max_length=80)
+    status: Optional[NewsStatus] = None
+    q: Optional[str] = Field(None, max_length=200)
+    page: int = Field(1, ge=1)
+    page_size: int = Field(12, ge=1, le=100)

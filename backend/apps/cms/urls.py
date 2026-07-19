@@ -27,4 +27,27 @@ urlpatterns = [
     # never redirects a stray trailing slash on its own.
     path("conference/config", views.conference_config),
     path("conference/config/", views.conference_config),
+    # News — frontend call sites (frontend/src/api/cms.ts): 'news/' (list,
+    # create), 'news/{id}' with NO trailing slash (get/patch/delete),
+    # 'news/by-slug/{slug}' with no trailing slash. Trailing-slash aliases on
+    # the detail routes are registered defensively, same convention as the
+    # contact-requests routes above (APPEND_SLASH=False never redirects a
+    # stray trailing slash on its own).
+    path("news/", views.news_collection),
+    path("news/by-slug/<str:slug>", views.news_by_slug),
+    path("news/by-slug/<str:slug>/", views.news_by_slug),
+    path("news/<int:news_id>", views.news_detail),
+    path("news/<int:news_id>/", views.news_detail),
+    # Categories — frontend call sites: 'categories/' (list, create),
+    # 'categories/{id}' with no trailing slash (patch/delete). Trailing-slash
+    # alias registered defensively per the same convention.
+    path("categories/", views.categories_collection),
+    path("categories/<int:category_id>", views.category_detail),
+    path("categories/<int:category_id>/", views.category_detail),
+    # Tags — frontend call sites: 'tags/' (list, create), 'tags/{id}' with no
+    # trailing slash (patch/delete). Trailing-slash alias registered
+    # defensively per the same convention.
+    path("tags/", views.tags_collection),
+    path("tags/<int:tag_id>", views.tag_detail),
+    path("tags/<int:tag_id>/", views.tag_detail),
 ]

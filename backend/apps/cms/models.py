@@ -17,10 +17,17 @@ an alembic-parity artifact.
 One piece of FastAPI business logic is intentionally preserved: a Postgres
 trigger that keeps the legacy ``published``/``published_at`` columns in sync
 with ``status`` (see migration ``0002_news_sync_published_trigger``, its
-``RunSQL`` operation). It stays as SQL for now because there is no News CRUD
-yet (Task 1.3, currently skipped) to carry the equivalent logic in
-``save()``/a signal — when that CRUD lands, this trigger should move into
-the model layer.
+``RunSQL`` operation). Task 1.3 added the News CRUD endpoints
+(``apps.cms.services.news_service``) and, per that task's brief, left the
+trigger in place rather than folding it into ``save()``/a signal: the
+service layer's ``apply_status_side_effects`` computes the same
+``published``/``published_at`` values in Python (so the ORM object handed
+back to a view reflects the correct values immediately, without a DB round
+trip) and always does a full, unrestricted ``News.save()`` so ``status`` is
+always part of the UPDATE's column list and the trigger reliably fires too
+— the two aren't fighting, they're computing the same thing twice on
+purpose. ``scheduled_at`` clearing on publish is the one bit the trigger
+does NOT do, and is real (non-duplicate) Python-side logic.
 """
 
 import uuid

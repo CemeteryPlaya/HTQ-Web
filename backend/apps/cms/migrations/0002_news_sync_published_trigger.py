@@ -1,14 +1,15 @@
-# Preserves one piece of FastAPI business logic that isn't yet re-homed at
-# the model layer: a Postgres trigger that keeps the legacy `published`
-# boolean and `published_at` timestamp in sync with `status` on
-# INSERT/UPDATE OF status. Ported from the FastAPI cms-service's alembic
-# chain (004_news_taxonomy), rewritten for the idiomatic unqualified
-# `public.cms_news` table/function names — no more `cms.` schema prefix.
+# Preserves one piece of FastAPI business logic: a Postgres trigger that
+# keeps the legacy `published` boolean and `published_at` timestamp in sync
+# with `status` on INSERT/UPDATE OF status. Ported from the FastAPI
+# cms-service's alembic chain (004_news_taxonomy), rewritten for the
+# idiomatic unqualified `public.cms_news` table/function names — no more
+# `cms.` schema prefix.
 #
-# TODO(News CRUD, Task 1.3, currently skipped): once News has real
-# create/update views, move this logic into News.save() or a pre_save
-# signal and drop this trigger. It is kept as RunSQL for now only because
-# there is nowhere else in the app for it to live yet.
+# Task 1.3 (News CRUD, apps.cms.services.news_service) deliberately kept
+# this trigger rather than folding it into News.save()/a signal — see
+# apps/cms/models.py's module docstring and
+# news_service.apply_status_side_effects for how the Python-side mirror and
+# this trigger stay in sync instead of fighting each other.
 
 from django.db import migrations
 
