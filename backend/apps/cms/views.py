@@ -16,6 +16,7 @@ router would give for an unregistered method on a real path.
 from __future__ import annotations
 
 import json
+import logging
 
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse, JsonResponse
@@ -29,6 +30,8 @@ from . import schemas
 from .services import audit
 from .services import conference_service
 from .services import contact_requests_service as svc
+
+logger = logging.getLogger(__name__)
 
 
 def _require_admin(request) -> None:
@@ -59,7 +62,20 @@ def _create_contact_request(request, data: schemas.ContactRequestCreate):
     # (notify_admins_on_contact_request.send(entry.id)); Task 1.4
     # deliberately deferred this side effect until the task itself landed
     # (Task 1.7, apps/cms/tasks.py).
-    async_task("apps.cms.tasks.notify_admins_on_contact_request", entry.id)
+    #
+    # Must never propagate: in Q_CLUSTER["sync"]=True (the whole test suite)
+    # django-q2's executor re-raises the task's exception back here, and in
+    # production a broker hiccup can raise synchronously out of enqueue().
+    # The ContactRequest row + audit entry above are already committed, so a
+    # notification/broker failure must not turn an already-saved submission
+    # into a 500 for the submitter.
+    try:
+        async_task("apps.cms.tasks.notify_admins_on_contact_request", entry.id)
+    except Exception:
+        logger.exception(
+            "notify_admins_on_contact_request enqueue/run failed for id=%d",
+            entry.id,
+        )
     return schemas.ContactRequestRead.model_validate(entry)
 
 

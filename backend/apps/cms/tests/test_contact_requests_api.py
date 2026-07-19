@@ -64,6 +64,32 @@ def test_public_post_without_token_succeeds_and_persists():
 
 
 @pytest.mark.django_db
+def test_public_post_succeeds_even_if_notification_enqueue_raises(monkeypatch):
+    """Review finding on Task 1.7: async_task(...) at the create call site
+    was unguarded. In Q_CLUSTER["sync"]=True (this whole suite) django-q2's
+    executor re-raises the task's own exception back to the caller of
+    async_task — so a notification/broker hiccup would 500 the submitter
+    even though the ContactRequest row + audit entry were already committed.
+    Force that path by making the enqueue call itself raise, and assert the
+    public POST still returns 201 with the persisted row intact."""
+    def _boom(*args, **kwargs):
+        raise RuntimeError("broker unreachable")
+
+    monkeypatch.setattr("apps.cms.views.async_task", _boom)
+
+    client = Client()
+    before = ContactRequest.objects.count()
+    resp = _post_json(client, f"{BASE}/", {
+        "first_name": "Bob", "last_name": "Roe", "email": "bob@example.com", "message": "hi",
+    })
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["email"] == "bob@example.com"
+    assert ContactRequest.objects.count() == before + 1
+    assert ContactRequest.objects.filter(email="bob@example.com").exists()
+
+
+@pytest.mark.django_db
 def test_public_post_invalid_body_422_with_detail():
     client = Client()
     resp = _post_json(client, f"{BASE}/", {"email": "not-an-email"})
