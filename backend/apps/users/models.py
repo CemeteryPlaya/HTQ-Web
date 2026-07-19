@@ -1,9 +1,10 @@
 import logging
 
 import bcrypt as bcrypt_lib
+from django.conf import settings
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
-from django.contrib.auth.models import PermissionsMixin
 from django.db import models
+from django.db.models.functions import Now
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,13 @@ class UserManager(BaseUserManager):
         return self.create_user(username, email, password, **extra)
 
 
-class User(AbstractBaseUser, PermissionsMixin):
-    """Маппинг на существующую таблицу users (создана alembic'ом user-service).
+class User(AbstractBaseUser):
+    """Идиоматичная Django-модель пользователя, с нуля в схеме ``public``.
+
+    Решение Р1 (заказчик): платформа использует собственные is_staff/
+    is_superuser + RBAC из htqweb.authn, Django-группы/права не нужны — от
+    ``PermissionsMixin`` отказались осознанно (см. has_perm/has_module_perms
+    ниже — минимальная замена для нужд django.contrib.admin).
 
     password хранится в колонке password_hash; исторические форматы:
     pbkdf2_sha256$... (родной Django) и raw bcrypt $2b$... (FastAPI-период).
@@ -42,37 +48,45 @@ class User(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(max_length=254, unique=True)
     password = models.CharField(max_length=256, db_column="password_hash")
 
-    first_name = models.CharField(max_length=150, blank=True, default="")
-    last_name = models.CharField(max_length=150, blank=True, default="")
-    patronymic = models.CharField(max_length=100, blank=True, default="")
-    display_name = models.CharField(max_length=100, blank=True, default="")
-    bio = models.TextField(blank=True, default="")
-    phone = models.CharField(max_length=30, blank=True, default="")
+    first_name = models.CharField(max_length=150, blank=True, default="", db_default="")
+    last_name = models.CharField(max_length=150, blank=True, default="", db_default="")
+    patronymic = models.CharField(max_length=100, blank=True, default="", db_default="")
+    display_name = models.CharField(max_length=100, blank=True, default="", db_default="")
+    bio = models.TextField(blank=True, default="", db_default="")
+    phone = models.CharField(max_length=30, blank=True, default="", db_default="")
     avatar_url = models.CharField(max_length=500, null=True, blank=True)
     settings = models.JSONField(default=dict)
 
     status = models.CharField(max_length=16, choices=UserStatus.choices,
-                              default=UserStatus.PENDING)
-    is_staff = models.BooleanField(default=False)
-    is_superuser = models.BooleanField(default=False)
-    must_change_password = models.BooleanField(default=False)
+                              default=UserStatus.PENDING, db_default=UserStatus.PENDING,
+                              db_index=True)
+    is_staff = models.BooleanField(default=False, db_default=False)
+    is_superuser = models.BooleanField(default=False, db_default=False)
+    must_change_password = models.BooleanField(default=False, db_default=False)
 
-    date_joined = models.DateTimeField(auto_now_add=True)
+    date_joined = models.DateTimeField(auto_now_add=True, db_default=Now())
     last_login = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     objects = UserManager()
     USERNAME_FIELD = "username"
     EMAIL_FIELD = "email"
     REQUIRED_FIELDS = ["email"]
 
-    class Meta:
-        db_table = "users"
-
     @property
     def is_active(self) -> bool:  # Django-контракт; колонки нет — есть status
         return self.status == UserStatus.ACTIVE
+
+    # Р1: без PermissionsMixin — django.contrib.admin всё равно опрашивает
+    # has_perm/has_module_perms. Минимальная реализация: только суперюзер
+    # проходит; staff без superuser прав в админке пока не получает вообще
+    # (task 2.6 — гейт для админки — строится поверх этого).
+    def has_perm(self, perm, obj=None):
+        return self.is_active and self.is_superuser
+
+    def has_module_perms(self, app_label):
+        return self.is_active and self.is_superuser
 
     def check_password(self, raw_password: str) -> bool:
         if self.password.startswith("$2"):  # raw bcrypt из FastAPI-периода
@@ -88,3 +102,17 @@ class User(AbstractBaseUser, PermissionsMixin):
                 self.save(update_fields=["password"])
             return ok
         return super().check_password(raw_password)
+
+
+class Item(models.Model):
+    """Пользовательские заметки/черновики — 1:N к User.
+
+    Порт services/user/app/models/item.py. У источника нет updated_at —
+    только created_at; не выдумываем лишнюю колонку.
+    """
+
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True, default="", db_default="")
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                              related_name="items")
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now(), db_index=True)
