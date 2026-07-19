@@ -47,3 +47,19 @@ def test_wrong_issuer_rejected(user):
                        settings.JWT_SECRET, algorithm="HS256")
     with pytest.raises(AuthError):
         decode_token(bad)
+
+
+def test_refresh_token_has_minimal_claims_only(user):
+    """Ревью-фикс: refresh — 7-дневный токен, не должен нести привилегии/PII
+    (см. services/user/app/services/auth_service.py::create_token_pair —
+    refresh_payload там тоже содержит только user_id/token_type/iat/exp/iss).
+    Привилегии переисчисляются из БД на каждый token/refresh/."""
+    pair = issue_token_pair(user)
+    payload = pyjwt.decode(pair["refresh"], settings.JWT_SECRET,
+                           algorithms=["HS256"], issuer="htqweb-auth")
+    assert payload["user_id"] == user.id
+    assert payload["token_type"] == "refresh"
+    assert payload["sub"] == str(user.id)
+    assert "iat" in payload and "exp" in payload and payload["iss"] == "htqweb-auth"
+    for field in ("username", "email", "is_staff", "is_superuser", "is_admin"):
+        assert field not in payload

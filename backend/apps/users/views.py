@@ -83,6 +83,21 @@ def admin_login(request):
     if request.method != "POST":
         return json_error("Method Not Allowed", 405)
 
+    # ``username``/``password`` are ``Form(...)`` (required) in the FastAPI
+    # original — an OMITTED field must 422, same as there. Reading via
+    # ``.get(..., "")`` before validation would silently turn "absent" into
+    # "empty string", which the schema (str, no default) happily accepts,
+    # so we check presence in request.POST ourselves first. A field that IS
+    # present but empty is a value, not an absence — that still reaches the
+    # schema/auth flow unchanged (matching the source).
+    missing = [f for f in ("username", "password") if f not in request.POST]
+    if missing:
+        detail = [
+            {"loc": ["body", f], "msg": "Field required", "type": "missing"}
+            for f in missing
+        ]
+        return JsonResponse({"detail": detail}, status=422)
+
     try:
         data = schemas.AdminSessionLoginRequest(
             username=request.POST.get("username", ""),

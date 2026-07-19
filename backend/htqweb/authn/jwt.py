@@ -23,6 +23,24 @@ def _base_claims(user) -> dict:
     }
 
 
+def _refresh_claims(user) -> dict:
+    """Minimal claim set for refresh tokens.
+
+    Mirrors ``services/user/app/services/auth_service.py``'s
+    ``create_token_pair``: a refresh token is long-lived (7 days), so it
+    deliberately does NOT carry privilege flags or PII (username/email/
+    is_staff/is_superuser/is_admin) — only enough to look the user back up.
+    Auth claims are re-derived from the DB on every ``token/refresh/`` call
+    (see ``apps.users.views.refresh_token``), so a refresh token can't hand
+    out stale privileges even if it outlives a role change.
+    """
+    return {
+        "sub": str(user.id),
+        "user_id": user.id,
+        "iss": settings.JWT_ISSUER,
+    }
+
+
 def _encode(claims: dict, ttl: timedelta, token_type: str) -> str:
     now = datetime.now(timezone.utc)
     return jwt.encode(
@@ -33,10 +51,9 @@ def _encode(claims: dict, ttl: timedelta, token_type: str) -> str:
 
 
 def issue_token_pair(user) -> dict:
-    claims = _base_claims(user)
     return {
-        "access": _encode(claims, timedelta(minutes=settings.JWT_ACCESS_TTL_MIN), "access"),
-        "refresh": _encode(claims, timedelta(days=settings.JWT_REFRESH_TTL_DAYS), "refresh"),
+        "access": _encode(_base_claims(user), timedelta(minutes=settings.JWT_ACCESS_TTL_MIN), "access"),
+        "refresh": _encode(_refresh_claims(user), timedelta(days=settings.JWT_REFRESH_TTL_DAYS), "refresh"),
         "token_type": "Bearer",
     }
 

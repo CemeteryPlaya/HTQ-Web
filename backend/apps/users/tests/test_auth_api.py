@@ -115,6 +115,35 @@ def test_login_updates_last_login(active_user):
 
 
 @pytest.mark.django_db
+def test_login_wrong_password_inactive_status_still_invalid_credentials(db):
+    """auth_service.authenticate checks status BEFORE password (ported
+    verbatim from the FastAPI original's obtain_token — see the docstring
+    on authenticate()). So a non-ACTIVE user gets 'Account is not activated'
+    regardless of whether the submitted password happens to be right OR
+    wrong — the status check short-circuits before check_password runs."""
+    u = User.objects.create(username="pending2", email="pending2@htq.test",
+                            password="x", status=UserStatus.PENDING)
+    u.set_password("S3cret!")
+    u.save()
+    resp = Client().post(f"{BASE}/token/", data={
+        "email": "pending2@htq.test", "password": "totally-wrong",
+    }, content_type="application/json")
+    assert resp.status_code == 401
+    assert resp.json() == {"detail": "Account is not activated"}
+
+
+@pytest.mark.django_db
+def test_failed_login_does_not_touch_last_login(active_user):
+    assert active_user.last_login is None
+    resp = Client().post(f"{BASE}/token/", data={
+        "email": "alice@htq.test", "password": "wrong",
+    }, content_type="application/json")
+    assert resp.status_code == 401
+    active_user.refresh_from_db()
+    assert active_user.last_login is None
+
+
+@pytest.mark.django_db
 def test_login_issued_access_token_decodes_with_full_claim_set(active_user):
     resp = Client().post(f"{BASE}/token/", data={
         "email": "alice@htq.test", "password": "S3cret!",
@@ -226,6 +255,39 @@ def test_admin_login_superuser_wrong_password_401_invalid_credentials(superuser)
     })
     assert resp.status_code == 401
     assert resp.json() == {"detail": "Invalid credentials"}
+
+
+@pytest.mark.django_db
+def test_admin_login_missing_username_field_422(db):
+    """FastAPI original declares username/password as Form(...) (required)
+    -> an OMITTED field 422s before auth even runs. request.POST.get(...,
+    "") would silently turn "absent" into "", which the schema (plain str)
+    happily accepts, and login would fall through to a 401 instead."""
+    resp = Client().post(f"{BASE}/admin-session/login", data={
+        "password": "whatever",
+    })
+    assert resp.status_code == 422
+    assert "detail" in resp.json()
+
+
+@pytest.mark.django_db
+def test_admin_login_missing_password_field_422(db):
+    resp = Client().post(f"{BASE}/admin-session/login", data={
+        "username": "root",
+    })
+    assert resp.status_code == 422
+    assert "detail" in resp.json()
+
+
+@pytest.mark.django_db
+def test_admin_login_both_fields_present_not_422(superuser):
+    """Present-but-wrong values are still values, not absences — they reach
+    auth and fail there (401), never the 422 path."""
+    resp = Client().post(f"{BASE}/admin-session/login", data={
+        "username": "root", "password": "wrong",
+    })
+    assert resp.status_code != 422
+    assert resp.status_code == 401
 
 
 # ── POST admin-session/logout ────────────────────────────────────────────────
