@@ -110,13 +110,16 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ── Object storage (S3/MinIO) — htqweb/storage/, ported from
 # services/cms/app/services/s3_storage.py + signed_url.py. Names/defaults
 # match docker-compose.yml's cms-service environment block byte-for-byte so
-# both stacks read the same env during the Strangler Fig transition.
+# both stacks read the same env during the Strangler Fig transition — with
+# one intentional exception: S3_PUBLIC_ENDPOINT has no compose default (cms
+# doesn't set it there either) and stays "" here too, which S3Storage treats
+# as "fall back to S3_ENDPOINT" (see s3.py's `public_endpoint or endpoint`).
 STORAGE_BACKEND = env("STORAGE_BACKEND", "s3")  # local | s3
 S3_BUCKET = env("S3_BUCKET", "htqweb-cms")
-S3_ENDPOINT = env("S3_ENDPOINT", "")
+S3_ENDPOINT = env("S3_ENDPOINT", "http://minio:9000")
 S3_PUBLIC_ENDPOINT = env("S3_PUBLIC_ENDPOINT", "")
-S3_ACCESS_KEY = env("S3_ACCESS_KEY", "")
-S3_SECRET_KEY = env("S3_SECRET_KEY", "")
+S3_ACCESS_KEY = env("S3_ACCESS_KEY", "minioadmin")
+S3_SECRET_KEY = env("S3_SECRET_KEY", "minioadmin")
 S3_REGION = env("S3_REGION", "us-east-1")
 S3_USE_PATH_STYLE = env("S3_USE_PATH_STYLE", "true").lower() in ("1", "true", "yes")
 S3_PRESIGNED_URL_TTL = int(env("S3_PRESIGNED_URL_TTL", "3600"))

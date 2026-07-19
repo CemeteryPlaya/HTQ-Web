@@ -9,7 +9,6 @@ presence that only exists if the surrounding conditional logic ran correctly.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -21,11 +20,12 @@ from htqweb.storage import s3
 # ── backend selection (get_storage) ──────────────────────────────────────────
 
 
-@override_settings(STORAGE_BACKEND="local", CMS_LOCAL_STORAGE_DIR="/tmp/htqweb-cms-test")
-def test_get_storage_returns_local_storage_when_backend_is_local():
-    storage = s3.get_storage()
+def test_get_storage_returns_local_storage_when_backend_is_local(tmp_path):
+    local_dir = tmp_path / "htqweb-cms-test"
+    with override_settings(STORAGE_BACKEND="local", CMS_LOCAL_STORAGE_DIR=str(local_dir)):
+        storage = s3.get_storage()
     assert isinstance(storage, s3.LocalStorage)
-    assert storage.base_dir == Path("/tmp/htqweb-cms-test")
+    assert storage.base_dir == local_dir
 
 
 @override_settings(
