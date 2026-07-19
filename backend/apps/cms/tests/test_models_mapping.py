@@ -4,15 +4,15 @@ from apps.cms import models
 
 
 def test_cms_models_own_their_schema():
-    """Django владеет схемой: alembic-цепочка перенесена в Django-миграции."""
+    """Django владеет схемой: идиоматичные Django-модели, без FastAPI-схем."""
     for model in (models.News, models.ContactRequest, models.Category,
                   models.Tag, models.NewsAttachment, models.AuditLog):
         assert model._meta.managed is True, model.__name__
 
 
-def test_news_table_is_schema_qualified():
-    # PgBouncer сбрасывает search_path -> схема обязана быть в имени таблицы.
-    assert models.News._meta.db_table == 'cms"."news'
+def test_news_table_uses_idiomatic_django_name():
+    # public-схема, стандартное имя Django (не 'cms"."news' из FastAPI-порта).
+    assert models.News._meta.db_table == 'cms_news'
 
 
 @pytest.mark.django_db

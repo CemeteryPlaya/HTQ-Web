@@ -45,9 +45,11 @@ messenger` — Postgres 16.13 Alpine) and not the native Windows Postgres 18.
 | `TEST_DB_USER` | `htqweb` |
 | `TEST_DB_PASSWORD` | `change-me` |
 
-`CACHES` stays `LocMemCache`, `Q_CLUSTER` stays `{sync: True, timeout: 30, retry: 60}`,
-`JWT_SECRET` stays the fixed test value — these were already correct/warning-free and
-are unchanged.
+`CACHES` stays `LocMemCache`; Celery runs eager in tests
+(`CELERY_TASK_ALWAYS_EAGER = True`, `CELERY_TASK_EAGER_PROPAGATES = True`, in-memory
+broker/backend) — the same synchronous-execution behaviour the old django-q2
+`Q_CLUSTER["sync"]` setting used to provide. `JWT_SECRET` stays the fixed test value —
+these were already correct/warning-free and are unchanged.
 
 ## Running the suite
 

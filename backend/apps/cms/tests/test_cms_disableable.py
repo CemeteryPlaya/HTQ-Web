@@ -18,7 +18,7 @@ therefore not yet functionally complete. When news lands, extend ENDPOINTS
 below to match.
 
 Background-task disableability (``require_service("cms")`` inside the
-django-q2 actors) is exercised end-to-end, with real task bodies, in
+Celery tasks) is exercised end-to-end, with real task bodies, in
 ``apps/cms/tests/test_cms_tasks.py``:
 ``test_translate_news_refuses_when_cms_disabled``,
 ``test_notify_admins_on_contact_request_refuses_when_cms_disabled``,
@@ -196,7 +196,7 @@ def test_admin_list_auth_gates_normally_when_cms_enabled():
 def test_notify_admins_task_also_refuses_tying_http_and_background_together():
     """Full disableability coverage for cms has two halves: the HTTP gate
     (every parametrized case above) and the ``require_service("cms")`` guard
-    inside the django-q2 actors (fully exercised in ``test_cms_tasks.py``).
+    inside the Celery tasks (fully exercised in ``test_cms_tasks.py``).
     This assertion ties them together: the exact same ``ServiceStatus`` row
     that 503s every HTTP endpoint above also makes the task fired from
     ``POST contact-requests/`` (``notify_admins_on_contact_request``)
