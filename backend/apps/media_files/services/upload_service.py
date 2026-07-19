@@ -34,6 +34,7 @@ from django.conf import settings
 from htqweb.storage import get_storage
 
 from apps.media_files.models import FileMetadata
+from apps.media_files.services.content_signature import SignatureCheck, verify_signature
 from apps.media_files.services.image_service import (
     ImageProcessingError,
     detect_mime,
@@ -94,19 +95,19 @@ def _validate_size(data: bytes, policy: ScopePolicy) -> None:
         )
 
 
-def _validate_mime(declared: str | None, real: str, policy: ScopePolicy) -> None:
-    """Reject obvious polyglots: declared content-type must match the real mime
-    (image/* family is forgiving to allow image/jpg vs image/jpeg etc.)."""
-    if declared and declared != real:
-        # Allow declared==image/* if real is also image/* — this normalises
-        # synonyms (e.g., browser sends ``image/jpg``, magic returns
-        # ``image/jpeg``). For non-image categories require strict equality.
-        if not (declared.startswith("image/") and real.startswith("image/")):
-            raise UploadValidationError(
-                415,
-                f"Declared Content-Type '{declared}' does not match detected '{real}'",
-            )
+def _validate_mime(real: str, policy: ScopePolicy) -> None:
+    """Reject a real mime the scope (or the global allow-list) doesn't permit.
 
+    NOTE: this used to also compare a "declared" mime against "real" and
+    reject a mismatch, but that branch was dead code: ``real`` (from
+    ``image_service.detect_mime``) is always exactly the declared
+    Content-Type or the "application/octet-stream" fallback — there is no
+    independent "real" mime to disagree with it, because python-magic isn't
+    used here (see ``image_service.py``'s module docstring — it segfaults on
+    this Windows host). The actual content-vs-declared check now lives in
+    ``_validate_signature`` below (magic-byte signatures, no native deps),
+    which fires for scopes that restrict mimes.
+    """
     if policy.mimes and real not in policy.mimes:
         raise UploadValidationError(
             415,
@@ -121,6 +122,31 @@ def _validate_mime(declared: str | None, real: str, policy: ScopePolicy) -> None
                 415,
                 f"Mime '{real}' not in global allow-list",
             )
+
+
+def _validate_signature(data: bytes, mime: str, policy: ScopePolicy) -> None:
+    """Verify magic-byte signature for restricted-mime scopes.
+
+    This is the substitute for python-magic (see ``_validate_mime``'s
+    docstring and ``image_service.py``'s module docstring for why it isn't
+    used). Image scopes are already content-verified by Pillow's decode in
+    ``normalise()``; this closes the gap for non-image restricted scopes
+    (e.g. ``hr_doc`` → ``application/pdf``) that never go through Pillow, so
+    a caller can't POST arbitrary bytes under a trusted Content-Type.
+
+    Only fires when the policy restricts mimes — permissive scopes
+    (``chat``/``generic``, ``policy.mimes == ()``) accept arbitrary mimes on
+    purpose and must not be blocked here. Also does not fire (does not
+    block) when the declared mime has no known signature — see
+    ``content_signature.SignatureCheck.UNKNOWN``.
+    """
+    if not policy.mimes:
+        return
+    if verify_signature(data, mime) is SignatureCheck.MISMATCH:
+        raise UploadValidationError(
+            415,
+            f"File content does not match declared Content-Type '{mime}'",
+        )
 
 
 def upload_file_bytes(
@@ -141,7 +167,8 @@ def upload_file_bytes(
     _validate_size(data, policy)
 
     real_mime = detect_mime(data, fallback=declared_mime)
-    _validate_mime(declared_mime, real_mime, policy)
+    _validate_mime(real_mime, policy)
+    _validate_signature(data, real_mime, policy)
     kind = kind_from_mime(real_mime)
 
     # Hash the *original* (pre-normalisation) bytes so a future dedup lookup

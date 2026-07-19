@@ -229,6 +229,77 @@ def test_hr_doc_scope_accepts_pdf_and_stores_privately_with_no_variants(fake_sto
 
 
 @pytest.mark.django_db
+def test_hr_doc_scope_rejects_spoofed_pdf_content_type(fake_storage, user):
+    # Attack case (security review, task 3.2 finding): declared Content-Type
+    # is application/pdf but the bytes are a shell script — since detect_mime
+    # doesn't run real magic-byte detection (python-magic segfaults on this
+    # host) and hr_doc is a document kind (no Pillow decode-verify path
+    # either), only the magic-byte signature check in
+    # upload_service._validate_signature stands between this and storage.
+    resp = _upload(
+        Client(), user,
+        filename="handbook.pdf", content=b"#!/bin/sh\nrm -rf /",
+        content_type="application/pdf", scope="hr_doc",
+    )
+    assert resp.status_code == 415
+    assert not FileMetadata.objects.exists()
+
+
+@pytest.mark.django_db
+def test_hr_doc_scope_rejects_html_masquerading_as_pdf(fake_storage, user):
+    resp = _upload(
+        Client(), user,
+        filename="handbook.pdf", content=b"<html><body>not a pdf</body></html>",
+        content_type="application/pdf", scope="hr_doc",
+    )
+    assert resp.status_code == 415
+    assert not FileMetadata.objects.exists()
+
+
+@pytest.mark.django_db
+def test_hr_doc_scope_accepts_genuine_pdf_signature(fake_storage, user):
+    resp = _upload(
+        Client(), user,
+        filename="handbook.pdf", content=b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\nminimal filler bytes",
+        content_type="application/pdf", scope="hr_doc",
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["kind"] == "document"
+    assert FileMetadata.objects.filter(id=uuid.UUID(body["id"])).exists()
+
+
+@pytest.mark.django_db
+def test_image_scope_still_works_end_to_end_after_signature_check(fake_storage, user):
+    # Regression guard: the new signature check must not break the normal
+    # avatar/news image path (Pillow's decode-verify still does the heavy
+    # lifting there; the signature check is uniform but redundant for images).
+    resp = _upload(
+        Client(), user,
+        filename="me.png", content=_png_bytes(), content_type="image/png",
+        scope="avatar",
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["kind"] == "image"
+    assert FileMetadata.objects.filter(id=uuid.UUID(body["id"])).exists()
+
+
+@pytest.mark.django_db
+def test_permissive_scope_accepts_unverifiable_mime(fake_storage, user):
+    # chat allows any mime (policy.mimes == ()); a mime with no known
+    # signature must not be blocked just because it can't be verified.
+    resp = _upload(
+        Client(), user,
+        filename="thing.bin", content=b"arbitrary bytes, no known signature",
+        content_type="application/vnd.custom", scope="chat",
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert FileMetadata.objects.filter(id=uuid.UUID(body["id"])).exists()
+
+
+@pytest.mark.django_db
 def test_unauthenticated_upload_returns_401(fake_storage, user):
     resp = Client().post(
         BASE,
