@@ -26,6 +26,7 @@ from htqweb.http import api_view, json_error
 
 from . import schemas
 from .services import audit
+from .services import conference_service
 from .services import contact_requests_service as svc
 
 
@@ -157,3 +158,10 @@ def reply_contact_request(request, contact_id: int, data: schemas.ContactRequest
         changes={"reply_message": data.reply_message},
     )
     return schemas.ContactRequestRead.model_validate(entry)
+
+
+# ── GET /conference/config (+ /conference/config/ alias) ────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def conference_config(request):
+    return conference_service.get_conference_config(request)

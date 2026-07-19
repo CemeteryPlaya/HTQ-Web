@@ -5,7 +5,7 @@ field names are kept identical because the React frontend parses them as-is.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -43,6 +43,32 @@ class ContactRequestRead(BaseModel):
 
 class ContactRequestStats(BaseModel):
     unhandled: int
+
+
+class IceServer(BaseModel):
+    """Ported 1:1 from ``services/cms/app/schemas/conference.py``."""
+
+    urls: Union[str, list[str]]
+    username: Optional[str] = None
+    credential: Optional[str] = None
+
+
+class ConferenceConfig(BaseModel):
+    """Response shape for ``GET /api/cms/v1/conference/config``.
+
+    Field-for-field port of the FastAPI original's ``ConferenceConfig``
+    (``services/cms/app/schemas/conference.py``) — the frontend's WebRTC
+    layer (``ConferencePage.tsx``) parses these names as-is, so they are not
+    renamed. ``enabled`` is the one addition beyond the port (Task 1.5):
+    whether the conference/SFU service itself is on in the service registry
+    (``apps.core.services.service_enabled``), placed last so it doesn't
+    disturb the ported fields.
+    """
+
+    sfu_signaling_url: str = ""
+    sfu_signaling_path: str = "/ws/sfu/"
+    ice_servers: list[IceServer] = Field(default_factory=list)
+    enabled: bool = True
 
 
 class ContactRequestListQuery(BaseModel):

@@ -106,3 +106,16 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# ── Conference (SFU) runtime config — GET /api/cms/v1/conference/config ─────
+# Ported defaults from services/cms/app/data/conference.yaml (FastAPI
+# cms-service). The conference/SFU stack itself is out of service (seeded
+# disabled by apps.core's registry migration — see apps/cms/services/
+# conference_service.py), but static WebRTC config is still served so the
+# frontend's ConferencePage.tsx behaves identically once it comes back.
+CONFERENCE_SFU_URL = env("CONFERENCE_SFU_URL", "ws://sfu:4443")
+CONFERENCE_SFU_PATH = env("CONFERENCE_SFU_PATH", "/ws/sfu/")
+CONFERENCE_ICE_SERVERS = [
+    {"urls": "stun:stun.l.google.com:19302"},
+    {"urls": "stun:stun1.l.google.com:19302"},
+]

@@ -18,4 +18,13 @@ urlpatterns = [
     path("contact-requests/<int:contact_id>/reply/", views.reply_contact_request),
     path("contact-requests/<int:contact_id>", views.contact_request_detail),
     path("contact-requests/<int:contact_id>/", views.contact_request_detail),
+    # conference/config — both the frontend call-site spellings (neither
+    # actually sends a trailing slash: api/cms.ts's apiPath('cms',
+    # 'conference/config') and ConferencePage.tsx's literal
+    # 'cms/v1/conference/config'), plus the trailing-slash alias registered
+    # defensively per this app's established convention (see the
+    # contact-requests routes above) since APPEND_SLASH=False means Django
+    # never redirects a stray trailing slash on its own.
+    path("conference/config", views.conference_config),
+    path("conference/config/", views.conference_config),
 ]
