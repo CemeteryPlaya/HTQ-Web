@@ -1,0 +1,10 @@
+# Test-only override: publishes Postgres on a free host port so pytest-django
+# can CREATE/DROP test_htqweb directly (the native Windows postgresql-x64-18
+# occupies 5432, and PgBouncer :6432 is transaction-pooled so CREATE DATABASE
+# cannot pass through it).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db
+services:
+  db:
+    ports:
+      - "${DB_HOST_PORT:-55432}:5432"
