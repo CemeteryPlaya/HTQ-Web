@@ -31,4 +31,17 @@ urlpatterns = [
     path("profile/change-password/", views.change_password),
     path("profile/avatar", views.remove_avatar),
     path("profile/avatar/", views.remove_avatar),
+    # register/, pending-registrations/*, admin/users/* — Task 2.4.
+    # Confirmed frontend call sites (frontend/src/pages/Register.tsx,
+    # AdminRegistrations.tsx, AdminUsers.tsx, components/admin/
+    # UserEditDialog.tsx, components/Header.tsx) all use these exact
+    # spellings with a trailing slash; APPEND_SLASH=False means no
+    # no-slash alias is registered (nothing in the frontend calls one).
+    path("register/", views.register),
+    path("pending-registrations/", views.pending_registrations),
+    path("pending-registrations/<int:user_id>/approve/", views.approve_registration),
+    path("pending-registrations/<int:user_id>/reject/", views.reject_registration),
+    path("admin/users/", views.admin_users_collection),
+    path("admin/users/<int:user_id>/set-password/", views.admin_set_password),
+    path("admin/users/<int:user_id>/", views.admin_user_detail),
 ]

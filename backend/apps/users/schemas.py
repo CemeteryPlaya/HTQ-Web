@@ -55,3 +55,137 @@ class ChangePasswordRequest(BaseModel):
 
     new_password: str = Field(..., min_length=8)
     current_password: str | None = None
+
+
+# ── Registration + moderation (Task 2.4) ────────────────────────────────────
+#
+# Ported from ``services/user/app/api/v1/registration.py``'s inline schemas
+# (the FastAPI original defines these in the router module too, not a
+# separate ``schemas/`` package).
+
+
+class RegisterRequest(BaseModel):
+    """``POST register/`` — self-registration request.
+
+    No format/length validation beyond "required string" — the FastAPI
+    original's ``RegisterRequest`` doesn't add stricter Pydantic
+    constraints either (``email: str``, not ``EmailStr``).
+    """
+
+    email: str
+    password: str
+    full_name: str  # split into first_name + last_name — see registration_service
+
+
+class RegisterResponse(BaseModel):
+    id: int
+    email: str
+    message: str = "Registration submitted. Awaiting admin approval."
+
+
+class PendingUserResponse(BaseModel):
+    id: int
+    email: str
+    username: str
+    full_name: str
+    date_joined: str
+
+
+# ── Admin: user management (Task 2.4) ───────────────────────────────────────
+#
+# Ported from ``services/user/app/api/v1/admin.py``'s inline schemas.
+
+
+class AdminUserResponse(BaseModel):
+    """``GET/POST/PATCH admin/users/*`` — admin-facing user view.
+
+    Both snake_case and camelCase name fields are present — ported verbatim
+    from the FastAPI original (the React admin UI reads snake_case;
+    camelCase kept for parity/forward-compat, same reasoning as
+    ``apps.users.services.profile_service.build_response``).
+    """
+
+    id: int
+    username: str
+    email: str
+    first_name: str
+    last_name: str
+    firstName: str
+    lastName: str
+    patronymic: str
+    display_name: str
+    bio: str
+    phone: str
+    avatar_url: str | None
+    avatarUrl: str | None
+    settings: dict
+    roles: list[str]
+    status: str
+    is_staff: bool
+    is_superuser: bool
+    must_change_password: bool
+    date_joined: str
+    last_login: str | None
+    created_at: str | None
+    updated_at: str | None
+
+
+class AdminUserCreateRequest(BaseModel):
+    """``POST admin/users/`` — manual user creation, bypassing self-registration.
+
+    Ported from the FastAPI original's ``AdminUserCreateRequest`` MINUS the
+    Mailcow mailbox-provisioning fields (``create_mailbox``,
+    ``mailbox_local_part``, ``mailbox_password``, ``mailbox_quota_mb``) —
+    that provisioning is an S2S call to email-service, dropped for the same
+    Р3 ("no S2S") reason as the DELETE mailbox archive — see
+    ``apps.users.services.admin_service``'s module docstring and the task
+    2.4 report.
+    """
+
+    username: str = Field(..., min_length=1, max_length=150)
+    email: str = Field(..., min_length=3, max_length=254)
+    password: str = Field(..., min_length=8)
+    first_name: str = ""
+    last_name: str = ""
+    patronymic: str = ""
+    display_name: str = ""
+    bio: str = ""
+    phone: str = ""
+    status: str = "active"
+    is_staff: bool = False
+    is_superuser: bool = False
+    # Default ON: admin sets a temp password, user changes it on first login.
+    must_change_password: bool = True
+
+
+class AdminUserUpdateRequest(BaseModel):
+    """``PATCH admin/users/{id}/`` — partial update; unset fields are ignored
+    (``exclude_unset=True`` at the view layer). No password field — password
+    changes go through ``AdminSetPasswordRequest`` instead, same split as
+    the FastAPI original."""
+
+    # Identity (admin can rename — HR rare-but-needed case).
+    username: str | None = None
+    email: str | None = None
+    # Role / status flags
+    is_staff: bool | None = None
+    is_superuser: bool | None = None
+    status: str | None = None
+    must_change_password: bool | None = None
+    # Profile fields — admins can edit on a user's behalf (HR /hr/profiles).
+    display_name: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    patronymic: str | None = None
+    bio: str | None = None
+    phone: str | None = None
+    avatar_url: str | None = None
+    settings: dict | str | None = None  # JSON object or stringified JSON
+
+
+class AdminSetPasswordRequest(BaseModel):
+    """``POST admin/users/{id}/set-password/`` — admin-initiated password
+    reset; does not require the user's old password."""
+
+    new_password: str = Field(..., min_length=8)
+    must_change_password: bool = True

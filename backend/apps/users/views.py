@@ -19,6 +19,7 @@ import json
 import logging
 
 from django.conf import settings
+from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
@@ -28,9 +29,22 @@ from htqweb.http import api_view, json_error
 
 from . import schemas
 from .models import User, UserStatus
-from .services import auth_service, profile_service
+from .services import admin_service, auth_service, profile_service, registration_service
 
 logger = logging.getLogger(__name__)
+
+
+def _require_admin(request) -> None:
+    """Gate on ``request.token.is_elevated`` (is_admin/is_staff/is_superuser).
+
+    ``htqweb.http.api_view`` maps ``PermissionDenied`` to a 403 ``{"detail":
+    "Forbidden"}`` envelope regardless of the message passed here (see
+    ``apps.cms.views._require_admin`` for the same established pattern) — a
+    missing/invalid token never reaches this far, ``api_view(auth="jwt")``
+    already 401s first.
+    """
+    if not request.token.is_elevated:
+        raise PermissionDenied("Admin access required")
 
 
 ADMIN_COOKIE_NAME = "admin_session"
@@ -297,3 +311,163 @@ def change_password(request, data: schemas.ChangePasswordRequest):
         return json_error("Current password is incorrect", 400)
 
     return {"detail": "Password changed successfully"}
+
+
+# ── Registration + moderation — POST register/, GET pending-registrations/,
+#    POST pending-registrations/{id}/approve|reject/ (Task 2.4) ────────────
+#
+# Ported from ``services/user/app/api/v1/registration.py``. Views stay
+# thin — domain logic lives in ``apps.users.services.registration_service``.
+#
+# Decision Р2 (dropped, see that module's docstring): the FastAPI source
+# publishes ``user_upserted``/``user_deactivated`` Redis pub/sub events
+# after approve/reject for messenger/task/HR replica sync. This port does
+# NOT re-publish those — noted at each call site below.
+
+
+@api_view(methods=("POST",), auth=None, body=schemas.RegisterRequest, status=201)
+def register(request, data: schemas.RegisterRequest):
+    try:
+        user = registration_service.register(
+            email=data.email, password=data.password, full_name=data.full_name,
+        )
+    except registration_service.DuplicateEmail:
+        return json_error("Email already registered", 400)
+    return schemas.RegisterResponse(id=user.id, email=user.email)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def pending_registrations(request):
+    _require_admin(request)
+    users = registration_service.list_pending()
+    return [
+        schemas.PendingUserResponse(
+            id=u.id,
+            email=u.email,
+            username=u.username,
+            full_name=u.display_name or f"{u.first_name} {u.last_name}".strip(),
+            date_joined=u.date_joined.isoformat(),
+        )
+        for u in users
+    ]
+
+
+@api_view(methods=("POST",), auth="jwt")
+def approve_registration(request, user_id: int):
+    _require_admin(request)
+    try:
+        registration_service.approve(user_id)
+    except registration_service.PendingRegistrationNotFound:
+        return json_error("Pending registration not found", 404)
+    # Decision Р2: source publishes user_upserted.send(_replica_payload(user)) here — dropped.
+    return HttpResponse(status=204)
+
+
+@api_view(methods=("POST",), auth="jwt")
+def reject_registration(request, user_id: int):
+    _require_admin(request)
+    try:
+        registration_service.reject(user_id)
+    except registration_service.PendingRegistrationNotFound:
+        return json_error("Pending registration not found", 404)
+    # Decision Р2: source publishes user_deactivated.send({"id": user.id}) here — dropped.
+    return HttpResponse(status=204)
+
+
+# ── Admin: users list/create/patch/set-password/delete (Task 2.4) ──────────
+#
+# Ported from ``services/user/app/api/v1/admin.py``. Decisions Р2/Р3
+# (dropped — see ``apps.users.services.admin_service``'s module docstring
+# for the full inventory): Redis pub/sub broadcasts after create/update/
+# delete, the S2S mailbox-archive call in delete, and Mailcow mailbox
+# provisioning in create.
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _admin_list_users(request):
+    _require_admin(request)
+    users = admin_service.list_users()
+    return [schemas.AdminUserResponse(**admin_service.serialize_admin_user(u)) for u in users]
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.AdminUserCreateRequest, status=201)
+def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
+    _require_admin(request)
+    try:
+        user = admin_service.create_user(**data.model_dump())
+    except admin_service.DuplicateEmail:
+        return json_error("Email already in use", 400)
+    except admin_service.DuplicateUsername:
+        return json_error("Username already in use", 400)
+    except admin_service.InvalidStatus as exc:
+        return json_error(str(exc), 400)
+    # Decision Р2: source publishes user_upserted.send(...) when status==ACTIVE — dropped.
+    return schemas.AdminUserResponse(**admin_service.serialize_admin_user(user))
+
+
+@csrf_exempt
+def admin_users_collection(request, *args, **kwargs):
+    if request.method == "GET":
+        return _admin_list_users(request, *args, **kwargs)
+    if request.method == "POST":
+        return _admin_create_user(request, *args, **kwargs)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.AdminUserUpdateRequest)
+def _admin_update_user(request, user_id: int, data: schemas.AdminUserUpdateRequest):
+    _require_admin(request)
+    try:
+        user = admin_service.get_user_or_404(user_id)
+    except admin_service.UserNotFound:
+        return json_error("User not found", 404)
+
+    changes = data.model_dump(exclude_unset=True)
+    try:
+        user = admin_service.update_user(user, changes)
+    except admin_service.DuplicateEmail:
+        return json_error("Email already in use", 400)
+    except admin_service.DuplicateUsername:
+        return json_error("Username already in use", 400)
+    except admin_service.InvalidSettingsJSON as exc:
+        return json_error(str(exc), 400)
+    # Decision Р2: source publishes user_upserted/user_deactivated depending
+    # on the new status — dropped.
+    return schemas.AdminUserResponse(**admin_service.serialize_admin_user(user))
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _admin_delete_user(request, user_id: int):
+    _require_admin(request)
+    if request.token.user_id == user_id:
+        return json_error("Cannot delete yourself", 400)
+    try:
+        user = admin_service.get_user_or_404(user_id)
+    except admin_service.UserNotFound:
+        return json_error("User not found", 404)
+    # Decisions Р2/Р3: source's S2S mailbox-archive call + user.deactivated/
+    # user.deleted broadcasts dropped here — see admin_service module docstring.
+    admin_service.delete_user(user)
+    return HttpResponse(status=204)
+
+
+@csrf_exempt
+def admin_user_detail(request, user_id: int, *args, **kwargs):
+    if request.method == "PATCH":
+        return _admin_update_user(request, user_id, *args, **kwargs)
+    if request.method == "DELETE":
+        return _admin_delete_user(request, user_id, *args, **kwargs)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.AdminSetPasswordRequest)
+def admin_set_password(request, user_id: int, data: schemas.AdminSetPasswordRequest):
+    _require_admin(request)
+    try:
+        user = admin_service.get_user_or_404(user_id)
+    except admin_service.UserNotFound:
+        return json_error("User not found", 404)
+    admin_service.set_password(
+        user, new_password=data.new_password, must_change_password=data.must_change_password,
+    )
+    return {"detail": "Password updated"}
