@@ -17,34 +17,42 @@ apps.cms.interface — см. его докстринг для полного о�
 apps.users.services.profile_service.build_response, который остаётся
 приватным для этой аппки).
 
-full_name собирается тем же способом, что и в
-apps.users.services.options_service.full_name_for /
-apps.users.services.profile_service.build_response's fio: "{first_name}
-{last_name}".strip(), с откатом на display_name, затем username.
+full_name — это apps.users.services.options_service.full_name_for
+("{first_name} {last_name}".strip(), с откатом на display_name, затем
+username), вызывается отсюда напрямую, а не копируется. ЭТО НЕ то же самое,
+что profile_service.build_response's fio: у fio другой порядок полей
+("{last_name} {first_name} {patronymic}"), в нём участвует patronymic и
+нет отката на display_name/username. Не путать одно с другим.
+
+Запросы здесь сужены до колонок, которые реально нужны (.values(...)) —
+это граница между аппками, и незачем поднимать в память password_hash и
+settings из полной User-строки ради 5 полей брифа.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Iterable
 
 from apps.core.services import require_service
-from apps.users.models import User
+from apps.users.models import User, UserStatus
+from apps.users.services.options_service import full_name_for
+
+_BRIEF_FIELDS = ("id", "username", "email", "first_name", "last_name",
+                 "display_name", "status")
 
 
-def _full_name(user: User) -> str:
-    """Same fallback chain as options_service.full_name_for — reused
-    logic, not reinvented, kept private to this module since it only
-    operates on already-fetched User rows (not a queryset)."""
-    name = f"{user.first_name} {user.last_name}".strip()
-    return name or user.display_name or user.username
-
-
-def _brief(user: User) -> dict:
+def _brief_from_values(row: dict) -> dict:
+    # full_name_for only reads .first_name/.last_name/.display_name/.username —
+    # a SimpleNamespace satisfies that without instantiating a real User row
+    # (this module never hands out ORM objects, not even internally).
+    stub = SimpleNamespace(first_name=row["first_name"], last_name=row["last_name"],
+                          display_name=row["display_name"], username=row["username"])
     return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "full_name": _full_name(user),
-        "is_active": user.is_active,
+        "id": row["id"],
+        "username": row["username"],
+        "email": row["email"],
+        "full_name": full_name_for(stub),
+        "is_active": row["status"] == UserStatus.ACTIVE,
     }
 
 
@@ -52,8 +60,8 @@ def get_user_brief(user_id: int) -> dict | None:
     """Minimal profile for a single user, or ``None`` if ``user_id`` doesn't
     resolve to any row (unknown/deleted user)."""
     require_service("users")
-    user = User.objects.filter(pk=user_id).first()
-    return _brief(user) if user is not None else None
+    row = User.objects.filter(pk=user_id).values(*_BRIEF_FIELDS).first()
+    return _brief_from_values(row) if row is not None else None
 
 
 def get_users_brief(user_ids: Iterable[int]) -> list[dict]:
@@ -63,5 +71,5 @@ def get_users_brief(user_ids: Iterable[int]) -> list[dict]:
     just expressed as omission instead of a null entry since this returns
     a list)."""
     require_service("users")
-    users = User.objects.filter(pk__in=list(user_ids))
-    return [_brief(user) for user in users]
+    rows = User.objects.filter(pk__in=list(user_ids)).values(*_BRIEF_FIELDS)
+    return [_brief_from_values(row) for row in rows]
