@@ -1,0 +1,8 @@
+{
+  "source": "services/user/app/api/v1/auth.py::TokenResponse (Pydantic model, NOT a live capture)",
+  "fields": {
+    "access": "str",
+    "refresh": "str",
+    "token_type": "str"
+  }
+}

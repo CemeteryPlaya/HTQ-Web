@@ -1,0 +1,8 @@
+{
+  "source": "services/user/app/api/v1/users.py::UserOption (Pydantic model, NOT a live capture)",
+  "fields": {
+    "id": "int",
+    "full_name": "str",
+    "email": "str"
+  }
+}

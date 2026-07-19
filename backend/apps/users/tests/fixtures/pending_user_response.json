@@ -1,0 +1,10 @@
+{
+  "source": "services/user/app/api/v1/registration.py::PendingUserResponse (Pydantic model, NOT a live capture)",
+  "fields": {
+    "id": "int",
+    "email": "str",
+    "username": "str",
+    "full_name": "str",
+    "date_joined": "str"
+  }
+}

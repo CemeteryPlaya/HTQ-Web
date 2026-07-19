@@ -1,0 +1,28 @@
+{
+  "source": "services/user/app/api/v1/admin.py::AdminUserResponse (Pydantic model, NOT a live capture)",
+  "fields": {
+    "id": "int",
+    "username": "str",
+    "email": "str",
+    "first_name": "str",
+    "last_name": "str",
+    "firstName": "str",
+    "lastName": "str",
+    "patronymic": "str",
+    "display_name": "str",
+    "bio": "str",
+    "phone": "str",
+    "avatar_url": "str|null",
+    "avatarUrl": "str|null",
+    "settings": "dict",
+    "roles": "list",
+    "status": "str",
+    "is_staff": "bool",
+    "is_superuser": "bool",
+    "must_change_password": "bool",
+    "date_joined": "str",
+    "last_login": "str|null",
+    "created_at": "str|null",
+    "updated_at": "str|null"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "source": "services/user/app/api/v1/profile.py::ProfileResponse (Pydantic model, NOT a live capture)",
+  "fields": {
+    "id": "str",
+    "username": "str",
+    "email": "str",
+    "first_name": "str",
+    "last_name": "str",
+    "firstName": "str",
+    "lastName": "str",
+    "patronymic": "str",
+    "display_name": "str",
+    "fio": "str",
+    "bio": "str",
+    "phone": "str",
+    "avatar_url": "str|null",
+    "avatarUrl": "str|null",
+    "avatar": "dict|null",
+    "settings": "dict",
+    "roles": "list",
+    "department": "str|null",
+    "department_id": "int|null",
+    "position": "str|null",
+    "must_change_password": "bool",
+    "date_joined": "str|null",
+    "last_login": "str|null",
+    "created_at": "str|null",
+    "updated_at": "str|null"
+  }
+}

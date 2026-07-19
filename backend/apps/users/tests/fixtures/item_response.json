@@ -1,0 +1,10 @@
+{
+  "source": "services/user/app/api/v1/items.py::ItemResponse (Pydantic model, NOT a live capture)",
+  "fields": {
+    "id": "int",
+    "title": "str",
+    "description": "str",
+    "owner_id": "int",
+    "created_at": "str"
+  }
+}
