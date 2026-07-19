@@ -13,7 +13,7 @@ import pytest
 from django.conf import settings
 from django.test import Client
 
-from apps.cms.models import ContactRequest
+from apps.cms.models import AuditLog, ContactRequest
 
 BASE = "/api/cms/v1/contact-requests"
 
@@ -261,3 +261,154 @@ def test_get_nonexistent_id_404_with_detail():
     resp = Client().get(f"{BASE}/999999", **_auth_header(_admin_token()))
     assert resp.status_code == 404
     assert "detail" in resp.json()
+
+
+@pytest.mark.django_db
+def test_get_nonexistent_id_404_detail_is_specific_message():
+    """Finding 4: htqweb.http.api_view must forward Http404's own message
+    (get_contact_request_or_404 raises Http404("Contact request not found"))
+    instead of collapsing it to the generic "Not Found"."""
+    resp = Client().get(f"{BASE}/999999", **_auth_header(_admin_token()))
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "Contact request not found"}
+
+
+# ── trailing-slash aliases on /{id} and /{id}/reply ──────────────────────────
+#
+# Finding 1: the real frontend (AdminContacts.tsx) calls
+# `contact-requests/{id}/` (PATCH, DELETE) WITH a trailing slash, but the
+# route was only ever registered without one. APPEND_SLASH=False means
+# Django never redirects, so that spelling 404s outright — these tests hit
+# exactly the spelling the frontend sends, not just the spelling the
+# implementation happened to use.
+
+@pytest.mark.django_db
+def test_patch_trailing_slash_matches_frontend_call_site():
+    entry = ContactRequest.objects.create(email="x@x.com")
+    resp = _patch_json(Client(), f"{BASE}/{entry.id}/", {"handled": True}, **_auth_header(_admin_token()))
+    assert resp.status_code == 200
+    assert resp.json()["handled"] is True
+    entry.refresh_from_db()
+    assert entry.handled is True
+
+
+@pytest.mark.django_db
+def test_delete_trailing_slash_matches_frontend_call_site():
+    entry = ContactRequest.objects.create(email="x@x.com")
+    resp = Client().delete(f"{BASE}/{entry.id}/", **_auth_header(_admin_token()))
+    assert resp.status_code == 204
+    assert not ContactRequest.objects.filter(id=entry.id).exists()
+
+
+@pytest.mark.django_db
+def test_get_detail_trailing_slash_alias():
+    entry = ContactRequest.objects.create(email="x@x.com")
+    resp = Client().get(f"{BASE}/{entry.id}/", **_auth_header(_admin_token()))
+    assert resp.status_code == 200
+    assert resp.json()["id"] == entry.id
+
+
+@pytest.mark.django_db
+def test_reply_trailing_slash_alias():
+    entry = ContactRequest.objects.create(email="x@x.com")
+    resp = _post_json(
+        Client(), f"{BASE}/{entry.id}/reply/", {"reply_message": "we got it"},
+        **_auth_header(_admin_token()),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reply_message"] == "we got it"
+
+
+# ── query param validation (Finding 2) ───────────────────────────────────────
+
+@pytest.mark.django_db
+def test_list_limit_zero_422():
+    resp = Client().get(f"{BASE}/?limit=0", **_auth_header(_admin_token()))
+    assert resp.status_code == 422
+    assert "detail" in resp.json()
+
+
+@pytest.mark.django_db
+def test_list_limit_over_max_422():
+    resp = Client().get(f"{BASE}/?limit=9999", **_auth_header(_admin_token()))
+    assert resp.status_code == 422
+    assert "detail" in resp.json()
+
+
+@pytest.mark.django_db
+def test_list_limit_non_numeric_422():
+    resp = Client().get(f"{BASE}/?limit=abc", **_auth_header(_admin_token()))
+    assert resp.status_code == 422
+    assert "detail" in resp.json()
+
+
+@pytest.mark.django_db
+def test_list_handled_invalid_value_422():
+    resp = Client().get(f"{BASE}/?handled=maybe", **_auth_header(_admin_token()))
+    assert resp.status_code == 422
+    assert "detail" in resp.json()
+
+
+@pytest.mark.django_db
+def test_list_valid_limit_and_offset_still_works():
+    for i in range(3):
+        ContactRequest.objects.create(email=f"{i}@x.com")
+    resp = Client().get(f"{BASE}/?limit=500&offset=0", **_auth_header(_admin_token()))
+    assert resp.status_code == 200
+    assert len(resp.json()) == 3
+
+
+# ── audit trail (Finding 3) ───────────────────────────────────────────────────
+
+@pytest.mark.django_db
+def test_public_post_writes_audit_log():
+    client = Client()
+    resp = _post_json(client, f"{BASE}/", {
+        "first_name": "Alice", "last_name": "Doe", "email": "alice@example.com", "message": "hi",
+    })
+    assert resp.status_code == 201
+    entry_id = resp.json()["id"]
+    log = AuditLog.objects.get(action="contact_request_submitted")
+    assert log.resource_type == "ContactRequest"
+    assert log.resource_id == str(entry_id)
+    assert log.user_id is None
+    assert log.changes == {"email": "alice@example.com"}
+
+
+@pytest.mark.django_db
+def test_patch_writes_audit_log_with_actor_and_changes():
+    entry = ContactRequest.objects.create(email="x@x.com")
+    resp = _patch_json(Client(), f"{BASE}/{entry.id}", {"handled": True}, **_auth_header(_admin_token()))
+    assert resp.status_code == 200
+    log = AuditLog.objects.get(action="contact_request_updated")
+    assert log.resource_type == "ContactRequest"
+    assert log.resource_id == str(entry.id)
+    assert log.user_id == 9
+    assert log.changes == {"handled": True}
+
+
+@pytest.mark.django_db
+def test_reply_writes_audit_log_with_actor_and_reply_message():
+    entry = ContactRequest.objects.create(email="x@x.com")
+    resp = _post_json(
+        Client(), f"{BASE}/{entry.id}/reply", {"reply_message": "we got it"},
+        **_auth_header(_admin_token()),
+    )
+    assert resp.status_code == 200
+    log = AuditLog.objects.get(action="contact_request_replied")
+    assert log.resource_type == "ContactRequest"
+    assert log.resource_id == str(entry.id)
+    assert log.user_id == 9
+    assert log.changes == {"reply_message": "we got it"}
+
+
+@pytest.mark.django_db
+def test_delete_writes_audit_log_with_actor_and_email():
+    entry = ContactRequest.objects.create(email="x@x.com")
+    resp = Client().delete(f"{BASE}/{entry.id}", **_auth_header(_admin_token()))
+    assert resp.status_code == 204
+    log = AuditLog.objects.get(action="contact_request_deleted")
+    assert log.resource_type == "ContactRequest"
+    assert log.resource_id == str(entry.id)
+    assert log.user_id == 9
+    assert log.changes == {"email": "x@x.com"}

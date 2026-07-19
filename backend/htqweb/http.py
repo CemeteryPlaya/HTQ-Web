@@ -75,6 +75,10 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                 result = fn(request, *args, **kwargs)
                 if isinstance(result, BaseModel):
                     return JsonResponse(result.model_dump(mode="json"), status=status)
+                if isinstance(result, list) and result and all(isinstance(item, BaseModel) for item in result):
+                    return JsonResponse(
+                        [item.model_dump(mode="json") for item in result], safe=False, status=status,
+                    )
                 if isinstance(result, (dict, list)):
                     return JsonResponse(result, safe=False, status=status)
                 return result  # готовый HttpResponse (файлы, 302, кастомные статусы) — status игнорируется
@@ -83,8 +87,9 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                 # что и внешний HTTP-гейт (ServiceGateMiddleware), иначе
                 # межаппная деградация видна как голый 500.
                 return JsonResponse(disabled_payload(exc.service, exc.message), status=503)
-            except Http404:
-                return json_error("Not Found", 404)
+            except Http404 as exc:
+                detail = str(exc) or "Not Found"
+                return json_error(detail, 404)
             except PermissionDenied:
                 return json_error("Forbidden", 403)
             except SuspiciousOperation:

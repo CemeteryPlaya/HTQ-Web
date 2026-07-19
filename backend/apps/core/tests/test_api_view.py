@@ -45,6 +45,21 @@ def raw_response_view(request):
     return HttpResponse(b"raw", status=204)
 
 
+class EchoListItem(BaseModel):
+    id: int
+    label: str
+
+
+@api_view(methods=("GET",), auth=None)
+def model_list_view(request):
+    return [EchoListItem(id=1, label="a"), EchoListItem(id=2, label="b")]
+
+
+@api_view(methods=("GET",), auth=None)
+def empty_model_list_view(request):
+    return []
+
+
 @api_view(methods=("GET",), auth="admin_session")
 def admin_only_view(request):
     return {"user_id": request.token.user_id}
@@ -65,6 +80,11 @@ def disabled_service_view(request):
 @api_view(methods=("GET",), auth=None)
 def http404_view(request):
     raise Http404("not here")
+
+
+@api_view(methods=("GET",), auth=None)
+def http404_no_message_view(request):
+    raise Http404()
 
 
 @api_view(methods=("GET",), auth=None)
@@ -244,10 +264,40 @@ def test_require_service_disabled_returns_503_envelope():
 
 
 def test_http404_mapped_to_404_envelope():
+    """Finding 4: a message passed to Http404() must surface as `detail`,
+    not be discarded in favour of a generic 'Not Found'."""
     rf = RequestFactory()
     resp = http404_view(rf.get("/404/"))
     assert resp.status_code == 404
+    assert json.loads(resp.content) == {"detail": "not here"}
+
+
+def test_http404_without_message_falls_back_to_generic_detail():
+    rf = RequestFactory()
+    resp = http404_no_message_view(rf.get("/404-generic/"))
+    assert resp.status_code == 404
     assert json.loads(resp.content) == {"detail": "Not Found"}
+
+
+def test_list_of_basemodel_serialized_with_mode_json():
+    """Finding 6: api_view must shape a `list[BaseModel]` return value the
+    same way it shapes a single BaseModel — via `model_dump(mode="json")`
+    on each item — not just pass it through the generic dict/list branch
+    (which would leave BaseModel instances un-serialized)."""
+    rf = RequestFactory()
+    resp = model_list_view(rf.get("/model-list/"))
+    assert resp.status_code == 200
+    assert json.loads(resp.content) == [
+        {"id": 1, "label": "a"},
+        {"id": 2, "label": "b"},
+    ]
+
+
+def test_empty_list_response_still_returns_empty_json_array():
+    rf = RequestFactory()
+    resp = empty_model_list_view(rf.get("/model-list-empty/"))
+    assert resp.status_code == 200
+    assert json.loads(resp.content) == []
 
 
 def test_permission_denied_mapped_to_403_envelope():

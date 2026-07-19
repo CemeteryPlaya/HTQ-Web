@@ -43,3 +43,16 @@ class ContactRequestRead(BaseModel):
 
 class ContactRequestStats(BaseModel):
     unhandled: int
+
+
+class ContactRequestListQuery(BaseModel):
+    """Validates ``GET /contact-requests/`` query params.
+
+    Mirrors the FastAPI original's ``Query(...)`` declarations
+    (``services/cms/app/api/v1/contact_requests.py``) so out-of-range or
+    malformed values 422 instead of being silently clamped/defaulted.
+    """
+
+    handled: Optional[bool] = None
+    limit: int = Field(50, ge=1, le=500)
+    offset: int = Field(0, ge=0)

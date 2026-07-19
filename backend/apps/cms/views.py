@@ -15,34 +15,23 @@ router would give for an unregistered method on a real path.
 
 from __future__ import annotations
 
+import json
+
 from django.core.exceptions import PermissionDenied
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from pydantic import ValidationError
 
 from htqweb.http import api_view, json_error
 
 from . import schemas
+from .services import audit
 from .services import contact_requests_service as svc
 
 
 def _require_admin(request) -> None:
     if not request.token.is_elevated:
         raise PermissionDenied("Admin privileges required")
-
-
-def _parse_bool(raw: str | None) -> bool | None:
-    if raw is None:
-        return None
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _parse_int(raw: str | None, default: int) -> int:
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
 
 
 # ── POST / (public) + GET / (admin) — collection ────────────────────────────
@@ -55,17 +44,26 @@ def _create_contact_request(request, data: schemas.ContactRequestCreate):
         email=data.email,
         message=data.message,
     )
+    audit.record_action(
+        request,
+        user_id=None,
+        action="contact_request_submitted",
+        resource_type="ContactRequest",
+        resource_id=str(entry.id),
+        changes={"email": entry.email},
+    )
     return schemas.ContactRequestRead.model_validate(entry)
 
 
 @api_view(methods=("GET",), auth="jwt")
 def _list_contact_requests(request):
     _require_admin(request)
-    handled = _parse_bool(request.GET.get("handled"))
-    limit = max(1, min(_parse_int(request.GET.get("limit"), 50), 500))
-    offset = max(0, _parse_int(request.GET.get("offset"), 0))
-    rows = svc.list_contact_requests(handled=handled, limit=limit, offset=offset)
-    return [schemas.ContactRequestRead.model_validate(row).model_dump(mode="json") for row in rows]
+    try:
+        query = schemas.ContactRequestListQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return JsonResponse({"detail": json.loads(exc.json())}, status=422)
+    rows = svc.list_contact_requests(handled=query.handled, limit=query.limit, offset=query.offset)
+    return [schemas.ContactRequestRead.model_validate(row) for row in rows]
 
 
 @csrf_exempt
@@ -101,6 +99,14 @@ def _update_contact_request(request, contact_id: int, data: schemas.ContactReque
     entry = svc.get_contact_request_or_404(contact_id)
     changes = data.model_dump(exclude_unset=True)
     entry = svc.update_contact_request(entry, changes)
+    audit.record_action(
+        request,
+        user_id=request.token.user_id,
+        action="contact_request_updated",
+        resource_type="ContactRequest",
+        resource_id=str(entry.id),
+        changes=changes,
+    )
     return schemas.ContactRequestRead.model_validate(entry)
 
 
@@ -108,7 +114,17 @@ def _update_contact_request(request, contact_id: int, data: schemas.ContactReque
 def _delete_contact_request(request, contact_id: int):
     _require_admin(request)
     entry = svc.get_contact_request_or_404(contact_id)
+    email = entry.email
+    contact_id_str = str(entry.id)
     svc.delete_contact_request(entry)
+    audit.record_action(
+        request,
+        user_id=request.token.user_id,
+        action="contact_request_deleted",
+        resource_type="ContactRequest",
+        resource_id=contact_id_str,
+        changes={"email": email},
+    )
     return HttpResponse(status=204)
 
 
@@ -131,5 +147,13 @@ def reply_contact_request(request, contact_id: int, data: schemas.ContactRequest
     entry = svc.get_contact_request_or_404(contact_id)
     entry = svc.reply_to_contact_request(
         entry, reply_message=data.reply_message, admin_user_id=request.token.user_id,
+    )
+    audit.record_action(
+        request,
+        user_id=request.token.user_id,
+        action="contact_request_replied",
+        resource_type="ContactRequest",
+        resource_id=str(entry.id),
+        changes={"reply_message": data.reply_message},
     )
     return schemas.ContactRequestRead.model_validate(entry)

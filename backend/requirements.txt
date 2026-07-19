@@ -1,7 +1,7 @@
 Django==5.2.7          # утверждено: Python 3.14 + Django 5.2.7 (см. §Версии)
 psycopg[binary]==3.3.4
 pydantic==2.12.4       # тот же, что в сервисах — schemas переносятся как есть
-email-validator==2.3.0 # pydantic EmailStr (ContactRequestCreate.email — как в FastAPI-схеме)
+email-validator==2.2.0 # pydantic EmailStr (ContactRequestCreate.email — как в FastAPI-схеме), пин как у сервисов
 django-q2==1.10.0
 redis[hiredis]==5.2.1
 django-redis==7.0.0

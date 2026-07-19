@@ -11,6 +11,11 @@ urlpatterns = [
     # header on some browsers. APPEND_SLASH=False means Django won't add this
     # redirect itself, so both routes need to be explicit here too.
     path("contact-requests/stats/", views.contact_request_stats),
+    # Same story for the detail/reply routes: the real frontend
+    # (AdminContacts.tsx) calls `contact-requests/{id}/` (PATCH, DELETE) WITH
+    # a trailing slash. Both spellings are registered so that spelling 404s.
     path("contact-requests/<int:contact_id>/reply", views.reply_contact_request),
+    path("contact-requests/<int:contact_id>/reply/", views.reply_contact_request),
     path("contact-requests/<int:contact_id>", views.contact_request_detail),
+    path("contact-requests/<int:contact_id>/", views.contact_request_detail),
 ]
