@@ -18,9 +18,10 @@ explicitly as ``AutoField`` to keep the column type ``integer``, not
 - ``cms.news`` — id PK autoincrement (int4); title varchar(300) NOT NULL;
   slug varchar(320) NOT NULL, UNIQUE via a *plain unique index*
   ``ix_cms_news_slug`` (alembic used ``create_index(..., unique=True)``, not a
-  named table constraint — replicated here as a ``UniqueConstraint`` named
-  identically, which is the closest Django idiom and produces a real
-  postgres index of that exact name); excerpt varchar(500) NOT NULL DEFAULT
+  named table constraint — a Django ``UniqueConstraint`` would add an extra
+  ``pg_constraint`` row (``contype='u'``) that alembic never created, so this
+  is instead a bare ``CREATE UNIQUE INDEX`` via ``RunSQL`` in the migration,
+  with no ``Meta.constraints``/``Meta.indexes`` entry on the model); excerpt varchar(500) NOT NULL DEFAULT
   '' (added 004); summary text NOT NULL DEFAULT ''; content text NOT NULL
   DEFAULT ''; image varchar(500) NULL; category varchar(100) NOT NULL
   DEFAULT '' (ix_cms_news_category); category_id int NULL FK ->
@@ -101,6 +102,7 @@ four-label enum.
 import uuid
 
 from django.db import models
+from django.db.models.functions import Now
 
 
 class NewsStatus(models.TextChoices):
@@ -114,8 +116,8 @@ class Category(models.Model):
     id = models.AutoField(primary_key=True)
     slug = models.CharField(max_length=120, unique=False)
     name = models.CharField(max_length=160)
-    description = models.CharField(max_length=500, default="", blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    description = models.CharField(max_length=500, default="", blank=True, db_default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:
         managed = True
@@ -135,7 +137,7 @@ class Tag(models.Model):
     id = models.AutoField(primary_key=True)
     slug = models.CharField(max_length=80, unique=False)
     name = models.CharField(max_length=80)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:
         managed = True
@@ -157,13 +159,13 @@ class News(models.Model):
     slug = models.CharField(max_length=320, unique=False, db_index=False)
 
     # Editorial
-    excerpt = models.CharField(max_length=500, default="", blank=True)
-    summary = models.TextField(default="", blank=True)
-    content = models.TextField(default="", blank=True)
+    excerpt = models.CharField(max_length=500, default="", blank=True, db_default="")
+    summary = models.TextField(default="", blank=True, db_default="")
+    content = models.TextField(default="", blank=True, db_default="")
     image = models.CharField(max_length=500, null=True, blank=True)
 
     # Taxonomy
-    category = models.CharField(max_length=100, default="", blank=True, db_index=False)
+    category = models.CharField(max_length=100, default="", blank=True, db_index=False, db_default="")
     # db_constraint=False: Django's on_delete is application-side only and
     # would otherwise create the FK with an implicit NO ACTION at the DB
     # level (confdeltype='a'), not the real ON DELETE SET NULL alembic has
@@ -187,21 +189,23 @@ class News(models.Model):
     status = models.CharField(
         max_length=20, choices=NewsStatus.choices, default=NewsStatus.DRAFT, db_index=False,
     )
-    published = models.BooleanField(default=False, db_index=False)
+    published = models.BooleanField(default=False, db_index=False, db_default=False)
     published_at = models.DateTimeField(null=True, blank=True, db_index=False)
     scheduled_at = models.DateTimeField(null=True, blank=True, db_index=False)
 
-    created_at = models.DateTimeField(auto_now_add=True, db_index=False)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=False, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     tags = models.ManyToManyField(Tag, through="NewsTag", related_name="news_set")
 
     class Meta:
         managed = True
         db_table = 'cms"."news'
-        constraints = [
-            models.UniqueConstraint(fields=["slug"], name="ix_cms_news_slug"),
-        ]
+        # slug's uniqueness is enforced by a bare `CREATE UNIQUE INDEX
+        # ix_cms_news_slug` (RunSQL, in the migration) — NOT a
+        # UniqueConstraint. Alembic used create_index(..., unique=True), which
+        # produces only a pg_index row; a Django UniqueConstraint would add a
+        # pg_constraint row (contype='u') on top, which alembic never created.
         indexes = [
             models.Index(fields=["category"], name="ix_cms_news_category"),
             models.Index(fields=["created_at"], name="ix_cms_news_created_at"),
@@ -244,16 +248,16 @@ class NewsTag(models.Model):
 
 class ContactRequest(models.Model):
     id = models.AutoField(primary_key=True)
-    first_name = models.CharField(max_length=150, default="", blank=True)
-    last_name = models.CharField(max_length=150, default="", blank=True)
+    first_name = models.CharField(max_length=150, default="", blank=True, db_default="")
+    last_name = models.CharField(max_length=150, default="", blank=True, db_default="")
     email = models.EmailField(max_length=254)
-    message = models.TextField(default="", blank=True)
-    handled = models.BooleanField(default=False, db_index=False)
+    message = models.TextField(default="", blank=True, db_default="")
+    handled = models.BooleanField(default=False, db_index=False, db_default=False)
     replied_at = models.DateTimeField(null=True, blank=True, db_index=False)
     # FK-less: User lives in the `auth` schema, owned by user-service.
     replied_by_id = models.IntegerField(null=True, blank=True)
-    reply_message = models.TextField(default="", blank=True)
-    created_at = models.DateTimeField(auto_now_add=True, db_index=False)
+    reply_message = models.TextField(default="", blank=True, db_default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=False, db_default=Now())
 
     class Meta:
         managed = True
@@ -276,13 +280,13 @@ class NewsAttachment(models.Model):
         News, on_delete=models.CASCADE, db_column="news_id", db_index=False,
         db_constraint=False, related_name="attachments",
     )
-    role = models.CharField(max_length=20, default="attachment", blank=True)  # attachment | cover
+    role = models.CharField(max_length=20, default="attachment", blank=True, db_default="attachment")  # attachment | cover
     filename = models.CharField(max_length=255)
     size = models.IntegerField()
     content_type = models.CharField(max_length=255)
     storage_path = models.CharField(max_length=1024)
     uploaded_by = models.IntegerField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:
         managed = True
@@ -301,7 +305,7 @@ class AuditLog(models.Model):
     ip_address = models.CharField(max_length=45, null=True, blank=True)
     user_agent = models.TextField(null=True, blank=True)
     correlation_id = models.CharField(max_length=36, null=True, blank=True, db_index=False)
-    created_at = models.DateTimeField(auto_now_add=True, db_index=False)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=False, db_default=Now())
 
     class Meta:
         managed = True
