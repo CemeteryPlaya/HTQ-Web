@@ -28,7 +28,7 @@ from htqweb.http import api_view, json_error
 
 from . import schemas
 from .models import User, UserStatus
-from .services import auth_service
+from .services import auth_service, profile_service
 
 logger = logging.getLogger(__name__)
 
@@ -148,3 +148,131 @@ def admin_logout(request):
     response = JsonResponse({"ok": True})
     response.delete_cookie(ADMIN_COOKIE_NAME, path="/")
     return response
+
+
+# ── Profile — GET/PATCH profile/me (+alias), change-password, avatar ────────
+#
+# Ported from services/user/app/api/v1/profile.py. Response shape and
+# PATCH field precedence live in apps.users.services.profile_service — kept
+# field-for-field/behaviour-for-behaviour identical to the FastAPI source
+# (see that module's docstring for the one deliberate deviation: avatar
+# storage, decision Р3).
+
+
+def _get_profile_user(request):
+    """Shared lookup: 404 if the JWT's user_id doesn't resolve (deleted
+    user with a still-valid access token) — same guard the FastAPI source
+    applies on every profile endpoint."""
+    return User.objects.filter(pk=request.token.user_id).first()
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_profile(request):
+    user = _get_profile_user(request)
+    if user is None:
+        return json_error("User not found", 404)
+    return profile_service.build_response(user)
+
+
+def _parse_multipart_patch(request):
+    """PATCH bodies aren't auto-parsed into request.POST/request.FILES by
+    Django (HttpRequest._load_post_and_files only populates those for
+    method == "POST") — so a multipart PATCH must be parsed by hand via the
+    same MultiPartParser Django itself uses internally."""
+    if request.content_type == "multipart/form-data":
+        return request.parse_file_upload(request.META, request)
+    return request.POST, request.FILES
+
+
+@api_view(methods=("PATCH",), auth="jwt")
+def _update_profile(request):
+    """Patch the current user's profile.
+
+    Content-Type: multipart/form-data (the frontend sends FormData so it
+    can optionally attach an avatar file). Accepts both snake_case and
+    camelCase aliases for first/last name (camelCase wins when both are
+    present — see profile_service.apply_profile_fields).
+    """
+    user = _get_profile_user(request)
+    if user is None:
+        return json_error("User not found", 404)
+
+    post_data, files_data = _parse_multipart_patch(request)
+
+    def _coalesce(camel: str, snake: str) -> str | None:
+        value = post_data.get(camel)
+        return value if value is not None else post_data.get(snake)
+
+    try:
+        profile_service.apply_profile_fields(
+            user,
+            display_name=post_data.get("display_name"),
+            first_name=_coalesce("firstName", "first_name"),
+            last_name=_coalesce("lastName", "last_name"),
+            patronymic=post_data.get("patronymic"),
+            bio=post_data.get("bio"),
+            phone=post_data.get("phone"),
+            settings_json=post_data.get("settings"),
+        )
+    except profile_service.InvalidSettingsJSON as exc:
+        return json_error(str(exc), 400)
+
+    avatar_file = files_data.get("avatar")
+    if avatar_file is not None and avatar_file.name:
+        # Decision Р3: write directly to htqweb.storage instead of an S2S
+        # hop to media-service. Degrade, don't 500, on storage failure —
+        # the rest of the PATCH (fields already applied above) must still
+        # land; only the avatar_url update is skipped.
+        try:
+            user.avatar_url = profile_service.save_avatar(
+                user.id, avatar_file.name, avatar_file.read(), avatar_file.content_type,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("avatar_save_failed user_id=%s", user.id)
+
+    user.save()
+    return profile_service.build_response(user)
+
+
+@csrf_exempt
+def profile_me(request, *args, **kwargs):
+    """profile/me (+ profile/ alias) — GET and PATCH share one path, so
+    (unlike token/ vs token/refresh/) they need a method dispatcher rather
+    than two separate ``path()`` entries: Django's URL resolver stops at
+    the first pattern that matches the path regardless of method, so a
+    second ``path("profile/me", ...)`` entry would simply be unreachable."""
+    if request.method == "GET":
+        return _get_profile(request, *args, **kwargs)
+    if request.method == "PATCH":
+        return _update_profile(request, *args, **kwargs)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def remove_avatar(request):
+    """Remove the user's avatar: best-effort delete of the underlying
+    storage object, then always clear ``user.avatar_url``."""
+    user = _get_profile_user(request)
+    if user is None:
+        return json_error("User not found", 404)
+
+    profile_service.delete_avatar_object(user.avatar_url)
+    user.avatar_url = None
+    user.save(update_fields=["avatar_url"])
+    return HttpResponse(status=204)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.ChangePasswordRequest)
+def change_password(request, data: schemas.ChangePasswordRequest):
+    user = _get_profile_user(request)
+    if user is None:
+        return json_error("User not found", 404)
+
+    try:
+        profile_service.change_password(
+            user, new_password=data.new_password, current_password=data.current_password,
+        )
+    except profile_service.CurrentPasswordRequired:
+        return json_error("Current password is incorrect", 400)
+
+    return {"detail": "Password changed successfully"}

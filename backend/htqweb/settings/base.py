@@ -120,6 +120,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # as "fall back to S3_ENDPOINT" (see s3.py's `public_endpoint or endpoint`).
 STORAGE_BACKEND = env("STORAGE_BACKEND", "s3")  # local | s3
 S3_BUCKET = env("S3_BUCKET", "htqweb-cms")
+# Media bucket — avatars (Task 2.3, decision Р3) are written directly via
+# htqweb.storage instead of S2S-forwarding to media-service, so they need
+# their own bucket (media-service's own bucket, not cms's).
+MEDIA_S3_BUCKET = env("MEDIA_S3_BUCKET", "htqweb-media")
 S3_ENDPOINT = env("S3_ENDPOINT", "http://minio:9000")
 S3_PUBLIC_ENDPOINT = env("S3_PUBLIC_ENDPOINT", "")
 S3_ACCESS_KEY = env("S3_ACCESS_KEY", "minioadmin")

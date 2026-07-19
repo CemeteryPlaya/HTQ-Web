@@ -5,7 +5,7 @@ which defines these inline rather than in a separate ``schemas/`` module) —
 field names are kept identical because the React frontend parses them as-is.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TokenObtainRequest(BaseModel):
@@ -41,3 +41,17 @@ class AdminSessionLoginRequest(BaseModel):
     username: str
     password: str
     next: str = "/sqladmin/"
+
+
+class ChangePasswordRequest(BaseModel):
+    """``POST profile/change-password`` payload.
+
+    Ported verbatim from ``services/user/app/api/v1/profile.py::
+    ChangePasswordRequest`` — ``current_password`` is required for ordinary
+    voluntary changes; when ``User.must_change_password`` is true (admin-
+    forced reset), the current-password check is relaxed (enforced in
+    ``apps.users.services.profile_service.change_password``, not here).
+    """
+
+    new_password: str = Field(..., min_length=8)
+    current_password: str | None = None

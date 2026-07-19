@@ -180,10 +180,24 @@ class S3Storage:
         )
 
 
-def get_storage() -> Storage:
+def get_storage(bucket: str | None = None) -> Storage:
+    """Build the configured storage backend.
+
+    ``bucket`` lets a caller target a different S3 bucket than the cms
+    default (e.g. ``apps.users.services.profile_service`` writes avatars to
+    ``settings.MEDIA_S3_BUCKET`` instead of ``settings.S3_BUCKET``). Omitting
+    it reproduces the original no-arg behaviour byte-for-byte — every
+    existing call site (``get_storage()``) is unaffected.
+
+    ``LocalStorage`` ignores ``bucket``: the local dev fallback has always
+    used a single directory (``CMS_LOCAL_STORAGE_DIR``) with no per-bucket
+    subdirectory, and introducing one now would change on-disk layout for
+    the cms local-storage path for no S3-parity benefit (local mode is a
+    dev-only fallback, never used in prod where STORAGE_BACKEND=s3).
+    """
     if settings.STORAGE_BACKEND == "s3":
         return S3Storage(
-            bucket=settings.S3_BUCKET,
+            bucket=bucket or settings.S3_BUCKET,
             endpoint=settings.S3_ENDPOINT,
             access_key=settings.S3_ACCESS_KEY,
             secret_key=settings.S3_SECRET_KEY,
