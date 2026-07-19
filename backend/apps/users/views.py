@@ -29,7 +29,14 @@ from htqweb.http import api_view, json_error
 
 from . import schemas
 from .models import User, UserStatus
-from .services import admin_service, auth_service, profile_service, registration_service
+from .services import (
+    admin_service,
+    auth_service,
+    items_service,
+    options_service,
+    profile_service,
+    registration_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -487,3 +494,153 @@ def admin_set_password(request, user_id: int, data: schemas.AdminSetPasswordRequ
         user, new_password=data.new_password, must_change_password=data.must_change_password,
     )
     return {"detail": "Password updated"}
+
+
+# ── Items — GET/POST items/, GET/PATCH/DELETE items/{id}/ (Task 2.5) ───────
+#
+# Ported from ``services/user/app/api/v1/items.py``. Strictly scoped to the
+# caller: list only ever returns the caller's own rows, and detail/patch/
+# delete 404 (never 403) on another user's item — see
+# ``apps.users.services.items_service`` module docstring for why 404 is the
+# faithful reproduction (the source's WHERE clause makes "not yours" and
+# "doesn't exist" indistinguishable).
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_items(request):
+    items = items_service.list_items(request.token.user_id)
+    return [schemas.ItemResponse(**items_service.serialize(i)) for i in items]
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.ItemCreateRequest, status=201)
+def _create_item(request, data: schemas.ItemCreateRequest):
+    item = items_service.create_item(
+        request.token.user_id, title=data.title, description=data.description,
+    )
+    return schemas.ItemResponse(**items_service.serialize(item))
+
+
+@csrf_exempt
+def items_collection(request, *args, **kwargs):
+    if request.method == "GET":
+        return _list_items(request, *args, **kwargs)
+    if request.method == "POST":
+        return _create_item(request, *args, **kwargs)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_item(request, item_id: int):
+    try:
+        item = items_service.get_item_or_404(request.token.user_id, item_id)
+    except items_service.ItemNotFound:
+        return json_error("Item not found", 404)
+    return schemas.ItemResponse(**items_service.serialize(item))
+
+
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.ItemUpdateRequest)
+def _update_item(request, item_id: int, data: schemas.ItemUpdateRequest):
+    try:
+        item = items_service.get_item_or_404(request.token.user_id, item_id)
+    except items_service.ItemNotFound:
+        return json_error("Item not found", 404)
+    changes = data.model_dump(exclude_unset=True)
+    item = items_service.update_item(item, changes)
+    return schemas.ItemResponse(**items_service.serialize(item))
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_item(request, item_id: int):
+    try:
+        item = items_service.get_item_or_404(request.token.user_id, item_id)
+    except items_service.ItemNotFound:
+        return json_error("Item not found", 404)
+    items_service.delete_item(item)
+    return HttpResponse(status=204)
+
+
+@csrf_exempt
+def item_detail(request, item_id: int, *args, **kwargs):
+    if request.method == "GET":
+        return _get_item(request, item_id, *args, **kwargs)
+    if request.method == "PATCH":
+        return _update_item(request, item_id, *args, **kwargs)
+    if request.method == "DELETE":
+        return _delete_item(request, item_id, *args, **kwargs)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── Client telemetry — POST client-errors(/), client-events(/) (Task 2.5) ──
+#
+# Ported from ``services/user/app/api/v1/client_errors.py``. Nothing is
+# persisted to SQL — these are log-only endpoints (Loki is the source of
+# truth for browser telemetry). Both accept anonymous callers: a missing or
+# invalid Authorization header must never turn into a 401 here (pre-login
+# crashes and logouts need to be captured too) — ``auth=None`` at the
+# ``api_view`` layer already guarantees that; ``_maybe_user_id`` below is a
+# best-effort enrichment on top, not a gate.
+
+
+def _maybe_user_id(request) -> int | None:
+    """Decode a bearer JWT if one is present and valid; otherwise ``None``.
+
+    Mirrors the source's ``_maybe_decode`` — a garbage/expired/absent
+    Authorization header is swallowed silently, never raised, so the caller
+    stays anonymous-but-accepted rather than rejected.
+    """
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    try:
+        payload = decode_token(header[7:])
+    except (AuthError, ValidationError):
+        return None
+    return payload.user_id
+
+
+@api_view(methods=("POST",), auth=None, body=schemas.ClientErrorReport, status=202)
+def ingest_client_error(request, data: schemas.ClientErrorReport):
+    """Log a frontend fatal error at ERROR level so Loki alerts can fire."""
+    user_id = _maybe_user_id(request) or data.userId
+    logger.error(
+        "frontend_client_error message=%r stack=%r component_stack=%r "
+        "client_url=%r user_agent=%r client_timestamp=%r user_id=%s ip=%s",
+        data.message, data.stack, data.componentStack, data.url,
+        data.userAgent, data.timestamp, user_id, request.META.get("REMOTE_ADDR"),
+    )
+    return {"ok": True}
+
+
+@api_view(methods=("POST",), auth=None, body=schemas.UserActionEvent, status=202)
+def ingest_user_action(request, data: schemas.UserActionEvent):
+    """Log a user-action audit event at INFO level."""
+    logger.info(
+        "frontend_user_action action=%r resource=%r resource_id=%r meta=%r "
+        "client_url=%r user_agent=%r client_timestamp=%r user_id=%s ip=%s",
+        data.action, data.resource,
+        str(data.resourceId) if data.resourceId is not None else None,
+        data.meta, data.url, data.userAgent, data.timestamp,
+        _maybe_user_id(request), request.META.get("REMOTE_ADDR"),
+    )
+    return {"ok": True}
+
+
+# ── GET users/options/ — active-user picker (Task 2.5) ─────────────────────
+#
+# Ported from ``services/user/app/api/v1/users.py``. Any authenticated user
+# may call this (no admin gate) — see ``apps.users.services.options_service``.
+
+
+@api_view(methods=("GET",), auth="jwt")
+def list_user_options(request):
+    try:
+        q = schemas.UserOptionsQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return JsonResponse({"detail": json.loads(exc.json())}, status=422)
+    users = options_service.list_user_options(query=q.query, limit=q.limit)
+    return [
+        schemas.UserOption(
+            id=u.id, full_name=options_service.full_name_for(u), email=u.email or "",
+        )
+        for u in users
+    ]

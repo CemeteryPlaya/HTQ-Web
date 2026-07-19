@@ -214,3 +214,74 @@ class AdminSetPasswordRequest(BaseModel):
 
     new_password: str = Field(..., min_length=8)
     must_change_password: bool = True
+
+
+# ── Items (Task 2.5) ─────────────────────────────────────────────────────────
+#
+# Ported from ``services/user/app/api/v1/items.py``'s inline schemas.
+
+
+class ItemResponse(BaseModel):
+    id: int
+    title: str
+    description: str
+    owner_id: int
+    created_at: str
+
+
+class ItemCreateRequest(BaseModel):
+    title: str
+    description: str = ""
+
+
+class ItemUpdateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+
+
+# ── Client telemetry (Task 2.5) ─────────────────────────────────────────────
+#
+# Ported from ``services/user/app/api/v1/client_errors.py``'s inline schemas.
+# Field names are camelCase where the FastAPI original used camelCase
+# (``componentStack``, ``userAgent``, ``userId``, ``resourceId``) — kept
+# identical because ``frontend/src/lib/telemetry.ts`` sends these as-is.
+
+
+class ClientErrorReport(BaseModel):
+    message: str
+    stack: str | None = None
+    componentStack: str | None = None
+    url: str
+    userAgent: str | None = None
+    userId: int | None = None
+    timestamp: str | None = None
+
+
+class UserActionEvent(BaseModel):
+    action: str
+    resource: str | None = None
+    resourceId: str | int | None = None
+    meta: dict | None = None
+    url: str
+    userAgent: str | None = None
+    timestamp: str | None = None
+
+
+# ── User options (Task 2.5) ─────────────────────────────────────────────────
+#
+# Ported from ``services/user/app/api/v1/users.py``'s inline schemas.
+
+
+class UserOption(BaseModel):
+    id: int
+    full_name: str
+    email: str
+
+
+class UserOptionsQuery(BaseModel):
+    """Validates ``GET users/options/`` query params — mirrors the FastAPI
+    original's ``Query(default=200, ge=1, le=500)`` so an out-of-range
+    ``limit`` 422s instead of being silently clamped."""
+
+    query: str | None = None
+    limit: int = Field(200, ge=1, le=500)
