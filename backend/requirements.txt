@@ -17,3 +17,11 @@ uvicorn[standard]==0.34.0   # локальный ASGI-запуск (SSE/socketio
 pytest==9.0.3
 pytest-django==4.12.0
 django-json-widget==2.1.1   # JSONField editing in django-admin (task 2.6)
+# Image processing for media uploads (task 3.2) — matches services/media's
+# pillow pin. NOT porting services/media's python-magic==0.4.27: on this
+# Windows dev host, `magic.from_buffer()` segfaults the interpreter (no
+# libmagic native lib installed) rather than raising a catchable exception
+# — an unacceptable crash risk in a request-handling path. See
+# apps/media_files/services/image_service.py's detect_mime() docstring for
+# the fallback (declared Content-Type + Pillow decode-validation instead).
+Pillow==11.3.0

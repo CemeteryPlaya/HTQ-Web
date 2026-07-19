@@ -163,3 +163,17 @@ TRANSLATION_API_BASE = env("TRANSLATION_API_BASE", "https://api-free.deepl.com")
 # notify_admins_on_contact_request calls out to the still-running FastAPI
 # email-service over HTTP (Strangler Fig — no Django email app exists yet).
 EMAIL_SERVICE_URL = env("EMAIL_SERVICE_URL", "http://email-service:8011")
+
+# ── media upload pipeline (apps/media_files, task 3.2) — ported defaults
+# from services/media/app/core/settings.py, byte-for-byte where the setting
+# still applies. dedup_enabled is NOT ported (defaults to False upstream
+# too, and this port doesn't implement the sha256-dedup lookup — see the
+# task 3.2 report). media_signed_url_* is NOT ported here either — signed
+# URLs are a later task (3.3+).
+MAX_UPLOAD_SIZE_MB = int(env("MAX_UPLOAD_SIZE_MB", "100"))
+ALLOWED_MIME_TYPES = env("ALLOWED_MIME_TYPES", "")  # comma-separated, "" = allow all
+IMAGE_JPEG_QUALITY = int(env("IMAGE_JPEG_QUALITY", "85"))
+THUMBNAIL_FORMAT = env("THUMBNAIL_FORMAT", "webp")  # webp | jpeg | png
+THUMBNAIL_QUALITY = int(env("THUMBNAIL_QUALITY", "82"))
+MAX_IMAGE_PIXELS = int(env("MAX_IMAGE_PIXELS", str(100_000_000)))  # image-bomb guard
+STRIP_EXIF = env("STRIP_EXIF", "true").lower() in ("1", "true", "yes")
