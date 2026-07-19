@@ -124,15 +124,52 @@ def test_news_foreign_keys_use_expected_on_delete_behavior():
 
 
 @pytest.mark.django_db
-def test_news_slug_and_taxonomy_slugs_are_unique():
-    rows = _fetchall(
-        """
-        SELECT indexdef FROM pg_indexes
-        WHERE schemaname = 'public' AND tablename = 'cms_news' AND indexname LIKE %s
-        """,
-        ["%slug%"],
+def test_news_category_ref_set_null_on_category_delete():
+    """Deleting a Category must not delete the News that reference it —
+    `category_ref` is SET_NULL, not CASCADE."""
+    category = models.Category.objects.create(slug="tech", name="Tech")
+    news = models.News.objects.create(
+        title="Some headline", slug="some-headline", category_ref=category,
     )
-    assert any("UNIQUE" in r[0] for r in rows), "cms_news.slug must be backed by a unique index"
+
+    category.delete()
+
+    news.refresh_from_db()
+    assert news.category_ref_id is None
+
+
+@pytest.mark.django_db
+def test_news_attachment_cascade_deletes_with_news():
+    """Deleting a News row must delete its attachments — `news` FK on
+    NewsAttachment is CASCADE."""
+    news = models.News.objects.create(title="Some headline", slug="some-headline")
+    attachment = models.NewsAttachment.objects.create(
+        news=news,
+        filename="cover.jpg",
+        size=1234,
+        content_type="image/jpeg",
+        storage_path="news/cover.jpg",
+    )
+    attachment_id = attachment.id
+
+    news.delete()
+
+    assert not models.NewsAttachment.objects.filter(id=attachment_id).exists()
+
+
+@pytest.mark.django_db
+def test_news_slug_and_taxonomy_slugs_are_unique():
+    for table in ("cms_news", "cms_category", "cms_tag"):
+        rows = _fetchall(
+            """
+            SELECT indexdef FROM pg_indexes
+            WHERE schemaname = 'public' AND tablename = %s AND indexname LIKE %s
+            """,
+            [table, "%slug%"],
+        )
+        assert any("UNIQUE" in r[0] for r in rows), (
+            f"{table}.slug must be backed by a unique index"
+        )
 
 
 def test_news_status_is_plain_varchar_with_four_choices():

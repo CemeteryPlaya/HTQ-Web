@@ -16,10 +16,11 @@ an alembic-parity artifact.
 
 One piece of FastAPI business logic is intentionally preserved: a Postgres
 trigger that keeps the legacy ``published``/``published_at`` columns in sync
-with ``status`` (see migration ``0001_initial``, the final ``RunSQL``
-operation). It stays as SQL for now because there is no News CRUD yet (Task
-1.3, currently skipped) to carry the equivalent logic in ``save()``/a signal
-— when that CRUD lands, this trigger should move into the model layer.
+with ``status`` (see migration ``0002_news_sync_published_trigger``, its
+``RunSQL`` operation). It stays as SQL for now because there is no News CRUD
+yet (Task 1.3, currently skipped) to carry the equivalent logic in
+``save()``/a signal — when that CRUD lands, this trigger should move into
+the model layer.
 """
 
 import uuid
@@ -65,7 +66,9 @@ class News(models.Model):
     image = models.CharField(max_length=500, null=True, blank=True)
 
     # Taxonomy
-    category = models.CharField(max_length=100, default="", blank=True, db_default="")
+    category = models.CharField(max_length=100, default="", blank=True, db_default="", db_index=True)
+    # `category_ref` is a ForeignKey — Django already creates an index on FK
+    # columns by default, so no redundant `db_index=True` here.
     category_ref = models.ForeignKey(
         Category,
         on_delete=models.SET_NULL,
@@ -73,17 +76,18 @@ class News(models.Model):
         blank=True,
         related_name="news",
     )
-    author_id = models.IntegerField(null=True, blank=True)
+    author_id = models.IntegerField(null=True, blank=True, db_index=True)
 
     # Lifecycle
     status = models.CharField(
         max_length=20, choices=NewsStatus.choices, default=NewsStatus.DRAFT, db_default=NewsStatus.DRAFT,
+        db_index=True,
     )
-    published = models.BooleanField(default=False, db_default=False)
-    published_at = models.DateTimeField(null=True, blank=True)
-    scheduled_at = models.DateTimeField(null=True, blank=True)
+    published = models.BooleanField(default=False, db_default=False, db_index=True)
+    published_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    scheduled_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
-    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     # A bare M2M — alembic parity (which required an explicit composite-PK
@@ -100,12 +104,12 @@ class ContactRequest(models.Model):
     last_name = models.CharField(max_length=150, default="", blank=True, db_default="")
     email = models.EmailField(max_length=254)
     message = models.TextField(default="", blank=True, db_default="")
-    handled = models.BooleanField(default=False, db_default=False)
-    replied_at = models.DateTimeField(null=True, blank=True)
+    handled = models.BooleanField(default=False, db_default=False, db_index=True)
+    replied_at = models.DateTimeField(null=True, blank=True, db_index=True)
     # FK-less: User lives in a different app/service boundary than cms owns.
     replied_by_id = models.IntegerField(null=True, blank=True)
     reply_message = models.TextField(default="", blank=True, db_default="")
-    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now(), db_index=True)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<ContactRequest id={self.id} email={self.email!r} handled={self.handled}>"
