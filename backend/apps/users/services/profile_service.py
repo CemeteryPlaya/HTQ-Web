@@ -192,6 +192,53 @@ def _avatar_key_from_url(avatar_url: str | None) -> str | None:
     return m.group(1) if m else None
 
 
+# Fixed content-type -> extension allow-list for avatar uploads (review
+# Finding 2). Deliberately NOT ``mimetypes.guess_extension`` (services/
+# media's ``_ext_for`` uses that) — this module only ever stores images, so
+# a small fixed map is both stricter and simpler than delegating to the
+# stdlib's much broader (non-image-aware) mime db.
+_AVATAR_CONTENT_TYPE_EXT = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
+# Strict allow-list for the filename-tail fallback: lowercase alnum only,
+# 1-8 chars. Anything else (``?``, ``&``, ``..``, ``/``, whitespace,
+# uppercase) is rejected outright rather than sanitized/escaped, so it can
+# never reach the storage key or the returned avatar_url.
+_SAFE_EXT_TAIL_RE = re.compile(r"[a-z0-9]{1,8}")
+
+
+def _safe_avatar_ext(filename: str | None, content_type: str | None) -> str:
+    """Derive a safe file extension for an avatar upload key.
+
+    Never trusts the client-supplied filename directly (review Finding 2):
+    a crafted name like ``"evil.png?x=1&y=2"`` or ``"../../../etc/passwd"``
+    would otherwise inject ``?``/``&``/``..`` into the S3 key AND the
+    returned ``avatar_url``, and could make ``_AVATAR_KEY_RE`` mis-parse on
+    a later delete (orphaning the object).
+
+    Precedence, mirroring services/media's ``_ext_for`` intent but
+    stricter: (1) the upload's content-type, mapped through a fixed
+    image-only allow-list; (2) the filename tail, ONLY if it is itself a
+    strict ``[a-z0-9]{1,8}`` token once lowercased; (3) ``.jpg`` as a safe
+    default (documented choice — avatars are jpeg-compatible for display
+    either way, and a default is required so an unrecognised/hostile input
+    never falls through with no extension or a raw client string).
+    """
+    if content_type:
+        ext = _AVATAR_CONTENT_TYPE_EXT.get(content_type.strip().lower())
+        if ext:
+            return ext
+    if filename and "." in filename:
+        tail = filename.rsplit(".", 1)[-1].lower()
+        if _SAFE_EXT_TAIL_RE.fullmatch(tail):
+            return "." + tail
+    return ".jpg"
+
+
 def save_avatar(user_id: int, filename: str, data: bytes, content_type: str | None) -> str:
     """Store the avatar directly in ``htqweb.storage`` (decision Р3).
 
@@ -201,9 +248,7 @@ def save_avatar(user_id: int, filename: str, data: bytes, content_type: str | No
     ``avatar_url``. See the task 2.3 report for why (mirrors cms's
     fire-and-forget principle for non-critical side effects).
     """
-    ext = ""
-    if filename and "." in filename:
-        ext = "." + filename.rsplit(".", 1)[-1]
+    ext = _safe_avatar_ext(filename, content_type)
     key = f"avatars/{user_id}/{uuid.uuid4().hex}{ext}"
     storage = get_storage(bucket=settings.MEDIA_S3_BUCKET)
     storage.save(key, data, content_type=content_type)

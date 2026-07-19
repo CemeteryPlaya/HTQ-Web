@@ -204,7 +204,7 @@ def _update_profile(request):
         return value if value is not None else post_data.get(snake)
 
     try:
-        profile_service.apply_profile_fields(
+        changes = profile_service.apply_profile_fields(
             user,
             display_name=post_data.get("display_name"),
             first_name=_coalesce("firstName", "first_name"),
@@ -217,6 +217,22 @@ def _update_profile(request):
     except profile_service.InvalidSettingsJSON as exc:
         return json_error(str(exc), 400)
 
+    # update_fields = only the columns THIS request actually changed (review
+    # Finding 1). Avatar storage I/O below is a real S3/network call, and an
+    # unconditional full-row user.save() would rewrite every column from the
+    # in-memory snapshot taken at request start — silently reverting any
+    # concurrent write to this row (e.g. an admin toggling is_staff/
+    # is_superuser/must_change_password) that lands during that window. Same
+    # pattern remove_avatar/change_password already use below.
+    # update_fields = only the columns THIS request actually changed (review
+    # Finding 1). Avatar storage I/O below is a real S3/network call, and an
+    # unconditional full-row user.save() would rewrite every column from the
+    # in-memory snapshot taken at request start — silently reverting any
+    # concurrent write to this row (e.g. an admin toggling is_staff/
+    # is_superuser/must_change_password) that lands during that window. Same
+    # pattern remove_avatar/change_password already use below.
+    update_fields = set(changes)
+
     avatar_file = files_data.get("avatar")
     if avatar_file is not None and avatar_file.name:
         # Decision Р3: write directly to htqweb.storage instead of an S2S
@@ -227,10 +243,15 @@ def _update_profile(request):
             user.avatar_url = profile_service.save_avatar(
                 user.id, avatar_file.name, avatar_file.read(), avatar_file.content_type,
             )
+            update_fields.add("avatar_url")
         except Exception:  # noqa: BLE001
             logger.exception("avatar_save_failed user_id=%s", user.id)
 
-    user.save()
+    if update_fields:
+        # auto_now fields are NOT auto-added to a partial update_fields save —
+        # must include updated_at explicitly whenever anything changed.
+        update_fields.add("updated_at")
+        user.save(update_fields=list(update_fields))
     return profile_service.build_response(user)
 
 

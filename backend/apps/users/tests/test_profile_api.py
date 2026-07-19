@@ -198,6 +198,18 @@ def test_patch_settings_invalid_json_400(active_user):
 
 
 @pytest.mark.django_db
+def test_patch_settings_valid_json_but_not_object_400(active_user):
+    token = _access_token(active_user)
+    resp = _patch_multipart(Client(), f"{BASE}/profile/me", {
+        "settings": json.dumps([1, 2, 3]),
+    }, token)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "settings must be a JSON object"
+    active_user.refresh_from_db()
+    assert active_user.settings == {}
+
+
+@pytest.mark.django_db
 def test_patch_unauthenticated_401(db):
     resp = _patch_multipart(Client(), f"{BASE}/profile/me", {"bio": "x"}, token="garbage")
     assert resp.status_code == 401
@@ -256,6 +268,111 @@ def test_patch_avatar_save_failure_degrades_rest_of_patch_still_succeeds(
     active_user.refresh_from_db()
     assert active_user.bio == "still saved"
     assert active_user.avatar_url is None
+
+
+@pytest.mark.django_db
+def test_patch_profile_lost_update_race_avatar_io_window(active_user, monkeypatch):
+    """Regression for review Finding 1 (lost-update race): the PATCH handler
+    used to call ``user.save()`` with no ``update_fields``, so Django
+    rewrote EVERY column from the in-memory snapshot taken at request
+    start. Avatar storage I/O is a real S3/network call — anything that
+    concurrently modifies this row while that call is in flight (e.g. an
+    admin toggling ``is_superuser``) would get silently reverted once the
+    stale in-memory ``user`` object was saved back.
+
+    Simulated here by mutating the row, via a direct queryset ``.update()``
+    (bypassing this ``user`` instance entirely), from inside the mocked
+    storage's ``save()`` — which runs strictly between the profile-fields
+    snapshot and the view's final ``user.save()``, i.e. exactly the race
+    window. Fails against the old unconditional ``user.save()`` (reverts
+    ``is_superuser`` to the stale ``False`` it had at fetch time) and
+    passes with ``update_fields`` restricted to the columns this request
+    actually changed.
+    """
+    assert active_user.is_superuser is False
+
+    class _RaceStorage:
+        def save(self, path, data, content_type=None):
+            # Represents a concurrent admin write landing mid-request,
+            # while this request is blocked on avatar storage I/O.
+            User.objects.filter(pk=active_user.pk).update(is_superuser=True)
+
+        def delete(self, path):
+            pass
+
+    monkeypatch.setattr(profile_service, "get_storage", lambda bucket=None: _RaceStorage())
+
+    token = _access_token(active_user)
+    avatar = SimpleUploadedFile("me.png", b"png-bytes", content_type="image/png")
+    resp = _patch_multipart(Client(), f"{BASE}/profile/me", {
+        "avatar": avatar, "bio": "concurrent-safe",
+    }, token)
+    assert resp.status_code == 200
+
+    active_user.refresh_from_db()
+    assert active_user.bio == "concurrent-safe"
+    assert active_user.is_superuser is True  # NOT reverted by the profile save
+
+
+# ── PATCH profile/me — avatar filename/ext sanitization (review Finding 2) ──
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("hostile_name", ["evil.png?x=1&y=2", "../../../etc/passwd"])
+def test_patch_avatar_hostile_filename_sanitized_and_round_trips(
+    active_user, fake_storage, hostile_name,
+):
+    token = _access_token(active_user)
+    avatar = SimpleUploadedFile(hostile_name, b"png-bytes", content_type="image/png")
+    resp = _patch_multipart(Client(), f"{BASE}/profile/me", {"avatar": avatar}, token)
+    assert resp.status_code == 200
+    body = resp.json()
+    url = body["avatarUrl"]
+
+    # Split off the legitimate ?sig=...&exp=... signed query before
+    # asserting — only the key portion (path_part) must be clean.
+    path_part, _, query_part = url.partition("?")
+    for bad in ("?", "&", "..", " "):
+        assert bad not in path_part
+    assert query_part.startswith("sig=")
+
+    assert len(fake_storage.saved) == 1
+    saved_key = fake_storage.saved[0][0]
+    for bad in ("?", "&", "..", " "):
+        assert bad not in saved_key
+    assert saved_key.startswith(f"avatars/{active_user.id}/")
+
+    # Round-trip: a subsequent DELETE must still parse the stored URL and
+    # clear it — proof _AVATAR_KEY_RE isn't mis-parsing an injected key.
+    resp2 = Client().delete(f"{BASE}/profile/avatar", **_auth(token))
+    assert resp2.status_code == 204
+    active_user.refresh_from_db()
+    assert active_user.avatar_url is None
+    assert fake_storage.deleted == [saved_key]
+
+
+@pytest.mark.parametrize(
+    "filename,content_type,expected_ext",
+    [
+        ("me.png", "image/png", ".png"),
+        ("me.jpg", "image/jpeg", ".jpg"),
+        ("me.gif", "image/gif", ".gif"),
+        ("me.webp", "image/webp", ".webp"),
+        # Content-type wins even over a mismatched/hostile filename.
+        ("evil.png?x=1&y=2", "image/png", ".png"),
+        # No usable content-type: filename tail fallback, but only if it
+        # is itself a strict lowercase alnum token.
+        ("photo.PNG", None, ".png"),
+        ("photo.PNG", "application/octet-stream", ".png"),
+        # Hostile/unsafe tails never pass through — safe default instead.
+        ("evil.png?x=1&y=2", None, ".jpg"),
+        ("../../../etc/passwd", None, ".jpg"),
+        ("../../../etc/passwd", "image/png", ".png"),
+        ("noext", None, ".jpg"),
+    ],
+)
+def test_safe_avatar_ext_sanitizes(filename, content_type, expected_ext):
+    assert profile_service._safe_avatar_ext(filename, content_type) == expected_ext
 
 
 # ── DELETE profile/avatar ────────────────────────────────────────────────────
