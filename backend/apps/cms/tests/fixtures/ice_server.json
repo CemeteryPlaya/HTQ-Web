@@ -1,0 +1,8 @@
+{
+  "source": "services/cms/app/schemas/conference.py::IceServer (Pydantic model, NOT a live capture)",
+  "fields": {
+    "urls": "str|list",
+    "username": "str|null",
+    "credential": "str|null"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "source": "services/cms/app/schemas/conference.py::ConferenceConfig (Pydantic model, NOT a live capture). Django's Response adds one extra field, `enabled`, on top of this contract — see apps/cms/schemas.py's ConferenceConfig docstring (Task 1.5) and the parity test that treats it as an explicit, intentional superset key rather than folding it in here.",
+  "fields": {
+    "sfu_signaling_url": "str",
+    "sfu_signaling_path": "str",
+    "ice_servers": "list"
+  }
+}

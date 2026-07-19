@@ -1,0 +1,15 @@
+{
+  "source": "services/cms/app/schemas/contact_request.py::ContactRequestRead (Pydantic model, NOT a live capture)",
+  "fields": {
+    "id": "int",
+    "first_name": "str",
+    "last_name": "str",
+    "email": "str",
+    "message": "str",
+    "handled": "bool",
+    "replied_at": "str|null",
+    "replied_by_id": "int|null",
+    "reply_message": "str",
+    "created_at": "str"
+  }
+}
