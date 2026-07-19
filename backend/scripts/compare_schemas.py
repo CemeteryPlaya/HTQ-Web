@@ -22,12 +22,37 @@ docker-compose.test.yml). Do not point this at the real `htqweb` database.
 Usage:
     backend/.venv/Scripts/python backend/scripts/compare_schemas.py
 
+    # Phase 2, e.g. schema `auth` (user-service), against its own pair of
+    # alembic-ref / django-ref databases — no source edit required:
+    SCHEMA=auth ALEMBIC_REF_DB=htqweb_alembic_ref_auth \
+    DJANGO_REF_DB=htqweb_django_ref_auth \
+    ALEMBIC_VERSION_TABLE=alembic_version \
+        backend/.venv/Scripts/python backend/scripts/compare_schemas.py
+
 Env overrides (all optional):
     DB_HOST, DB_PORT, DB_USER, DB_PASSWORD  — connection params (same for
                                                both reference DBs)
-    ALEMBIC_REF_DB   (default: htqweb_alembic_ref)
-    DJANGO_REF_DB    (default: htqweb_django_ref)
-    SCHEMA           (default: cms)
+    ALEMBIC_REF_DB        (default: htqweb_alembic_ref)
+    DJANGO_REF_DB         (default: htqweb_django_ref)
+    SCHEMA                (default: cms)
+    ALEMBIC_VERSION_TABLE — name of alembic's own bookkeeping table living
+                             inside SCHEMA, excluded from the table-set
+                             comparison (see point 6 below). Defaults to
+                             "alembic_version_cms" when SCHEMA=cms (cms-
+                             service's actual table name — it passes an
+                             explicit `version_table=` to alembic, see
+                             services/cms/alembic/env.py), else to the bare
+                             alembic default "alembic_version" — which is
+                             what user-service actually produces: its
+                             services/user/alembic/env.py sets only
+                             `version_table_schema=settings.db_schema` and
+                             never overrides `version_table`, so its
+                             bookkeeping table is `auth.alembic_version`,
+                             NOT "alembic_version_user". The naming is not a
+                             clean `alembic_version_<schema>` pattern across
+                             services, so callers targeting a schema/service
+                             with yet another convention should set this
+                             explicitly rather than rely on the default.
 
 Exit code: 0 if no *real* schema difference is found (after normalizing the
 documented "expected diffs" below), 1 otherwise.
@@ -54,9 +79,12 @@ output:
      auth_*, django_q_*, sessions, admin, core_service_status, ...) — these
      live in schema `public`, not `cms`, so scoping the comparison to schema
      `cms` already excludes them. Verified, not assumed (see report).
-  6. `alembic_version_cms` — alembic's own bookkeeping table. It lives inside
-     schema `cms` (unlike Django's `django_migrations`, which Django puts in
-     `public`), so it must be explicitly excluded here. Analogous to #5.
+  6. The alembic version-bookkeeping table (`alembic_version_cms` for this
+     cms run) — it lives inside schema `cms` (unlike Django's
+     `django_migrations`, which Django puts in `public`), so it must be
+     explicitly excluded here. Analogous to #5. The table name is derived
+     from SCHEMA / ALEMBIC_VERSION_TABLE, not hardcoded — see the env-vars
+     section above.
 
 Everything else — a missing/extra table or column, a differing data type,
 nullability, default, missing/extra index, missing unique/FK, wrong
@@ -84,11 +112,24 @@ DB_PASSWORD = os.environ.get("DB_PASSWORD", "change-me")
 ALEMBIC_REF_DB = os.environ.get("ALEMBIC_REF_DB", "htqweb_alembic_ref")
 DJANGO_REF_DB = os.environ.get("DJANGO_REF_DB", "htqweb_django_ref")
 
+# Alembic's own bookkeeping-table name, inside SCHEMA. NOT a clean
+# `alembic_version_<schema>` pattern across services — verified by reading
+# each service's alembic/env.py (see the "ALEMBIC_VERSION_TABLE" entry in the
+# module docstring for details): cms-service passes an explicit
+# `version_table="alembic_version_cms"`; user-service passes no
+# `version_table` override at all, so it gets alembic's bare default
+# "alembic_version" (in schema `auth`). Default here covers both of those
+# verified cases; anything else must be set explicitly via env.
+ALEMBIC_VERSION_TABLE = os.environ.get(
+    "ALEMBIC_VERSION_TABLE",
+    "alembic_version_cms" if SCHEMA == "cms" else "alembic_version",
+)
+
 # Tables that exist by construction on only one side and are explicitly
 # excluded from comparison (see module docstring, points 5-6). Django's own
 # service tables aren't here because they live outside schema `cms` — they
 # never even reach the table-set comparison.
-ALEMBIC_ONLY_EXPECTED_TABLES = {"alembic_version_cms"}
+ALEMBIC_ONLY_EXPECTED_TABLES = {ALEMBIC_VERSION_TABLE}
 DJANGO_ONLY_EXPECTED_TABLES: set[str] = set()
 
 
@@ -297,7 +338,7 @@ def compare(a_conn: psycopg.Connection, d_conn: psycopg.Connection, report: Repo
     d_extra = d_tables_raw - a_tables_raw
     for t in sorted(a_extra):
         if t in ALEMBIC_ONLY_EXPECTED_TABLES:
-            report.expected(f"table `{t}` exists only on alembic side (alembic's own migration-bookkeeping table)")
+            report.expected(f"table `{t}` exists only on alembic side (alembic's own migration-bookkeeping table, ALEMBIC_VERSION_TABLE)")
         else:
             report.real(f"table `{t}` exists in alembic ref but is MISSING from Django migrations")
     for t in sorted(d_extra):
@@ -425,9 +466,9 @@ def main() -> int:
         for msg in report.real_diffs:
             print(f"  - {msg}")
         return 1
-    print("\nPASS — schema `cms` built by Django migrations is equivalent to the alembic reference "
+    print(f"\nPASS — schema `{SCHEMA}` built by Django migrations is equivalent to the alembic reference "
           "(modulo documented expected diffs: identity vs serial, statement_timestamp() vs now(), "
-          "column ordinal order, and alembic_version_cms bookkeeping table).")
+          f"column ordinal order, and the `{ALEMBIC_VERSION_TABLE}` bookkeeping table).")
     return 0
 
 
