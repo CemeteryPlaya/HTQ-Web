@@ -15,11 +15,15 @@ decisions Р2/Р3 — see the task 2.4 report for the full inventory):
   flags) is still performed below.
 * **Mailcow mailbox *provisioning*** in ``create_user``
   (``_provision_mailbox``, also an S2S email-service call) — dropped for
-  the same Р3 reason. ``create_mailbox``/``mailbox_local_part``/
-  ``mailbox_password``/``mailbox_quota_mb`` request fields and the
-  ``mailbox``/``mailbox_error`` response fields from the source's
-  ``AdminUserCreateRequest``/``AdminUserCreatedResponse`` are not part of
-  this port's schema (``apps.users.schemas.AdminUserCreateRequest``).
+  the same Р3 reason. The ``create_mailbox``/``mailbox_local_part``/
+  ``mailbox_password``/``mailbox_quota_mb`` request fields ARE accepted by
+  this port's schema (``apps.users.schemas.AdminUserCreateRequest``), for
+  frontend/contract parity, but are otherwise inert: no mailbox is ever
+  provisioned. When ``create_mailbox`` is true, the view
+  (``apps.users.views._admin_create_user``) returns a non-null
+  ``mailbox_error`` explaining email-service isn't available yet (phase 7),
+  rather than silently doing nothing — see the task 2.4 report's review
+  fix-pass notes.
 """
 
 from __future__ import annotations
@@ -126,11 +130,20 @@ def update_user(user: User, changes: dict) -> User:
     and ``settings`` (JSON parsing) get special handling; everything else
     is a direct ``setattr``, ported verbatim from the source's field loop.
 
-    Note: unlike ``create_user``, an invalid ``status`` string is NOT
-    validated here — the FastAPI original doesn't guard ``UserStatus(value)``
-    with a try/except in ``update_user`` either (only in ``create_user``),
-    so this mirrors that omission rather than inventing stricter behaviour
-    the source doesn't have.
+    ``status`` IS validated here, same as ``create_user`` (``InvalidStatus``,
+    mapped to 400 by the view). An earlier version of this docstring claimed
+    this "mirrors the source's omission" — that was wrong. The FastAPI
+    original does ``setattr(user, field, UserStatus(value))`` in this same
+    loop (``services/user/app/api/v1/admin.py:417-419``): a bad value raises
+    ``ValueError`` *before* ``db.commit()``, so the request fails and nothing
+    is persisted. Doing a bare ``setattr(user, "status", value)`` here would
+    NOT reproduce that — Django's ``CharField(choices=...)`` doesn't enforce
+    choices on ``.save()`` (only ``full_clean()`` does), so it would silently
+    write an invalid string to the DB and lock the user out of
+    authentication (``auth_service.authenticate`` requires
+    ``status == ACTIVE``). Validating explicitly, with the same
+    ``InvalidStatus`` exception/message shape ``create_user`` uses, is what
+    actually matches the source's fail-loud-and-persist-nothing behaviour.
     """
     update_data = dict(changes)
 
@@ -150,7 +163,11 @@ def update_user(user: User, changes: dict) -> User:
 
     touched: set[str] = set()
     for field, value in update_data.items():
-        if field == "settings" and value is not None:
+        if field == "status" and value:
+            if value not in UserStatus.values:
+                raise InvalidStatus(value)
+            setattr(user, field, value)
+        elif field == "settings" and value is not None:
             if isinstance(value, str):
                 try:
                     parsed = json.loads(value) if value else {}

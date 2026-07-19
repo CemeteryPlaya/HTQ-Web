@@ -56,6 +56,11 @@ ADMIN_RESPONSE_FIELDS = {
     "date_joined", "last_login", "created_at", "updated_at",
 }
 
+# POST admin/users/ returns AdminUserCreatedResponse — AdminUserResponse plus
+# the mailbox-provisioning outcome fields (always present: ``mailbox`` is
+# always null in this port, ``mailbox_error`` set iff create_mailbox=True).
+ADMIN_CREATED_RESPONSE_FIELDS = ADMIN_RESPONSE_FIELDS | {"mailbox", "mailbox_error"}
+
 
 # ── GET admin/users/ ──────────────────────────────────────────────────────────
 
@@ -122,7 +127,7 @@ def test_create_user_201_defaults(superuser, db):
     }, content_type="application/json", **_auth(superuser))
     assert resp.status_code == 201
     body = resp.json()
-    assert set(body) == ADMIN_RESPONSE_FIELDS
+    assert set(body) == ADMIN_CREATED_RESPONSE_FIELDS
     assert body["email"] == "newbie@htq.test"
     assert body["status"] == "active"
     assert body["is_staff"] is False
@@ -184,6 +189,36 @@ def test_create_user_short_password_422(superuser, db):
         "username": "shorty", "email": "shorty@htq.test", "password": "short",
     }, content_type="application/json", **_auth(superuser))
     assert resp.status_code == 422
+
+
+@pytest.mark.django_db
+def test_create_user_mailbox_requested_returns_loud_error(superuser, db):
+    """Review finding: mailbox fields used to vanish silently (Pydantic
+    ``extra=ignore``) — 201, no mailbox, no feedback. Now they're accepted
+    and, when ``create_mailbox`` is true, the response carries a non-empty
+    ``mailbox_error`` (no mailbox is ever actually provisioned — Р3)."""
+    resp = Client().post(f"{BASE}/admin/users/", data={
+        "username": "mailboxer", "email": "mailboxer@htq.test", "password": "Passw0rd!",
+        "create_mailbox": True, "mailbox_local_part": "m.boxer",
+    }, content_type="application/json", **_auth(superuser))
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["mailbox_error"]
+    assert body["mailbox"] is None
+
+    user = User.objects.get(username="mailboxer")
+    assert user is not None  # user creation itself still succeeds
+
+
+@pytest.mark.django_db
+def test_create_user_no_mailbox_requested_no_error(superuser, db):
+    resp = Client().post(f"{BASE}/admin/users/", data={
+        "username": "nomailbox", "email": "nomailbox@htq.test", "password": "Passw0rd!",
+    }, content_type="application/json", **_auth(superuser))
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["mailbox_error"] is None
+    assert body["mailbox"] is None
 
 
 # ── PATCH admin/users/{id}/ ──────────────────────────────────────────────────
@@ -248,6 +283,23 @@ def test_patch_user_400_invalid_settings_json(superuser, plain_user):
         "settings": "not-json",
     }, content_type="application/json", **_auth(superuser))
     assert resp.status_code == 400
+
+
+@pytest.mark.django_db
+def test_patch_user_400_invalid_status_and_nothing_persisted(superuser, plain_user):
+    """Review finding: a bare ``setattr`` + ``.save()`` doesn't enforce Django
+    ``choices`` — an invalid ``status`` string must be rejected the same way
+    ``create_user`` rejects it (same error shape), and the DB row must be
+    left untouched (proving nothing was persisted), not silently corrupted."""
+    original_status = plain_user.status
+    resp = Client().patch(f"{BASE}/admin/users/{plain_user.id}/", data={
+        "status": "garbage",
+    }, content_type="application/json", **_auth(superuser))
+    assert resp.status_code == 400
+    assert resp.json() == {"detail": "Invalid status: garbage"}
+
+    plain_user.refresh_from_db()
+    assert plain_user.status == original_status
 
 
 @pytest.mark.django_db

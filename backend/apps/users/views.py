@@ -390,11 +390,19 @@ def _admin_list_users(request):
     return [schemas.AdminUserResponse(**admin_service.serialize_admin_user(u)) for u in users]
 
 
+_MAILBOX_UNAVAILABLE = "Провижининг почтового ящика недоступен: email-service переезжает в фазе 7"
+
+
 @api_view(methods=("POST",), auth="jwt", body=schemas.AdminUserCreateRequest, status=201)
 def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
     _require_admin(request)
+    payload = data.model_dump()
+    create_mailbox = payload.pop("create_mailbox")
+    payload.pop("mailbox_local_part", None)
+    payload.pop("mailbox_password", None)
+    payload.pop("mailbox_quota_mb", None)
     try:
-        user = admin_service.create_user(**data.model_dump())
+        user = admin_service.create_user(**payload)
     except admin_service.DuplicateEmail:
         return json_error("Email already in use", 400)
     except admin_service.DuplicateUsername:
@@ -402,7 +410,13 @@ def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
     except admin_service.InvalidStatus as exc:
         return json_error(str(exc), 400)
     # Decision Р2: source publishes user_upserted.send(...) when status==ACTIVE — dropped.
-    return schemas.AdminUserResponse(**admin_service.serialize_admin_user(user))
+    # Decision Р3: no S2S mailbox provisioning — loud mailbox_error instead of a silent no-op.
+    mailbox_error = _MAILBOX_UNAVAILABLE if create_mailbox else None
+    return schemas.AdminUserCreatedResponse(
+        **admin_service.serialize_admin_user(user),
+        mailbox=None,
+        mailbox_error=mailbox_error,
+    )
 
 
 @csrf_exempt
@@ -429,6 +443,8 @@ def _admin_update_user(request, user_id: int, data: schemas.AdminUserUpdateReque
         return json_error("Email already in use", 400)
     except admin_service.DuplicateUsername:
         return json_error("Username already in use", 400)
+    except admin_service.InvalidStatus as exc:
+        return json_error(str(exc), 400)
     except admin_service.InvalidSettingsJSON as exc:
         return json_error(str(exc), 400)
     # Decision Р2: source publishes user_upserted/user_deactivated depending

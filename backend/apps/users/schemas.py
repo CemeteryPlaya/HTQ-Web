@@ -133,13 +133,16 @@ class AdminUserResponse(BaseModel):
 class AdminUserCreateRequest(BaseModel):
     """``POST admin/users/`` — manual user creation, bypassing self-registration.
 
-    Ported from the FastAPI original's ``AdminUserCreateRequest`` MINUS the
-    Mailcow mailbox-provisioning fields (``create_mailbox``,
-    ``mailbox_local_part``, ``mailbox_password``, ``mailbox_quota_mb``) —
-    that provisioning is an S2S call to email-service, dropped for the same
-    Р3 ("no S2S") reason as the DELETE mailbox archive — see
+    Ported from the FastAPI original's ``AdminUserCreateRequest``, including
+    the Mailcow mailbox-provisioning fields (``create_mailbox``,
+    ``mailbox_local_part``, ``mailbox_password``, ``mailbox_quota_mb``) for
+    request-shape parity with the frontend (``UserEditDialog.tsx`` always
+    sends them). The actual provisioning (an S2S call to email-service) is
+    dropped per decision Р3 ("no S2S") — see
     ``apps.users.services.admin_service``'s module docstring and the task
-    2.4 report.
+    2.4 report. These fields are accepted but INERT: when
+    ``create_mailbox`` is true, ``apps.users.views._admin_create_user``
+    returns a non-null ``mailbox_error`` instead of silently doing nothing.
     """
 
     username: str = Field(..., min_length=1, max_length=150)
@@ -156,6 +159,28 @@ class AdminUserCreateRequest(BaseModel):
     is_superuser: bool = False
     # Default ON: admin sets a temp password, user changes it on first login.
     must_change_password: bool = True
+    # Mailcow mailbox provisioning — accepted, inert (see class docstring).
+    create_mailbox: bool = False
+    mailbox_local_part: str | None = None
+    mailbox_password: str | None = None
+    mailbox_quota_mb: int = 0
+
+
+class AdminUserCreatedResponse(AdminUserResponse):
+    """``POST admin/users/`` response — ``AdminUserResponse`` plus the
+    mailbox-provisioning outcome. Mirrors the source's
+    ``AdminUserCreatedResponse`` shape so the frontend's existing
+    ``created.mailbox`` / ``created.mailbox_error`` branches
+    (``UserEditDialog.tsx:181-197``) work unchanged.
+
+    ``mailbox`` is always ``None`` in this port — no provisioning ever
+    happens (see ``AdminUserCreateRequest`` docstring, decision Р3).
+    ``mailbox_error`` is set to an explanatory message when the admin asked
+    for a mailbox (``create_mailbox=True``); ``None`` otherwise.
+    """
+
+    mailbox: dict | None = None
+    mailbox_error: str | None = None
 
 
 class AdminUserUpdateRequest(BaseModel):
