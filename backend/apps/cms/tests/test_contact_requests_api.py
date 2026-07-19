@@ -65,17 +65,20 @@ def test_public_post_without_token_succeeds_and_persists():
 
 @pytest.mark.django_db
 def test_public_post_succeeds_even_if_notification_enqueue_raises(monkeypatch):
-    """Review finding on Task 1.7: async_task(...) at the create call site
-    was unguarded. In Q_CLUSTER["sync"]=True (this whole suite) django-q2's
-    executor re-raises the task's own exception back to the caller of
-    async_task — so a notification/broker hiccup would 500 the submitter
-    even though the ContactRequest row + audit entry were already committed.
-    Force that path by making the enqueue call itself raise, and assert the
-    public POST still returns 201 with the persisted row intact."""
+    """Review finding on Task 1.7: the notification enqueue at the create
+    call site was unguarded. In CELERY_TASK_ALWAYS_EAGER=True (this whole
+    suite) Celery's eager executor re-raises the task's own exception back
+    to the caller of ``.delay(...)`` (CELERY_TASK_EAGER_PROPAGATES=True) —
+    so a notification/broker hiccup would 500 the submitter even though the
+    ContactRequest row + audit entry were already committed. Force that path
+    by making the enqueue call itself raise, and assert the public POST
+    still returns 201 with the persisted row intact."""
     def _boom(*args, **kwargs):
         raise RuntimeError("broker unreachable")
 
-    monkeypatch.setattr("apps.cms.views.async_task", _boom)
+    monkeypatch.setattr(
+        "apps.cms.views.notify_admins_on_contact_request.delay", _boom,
+    )
 
     client = Client()
     before = ContactRequest.objects.count()

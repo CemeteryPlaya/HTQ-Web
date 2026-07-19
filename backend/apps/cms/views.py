@@ -21,7 +21,6 @@ import logging
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django_q.tasks import async_task
 from pydantic import ValidationError
 
 from htqweb.http import api_view, json_error
@@ -30,6 +29,7 @@ from . import schemas
 from .services import audit
 from .services import conference_service
 from .services import contact_requests_service as svc
+from .tasks import notify_admins_on_contact_request
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +63,15 @@ def _create_contact_request(request, data: schemas.ContactRequestCreate):
     # deliberately deferred this side effect until the task itself landed
     # (Task 1.7, apps/cms/tasks.py).
     #
-    # Must never propagate: in Q_CLUSTER["sync"]=True (the whole test suite)
-    # django-q2's executor re-raises the task's exception back here, and in
+    # Must never propagate: in CELERY_TASK_ALWAYS_EAGER=True (the whole test
+    # suite) Celery runs .delay(...) inline and re-raises the task's own
+    # exception back here (CELERY_TASK_EAGER_PROPAGATES=True), and in
     # production a broker hiccup can raise synchronously out of enqueue().
     # The ContactRequest row + audit entry above are already committed, so a
     # notification/broker failure must not turn an already-saved submission
     # into a 500 for the submitter.
     try:
-        async_task("apps.cms.tasks.notify_admins_on_contact_request", entry.id)
+        notify_admins_on_contact_request.delay(entry.id)
     except Exception:
         logger.exception(
             "notify_admins_on_contact_request enqueue/run failed for id=%d",

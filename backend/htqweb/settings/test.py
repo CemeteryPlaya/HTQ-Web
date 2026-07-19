@@ -20,10 +20,18 @@ DATABASES = {
     }
 }
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
-Q_CLUSTER = {"name": "htqweb-test", "sync": True, "timeout": 30, "retry": 60}
+
+# Celery eager mode: tasks run inline, synchronously, with no broker — this
+# reproduces the old django-q2 Q_CLUSTER["sync"]=True behaviour the tests
+# rely on (notify_admins_on_contact_request fires synchronously from the
+# contact-request POST view during tests; guard-test tasks raise inline).
+CELERY_TASK_ALWAYS_EAGER = True
+CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_BROKER_URL = "memory://"
+CELERY_RESULT_BACKEND = "cache+memory://"
 JWT_SECRET = "test-secret-key-for-htqweb-tests-32b"
 
-# Q_CLUSTER["sync"]=True runs async_task(...) inline — so
+# Eager mode runs .delay(...) inline — so
 # notify_admins_on_contact_request fires synchronously from the
 # contact-request POST view during tests. Blank EMAIL_SERVICE_URL makes that
 # task no-op instead of attempting a real HTTP call (see apps/cms/tasks.py).

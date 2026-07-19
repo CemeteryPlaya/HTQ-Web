@@ -20,7 +20,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "django_q",
+    "django_celery_results",
+    "django_celery_beat",
     "apps.core",
     "apps.users",
     "apps.cms",
@@ -84,14 +85,16 @@ CACHES = {
     }
 }
 
-Q_CLUSTER = {
-    "name": "htqweb",
-    "workers": 4,
-    "timeout": 300,
-    "retry": 360,
-    "max_attempts": 3,
-    "redis": env("REDIS_URL", "redis://localhost:6379/8"),
-}
+# ── Celery (worker stack — replaces django-q2, customer decision 2026-07-19)
+# broker=Redis, result backend=django-celery-results (DB), beat scheduler=
+# django-celery-beat DatabaseScheduler. Uses its own Redis DB (/9) so the
+# broker traffic doesn't share a logical DB with the cache (/8).
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", env("REDIS_URL", "redis://localhost:6379/9"))
+CELERY_RESULT_BACKEND = "django-db"
+CELERY_CACHE_BACKEND = "default"
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 300
 
 # ── JWT-контракт платформы (API.md §Authentication) ─────────────────────────
 JWT_SECRET = env("JWT_SECRET", "change-me")
@@ -103,6 +106,7 @@ JWT_REFRESH_TTL_DAYS = int(env("JWT_REFRESH_TTL_DAYS", "7"))
 LANGUAGE_CODE = "ru"
 TIME_ZONE = "UTC"
 USE_TZ = True
+CELERY_TIMEZONE = TIME_ZONE
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

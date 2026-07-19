@@ -1,10 +1,10 @@
-"""Tests for the cms django-q2 tasks (``apps/cms/tasks.py``) and the news
+"""Tests for the cms Celery tasks (``apps/cms/tasks.py``) and the news
 snapshot service (``apps/cms/services/news_snapshot.py``).
 
 Ported from ``services/cms/app/workers/actors.py`` (Dramatiq actors) and
 ``services/cms/app/services/news_snapshot.py``. Tasks are called DIRECTLY
-(not through ``async_task``) to assert the ``ServiceDisabled`` guard, same
-style as ``apps/core/tests/test_qcluster.py::test_guarded_task_refuses_when_disabled``.
+(not through ``.delay(...)``) to assert the ``ServiceDisabled`` guard, same
+style as ``apps/core/tests/test_celery.py::test_guarded_task_refuses_when_disabled``.
 
 The snapshot tests stub storage at the ``htqweb.storage`` boundary by
 passing a fake ``Storage``-shaped object into ``write_news_snapshot`` /

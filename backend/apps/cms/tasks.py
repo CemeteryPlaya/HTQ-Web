@@ -1,4 +1,4 @@
-"""django-q2 background tasks for ``cms`` — ported from
+"""Celery background tasks for ``cms`` — ported from
 ``services/cms/app/workers/actors.py`` (Dramatiq actors) and
 ``services/cms/app/workers/scheduler.py`` (APScheduler cron job).
 
@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 
 import httpx
+from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
 
@@ -29,6 +30,7 @@ from .models import News
 logger = logging.getLogger(__name__)
 
 
+@shared_task
 def translate_news(news_id: int, target_lang: str) -> None:
     """Translate a news article via DeepL (or whatever ``TRANSLATION_PROVIDER``
     says). Ported from ``actors.py::translate_news``.
@@ -84,6 +86,7 @@ def translate_news(news_id: int, target_lang: str) -> None:
         logger.error("translate_news: provider unreachable: %s", exc)
 
 
+@shared_task
 def notify_admins_on_contact_request(contact_request_id: int) -> None:
     """Notify administrators about a new contact request via email-service.
 
@@ -141,16 +144,18 @@ def notify_admins_on_contact_request(contact_request_id: int) -> None:
         )
 
 
+@shared_task
 def publish_scheduled_news() -> int:
     """Auto-publish ``News`` rows whose scheduled go-live time has passed.
 
     Ported from ``scheduler.py::news_scheduled_publish`` — an APScheduler
     cron job (``CronTrigger(minute="*")``, i.e. every minute) run by the
     standalone ``cms-scheduler`` container (and also started inside the main
-    app's lifespan — both run the same job). Registered here as a django-q2
-    periodic ``Schedule`` row (see migration
-    ``0002_schedule_publish_scheduled_news``), not invoked from any HTTP call
-    site.
+    app's lifespan — both run the same job). Not currently scheduled: the
+    django-q2 periodic ``Schedule`` row this task used to have (migration
+    ``0002_schedule_publish_scheduled_news``, deleted with the Celery
+    rework) will be re-registered via django-celery-beat in a separate task.
+    Not invoked from any HTTP call site in the meantime.
 
     Query kept BYTE-IDENTICAL to the FastAPI original (``published=False AND
     published_at IS NOT NULL AND published_at <= now()``).
