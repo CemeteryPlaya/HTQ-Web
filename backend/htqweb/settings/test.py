@@ -22,3 +22,9 @@ DATABASES = {
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 Q_CLUSTER = {"name": "htqweb-test", "sync": True, "timeout": 30, "retry": 60}
 JWT_SECRET = "test-secret-key-for-htqweb-tests-32b"
+
+# Q_CLUSTER["sync"]=True runs async_task(...) inline — so
+# notify_admins_on_contact_request fires synchronously from the
+# contact-request POST view during tests. Blank EMAIL_SERVICE_URL makes that
+# task no-op instead of attempting a real HTTP call (see apps/cms/tasks.py).
+EMAIL_SERVICE_URL = ""

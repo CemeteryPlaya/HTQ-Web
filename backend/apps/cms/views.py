@@ -20,6 +20,7 @@ import json
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django_q.tasks import async_task
 from pydantic import ValidationError
 
 from htqweb.http import api_view, json_error
@@ -53,6 +54,12 @@ def _create_contact_request(request, data: schemas.ContactRequestCreate):
         resource_id=str(entry.id),
         changes={"email": entry.email},
     )
+    # Fire-and-forget notification to admins via email-service — ported
+    # call site from services/cms/app/api/v1/contact_requests.py
+    # (notify_admins_on_contact_request.send(entry.id)); Task 1.4
+    # deliberately deferred this side effect until the task itself landed
+    # (Task 1.7, apps/cms/tasks.py).
+    async_task("apps.cms.tasks.notify_admins_on_contact_request", entry.id)
     return schemas.ContactRequestRead.model_validate(entry)
 
 

@@ -140,3 +140,16 @@ CONFERENCE_ICE_SERVERS = [
     {"urls": "stun:stun.l.google.com:19302"},
     {"urls": "stun:stun1.l.google.com:19302"},
 ]
+
+# ── cms background tasks (apps/cms/tasks.py) — ported defaults from
+# services/cms/app/core/settings.py + .env.example, byte-for-byte, so both
+# stacks read the same env during the Strangler Fig transition.
+# TRANSLATION_API_KEY empty (default) => translate_news no-ops (logs and
+# returns) instead of calling DeepL — same behaviour as the FastAPI original.
+TRANSLATION_API_KEY = env("TRANSLATION_API_KEY", "")
+TRANSLATION_PROVIDER = env("TRANSLATION_PROVIDER", "deepl")
+TRANSLATION_API_BASE = env("TRANSLATION_API_BASE", "https://api-free.deepl.com")
+
+# notify_admins_on_contact_request calls out to the still-running FastAPI
+# email-service over HTTP (Strangler Fig — no Django email app exists yet).
+EMAIL_SERVICE_URL = env("EMAIL_SERVICE_URL", "http://email-service:8011")
