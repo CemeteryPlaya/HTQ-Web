@@ -9,13 +9,13 @@ a signed URL, and list files (admin) — ported from
 Update/delete (``PATCH``/``DELETE /{file_id}``) are NOT ported here — out of
 scope per the task 3.3 brief, later tasks.
 
-**Raw storage-key serving (not in the FastAPI source):** ``apps.users.
-services.profile_service.save_avatar`` (task 2.3, decision Р3) writes
-avatars straight to storage without a ``FileMetadata`` row and builds
-``avatar_url = f"/api/media/v1/files/{key}?{signed_query(key)}"`` where
-``key`` is the raw storage path (e.g. ``avatars/42/<uuid>.jpg`` — contains
-``/``, never a bare UUID). ``serve_raw_key`` below is what finally makes
-that URL fetchable (task 2.3 report, "deferred to task 3.3"): it verifies
+**Raw storage-key serving (not in the FastAPI source):** originally added
+(task 3.3) because ``apps.users.services.profile_service.save_avatar``
+(task 2.3, decision Р3) wrote avatars straight to storage without a
+``FileMetadata`` row, persisting ``avatar_url = f"/api/media/v1/files/
+{key}?{signed_query(key)}"`` where ``key`` was the raw storage path (e.g.
+``avatars/42/<uuid>.jpg`` — contains ``/``, never a bare UUID).
+``serve_raw_key`` below is what made that URL fetchable: it verifies
 ``sig``/``exp`` against the raw key directly (no FileMetadata, no
 public/JWT path — signature is the only access control) and, per
 STRUCTURE.md §7.1's documented private-file flow, redirects (302) to a
@@ -25,11 +25,20 @@ non-fetchable ``file://`` URI, so redirecting there would break the
 browser). The FastAPI ``files.py`` original/variant routes never redirect —
 they always stream via ``storage.open()`` regardless of backend, reproduced
 faithfully in ``download_file``/``download_variant`` below.
+
+**Final review of phases 2-3 (Finding 2)** routed ``save_avatar`` through
+the real upload pipeline (``apps.media_files.interface.store_file``)
+instead of writing straight to storage — avatars are ``FileMetadata`` rows
+now, served by ``download_file``/``download_variant`` above like any other
+upload, not by ``serve_raw_key``. ``serve_raw_key`` is kept as
+general-purpose raw-key serving infrastructure (still exercised directly by
+its own tests) and as the read path for any pre-fix avatar rows still
+carrying the old raw-key-shaped URL, but it is no longer written by
+anything in this codebase.
 """
 
 from __future__ import annotations
 
-import datetime
 import logging
 import mimetypes
 
@@ -39,12 +48,13 @@ from django.http import HttpResponse, HttpResponseRedirect
 from django.views.decorators.csrf import csrf_exempt
 
 from htqweb.http import _authenticate_jwt, api_view, json_error
-from htqweb.storage import get_storage, sign, verify
+from htqweb.storage import get_storage, verify
 
 from apps.media_files.models import FileMetadata, FileVariant
 from apps.media_files.schemas import serialize_file
 from apps.media_files.services import audit
 from apps.media_files.services.upload_service import UploadValidationError, upload_file_bytes
+from apps.media_files.services.url_service import build_file_url
 
 logger = logging.getLogger(__name__)
 
@@ -340,41 +350,6 @@ def download_variant(request, file_id, variant):
 # ─── Signed URL ─────────────────────────────────────────────────────────────
 
 
-def _build_file_url(meta: FileMetadata, variant: str = "original",
-                     ttl: int | None = None) -> tuple[str, int]:
-    """The signed-vs-plain URL decision, factored out so it has exactly one
-    implementation.
-
-    Shared by ``issue_signed_url`` below (HTTP ``POST .../sign``) and
-    ``apps.media_files.interface.get_file_url`` (the cross-app entry point,
-    task 3.4) — both need "public -> plain path, private -> HMAC-signed
-    query string", and neither should hand-roll its own signing (see
-    ``htqweb.storage.signed_url``'s module docstring: the payload layout
-    must stay byte-identical everywhere it's produced). ``ttl=None`` falls
-    back to ``settings.NEWS_SIGNED_URL_TTL`` (``sign()``'s own default) —
-    used by the interface function, which has no per-call ``ttl`` query
-    param to read.
-
-    Returns ``(url, exp)`` — ``exp`` is a Unix timestamp (cache-busting hint
-    for public files, real expiry for signed ones).
-    """
-    base = (
-        f"/api/media/v1/files/{meta.id}"
-        if variant == "original"
-        else f"/api/media/v1/files/{meta.id}/{variant}"
-    )
-
-    if meta.is_public:
-        # No need to sign; expose a far-future exp for cache-busting hint only.
-        resolved_ttl = ttl if ttl is not None else settings.NEWS_SIGNED_URL_TTL
-        far_future = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + resolved_ttl
-        return base, far_future
-
-    resource_id = str(meta.id) if variant == "original" else f"{meta.id}:{variant}"
-    sig_value, exp_ts = sign(resource_id, ttl)
-    return f"{base}?sig={sig_value}&exp={exp_ts}", exp_ts
-
-
 @api_view(methods=("POST",), auth="jwt")
 def issue_signed_url(request, file_id):
     """``POST /api/media/v1/files/{file_id}/sign?variant=original&ttl=3600``.
@@ -399,7 +374,7 @@ def issue_signed_url(request, file_id):
     if not _can_access_private(request.token, meta) and not meta.is_public:
         return json_error("Forbidden", 403)
 
-    url, exp = _build_file_url(meta, variant=variant, ttl=ttl)
+    url, exp = build_file_url(meta, variant=variant, ttl=ttl)
     return {"url": url, "exp": exp}
 
 
@@ -423,14 +398,18 @@ def file_tail_dispatch(request, file_id, tail):
     return json_error("Method Not Allowed", 405)
 
 
-# ─── Raw storage-key serving (avatar flow, see module docstring) ───────────
+# ─── Raw storage-key serving (see module docstring) ────────────────────────
 
 
 @api_view(methods=("GET",), auth=None)
 def serve_raw_key(request, file_key):
     """``GET /api/media/v1/files/<key>?sig=&exp=`` — serve a file that has
-    no ``FileMetadata`` row at all (currently: avatars written by
-    ``apps.users.services.profile_service.save_avatar``).
+    no ``FileMetadata`` row at all. Originally added for avatars written by
+    ``apps.users.services.profile_service.save_avatar``; that no longer
+    writes this shape (final review of phases 2-3, Finding 2 — see the
+    module docstring), so this endpoint now only matters for any
+    still-outstanding pre-fix avatar rows and as general-purpose raw-key
+    serving infrastructure.
 
     No FileMetadata means no ``is_public``/owner concept — a valid
     ``sig``/``exp`` pair (checked against the raw key, matching

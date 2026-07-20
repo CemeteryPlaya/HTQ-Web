@@ -176,8 +176,8 @@ def admin_logout(request):
 # Ported from services/user/app/api/v1/profile.py. Response shape and
 # PATCH field precedence live in apps.users.services.profile_service — kept
 # field-for-field/behaviour-for-behaviour identical to the FastAPI source
-# (see that module's docstring for the one deliberate deviation: avatar
-# storage, decision Р3).
+# (see that module's docstring for avatar storage's history, including the
+# final-review-of-phases-2-3 fix).
 
 
 def _get_profile_user(request):
@@ -256,9 +256,12 @@ def _update_profile(request):
 
     avatar_file = files_data.get("avatar")
     if avatar_file is not None and avatar_file.name:
-        # Decision Р3: write directly to htqweb.storage instead of an S2S
-        # hop to media-service. Degrade, don't 500, on storage failure —
-        # the rest of the PATCH (fields already applied above) must still
+        # Routed through apps.media_files.interface.store_file(scope=
+        # "avatar", ...) — the real upload pipeline (final review of
+        # phases 2-3, Finding 2), not a direct htqweb.storage write.
+        # Degrade, don't 500, on any failure (ServiceDisabled when media
+        # is off, UploadValidationError, or a storage-backend error) — the
+        # rest of the PATCH (fields already applied above) must still
         # land; only the avatar_url update is skipped.
         try:
             user.avatar_url = profile_service.save_avatar(

@@ -483,20 +483,14 @@ def test_raw_key_missing_object_is_404(fake_storage):
     assert resp.status_code == 404
 
 
-@pytest.mark.django_db
-def test_avatar_save_and_serve_end_to_end(fake_storage, owner, monkeypatch):
-    """Closes the task 2.3 loop: ``profile_service.save_avatar`` writes the
-    key + signed URL, this task's ``serve_raw_key`` must actually serve it."""
-    from apps.users.services import profile_service
-
-    monkeypatch.setattr(profile_service, "get_storage", lambda bucket=None: fake_storage)
-
-    with override_settings(STORAGE_BACKEND="local"):
-        avatar_url = profile_service.save_avatar(
-            owner.id, "me.jpg", CONTENT, "image/jpeg"
-        )
-        assert avatar_url.startswith(f"{BASE}/avatars/{owner.id}/")
-
-        resp = Client().get(avatar_url)
-        assert resp.status_code == 200
-        assert resp.content == CONTENT
+# NOTE (final review of phases 2-3, Finding 2): this section used to include
+# ``test_avatar_save_and_serve_end_to_end``, closing the loop between
+# ``profile_service.save_avatar`` (which wrote a raw storage key + signed
+# URL) and ``serve_raw_key`` above. Avatars no longer take that path —
+# ``save_avatar`` now routes through ``apps.media_files.interface.
+# store_file(scope="avatar", ...)``, so an avatar is a real ``FileMetadata``
+# row served by ``download_file``/``download_variant`` like any other
+# upload, never by ``serve_raw_key``. The users<->media avatar round-trip
+# now lives in ``apps/users/tests/test_avatar_e2e.py``. The raw-key tests
+# above remain as coverage for ``serve_raw_key`` itself, which is kept as
+# general-purpose infrastructure (see ``views.py``'s module docstring).

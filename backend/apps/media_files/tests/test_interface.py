@@ -246,3 +246,112 @@ def test_get_file_url_raises_when_media_disabled(fake_storage):
     _disable_media()
     with pytest.raises(ServiceDisabled):
         interface.get_file_url(meta.id)
+
+
+@pytest.mark.django_db
+def test_get_file_url_variant_public_is_plain_and_scoped_to_that_variant(fake_storage):
+    """Final review of phases 2-3 (Finding 2 follow-through): ``get_file_url``
+    grew a ``variant`` parameter so a caller (``apps.users.services.
+    profile_service.avatar_payload``) can mint a thumbnail URL through the
+    same signed-vs-plain machinery as the original, not just a hand-rolled
+    path string."""
+    meta = FileMetadata.objects.create(
+        path="p", original_filename="p.png", size=1, mime="image/png",
+        is_public=True, kind="image", scope="avatar",
+    )
+    assert interface.get_file_url(meta.id) == f"{BASE}/{meta.id}"
+    assert interface.get_file_url(meta.id, variant="thumb_32") == f"{BASE}/{meta.id}/thumb_32"
+
+
+@pytest.mark.django_db
+def test_get_file_url_variant_private_is_signed_and_distinct_from_original(fake_storage):
+    meta = FileMetadata.objects.create(
+        path="p", original_filename="p.png", size=1, mime="image/png",
+        is_public=False, kind="image", scope="avatar",
+    )
+    original_url = interface.get_file_url(meta.id)
+    variant_url = interface.get_file_url(meta.id, variant="thumb_32")
+
+    assert original_url.startswith(f"{BASE}/{meta.id}?sig=")
+    assert variant_url.startswith(f"{BASE}/{meta.id}/thumb_32?sig=")
+
+    original_sig = original_url.split("sig=")[1].split("&")[0]
+    variant_sig = variant_url.split("sig=")[1].split("&")[0]
+    assert original_sig != variant_sig  # a signature for one must not verify for the other
+
+
+# ── delete_file ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_delete_file_soft_deletes_and_returns_true(fake_storage):
+    meta = FileMetadata.objects.create(
+        path="p", original_filename="p.txt", size=1, mime="text/plain",
+        is_public=True, kind="document", scope="generic",
+    )
+    assert interface.delete_file(meta.id) is True
+
+    meta.refresh_from_db()
+    assert meta.deleted_at is not None
+    # A soft-deleted row must not resolve any more through the public API.
+    assert interface.get_file_url(meta.id) is None
+
+
+@pytest.mark.django_db
+def test_delete_file_accepts_str_id(fake_storage):
+    meta = FileMetadata.objects.create(
+        path="p", original_filename="p.txt", size=1, mime="text/plain",
+        is_public=True, kind="document", scope="generic",
+    )
+    assert interface.delete_file(str(meta.id)) is True
+    meta.refresh_from_db()
+    assert meta.deleted_at is not None
+
+
+@pytest.mark.django_db
+def test_delete_file_unknown_id_returns_false(fake_storage):
+    assert interface.delete_file(uuid.uuid4()) is False
+
+
+@pytest.mark.django_db
+def test_delete_file_malformed_id_returns_false(fake_storage):
+    assert interface.delete_file("not-a-uuid") is False
+
+
+@pytest.mark.django_db
+def test_delete_file_already_deleted_returns_false(fake_storage):
+    import datetime
+
+    meta = FileMetadata.objects.create(
+        path="p", original_filename="p.txt", size=1, mime="text/plain",
+        is_public=True, kind="document", scope="generic",
+        deleted_at=datetime.datetime.now(datetime.timezone.utc),
+    )
+    assert interface.delete_file(meta.id) is False
+
+
+@pytest.mark.django_db
+def test_delete_file_does_not_touch_storage(fake_storage):
+    """Soft-delete only — no S3 object removal here (matches the rest of
+    this app: full delete/purge is a separate, later concern, see
+    ``apps.media_files.tasks.purge_soft_deleted``)."""
+    meta = FileMetadata.objects.create(
+        path="p", original_filename="p.txt", size=1, mime="text/plain",
+        is_public=True, kind="document", scope="generic",
+    )
+    fake_storage.save(meta.path, b"hello", "text/plain")
+    interface.delete_file(meta.id)
+    assert fake_storage.exists(meta.path)
+
+
+@pytest.mark.django_db
+def test_delete_file_raises_when_media_disabled(fake_storage):
+    meta = FileMetadata.objects.create(
+        path="p", original_filename="p.txt", size=1, mime="text/plain",
+        is_public=True, kind="document", scope="generic",
+    )
+    _disable_media()
+    with pytest.raises(ServiceDisabled):
+        interface.delete_file(meta.id)
+    meta.refresh_from_db()
+    assert meta.deleted_at is None

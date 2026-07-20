@@ -22,11 +22,21 @@ store_file() запускает ТОТ ЖЕ пайплайн загрузки, �
 request=None — тот принимает это штатно, см. его докстринг).
 
 get_file_url() переиспользует ровно ту же "signed vs plain" развилку, что
-и views.issue_signed_url (через общий views._build_file_url) — никакого
-самодельного HMAC здесь, как и предупреждает докстринг
-htqweb.storage.signed_url.
+и views.issue_signed_url (через общий services.url_service.build_file_url)
+— никакого самодельного HMAC здесь, как и предупреждает докстринг
+htqweb.storage.signed_url. Импортируется из services/url_service.py, а не
+из views.py (final review фаз 2-3, Finding 3) — публичный interface не
+должен тянуть за собой HTTP-слой.
 
-Обе функции возвращают только простые dict/str, никогда ORM-объекты
+delete_file() — best-effort soft-delete на стороне соседа (сейчас
+единственный вызывающий — apps.users.services.profile_service.
+delete_avatar_object, после того как save_avatar/store_file стали
+единственным писателем аватарок — final review фаз 2-3, Finding 1/2).
+Полноценный DELETE-эндпоинт (PATCH/DELETE /{file_id}) вне скоупа задачи
+3.3 и здесь не появляется — только soft-delete самой записи, необходимый
+соседям для best-effort очистки.
+
+Все функции возвращают только простые dict/str/bool, никогда ORM-объекты
 FileMetadata — сосед не должен получить возможность мутировать чужую
 модель напрямую.
 """
@@ -36,12 +46,14 @@ from __future__ import annotations
 import logging
 import uuid
 
+from django.utils import timezone
+
 from apps.core.services import require_service
 from apps.media_files.models import FileMetadata
 from apps.media_files.schemas import serialize_file
 from apps.media_files.services import audit
 from apps.media_files.services.upload_service import upload_file_bytes
-from apps.media_files.views import _build_file_url
+from apps.media_files.services.url_service import build_file_url
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +116,19 @@ def store_file(*, data: bytes, filename: str, mime: str, scope: str,
     return serialize_file(meta).model_dump(mode="json")
 
 
-def get_file_url(file_id) -> str | None:
+def get_file_url(file_id, variant: str = "original") -> str | None:
     """The URL a caller should hand to a browser for ``file_id`` — signed
     for private files, plain for public ones (see
-    ``views._build_file_url``, which this reuses). ``None`` if ``file_id``
-    doesn't resolve to any (non-soft-deleted) row, including a
-    malformed/non-UUID id.
+    ``services.url_service.build_file_url``, which this reuses). ``None``
+    if ``file_id`` doesn't resolve to any (non-soft-deleted) row, including
+    a malformed/non-UUID id.
+
+    ``variant`` defaults to ``"original"``; pass e.g. ``"thumb_96"`` for a
+    derived rendition's URL — same signed-vs-plain rule applies, scoped to
+    that variant (a signature minted for one variant never verifies for
+    another, see ``build_file_url``). This does not check whether the
+    variant has actually been produced yet — same "may 404 until the
+    worker runs" contract as the HTTP sign endpoint.
     """
     require_service("media")
 
@@ -122,5 +141,34 @@ def get_file_url(file_id) -> str | None:
     if meta is None:
         return None
 
-    url, _exp = _build_file_url(meta)
+    url, _exp = build_file_url(meta, variant=variant)
     return url
+
+
+def delete_file(file_id) -> bool:
+    """Best-effort soft-delete of a ``FileMetadata`` row on behalf of a
+    neighbour app (currently: ``apps.users.services.profile_service.
+    delete_avatar_object``, once avatars became real ``FileMetadata`` rows
+    — final review of phases 2-3, Findings 1/2).
+
+    Sets ``deleted_at`` (same soft-delete every serving/list endpoint
+    already respects via ``deleted_at__isnull=True``) rather than a hard
+    DELETE — consistent with the rest of this app, no S3 object removal
+    here (mirrors ``apps.media_files.views``'s deliberate scope: full
+    delete/update is a later task, out of scope for 3.3).
+
+    Returns ``True`` if a live (not already soft-deleted) row was found and
+    marked deleted, ``False`` for an unknown/malformed/already-deleted id —
+    never raises for those cases, only for ``ServiceDisabled``.
+    """
+    require_service("media")
+
+    try:
+        key = uuid.UUID(str(file_id))
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+    updated = FileMetadata.objects.filter(
+        pk=key, deleted_at__isnull=True,
+    ).update(deleted_at=timezone.now())
+    return bool(updated)

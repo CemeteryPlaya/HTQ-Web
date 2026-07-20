@@ -230,16 +230,21 @@ def test_users_profile_patch_without_avatar_still_works_when_media_disabled():
     """This is the whole reason the platform can afford a ``media``
     kill-switch.
 
-    ``apps.users.views._update_profile`` only reaches into storage (via
-    ``apps.users.services.profile_service.save_avatar``) when the request
-    actually attaches an ``avatar`` file (decision Р3: writes directly to
-    ``htqweb.storage``, no S2S/interface call into ``apps.media_files`` at
-    all — see that view's module docstring). A profile PATCH that never
-    touches the avatar field must therefore succeed completely normally
-    even with ``media`` disabled, proving the domains are genuinely
-    decoupled and not just "usually don't collide" — mirrors
-    ``apps/users/tests/test_users_disableable.py``'s
+    ``apps.users.views._update_profile`` only reaches into ``media`` (via
+    ``apps.users.services.profile_service.save_avatar`` ->
+    ``apps.media_files.interface.store_file`` — final review of phases 2-3,
+    Finding 2) when the request actually attaches an ``avatar`` file. A
+    profile PATCH that never touches the avatar field must therefore
+    succeed completely normally even with ``media`` disabled, proving the
+    domains are genuinely decoupled and not just "usually don't collide" —
+    mirrors ``apps/users/tests/test_users_disableable.py``'s
     ``test_cms_endpoint_still_works_with_valid_token_when_users_disabled``.
+    (When an avatar IS attached and ``media`` is disabled, the PATCH still
+    degrades gracefully rather than 500ing — see
+    ``apps/users/tests/test_avatar_e2e.py``'s
+    ``test_profile_patch_with_avatar_still_succeeds_when_media_disabled``,
+    which now also proves the write is genuinely refused, not silently
+    bypassed.)
     """
     from apps.users.models import User, UserStatus
     from htqweb.authn.jwt import issue_token_pair

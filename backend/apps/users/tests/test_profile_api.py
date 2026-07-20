@@ -2,22 +2,31 @@
 
 Mirrors ``services/user/app/api/v1/profile.py`` (the FastAPI original) field
 for field, precedence rule for precedence rule, status for status — EXCEPT
-the avatar storage path (decision Р3, see ``apps.users.services.
-profile_service``'s module docstring): we write directly to
-``htqweb.storage`` instead of forwarding to media-service over S2S, so the
-avatar tests here mock ``get_storage`` rather than an httpx call.
+the avatar storage path: this port routes avatar uploads through the real
+media pipeline (``apps.media_files.interface.store_file(scope="avatar",
+...)``, final review of phases 2-3, Finding 2 — see ``apps.users.services.
+profile_service``'s module docstring) instead of the FastAPI source's S2S
+forward to media-service. ``profile_service`` does not touch storage
+directly at all any more, so the avatar tests here mock the pipeline's
+actual storage boundary — ``apps.media_files.services.upload_service.
+get_storage`` / ``apps.media_files.tasks.get_storage`` — not
+``profile_service.get_storage`` (no longer exists).
 """
 
+import io
 import json
 
 import pytest
-from django.conf import settings
 from django.test import Client
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
+from PIL import Image
 
+from apps.core.models import ServiceStatus
+from apps.media_files import tasks as media_tasks
+from apps.media_files.models import FileMetadata
+from apps.media_files.services import upload_service as media_upload_service
 from apps.users.models import User, UserStatus
-from apps.users.services import profile_service
 from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/users/v1"
@@ -46,37 +55,65 @@ def _patch_multipart(client: Client, path: str, data: dict, token: str):
 
 
 class _RecordingStorage:
+    """Patched into the media upload pipeline's actual storage boundary —
+    ``upload_service`` writes the original, ``tasks.make_variants`` (run
+    eagerly, see ``CELERY_TASK_ALWAYS_EAGER`` in test settings) reads it
+    back to produce thumbnails. Same instance for both, mirroring the
+    shared-bucket contract the real S3 setup gives both in production."""
+
     def __init__(self):
-        self.saved = []
-        self.deleted = []
+        self.objects: dict[str, tuple[bytes, str | None]] = {}
 
     def save(self, path, data, content_type=None):
-        self.saved.append((path, data, content_type))
+        self.objects[path] = (data, content_type)
+
+    def open(self, path, byte_range=None):
+        data = self.objects[path][0]
+        if byte_range is not None:
+            start, end = byte_range
+            return data[start : end + 1]
+        return data
 
     def delete(self, path):
-        self.deleted.append(path)
+        self.objects.pop(path, None)
+
+    def exists(self, path):
+        return path in self.objects
+
+    def size(self, path):
+        return len(self.objects[path][0])
 
 
 class _FailingStorage:
     def save(self, path, data, content_type=None):
         raise RuntimeError("storage unavailable")
 
+    def open(self, path, byte_range=None):
+        raise RuntimeError("storage unavailable")
+
     def delete(self, path):
         raise RuntimeError("storage unavailable")
+
+    def exists(self, path):
+        return False
 
 
 @pytest.fixture
 def fake_storage(monkeypatch):
     storage = _RecordingStorage()
-    buckets_requested = []
-
-    def fake_get_storage(bucket=None):
-        buckets_requested.append(bucket)
-        return storage
-
-    monkeypatch.setattr(profile_service, "get_storage", fake_get_storage)
-    storage.buckets_requested = buckets_requested
+    monkeypatch.setattr(media_upload_service, "get_storage", lambda bucket=None: storage)
+    monkeypatch.setattr(media_tasks, "get_storage", lambda bucket=None: storage)
     return storage
+
+
+def _disable_media():
+    ServiceStatus.objects.update_or_create(app_label="media", defaults={"enabled": False})
+
+
+def _png_bytes(color=(255, 0, 0), size=(8, 8)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 # ── GET profile/me (+ alias) ─────────────────────────────────────────────────
@@ -215,49 +252,54 @@ def test_patch_unauthenticated_401(db):
     assert resp.status_code == 401
 
 
-# ── PATCH profile/me — avatar (decision Р3: direct htqweb.storage write) ────
+# ── PATCH profile/me — avatar (final review of phases 2-3, Finding 2:
+#    routed through apps.media_files.interface.store_file(scope="avatar")) ──
 
 
 @pytest.mark.django_db
-def test_patch_avatar_file_stored_and_signed_url_returned(active_user, fake_storage):
+def test_patch_avatar_stored_via_media_pipeline_as_public_file(active_user, fake_storage):
     token = _access_token(active_user)
-    avatar = SimpleUploadedFile("me.png", b"png-bytes", content_type="image/png")
+    avatar = SimpleUploadedFile("me.png", _png_bytes(), content_type="image/png")
     resp = _patch_multipart(Client(), f"{BASE}/profile/me", {"avatar": avatar}, token)
     assert resp.status_code == 200
     body = resp.json()
 
     assert body["avatar_url"] == body["avatarUrl"]
     url = body["avatarUrl"]
-    assert url.startswith(f"/api/media/v1/files/avatars/{active_user.id}/")
-    assert "?sig=" in url
-    assert "&exp=" in url
-    # The image-variant worker isn't reproduced in this port (task brief) —
-    # our own key shape never matches the FastAPI source's UUID-file-id
-    # regex, so the structured `avatar` block degrades to the
-    # legacy/external-URL branch: id=None, variants={}.
-    assert body["avatar"] == {"id": None, "url": url, "variants": {}}
+    # avatar scope is public (ScopePolicy) -> canonical FileMetadata path,
+    # never a signature baked in (final review Finding 1).
+    assert url.startswith("/api/media/v1/files/")
+    assert "?" not in url
 
-    assert fake_storage.buckets_requested == [settings.MEDIA_S3_BUCKET]
-    assert len(fake_storage.saved) == 1
-    saved_key, saved_data, saved_content_type = fake_storage.saved[0]
-    assert saved_data == b"png-bytes"
-    assert saved_content_type == "image/png"
-    assert saved_key.startswith(f"avatars/{active_user.id}/")
+    file_id = url.removeprefix("/api/media/v1/files/")
+    meta = FileMetadata.objects.get(id=file_id)
+    assert meta.owner_id == active_user.id
+    assert meta.scope == "avatar"
+    assert meta.is_public is True
+    assert fake_storage.exists(meta.path)
+
+    # The real pipeline now runs -> variants actually get produced
+    # (ScopePolicy's avatar.variants), unlike the old direct-write path
+    # where the structured `avatar` block always degraded to {}.
+    assert body["avatar"]["id"] == str(meta.id)
+    assert set(body["avatar"]["variants"]) == {"thumb_32", "thumb_96", "thumb_256"}
+    for variant_url in body["avatar"]["variants"].values():
+        assert variant_url.startswith(f"/api/media/v1/files/{meta.id}/")
 
     active_user.refresh_from_db()
     assert active_user.avatar_url == url
 
 
 @pytest.mark.django_db
-def test_patch_avatar_save_failure_degrades_rest_of_patch_still_succeeds(
+def test_patch_avatar_storage_failure_degrades_rest_of_patch_still_succeeds(
     active_user, monkeypatch,
 ):
-    """Storage save raising must NOT 500 the whole PATCH (task brief's
-    degradation requirement) — other fields still save, avatar_url is left
-    exactly as it was before."""
-    monkeypatch.setattr(profile_service, "get_storage", lambda bucket=None: _FailingStorage())
+    """Storage save raising inside the pipeline must NOT 500 the whole
+    PATCH (degradation requirement, unchanged since task 2.3) — other
+    fields still save, avatar_url is left exactly as it was before."""
+    monkeypatch.setattr(media_upload_service, "get_storage", lambda bucket=None: _FailingStorage())
     token = _access_token(active_user)
-    avatar = SimpleUploadedFile("me.png", b"png-bytes", content_type="image/png")
+    avatar = SimpleUploadedFile("me.png", _png_bytes(), content_type="image/png")
     resp = _patch_multipart(Client(), f"{BASE}/profile/me", {
         "avatar": avatar, "bio": "still saved",
     }, token)
@@ -271,39 +313,77 @@ def test_patch_avatar_save_failure_degrades_rest_of_patch_still_succeeds(
 
 
 @pytest.mark.django_db
+def test_patch_avatar_degrades_when_media_disabled(active_user, fake_storage):
+    """Final review of phases 2-3, Finding 2's other half — the kill-switch
+    hole: ``apps.media_files.interface.store_file``'s first statement is
+    ``require_service("media")``, so a disabled ``media`` now correctly
+    refuses the avatar write (``ServiceDisabled``) BEFORE anything is
+    written, instead of silently bypassing the switch as the old
+    direct-storage-write code did. The profile PATCH must still succeed
+    (task 2.3's original degradation contract, unchanged): other fields
+    save, avatar_url is left exactly as it was before."""
+    _disable_media()
+    token = _access_token(active_user)
+    avatar = SimpleUploadedFile("me.png", _png_bytes(), content_type="image/png")
+    resp = _patch_multipart(Client(), f"{BASE}/profile/me", {
+        "avatar": avatar, "bio": "media is down",
+    }, token)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bio"] == "media is down"
+    assert body["avatar_url"] is None
+    active_user.refresh_from_db()
+    assert active_user.bio == "media is down"
+    assert active_user.avatar_url is None
+    assert not fake_storage.objects  # nothing was ever written -- the switch actually held
+
+
+@pytest.mark.django_db
 def test_patch_profile_lost_update_race_avatar_io_window(active_user, monkeypatch):
-    """Regression for review Finding 1 (lost-update race): the PATCH handler
-    used to call ``user.save()`` with no ``update_fields``, so Django
-    rewrote EVERY column from the in-memory snapshot taken at request
-    start. Avatar storage I/O is a real S3/network call — anything that
-    concurrently modifies this row while that call is in flight (e.g. an
-    admin toggling ``is_superuser``) would get silently reverted once the
-    stale in-memory ``user`` object was saved back.
+    """Regression for review Finding 1 (lost-update race, task 2.3): the
+    PATCH handler used to call ``user.save()`` with no ``update_fields``,
+    so Django rewrote EVERY column from the in-memory snapshot taken at
+    request start. Avatar storage I/O is a real S3/network call — anything
+    that concurrently modifies this row while that call is in flight (e.g.
+    an admin toggling ``is_superuser``) would get silently reverted once
+    the stale in-memory ``user`` object was saved back.
 
     Simulated here by mutating the row, via a direct queryset ``.update()``
     (bypassing this ``user`` instance entirely), from inside the mocked
     storage's ``save()`` — which runs strictly between the profile-fields
     snapshot and the view's final ``user.save()``, i.e. exactly the race
-    window. Fails against the old unconditional ``user.save()`` (reverts
-    ``is_superuser`` to the stale ``False`` it had at fetch time) and
-    passes with ``update_fields`` restricted to the columns this request
-    actually changed.
+    window (now inside the media pipeline's ``upload_service.get_storage``,
+    not ``profile_service``'s own, but the same window). Fails against the
+    old unconditional ``user.save()`` (reverts ``is_superuser`` to the
+    stale ``False`` it had at fetch time) and passes with ``update_fields``
+    restricted to the columns this request actually changed.
     """
     assert active_user.is_superuser is False
 
     class _RaceStorage:
+        def __init__(self):
+            self._data: dict[str, bytes] = {}
+
         def save(self, path, data, content_type=None):
             # Represents a concurrent admin write landing mid-request,
             # while this request is blocked on avatar storage I/O.
             User.objects.filter(pk=active_user.pk).update(is_superuser=True)
+            self._data[path] = data
+
+        def open(self, path, byte_range=None):
+            return self._data[path]
 
         def delete(self, path):
-            pass
+            self._data.pop(path, None)
 
-    monkeypatch.setattr(profile_service, "get_storage", lambda bucket=None: _RaceStorage())
+        def exists(self, path):
+            return path in self._data
+
+    monkeypatch.setattr(media_upload_service, "get_storage", lambda bucket=None: _RaceStorage())
+    monkeypatch.setattr(media_tasks, "get_storage", lambda bucket=None: _RaceStorage())
 
     token = _access_token(active_user)
-    avatar = SimpleUploadedFile("me.png", b"png-bytes", content_type="image/png")
+    avatar = SimpleUploadedFile("me.png", _png_bytes(), content_type="image/png")
     resp = _patch_multipart(Client(), f"{BASE}/profile/me", {
         "avatar": avatar, "bio": "concurrent-safe",
     }, token)
@@ -314,82 +394,98 @@ def test_patch_profile_lost_update_race_avatar_io_window(active_user, monkeypatc
     assert active_user.is_superuser is True  # NOT reverted by the profile save
 
 
-# ── PATCH profile/me — avatar filename/ext sanitization (review Finding 2) ──
-
-
 @pytest.mark.django_db
 @pytest.mark.parametrize("hostile_name", ["evil.png?x=1&y=2", "../../../etc/passwd"])
-def test_patch_avatar_hostile_filename_sanitized_and_round_trips(
+def test_patch_avatar_hostile_filename_does_not_leak_into_the_stored_path(
     active_user, fake_storage, hostile_name,
 ):
+    """The old direct-write path derived part of the storage key from the
+    client-supplied filename and needed its own sanitizer
+    (``_safe_avatar_ext``, removed along with the direct-write path itself
+    — final review of phases 2-3, Finding 2). The real pipeline's storage
+    key (``<scope>/<yyyy>/<mm>/<uuid>/original<ext>``) is built entirely
+    server-side from the scope and a fresh uuid, with ``ext`` derived from
+    the REAL upload mime — not the filename — so a hostile filename simply
+    cannot reach the key or the URL any more. This proves that, rather than
+    re-testing a sanitizer that no longer exists."""
     token = _access_token(active_user)
-    avatar = SimpleUploadedFile(hostile_name, b"png-bytes", content_type="image/png")
+    avatar = SimpleUploadedFile(hostile_name, _png_bytes(), content_type="image/png")
     resp = _patch_multipart(Client(), f"{BASE}/profile/me", {"avatar": avatar}, token)
     assert resp.status_code == 200
-    body = resp.json()
-    url = body["avatarUrl"]
+    url = resp.json()["avatarUrl"]
 
-    # Split off the legitimate ?sig=...&exp=... signed query before
-    # asserting — only the key portion (path_part) must be clean.
-    path_part, _, query_part = url.partition("?")
     for bad in ("?", "&", "..", " "):
-        assert bad not in path_part
-    assert query_part.startswith("sig=")
+        assert bad not in url
 
-    assert len(fake_storage.saved) == 1
-    saved_key = fake_storage.saved[0][0]
+    file_id = url.removeprefix("/api/media/v1/files/")
+    meta = FileMetadata.objects.get(id=file_id)
     for bad in ("?", "&", "..", " "):
-        assert bad not in saved_key
-    assert saved_key.startswith(f"avatars/{active_user.id}/")
+        assert bad not in meta.path
+
+    # NOT byte-equality with hostile_name: Django's own multipart parser
+    # (django.http.multipartparser.MultiPartParser.sanitize_file_name)
+    # unconditionally strips path separators and drops "."/".." components
+    # from an uploaded file's name *before* our view code ever sees it —
+    # so for "../../../etc/passwd" what reaches us as
+    # ``request.FILES["avatar"].name`` is already just "passwd", never the
+    # raw traversal string. Asserting verbatim storage was asserting
+    # something Django itself already prevents. The property that actually
+    # matters here — and that upload_service/_build_path never derive a
+    # path or storage key from this field (only the scope + a fresh uuid
+    # do, see the docstring above) — is that whatever ends up in
+    # original_filename cannot itself carry a path component, so it can
+    # never be used later to escape the intended storage prefix.
+    assert "/" not in meta.original_filename
+    assert "\\" not in meta.original_filename
+    assert ".." not in meta.original_filename
 
     # Round-trip: a subsequent DELETE must still parse the stored URL and
-    # clear it — proof _AVATAR_KEY_RE isn't mis-parsing an injected key.
+    # clear it, and soft-delete the underlying row.
     resp2 = Client().delete(f"{BASE}/profile/avatar", **_auth(token))
     assert resp2.status_code == 204
     active_user.refresh_from_db()
     assert active_user.avatar_url is None
-    assert fake_storage.deleted == [saved_key]
-
-
-@pytest.mark.parametrize(
-    "filename,content_type,expected_ext",
-    [
-        ("me.png", "image/png", ".png"),
-        ("me.jpg", "image/jpeg", ".jpg"),
-        ("me.gif", "image/gif", ".gif"),
-        ("me.webp", "image/webp", ".webp"),
-        # Content-type wins even over a mismatched/hostile filename.
-        ("evil.png?x=1&y=2", "image/png", ".png"),
-        # No usable content-type: filename tail fallback, but only if it
-        # is itself a strict lowercase alnum token.
-        ("photo.PNG", None, ".png"),
-        ("photo.PNG", "application/octet-stream", ".png"),
-        # Hostile/unsafe tails never pass through — safe default instead.
-        ("evil.png?x=1&y=2", None, ".jpg"),
-        ("../../../etc/passwd", None, ".jpg"),
-        ("../../../etc/passwd", "image/png", ".png"),
-        ("noext", None, ".jpg"),
-    ],
-)
-def test_safe_avatar_ext_sanitizes(filename, content_type, expected_ext):
-    assert profile_service._safe_avatar_ext(filename, content_type) == expected_ext
+    meta.refresh_from_db()
+    assert meta.deleted_at is not None
 
 
 # ── DELETE profile/avatar ────────────────────────────────────────────────────
 
 
 @pytest.mark.django_db
-def test_delete_avatar_204_clears_avatar_url(active_user, fake_storage):
-    old_key = f"avatars/{active_user.id}/old.png"
-    active_user.avatar_url = f"/api/media/v1/files/{old_key}?sig=abc&exp=999999999999"
-    active_user.save(update_fields=["avatar_url"])
+def test_delete_avatar_204_clears_avatar_url_and_soft_deletes_the_file(active_user, fake_storage):
     token = _access_token(active_user)
+    avatar = SimpleUploadedFile("me.png", _png_bytes(), content_type="image/png")
+    upload_resp = _patch_multipart(Client(), f"{BASE}/profile/me", {"avatar": avatar}, token)
+    file_id = upload_resp.json()["avatarUrl"].removeprefix("/api/media/v1/files/")
+
     resp = Client().delete(f"{BASE}/profile/avatar", **_auth(token))
     assert resp.status_code == 204
     assert resp.content == b""
     active_user.refresh_from_db()
     assert active_user.avatar_url is None
-    assert fake_storage.deleted == [old_key]
+
+    meta = FileMetadata.objects.get(id=file_id)
+    assert meta.deleted_at is not None
+
+
+@pytest.mark.django_db
+def test_delete_avatar_with_legacy_raw_key_url_clears_field_but_skips_cleanup(active_user):
+    """Pre-fix rows (old direct-write path, raw storage key baked straight
+    into the URL) don't match ``_FILE_ID_RE`` any more (see
+    ``profile_service``'s module docstring) — ``delete_avatar_object`` has
+    no ``FileMetadata`` id to soft-delete, so cleanup is skipped. The
+    user-facing DELETE must still succeed and clear ``avatar_url`` —
+    documented gap, not a crash."""
+    old_key = f"avatars/{active_user.id}/old.png"
+    active_user.avatar_url = f"/api/media/v1/files/{old_key}?sig=abc&exp=999999999999"
+    active_user.save(update_fields=["avatar_url"])
+    token = _access_token(active_user)
+
+    resp = Client().delete(f"{BASE}/profile/avatar", **_auth(token))
+    assert resp.status_code == 204
+    active_user.refresh_from_db()
+    assert active_user.avatar_url is None
 
 
 @pytest.mark.django_db
@@ -398,7 +494,6 @@ def test_delete_avatar_no_avatar_is_a_noop_204(active_user, fake_storage):
     token = _access_token(active_user)
     resp = Client().delete(f"{BASE}/profile/avatar", **_auth(token))
     assert resp.status_code == 204
-    assert fake_storage.deleted == []
 
 
 def test_delete_avatar_unauthenticated_401(db):

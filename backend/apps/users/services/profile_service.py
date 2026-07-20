@@ -6,14 +6,56 @@ Response shape (``build_response``), field-precedence rules
 (``change_password``) are kept field-for-field/behaviour-for-behaviour
 identical to that source — the React SPA parses the response as-is.
 
-**Decision Р3 (the one deliberate deviation):** the FastAPI source forwards
-the uploaded avatar file to media-service over an S2S JWT and stores the
-URL it returns. This Django port does not do that S2S hop — it writes the
-file straight to ``htqweb.storage`` (bucket ``settings.MEDIA_S3_BUCKET``)
-and builds a stable signed URL itself (``htqweb.storage.signed_url``). The
-endpoint that actually serves ``/api/media/v1/files/<key>`` (redirecting to
-a presigned S3 URL, verifying ``sig``/``exp``) is a later task (3.3); until
-then this URL is written but not yet fetchable — see the task 2.3 report.
+**Avatar storage — history and the final-review-of-phases-2-3 fix.**
+Task 2.3's decision Р3 was: instead of the FastAPI source's S2S forward to
+media-service, write the avatar straight to ``htqweb.storage`` and mint a
+long-lived signed URL (``htqweb.storage.signed_url``) *once*, at upload
+time, then persist that whole URL — signature and all — in
+``User.avatar_url`` forever. Two problems fell out of that, both closed
+here:
+
+1. **(Critical)** the persisted URL's signature expires
+   (``settings.NEWS_SIGNED_URL_TTL``, default 1h) and nothing ever
+   re-signs it — every avatar went dead an hour after upload with no
+   refresh path. Fixed by never persisting a signature: ``User.avatar_url``
+   now stores the *unsigned* canonical path
+   (``/api/media/v1/files/<file_id>``), and ``avatar_payload``/
+   ``build_response`` mint a fresh URL on every response via
+   ``apps.media_files.interface.get_file_url`` — which returns that same
+   plain path untouched for a public file, or a freshly-signed one for a
+   private file. Either way, a response handed to the browser is always
+   currently valid.
+2. **(Important)** the direct-to-storage write bypassed
+   ``apps.media_files.services.scope_policy.ScopePolicy`` entirely — no
+   size cap, no real mime allow-list (only the *filename extension* was
+   checked), no magic-byte signature check, no EXIF strip/re-encode, and
+   the client's declared ``content_type`` was trusted straight through to
+   the storage backend. It also meant the ``media`` kill-switch
+   (``apps.core.services.require_service``) never even ran for avatars.
+   Fixed by routing ``save_avatar`` through
+   ``apps.media_files.interface.store_file(scope="avatar", ...)`` — the
+   exact same pipeline ``POST /api/media/v1/files/`` uses. ``users``
+   importing ``apps.media_files.interface`` is the sanctioned way for one
+   app to reach another (see that module's docstring); this is not a
+   layering violation.
+
+One consequence of (2) worth calling out: the ``avatar`` scope
+(``apps.media_files.services.scope_policy``) is ``public=True``, so every
+avatar written through this path is a public ``FileMetadata`` row —
+``get_file_url`` never needs to sign it at all in practice. The
+sign-at-read-time machinery in ``avatar_payload``/``build_response`` still
+exists and is exercised (it is the only thing standing between "works
+today" and "silently breaks the day someone flips the avatar scope to
+private"), but for the current policy it's mostly future-proofing, not
+something visibly exercised by the happy path.
+
+Pre-existing rows written by the old code path (raw storage key,
+signature baked into the URL) are **not** migrated by this change — they
+still match the legacy branch below (``_FILE_ID_RE`` doesn't recognise a
+raw ``avatars/<user_id>/<uuid><ext>`` key) and will keep serving/expiring
+exactly as before until the user re-uploads. No such rows exist outside
+this repo's own test fixtures at the time of this fix (see the final
+review report for the full inventory), so no data migration was written.
 """
 
 from __future__ import annotations
@@ -21,11 +63,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import uuid
-
-from django.conf import settings
-
-from htqweb.storage import get_storage, signed_query
 
 from apps.users.models import User
 
@@ -41,44 +78,58 @@ class CurrentPasswordRequired(Exception):
 
 
 # UUID-shaped file id embedded in a media-service URL — ported verbatim from
-# the FastAPI original's ``_FILE_ID_RE``. Our own avatar keys
-# (``avatars/<user_id>/<uuid><ext>``) never match this 36-char-UUID-only
-# shape, so ``avatar_payload()`` falls through to the "legacy/external URL"
-# branch for every avatar this module writes — ``id`` stays ``None``,
-# ``variants`` stays ``{}`` (the thumbnail worker doesn't exist in this
-# port — see the module docstring / task brief).
+# the FastAPI original's ``_FILE_ID_RE``. Since the final-review fix
+# (Findings 1/2), every avatar this module writes IS a FileMetadata row and
+# DOES match this shape (``/api/media/v1/files/<uuid>``, no signature baked
+# in — see the module docstring). Pre-fix rows using the old raw-key shape
+# (``avatars/<user_id>/<uuid><ext>``, with ``?sig=&exp=``) never match it
+# and fall through to the legacy/external-URL branch below, same as a
+# genuinely external URL (e.g. i.pravatar.cc) would.
 _FILE_ID_RE = re.compile(r"/files/([0-9a-f-]{36})", re.IGNORECASE)
 
-# Extracts the storage key *we* embedded in avatar_url, for our own
-# best-effort delete of the underlying object. Distinct from _FILE_ID_RE
-# above (that one exists purely for response-shape parity with the FastAPI
-# source's UUID-based media-service URLs; this one is our own bookkeeping
-# for the storage key format `avatars/<user_id>/<filename>`).
-_AVATAR_KEY_RE = re.compile(r"^/api/media/v1/files/(.+?)(?:\?|$)")
+_AVATAR_VARIANTS = ("thumb_32", "thumb_96", "thumb_256")
 
 
 def avatar_payload(avatar_url: str | None) -> dict | None:
     """Build the structured ``avatar`` block from a stored URL.
 
-    Ported verbatim from the FastAPI original's ``_avatar_payload``.
+    Ported from the FastAPI original's ``_avatar_payload``, extended by the
+    final review of phases 2-3 (Finding 1 — CRITICAL) to mint the URL(s)
+    fresh on *every* call rather than echo back whatever was persisted:
+    ``User.avatar_url`` only ever stores the bare, unsigned canonical path
+    now (see ``save_avatar``); the actual signed-vs-plain decision is made
+    here, per response, via ``apps.media_files.interface.get_file_url`` —
+    so a client is never handed a URL whose signature has already expired
+    by the time it's read back. ``users`` importing
+    ``apps.media_files.interface`` is the sanctioned cross-app seam, not a
+    layering violation (see that module's docstring).
     """
     if not avatar_url:
         return None
     m = _FILE_ID_RE.search(avatar_url)
     if not m:
-        # Legacy / external URLs (e.g., i.pravatar.cc) — and, in this port,
-        # every avatar_url we write ourselves (see module docstring).
+        # Legacy raw-key rows (pre-fix, see module docstring) and genuinely
+        # external URLs (e.g. i.pravatar.cc) — nothing of ours to re-sign,
+        # pass through untouched.
         return {"id": None, "url": avatar_url, "variants": {}}
     file_id = m.group(1)
-    return {
-        "id": file_id,
-        "url": f"/api/media/v1/files/{file_id}",
-        "variants": {
-            "thumb_32": f"/api/media/v1/files/{file_id}/thumb_32",
-            "thumb_96": f"/api/media/v1/files/{file_id}/thumb_96",
-            "thumb_256": f"/api/media/v1/files/{file_id}/thumb_256",
-        },
-    }
+
+    from apps.media_files import interface as media_interface
+
+    def _fresh(variant: str) -> str | None:
+        try:
+            return media_interface.get_file_url(file_id, variant=variant)
+        except Exception:
+            # ServiceDisabled (media off) or any other hiccup minting a
+            # fresh URL — degrade rather than fail the whole profile
+            # response over a picture. Falls back to the stored (unsigned)
+            # path for the primary URL; variants simply get omitted.
+            return None
+
+    url = _fresh("original") or avatar_url
+    variants = {name: u for name in _AVATAR_VARIANTS if (u := _fresh(name))}
+
+    return {"id": file_id, "url": url, "variants": variants}
 
 
 def roles_for(user: User) -> list[str]:
@@ -98,12 +149,20 @@ def build_response(user: User) -> dict:
     Returned as a plain dict (not a pydantic model) — ``htqweb.http.api_view``
     JSON-serializes dicts directly, and a dict lets ``avatar``/``settings``
     nest freely without a schema class per call site.
+
+    ``avatar_url``/``avatarUrl`` are derived from the same freshly-minted
+    ``avatar_payload()`` call as the nested ``avatar.url`` (final review of
+    phases 2-3, Finding 1) rather than echoing ``user.avatar_url`` raw —
+    both top-level and nested shapes must agree, and both must be
+    currently-valid, not whatever was persisted at upload time.
     """
     first_name = user.first_name or ""
     last_name = user.last_name or ""
     patronymic = user.patronymic or ""
     fio_parts = [p for p in (last_name, first_name, patronymic) if p]
     fio = " ".join(fio_parts)
+    avatar = avatar_payload(user.avatar_url)
+    avatar_url = avatar["url"] if avatar else None
     return {
         "id": str(user.id),
         "username": user.username,
@@ -117,9 +176,9 @@ def build_response(user: User) -> dict:
         "fio": fio,
         "bio": user.bio or "",
         "phone": user.phone or "",
-        "avatar_url": user.avatar_url,
-        "avatarUrl": user.avatar_url,
-        "avatar": avatar_payload(user.avatar_url),
+        "avatar_url": avatar_url,
+        "avatarUrl": avatar_url,
+        "avatar": avatar,
         "settings": user.settings or {},
         "roles": roles_for(user),
         "department": None,
@@ -185,91 +244,71 @@ def apply_profile_fields(
     return changes
 
 
-def _avatar_key_from_url(avatar_url: str | None) -> str | None:
-    if not avatar_url:
-        return None
-    m = _AVATAR_KEY_RE.search(avatar_url)
-    return m.group(1) if m else None
-
-
-# Fixed content-type -> extension allow-list for avatar uploads (review
-# Finding 2). Deliberately NOT ``mimetypes.guess_extension`` (services/
-# media's ``_ext_for`` uses that) — this module only ever stores images, so
-# a small fixed map is both stricter and simpler than delegating to the
-# stdlib's much broader (non-image-aware) mime db.
-_AVATAR_CONTENT_TYPE_EXT = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/gif": ".gif",
-    "image/webp": ".webp",
-}
-
-# Strict allow-list for the filename-tail fallback: lowercase alnum only,
-# 1-8 chars. Anything else (``?``, ``&``, ``..``, ``/``, whitespace,
-# uppercase) is rejected outright rather than sanitized/escaped, so it can
-# never reach the storage key or the returned avatar_url.
-_SAFE_EXT_TAIL_RE = re.compile(r"[a-z0-9]{1,8}")
-
-
-def _safe_avatar_ext(filename: str | None, content_type: str | None) -> str:
-    """Derive a safe file extension for an avatar upload key.
-
-    Never trusts the client-supplied filename directly (review Finding 2):
-    a crafted name like ``"evil.png?x=1&y=2"`` or ``"../../../etc/passwd"``
-    would otherwise inject ``?``/``&``/``..`` into the S3 key AND the
-    returned ``avatar_url``, and could make ``_AVATAR_KEY_RE`` mis-parse on
-    a later delete (orphaning the object).
-
-    Precedence, mirroring services/media's ``_ext_for`` intent but
-    stricter: (1) the upload's content-type, mapped through a fixed
-    image-only allow-list; (2) the filename tail, ONLY if it is itself a
-    strict ``[a-z0-9]{1,8}`` token once lowercased; (3) ``.jpg`` as a safe
-    default (documented choice — avatars are jpeg-compatible for display
-    either way, and a default is required so an unrecognised/hostile input
-    never falls through with no extension or a raw client string).
-    """
-    if content_type:
-        ext = _AVATAR_CONTENT_TYPE_EXT.get(content_type.strip().lower())
-        if ext:
-            return ext
-    if filename and "." in filename:
-        tail = filename.rsplit(".", 1)[-1].lower()
-        if _SAFE_EXT_TAIL_RE.fullmatch(tail):
-            return "." + tail
-    return ".jpg"
-
-
 def save_avatar(user_id: int, filename: str, data: bytes, content_type: str | None) -> str:
-    """Store the avatar directly in ``htqweb.storage`` (decision Р3).
+    """Store the avatar through the real media pipeline.
 
-    Raises whatever the underlying storage backend raises — callers
-    (``apps.users.views.update_profile``) must catch it and degrade: save
-    the rest of the profile PATCH, log the error, keep the old
-    ``avatar_url``. See the task 2.3 report for why (mirrors cms's
-    fire-and-forget principle for non-critical side effects).
+    Final review of phases 2-3 (Finding 2 — Important): this used to write
+    straight to ``htqweb.storage`` with only a filename-extension allow-list
+    of its own, bypassing ``ScopePolicy`` (size cap, real mime allow-list,
+    magic-byte signature check, EXIF strip/re-encode) and the ``media``
+    kill-switch entirely. Now it calls
+    ``apps.media_files.interface.store_file(scope="avatar", ...)`` — the
+    exact same pipeline the ``POST /api/media/v1/files/`` endpoint runs —
+    so every one of those checks actually applies, and a disabled ``media``
+    service correctly refuses the write (``ServiceDisabled``) instead of
+    silently succeeding.
+
+    Returns the unsigned canonical path (``result["url"]``, e.g.
+    ``/api/media/v1/files/<uuid>``) — never a signature, see the module
+    docstring's Finding 1 section for why. Raises whatever
+    ``store_file`` raises (``ServiceDisabled`` when ``media`` is off,
+    ``UploadValidationError`` for oversize/wrong-mime/undecodable-image) —
+    callers (``apps.users.views._update_profile``) must catch it and
+    degrade: save the rest of the profile PATCH, log the error, keep the
+    old ``avatar_url``. See the task 2.3 report for why (mirrors cms's
+    fire-and-forget principle for non-critical side effects) — that
+    degradation contract is unchanged by this fix, only *what* can now
+    raise (validation/kill-switch errors, not just storage-backend errors)
+    is different.
     """
-    ext = _safe_avatar_ext(filename, content_type)
-    key = f"avatars/{user_id}/{uuid.uuid4().hex}{ext}"
-    storage = get_storage(bucket=settings.MEDIA_S3_BUCKET)
-    storage.save(key, data, content_type=content_type)
-    return f"/api/media/v1/files/{key}?{signed_query(key)}"
+    from apps.media_files import interface as media_interface
+
+    result = media_interface.store_file(
+        data=data,
+        filename=filename or "avatar",
+        mime=content_type or "application/octet-stream",
+        scope="avatar",
+        owner_id=user_id,
+    )
+    return result["url"]
 
 
 def delete_avatar_object(avatar_url: str | None) -> None:
-    """Best-effort delete of the underlying storage object.
+    """Best-effort delete of the underlying avatar file.
 
     Mirrors the FastAPI original's best-effort media-service DELETE call in
     ``remove_avatar`` — failures are logged, never raised, so the
     user-facing detach (``user.avatar_url = None``) always succeeds even if
-    the storage backend is unreachable.
+    ``media`` is unreachable or disabled.
+
+    Since Finding 2's fix, an avatar written by this module is a real
+    ``FileMetadata`` row, so this soft-deletes it via
+    ``apps.media_files.interface.delete_file`` rather than touching storage
+    directly. Legacy pre-fix rows (raw storage key, no ``FileMetadata``) —
+    or an already-cleared/never-set ``avatar_url`` — don't match
+    ``_FILE_ID_RE`` and are silently skipped, same "nothing to do" contract
+    as before.
     """
-    key = _avatar_key_from_url(avatar_url)
-    if not key:
+    m = _FILE_ID_RE.search(avatar_url) if avatar_url else None
+    if not m:
         return
+    file_id = m.group(1)
+    from apps.media_files import interface as media_interface
+
     try:
-        get_storage(bucket=settings.MEDIA_S3_BUCKET).delete(key)
+        media_interface.delete_file(file_id)
     except Exception as exc:  # noqa: BLE001 — best-effort cleanup only
-        logger.warning("avatar_delete_storage_failed key=%s err=%s", key, exc)
+        logger.warning("avatar_delete_failed file_id=%s err=%s", file_id, exc)
 
 
 def change_password(user: User, *, new_password: str, current_password: str | None) -> None:
