@@ -28,11 +28,13 @@ All three discover their targets reflectively (app registry / admin registry
 7th/8th/9th domain app is covered the day its ``tasks.py``/``admin.py``/
 ``urls.py`` lands, with zero edits here.
 
-Known, documented, current gaps are carved out explicitly below (not
-silently skipped) with a TODO pointing at the remediation step that closes
-them — ``_KNOWN_UNREGISTERED`` for ``media_files`` (closed by R2). As each
-gap closes, delete its allow-list entry; the moment nobody does, the sweep
-fails again and stays honest.
+Known, documented gaps get carved out explicitly below (not silently
+skipped) via ``_KNOWN_UNREGISTERED``, each entry TODO-annotated with the
+remediation step that closes it. ``media_files`` was the one entry there
+until R2 landed ``apps/media_files/admin.py``; the set is empty as of R2, so
+test 2 now enforces "every domain app has SOME registered, gated admin"
+with zero carve-outs. As each future gap closes, delete its allow-list
+entry; the moment nobody does, the sweep fails again and stays honest.
 """
 
 from __future__ import annotations
@@ -161,14 +163,12 @@ def test_every_domain_task_guards_disableability_first():
 # Test 2 — every domain ModelAdmin must mix in ServiceGatedAdminMixin.
 # ═══════════════════════════════════════════════════════════════════════
 
-# TODO(R2): apps/media_files has no admin.py at all yet — its 3 models
-# (FileMetadata, FileVariant, AuditLog) are unregistered, so there is
-# nothing here for the mixin assertion to even see. Remove this entry once
-# R2 lands apps/media_files/admin.py with ServiceGatedAdminMixin on all
-# three; at that point this allow-list becomes empty and this test starts
-# enforcing "every domain app has SOME registered, gated admin" with no
-# carve-outs left.
-_KNOWN_UNREGISTERED = {"media_files"}
+# Empty as of R2: apps/media_files/admin.py now registers all 3 models
+# (FileMetadata, FileVariant, AuditLog) with ServiceGatedAdminMixin, closing
+# the last documented gap. Kept as a named set (not deleted outright) so a
+# future gap has an established, TODO-annotated place to land rather than
+# reintroducing the pattern from scratch.
+_KNOWN_UNREGISTERED: set[str] = set()
 
 # ServiceStatus is the operator on/off switch itself. Wrapping it in the
 # gate it implements would be a lockout footgun: if `core` (or any label,
