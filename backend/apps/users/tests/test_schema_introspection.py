@@ -41,6 +41,7 @@ COLUMNS_REQUIRING_DB_DEFAULT = [
     ("users_user", "updated_at"),
     ("users_item", "description"),
     ("users_item", "created_at"),
+    ("users_auditlog", "created_at"),
 ]
 
 
@@ -74,7 +75,7 @@ def test_users_tables_exist_in_public_schema_with_django_default_names():
         """
     )
     existing = {r[0] for r in rows}
-    assert {"users_user", "users_item"} <= existing
+    assert {"users_user", "users_item", "users_auditlog"} <= existing
     # The old FastAPI-parity `users`/`items` table names must be gone.
     assert "users" not in existing
     assert "items" not in existing
@@ -120,6 +121,11 @@ def test_indexed_columns_have_indexes():
         ("users_user", "email"),
         ("users_user", "status"),
         ("users_item", "created_at"),
+        ("users_auditlog", "user_id"),
+        ("users_auditlog", "action"),
+        ("users_auditlog", "resource_id"),
+        ("users_auditlog", "correlation_id"),
+        ("users_auditlog", "created_at"),
     ]:
         rows = _fetchall(
             """

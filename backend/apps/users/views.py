@@ -30,6 +30,7 @@ from . import schemas
 from .models import User, UserStatus
 from .services import (
     admin_service,
+    audit,
     auth_service,
     items_service,
     options_service,
@@ -41,6 +42,29 @@ logger = logging.getLogger(__name__)
 
 
 ADMIN_COOKIE_NAME = "admin_session"
+
+
+def _record_audit(request, **kwargs) -> None:
+    """Best-effort wrapper around ``services.audit.record_action`` for the
+    identity domain's privileged mutations (R3 remediation — see that
+    module's docstring for the full list of action names/call sites).
+
+    The primary mutation (create/update/set-password/suspend/approve/
+    reject) has already been committed by the time every call site below
+    reaches this — an audit-write failure (e.g. a transient DB hiccup) must
+    not turn an already-applied admin action into a 500 for the caller, but
+    it must never disappear silently either: log it loudly with
+    ``logger.exception`` (same non-fatal-but-loud shape as the Celery
+    ``.delay()`` enqueue guards in ``apps.cms.views``/``apps.media_files.
+    views``) so a missing audit row is at least visible in the logs.
+    """
+    try:
+        audit.record_action(request, **kwargs)
+    except Exception:
+        logger.exception(
+            "audit record_action failed action=%s resource_type=%s resource_id=%s",
+            kwargs.get("action"), kwargs.get("resource_type"), kwargs.get("resource_id"),
+        )
 
 
 # ── POST token/ — login by email or username ────────────────────────────────
@@ -354,6 +378,14 @@ def approve_registration(request, user_id: int):
     except registration_service.PendingRegistrationNotFound:
         return json_error("Pending registration not found", 404)
     # Decision Р2: source publishes user_upserted.send(_replica_payload(user)) here — dropped.
+    _record_audit(
+        request,
+        user_id=request.token.user_id,
+        action="registration.approved",
+        resource_type="User",
+        resource_id=str(user_id),
+        changes={"status": "active"},
+    )
     return HttpResponse(status=204)
 
 
@@ -364,6 +396,14 @@ def reject_registration(request, user_id: int):
     except registration_service.PendingRegistrationNotFound:
         return json_error("Pending registration not found", 404)
     # Decision Р2: source publishes user_deactivated.send({"id": user.id}) here — dropped.
+    _record_audit(
+        request,
+        user_id=request.token.user_id,
+        action="registration.rejected",
+        resource_type="User",
+        resource_id=str(user_id),
+        changes={"status": "rejected"},
+    )
     return HttpResponse(status=204)
 
 
@@ -403,6 +443,17 @@ def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
     # Decision Р2: source publishes user_upserted.send(...) when status==ACTIVE — dropped.
     # Decision Р3: no S2S mailbox provisioning — loud mailbox_error instead of a silent no-op.
     mailbox_error = _MAILBOX_UNAVAILABLE if create_mailbox else None
+    # `payload` still has every field `admin_service.create_user` was called
+    # with EXCEPT `password` — never let the plaintext password (or, were
+    # this ever refactored, a hash) reach the audit log's `changes` JSON.
+    _record_audit(
+        request,
+        user_id=request.token.user_id,
+        action="user.created",
+        resource_type="User",
+        resource_id=str(user.id),
+        changes={k: v for k, v in payload.items() if k != "password"},
+    )
     return schemas.AdminUserCreatedResponse(
         **admin_service.serialize_admin_user(user),
         mailbox=None,
@@ -427,6 +478,14 @@ def _admin_update_user(request, user_id: int, data: schemas.AdminUserUpdateReque
         return json_error("User not found", 404)
 
     changes = data.model_dump(exclude_unset=True)
+    # Snapshot pre-update values for every field the request touched, BEFORE
+    # admin_service.update_user mutates `user` in place — the audit log
+    # records a diff of what actually changed (old != new), not the raw
+    # request payload (a field re-sent with its current value is a no-op
+    # and shouldn't show up as "changed"), and privilege flags
+    # (is_staff/is_superuser/status) are exactly the fields this diff exists
+    # to make visible.
+    before = {field: getattr(user, field, None) for field in changes}
     try:
         user = admin_service.update_user(user, changes)
     except admin_service.DuplicateEmail:
@@ -439,6 +498,19 @@ def _admin_update_user(request, user_id: int, data: schemas.AdminUserUpdateReque
         return json_error(str(exc), 400)
     # Decision Р2: source publishes user_upserted/user_deactivated depending
     # on the new status — dropped.
+    diff = {
+        field: {"old": before[field], "new": getattr(user, field, None)}
+        for field in changes
+        if getattr(user, field, None) != before[field]
+    }
+    _record_audit(
+        request,
+        user_id=request.token.user_id,
+        action="user.updated",
+        resource_type="User",
+        resource_id=str(user.id),
+        changes=diff,
+    )
     return schemas.AdminUserResponse(**admin_service.serialize_admin_user(user))
 
 
@@ -453,6 +525,14 @@ def _admin_delete_user(request, user_id: int):
     # Decisions Р2/Р3: source's S2S mailbox-archive call + user.deactivated/
     # user.deleted broadcasts dropped here — see admin_service module docstring.
     admin_service.delete_user(user)
+    _record_audit(
+        request,
+        user_id=request.token.user_id,
+        action="user.suspended",
+        resource_type="User",
+        resource_id=str(user_id),
+        changes={"status": "suspended", "is_staff": False, "is_superuser": False},
+    )
     return HttpResponse(status=204)
 
 
@@ -473,6 +553,16 @@ def admin_set_password(request, user_id: int, data: schemas.AdminSetPasswordRequ
         return json_error("User not found", 404)
     admin_service.set_password(
         user, new_password=data.new_password, must_change_password=data.must_change_password,
+    )
+    # `changes` records only that a reset happened + the resulting
+    # must_change_password flag — NEVER the new password or its hash.
+    _record_audit(
+        request,
+        user_id=request.token.user_id,
+        action="user.password_set",
+        resource_type="User",
+        resource_id=str(user.id),
+        changes={"must_change_password": data.must_change_password},
     )
     return {"detail": "Password updated"}
 

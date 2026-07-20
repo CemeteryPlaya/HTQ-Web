@@ -3,7 +3,7 @@ from django.db import models as db_models
 
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
-from .models import Item, User
+from .models import AuditLog, Item, User
 
 try:
     from django_json_widget.widgets import JSONEditorWidget
@@ -53,3 +53,25 @@ class ItemAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_filter = ("created_at",)
     readonly_fields = ("created_at",)
     autocomplete_fields = ("owner",)
+
+
+@admin.register(AuditLog)
+class AuditLogAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "user_id", "action", "resource_type", "resource_id",
+                     "created_at")
+    list_filter = ("action", "resource_type")
+    search_fields = ("action", "resource_type", "resource_id", "correlation_id")
+    readonly_fields = ("created_at",)
+
+    if _HAS_JSON_WIDGET:
+        formfield_overrides = {
+            db_models.JSONField: {"widget": JSONEditorWidget},
+        }
+
+    def has_add_permission(self, request):
+        # Intentionally hardcoded False, NOT `super().has_add_permission(...)
+        # and self._service_enabled()`: audit rows are written by code only,
+        # never authored by hand, so this is unconditionally stricter than
+        # the service gate (denying add regardless of users's enabled state)
+        # rather than a stand-in for it.
+        return False

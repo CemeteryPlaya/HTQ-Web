@@ -104,6 +104,30 @@ class User(AbstractBaseUser):
         return super().check_password(raw_password)
 
 
+class AuditLog(models.Model):
+    """Аудит-журнал привилегированных действий identity-домена — та же форма,
+    что у ``apps.cms.models.AuditLog`` / ``apps.media_files.models.AuditLog``
+    (каждая аппка владеет своей конкретной моделью, а не общей — см. их
+    докстрайны). ``users`` — самая аудируемая поверхность платформы (админ
+    создаёт/правит/удаляет пользователей, сбрасывает пароли, модерирует
+    регистрации), и до этой задачи (R3 плана устранения находок фаз 2-3) она
+    не писала ничего, кроме structlog-строк, в отличие от cms/media — эта
+    таблица и ``services.audit.record_action`` (см. этот модуль) закрывают
+    разрыв. Никогда не пишет пароль/хэш в ``changes`` — см. вызывающих в
+    ``views.py``.
+    """
+
+    user_id = models.IntegerField(null=True, blank=True, db_index=True)
+    action = models.CharField(max_length=100, db_index=True)
+    resource_type = models.CharField(max_length=100)
+    resource_id = models.CharField(max_length=100, null=True, blank=True, db_index=True)
+    changes = models.JSONField(null=True, blank=True)
+    ip_address = models.CharField(max_length=45, null=True, blank=True)
+    user_agent = models.TextField(null=True, blank=True)
+    correlation_id = models.CharField(max_length=36, null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True, db_default=Now())
+
+
 class Item(models.Model):
     """Пользовательские заметки/черновики — 1:N к User.
 
