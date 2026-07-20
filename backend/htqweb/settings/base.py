@@ -177,3 +177,7 @@ THUMBNAIL_FORMAT = env("THUMBNAIL_FORMAT", "webp")  # webp | jpeg | png
 THUMBNAIL_QUALITY = int(env("THUMBNAIL_QUALITY", "82"))
 MAX_IMAGE_PIXELS = int(env("MAX_IMAGE_PIXELS", str(100_000_000)))  # image-bomb guard
 STRIP_EXIF = env("STRIP_EXIF", "true").lower() in ("1", "true", "yes")
+# Ported from services/media/app/core/settings.py's
+# soft_delete_grace_days: int = 30 — used by apps.media_files.tasks
+# .purge_soft_deleted (task 3.4).
+MEDIA_SOFT_DELETE_GRACE_DAYS = int(env("MEDIA_SOFT_DELETE_GRACE_DAYS", "30"))

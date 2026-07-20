@@ -1,0 +1,21 @@
+{
+  "source": "services/media/app/schemas/file.py::FileMetadataRead (Pydantic model, NOT a live capture)",
+  "fields": {
+    "id": "str",
+    "path": "str",
+    "original_filename": "str",
+    "owner_id": "int|null",
+    "size": "int",
+    "mime": "str",
+    "is_public": "bool",
+    "sha256": "str|null",
+    "kind": "str",
+    "scope": "str",
+    "width": "int|null",
+    "height": "int|null",
+    "created_at": "str",
+    "updated_at": "str",
+    "url": "str",
+    "variants": "dict"
+  }
+}

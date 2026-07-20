@@ -340,6 +340,41 @@ def download_variant(request, file_id, variant):
 # ─── Signed URL ─────────────────────────────────────────────────────────────
 
 
+def _build_file_url(meta: FileMetadata, variant: str = "original",
+                     ttl: int | None = None) -> tuple[str, int]:
+    """The signed-vs-plain URL decision, factored out so it has exactly one
+    implementation.
+
+    Shared by ``issue_signed_url`` below (HTTP ``POST .../sign``) and
+    ``apps.media_files.interface.get_file_url`` (the cross-app entry point,
+    task 3.4) — both need "public -> plain path, private -> HMAC-signed
+    query string", and neither should hand-roll its own signing (see
+    ``htqweb.storage.signed_url``'s module docstring: the payload layout
+    must stay byte-identical everywhere it's produced). ``ttl=None`` falls
+    back to ``settings.NEWS_SIGNED_URL_TTL`` (``sign()``'s own default) —
+    used by the interface function, which has no per-call ``ttl`` query
+    param to read.
+
+    Returns ``(url, exp)`` — ``exp`` is a Unix timestamp (cache-busting hint
+    for public files, real expiry for signed ones).
+    """
+    base = (
+        f"/api/media/v1/files/{meta.id}"
+        if variant == "original"
+        else f"/api/media/v1/files/{meta.id}/{variant}"
+    )
+
+    if meta.is_public:
+        # No need to sign; expose a far-future exp for cache-busting hint only.
+        resolved_ttl = ttl if ttl is not None else settings.NEWS_SIGNED_URL_TTL
+        far_future = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + resolved_ttl
+        return base, far_future
+
+    resource_id = str(meta.id) if variant == "original" else f"{meta.id}:{variant}"
+    sig_value, exp_ts = sign(resource_id, ttl)
+    return f"{base}?sig={sig_value}&exp={exp_ts}", exp_ts
+
+
 @api_view(methods=("POST",), auth="jwt")
 def issue_signed_url(request, file_id):
     """``POST /api/media/v1/files/{file_id}/sign?variant=original&ttl=3600``.
@@ -364,20 +399,8 @@ def issue_signed_url(request, file_id):
     if not _can_access_private(request.token, meta) and not meta.is_public:
         return json_error("Forbidden", 403)
 
-    base = (
-        f"/api/media/v1/files/{meta.id}"
-        if variant == "original"
-        else f"/api/media/v1/files/{meta.id}/{variant}"
-    )
-
-    if meta.is_public:
-        # No need to sign; expose a far-future exp for cache-busting hint only.
-        far_future = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + ttl
-        return {"url": base, "exp": far_future}
-
-    resource_id = str(meta.id) if variant == "original" else f"{meta.id}:{variant}"
-    sig_value, exp_ts = sign(resource_id, ttl)
-    return {"url": f"{base}?sig={sig_value}&exp={exp_ts}", "exp": exp_ts}
+    url, exp = _build_file_url(meta, variant=variant, ttl=ttl)
+    return {"url": url, "exp": exp}
 
 
 # ─── {file_id}/{tail} dispatch (GET variant vs POST sign) ──────────────────

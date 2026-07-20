@@ -13,12 +13,14 @@ only gates the request/response cycle).
 
 from __future__ import annotations
 
+import datetime
 import logging
 import uuid
 from pathlib import PurePosixPath
 
 from celery import shared_task
 from django.conf import settings
+from django.utils import timezone
 
 from apps.core.services import require_service
 from htqweb.storage import get_storage
@@ -122,3 +124,89 @@ def make_variants(file_id: str) -> int:
     except Exception:
         logger.exception("make_variants failed for id=%s", file_id)
         raise
+
+
+# ─── Cleanup (task 3.4) ──────────────────────────────────────────────────────
+#
+# Ported from services/media/app/workers/actors.py's ``purge_soft_deleted``
+# and ``cleanup_orphan_files`` dramatiq actors. Their schedules come from
+# services/media/app/workers/scheduler.py's APScheduler cron jobs (a
+# standalone ``cms-scheduler``-style process, also started from the app's
+# lifespan) — registered here as django_celery_beat ``PeriodicTask`` rows by
+# the ``0002_media_periodic_tasks`` data migration, not invented.
+#
+# The source's ``audit_log_compaction`` scheduler job (daily 03:30 UTC,
+# deletes old ``AuditLog`` rows) has NO actor counterpart in actors.py — the
+# task 3.4 brief scopes this port to the two actors.py workers only
+# (``make_variants`` was already ported in 3.2). It is not ported here.
+
+
+@shared_task
+def purge_soft_deleted() -> int:
+    """Reap ``FileMetadata`` rows (and their storage objects) past their
+    soft-delete grace period.
+
+    Ported from ``actors.py``'s ``purge_soft_deleted``
+    (``_purge_soft_deleted_impl``): every ``FileMetadata`` whose
+    ``deleted_at`` is older than ``settings.MEDIA_SOFT_DELETE_GRACE_DAYS``
+    (source: ``settings.soft_delete_grace_days``, default 30) is reaped —
+    variant storage objects first, then the original, then the DB rows
+    (``FileVariant`` cascades on ``meta.delete()``, but the source drops
+    storage objects explicitly since storage isn't transactional; this port
+    keeps that explicit order). Storage failures are logged and do not abort
+    the sweep — same best-effort contract as the source.
+
+    Scheduled daily at 03:00 UTC (``scheduler.py``'s ``purge_soft_deleted``
+    cron job, ``hour=3, minute=0``) via the ``0002_media_periodic_tasks``
+    migration.
+    """
+    require_service("media")
+
+    cutoff = timezone.now() - datetime.timedelta(days=settings.MEDIA_SOFT_DELETE_GRACE_DAYS)
+    files = list(FileMetadata.objects.filter(deleted_at__isnull=False, deleted_at__lt=cutoff))
+    if not files:
+        return 0
+
+    storage = get_storage(bucket=settings.MEDIA_S3_BUCKET)
+    purged = 0
+    for meta in files:
+        for variant in meta.variants.all():
+            try:
+                storage.delete(variant.path)
+            except Exception:
+                logger.exception("purge_soft_deleted: failed to drop variant %s", variant.path)
+        try:
+            storage.delete(meta.path)
+        except Exception:
+            logger.exception("purge_soft_deleted: failed to drop original %s", meta.path)
+        meta.delete()
+        purged += 1
+
+    logger.info(
+        "purge_soft_deleted: purged %d files (grace_days=%d)",
+        purged,
+        settings.MEDIA_SOFT_DELETE_GRACE_DAYS,
+    )
+    return purged
+
+
+@shared_task
+def cleanup_orphan_files() -> None:
+    """Reserved: scan storage for files with no ``FileMetadata`` row and
+    remove them.
+
+    Ported from ``actors.py``'s ``cleanup_orphan_files`` — a stub in the
+    FastAPI source too ("not implemented yet"; the docstring there says the
+    implementation needs a storage-side enumerate that differs between
+    LocalStorage/S3 and was left as a TODO, not blocking correctness).
+
+    This is the "dead job" case called out in the task 3.4 brief (same
+    situation as ``apps.cms.tasks.publish_scheduled_news``'s query that can
+    never match against the current schema): rather than silently drop the
+    schedule or run a no-op every week, ``0002_media_periodic_tasks``
+    registers this job's ``PeriodicTask`` row with ``enabled=False`` — the
+    weekly Sunday 04:00 UTC cron from ``scheduler.py`` is preserved as
+    documentation of intent, but beat will not actually tick it.
+    """
+    require_service("media")
+    logger.info("cleanup_orphan_files: not implemented yet")

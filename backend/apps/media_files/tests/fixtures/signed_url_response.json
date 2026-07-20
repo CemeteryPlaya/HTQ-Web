@@ -1,0 +1,7 @@
+{
+  "source": "services/media/app/schemas/file.py::SignedUrlResponse (Pydantic model, NOT a live capture)",
+  "fields": {
+    "url": "str",
+    "exp": "int"
+  }
+}
