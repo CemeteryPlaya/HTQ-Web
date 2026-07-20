@@ -20,13 +20,28 @@ Call from the identity domain's privileged mutations (R3 remediation task):
 
 ``request`` is the Django ``HttpRequest`` — used only to pull IP/user-agent/
 correlation-id, mirroring the cms/media originals' ``request`` parameter.
+
+**Non-fatal by construction (review fix-pass on R3):** by the time any call
+site above reaches this, the primary mutation (create/update/set-password/
+suspend/approve/reject) has already been committed — an audit-write failure
+(e.g. a transient DB hiccup) must not turn an already-applied admin action
+into a 500 for the caller. The ``AuditLog.objects.create`` call is wrapped
+in ``try/except Exception: logger.exception(...)`` here, once, so every
+call site can call ``record_action`` directly without its own guard (same
+pattern applied to ``apps.cms.services.audit``/``apps.media_files.services.
+audit`` — see those modules). Returns ``None`` (instead of the created row)
+on a swallowed failure; no call site in this codebase uses the return
+value.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from apps.users.models import AuditLog
+
+logger = logging.getLogger(__name__)
 
 
 def record_action(
@@ -37,18 +52,25 @@ def record_action(
     resource_type: str,
     resource_id: Optional[str] = None,
     changes: Optional[dict[str, Any]] = None,
-) -> AuditLog:
+) -> Optional[AuditLog]:
     ip = request.META.get("REMOTE_ADDR") if request is not None else None
     user_agent = request.headers.get("user-agent") if request is not None else None
     correlation_id = getattr(request, "request_id", None) if request is not None else None
 
-    return AuditLog.objects.create(
-        user_id=user_id,
-        action=action,
-        resource_type=resource_type,
-        resource_id=str(resource_id) if resource_id is not None else None,
-        changes=changes,
-        ip_address=ip,
-        user_agent=user_agent,
-        correlation_id=correlation_id,
-    )
+    try:
+        return AuditLog.objects.create(
+            user_id=user_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=str(resource_id) if resource_id is not None else None,
+            changes=changes,
+            ip_address=ip,
+            user_agent=user_agent,
+            correlation_id=correlation_id,
+        )
+    except Exception:
+        logger.exception(
+            "audit record_action failed action=%s resource_type=%s resource_id=%s",
+            action, resource_type, resource_id,
+        )
+        return None

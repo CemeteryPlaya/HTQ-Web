@@ -6,6 +6,7 @@ create/update/delete. Tokens are built with real ``jwt.encode`` against
 """
 
 import json
+import logging
 
 import jwt as pyjwt
 import pytest
@@ -94,6 +95,38 @@ def test_create_category_admin_token_201():
     assert body["description"] == "d"
     assert "id" in body and "created_at" in body
     assert Category.objects.filter(slug="tech").exists()
+
+
+@pytest.mark.django_db
+def test_create_category_audit_write_failure_is_non_fatal(monkeypatch, caplog):
+    """Consistency fix (R3 review, Finding 4): under autocommit the Category
+    row is already committed by the time ``audit.record_action`` runs — an
+    audit-insert failure must not 500 an already-successful create. Mirrors
+    ``apps.users.tests.test_audit.
+    test_admin_create_user_audit_write_failure_is_non_fatal``: force
+    ``AuditLog.objects.create`` to raise, do the real mutation over HTTP, and
+    assert the endpoint still returns 201, the category still persisted, and
+    the failure was logged rather than swallowed silently.
+    """
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated audit DB failure")
+
+    monkeypatch.setattr(AuditLog.objects, "create", _boom)
+
+    with caplog.at_level(logging.ERROR, logger="apps.cms.services.audit"):
+        resp = _post_json(
+            Client(), f"{BASE}/categories/", {"slug": "resilient", "name": "Resilient"},
+            **_auth_header(_admin_token()),
+        )
+
+    assert resp.status_code == 201
+    assert Category.objects.filter(slug="resilient").exists()
+    assert not AuditLog.objects.filter(action="category_created").exists()
+    assert any(
+        "audit record_action failed" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.django_db

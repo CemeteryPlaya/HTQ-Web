@@ -15,6 +15,7 @@ namespace, so both need patching to share one fake backend.
 from __future__ import annotations
 
 import io
+import logging
 import uuid
 
 import pytest
@@ -167,6 +168,39 @@ def test_upload_generic_scope_default_is_private_no_variants(fake_storage, user)
 
     meta = FileMetadata.objects.get(id=uuid.UUID(body["id"]))
     assert not FileVariant.objects.filter(file_id=meta.id).exists()
+
+
+@pytest.mark.django_db
+def test_upload_audit_write_failure_is_non_fatal(fake_storage, user, monkeypatch, caplog):
+    """Consistency fix (R3 review, Finding 4): the ``FileMetadata`` row is
+    already committed by the time ``audit.record_action`` runs — an
+    audit-insert failure must not 500 an already-successful upload. Mirrors
+    ``apps.users.tests.test_audit.
+    test_admin_create_user_audit_write_failure_is_non_fatal``: force
+    ``AuditLog.objects.create`` to raise, do the real upload over HTTP, and
+    assert the endpoint still returns 201, the file still persisted, and the
+    failure was logged rather than swallowed silently.
+    """
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated audit DB failure")
+
+    monkeypatch.setattr(AuditLog.objects, "create", _boom)
+
+    with caplog.at_level(logging.ERROR, logger="apps.media_files.services.audit"):
+        resp = _upload(
+            Client(), user,
+            filename="notes.txt", content=b"hello world", content_type="text/plain",
+        )
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert FileMetadata.objects.filter(id=uuid.UUID(body["id"])).exists()
+    assert not AuditLog.objects.filter(action="file_uploaded").exists()
+    assert any(
+        "audit record_action failed" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.django_db

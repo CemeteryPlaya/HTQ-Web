@@ -8,6 +8,8 @@ test files. Tokens are built with real ``htqweb.authn.jwt.issue_token_pair``
 against real DB rows — no mocking.
 """
 
+import logging
+
 import pytest
 from django.test import Client
 
@@ -92,6 +94,46 @@ def test_admin_create_user_audit_captures_request_metadata(superuser, db):
     assert log.ip_address  # Django test client sets REMOTE_ADDR (127.0.0.1)
 
 
+# ── audit write failure must be non-fatal (review fix-pass on R3) ───────────
+
+
+@pytest.mark.django_db
+def test_admin_create_user_audit_write_failure_is_non_fatal(superuser, db, monkeypatch, caplog):
+    """R3 wired ``audit.record_action`` into every privileged admin mutation,
+    guaranteeing the write is non-fatal (guard now lives in ``apps.users.
+    services.audit.record_action`` itself — see its docstring). This proves
+    that guarantee end-to-end: force ``AuditLog.objects.create`` to raise,
+    perform a real admin create over HTTP, and assert (a) the endpoint still
+    returns 201, (b) the user was actually created (the mutation committed),
+    and (c) the failure was logged loudly rather than disappearing silently.
+
+    Confirmed RED: temporarily removing the ``try/except`` around
+    ``AuditLog.objects.create`` in ``apps.users.services.audit.record_action``
+    makes this test fail with the injected ``RuntimeError`` propagating out
+    as a 500 (see the R3 fix-pass report for the transcript).
+    """
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated audit DB failure")
+
+    monkeypatch.setattr(AuditLog.objects, "create", _boom)
+
+    with caplog.at_level(logging.ERROR, logger="apps.users.services.audit"):
+        resp = Client().post(f"{BASE}/admin/users/", data={
+            "username": "resilient", "email": "resilient@htq.test", "password": "Passw0rd!",
+        }, content_type="application/json", **_auth(superuser))
+
+    assert resp.status_code == 201
+    assert User.objects.filter(username="resilient").exists()
+    # The audit row itself is the thing that failed to write — it must not
+    # exist, but that must not have taken the mutation down with it.
+    assert not AuditLog.objects.filter(action="user.created").exists()
+    assert any(
+        "audit record_action failed" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 # ── admin update user -> "user.updated" ──────────────────────────────────────
 
 
@@ -127,15 +169,36 @@ def test_admin_update_user_diff_excludes_unchanged_fields(superuser, plain_user)
 
 
 @pytest.mark.django_db
-def test_admin_update_user_audit_never_contains_password():
-    """``AdminUserUpdateRequest`` has no password field at all (password
-    changes go through set-password) — nothing to assert against a live
-    request here beyond documenting the guarantee; the schema itself is the
-    enforcement point. See ``apps/users/schemas.py::AdminUserUpdateRequest``.
+def test_admin_update_user_audit_never_contains_password(superuser, plain_user):
+    """``AdminUserUpdateRequest`` has no ``password`` field (password changes
+    go through set-password) — Pydantic silently drops unknown keys (no
+    ``extra="forbid"``), so this exercises the REAL request path: inject a
+    stray ``"password"`` key into the PATCH body and assert (a) it's absent
+    from ``AdminUserUpdateRequest.model_fields`` (the static guarantee), and
+    (b) the live audit ``changes`` diff contains no password/password_hash
+    key, and (c) the injected value was never applied — the user's password
+    hash is unchanged and doesn't verify against it.
     """
     from apps.users.schemas import AdminUserUpdateRequest
 
     assert "password" not in AdminUserUpdateRequest.model_fields
+
+    old_hash = plain_user.password
+    resp = Client().patch(f"{BASE}/admin/users/{plain_user.id}/", data={
+        "phone": "+7 700 111 22 33",
+        "password": "InjectedPassw0rd!",
+    }, content_type="application/json", **_auth(superuser))
+    assert resp.status_code == 200
+
+    log = AuditLog.objects.get(action="user.updated")
+    assert "phone" in log.changes  # the real change is still recorded
+    assert "password" not in log.changes
+    assert "password_hash" not in log.changes
+    assert "InjectedPassw0rd!" not in str(log.changes)
+
+    plain_user.refresh_from_db()
+    assert plain_user.password == old_hash  # stray field ignored, not applied
+    assert not plain_user.check_password("InjectedPassw0rd!")
 
 
 # ── admin set-password -> "user.password_set" ────────────────────────────────
@@ -187,6 +250,12 @@ def test_admin_delete_user_writes_audit_log(superuser, plain_user):
     assert log.resource_type == "User"
     assert log.resource_id == str(plain_user.id)
     assert log.user_id == superuser.id
+    # ``_admin_delete_user`` writes a static resulting-state dict (not a
+    # before/after diff) — acceptable for an unconditional SUSPEND, but the
+    # shape itself was previously unasserted.
+    assert log.changes == {
+        "status": "suspended", "is_staff": False, "is_superuser": False,
+    }
 
 
 # ── registration approve -> "registration.approved" ──────────────────────────

@@ -44,29 +44,6 @@ logger = logging.getLogger(__name__)
 ADMIN_COOKIE_NAME = "admin_session"
 
 
-def _record_audit(request, **kwargs) -> None:
-    """Best-effort wrapper around ``services.audit.record_action`` for the
-    identity domain's privileged mutations (R3 remediation — see that
-    module's docstring for the full list of action names/call sites).
-
-    The primary mutation (create/update/set-password/suspend/approve/
-    reject) has already been committed by the time every call site below
-    reaches this — an audit-write failure (e.g. a transient DB hiccup) must
-    not turn an already-applied admin action into a 500 for the caller, but
-    it must never disappear silently either: log it loudly with
-    ``logger.exception`` (same non-fatal-but-loud shape as the Celery
-    ``.delay()`` enqueue guards in ``apps.cms.views``/``apps.media_files.
-    views``) so a missing audit row is at least visible in the logs.
-    """
-    try:
-        audit.record_action(request, **kwargs)
-    except Exception:
-        logger.exception(
-            "audit record_action failed action=%s resource_type=%s resource_id=%s",
-            kwargs.get("action"), kwargs.get("resource_type"), kwargs.get("resource_id"),
-        )
-
-
 # ── POST token/ — login by email or username ────────────────────────────────
 
 @api_view(methods=("POST",), auth=None, body=schemas.TokenObtainRequest)
@@ -378,7 +355,7 @@ def approve_registration(request, user_id: int):
     except registration_service.PendingRegistrationNotFound:
         return json_error("Pending registration not found", 404)
     # Decision Р2: source publishes user_upserted.send(_replica_payload(user)) here — dropped.
-    _record_audit(
+    audit.record_action(
         request,
         user_id=request.token.user_id,
         action="registration.approved",
@@ -396,7 +373,7 @@ def reject_registration(request, user_id: int):
     except registration_service.PendingRegistrationNotFound:
         return json_error("Pending registration not found", 404)
     # Decision Р2: source publishes user_deactivated.send({"id": user.id}) here — dropped.
-    _record_audit(
+    audit.record_action(
         request,
         user_id=request.token.user_id,
         action="registration.rejected",
@@ -446,7 +423,7 @@ def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
     # `payload` still has every field `admin_service.create_user` was called
     # with EXCEPT `password` — never let the plaintext password (or, were
     # this ever refactored, a hash) reach the audit log's `changes` JSON.
-    _record_audit(
+    audit.record_action(
         request,
         user_id=request.token.user_id,
         action="user.created",
@@ -503,7 +480,7 @@ def _admin_update_user(request, user_id: int, data: schemas.AdminUserUpdateReque
         for field in changes
         if getattr(user, field, None) != before[field]
     }
-    _record_audit(
+    audit.record_action(
         request,
         user_id=request.token.user_id,
         action="user.updated",
@@ -525,7 +502,7 @@ def _admin_delete_user(request, user_id: int):
     # Decisions Р2/Р3: source's S2S mailbox-archive call + user.deactivated/
     # user.deleted broadcasts dropped here — see admin_service module docstring.
     admin_service.delete_user(user)
-    _record_audit(
+    audit.record_action(
         request,
         user_id=request.token.user_id,
         action="user.suspended",
@@ -556,7 +533,7 @@ def admin_set_password(request, user_id: int, data: schemas.AdminSetPasswordRequ
     )
     # `changes` records only that a reset happened + the resulting
     # must_change_password flag — NEVER the new password or its hash.
-    _record_audit(
+    audit.record_action(
         request,
         user_id=request.token.user_id,
         action="user.password_set",
