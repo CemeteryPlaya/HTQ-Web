@@ -246,6 +246,100 @@ def test_file_physically_missing_is_404(fake_storage, owner):
     assert resp.status_code == 404
 
 
+# ─── Content-Disposition hardening (R4, stored-XSS) ─────────────────────────
+#
+# Pre-R4 both download_file and download_variant answered `Content-
+# Disposition: inline` unconditionally. A `generic`/`chat`-scope upload with
+# `is_public=true` and an attacker-controlled mime (`text/html`,
+# `image/svg+xml`) would then render as live HTML/script on the app's own
+# origin when fetched directly — stored XSS. These tests prove the fix: only
+# an allow-list of mimes (raster images, pdf, video/audio) stays inline;
+# everything else, including SVG (which can carry <script> despite the
+# `image/` prefix), is forced to `attachment`.
+
+
+@pytest.mark.django_db
+def test_html_mime_file_served_as_attachment_not_inline(fake_storage, owner):
+    meta = _make_file(owner_id=owner.id, is_public=True, mime="text/html")
+    fake_storage.save(meta.path, CONTENT, "text/html")
+
+    resp = Client().get(f"{BASE}/{meta.id}")
+
+    assert resp.status_code == 200
+    assert resp["Content-Disposition"].startswith("attachment")
+
+
+@pytest.mark.django_db
+def test_svg_mime_file_served_as_attachment_not_inline(fake_storage, owner):
+    # image/svg+xml matches the "image/" prefix but can embed <script> —
+    # must be explicitly denylisted, not swept up by the raster-image rule.
+    meta = _make_file(owner_id=owner.id, is_public=True, mime="image/svg+xml")
+    fake_storage.save(meta.path, CONTENT, "image/svg+xml")
+
+    resp = Client().get(f"{BASE}/{meta.id}")
+
+    assert resp.status_code == 200
+    assert resp["Content-Disposition"].startswith("attachment")
+
+
+@pytest.mark.django_db
+def test_raster_image_file_still_served_inline(fake_storage, owner):
+    # Regression guard: real images (avatars, news covers) must stay inline
+    # or <img src> breaks.
+    meta = _make_file(owner_id=owner.id, is_public=True, mime="image/jpeg")
+    fake_storage.save(meta.path, CONTENT, "image/jpeg")
+
+    resp = Client().get(f"{BASE}/{meta.id}")
+
+    assert resp.status_code == 200
+    assert resp["Content-Disposition"].startswith("inline")
+
+
+@pytest.mark.django_db
+def test_pdf_file_still_served_inline(fake_storage, owner):
+    meta = _make_file(owner_id=owner.id, is_public=True, mime="application/pdf")
+    fake_storage.save(meta.path, CONTENT, "application/pdf")
+
+    resp = Client().get(f"{BASE}/{meta.id}")
+
+    assert resp.status_code == 200
+    assert resp["Content-Disposition"].startswith("inline")
+
+
+@pytest.mark.django_db
+def test_variant_download_html_mime_is_attachment(fake_storage, owner):
+    # Variants are always images produced by the pipeline in practice, but
+    # the serving path applies the same allow-list defensively.
+    meta = _make_file(owner_id=owner.id, is_public=True, mime="image/png")
+    fake_storage.save(meta.path, CONTENT, "image/png")
+    fv = FileVariant.objects.create(
+        file=meta, variant="thumb_96", path="generic/2026/07/abc/thumb_96.html",
+        mime="text/html", size=len(CONTENT), width=96, height=96,
+    )
+    fake_storage.save(fv.path, CONTENT, "text/html")
+
+    resp = Client().get(f"{BASE}/{meta.id}/thumb_96")
+
+    assert resp.status_code == 200
+    assert resp["Content-Disposition"].startswith("attachment")
+
+
+@pytest.mark.django_db
+def test_variant_download_image_mime_stays_inline(fake_storage, owner):
+    meta = _make_file(owner_id=owner.id, is_public=True, mime="image/png")
+    fake_storage.save(meta.path, CONTENT, "image/png")
+    fv = FileVariant.objects.create(
+        file=meta, variant="thumb_96", path="generic/2026/07/abc/thumb_96.jpg",
+        mime="image/jpeg", size=len(CONTENT), width=96, height=96,
+    )
+    fake_storage.save(fv.path, CONTENT, "image/jpeg")
+
+    resp = Client().get(f"{BASE}/{meta.id}/thumb_96")
+
+    assert resp.status_code == 200
+    assert resp["Content-Disposition"].startswith("inline")
+
+
 # ─── Range support ───────────────────────────────────────────────────────────
 
 

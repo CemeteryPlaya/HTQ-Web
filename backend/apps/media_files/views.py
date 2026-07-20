@@ -216,6 +216,38 @@ def _quote_filename(name: str) -> str:
     return name.replace('"', "").replace("\r", "").replace("\n", "")
 
 
+# ─── Content-Disposition hardening (R4, stored-XSS) ─────────────────────────
+#
+# The FastAPI source (and this port, pre-R4) always answered `inline`
+# regardless of mime. Fine for a real image/pdf preview, but a `generic`/
+# `chat`-scope upload with `is_public=true` and an attacker-controlled mime
+# like `text/html` or `image/svg+xml` (SVG can carry <script>) would then
+# render as a live HTML/script document on the application's own origin —
+# stored XSS. Anything not on this allow-list is forced to `attachment`
+# instead, which makes the browser download it rather than execute/render
+# it. Raster images and PDFs stay `inline` on purpose — that's what makes
+# `<img src>` (avatars, news covers, thumbnails) and inline PDF preview work.
+
+_INLINE_MIME_EXTRAS = frozenset({"application/pdf"})
+_INLINE_MIME_PREFIXES = ("image/", "video/", "audio/")
+# SVG is served under the "image/" prefix but can embed <script>/event
+# handlers that execute when rendered — explicitly excluded from inline
+# rendering even though it matches the prefix above.
+_INLINE_MIME_DENYLIST = frozenset({"image/svg+xml"})
+
+
+def _disposition_for(mime: str | None) -> str:
+    """``"inline"`` for mimes safe to render directly in the browser,
+    ``"attachment"`` for everything else (forces a download instead of an
+    in-origin render) — see the module-level allow-list above."""
+    mime = (mime or "").lower()
+    if mime in _INLINE_MIME_DENYLIST:
+        return "attachment"
+    if mime in _INLINE_MIME_EXTRAS or mime.startswith(_INLINE_MIME_PREFIXES):
+        return "inline"
+    return "attachment"
+
+
 # ─── Download (original) ────────────────────────────────────────────────────
 
 
@@ -260,7 +292,10 @@ def download_file(request, file_id):
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Type": meta.mime,
-        "Content-Disposition": f'inline; filename="{_quote_filename(meta.original_filename)}"',
+        "Content-Disposition": (
+            f'{_disposition_for(meta.mime)}; '
+            f'filename="{_quote_filename(meta.original_filename)}"'
+        ),
         "ETag": f'"{meta.id}-{meta.updated_at.timestamp()}"',
     }
 
@@ -335,6 +370,10 @@ def download_variant(request, file_id, variant):
     headers = {
         "Content-Type": fv.mime,
         "Content-Length": str(fv.size),
+        "Content-Disposition": (
+            f'{_disposition_for(fv.mime)}; '
+            f'filename="{_quote_filename(meta.original_filename)}"'
+        ),
         "ETag": f'"{fv.id}"',
         "Cache-Control": (
             "public, max-age=31536000, immutable" if meta.is_public else "private, max-age=300"

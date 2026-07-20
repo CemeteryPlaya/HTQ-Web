@@ -372,34 +372,72 @@ def test_avatar_replace_serves_new_bytes(shared_storage, user):
 
 
 @pytest.mark.django_db
-def test_avatar_replace_does_not_delete_previous_object(shared_storage, user):
-    """``profile_service.save_avatar`` (read the code) never soft-deletes
-    the PREVIOUS avatar's ``FileMetadata`` row before creating a new one on
-    replace — ``_update_profile`` in ``apps/users/views.py`` just does
-    ``user.avatar_url = profile_service.save_avatar(...)`` with no delete
-    step first. So the old row (and its storage object) is an orphan:
-    still present, still fetchable at its old (still-unsigned, since
-    public) URL. Documented gap carried forward unchanged from the
-    pre-fix behaviour, not something this fix introduces or resolves."""
+def test_avatar_replace_soft_deletes_previous_object(shared_storage, user):
+    """R4 (orphan cleanup): ``_update_profile`` (``apps/users/views.py``)
+    now soft-deletes the PREVIOUS avatar's ``FileMetadata`` row (via
+    ``profile_service.delete_avatar_object`` ->
+    ``apps.media_files.interface.delete_file``, same mechanism
+    ``remove_avatar`` already used) once the new avatar has landed. Before
+    R4, the old row was left forever as an orphan — this replaces
+    ``test_avatar_replace_does_not_delete_previous_object``, which asserted
+    exactly that (now-fixed) gap."""
     token = _token(user)
     png1 = _png_bytes((255, 0, 0))
     resp1 = _patch_avatar(Client(), token, png1)
     url1 = resp1.json()["avatarUrl"]
+    file_id1 = _file_id_from_url(url1)
 
     png2 = _png_bytes((0, 0, 255))
-    _patch_avatar(Client(), token, png2)
+    resp2 = _patch_avatar(Client(), token, png2)
+    url2 = resp2.json()["avatarUrl"]
+    file_id2 = _file_id_from_url(url2)
 
+    meta1 = FileMetadata.objects.get(id=file_id1)
+    assert meta1.deleted_at is not None  # old avatar soft-deleted
+
+    meta2 = FileMetadata.objects.get(id=file_id2)
+    assert meta2.deleted_at is None  # new avatar stays live
+
+    # The soft-deleted old file follows the same serving rule as any other
+    # soft-deleted FileMetadata (test_serving_api.py's
+    # test_soft_deleted_file_not_served): 404, not the old bytes.
     get1 = Client().get(url1)
-    assert get1.status_code == 200  # NOT 404 -- the old row was never deleted
-    # NOT byte-equality with `png1` — see _avg_color's docstring (re-encode
-    # to JPEG on upload). The property this test is actually about — the
-    # OLD file is still intact and still serving the OLD image, unaffected
-    # by the replace — is proven by decoding it and checking it's still
-    # recognizably red (png1's color), not blue (png2's, which replaced it
-    # on the user's `avatar_url` but never touched this orphaned row).
-    assert _decoded_size(get1.content) == (8, 8)
-    r, g, b = _avg_color(get1.content)
-    assert r > 200 and g < 40 and b < 40
+    assert get1.status_code == 404
+
+    get2 = Client().get(url2)
+    assert get2.status_code == 200
+    assert _decoded_size(get2.content) == (8, 8)
+    r, g, b = _avg_color(get2.content)
+    assert b > 200 and r < 40 and g < 40
+
+
+@pytest.mark.django_db
+def test_avatar_replace_cleanup_failure_does_not_fail_the_patch(shared_storage, user, monkeypatch):
+    """Degradation: if soft-deleting the OLD avatar blows up (media
+    unreachable, or any other hiccup), the profile PATCH must still
+    succeed — the NEW avatar is already stored and set by that point, only
+    the old orphan's cleanup is best-effort. Force the failure directly at
+    ``profile_service.delete_avatar_object`` (the call site
+    ``_update_profile`` uses) rather than relying on it already swallowing
+    exceptions internally, so this test would catch a regression even if
+    that internal try/except were ever removed."""
+    token = _token(user)
+    _patch_avatar(Client(), token, _png_bytes((255, 0, 0)))
+
+    from apps.users import views as users_views
+
+    def _boom(_avatar_url):
+        raise RuntimeError("media unreachable")
+
+    monkeypatch.setattr(users_views.profile_service, "delete_avatar_object", _boom)
+
+    resp2 = _patch_avatar(Client(), token, _png_bytes((0, 0, 255)))
+    assert resp2.status_code == 200
+    body = resp2.json()
+    assert body["avatarUrl"] is not None
+
+    user.refresh_from_db()
+    assert user.avatar_url == body["avatarUrl"]
 
 
 # ── DELETE profile/avatar ────────────────────────────────────────────────────

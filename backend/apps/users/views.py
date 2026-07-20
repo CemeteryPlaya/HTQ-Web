@@ -250,6 +250,7 @@ def _update_profile(request):
         # is off, UploadValidationError, or a storage-backend error) — the
         # rest of the PATCH (fields already applied above) must still
         # land; only the avatar_url update is skipped.
+        previous_avatar_url = user.avatar_url
         try:
             user.avatar_url = profile_service.save_avatar(
                 user.id, avatar_file.name, avatar_file.read(), avatar_file.content_type,
@@ -257,6 +258,27 @@ def _update_profile(request):
             update_fields.add("avatar_url")
         except Exception:  # noqa: BLE001
             logger.exception("avatar_save_failed user_id=%s", user.id)
+        else:
+            # R4 (orphan cleanup): the new avatar is live now — soft-delete
+            # the PREVIOUS avatar's FileMetadata row so it doesn't sit
+            # around forever as an orphaned object. Only runs once the new
+            # avatar actually landed (this `else`, not `finally`) — a
+            # failed upload above must leave the still-live old avatar
+            # alone. profile_service.delete_avatar_object is already
+            # best-effort internally (catches everything, including
+            # ServiceDisabled when media is off, and only logs), but this
+            # call site wraps it again anyway: the new avatar_url is
+            # already set at this point, so cleanup of the OLD one must
+            # NEVER be allowed to turn an otherwise-successful profile
+            # PATCH into a 500, no matter how ``delete_avatar_object``
+            # itself evolves.
+            if previous_avatar_url:
+                try:
+                    profile_service.delete_avatar_object(previous_avatar_url)
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "previous_avatar_cleanup_failed user_id=%s", user.id,
+                    )
 
     if update_fields:
         # auto_now fields are NOT auto-added to a partial update_fields save —
