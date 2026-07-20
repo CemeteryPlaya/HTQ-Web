@@ -74,6 +74,22 @@ def user(db):
     return u
 
 
+@pytest.fixture
+def elevated_user(db):
+    # R5 (decision Д1): hr_doc is a restricted scope now — writing to it
+    # requires is_elevated. The mime/signature-validation tests below exist
+    # to exercise upload_service's pipeline for that scope, not authorization
+    # (see test_scope_authz.py for the authz coverage), so they upload as
+    # this staff user rather than the plain `user` fixture.
+    u = User.objects.create(
+        username="hr-staffer", email="hr-staffer@htq.test", password="x",
+        status=UserStatus.ACTIVE, is_staff=True,
+    )
+    u.set_password("S3cret!")
+    u.save()
+    return u
+
+
 def _auth(user) -> dict:
     token = issue_token_pair(user)["access"]
     return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
@@ -237,10 +253,10 @@ def test_oversize_file_for_scope_returns_413(fake_storage, user):
 
 
 @pytest.mark.django_db
-def test_wrong_mime_for_restricted_scope_returns_415(fake_storage, user):
+def test_wrong_mime_for_restricted_scope_returns_415(fake_storage, elevated_user):
     # hr_doc only allows application/pdf; send a PNG.
     resp = _upload(
-        Client(), user,
+        Client(), elevated_user,
         filename="not-a-doc.png", content=_png_bytes(), content_type="image/png",
         scope="hr_doc",
     )
@@ -249,9 +265,9 @@ def test_wrong_mime_for_restricted_scope_returns_415(fake_storage, user):
 
 
 @pytest.mark.django_db
-def test_hr_doc_scope_accepts_pdf_and_stores_privately_with_no_variants(fake_storage, user):
+def test_hr_doc_scope_accepts_pdf_and_stores_privately_with_no_variants(fake_storage, elevated_user):
     resp = _upload(
-        Client(), user,
+        Client(), elevated_user,
         filename="handbook.pdf", content=b"%PDF-1.4 minimal test bytes",
         content_type="application/pdf", scope="hr_doc",
     )
@@ -263,7 +279,7 @@ def test_hr_doc_scope_accepts_pdf_and_stores_privately_with_no_variants(fake_sto
 
 
 @pytest.mark.django_db
-def test_hr_doc_scope_rejects_spoofed_pdf_content_type(fake_storage, user):
+def test_hr_doc_scope_rejects_spoofed_pdf_content_type(fake_storage, elevated_user):
     # Attack case (security review, task 3.2 finding): declared Content-Type
     # is application/pdf but the bytes are a shell script — since detect_mime
     # doesn't run real magic-byte detection (python-magic segfaults on this
@@ -271,7 +287,7 @@ def test_hr_doc_scope_rejects_spoofed_pdf_content_type(fake_storage, user):
     # either), only the magic-byte signature check in
     # upload_service._validate_signature stands between this and storage.
     resp = _upload(
-        Client(), user,
+        Client(), elevated_user,
         filename="handbook.pdf", content=b"#!/bin/sh\nrm -rf /",
         content_type="application/pdf", scope="hr_doc",
     )
@@ -280,9 +296,9 @@ def test_hr_doc_scope_rejects_spoofed_pdf_content_type(fake_storage, user):
 
 
 @pytest.mark.django_db
-def test_hr_doc_scope_rejects_html_masquerading_as_pdf(fake_storage, user):
+def test_hr_doc_scope_rejects_html_masquerading_as_pdf(fake_storage, elevated_user):
     resp = _upload(
-        Client(), user,
+        Client(), elevated_user,
         filename="handbook.pdf", content=b"<html><body>not a pdf</body></html>",
         content_type="application/pdf", scope="hr_doc",
     )
@@ -291,9 +307,9 @@ def test_hr_doc_scope_rejects_html_masquerading_as_pdf(fake_storage, user):
 
 
 @pytest.mark.django_db
-def test_hr_doc_scope_accepts_genuine_pdf_signature(fake_storage, user):
+def test_hr_doc_scope_accepts_genuine_pdf_signature(fake_storage, elevated_user):
     resp = _upload(
-        Client(), user,
+        Client(), elevated_user,
         filename="handbook.pdf", content=b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\nminimal filler bytes",
         content_type="application/pdf", scope="hr_doc",
     )

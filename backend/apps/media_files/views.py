@@ -52,6 +52,7 @@ from htqweb.storage import get_storage, verify
 from apps.media_files.models import FileMetadata, FileVariant
 from apps.media_files.schemas import serialize_file
 from apps.media_files.services import audit
+from apps.media_files.services.scope_policy import authorize_scope_write
 from apps.media_files.services.upload_service import UploadValidationError, upload_file_bytes
 from apps.media_files.services.url_service import build_file_url
 
@@ -85,6 +86,11 @@ def upload_file(request):
         return json_error("Field 'file' is required", 422)
 
     scope = request.POST.get("scope") or "generic"
+    # R5 (decision Д1): restricted scopes (hr_doc/hr_department/task_attachment
+    # — not-yet-migrated privileged domains) require is_elevated for now;
+    # raises PermissionDenied -> api_view maps it to 403. See
+    # scope_policy.authorize_scope_write's docstring for the interim rule.
+    authorize_scope_write(scope, is_elevated=request.token.is_elevated)
     is_public = _parse_is_public(request.POST.get("is_public"))
     owner_id = request.token.user_id
 

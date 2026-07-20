@@ -52,6 +52,7 @@ from apps.core.services import require_service
 from apps.media_files.models import FileMetadata
 from apps.media_files.schemas import serialize_file
 from apps.media_files.services import audit
+from apps.media_files.services.scope_policy import authorize_scope_write
 from apps.media_files.services.upload_service import upload_file_bytes
 from apps.media_files.services.url_service import build_file_url
 
@@ -59,11 +60,26 @@ logger = logging.getLogger(__name__)
 
 
 def store_file(*, data: bytes, filename: str, mime: str, scope: str,
-                owner_id: int | None) -> dict:
+                owner_id: int | None, internal_authorized: bool = False) -> dict:
     """Run the upload pipeline on behalf of a neighbour app and hand back a
     plain dict shaped like the HTTP upload response
     (``schemas.FileMetadataRead``, at least ``{id, url, mime, size,
     is_public}`` — see that schema for the full field list).
+
+    **R5 authorization contract (decision Д1):** this function goes through
+    the same ``scope_policy.authorize_scope_write`` seam as the HTTP upload
+    endpoint (``views.upload_file``), so a neighbour app can't silently write
+    a restricted scope (``hr_doc``/``hr_department``/``task_attachment``) by
+    accident. Because ``store_file`` is a service-to-service call with no
+    request/JWT of its own to read ``is_elevated`` off of, the caller must
+    assert authorization explicitly: pass ``internal_authorized=True`` to
+    mean "the calling domain has already checked its own role/ownership
+    rules for this write and vouches for it". Without it, a restricted-scope
+    call raises ``django.core.exceptions.PermissionDenied`` — loud failure
+    instead of a silent privileged write. Open scopes (``avatar``/``news``/
+    ``chat``/``generic``) and unknown scopes are unaffected — same seam,
+    same open/unknown behaviour as the HTTP path. The current only caller
+    (the avatar path, an open scope) never needs the flag.
 
     Raises ``apps.media_files.services.upload_service.UploadValidationError``
     for oversize/wrong-mime/undecodable-image inputs — same contract as
@@ -71,6 +87,7 @@ def store_file(*, data: bytes, filename: str, mime: str, scope: str,
     maps that to a 4xx status, not this function.
     """
     require_service("media")
+    authorize_scope_write(scope, is_elevated=internal_authorized)
 
     result = upload_file_bytes(
         data=data,

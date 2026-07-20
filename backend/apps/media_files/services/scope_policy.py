@@ -17,7 +17,12 @@ chat attachment, news image, hr document, ...). It drives:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
+from django.core.exceptions import PermissionDenied
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -101,3 +106,59 @@ def resolve_is_public(scope: str, requested: bool | None) -> bool:
     if policy.public:
         return True
     return bool(requested) if requested is not None else False
+
+
+# ─── R5 — scope write-authorization seam (decision Д1) ─────────────────────
+#
+# ``scope`` is free-text, unauthorized client input (see ``views.upload_file``
+# and ``interface.store_file``) — before this seam, ANY authenticated caller
+# could write into ``hr_doc``/``hr_department``/``task_attachment``, three
+# scopes that belong to not-yet-migrated privileged/owned domains. Nothing
+# reads by scope yet, so this was unexploited, but the fork had to be closed
+# before hr/task land.
+#
+# RESTRICTED_SCOPES is deliberately just the three not-yet-migrated domains.
+# Everything else (``avatar``, ``news``, ``chat``, ``generic``) is already
+# effectively user-writable in practice — ``news`` covers go through admin
+# news endpoints, ``chat``/``avatar``/``generic`` are ordinary user content —
+# so no extra check is added for them here.
+RESTRICTED_SCOPES = frozenset({"hr_doc", "hr_department", "task_attachment"})
+
+
+def authorize_scope_write(scope: str, *, is_elevated: bool) -> None:
+    """Authorize writing (uploading) into ``scope``. Raises
+    ``django.core.exceptions.PermissionDenied`` (→ 403 via ``api_view``) to
+    deny; returns ``None`` to allow.
+
+    **Interim rule (decision Д1) — NOT the final model.** ``hr_doc``,
+    ``hr_department``, and ``task_attachment`` belong to domains that have
+    not migrated yet (hr/task, phases 4/6). Until they do, there is no real
+    HR-role / task-membership / ownership check to enforce, so this is a
+    conservative default-deny: only ``is_elevated`` (platform admin/staff)
+    callers may write these scopes. When hr/task migrate, THEY are expected
+    to refine this into real role/ownership checks via their own
+    ``interface`` calls (or a per-scope predicate registered here) — this
+    function is the one seam both entry points (the HTTP upload view and
+    ``interface.store_file``) call, so that refinement lands in one place,
+    not three.
+
+    Any scope not in ``RESTRICTED_SCOPES`` — including the open scopes
+    (``avatar``/``news``/``chat``/``generic``) and any UNKNOWN scope not in
+    ``KNOWN_SCOPES`` (e.g. the frontend's ``cms-news``, see
+    ``get_policy``) — is open to any authenticated caller: no check here.
+    An unknown scope is logged loudly (it silently fell back to the
+    ``generic`` *policy* already via ``get_policy``; this is the write-auth
+    side of that same fallback) rather than rejected, so pre-existing
+    frontend behaviour (``scope=cms-news`` for inline news images) keeps
+    working.
+    """
+    if scope not in KNOWN_SCOPES:
+        logger.warning("unknown upload scope %r, falling back to generic", scope)
+        return
+
+    if scope in RESTRICTED_SCOPES and not is_elevated:
+        raise PermissionDenied(
+            f"scope '{scope}' is restricted to elevated (staff/admin) callers "
+            f"until its owning domain migrates and defines real role/ownership "
+            f"rules (decision Д1)"
+        )
