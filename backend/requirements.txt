@@ -25,3 +25,11 @@ django-json-widget==2.1.1   # JSONField editing in django-admin (task 2.6)
 # apps/media_files/services/image_service.py's detect_mime() docstring for
 # the fallback (declared Content-Type + Pillow decode-validation instead).
 Pillow==11.3.0
+
+# ── prep 4.0 (PLAN.md §5): зависимости, заложенные заранее, чтобы доменные
+# фазы не конфликтовали построчно в этом файле. Код появится в их фазах;
+# фазы подтверждают/уточняют пины при реальном использовании.
+python-socketio==5.11.4   # messenger (Поток A, фаза 8) — Socket.IO ASGI
+oauthlib==3.2.2           # mail (Поток A, фаза 7) — OAuth Google/Microsoft
+requests-oauthlib==2.0.0  # mail (Поток A, фаза 7) — OAuth-обвязка над requests
+django-recurrence==1.11.1 # task (Поток B, фаза 4) — повторяющиеся события календаря

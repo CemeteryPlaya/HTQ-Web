@@ -27,6 +27,16 @@ INSTALLED_APPS = [
     "apps.users",
     "apps.cms",
     "apps.media_files",
+    # Доменные аппки миграции — скаффолд prep 4.0 (PLAN.md §5). Пустые
+    # (модели/роуты/задачи приходят в их фазах §6), но уже установлены и
+    # отключаемы: URL-автодискавери монтирует их по AppConfig.API_PREFIX,
+    # а ServiceGateMiddleware гейтит по префиксу. Регистрируются одной
+    # пачкой, чтобы фазы не правили INSTALLED_APPS (точка конфликта потоков).
+    "apps.hr",          # Поток A · фаза 6 · /api/hr/v1/
+    "apps.mail",        # Поток A · фаза 7 · /api/email/v1/
+    "apps.messenger",   # Поток A · фаза 8 · /api/messenger/v1/
+    "apps.tasks",       # Поток B · фаза 4 · /api/tasks/v1/
+    "apps.approvals",   # Поток B · фаза 5 · /api/requests/v1/
 ]
 
 MIDDLEWARE = [

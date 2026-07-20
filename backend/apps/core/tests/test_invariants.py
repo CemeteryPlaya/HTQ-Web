@@ -32,9 +32,12 @@ Known, documented gaps get carved out explicitly below (not silently
 skipped) via ``_KNOWN_UNREGISTERED``, each entry TODO-annotated with the
 remediation step that closes it. ``media_files`` was the one entry there
 until R2 landed ``apps/media_files/admin.py``; the set is empty as of R2, so
-test 2 now enforces "every domain app has SOME registered, gated admin"
-with zero carve-outs. As each future gap closes, delete its allow-list
-entry; the moment nobody does, the sweep fails again and stays honest.
+test 2 now enforces "every domain app WITH AT LEAST ONE MODEL has SOME
+registered, gated admin" with zero carve-outs. An empty scaffold app (prep
+4.0, PLAN.md §5 — a domain app installed but with no models yet) is skipped
+until it defines its first model, so registering the five migration apps up
+front doesn't trip this test. As each future gap closes, delete its
+allow-list entry; the moment nobody does, the sweep fails again and stays honest.
 """
 
 from __future__ import annotations
@@ -208,7 +211,16 @@ def test_every_domain_model_admin_has_service_gate_mixin():
         + "\n  ".join(violations)
     )
 
-    domain_labels = {c.label for c in _domain_app_configs()}
+    # Требуем зарегистрированную gated-админку только от аппок, у которых УЖЕ
+    # есть ≥1 конкретная модель. Свежескаффолженная доменная аппка с пустым
+    # models.py (prep 4.0, PLAN.md §5) регистрировать пока нечего — она здесь
+    # пропускается; в день, когда добавит первую модель, снова попадёт под
+    # проверку и обязана дать ModelAdmin под ServiceGatedAdminMixin (или
+    # TODO-запись в _KNOWN_UNREGISTERED). Так добавление доменных аппок в prep
+    # не заставляет фазы править этот общий мета-тест (точка конфликта потоков).
+    domain_labels = {
+        c.label for c in _domain_app_configs() if list(c.get_models())
+    }
     missing_entirely = domain_labels - labels_with_registered_admin - _KNOWN_UNREGISTERED
     assert missing_entirely == set(), (
         "Domain app(s) with ZERO registered ModelAdmin and not in the "

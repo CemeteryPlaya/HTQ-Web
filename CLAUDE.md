@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Dual Django migration — this working branch is Поток A
+
+The FastAPI→Django reverse migration is being finished by **two parallel executors** — see **[PLAN.md](PLAN.md)** (authoritative). **This branch is Поток A.** Its scope is **only**: `backend/apps/hr/**`, `backend/apps/mail/**`, `backend/apps/messenger/**` (+ append-only edits to `backend/requirements.txt`, + its own Socket.IO section of `htqweb/asgi.py`). Поток A **produces** the `hr`/`mail`/`messenger` interfaces and depends only on the finished `users`.
+
+- **Do NOT touch Поток B's zone:** `backend/apps/tasks/**`, `backend/apps/approvals/**`, and the prep-owned shared files (`htqweb/urls.py`, `INSTALLED_APPS`, `service_gate.py`, `apps/core/tests/test_invariants.py`, the `asgi.py` scaffold). Need cross-domain data → call the neighbour's `interface` stub; never implement another domain (PLAN.md §1.3, §1.5).
+- **NEVER create git branches yourself.** The user creates and hands off every branch. Do not run `git branch`, `git checkout -b`, `git switch -c`, or `git worktree add`, and do **not** "branch first" before committing — even on the default branch. This overrides the default Claude Code behavior. Work only on the branch you are given; if the expected branch seems missing or wrong, stop and ask.
+
 ## What this is
 
 HTQWeb — Hi-Tech Group's internal enterprise platform. A React + Vite SPA in front of ~9 FastAPI microservices behind an nginx API gateway, migrated (Strangler Fig) out of a now-removed Django monolith. Postgres (via PgBouncer), MongoDB (HR docs + admin panel), Redis (cache + Dramatiq broker + pub/sub), Mediasoup SFU for video.

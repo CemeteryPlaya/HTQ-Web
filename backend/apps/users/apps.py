@@ -7,3 +7,5 @@ class UsersConfig(AppConfig):
     # explicit AutoField, this only affects Item's auto PK.
     default_auto_field = "django.db.models.AutoField"
     name = "apps.users"
+    # URL-автодискавери (htqweb/urls.py, PLAN.md §4.1).
+    API_PREFIX = "api/users/v1/"
