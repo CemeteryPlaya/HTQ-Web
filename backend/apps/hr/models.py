@@ -33,9 +33,23 @@ class UnitType(models.TextChoices):
 
 
 class EmployeeStatus(models.TextChoices):
+    """Полный набор из КОНТРАКТА API, а не из комментария к модели.
+
+    services/hr/app/models/employee.py комментирует поле как
+    ``active | inactive | terminated``, но реальный контракт —
+    ``schemas/employee.py::EmployeeBase.status`` с
+    ``pattern="^(active|inactive|terminated|suspended|pending|rejected)$"``:
+    клиент вправе прислать все шесть, и колонка (String(20) без constraint)
+    их принимает. Сузить список здесь — значит соврать в админке и сломать
+    любую будущую валидацию, поэтому переносим контрактный набор целиком.
+    """
+
     ACTIVE = "active", "Работает"
     INACTIVE = "inactive", "Неактивен"
     TERMINATED = "terminated", "Уволен"
+    SUSPENDED = "suspended", "Приостановлен"
+    PENDING = "pending", "На согласовании"
+    REJECTED = "rejected", "Отклонён"
 
 
 class Department(HrBase):
