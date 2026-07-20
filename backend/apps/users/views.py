@@ -19,7 +19,6 @@ import json
 import logging
 
 from django.conf import settings
-from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
@@ -39,19 +38,6 @@ from .services import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _require_admin(request) -> None:
-    """Gate on ``request.token.is_elevated`` (is_admin/is_staff/is_superuser).
-
-    ``htqweb.http.api_view`` maps ``PermissionDenied`` to a 403 ``{"detail":
-    "Forbidden"}`` envelope regardless of the message passed here (see
-    ``apps.cms.views._require_admin`` for the same established pattern) — a
-    missing/invalid token never reaches this far, ``api_view(auth="jwt")``
-    already 401s first.
-    """
-    if not request.token.is_elevated:
-        raise PermissionDenied("Admin access required")
 
 
 ADMIN_COOKIE_NAME = "admin_session"
@@ -346,9 +332,8 @@ def register(request, data: schemas.RegisterRequest):
     return schemas.RegisterResponse(id=user.id, email=user.email)
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", admin=True)
 def pending_registrations(request):
-    _require_admin(request)
     users = registration_service.list_pending()
     return [
         schemas.PendingUserResponse(
@@ -362,9 +347,8 @@ def pending_registrations(request):
     ]
 
 
-@api_view(methods=("POST",), auth="jwt")
+@api_view(methods=("POST",), auth="jwt", admin=True)
 def approve_registration(request, user_id: int):
-    _require_admin(request)
     try:
         registration_service.approve(user_id)
     except registration_service.PendingRegistrationNotFound:
@@ -373,9 +357,8 @@ def approve_registration(request, user_id: int):
     return HttpResponse(status=204)
 
 
-@api_view(methods=("POST",), auth="jwt")
+@api_view(methods=("POST",), auth="jwt", admin=True)
 def reject_registration(request, user_id: int):
-    _require_admin(request)
     try:
         registration_service.reject(user_id)
     except registration_service.PendingRegistrationNotFound:
@@ -393,9 +376,8 @@ def reject_registration(request, user_id: int):
 # provisioning in create.
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", admin=True)
 def _admin_list_users(request):
-    _require_admin(request)
     users = admin_service.list_users()
     return [schemas.AdminUserResponse(**admin_service.serialize_admin_user(u)) for u in users]
 
@@ -403,9 +385,8 @@ def _admin_list_users(request):
 _MAILBOX_UNAVAILABLE = "Провижининг почтового ящика недоступен: email-service переезжает в фазе 7"
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.AdminUserCreateRequest, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.AdminUserCreateRequest, status=201, admin=True)
 def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
-    _require_admin(request)
     payload = data.model_dump()
     create_mailbox = payload.pop("create_mailbox")
     payload.pop("mailbox_local_part", None)
@@ -438,9 +419,8 @@ def admin_users_collection(request, *args, **kwargs):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.AdminUserUpdateRequest)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.AdminUserUpdateRequest, admin=True)
 def _admin_update_user(request, user_id: int, data: schemas.AdminUserUpdateRequest):
-    _require_admin(request)
     try:
         user = admin_service.get_user_or_404(user_id)
     except admin_service.UserNotFound:
@@ -462,9 +442,8 @@ def _admin_update_user(request, user_id: int, data: schemas.AdminUserUpdateReque
     return schemas.AdminUserResponse(**admin_service.serialize_admin_user(user))
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
 def _admin_delete_user(request, user_id: int):
-    _require_admin(request)
     if request.token.user_id == user_id:
         return json_error("Cannot delete yourself", 400)
     try:
@@ -486,9 +465,8 @@ def admin_user_detail(request, user_id: int, *args, **kwargs):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.AdminSetPasswordRequest)
+@api_view(methods=("POST",), auth="jwt", body=schemas.AdminSetPasswordRequest, admin=True)
 def admin_set_password(request, user_id: int, data: schemas.AdminSetPasswordRequest):
-    _require_admin(request)
     try:
         user = admin_service.get_user_or_404(user_id)
     except admin_service.UserNotFound:

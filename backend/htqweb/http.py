@@ -16,6 +16,7 @@ from pydantic import BaseModel, ValidationError
 
 from apps.core.services import ServiceDisabled, disabled_payload
 from htqweb.authn.jwt import AuthError, decode_token
+from htqweb.authn.rbac import require_admin
 
 
 def json_error(detail, status: int) -> JsonResponse:
@@ -51,7 +52,14 @@ _AUTHENTICATORS = {"jwt": _authenticate_jwt,
 
 
 def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
-            status: int = 200):
+            status: int = 200, admin: bool = False):
+    if admin and auth is None:
+        # admin=True checks request.token, which only an authenticator
+        # populates — auth=None always sets it to None (see below), so the
+        # admin predicate would have nothing to check. Programming error:
+        # fail loudly at decoration time, not as a confusing 403 later.
+        raise ValueError("api_view(admin=True) requires auth='jwt' or auth='admin_session'")
+
     def deco(fn):
         @csrf_exempt
         @wraps(fn)
@@ -63,6 +71,12 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                 if payload is None:
                     return json_error("Not authenticated", 401)
                 request.token = payload
+                # Single platform admin-gate seam (R1): every admin route
+                # goes through this one predicate — htqweb.authn.rbac.
+                # require_admin — instead of each app keeping its own
+                # private _require_admin copy.
+                if admin and not require_admin(request.token):
+                    return json_error("Forbidden", 403)
             else:
                 request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
             if body is not None:

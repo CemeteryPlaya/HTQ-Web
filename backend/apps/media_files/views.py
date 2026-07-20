@@ -43,7 +43,6 @@ import logging
 import mimetypes
 
 from django.conf import settings
-from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse, HttpResponseRedirect
 from django.views.decorators.csrf import csrf_exempt
 
@@ -158,12 +157,7 @@ def files_collection(request, *args, **kwargs):
     return json_error("Method Not Allowed", 405)
 
 
-def _require_admin(request) -> None:
-    if not request.token.is_admin:
-        raise PermissionDenied("Admin privileges required")
-
-
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", admin=True)
 def list_files(request):
     """``GET /api/media/v1/files/`` (admin only).
 
@@ -171,8 +165,6 @@ def list_files(request):
     params, same bounds (``1<=limit<=500``, ``offset>=0``), soft-deleted
     rows excluded, newest first.
     """
-    _require_admin(request)
-
     try:
         limit = int(request.GET.get("limit", 50))
         offset = int(request.GET.get("offset", 0))
@@ -195,10 +187,15 @@ def _can_access_private(user, meta: FileMetadata) -> bool:
     """Port of the source's ``_can_access_private`` minus the S2S
     (``user.is_service``) branch — this Django port carries no service-JWT
     concept (decision Р3, same omission as ``upload_service``'s dropped
-    ``X-User-Id`` path)."""
+    ``X-User-Id`` path).
+
+    Uses ``is_elevated`` (the one platform admin predicate, see R1 — also
+    what ``api_view(admin=True)``/``htqweb.authn.rbac.require_admin`` check)
+    rather than the raw ``is_admin`` claim, so media's private-file access
+    and its admin gate agree on the same flag."""
     if user is None:
         return False
-    if user.is_admin:
+    if user.is_elevated:
         return True
     return user.user_id == meta.owner_id
 

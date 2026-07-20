@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 
-from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
@@ -35,11 +34,6 @@ from .services import taxonomy_service as tax_svc
 from .tasks import notify_admins_on_contact_request
 
 logger = logging.getLogger(__name__)
-
-
-def _require_admin(request) -> None:
-    if not request.token.is_elevated:
-        raise PermissionDenied("Admin privileges required")
 
 
 def _json_safe(value):
@@ -97,9 +91,8 @@ def _create_contact_request(request, data: schemas.ContactRequestCreate):
     return schemas.ContactRequestRead.model_validate(entry)
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", admin=True)
 def _list_contact_requests(request):
-    _require_admin(request)
     try:
         query = schemas.ContactRequestListQuery.model_validate(dict(request.GET.items()))
     except ValidationError as exc:
@@ -119,25 +112,22 @@ def contact_requests_collection(request, *args, **kwargs):
 
 # ── GET /stats (+ /stats/ alias), admin ─────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", admin=True)
 def contact_request_stats(request):
-    _require_admin(request)
     unhandled = svc.contact_request_stats()
     return schemas.ContactRequestStats(unhandled=unhandled)
 
 
 # ── GET/PATCH/DELETE /{id}, admin — detail ──────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", admin=True)
 def _get_contact_request(request, contact_id: int):
-    _require_admin(request)
     entry = svc.get_contact_request_or_404(contact_id)
     return schemas.ContactRequestRead.model_validate(entry)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.ContactRequestUpdate)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.ContactRequestUpdate, admin=True)
 def _update_contact_request(request, contact_id: int, data: schemas.ContactRequestUpdate):
-    _require_admin(request)
     entry = svc.get_contact_request_or_404(contact_id)
     changes = data.model_dump(exclude_unset=True)
     entry = svc.update_contact_request(entry, changes)
@@ -152,9 +142,8 @@ def _update_contact_request(request, contact_id: int, data: schemas.ContactReque
     return schemas.ContactRequestRead.model_validate(entry)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
 def _delete_contact_request(request, contact_id: int):
-    _require_admin(request)
     entry = svc.get_contact_request_or_404(contact_id)
     email = entry.email
     contact_id_str = str(entry.id)
@@ -183,9 +172,8 @@ def contact_request_detail(request, contact_id: int, *args, **kwargs):
 
 # ── POST /{id}/reply, admin ─────────────────────────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.ContactRequestReply)
+@api_view(methods=("POST",), auth="jwt", body=schemas.ContactRequestReply, admin=True)
 def reply_contact_request(request, contact_id: int, data: schemas.ContactRequestReply):
-    _require_admin(request)
     entry = svc.get_contact_request_or_404(contact_id)
     entry = svc.reply_to_contact_request(
         entry, reply_message=data.reply_message, admin_user_id=request.token.user_id,
@@ -237,9 +225,8 @@ def _list_news(request):
     return schemas.Page[schemas.NewsRead].model_validate(page)
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.NewsCreate, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.NewsCreate, status=201, admin=True)
 def _create_news(request, data: schemas.NewsCreate):
-    _require_admin(request)
     values = data.model_dump(exclude={"tag_ids"})
     if values.get("author_id") is None:
         values["author_id"] = request.token.user_id
@@ -285,9 +272,8 @@ def _get_news(request, news_id: int):
     return schemas.NewsRead.model_validate(news_svc.serialize_news(news))
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.NewsUpdate)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.NewsUpdate, admin=True)
 def _update_news(request, news_id: int, data: schemas.NewsUpdate):
-    _require_admin(request)
     news = news_svc.get_news_for_admin_or_404(news_id)
     raw_changes = data.model_dump(exclude_unset=True)
     try:
@@ -305,9 +291,8 @@ def _update_news(request, news_id: int, data: schemas.NewsUpdate):
     return schemas.NewsRead.model_validate(news_svc.serialize_news(news))
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
 def _delete_news(request, news_id: int):
-    _require_admin(request)
     news = news_svc.get_news_for_admin_or_404(news_id)
     slug = news.slug
     news_svc.delete_news(news)
@@ -341,9 +326,8 @@ def _list_categories(request):
     return [schemas.CategoryRead.model_validate(row) for row in rows]
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.CategoryCreate, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.CategoryCreate, status=201, admin=True)
 def _create_category(request, data: schemas.CategoryCreate):
-    _require_admin(request)
     try:
         cat = tax_svc.create_category(data.model_dump())
     except tax_svc.ConflictError as exc:
@@ -370,9 +354,8 @@ def categories_collection(request, *args, **kwargs):
 
 # ── Categories: PATCH /{id} (admin) + DELETE /{id} (admin) — detail ─────────
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.CategoryUpdate)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.CategoryUpdate, admin=True)
 def _update_category(request, category_id: int, data: schemas.CategoryUpdate):
-    _require_admin(request)
     cat = tax_svc.get_category_or_404(category_id)
     changes = data.model_dump(exclude_unset=True)
     try:
@@ -390,9 +373,8 @@ def _update_category(request, category_id: int, data: schemas.CategoryUpdate):
     return schemas.CategoryRead.model_validate(cat)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
 def _delete_category(request, category_id: int):
-    _require_admin(request)
     cat = tax_svc.get_category_or_404(category_id)
     slug = cat.slug
     tax_svc.delete_category(cat)
@@ -424,9 +406,8 @@ def _list_tags(request):
     return [schemas.TagRead.model_validate(row) for row in rows]
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.TagCreate, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.TagCreate, status=201, admin=True)
 def _create_tag(request, data: schemas.TagCreate):
-    _require_admin(request)
     try:
         tag = tax_svc.create_tag(data.model_dump())
     except tax_svc.ConflictError as exc:
@@ -453,9 +434,8 @@ def tags_collection(request, *args, **kwargs):
 
 # ── Tags: PATCH /{id} (admin) + DELETE /{id} (admin) — detail ───────────────
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.TagUpdate)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.TagUpdate, admin=True)
 def _update_tag(request, tag_id: int, data: schemas.TagUpdate):
-    _require_admin(request)
     tag = tax_svc.get_tag_or_404(tag_id)
     changes = data.model_dump(exclude_unset=True)
     try:
@@ -473,9 +453,8 @@ def _update_tag(request, tag_id: int, data: schemas.TagUpdate):
     return schemas.TagRead.model_validate(tag)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
 def _delete_tag(request, tag_id: int):
-    _require_admin(request)
     tag = tax_svc.get_tag_or_404(tag_id)
     slug = tag.slug
     tax_svc.delete_tag(tag)

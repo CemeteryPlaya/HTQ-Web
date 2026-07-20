@@ -65,6 +65,11 @@ def admin_only_view(request):
     return {"user_id": request.token.user_id}
 
 
+@api_view(methods=("POST",), auth="jwt", admin=True)
+def admin_gated_view(request):
+    return {"ok": True}
+
+
 @api_view(methods=("GET",), auth=None)
 def no_auth_view(request):
     return {"token_is_none": request.token is None}
@@ -320,3 +325,44 @@ def test_custom_status_returned_with_body_intact():
     resp = created_view(rf.post("/created/"))
     assert resp.status_code == 201
     assert json.loads(resp.content) == {"created": True}
+
+
+# ── R1: api_view(admin=True) — the single platform admin-gate seam ─────────
+
+
+def test_admin_true_no_token_401_envelope():
+    rf = RequestFactory()
+    resp = admin_gated_view(rf.post("/admin-gated/"))
+    assert resp.status_code == 401
+    assert "detail" in json.loads(resp.content)
+
+
+def test_admin_true_non_elevated_token_403_envelope():
+    rf = RequestFactory()
+    token = _token()  # is_staff/is_superuser/is_admin all False
+    resp = admin_gated_view(
+        rf.post("/admin-gated/", HTTP_AUTHORIZATION=f"Bearer {token}"),
+    )
+    assert resp.status_code == 403
+    assert json.loads(resp.content) == {"detail": "Forbidden"}
+
+
+def test_admin_true_elevated_token_200():
+    rf = RequestFactory()
+    token = _token(is_staff=True)
+    resp = admin_gated_view(
+        rf.post("/admin-gated/", HTTP_AUTHORIZATION=f"Bearer {token}"),
+    )
+    assert resp.status_code == 200
+    assert json.loads(resp.content) == {"ok": True}
+
+
+def test_admin_true_with_auth_none_raises_at_decoration_time():
+    """admin=True only makes sense layered on top of an authenticator —
+    auth=None never sets a real request.token, so there's nothing for the
+    admin predicate to check. Catch that programming error eagerly, at
+    decoration time, not as a confusing AttributeError/403 at request time."""
+    with pytest.raises(ValueError):
+        @api_view(methods=("GET",), auth=None, admin=True)
+        def _bad_view(request):
+            return {"unreachable": True}
