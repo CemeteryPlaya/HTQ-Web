@@ -89,9 +89,27 @@ _POLICIES: dict[str, ScopePolicy] = {
 KNOWN_SCOPES = frozenset(_POLICIES)
 
 
+def normalize_scope(raw: str | None) -> str:
+    """Canonicalise a client-supplied scope string: strip surrounding
+    whitespace and lowercase it.
+
+    ``scope`` is free-text client input used for authorization
+    (``authorize_scope_write``), policy lookup (``get_policy``), the storage
+    path (``upload_service._build_path``) and the stored ``FileMetadata.scope``.
+    Without normalization a case/whitespace variant of a restricted scope
+    (``"HR_DOC"``, ``"hr_doc "``) would miss the exact-match ``RESTRICTED_SCOPES``
+    / ``KNOWN_SCOPES`` checks and slip through the unknown→generic branch, then
+    be stored verbatim — so a future hr/task READ side matching the canonical
+    string would either mis-classify it or (worse, if it matched loosely) grant
+    privileged access. Normalizing at every consumer closes that at the source:
+    the canonical form is the only thing authorized, looked up, and stored.
+    """
+    return (raw or "").strip().lower()
+
+
 def get_policy(scope: str) -> ScopePolicy:
     """Return the policy for `scope`, or the `generic` policy if unknown."""
-    return _POLICIES.get(scope, _POLICIES["generic"])
+    return _POLICIES.get(normalize_scope(scope), _POLICIES["generic"])
 
 
 def resolve_is_public(scope: str, requested: bool | None) -> bool:
@@ -152,6 +170,7 @@ def authorize_scope_write(scope: str, *, is_elevated: bool) -> None:
     frontend behaviour (``scope=cms-news`` for inline news images) keeps
     working.
     """
+    scope = normalize_scope(scope)
     if scope not in KNOWN_SCOPES:
         logger.warning("unknown upload scope %r, falling back to generic", scope)
         return

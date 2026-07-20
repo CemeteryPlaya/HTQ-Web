@@ -41,7 +41,12 @@ from apps.media_files.services.image_service import (
     kind_from_mime,
     normalise as normalise_image,
 )
-from apps.media_files.services.scope_policy import ScopePolicy, get_policy, resolve_is_public
+from apps.media_files.services.scope_policy import (
+    ScopePolicy,
+    get_policy,
+    normalize_scope,
+    resolve_is_public,
+)
 
 
 class UploadValidationError(ValueError):
@@ -163,6 +168,10 @@ def upload_file_bytes(
     Raises ``UploadValidationError`` (caller maps ``.status_code``/``.detail``
     to an HTTP response) for oversize/wrong-mime/undecodable-image inputs.
     """
+    # Canonicalise the client-supplied scope once, up front, so the storage
+    # path (_build_path), the policy lookup, and the persisted FileMetadata.scope
+    # all use the same normalized form (see scope_policy.normalize_scope).
+    scope = normalize_scope(scope)
     policy = get_policy(scope)
     _validate_size(data, policy)
 

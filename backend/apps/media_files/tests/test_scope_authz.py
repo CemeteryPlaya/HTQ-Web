@@ -32,7 +32,12 @@ from django.test import Client
 from apps.media_files import interface
 from apps.media_files.models import FileMetadata
 from apps.media_files.services import upload_service
-from apps.media_files.services.scope_policy import RESTRICTED_SCOPES, authorize_scope_write
+from apps.media_files.services.scope_policy import (
+    RESTRICTED_SCOPES,
+    authorize_scope_write,
+    get_policy,
+    normalize_scope,
+)
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -152,6 +157,69 @@ def test_authorize_scope_write_unknown_scope_logs_warning_and_is_allowed(caplog)
         "unknown upload scope" in record.getMessage() and "cms-news" in record.getMessage()
         for record in caplog.records
     )
+
+
+# ─── normalization: a case/whitespace variant of a restricted scope must NOT
+#     slip through the unknown→generic branch (final-review R5 minor) ──────────
+
+
+@pytest.mark.parametrize("variant", ["HR_DOC", "hr_doc ", " Hr_Doc", "HR_DEPARTMENT", "Task_Attachment"])
+def test_authorize_scope_write_denies_case_or_whitespace_variant_of_restricted(variant):
+    """RED before the fix: these missed the case-sensitive KNOWN_SCOPES/
+    RESTRICTED_SCOPES exact match, fell into the unknown→generic branch, and
+    were silently allowed. Normalizing (strip+lower) canonicalises them so the
+    restricted check catches them."""
+    with pytest.raises(PermissionDenied):
+        authorize_scope_write(variant, is_elevated=False)
+
+
+@pytest.mark.parametrize("variant", ["HR_DOC", "hr_doc "])
+def test_authorize_scope_write_allows_restricted_variant_when_elevated(variant):
+    authorize_scope_write(variant, is_elevated=True)  # must not raise
+
+
+def test_normalize_scope_strips_and_lowercases():
+    assert normalize_scope("  HR_DOC ") == "hr_doc"
+    assert normalize_scope("Avatar") == "avatar"
+    assert normalize_scope(None) == ""
+    assert normalize_scope("cms-news") == "cms-news"
+
+
+def test_get_policy_matches_canonical_variant():
+    # A case/whitespace variant of a real scope resolves to that scope's
+    # policy, not the generic fallback.
+    assert get_policy("HR_DOC ").name == "hr_doc"
+    assert get_policy("AVATAR").name == "avatar"
+    # A genuinely unknown scope still falls back to generic.
+    assert get_policy("cms-news").name == "generic"
+
+
+@pytest.mark.django_db
+def test_http_upload_restricted_variant_by_non_elevated_is_403(fake_storage, user):
+    """The whole chain: a crafted 'HR_DOC' scope from a non-elevated user is
+    rejected at the HTTP endpoint, not stored."""
+    resp = _upload(
+        Client(), user,
+        filename="handbook.pdf", content=_pdf_bytes(), content_type="application/pdf",
+        scope="HR_DOC",
+    )
+    assert resp.status_code == 403
+    assert not FileMetadata.objects.exists()
+
+
+@pytest.mark.django_db
+def test_http_upload_stores_canonical_scope(fake_storage, user):
+    """An open-scope upload with a case variant is stored under the canonical
+    lowercase scope, so a future read side can match on the exact string."""
+    resp = _upload(
+        Client(), user,
+        filename="a.png", content=_png_bytes(), content_type="image/png",
+        scope="AVATAR",
+    )
+    assert resp.status_code == 201
+    meta = FileMetadata.objects.get()
+    assert meta.scope == "avatar"
+    assert meta.path.startswith("avatar/")  # storage path is canonical too
 
 
 # ─── HTTP endpoint ───────────────────────────────────────────────────────────
