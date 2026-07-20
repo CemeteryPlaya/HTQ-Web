@@ -70,6 +70,16 @@ def admin_gated_view(request):
     return {"ok": True}
 
 
+class AdminBodyIn(BaseModel):
+    title: str
+    count: int
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=AdminBodyIn)
+def admin_gated_body_view(request, data: AdminBodyIn):
+    return {"title": data.title, "count": data.count}
+
+
 @api_view(methods=("GET",), auth=None)
 def no_auth_view(request):
     return {"token_is_none": request.token is None}
@@ -355,6 +365,21 @@ def test_admin_true_elevated_token_200():
     )
     assert resp.status_code == 200
     assert json.loads(resp.content) == {"ok": True}
+
+
+def test_admin_true_non_admin_malformed_body_is_403_not_422():
+    """Fix 4 (R6): the admin seam runs BEFORE body validation. A non-admin
+    token with a malformed body must get 403 (admin gate), not 422 (body
+    validation) — proving admin-check precedes body-validation ordering."""
+    rf = RequestFactory()
+    token = _token()  # is_staff/is_superuser/is_admin all False
+    resp = admin_gated_body_view(
+        rf.post("/admin-gated-body/", data=json.dumps({"count": "not-an-int"}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}"),
+    )
+    assert resp.status_code == 403
+    assert json.loads(resp.content) == {"detail": "Forbidden"}
 
 
 def test_admin_true_with_auth_none_raises_at_decoration_time():

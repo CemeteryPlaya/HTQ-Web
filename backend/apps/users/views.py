@@ -232,13 +232,6 @@ def _update_profile(request):
     # concurrent write to this row (e.g. an admin toggling is_staff/
     # is_superuser/must_change_password) that lands during that window. Same
     # pattern remove_avatar/change_password already use below.
-    # update_fields = only the columns THIS request actually changed (review
-    # Finding 1). Avatar storage I/O below is a real S3/network call, and an
-    # unconditional full-row user.save() would rewrite every column from the
-    # in-memory snapshot taken at request start — silently reverting any
-    # concurrent write to this row (e.g. an admin toggling is_staff/
-    # is_superuser/must_change_password) that lands during that window. Same
-    # pattern remove_avatar/change_password already use below.
     update_fields = set(changes)
 
     avatar_file = files_data.get("avatar")
@@ -312,7 +305,9 @@ def remove_avatar(request):
 
     profile_service.delete_avatar_object(user.avatar_url)
     user.avatar_url = None
-    user.save(update_fields=["avatar_url"])
+    # auto_now fields are NOT auto-added to a partial update_fields save —
+    # updated_at must be listed explicitly (R6 Fix 2).
+    user.save(update_fields=["avatar_url", "updated_at"])
     return HttpResponse(status=204)
 
 
@@ -664,6 +659,8 @@ def _maybe_user_id(request) -> int | None:
     try:
         payload = decode_token(header[7:])
     except (AuthError, ValidationError):
+        return None
+    if payload.token_type != "access":
         return None
     return payload.user_id
 

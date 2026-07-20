@@ -101,6 +101,22 @@ def test_client_errors_enriches_log_with_user_id(alice, caplog):
     assert any(f"user_id={alice.id}" in rec.getMessage() for rec in caplog.records)
 
 
+@pytest.mark.django_db
+def test_client_errors_refresh_token_not_attributed(alice, caplog):
+    """R6 Fix 1: ``_maybe_user_id`` must check ``token_type`` — a refresh
+    token in the Authorization header must not be attributed as the caller,
+    only an access token may enrich the log with ``user_id``."""
+    refresh_token = issue_token_pair(alice)["refresh"]
+    with caplog.at_level(logging.ERROR, logger="apps.users.views"):
+        resp = Client().post(
+            f"{BASE}/client-errors", data=ERROR_PAYLOAD, content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {refresh_token}",
+        )
+    assert resp.status_code == 202
+    assert any("user_id=None" in rec.getMessage() for rec in caplog.records)
+    assert not any(f"user_id={alice.id}" in rec.getMessage() for rec in caplog.records)
+
+
 # ── client-events ─────────────────────────────────────────────────────────
 
 

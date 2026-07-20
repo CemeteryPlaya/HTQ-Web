@@ -245,8 +245,16 @@ _INLINE_MIME_DENYLIST = frozenset({"image/svg+xml"})
 def _disposition_for(mime: str | None) -> str:
     """``"inline"`` for mimes safe to render directly in the browser,
     ``"attachment"`` for everything else (forces a download instead of an
-    in-origin render) — see the module-level allow-list above."""
-    mime = (mime or "").lower()
+    in-origin render) — see the module-level allow-list above.
+
+    Django strips ``;``-parameters before storing ``FileMetadata.mime``, so a
+    parameterized value (``"image/svg+xml; charset=utf-8"``) isn't currently
+    reachable here — but the exact-string denylist check would silently miss
+    it while the ``image/`` prefix check would still match, wrongly allowing
+    ``inline``. Stripped defensively (R6 Fix 5) so this stays correct even if
+    that storage guarantee ever changes.
+    """
+    mime = (mime or "").split(";", 1)[0].strip().lower()
     if mime in _INLINE_MIME_DENYLIST:
         return "attachment"
     if mime in _INLINE_MIME_EXTRAS or mime.startswith(_INLINE_MIME_PREFIXES):

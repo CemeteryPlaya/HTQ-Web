@@ -306,6 +306,16 @@ def test_pdf_file_still_served_inline(fake_storage, owner):
     assert resp["Content-Disposition"].startswith("inline")
 
 
+def test_disposition_for_parameterized_svg_mime_is_attachment():
+    """R6 Fix 5: a parameterized mime (``"image/svg+xml; charset=utf-8"``)
+    must not slip past the exact-string SVG denylist check just because it
+    still matches the ``image/`` prefix. Not currently reachable via the API
+    (Django strips ``;``-params before storage) — hardened defensively at
+    the ``_disposition_for`` unit level regardless."""
+    assert views._disposition_for("image/svg+xml; charset=utf-8") == "attachment"
+    assert views._disposition_for("IMAGE/SVG+XML") == "attachment"
+
+
 @pytest.mark.django_db
 def test_variant_download_html_mime_is_attachment(fake_storage, owner):
     # Variants are always images produced by the pipeline in practice, but

@@ -326,4 +326,6 @@ def change_password(user: User, *, new_password: str, current_password: str | No
 
     user.set_password(new_password)
     user.must_change_password = False
-    user.save(update_fields=["password", "must_change_password"])
+    # auto_now fields are NOT auto-added to a partial update_fields save —
+    # updated_at must be listed explicitly (R6 Fix 2).
+    user.save(update_fields=["password", "must_change_password", "updated_at"])

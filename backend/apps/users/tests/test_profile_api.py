@@ -15,11 +15,13 @@ get_storage`` / ``apps.media_files.tasks.get_storage`` — not
 
 import io
 import json
+from datetime import timedelta
 
 import pytest
 from django.test import Client
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
+from django.utils import timezone
 from PIL import Image
 
 from apps.core.models import ServiceStatus
@@ -501,6 +503,25 @@ def test_delete_avatar_unauthenticated_401(db):
     assert resp.status_code == 401
 
 
+@pytest.mark.django_db
+def test_delete_avatar_advances_updated_at(active_user, fake_storage):
+    """R6 Fix 2: ``remove_avatar``'s partial save uses
+    ``update_fields=["avatar_url"]`` — Django does NOT auto-add an
+    ``auto_now`` field to a partial ``update_fields`` save, so without an
+    explicit ``updated_at`` in that list, the column would never advance."""
+    old = timezone.now() - timedelta(days=1)
+    User.objects.filter(pk=active_user.pk).update(updated_at=old)
+    active_user.refresh_from_db()
+    assert active_user.updated_at == old
+
+    token = _access_token(active_user)
+    resp = Client().delete(f"{BASE}/profile/avatar", **_auth(token))
+    assert resp.status_code == 204
+
+    active_user.refresh_from_db()
+    assert active_user.updated_at > old
+
+
 # ── POST profile/change-password ─────────────────────────────────────────────
 
 
@@ -568,3 +589,23 @@ def test_change_password_unauthenticated_401(db):
         "new_password": "N3wPassw0rd!",
     }), content_type="application/json")
     assert resp.status_code == 401
+
+
+@pytest.mark.django_db
+def test_change_password_advances_updated_at(active_user):
+    """R6 Fix 2: ``change_password``'s partial save uses
+    ``update_fields=["password", "must_change_password"]`` — without an
+    explicit ``updated_at`` in that list, ``auto_now`` would not fire."""
+    old = timezone.now() - timedelta(days=1)
+    User.objects.filter(pk=active_user.pk).update(updated_at=old)
+    active_user.refresh_from_db()
+    assert active_user.updated_at == old
+
+    token = _access_token(active_user)
+    resp = Client().post(f"{BASE}/profile/change-password/", data=json.dumps({
+        "current_password": "S3cret!", "new_password": "N3wPassw0rd!",
+    }), content_type="application/json", **_auth(token))
+    assert resp.status_code == 200
+
+    active_user.refresh_from_db()
+    assert active_user.updated_at > old
