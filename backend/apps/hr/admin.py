@@ -10,7 +10,7 @@ from django.contrib import admin
 
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
-from .models import Department, Employee, LevelThreshold, OrgSettings, Position
+from .models import AuditLog, Department, Employee, LevelThreshold, OrgSettings, Position
 
 
 @admin.register(Department)
@@ -52,3 +52,11 @@ class OrgSettingsAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("key", "value", "updated_at")
     search_fields = ("key",)
     readonly_fields = ("updated_at",)
+
+
+@admin.register(AuditLog)
+class AuditLogAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "entity_type", "entity_id", "action", "changed_by", "created_at")
+    list_filter = ("entity_type", "action")
+    search_fields = ("entity_type", "entity_id", "changed_by")
+    readonly_fields = ("created_at", "updated_at")

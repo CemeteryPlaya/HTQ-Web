@@ -201,6 +201,52 @@ class PositionWeightAudit(models.Model):
         return f"Position #{self.position_id}: {self.old_weight}->{self.new_weight}"
 
 
+class AuditLog(HrBase):
+    """Аудит-лог HR-мутаций — порт services/hr/app/models/audit_log.py.
+
+    Таблица — дефолтное имя Django: hr_auditlog (а не hr_audit_log исходника,
+    решение D2, как и у остальных моделей домена).
+
+    D10 — ``changed_by`` НЕ FK, хотя в исходнике объявлен как
+    ``ForeignKey("hr_employees.id")``. Реальное значение, которое туда
+    пишется — ``TokenPayload.user_id`` (id платформенного пользователя из
+    JWT: ``employee_service.py`` везде передаёт ``changed_by_id=
+    current_user.user_id``), а не PK строки ``Employee`` — то же
+    ID-пространство, что и у ``Employee.user_id`` (решение D7), не
+    пространство PK ``hr_employees``. FK на несовпадающее пространство ID
+    означал бы, что Postgres откатывает КАЖДОЕ создание/изменение/удаление/
+    перевод сотрудника всякий раз, когда действующий пользователь не
+    оказался (случайно, по числовому совпадению) той же строкой в
+    ``hr_employees`` — то есть почти всегда, а ``audit_service.log(...)`` в
+    исходнике нигде не обёрнут в try/except (мутация обязана падать вместе
+    с записью аудита). Этот путь не покрыт ни одним интеграционным тестом
+    исходника (``test_permission_enforcement.py`` проверяет только матрицу
+    прав), а аналогичное по смыслу поле ``PositionWeightAudit.changed_by``
+    там же в исходнике уже сделано простым ``Integer`` без FK — тот же
+    паттерн, применённый последовательно. Портируем как простой
+    ``IntegerField`` (NOT NULL, как и в исходнике), без ``db_index``: ни
+    сама колонка, ни исходник её отдельно не индексируют — только составной
+    индекс ниже.
+    """
+
+    entity_type = models.CharField(max_length=50)  # employee | department | ...
+    entity_id = models.IntegerField()
+    action = models.CharField(max_length=20)  # create | update | delete
+    old_values = models.JSONField(null=True, blank=True)
+    new_values = models.JSONField(null=True, blank=True)
+    changed_by = models.IntegerField()
+    ip_address = models.CharField(max_length=45, null=True, blank=True)
+    user_agent = models.CharField(max_length=500, null=True, blank=True)
+
+    class Meta:
+        # Порт Index("ix_audit_log_entity", "entity_type", "entity_id") —
+        # единственный индекс исходника на этой таблице.
+        indexes = [models.Index(fields=["entity_type", "entity_id"])]
+
+    def __str__(self) -> str:
+        return f"<AuditLog(id={self.id}, entity={self.entity_type}:{self.entity_id}, action='{self.action}')>"
+
+
 class OrgSettings(models.Model):
     """Key-value настройки поведения оргструктуры.
 

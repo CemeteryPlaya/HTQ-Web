@@ -63,4 +63,26 @@ urlpatterns = [
 
     path("positions/<int:id>/", views.position_detail),
     path("positions/<int:id>", views.position_detail),
+
+    # ── employees ─────────────────────────────────────────────────────────
+    # Литеральные роуты (hr-level/, me/) — ДО /<int:id>/, ровно как в
+    # роутере исходника (users/ тоже был бы здесь, но эндпойнт отложен —
+    # см. tests/test_employees_api.py растяжку).
+    path("employees/hr-level/", views.employee_hr_level),
+    path("employees/hr-level", views.employee_hr_level),
+
+    path("employees/me/", views.my_employee),
+    path("employees/me", views.my_employee),
+
+    path("employees/", views.employees_collection),
+    path("employees", views.employees_collection),
+
+    path("employees/<int:id>/transfer", views.transfer_employee),
+    path("employees/<int:id>/transfer/", views.transfer_employee),
+
+    path("employees/<int:id>/history", views.employee_history),
+    path("employees/<int:id>/history/", views.employee_history),
+
+    path("employees/<int:id>/", views.employee_detail),
+    path("employees/<int:id>", views.employee_detail),
 ]

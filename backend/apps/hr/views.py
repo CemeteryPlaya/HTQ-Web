@@ -24,9 +24,11 @@ from pydantic import ValidationError
 
 from htqweb.http import api_view, json_error
 
+from . import access as hr_access
 from . import schemas
 from .permissions import LEVEL_PRESETS
 from .services import department_service as svc
+from .services import employee_service as emp_svc
 from .services import position_service as pos_svc
 
 
@@ -371,3 +373,244 @@ def move_position(request, id: int, data: schemas.PositionMoveRequest):
         # в коллизию веса с должностью вне уровня — исходник отдаёт 409, а не 500.
         return json_error(exc.detail, 409)
     return pos_svc.serialize(pos)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /employees/* — порт services/hr/app/api/v1/employees.py (9 из 16
+#  эндпойнтов; 7 отложены — см. брифы hr-misc/hr-docs/apps.users.interface,
+#  растяжки в tests/test_employees_api.py)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация здесь — НЕ грубый api_view(admin=True) (как в positions):
+# каждая вьюха аутентифицирует через ``auth="jwt"``, затем сама зовёт
+# ``hr_access.resolve_hr_access(request.token)`` и проверяет ``access.can_*``,
+# поднимая нужный 403 с ТОЧНЫМ detail исходника. ``HRAccessDenied`` несёт
+# detail "HR access required" / "HR write access required" (require_hr_access/
+# require_can_write_basic); остальные 403 ("Senior HR access required", "CO HR
+# access required", "Transferring, changing position...") — inline, как в
+# роутере исходника.
+
+
+def _require_visible_employee(id: int, access: hr_access.HRAccess):
+    """Порт ``_require_visible_employee`` роутера исходника.
+
+    404 "Employee not found" (НЕ 403) для чужого отдела — намеренно: не
+    раскрываем существование сотрудника вне своего скоупа. Оба случая
+    (не существует / не виден) дают идентичный detail, поэтому объединены в
+    одно исключение.
+    """
+    employee = emp_svc.get_employee(id)
+    if not access.can_see_department(employee.department_id):
+        raise emp_svc.EmployeeNotFound
+    return employee
+
+
+# ── /employees/hr-level/ (литеральный роут — ДО /{id}/) ──────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def employee_hr_level(request):
+    access = hr_access.resolve_hr_access(request.token)
+    return {
+        "level": access.level,
+        "scope_department_id": access.department_id,
+        "can_read_all": access.can_read_all,
+        "can_write_basic": access.can_write_basic,
+        "can_create_employee": access.can_create_employee,
+        "can_transfer_employee": access.can_transfer_employee,
+        "can_delete_employee": access.can_delete_employee,
+        "can_list_user_options": access.can_list_user_options,
+        "can_manage_user_options": access.can_manage_user_options,
+        "permissions": sorted(access.permissions),
+    }
+
+
+# ── /employees/me/ (литеральный роут — ДО /{id}/) ─────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def my_employee(request):
+    employee = emp_svc.get_my_employee(request.token)
+    if employee is None:
+        return json_error("Employee profile not found", 404)
+    return svc.serialize_employee(employee)
+
+
+# ── /employees/ — коллекция ───────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_employees(request):
+    try:
+        query = schemas.EmployeeListQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+
+    effective_department_id = query.department_id
+    if not access.can_read_all:
+        if access.department_id is None or (
+            query.department_id is not None and query.department_id != access.department_id
+        ):
+            return {"items": [], "total": 0, "page": query.page, "pages": 0, "limit": query.limit}
+        effective_department_id = access.department_id
+
+    items, total = emp_svc.list_employees(
+        department_id=effective_department_id,
+        status=query.status,
+        search=query.search,
+        page=query.page,
+        limit=query.limit,
+    )
+    pages = (total + query.limit - 1) // query.limit
+    return {
+        "items": [svc.serialize_employee(e) for e in items],
+        "total": total,
+        "page": query.page,
+        "pages": pages,
+        "limit": query.limit,
+    }
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeCreate, status=201)
+def _create_employee(request, data: schemas.EmployeeCreate):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    if not access.can_create_employee:
+        return json_error("Senior HR access required", 403)
+
+    try:
+        employee = emp_svc.create_employee(data, changed_by_id=request.token.user_id)
+    except emp_svc.DepartmentNotFound:
+        return json_error("Department not found", 422)
+    except emp_svc.PositionNotFound:
+        return json_error("Position not found", 422)
+    except emp_svc.EmailAlreadyInUse:
+        return json_error("Email already in use", 409)
+    return svc.serialize_employee(employee)
+
+
+def employees_collection(request):
+    if request.method == "GET":
+        return _list_employees(request)
+    if request.method == "POST":
+        return _create_employee(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /employees/{id}/ — детальный ресурс ────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_employee(request, id: int):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    try:
+        employee = _require_visible_employee(id, access)
+    except emp_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+    return svc.serialize_employee(employee)
+
+
+@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.EmployeeUpdate)
+def _update_employee(request, id: int, data: schemas.EmployeeUpdate):
+    # PUT — задокументированный контракт исходника; PATCH регистрируем тоже
+    # (аддитивно), как и в departments/positions.
+    try:
+        access = hr_access.require_can_write_basic(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    try:
+        _require_visible_employee(id, access)
+    except emp_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+
+    if not access.can_transfer_employee and (
+        data.department_id is not None
+        or data.position_id is not None
+        or data.termination_date is not None
+        or data.status in {"terminated", "suspended", "rejected"}
+    ):
+        return json_error(
+            "Transferring, changing position, or terminating requires the transfer permission",
+            403,
+        )
+
+    try:
+        employee = emp_svc.update_employee(id, data, changed_by_id=request.token.user_id)
+    except emp_svc.DepartmentNotFound:
+        return json_error("Department not found", 422)
+    except emp_svc.PositionNotFound:
+        return json_error("Position not found", 422)
+    except emp_svc.EmailAlreadyInUse:
+        return json_error("Email already in use", 409)
+    return svc.serialize_employee(employee)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_employee(request, id: int):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    if not access.can_delete_employee:
+        return json_error("CO HR access required", 403)
+    try:
+        _require_visible_employee(id, access)
+    except emp_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+    emp_svc.delete_employee(id, changed_by_id=request.token.user_id)
+    return HttpResponse(status=204)
+
+
+def employee_detail(request, id: int):
+    if request.method == "GET":
+        return _get_employee(request, id=id)
+    if request.method in ("PUT", "PATCH"):
+        return _update_employee(request, id=id)
+    if request.method == "DELETE":
+        return _delete_employee(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /employees/{id}/transfer ────────────────────────────────────────────────
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeTransfer)
+def transfer_employee(request, id: int, data: schemas.EmployeeTransfer):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    if not access.can_transfer_employee:
+        return json_error("Senior HR access required", 403)
+    try:
+        _require_visible_employee(id, access)
+    except emp_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+
+    try:
+        employee = emp_svc.transfer_employee(id, data, changed_by_id=request.token.user_id)
+    except emp_svc.DepartmentNotFound:
+        return json_error("Department not found", 422)
+    except emp_svc.PositionNotFound:
+        return json_error("Position not found", 422)
+    return svc.serialize_employee(employee)
+
+
+# ── /employees/{id}/history ─────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def employee_history(request, id: int):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    try:
+        _require_visible_employee(id, access)
+    except emp_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+    return emp_svc.get_history(id)

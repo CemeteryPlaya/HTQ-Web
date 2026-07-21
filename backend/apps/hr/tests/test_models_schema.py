@@ -14,7 +14,7 @@ import pytest
 from django.db import connection
 from django.db.utils import IntegrityError
 
-from apps.hr.models import Department, Employee, LevelThreshold, OrgSettings, Position
+from apps.hr.models import AuditLog, Department, Employee, LevelThreshold, OrgSettings, Position
 
 
 def _cols(table: str) -> dict:
@@ -118,3 +118,38 @@ def test_core_roundtrip_with_circular_manager_fk():
     assert emp.status == "active"
     assert emp.is_deleted is False
     assert OrgSettings.objects.create(key="deletion_strategy", value="cascade").id
+
+
+@pytest.mark.django_db
+def test_audit_log_columns_and_indexes():
+    # Порт services/hr/app/models/audit_log.py — сверка каждого поля.
+    cols = _cols("hr_auditlog")
+    assert not cols["entity_type"]["nullable"]
+    assert not cols["entity_id"]["nullable"]
+    assert not cols["action"]["nullable"]
+    assert not cols["changed_by"]["nullable"]
+    assert cols["old_values"]["nullable"]
+    assert cols["new_values"]["nullable"]
+    assert cols["ip_address"]["nullable"]
+    assert cols["user_agent"]["nullable"]
+    # Единственный индекс исходника: Index("ix_audit_log_entity", entity_type, entity_id).
+    assert {"entity_type", "entity_id"} <= _indexed_columns("hr_auditlog")
+
+
+@pytest.mark.django_db
+def test_audit_log_changed_by_has_no_fk_constraint():
+    """D10: ``changed_by`` хранит TokenPayload.user_id (платформенный id
+    действующего пользователя из JWT), а не PK ``hr_employee`` — умышленно
+    НЕ ``ForeignKey`` (см. models.py::AuditLog docstring, D10). Исходник
+    объявляет её как FK на hr_employees.id, но фактическое ID-пространство
+    не совпадает; порт сознательно отходит от буквальной SQLAlchemy-формы,
+    сохраняя её NOT NULL semantics."""
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT tc.constraint_type FROM information_schema.table_constraints tc "
+            "JOIN information_schema.key_column_usage kcu "
+            "ON tc.constraint_name = kcu.constraint_name "
+            "WHERE tc.table_name = %s AND kcu.column_name = %s AND tc.constraint_type = 'FOREIGN KEY'",
+            ["hr_auditlog", "changed_by"],
+        )
+        assert cur.fetchall() == []

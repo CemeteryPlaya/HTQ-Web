@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -118,3 +119,60 @@ class LevelThresholdUpdate(BaseModel):
     weight_to: int | None = Field(default=None, ge=0)
     label: str | None = Field(default=None, max_length=100)
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
+# ── employees — порт services/hr/app/schemas/employee.py ────────────────────
+#
+# ``status`` — ШЕСТЬ значений контракта (см. models.py::EmployeeStatus
+# docstring): active|inactive|terminated|suspended|pending|rejected —
+# идентичный regex EmployeeBase.status исходника, не сокращённый список.
+_STATUS_PATTERN = r"^(active|inactive|terminated|suspended|pending|rejected)$"
+
+
+class EmployeeCreate(BaseModel):
+    first_name: str = Field(..., max_length=100)
+    last_name: str = Field(..., max_length=100)
+    middle_name: str | None = Field(default=None, max_length=100)
+    email: str = Field(..., max_length=255)
+    phone: str | None = Field(default=None, max_length=20)
+    department_id: int
+    position_id: int
+    hire_date: date
+    status: str = Field(default="active", pattern=_STATUS_PATTERN)
+    avatar_url: str | None = Field(default=None, max_length=500)
+    bio: str | None = None
+    user_id: int | None = None
+
+
+class EmployeeUpdate(BaseModel):
+    """Порт EmployeeUpdate — все поля опциональны, exclude_none PATCH-семантика
+    (как и Department/PositionUpdate)."""
+
+    first_name: str | None = Field(default=None, max_length=100)
+    last_name: str | None = Field(default=None, max_length=100)
+    middle_name: str | None = None
+    email: str | None = Field(default=None, max_length=255)
+    phone: str | None = None
+    department_id: int | None = None
+    position_id: int | None = None
+    status: str | None = Field(default=None, pattern=_STATUS_PATTERN)
+    avatar_url: str | None = None
+    bio: str | None = None
+    termination_date: date | None = None
+
+
+class EmployeeTransfer(BaseModel):
+    department_id: int
+    position_id: int | None = None
+    effective_date: date | None = None
+
+
+class EmployeeListQuery(BaseModel):
+    """Порт Query(department_id, status, search, page, limit) роутера —
+    page/limit валидируются как PositionListQuery (та же 422-семантика)."""
+
+    department_id: int | None = None
+    status: str | None = None
+    search: str | None = None
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=20, ge=1, le=200)
