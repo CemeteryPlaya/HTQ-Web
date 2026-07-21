@@ -162,6 +162,41 @@ class LevelThreshold(HrBase):
         return f"L{self.level_number} ({self.weight_from}–{self.weight_to})"
 
 
+class PositionWeightAudit(models.Model):
+    """Append-only лог изменений веса/уровня должности.
+
+    Порт services/hr/app/models/position_weight_audit.py. Не наследует
+    HrBase — у исходника нет created_at/updated_at, только changed_at
+    (server_default=func.now()). PK — BigInteger в исходнике (высокообъёмный
+    аппенд-лог), поэтому BigAutoField, а не дефолтный AutoField аппки.
+    Таблица — дефолтное имя Django: hr_positionweightaudit.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="weight_audits"
+    )
+    old_weight = models.IntegerField(null=True, blank=True)
+    new_weight = models.IntegerField(null=True, blank=True)
+    old_level = models.IntegerField(null=True, blank=True)
+    new_level = models.IntegerField(null=True, blank=True)
+    changed_by = models.IntegerField(null=True, blank=True)
+    changed_at = models.DateTimeField(db_default=Now())
+    reason = models.CharField(max_length=64, null=True, blank=True)
+
+    class Meta:
+        # Составной индекс (position_id, changed_at) — порт
+        # Index("ix_hr_position_weight_audit_position", "position_id", "changed_at").
+        # Имя не задаём явно: Django сам генерирует детерминированное короткое
+        # имя (см. max_name_length()) — не привязываемся к имени исходника,
+        # у которого другое имя таблицы (hr_position_weight_audit vs
+        # дефолтное hr_positionweightaudit здесь).
+        indexes = [models.Index(fields=["position", "changed_at"])]
+
+    def __str__(self) -> str:
+        return f"Position #{self.position_id}: {self.old_weight}->{self.new_weight}"
+
+
 class OrgSettings(models.Model):
     """Key-value настройки поведения оргструктуры.
 

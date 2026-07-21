@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -36,3 +38,83 @@ class DepartmentUpdate(BaseModel):
     description: str | None = None
     manager_id: int | None = None
     is_active: bool | None = None
+
+
+# ── positions — порт services/hr/app/schemas/position.py ────────────────────
+
+HRLevelLiteral = Literal["junior", "middle", "senior", "lead"]
+
+
+class PositionPermissions(BaseModel):
+    """Матрица прав, прикреплённая к несистемной должности.
+
+    ``permissions`` — авторитетный набор ключей (проверяется исходником в
+    ``app.auth.hr_access``, который в porту ещё не появился — см. брифы
+    employees). ``hr_level`` — UI/миграционный пресет: выбор уровня
+    заполняет ``permissions`` соответствующим пресетом (apps.hr.permissions).
+    """
+
+    hr_level: HRLevelLiteral | None = None
+    permissions: list[str] = Field(default_factory=list)
+
+
+class PositionCreate(BaseModel):
+    title: str = Field(..., max_length=255)
+    department_id: int
+    grade: int = Field(default=1, ge=1, le=10)
+    description: str | None = None
+    requirements: dict | None = None
+    is_active: bool = True
+    weight: int = Field(default=100, ge=0)
+    permissions: PositionPermissions | None = None
+
+
+class PositionUpdate(BaseModel):
+    """Порт PositionUpdate — все поля опциональны, exclude_none PATCH-семантика
+    (как и DepartmentUpdate)."""
+
+    title: str | None = Field(default=None, max_length=255)
+    department_id: int | None = None
+    grade: int | None = Field(default=None, ge=1, le=10)
+    description: str | None = None
+    requirements: dict | None = None
+    is_active: bool | None = None
+    weight: int | None = Field(default=None, ge=0)
+    permissions: PositionPermissions | None = None
+
+
+class PositionWeightUpdate(BaseModel):
+    weight: int = Field(..., ge=0)
+
+
+class PositionMoveRequest(BaseModel):
+    before_position_id: int | None = None
+    after_position_id: int | None = None
+    target_level: int | None = Field(default=None, ge=1)
+
+
+class PositionRebalanceRequest(BaseModel):
+    level: int | None = Field(default=None, ge=1)
+
+
+class PositionListQuery(BaseModel):
+    """Порт Query(page, limit) роутера — валидация даёт тот же 422, что и
+    FastAPI при выходе за границы (страница <1, лимит вне [1, 200])."""
+
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class LevelThresholdCreate(BaseModel):
+    level_number: int = Field(..., ge=1)
+    weight_from: int = Field(..., ge=0)
+    weight_to: int = Field(..., ge=0)
+    label: str | None = Field(default=None, max_length=100)
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
+class LevelThresholdUpdate(BaseModel):
+    weight_from: int | None = Field(default=None, ge=0)
+    weight_to: int | None = Field(default=None, ge=0)
+    label: str | None = Field(default=None, max_length=100)
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
