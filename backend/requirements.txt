@@ -33,3 +33,8 @@ python-socketio==5.11.4   # messenger (Поток A, фаза 8) — Socket.IO A
 oauthlib==3.2.2           # mail (Поток A, фаза 7) — OAuth Google/Microsoft
 requests-oauthlib==2.0.0  # mail (Поток A, фаза 7) — OAuth-обвязка над requests
 django-recurrence==1.11.1 # task (Поток B, фаза 4) — повторяющиеся события календаря
+
+# ── mail-core (Поток A, фаза 7) — AES-256-GCM шифрование OAuth-токенов в
+# apps/mail/services/crypto.py, буквальный порт services/email/app/services/
+# crypto.py. Тот же пин, что services/email/requirements (см. там).
+cryptography==49.0.0

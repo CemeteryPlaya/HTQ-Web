@@ -1,0 +1,113 @@
+"""HTTP-вьюхи домена mail — ``/api/email/v1/{accounts,oauth}/*``.
+
+Порт services/email/app/api/v1/{accounts,oauth}.py. Вьюхи тонкие:
+аутентификация, парсинг, коды ответа. Логика — в apps/mail/services/
+{account,oauth}_service.py.
+
+Авторизация (решение 3 брифа mail-core): все accounts/oauth эндпойнты, КРОМЕ
+callback — обычный залогиненный пользователь (``get_current_user``
+исходника) → ``api_view(auth="jwt")``. Аккаунт/токен привязан к ``user_id``
+из JWT — пользователь видит и правит ТОЛЬКО свои строки (фильтрация — в
+apps/mail/services/*, не ослаблена относительно исходника).
+
+Единственное исключение — ``GET /oauth/callback``: это редирект ПРОВАЙДЕРА
+(без заголовка Authorization), в исходнике роут объявлен БЕЗ
+``get_current_user`` — идентичность пользователя приходит из state-нонса
+(см. oauth_service.connect/callback), а не из JWT → ``api_view(auth=None)``.
+
+Каждый из 9 эндпойнтов этой под-задачи обслуживает РОВНО один HTTP-метод —
+дублирующий диспетчер (как в apps/hr/views.py для departments/positions/...)
+здесь не нужен, ни один путь не переиспользуется под другим методом.
+"""
+from __future__ import annotations
+
+from django.http import HttpResponse
+
+from htqweb.http import api_view, json_error
+
+from .services import account_service as acct_svc
+from .services import oauth_service as oauth_svc
+
+_VALID_PROVIDERS = ("google", "microsoft")
+
+
+# ── /accounts/ ────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def accounts_collection(request):
+    return acct_svc.list_accounts(request.token.user_id)
+
+
+@api_view(methods=("POST",), auth="jwt")
+def account_set_default(request, account_id: int):
+    try:
+        return acct_svc.set_default_account(request.token.user_id, account_id)
+    except acct_svc.AccountNotFound:
+        return json_error("Account not found", 404)
+
+
+@api_view(methods=("POST",), auth="jwt", status=202)
+def account_sync(request, account_id: int):
+    try:
+        return acct_svc.trigger_sync(request.token.user_id, account_id)
+    except acct_svc.AccountNotFound:
+        return json_error("Account not found", 404)
+    except acct_svc.AccountInactive:
+        return json_error("Account is inactive", 409)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def account_detail(request, account_id: int):
+    try:
+        acct_svc.disconnect_account(request.token.user_id, account_id)
+    except acct_svc.AccountNotFound:
+        return json_error("Account not found", 404)
+    except acct_svc.CorporateAccountProtected:
+        return json_error(
+            "Corporate mailboxes are removed via /mailboxes/{id}/archive/", 400,
+        )
+    return HttpResponse(status=204)
+
+
+# ── /oauth/* ──────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def oauth_status(request):
+    return oauth_svc.status(request.token.user_id)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def oauth_accounts(request):
+    return oauth_svc.list_tokens(request.token.user_id)
+
+
+@api_view(methods=("POST",), auth="jwt")
+def oauth_connect(request, provider: str):
+    if provider not in _VALID_PROVIDERS:
+        return json_error(f"Unsupported OAuth provider: {provider!r}", 422)
+    try:
+        return oauth_svc.connect(request.token.user_id, provider)
+    except oauth_svc.ProviderNotConfigured as exc:
+        return json_error(str(exc), 503)
+
+
+@api_view(methods=("GET",), auth=None)
+def oauth_callback(request):
+    code = request.GET.get("code")
+    state = request.GET.get("state")
+    error = request.GET.get("error")
+    if error:
+        return json_error(f"Provider error: {error}", 400)
+    if not code or not state:
+        return json_error("Missing required query parameter: code/state", 422)
+    try:
+        return oauth_svc.callback(code=code, state=state)
+    except oauth_svc.InvalidOAuthState:
+        return json_error("Invalid or expired state", 400)
+    except oauth_svc.ProviderEmailMissing:
+        return json_error("Provider did not return an email address", 502)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def oauth_disconnect(request):
+    return oauth_svc.disconnect_all(request.token.user_id)

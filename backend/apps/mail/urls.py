@@ -1,5 +1,55 @@
-# Роуты домена mail регистрируются в его фазе (PLAN.md §6). Пустой список:
-# аппка смонтирована автодискавери (htqweb/urls.py) под своим API_PREFIX, но
-# эндпойнтов ещё нет — любой путь под префиксом даёт 404 при включённом
-# сервисе и 503 при выключенном (ServiceGateMiddleware работает до резолва URL).
-urlpatterns = []
+"""Роуты домена mail под ``/api/email/v1/`` (монтируется автодискавери по
+``MailConfig.API_PREFIX``, см. htqweb/urls.py).
+
+``APPEND_SLASH=False`` — каждое написание пути регистрируется явно (как в
+apps/hr/urls.py и apps/cms/urls.py).
+
+Реальные вызовы фронта (frontend/src/api/email.ts,
+frontend/src/services/emailService.ts — легаси, ещё не выпилен):
+``accounts/`` (GET), ``accounts/{id}/set-default/`` и ``accounts/{id}/sync/``
+(POST) — СО слешем; ``accounts/{id}/`` (DELETE) — тоже со слешем.
+``oauth/status``, ``oauth/connect/{provider}``, ``oauth/callback``,
+``oauth/disconnect`` — ВСЕ БЕЗ слеша (см. legacy emailService.ts) — ровно как
+в роутере исходника (``router = APIRouter(tags=["oauth"])`` без trailing
+slash на путях). ``oauth/accounts`` (список сырых OAuthToken — легаси
+account-picker) фронтом сейчас не используется — регистрируется защитно, по
+конвенции остальных аппок.
+
+Источник: services/email/app/main.py — ``accounts_router`` смонтирован под
+prefix="/api/email/v1/accounts", ``oauth_router`` — под
+prefix="/api/email/v1/oauth".
+"""
+from django.urls import path
+
+from . import views
+
+urlpatterns = [
+    # ── accounts (4 эндпойнта, services/email/app/api/v1/accounts.py) ──────
+    path("accounts/", views.accounts_collection),
+    path("accounts", views.accounts_collection),
+
+    path("accounts/<int:account_id>/set-default/", views.account_set_default),
+    path("accounts/<int:account_id>/set-default", views.account_set_default),
+
+    path("accounts/<int:account_id>/sync/", views.account_sync),
+    path("accounts/<int:account_id>/sync", views.account_sync),
+
+    path("accounts/<int:account_id>/", views.account_detail),
+    path("accounts/<int:account_id>", views.account_detail),
+
+    # ── oauth (5 эндпойнтов, services/email/app/api/v1/oauth.py) ───────────
+    path("oauth/status", views.oauth_status),
+    path("oauth/status/", views.oauth_status),
+
+    path("oauth/accounts", views.oauth_accounts),
+    path("oauth/accounts/", views.oauth_accounts),
+
+    path("oauth/connect/<str:provider>", views.oauth_connect),
+    path("oauth/connect/<str:provider>/", views.oauth_connect),
+
+    path("oauth/callback", views.oauth_callback),
+    path("oauth/callback/", views.oauth_callback),
+
+    path("oauth/disconnect", views.oauth_disconnect),
+    path("oauth/disconnect/", views.oauth_disconnect),
+]
