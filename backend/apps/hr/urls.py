@@ -299,4 +299,54 @@ urlpatterns = [
 
     path("pmo/<int:id>/", views.pmo_detail),
     path("pmo/<int:id>", views.pmo_detail),
+
+    # ── share-links ───────────────────────────────────────────────────────
+    # Порт services/hr/app/api/v1/share_links.py (4 эндпойнта). Литеральный
+    # ``{id}/audit`` — ДО голого ``<uuid:link_id>`` detail-роута (порядок
+    # роутера исходника, как и везде в этой аппке).
+    path("share-links/", views.share_links_collection),
+    path("share-links", views.share_links_collection),
+
+    path("share-links/<uuid:link_id>/audit", views.share_link_audit),
+    path("share-links/<uuid:link_id>/audit/", views.share_link_audit),
+
+    path("share-links/<uuid:link_id>", views.share_link_detail),
+    path("share-links/<uuid:link_id>/", views.share_link_detail),
+
+    # ── public (БЕЗ JWT) — порт services/hr/app/api/public/{org,employee}.py ──
+    # ``<str:token>`` — raw token (secrets.token_urlsafe), не uuid/int.
+    path("public/org/<str:token>", views.public_org_view),
+    path("public/org/<str:token>/", views.public_org_view),
+
+    path("public/employee/<str:token>", views.public_employee_view),
+    path("public/employee/<str:token>/", views.public_employee_view),
+
+    # ── department-files — порт services/hr/app/api/v1/department_files.py
+    # (7 эндпойнтов). Литеральный ``department-files/search/`` — ДО
+    # ``department-files/<int:file_id>/`` (порядок роутера исходника).
+    path("department-folders/", views.department_folders_list),
+    path("department-folders", views.department_folders_list),
+
+    path("department-file-folders/", views.department_file_folders_collection),
+    path("department-file-folders", views.department_file_folders_collection),
+
+    path("department-files/search/", views.department_files_search),
+    path("department-files/search", views.department_files_search),
+
+    path("department-files/", views.department_files_collection),
+    path("department-files", views.department_files_collection),
+
+    path("department-files/<int:file_id>/", views.department_file_detail),
+    path("department-files/<int:file_id>", views.department_file_detail),
+
+    # ── audit (логи) — порт services/hr/app/api/v1/audit.py. Роутер
+    # исходника смонтирован под prefix="/logs" (комментарий исходника:
+    # "Mounted at `/logs` to match the frontend (HRLogs.tsx)").
+    path("logs/", views.audit_logs),
+    path("logs", views.audit_logs),
+
+    # ── internal (S2S, БЕЗ JWT) — порт services/hr/app/api/v1/internal.py.
+    # Смонтирован исходником под prefix=f"{API_PREFIX}/internal".
+    path("internal/supervisor", views.internal_supervisor),
+    path("internal/supervisor/", views.internal_supervisor),
 ]

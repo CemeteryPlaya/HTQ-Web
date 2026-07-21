@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 
+from django.conf import settings as django_settings
 from django.http import HttpResponse, JsonResponse
 from pydantic import ValidationError
 
@@ -36,18 +38,22 @@ from .permissions import (
     STAFFING_MANAGE,
     STAFFING_VIEW,
 )
+from .services import audit_service
 from .services import calendar_service as cal_svc
+from .services import department_file_service as dept_file_svc
 from .services import department_service as svc
 from .services import document_service as doc_svc
 from .services import employee_card_service as card_svc
 from .services import employee_card_t2_service as card_t2_svc
 from .services import employee_groups_service as groups_svc
 from .services import employee_service as emp_svc
+from .services import internal_service as internal_svc
 from .services import org_service
 from .services import personnel_history_service as ph_svc
 from .services import pmo_service as pmo_svc
 from .services import position_service as pos_svc
 from .services import recruitment_service as rec_svc
+from .services import share_link_service as share_link_svc
 from .services import staffing_service as staffing_svc
 from .services import time_service as time_svc
 
@@ -2062,3 +2068,339 @@ def pmo_org_chart(request, id: int):
         return pmo_svc.get_pmo_org_chart(id)
     except pmo_svc.PMONotFound:
         return json_error("PMO not found", 404)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  final: /share-links/*, /public/{org,employee}/{token}, /department-*/*,
+#  /logs/, /internal/supervisor — порт services/hr/app/api/v1/{share_links,
+#  department_files,audit,internal}.py + app/api/public/{org,employee}.py.
+#  Последний под-модуль домена hr.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация (решение контроллера, брифа под-модуля final) — разнобой,
+# сверено с каждым эндпойнтом исходника отдельно:
+#   * share-links (управление) — ``get_current_user`` исходника -> обычный
+#     ``auth="jwt"`` на ВСЕХ 4 (включая POST/DELETE — исходник НЕ зовёт
+#     require_hr_write здесь: любой залогиненный может создать/отозвать
+#     СВОЮ ссылку, get_link/list_audit сами гейтят по created_by_user_id);
+#   * /public/org/{token}, /public/employee/{token} — БЕЗ JWT вовсе
+#     (``auth=None``): доступ по знанию токена ссылки, проверка внутри
+#     share_link_service;
+#   * department-files/department-file-folders — ``get_current_user`` +
+#     собственный department-based access-check (НЕ hr_access.HRAccess,
+#     НЕ require_permission — самостоятельная авторизационная модель
+#     исходника, отдел сотрудника == department_id ИЛИ is_elevated);
+#   * /logs/ (audit) — обычный ``get_current_user`` -> auth="jwt", БЕЗ
+#     admin=True — любой залогиненный видит весь журнал (буквальный порт,
+#     странность исходника, не баг);
+#   * /internal/supervisor — S2S, НЕ JWT: общий секрет в заголовке
+#     ``X-Internal-Token`` (``auth=None`` + ручная проверка), буквальный порт
+#     ``require_internal_token`` исходника.
+
+
+# ── /share-links/ — коллекция ────────────────────────────────────────────────
+
+def _share_link_public_path(target_type: str) -> str:
+    return "/public/employee/" if target_type == "employee" else "/public/org/"
+
+
+def _share_link_public_url(request, raw_token: str, target_type: str = "org") -> str:
+    """Строит user-facing публичный URL — порт ``_public_url`` роутера
+    исходника. ``settings.public_base_url`` исходника не имеет здесь прямого
+    аналога (Django-настройки этой аппки его не заводят — граница задачи
+    ограничена ``backend/apps/hr/**``); ``getattr`` с дефолтом воспроизводит
+    тот же "нет — падаем на следующий уровень" фолбэк, что и исходник."""
+    path = _share_link_public_path(target_type)
+    base = getattr(django_settings, "PUBLIC_BASE_URL", None)
+    if base:
+        return f"{base.rstrip('/')}{path}{raw_token}"
+
+    fwd_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    if fwd_host:
+        proto = (request.headers.get("x-forwarded-proto") or request.scheme).split(",")[0].strip()
+        return f"{proto}://{fwd_host}{path}{raw_token}"
+
+    return f"{request.scheme}://{request.get_host()}{path}{raw_token}"
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.ShareLinkCreate, status=201)
+def _create_share_link(request, data: schemas.ShareLinkCreate):
+    try:
+        created = share_link_svc.create_link(request.token.user_id, data.model_dump())
+    except share_link_svc.TargetEmployeeRequired:
+        return json_error("target_employee_id is required when target_type='employee'", 422)
+    out = share_link_svc.serialize_link(created.link)
+    out["token"] = created.raw_token
+    out["url"] = _share_link_public_url(request, created.raw_token, created.link.target_type or "org")
+    return out
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_share_links(request):
+    return [share_link_svc.serialize_link(link) for link in share_link_svc.list_links(request.token.user_id)]
+
+
+def share_links_collection(request):
+    if request.method == "GET":
+        return _list_share_links(request)
+    if request.method == "POST":
+        return _create_share_link(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /share-links/{id} ─────────────────────────────────────────────────────
+
+@api_view(methods=("DELETE",), auth="jwt")
+def share_link_detail(request, link_id):
+    try:
+        share_link_svc.revoke_link(link_id, request.token.user_id)
+    except share_link_svc.LinkNotFound:
+        return json_error("Link not found", 404)
+    return HttpResponse(status=204)
+
+
+# ── /share-links/{id}/audit ───────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def share_link_audit(request, link_id):
+    """Forensic-трейл одной ссылки. Только владельцу."""
+    try:
+        entries = share_link_svc.list_audit(link_id, request.token.user_id)
+    except share_link_svc.LinkNotFound:
+        return json_error("Link not found", 404)
+    return [share_link_svc.serialize_audit_entry(e) for e in entries]
+
+
+# ── /public/org/{token}, /public/employee/{token} — БЕЗ JWT ───────────────
+
+def _public_consume_error(exc: Exception):
+    if isinstance(exc, share_link_svc.LinkNotFound):
+        return json_error("Link not found", 404)
+    if isinstance(exc, share_link_svc.LinkRevoked):
+        return json_error("This link has been revoked", 410)
+    if isinstance(exc, share_link_svc.LinkAlreadyUsed):
+        return json_error("This one-time link has already been used", 410)
+    if isinstance(exc, share_link_svc.LinkExpired):
+        return json_error("This link has expired", 410)
+    if isinstance(exc, share_link_svc.LinkInactive):
+        return json_error("This link is no longer active", 410)
+    if isinstance(exc, share_link_svc.EmployeeLinkGone):
+        return json_error("The employee referenced by this link no longer exists", 410)
+    raise exc
+
+
+def _public_json_response(result: dict) -> JsonResponse:
+    # X-Robots-Tag/Cache-Control — порт заголовков роутера исходника
+    # (защита от индексации + запрет кеширования). Возвращаем готовый
+    # HttpResponse напрямую (не dict) — api_view передаёт такие объекты как
+    # есть, не оборачивая повторно (см. htqweb/http.py).
+    response = JsonResponse(result)
+    response["X-Robots-Tag"] = "noindex, nofollow"
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@api_view(methods=("GET",), auth=None)
+def public_org_view(request, token: str):
+    try:
+        result = share_link_svc.consume_link(request, token)
+    except (
+        share_link_svc.LinkNotFound,
+        share_link_svc.LinkRevoked,
+        share_link_svc.LinkAlreadyUsed,
+        share_link_svc.LinkExpired,
+        share_link_svc.LinkInactive,
+    ) as exc:
+        return _public_consume_error(exc)
+    return _public_json_response(result)
+
+
+@api_view(methods=("GET",), auth=None)
+def public_employee_view(request, token: str):
+    try:
+        result = share_link_svc.consume_employee_link(request, token)
+    except (
+        share_link_svc.LinkNotFound,
+        share_link_svc.LinkRevoked,
+        share_link_svc.LinkAlreadyUsed,
+        share_link_svc.LinkExpired,
+        share_link_svc.LinkInactive,
+        share_link_svc.EmployeeLinkGone,
+    ) as exc:
+        return _public_consume_error(exc)
+    return _public_json_response(result)
+
+
+# ── /department-folders/ ─────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def department_folders_list(request):
+    return dept_file_svc.list_department_folders(request.token)
+
+
+# ── /department-files/search/ (литеральный роут — ДО коллекции) ────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def department_files_search(request):
+    try:
+        query = schemas.DepartmentFileSearchQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return dept_file_svc.search_department_files(request.token, query.q, limit=query.limit)
+
+
+# ── /department-file-folders/ — коллекция ───────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_department_file_folders(request):
+    try:
+        query = schemas.DepartmentQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    try:
+        return dept_file_svc.list_department_file_folders(request.token, query.department)
+    except dept_file_svc.DepartmentNotFound:
+        return json_error("Department not found", 404)
+    except dept_file_svc.DepartmentAccessDenied:
+        return json_error("Department access denied", 403)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.DepartmentFileFolderCreate, status=201)
+def _create_department_file_folder(request, data: schemas.DepartmentFileFolderCreate):
+    try:
+        return dept_file_svc.create_department_file_folder(request.token, data.department, data.name)
+    except dept_file_svc.DepartmentNotFound:
+        return json_error("Department not found", 404)
+    except dept_file_svc.DepartmentAccessDenied:
+        return json_error("Department access denied", 403)
+    except dept_file_svc.FolderNameRequired:
+        return json_error("Folder name is required", 400)
+    except dept_file_svc.FolderAlreadyExists:
+        return json_error("Folder already exists", 409)
+
+
+def department_file_folders_collection(request):
+    if request.method == "GET":
+        return _list_department_file_folders(request)
+    if request.method == "POST":
+        return _create_department_file_folder(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /department-files/ — коллекция ───────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_department_files(request):
+    try:
+        query = schemas.DepartmentFileListQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    try:
+        return dept_file_svc.list_department_files(
+            request.token, folder=query.folder, file_folder=query.file_folder, root_only=query.root_only,
+        )
+    except dept_file_svc.DepartmentNotFound:
+        return json_error("Department not found", 404)
+    except dept_file_svc.DepartmentAccessDenied:
+        return json_error("Department access denied", 403)
+    except dept_file_svc.FileFolderNotFound:
+        return json_error("File folder not found", 404)
+
+
+@api_view(methods=("POST",), auth="jwt", status=201)
+def _upload_department_file(request):
+    # multipart/form-data — POST Django сам парсит в request.POST/request.FILES
+    # (в отличие от PATCH, см. apps/users/views.py::_parse_multipart_patch).
+    try:
+        folder = int(request.POST.get("folder", ""))
+    except (TypeError, ValueError):
+        return json_error({"folder": "field required"}, 422)
+
+    file_folder_raw = request.POST.get("file_folder")
+    file_folder: int | None = None
+    if file_folder_raw not in (None, ""):
+        try:
+            file_folder = int(file_folder_raw)
+        except (TypeError, ValueError):
+            return json_error({"file_folder": "must be an integer"}, 422)
+
+    upload = request.FILES.get("file")
+    if upload is None:
+        return json_error({"file": "field required"}, 422)
+
+    description = request.POST.get("description", "")
+
+    try:
+        return dept_file_svc.upload_department_file(
+            request.token, folder=folder, file_folder=file_folder, file=upload, description=description,
+        )
+    except dept_file_svc.DepartmentNotFound:
+        return json_error("Department not found", 404)
+    except dept_file_svc.DepartmentAccessDenied:
+        return json_error("Department access denied", 403)
+    except dept_file_svc.FileFolderNotFound:
+        return json_error("File folder not found", 404)
+    except dept_file_svc.UploadRejected as exc:
+        return json_error(exc.detail, exc.status_code)
+
+
+def department_files_collection(request):
+    if request.method == "GET":
+        return _list_department_files(request)
+    if request.method == "POST":
+        return _upload_department_file(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /department-files/{id}/ ──────────────────────────────────────────────
+
+@api_view(methods=("DELETE",), auth="jwt")
+def department_file_detail(request, file_id: int):
+    try:
+        dept_file_svc.delete_department_file(request.token, file_id)
+    except dept_file_svc.DepartmentFileNotFound:
+        return json_error("Department file not found", 404)
+    except dept_file_svc.DepartmentAccessDenied:
+        return json_error("Department access denied", 403)
+    return HttpResponse(status=204)
+
+
+# ── /logs/ — порт audit.py ────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def audit_logs(request):
+    try:
+        query = schemas.AuditLogQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return audit_service.list_logs(
+        entity_type=query.entity_type, entity_id=query.entity_id, page=query.page, limit=query.limit,
+    )
+
+
+# ── /internal/supervisor — S2S, БЕЗ JWT ────────────────────────────────────
+
+def _check_internal_token(request):
+    """None — авторизован; иначе готовый json_error. Буквальный порт
+    ``require_internal_token`` исходника: общий секрет
+    ``INTERNAL_S2S_TOKEN`` (или legacy ``MESSENGER_INTERNAL_TOKEN`` на время
+    перехода) сверяется с заголовком ``X-Internal-Token``."""
+    expected = os.environ.get("INTERNAL_S2S_TOKEN") or os.environ.get("MESSENGER_INTERNAL_TOKEN") or ""
+    if not expected:
+        return json_error("INTERNAL_S2S_TOKEN not configured", 503)
+    got = request.headers.get("X-Internal-Token")
+    if not got or got != expected:
+        return json_error("invalid internal token", 401)
+    return None
+
+
+@api_view(methods=("GET",), auth=None)
+def internal_supervisor(request):
+    err = _check_internal_token(request)
+    if err is not None:
+        return err
+    try:
+        query = schemas.InternalSupervisorQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return {"supervisor_user_id": internal_svc.get_supervisor_user_id(query.user_id)}

@@ -6,6 +6,8 @@
 Старые имена (hr_departments, …) живут только в карте ETL фазы 10.
 """
 
+import uuid
+
 from django.db import models
 from django.db.models.functions import Now
 
@@ -1070,3 +1072,257 @@ class PMOMember(models.Model):
     def __str__(self) -> str:
         return (f"<PMOMember(id={self.id}, pmo_id={self.pmo_id}, "
                 f"employee_id={self.employee_id})>")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  final: ShareableLink + ShareLinkAudit + DepartmentFileFolder +
+#  DepartmentFile — порт services/hr/app/models/{shareable_link,
+#  department_file}.py. Последний под-модуль домена hr.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class ShareLinkType(models.TextChoices):
+    ONE_TIME = "one_time", "Одноразовая"
+    TIME_LIMITED = "time_limited", "Ограничена по времени"
+    PERMANENT_WITH_EXPIRY = "permanent_with_expiry", "Постоянная с истечением"
+
+
+class ShareLinkLanguage(models.TextChoices):
+    RU = "ru", "Русский"
+    EN = "en", "Английский"
+
+
+class ShareLinkTargetType(models.TextChoices):
+    ORG = "org", "Оргструктура"
+    EMPLOYEE = "employee", "Карточка сотрудника"
+
+
+class ShareableLink(models.Model):
+    """Публичная ссылка доступа к оргдереву/карточке сотрудника — порт
+    services/hr/app/models/shareable_link.py::ShareableLink.
+
+    Таблица — дефолтное имя Django: hr_shareablelink (не hr_shareable_links
+    исходника, решение D2, как и весь остальной файл). D5-подобное решение:
+    наследует голый ``models.Model``, а НЕ ``HrBase`` — исходник наследует
+    ``Base`` напрямую (НЕ ``BaseModel``): есть только ``created_at``
+    (``server_default=func.now()``), НЕТ ``updated_at`` — мутации полей
+    (``opened_at``/``used_at``/``revoked_at``/``is_active``) в исходнике
+    точечные, без общего "последнее изменение".
+
+    ``id`` — UUID PK; у исходника ``server_default=text("gen_random_uuid()")``
+    (генерация на стороне БД). Порт использует КЛИЕНТСКИЙ
+    ``default=uuid.uuid4`` — тот же осознанный отход от буквальной формы, что
+    уже сделан для ``apps.media_files.models.FileMetadata.id`` (тоже UUID PK
+    исходника с server-side генерацией в SQLAlchemy): не заводим здесь
+    Postgres-специфичную ``gen_random_uuid()``-обвязку там, где в кодовой базе
+    уже есть работающий прецедент с тем же практическим эффектом —
+    гарантированно уникальный UUID при каждой вставке, включая мимо ORM
+    (Python генерирует его до INSERT).
+
+    ``token`` — legacy plaintext-колонка исходника (``nullable``, новые
+    строки её не заполняют — ``token=None`` при создании); переносится как
+    есть, только ради формы, порт никогда её не читает.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    token = models.CharField(max_length=64, null=True, blank=True)
+    token_hash = models.CharField(max_length=64, unique=True)
+    created_by_user_id = models.IntegerField(db_index=True)
+    label = models.CharField(max_length=200, null=True, blank=True)
+    viewer_label = models.CharField(max_length=64, null=True, blank=True)
+    watermark_text = models.CharField(max_length=128, null=True, blank=True)
+    max_level = models.IntegerField(default=3, db_default=3)
+    default_language = models.CharField(
+        max_length=2,
+        choices=ShareLinkLanguage.choices,
+        default=ShareLinkLanguage.RU,
+        db_default=ShareLinkLanguage.RU.value,
+    )
+    visible_units = models.JSONField(null=True, blank=True)
+    link_type = models.CharField(
+        max_length=30,
+        choices=ShareLinkType.choices,
+        default=ShareLinkType.ONE_TIME,
+        db_default=ShareLinkType.ONE_TIME.value,
+    )
+    expires_at = models.DateTimeField(null=True, blank=True)
+    opened_at = models.DateTimeField(null=True, blank=True)
+    opened_by_ip = models.CharField(max_length=45, null=True, blank=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True, db_default=True, db_index=True)
+    # 'org' (весь оргчарт) | 'employee' (одна карточка). Дефолт 'org' сохраняет
+    # legacy-строки без изменений после бэкафилла колонки (комментарий исходника).
+    target_type = models.CharField(
+        max_length=16,
+        choices=ShareLinkTargetType.choices,
+        default=ShareLinkTargetType.ORG,
+        db_default=ShareLinkTargetType.ORG.value,
+    )
+    # Обязателен при target_type='employee'. Без FK — ссылка должна пережить
+    # soft-delete сотрудника; consume-путь резолвит лениво и отдаёт 410, если
+    # сотрудник исчез (буквальный порт комментария исходника).
+    target_employee_id = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(db_default=Now())
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(link_type__in=list(ShareLinkType.values)),
+                name="ck_link_type",
+            ),
+            models.CheckConstraint(condition=models.Q(max_level__gte=1), name="ck_link_max_level"),
+            models.CheckConstraint(
+                condition=models.Q(default_language__in=list(ShareLinkLanguage.values)),
+                name="ck_share_link_default_language",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(target_type__in=list(ShareLinkTargetType.values)),
+                name="ck_share_link_target_type",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(target_type=ShareLinkTargetType.ORG, target_employee_id__isnull=True)
+                    | models.Q(target_type=ShareLinkTargetType.EMPLOYEE, target_employee_id__isnull=False)
+                ),
+                name="ck_share_link_target_consistency",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<ShareableLink(id={self.id}, type='{self.link_type}', active={self.is_active})>"
+
+
+class ShareLinkAuditAction(models.TextChoices):
+    OPEN = "open", "Открыта"
+    DENIED_REVOKED = "denied_revoked", "Отказ: отозвана"
+    DENIED_EXPIRED = "denied_expired", "Отказ: истекла"
+    DENIED_USED = "denied_used", "Отказ: уже использована"
+    DENIED_UNKNOWN = "denied_unknown", "Отказ: неизвестный токен"
+    REVOKED = "revoked", "Отозвана"
+    CREATED = "created", "Создана"
+
+
+class ShareLinkAudit(models.Model):
+    """Аппенд-лог событий шаринговой ссылки — порт
+    services/hr/app/models/shareable_link.py::ShareLinkAudit.
+
+    Таблица — дефолтное имя Django: hr_sharelinkaudit (не hr_share_link_audit
+    исходника, решение D2). НЕ наследует HrBase — у исходника собственный
+    ``occurred_at`` (``server_default=func.now()``) вместо привычного
+    created_at, апдейтов нет вовсе (INSERT-only, докстринг исходника это
+    прямо оговаривает: never UPDATE or DELETE).
+
+    ``link`` — ``db_index=False``: составной
+    ``Index("ix_share_link_audit_link", "link_id", "occurred_at")`` —
+    единственный индекс исходника на этой таблице, покрывает ``link_id``
+    своим левым префиксом (тот же приём, что ``PositionWeightAudit.position``/
+    ``TimeEntry.employee`` выше в этом файле) — отдельный btree от
+    дефолтного Django FK-индекса был бы дублем; исходник тоже не
+    индексирует ``link_id`` отдельно (``ForeignKey(...)`` без
+    ``index=True``).
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    link = models.ForeignKey(
+        ShareableLink, on_delete=models.CASCADE, related_name="audit_entries", db_index=False,
+    )
+    action = models.CharField(max_length=20, choices=ShareLinkAuditAction.choices)
+    occurred_at = models.DateTimeField(db_default=Now())
+    ip = models.CharField(max_length=45, null=True, blank=True)
+    user_agent = models.TextField(null=True, blank=True)
+    reason = models.CharField(max_length=64, null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["link", "occurred_at"])]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(action__in=list(ShareLinkAuditAction.values)),
+                name="ck_share_link_audit_action",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<ShareLinkAudit(id={self.id}, link_id={self.link_id}, action='{self.action}')>"
+
+
+class DepartmentFileFolder(HrBase):
+    """Пользовательская папка внутри файлового пространства отдела — порт
+    services/hr/app/models/department_file.py::DepartmentFileFolder.
+
+    Таблица — дефолтное имя Django: hr_departmentfilefolder (не
+    hr_department_file_folders исходника, решение D2). Наследует HrBase —
+    исходник наследует BaseModel (created_at/updated_at), как Document/
+    EmployeeCard выше.
+
+    ``department`` — ``db_index=False``: составной
+    ``UniqueConstraint(department, name)`` (порт
+    ``uq_hr_department_file_folders_department_name``) покрывает
+    ``department_id`` своим левым префиксом — отдельный btree от
+    дефолтного Django FK-индекса был бы дублем поверх уникального индекса
+    составного ограничения (тот же приём, что ``TimeEntry.employee``/
+    ``PositionWeightAudit.position`` выше в этом файле). Исходник
+    ДОПОЛНИТЕЛЬНО несёт явный одиночный ``index=True`` на этой же колонке
+    ПОВЕРХ составного UniqueConstraint (две структуры на одном столбце) —
+    та же странность исходника, что у ``PMO.code`` выше, не воспроизводим
+    байт-в-байт.
+    """
+
+    department = models.ForeignKey(
+        Department, on_delete=models.CASCADE, related_name="file_folders", db_index=False,
+    )
+    name = models.CharField(max_length=255)
+    created_by_user_id = models.IntegerField(null=True, blank=True, db_index=True)
+    created_by_name = models.CharField(max_length=255, null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["department", "name"],
+                name="uq_hr_department_file_folders_department_name",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (f"<DepartmentFileFolder(id={self.id}, department_id={self.department_id}, "
+                f"name='{self.name}')>")
+
+
+class DepartmentFile(HrBase):
+    """Файл отдела — метаданные (байты хранятся в media_files через
+    ``apps.media_files.interface``, scope ``hr_department``) — порт
+    services/hr/app/models/department_file.py::DepartmentFile.
+
+    Таблица — дефолтное имя Django: hr_departmentfile (не
+    hr_department_files исходника, решение D2). ``department``/
+    ``file_folder`` оба несут явный ``index=True`` в исходнике САМИ ПО
+    СЕБЕ (не покрыты никаким составным индексом здесь, в отличие от
+    ``DepartmentFileFolder.department`` выше) — оставлены с дефолтным
+    Django FK-индексом (``db_index=True`` неявно).
+
+    ``media_file_id`` — строковый UUID
+    ``apps.media_files.models.FileMetadata.id`` (НЕ FK — межаппные FK
+    запрещены, тот же приём, что ``Document.file_path``/``Employee.avatar_url``
+    выше: файловый бэкенд — отдельная аппка, апелляция только через
+    ``apps.media_files.interface``).
+    """
+
+    department = models.ForeignKey(
+        Department, on_delete=models.CASCADE, related_name="files",
+    )
+    file_folder = models.ForeignKey(
+        DepartmentFileFolder, null=True, blank=True, on_delete=models.SET_NULL, related_name="files",
+    )
+    media_file_id = models.CharField(max_length=64, db_index=True)
+    name = models.CharField(max_length=512)
+    file_url = models.CharField(max_length=1024)
+    file_size = models.BigIntegerField(default=0, db_default=0)
+    mime_type = models.CharField(
+        max_length=255, default="application/octet-stream", db_default="application/octet-stream",
+    )
+    uploaded_by_user_id = models.IntegerField(null=True, blank=True, db_index=True)
+    uploaded_by_name = models.CharField(max_length=255, null=True, blank=True)
+    description = models.TextField(default="", db_default="")
+
+    def __str__(self) -> str:
+        return f"<DepartmentFile(id={self.id}, department_id={self.department_id}, name='{self.name}')>"

@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, datetime, time
 from enum import Enum
 from typing import Literal
 
@@ -754,3 +754,76 @@ class EmployeeGroupsIn(BaseModel):
     education: list[EducationItem] = []
     experience: list[ExperienceItem] = []
     relatives: list[RelativeItem] = []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  final: share_links + department_files + audit + internal — порт
+#  services/hr/app/schemas/{shareable_link (inline в роутере),
+#  department_file}.py + query-параметры audit.py/internal.py.
+# ═══════════════════════════════════════════════════════════════════════════
+
+ShareLinkTypeLiteral = Literal["one_time", "time_limited", "permanent_with_expiry"]
+ShareLinkLanguageLiteral = Literal["ru", "en"]
+ShareLinkTargetTypeLiteral = Literal["org", "employee"]
+
+
+class ShareLinkCreate(BaseModel):
+    """Порт ``share_links.py::LinkCreate`` (схема объявлена inline в роутере
+    исходника, не в отдельном schemas-модуле — сюда переносится буквально)."""
+
+    label: str | None = Field(default=None, max_length=200)
+    viewer_label: str | None = Field(default=None, max_length=64)
+    watermark_text: str | None = Field(default=None, max_length=128)
+    max_level: int = Field(default=3, ge=1, le=10)
+    default_language: ShareLinkLanguageLiteral = "ru"
+    visible_units: list[int] | None = None
+    link_type: ShareLinkTypeLiteral = "one_time"
+    expires_at: datetime | None = None
+    # target_type='employee' требует target_employee_id (проверка в сервисе —
+    # схема сама по себе не может выразить conditional-required буквально
+    # как исходник, который тоже проверяет это в роутере, не в pydantic).
+    target_type: ShareLinkTargetTypeLiteral = "org"
+    target_employee_id: int | None = None
+
+
+class DepartmentFileFolderCreate(BaseModel):
+    """Порт schemas/department_file.py::DepartmentFileFolderCreate."""
+
+    department: int = Field(..., ge=1)
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class DepartmentQuery(BaseModel):
+    """Query-параметр ``department`` — GET /department-file-folders/."""
+
+    department: int = Field(..., ge=1)
+
+
+class DepartmentFileListQuery(BaseModel):
+    """Query-параметры GET /department-files/."""
+
+    folder: int = Field(..., ge=1)
+    file_folder: int | None = Field(default=None, ge=1)
+    root_only: bool = False
+
+
+class DepartmentFileSearchQuery(BaseModel):
+    """Query-параметры GET /department-files/search/."""
+
+    q: str = Field(..., min_length=1)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class AuditLogQuery(BaseModel):
+    """Query-параметры GET /logs/ (порт audit.py — Query-параметры роутера)."""
+
+    entity_type: str | None = None
+    entity_id: int | None = None
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class InternalSupervisorQuery(BaseModel):
+    """Query-параметр ``user_id`` — GET /internal/supervisor (порт internal.py)."""
+
+    user_id: int

@@ -15,6 +15,8 @@ from .models import (
     AuditLog,
     CalendarDay,
     Department,
+    DepartmentFile,
+    DepartmentFileFolder,
     Document,
     Employee,
     EmployeeCard,
@@ -32,6 +34,8 @@ from .models import (
     PMOPosition,
     Position,
     ReportingRelation,
+    ShareableLink,
+    ShareLinkAudit,
     ShiftPattern,
     StaffingPosition,
     TimeEntry,
@@ -230,6 +234,43 @@ class PMOMemberAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
                     "is_primary", "from_date", "to_date")
     list_filter = ("membership_type", "is_primary")
     autocomplete_fields = ("pmo", "employee")
+
+
+@admin.register(ShareableLink)
+class ShareableLinkAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "label", "link_type", "target_type", "created_by_user_id",
+                    "is_active", "created_at")
+    list_filter = ("link_type", "target_type", "is_active")
+    search_fields = ("label",)
+    readonly_fields = ("created_at",)
+    # token_hash — секретный материал; никогда не показываем сырой token.
+    exclude = ("token",)
+
+
+@admin.register(ShareLinkAudit)
+class ShareLinkAuditAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "link", "action", "ip", "occurred_at")
+    list_filter = ("action",)
+    readonly_fields = ("occurred_at",)
+    autocomplete_fields = ("link",)
+
+
+@admin.register(DepartmentFileFolder)
+class DepartmentFileFolderAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "department", "name", "created_by_user_id", "created_at")
+    search_fields = ("name",)
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("department",)
+
+
+@admin.register(DepartmentFile)
+class DepartmentFileAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "department", "file_folder", "name", "file_size",
+                    "uploaded_by_user_id", "created_at")
+    list_filter = ("department",)
+    search_fields = ("name",)
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("department", "file_folder")
 
 
 # PMODepartment/PMOPosition are NOT registered here — Django hard-rejects it.
