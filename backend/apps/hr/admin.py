@@ -11,6 +11,7 @@ from django.contrib import admin
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
 from .models import (
+    Application,
     AuditLog,
     Department,
     Employee,
@@ -18,6 +19,7 @@ from .models import (
     OrgSettings,
     Position,
     ReportingRelation,
+    Vacancy,
 )
 
 
@@ -77,3 +79,22 @@ class AuditLogAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_filter = ("entity_type", "action")
     search_fields = ("entity_type", "entity_id", "changed_by")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Vacancy)
+class VacancyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "title", "department", "position", "status",
+                    "opened_at", "closed_at")
+    list_filter = ("status", "department")
+    search_fields = ("title",)
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("department", "position", "assigned_recruiter")
+
+
+@admin.register(Application)
+class ApplicationAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "candidate_name", "candidate_email", "vacancy", "status", "applied_at")
+    list_filter = ("status",)
+    search_fields = ("candidate_name", "candidate_email")
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("vacancy",)

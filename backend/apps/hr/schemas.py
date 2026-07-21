@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 
 class DepartmentCreate(BaseModel):
@@ -209,3 +209,81 @@ class RelationCreate(BaseModel):
 
 class OrgSettingUpdate(BaseModel):
     deletion_strategy: DeletionStrategyLiteral
+
+
+# ── recruiting — порт services/hr/app/schemas/{vacancy,application}.py ──────
+
+VacancyStatusLiteral = Literal["open", "closed", "on_hold"]
+ApplicationStatusLiteral = Literal["new", "reviewed", "interview", "offer", "rejected", "hired"]
+
+
+class VacancyCreate(BaseModel):
+    title: str = Field(..., max_length=255)
+    department_id: int
+    position_id: int
+    description: str = ""
+    requirements: str = ""
+    status: VacancyStatusLiteral = "open"
+    assigned_recruiter_id: int | None = None
+
+
+class VacancyUpdate(BaseModel):
+    """Порт VacancyUpdate — все поля опциональны, exclude_none PATCH-семантика
+    (как и Department/PositionUpdate)."""
+
+    title: str | None = Field(default=None, max_length=255)
+    department_id: int | None = None
+    position_id: int | None = None
+    description: str | None = None
+    requirements: str | None = None
+    status: VacancyStatusLiteral | None = None
+    assigned_recruiter_id: int | None = None
+    closed_at: date | None = None
+
+
+class VacancyListQuery(BaseModel):
+    """Порт Query(status, department_id, page, limit) роутера ``GET /vacancies/``.
+
+    ``status`` — свободная строка в исходнике (без pattern на фильтре, в
+    отличие от VacancyCreate/Update.status) — фильтр по несуществующему
+    статусу просто не найдёт совпадений, не 422.
+    """
+
+    status: str | None = None
+    department_id: int | None = None
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class ApplicationCreate(BaseModel):
+    vacancy_id: int
+    candidate_name: str = Field(..., max_length=255)
+    candidate_email: EmailStr
+    candidate_phone: str | None = Field(default=None, max_length=20)
+    resume_url: str | None = Field(default=None, max_length=500)
+    cover_letter: str | None = None
+    notes: str | None = None
+
+
+class ApplicationUpdate(BaseModel):
+    """Порт ApplicationUpdate — все поля опциональны, exclude_none PATCH-семантика."""
+
+    candidate_name: str | None = Field(default=None, max_length=255)
+    candidate_email: EmailStr | None = None
+    candidate_phone: str | None = None
+    resume_url: str | None = None
+    cover_letter: str | None = None
+    notes: str | None = None
+    status: ApplicationStatusLiteral | None = None
+
+
+class ApplicationStatusChange(BaseModel):
+    status: ApplicationStatusLiteral
+    notes: str | None = None
+
+
+class ApplicationListQuery(BaseModel):
+    """Порт Query(page, limit) роутера ``GET /applications/`` — без фильтров."""
+
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=20, ge=1, le=200)

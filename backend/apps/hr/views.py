@@ -31,6 +31,7 @@ from .services import department_service as svc
 from .services import employee_service as emp_svc
 from .services import org_service
 from .services import position_service as pos_svc
+from .services import recruitment_service as rec_svc
 
 
 def _wants_cascade(request) -> bool:
@@ -699,3 +700,182 @@ def org_deletion_strategy(request):
     if request.method == "PUT":
         return _set_deletion_strategy(request)
     return json_error("Method Not Allowed", 405)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /vacancies/* + /applications/* — порт services/hr/app/api/v1/{vacancies,
+#  applications}.py (13 эндпойнтов: vacancies 6 + applications 7)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация — БУКВАЛЬНО как в исходнике: recruiting-роутеры (в отличие от
+# positions/org) используют ТОЛЬКО ``get_current_user`` — ни один эндпойнт,
+# включая POST/PUT/DELETE, не зовёт ``require_hr_write``. Это странность
+# исходника (см. докстринг apps/hr/services/recruitment_service.py), не баг
+# порта: ВСЕ 13 эндпойнтов ниже — ``api_view(auth="jwt")`` без ``admin=True``.
+
+
+# ── /vacancies/ — коллекция ─────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_vacancies(request):
+    try:
+        query = schemas.VacancyListQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    items, total = rec_svc.list_vacancies(
+        status=query.status, department_id=query.department_id, page=query.page, limit=query.limit,
+    )
+    return rec_svc.paginate(
+        [rec_svc.serialize_vacancy(v) for v in items], total=total, page=query.page, limit=query.limit,
+    )
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.VacancyCreate, status=201)
+def _create_vacancy(request, data: schemas.VacancyCreate):
+    return rec_svc.serialize_vacancy(rec_svc.create_vacancy(data))
+
+
+def vacancies_collection(request):
+    if request.method == "GET":
+        return _list_vacancies(request)
+    if request.method == "POST":
+        return _create_vacancy(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /vacancies/{id}/ — детальный ресурс ─────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_vacancy(request, id: int):
+    try:
+        return rec_svc.serialize_vacancy(rec_svc.get_vacancy(id))
+    except rec_svc.VacancyNotFound:
+        return json_error("Vacancy not found", 404)
+
+
+@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.VacancyUpdate)
+def _update_vacancy(request, id: int, data: schemas.VacancyUpdate):
+    # PUT — задокументированный контракт исходника; PATCH регистрируем тоже
+    # (аддитивно), как и в departments/positions/employees.
+    try:
+        return rec_svc.serialize_vacancy(rec_svc.update_vacancy(id, data))
+    except rec_svc.VacancyNotFound:
+        return json_error("Vacancy not found", 404)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _close_vacancy(request, id: int):
+    # DELETE в исходнике — НЕ физическое удаление: close_vacancy помечает
+    # status="closed" + closed_at=today и оставляет строку (контракт, не баг).
+    try:
+        rec_svc.close_vacancy(id)
+    except rec_svc.VacancyNotFound:
+        return json_error("Vacancy not found", 404)
+    return HttpResponse(status=204)
+
+
+def vacancy_detail(request, id: int):
+    if request.method == "GET":
+        return _get_vacancy(request, id=id)
+    if request.method in ("PUT", "PATCH"):
+        return _update_vacancy(request, id=id)
+    if request.method == "DELETE":
+        return _close_vacancy(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /vacancies/{id}/applications ────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def vacancy_applications(request, id: int):
+    try:
+        apps = rec_svc.get_vacancy_applications(id)
+    except rec_svc.VacancyNotFound:
+        return json_error("Vacancy not found", 404)
+    return [rec_svc.serialize_application(a) for a in apps]
+
+
+# ── /applications/ — коллекция ──────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_applications(request):
+    try:
+        query = schemas.ApplicationListQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    items, total = rec_svc.list_applications(page=query.page, limit=query.limit)
+    return rec_svc.paginate(
+        [rec_svc.serialize_application(a) for a in items], total=total, page=query.page, limit=query.limit,
+    )
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.ApplicationCreate, status=201)
+def _create_application(request, data: schemas.ApplicationCreate):
+    try:
+        return rec_svc.serialize_application(rec_svc.create_application(data))
+    except rec_svc.VacancyNotFound:
+        # create_application проверяет существование вакансии ДО создания
+        # отклика — 404 "Vacancy not found", а НЕ 422 (буквальный порт).
+        return json_error("Vacancy not found", 404)
+
+
+def applications_collection(request):
+    if request.method == "GET":
+        return _list_applications(request)
+    if request.method == "POST":
+        return _create_application(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /applications/archive/ (литеральный роут — ДО /{id}/) ──────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def applications_archive(request):
+    return rec_svc.archive()
+
+
+# ── /applications/{id}/ — детальный ресурс ──────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_application(request, id: int):
+    try:
+        return rec_svc.serialize_application(rec_svc.get_application(id))
+    except rec_svc.ApplicationNotFound:
+        return json_error("Application not found", 404)
+
+
+@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.ApplicationUpdate)
+def _update_application(request, id: int, data: schemas.ApplicationUpdate):
+    try:
+        return rec_svc.serialize_application(rec_svc.update_application(id, data))
+    except rec_svc.ApplicationNotFound:
+        return json_error("Application not found", 404)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_application(request, id: int):
+    try:
+        rec_svc.delete_application(id)
+    except rec_svc.ApplicationNotFound:
+        return json_error("Application not found", 404)
+    return HttpResponse(status=204)
+
+
+def application_detail(request, id: int):
+    if request.method == "GET":
+        return _get_application(request, id=id)
+    if request.method in ("PUT", "PATCH"):
+        return _update_application(request, id=id)
+    if request.method == "DELETE":
+        return _delete_application(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /applications/{id}/status ────────────────────────────────────────────────
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.ApplicationStatusChange)
+def change_application_status(request, id: int, data: schemas.ApplicationStatusChange):
+    try:
+        return rec_svc.serialize_application(rec_svc.change_status(id, data))
+    except rec_svc.ApplicationNotFound:
+        return json_error("Application not found", 404)

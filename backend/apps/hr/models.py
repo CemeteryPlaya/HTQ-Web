@@ -317,3 +317,100 @@ class OrgSettings(models.Model):
 
     def __str__(self) -> str:
         return f"{self.key}={self.value!r}"
+
+
+class VacancyStatus(models.TextChoices):
+    OPEN = "open", "Открыта"
+    CLOSED = "closed", "Закрыта"
+    ON_HOLD = "on_hold", "Приостановлена"
+
+
+class ApplicationStatus(models.TextChoices):
+    NEW = "new", "Новый"
+    REVIEWED = "reviewed", "Рассмотрен"
+    INTERVIEW = "interview", "Собеседование"
+    OFFER = "offer", "Оффер"
+    REJECTED = "rejected", "Отклонён"
+    HIRED = "hired", "Принят"
+
+
+class _CurrentDate(models.Func):
+    """``CURRENT_DATE`` без скобок — Postgres не принимает ``CURRENT_DATE()``.
+
+    Порт ``server_default=func.current_date()`` (services/hr/app/models/vacancy.py
+    ::Vacancy.opened_at) — тот же приём, что и ``Now()`` для created_at/updated_at,
+    только для колонки типа DATE, для которой Django не даёт готового хелпера.
+    """
+
+    function = "CURRENT_DATE"
+    template = "%(function)s"
+    output_field = models.DateField()
+
+
+class Vacancy(HrBase):
+    """Порт services/hr/app/models/vacancy.py.
+
+    Таблица — дефолтное имя Django: hr_vacancy (не hr_vacancies исходника,
+    решение D2, как и у остальных моделей домена).
+    """
+
+    title = models.CharField(max_length=255)
+    # FK NOT NULL без явного ondelete в исходнике -> PROTECT (тот же выбор,
+    # что для Employee.department/position, см. docs/plans/2026-07-20-hr-domain.md
+    # «Открытые вопросы» #2).
+    department = models.ForeignKey(
+        Department, on_delete=models.PROTECT, related_name="vacancies",
+    )
+    position = models.ForeignKey(
+        Position, on_delete=models.PROTECT, related_name="vacancies",
+    )
+    # Text NOT NULL с клиентским default="" в исходнике (не server_default) —
+    # db_default всё равно ставим (та же практика, что и у is_active/weight/…
+    # в этом файле): защищает вставки мимо ORM от NOT NULL violation.
+    description = models.TextField(default="", db_default="", blank=True)
+    requirements = models.TextField(default="", db_default="", blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=VacancyStatus.choices,
+        default=VacancyStatus.OPEN,
+        db_default=VacancyStatus.OPEN.value,
+    )
+    opened_at = models.DateField(db_default=_CurrentDate())
+    closed_at = models.DateField(null=True, blank=True)
+    # Nullable FK без явного ondelete в исходнике -> SET_NULL (тот же выбор,
+    # что для Department.manager -> Employee).
+    assigned_recruiter = models.ForeignKey(
+        Employee, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="assigned_vacancies",
+    )
+
+    def __str__(self) -> str:
+        return f"{self.title} ({self.status})"
+
+
+class Application(HrBase):
+    """Отклик кандидата — порт services/hr/app/models/application.py.
+
+    Таблица — дефолтное имя Django: hr_application (не hr_applications
+    исходника, решение D2, как и у остальных моделей домена).
+    """
+
+    vacancy = models.ForeignKey(
+        Vacancy, on_delete=models.PROTECT, related_name="applications",
+    )
+    candidate_name = models.CharField(max_length=255)
+    candidate_email = models.CharField(max_length=255)
+    candidate_phone = models.CharField(max_length=20, null=True, blank=True)
+    resume_url = models.CharField(max_length=500, null=True, blank=True)
+    cover_letter = models.TextField(null=True, blank=True)
+    status = models.CharField(
+        max_length=30,
+        choices=ApplicationStatus.choices,
+        default=ApplicationStatus.NEW,
+        db_default=ApplicationStatus.NEW.value,
+    )
+    applied_at = models.DateTimeField(db_default=Now())
+    notes = models.TextField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"{self.candidate_name} -> vacancy #{self.vacancy_id} ({self.status})"

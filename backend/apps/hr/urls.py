@@ -13,6 +13,11 @@
 роутере исходника). Варианты без явного использования во фронте
 регистрируются защитно, по конвенции остальных аппок.
 
+``vacancies/`` (list GET/create POST), ``vacancies/{id}/`` (PATCH/DELETE) —
+СО слешем (frontend/src/api/hr.ts); фронт шлёт PATCH — регистрируем и PUT, и
+PATCH аддитивно, как и везде. ``applications/`` (list GET/create POST),
+``applications/{id}/`` (PATCH/DELETE) — тоже со слешем.
+
 Порядок positions/* важен буквально: литеральные сегменты (``levels/``,
 ``permissions-catalog/``, ``rebalance``) объявлены ДО ``positions/<int:id>/``
 — хотя конвертер ``int`` и так не матчит слова, порядок сохраняем для
@@ -105,4 +110,30 @@ urlpatterns = [
 
     path("org/settings/deletion-strategy", views.org_deletion_strategy),
     path("org/settings/deletion-strategy/", views.org_deletion_strategy),
+
+    # ── vacancies ─────────────────────────────────────────────────────────
+    path("vacancies/", views.vacancies_collection),
+    path("vacancies", views.vacancies_collection),
+
+    path("vacancies/<int:id>/applications", views.vacancy_applications),
+    path("vacancies/<int:id>/applications/", views.vacancy_applications),
+
+    path("vacancies/<int:id>/", views.vacancy_detail),
+    path("vacancies/<int:id>", views.vacancy_detail),
+
+    # ── applications ──────────────────────────────────────────────────────
+    # Литеральный ``archive/`` — ДО ``/<int:id>/`` (ровно как в роутере
+    # исходника: комментарий там явно объясняет, что иначе FastAPI попытался
+    # бы распарсить "archive" как int и отдал 422).
+    path("applications/archive/", views.applications_archive),
+    path("applications/archive", views.applications_archive),
+
+    path("applications/", views.applications_collection),
+    path("applications", views.applications_collection),
+
+    path("applications/<int:id>/status", views.change_application_status),
+    path("applications/<int:id>/status/", views.change_application_status),
+
+    path("applications/<int:id>/", views.application_detail),
+    path("applications/<int:id>", views.application_detail),
 ]
