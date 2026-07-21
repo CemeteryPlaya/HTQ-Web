@@ -9,7 +9,14 @@ from django.contrib import admin
 
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
-from .models import AuditLog, EmailAccount, OAuthToken
+from .models import (
+    AuditLog,
+    EmailAccount,
+    EmailAttachment,
+    EmailMessage,
+    OAuthToken,
+    RecipientStatus,
+)
 
 
 @admin.register(EmailAccount)
@@ -39,3 +46,40 @@ class AuditLogAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_filter = ("action", "resource_type")
     search_fields = ("resource_id", "correlation_id")
     readonly_fields = ("created_at",)
+
+
+class EmailAttachmentInline(admin.TabularInline):
+    model = EmailAttachment
+    extra = 0
+    readonly_fields = ("id", "created_at", "updated_at")
+
+
+class RecipientStatusInline(admin.TabularInline):
+    model = RecipientStatus
+    extra = 0
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(EmailMessage)
+class EmailMessageAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "user_id", "account", "folder", "subject", "sender_email",
+                    "is_read", "is_flagged", "has_attachments", "date")
+    list_filter = ("folder", "is_read", "is_flagged", "dlp_flagged")
+    search_fields = ("subject", "sender_email", "message_id", "thread_id")
+    readonly_fields = ("created_at", "updated_at")
+    inlines = [EmailAttachmentInline, RecipientStatusInline]
+
+
+@admin.register(EmailAttachment)
+class EmailAttachmentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "message", "filename", "mime_type", "size", "created_at")
+    search_fields = ("filename",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(RecipientStatus)
+class RecipientStatusAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "message", "recipient_email", "status", "created_at")
+    list_filter = ("status",)
+    search_fields = ("recipient_email",)
+    readonly_fields = ("created_at", "updated_at")

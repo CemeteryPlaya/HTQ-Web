@@ -7,18 +7,21 @@
 исходника; фактическая постановка в очередь появится вместе с
 под-задачей workers (Celery в этом Django-порту, см. CLAUDE.md).
 
-Растяжка unread_count: исходник считает его коррелированным подзапросом к
-``EmailMessage`` (folder=inbox, is_read=false). ``EmailMessage`` — модель
-под-задачи messages, ещё не перенесена (вне зоны этой под-задачи) — здесь
-``unread_count`` всегда 0. tests/test_stretch.py::
-test_unread_count_todo_is_tracked падает в момент появления
-``apps.mail.models.EmailMessage``, требуя раскрыть реальный подсчёт.
+unread_count (раскрыто в под-задаче mail-messages, бриф п.7): исходник
+(accounts.py::list_accounts) считает его коррелированным подзапросом к
+``EmailMessage`` — ``COUNT(*) WHERE account_id=<account>, folder='inbox',
+is_read=false``. Теперь, когда ``apps.mail.models.EmailMessage`` перенесена,
+здесь тот же подсчёт через ``annotate(Count(..., filter=Q(...)))`` —
+эквивалент SQLAlchemy correlated subquery. Растяжка tests/test_stretch.py::
+test_unread_count_todo_is_tracked снята (см. история коммитов) — она
+выполнила свою роль сторожа.
 """
 from __future__ import annotations
 
 import logging
 
 from django.db import transaction
+from django.db.models import Count, Q
 
 from apps.mail.models import AccountType, EmailAccount, OAuthToken
 from apps.mail.services.crypto import crypto_service
@@ -60,16 +63,25 @@ def serialize(account: EmailAccount, *, unread_count: int = 0) -> dict:
         "last_sync_error": account.last_sync_error,
         "watch_expires_at": account.watch_expires_at.isoformat() if account.watch_expires_at else None,
         "connected_at": account.connected_at.isoformat(),
-        # TODO(messages-под-задача): реальный подсчёт непрочитанных из
-        # EmailMessage (folder=inbox, is_read=false) — см. растяжку в
-        # tests/test_stretch.py.
         "unread_count": unread_count,
     }
 
 
 def list_accounts(user_id: int) -> list[dict]:
-    qs = EmailAccount.objects.filter(user_id=user_id).order_by("-is_default", "id")
-    return [serialize(a) for a in qs]
+    """Порт accounts.py::list_accounts — ``unread_count`` через коррелированный
+    ``Count(..., filter=Q(...))`` на related_name ``messages``
+    (``EmailMessage.account``), эквивалент SQLAlchemy-подзапроса исходника."""
+    qs = (
+        EmailAccount.objects.filter(user_id=user_id)
+        .annotate(
+            unread=Count(
+                "messages",
+                filter=Q(messages__folder="inbox", messages__is_read=False),
+            ),
+        )
+        .order_by("-is_default", "id")
+    )
+    return [serialize(a, unread_count=a.unread) for a in qs]
 
 
 @transaction.atomic

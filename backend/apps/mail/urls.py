@@ -52,4 +52,35 @@ urlpatterns = [
 
     path("oauth/disconnect", views.oauth_disconnect),
     path("oauth/disconnect/", views.oauth_disconnect),
+
+    # ── messages (mail-messages-brief.md, 6 эндпойнтов
+    # services/email/app/api/v1/emails.py) ──────────────────────────────────
+    # Реальные вызовы фронта (frontend/src/api/email.ts::emailApi,
+    # frontend/src/services/emailService.ts — легаси): ``folder/{folder}``
+    # (GET, БЕЗ слеша), ``{messageId}`` (GET, БЕЗ слеша),
+    # ``{messageId}/read`` (POST, БЕЗ слеша), ``unread-counts/`` (GET, СО
+    # слешем), ``send``/``draft`` (POST, БЕЗ слеша) — оба написания
+    # регистрируются защитно, как и везде в этом файле.
+    path("folder/<str:folder>", views.list_emails),
+    path("folder/<str:folder>/", views.list_emails),
+
+    path("unread-counts/", views.unread_counts),
+    path("unread-counts", views.unread_counts),
+
+    path("send", views.send_email),
+    path("send/", views.send_email),
+
+    path("draft", views.save_draft),
+    path("draft/", views.save_draft),
+
+    # <uuid:message_id> — намеренно ПОСЛЕ более специфичных путей выше (как
+    # и в apps/media_files/urls.py::<uuid:file_id>): валидный UUID-сегмент
+    # никогда не совпадёт с "folder", "send", "draft", "unread-counts", так
+    # что порядок здесь не критичен, но соблюдается конвенция "самое общее —
+    # в конце".
+    path("<uuid:message_id>/read", views.mark_as_read),
+    path("<uuid:message_id>/read/", views.mark_as_read),
+
+    path("<uuid:message_id>", views.get_email),
+    path("<uuid:message_id>/", views.get_email),
 ]

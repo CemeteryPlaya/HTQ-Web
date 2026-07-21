@@ -115,6 +115,51 @@ def test_list_returns_only_own_accounts_ordered_default_first(user, other_user, 
 
 
 @pytest.mark.django_db
+def test_list_unread_count_is_real_inbox_unread_count_per_account(user, auth):
+    """mail-messages-brief.md п.7 — растяжка снята: unread_count теперь
+    считает EmailMessage(account=, folder='inbox', is_read=False),
+    буквально как исходник (accounts.py::list_accounts, коррелированный
+    подзапрос)."""
+    import datetime
+
+    from apps.mail.models import EmailMessage
+
+    acc = _personal_account(user.id, "unread@example.com")
+    other_acc = _personal_account(user.id, "other@example.com")
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    EmailMessage.objects.create(
+        user_id=user.id, account=acc, folder="inbox", is_read=False,
+        sender_email="a@example.com", date=now,
+    )
+    EmailMessage.objects.create(
+        user_id=user.id, account=acc, folder="inbox", is_read=False,
+        sender_email="b@example.com", date=now,
+    )
+    # Read inbox message — must NOT count.
+    EmailMessage.objects.create(
+        user_id=user.id, account=acc, folder="inbox", is_read=True,
+        sender_email="c@example.com", date=now,
+    )
+    # Unread but not inbox — must NOT count.
+    EmailMessage.objects.create(
+        user_id=user.id, account=acc, folder="sent", is_read=False,
+        sender_email="d@example.com", date=now,
+    )
+    # Different account — must not bleed into acc's count.
+    EmailMessage.objects.create(
+        user_id=user.id, account=other_acc, folder="inbox", is_read=False,
+        sender_email="e@example.com", date=now,
+    )
+
+    resp = Client().get(f"{BASE}/", **auth)
+    assert resp.status_code == 200
+    by_id = {row["id"]: row["unread_count"] for row in resp.json()}
+    assert by_id[acc.id] == 2
+    assert by_id[other_acc.id] == 1
+
+
+@pytest.mark.django_db
 def test_list_empty_when_no_accounts(auth):
     resp = Client().get(f"{BASE}/", **auth)
     assert resp.status_code == 200

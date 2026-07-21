@@ -25,10 +25,32 @@ from django.http import HttpResponse
 
 from htqweb.http import api_view, json_error
 
+from . import schemas
 from .services import account_service as acct_svc
+from .services import email_service as mail_svc
 from .services import oauth_service as oauth_svc
 
 _VALID_PROVIDERS = ("google", "microsoft")
+
+
+class _QueryValidationError(Exception):
+    """422 — некорректный query-параметр (порт неявной FastAPI
+    ``Query(..., ge=..., le=...)`` валидации из emails.py::list_emails)."""
+
+
+def _int_query(request, name: str, *, default: int, ge: int | None = None,
+               le: int | None = None) -> int:
+    raw = request.GET.get(name)
+    if raw is None or raw == "":
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except ValueError:
+            raise _QueryValidationError(name) from None
+    if (ge is not None and value < ge) or (le is not None and value > le):
+        raise _QueryValidationError(name)
+    return value
 
 
 # ── /accounts/ ────────────────────────────────────────────────────────────
@@ -111,3 +133,73 @@ def oauth_callback(request):
 @api_view(methods=("DELETE",), auth="jwt")
 def oauth_disconnect(request):
     return oauth_svc.disconnect_all(request.token.user_id)
+
+
+# ── /folder/{folder}, /unread-counts/, /{message_id}, /send, /draft ───────
+# (mail-messages-brief.md — порт services/email/app/api/v1/emails.py, 6
+# эндпойнтов). Авторизация — обычный JWT-пользователь, СТРОГИЙ user-scoping:
+# каждый запрос фильтрует EmailMessage по request.token.user_id; чужое —
+# 404 "Email not found" (не 403 — та же конвенция, что и accounts/*).
+
+
+@api_view(methods=("GET",), auth="jwt")
+def list_emails(request, folder: str):
+    try:
+        account_id = _int_query(request, "account_id", default=None)
+        limit = _int_query(request, "limit", default=50, ge=1, le=100)
+        offset = _int_query(request, "offset", default=0, ge=0)
+    except _QueryValidationError as exc:
+        return json_error(f"Invalid query parameter: {exc}", 422)
+
+    try:
+        return mail_svc.list_emails(
+            request.token.user_id, folder=folder, account_id=account_id,
+            limit=limit, offset=offset,
+        )
+    except mail_svc.InvalidFolder:
+        return json_error("Invalid folder", 400)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def unread_counts(request):
+    return mail_svc.unread_counts(request.token.user_id)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def get_email(request, message_id):
+    try:
+        return mail_svc.get_email(request.token.user_id, message_id)
+    except mail_svc.EmailNotFound:
+        return json_error("Email not found", 404)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.EmailSendRequest, status=202)
+def send_email(request, data: schemas.EmailSendRequest):
+    try:
+        return mail_svc.send_email(
+            request.token.user_id,
+            account_id=data.account_id,
+            to_recipients=data.to_recipients,
+            cc_recipients=data.cc_recipients,
+            bcc_recipients=data.bcc_recipients,
+            subject=data.subject,
+            body_html=data.body_html,
+            body_text=data.body_text,
+        )
+    except mail_svc.AccountNotFound:
+        return json_error("Account not found", 404)
+    except mail_svc.AccountInactive:
+        return json_error("Account is inactive", 409)
+    except mail_svc.DLPViolation:
+        return json_error("DLP Policy Violation: Sensitive data detected.", 403)
+
+
+@api_view(methods=("POST",), auth="jwt")
+def mark_as_read(request, message_id):
+    mail_svc.mark_as_read(request.token.user_id, message_id)
+    return HttpResponse(status=204)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.DraftIn, status=201)
+def save_draft(request, data: schemas.DraftIn):
+    return mail_svc.save_draft(request.token.user_id, subject=data.subject, body=data.body)
