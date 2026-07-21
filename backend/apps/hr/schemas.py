@@ -6,10 +6,10 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, time
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 class DepartmentCreate(BaseModel):
@@ -287,3 +287,125 @@ class ApplicationListQuery(BaseModel):
 
     page: int = Field(default=1, ge=1)
     limit: int = Field(default=20, ge=1, le=200)
+
+
+# ── time-tracking — порт services/hr/app/schemas/time_tracking.py ───────────
+
+class TimeEntryCreate(BaseModel):
+    """Порт TimeEntryBase + TimeEntryCreate — валидатор end_after_start
+    буквально: end_time <= start_time -> 422 (pydantic ValueError)."""
+
+    employee_id: int
+    date: date
+    start_time: time
+    end_time: time
+    break_minutes: int = Field(default=0, ge=0)
+    description: str | None = None
+    project: str | None = Field(default=None, max_length=255)
+    task: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def _end_after_start(self) -> "TimeEntryCreate":
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time")
+        return self
+
+
+class TimeEntryUpdate(BaseModel):
+    """Порт TimeEntryUpdate — все поля опциональны, exclude_none PATCH-семантика
+    (как и Department/PositionUpdate). Без end_after_start валидатора — как
+    и в исходнике (только TimeEntryBase/Create его несут).
+
+    Атрибут ``entry_date`` (не ``date``) с ``alias="date"`` — умышленно, НЕ
+    косметика: поле, названное как свой же тип (``date: date | None = None``),
+    в сочетании с ``from __future__ import annotations`` (файл целиком под
+    postponed evaluation) ловит реальный питоновский капкан — присвоенный
+    class-body default ``None`` попадает в пространство имён класса под тем
+    же именем ``date`` ДО того, как pydantic лениво вычисляет строковую
+    аннотацию ``"date | None"``, и резолвит ``date`` в ``None`` вместо
+    импортированного типа (``TypeError: unsupported operand type(s) for |:
+    'NoneType' and 'NoneType'`` при первом же обращении к роуту). Обходится
+    переименованием python-атрибута при сохранении wire-имени "date" через
+    alias — вызывающая сторона обязана дампить с ``by_alias=True``
+    (services/time_service.py::update_entry)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    entry_date: date | None = Field(default=None, alias="date")
+    start_time: time | None = None
+    end_time: time | None = None
+    break_minutes: int | None = Field(default=None, ge=0)
+    description: str | None = None
+    project: str | None = None
+    task: str | None = None
+
+
+class TimeEntryListQuery(BaseModel):
+    """Порт Query(page, limit) роутера ``GET /time-tracking/`` и
+    ``GET /time-tracking/entries/`` — идентичная page/limit валидация."""
+
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class TimeDailyReportQuery(BaseModel):
+    """Порт Query(employee_id, date) роутера ``GET /time-tracking/reports/daily``.
+
+    ``date`` опционален (default_factory=date.today в исходнике) — здесь
+    ``None`` и подстановка ``date.today()`` в вьюхе, тот же эффект.
+
+    ``report_date``/``alias="date"`` — та же защита от самозатеняющегося
+    поля под postponed evaluation, что и TimeEntryUpdate.entry_date выше."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    employee_id: int
+    report_date: date | None = Field(default=None, alias="date")
+
+
+class TimeWeeklyReportQuery(BaseModel):
+    employee_id: int
+    week_start: date
+
+
+class TimeMonthlyReportQuery(BaseModel):
+    employee_id: int
+    year: int = Field(..., ge=2000, le=2100)
+    month: int = Field(..., ge=1, le=12)
+
+
+# ── staffing — порт services/hr/app/schemas/staffing.py ─────────────────────
+
+class StaffingLineIn(BaseModel):
+    """Порт StaffingLineIn — СТРОКОВЫЕ headcount/salary (не float), дефолты
+    "1"/"0". Используется И для create (POST), И для update (PUT) — в
+    исходнике нет отдельной Update-схемы: PUT всегда ожидает ПОЛНОЕ тело
+    (контракт, не баг)."""
+
+    position_id: int
+    department_id: int
+    grade: int | None = None
+    headcount: str = "1"
+    salary: str = "0"
+    note: str | None = None
+
+
+class StaffingListQuery(BaseModel):
+    """Порт Query(department_id) роутера ``GET /staffing/``."""
+
+    department_id: int | None = None
+
+
+# ── personnel-history — порт services/hr/app/api/v1/personnel_history.py ───
+# (схемы были inline в роутере исходника, как и у org/*)
+
+class PersonnelHistoryIn(BaseModel):
+    employee: int
+    event_type: str = "other"
+    event_date: date
+    from_department: int | None = None
+    to_department: int | None = None
+    from_position: int | None = None
+    to_position: int | None = None
+    order_number: str = ""
+    comment: str = ""

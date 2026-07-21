@@ -136,4 +136,48 @@ urlpatterns = [
 
     path("applications/<int:id>/", views.application_detail),
     path("applications/<int:id>", views.application_detail),
+
+    # ── time-tracking ─────────────────────────────────────────────────────
+    # Литеральные ``entries/`` и ``reports/{daily,weekly,monthly}`` — порядок
+    # роутера исходника (не критично для int-конвертера, но сохраняем для
+    # ясности, как и везде в этой аппке).
+    path("time-tracking/", views.time_tracking_root),
+    path("time-tracking", views.time_tracking_root),
+
+    path("time-tracking/entries/", views.time_entries_collection),
+    path("time-tracking/entries", views.time_entries_collection),
+
+    path("time-tracking/entries/<int:id>/", views.time_entry_detail),
+    path("time-tracking/entries/<int:id>", views.time_entry_detail),
+
+    path("time-tracking/reports/daily", views.time_daily_report),
+    path("time-tracking/reports/daily/", views.time_daily_report),
+
+    path("time-tracking/reports/weekly", views.time_weekly_report),
+    path("time-tracking/reports/weekly/", views.time_weekly_report),
+
+    path("time-tracking/reports/monthly", views.time_monthly_report),
+    path("time-tracking/reports/monthly/", views.time_monthly_report),
+
+    # ── staffing ──────────────────────────────────────────────────────────
+    # Литеральные ``occupancy``/``summary`` — ДО ``<int:line_id>`` (порядок
+    # роутера исходника).
+    path("staffing/occupancy", views.staffing_occupancy),
+    path("staffing/occupancy/", views.staffing_occupancy),
+
+    path("staffing/summary", views.staffing_summary),
+    path("staffing/summary/", views.staffing_summary),
+
+    path("staffing/", views.staffing_lines_collection),
+    path("staffing", views.staffing_lines_collection),
+
+    path("staffing/<int:line_id>", views.staffing_line_detail),
+    path("staffing/<int:line_id>/", views.staffing_line_detail),
+
+    # ── personnel-history ────────────────────────────────────────────────
+    path("personnel-history/", views.personnel_history_collection),
+    path("personnel-history", views.personnel_history_collection),
+
+    path("personnel-history/<int:id>/", views.personnel_history_detail),
+    path("personnel-history/<int:id>", views.personnel_history_detail),
 ]

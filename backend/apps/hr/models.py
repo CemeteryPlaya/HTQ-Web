@@ -414,3 +414,130 @@ class Application(HrBase):
 
     def __str__(self) -> str:
         return f"{self.candidate_name} -> vacancy #{self.vacancy_id} ({self.status})"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  time-core: TimeEntry + StaffingPosition + PersonnelHistory — порт
+#  services/hr/app/models/{time_tracking,staffing,personnel_history}.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TimeEntry(HrBase):
+    """Запись учёта рабочего времени — порт models/time_tracking.py.
+
+    Таблица — дефолтное имя Django: hr_timeentry (не hr_time_entries
+    исходника, решение D2, как и у остальных моделей домена).
+    """
+
+    # FK NOT NULL без явного ondelete в исходнике -> PROTECT (та же практика,
+    # что для Employee.department/position, Vacancy.department/position).
+    # db_index=False: составной UniqueConstraint (employee, date, start_time)
+    # ниже уже покрывает employee_id своим левым префиксом — исходник тоже не
+    # индексирует employee_id отдельно (нет отдельного index=True на колонке,
+    # только UniqueConstraint) — тот же приём, что и у
+    # PositionWeightAudit.position (левый префикс составного индекса).
+    employee = models.ForeignKey(
+        Employee, on_delete=models.PROTECT, related_name="time_entries", db_index=False,
+    )
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    break_minutes = models.IntegerField(default=0, db_default=0)
+    description = models.TextField(null=True, blank=True)
+    project = models.CharField(max_length=255, null=True, blank=True)
+    task = models.CharField(max_length=255, null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["employee", "date", "start_time"], name="uq_employee_time_entry",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<TimeEntry(id={self.id}, employee_id={self.employee_id}, date={self.date})>"
+
+
+class StaffingPosition(HrBase):
+    """Строка штатного расписания — порт models/staffing.py.
+
+    Таблица — дефолтное имя Django: hr_staffingposition (не
+    hr_staffing_positions исходника, решение D2). Оба FK исходник объявляет
+    с явным ``index=True`` — дефолтное индексирование Django FK уже
+    воспроизводит это без дополнительных пометок.
+    """
+
+    position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="staffing_lines",
+    )
+    department = models.ForeignKey(
+        Department, on_delete=models.CASCADE, related_name="staffing_lines",
+    )
+    grade = models.IntegerField(null=True, blank=True)
+    headcount = models.DecimalField(max_digits=5, decimal_places=2, default=1, db_default=1)
+    salary = models.DecimalField(max_digits=12, decimal_places=2, default=0, db_default=0)
+    note = models.CharField(max_length=255, null=True, blank=True)
+
+    def __str__(self) -> str:
+        return (f"<StaffingPosition(id={self.id}, position_id={self.position_id}, "
+                f"department_id={self.department_id})>")
+
+
+class PersonnelHistoryEventType(models.TextChoices):
+    """Порт ``EVENT_TYPES`` (простой tuple в исходнике, models/personnel_history.py)."""
+
+    HIRED = "hired", "Принят"
+    DISMISSED = "dismissed", "Уволен"
+    TRANSFER = "transfer", "Перевод"
+    PROMOTION = "promotion", "Повышение"
+    DEMOTION = "demotion", "Понижение"
+    OTHER = "other", "Другое"
+
+
+class PersonnelHistory(HrBase):
+    """Кадровая история (HR-событие) — порт models/personnel_history.py.
+
+    Таблица — дефолтное имя Django: hr_personnelhistory (не
+    hr_personnel_history исходника, решение D2).
+    """
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="personnel_history",
+    )
+    event_type = models.CharField(
+        max_length=20,
+        choices=PersonnelHistoryEventType.choices,
+        default=PersonnelHistoryEventType.OTHER,
+        db_default=PersonnelHistoryEventType.OTHER.value,
+        db_index=True,
+    )
+    event_date = models.DateField(db_index=True)
+
+    from_department = models.ForeignKey(
+        Department, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="personnel_history_from",
+    )
+    to_department = models.ForeignKey(
+        Department, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="personnel_history_to",
+    )
+    from_position = models.ForeignKey(
+        Position, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="personnel_history_from_position",
+    )
+    to_position = models.ForeignKey(
+        Position, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="personnel_history_to_position",
+    )
+
+    order_number = models.CharField(max_length=64, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    # D10-подобное решение (см. AuditLog.changed_by выше): TokenPayload.user_id
+    # платформенного пользователя (то же ID-пространство, что Employee.user_id,
+    # решение D7) — НЕ PK hr_employees, поэтому простой IntegerField без FK,
+    # ровно как и в исходнике (комментарий там: "no FK — user lives in
+    # user-service").
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+
+    def __str__(self) -> str:
+        return f"<PersonnelHistory(id={self.id}, employee_id={self.employee_id}, event={self.event_type})>"

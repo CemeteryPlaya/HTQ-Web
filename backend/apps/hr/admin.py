@@ -17,8 +17,11 @@ from .models import (
     Employee,
     LevelThreshold,
     OrgSettings,
+    PersonnelHistory,
     Position,
     ReportingRelation,
+    StaffingPosition,
+    TimeEntry,
     Vacancy,
 )
 
@@ -98,3 +101,28 @@ class ApplicationAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     search_fields = ("candidate_name", "candidate_email")
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("vacancy",)
+
+
+@admin.register(TimeEntry)
+class TimeEntryAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "employee", "date", "start_time", "end_time", "break_minutes")
+    list_filter = ("date",)
+    search_fields = ("project", "task")
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("employee",)
+
+
+@admin.register(StaffingPosition)
+class StaffingPositionAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "position", "department", "grade", "headcount", "salary")
+    list_filter = ("department",)
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("position", "department")
+
+
+@admin.register(PersonnelHistory)
+class PersonnelHistoryAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "employee", "event_type", "event_date", "created_by")
+    list_filter = ("event_type",)
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("employee", "from_department", "to_department", "from_position", "to_position")

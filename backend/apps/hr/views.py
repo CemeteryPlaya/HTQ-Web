@@ -17,6 +17,7 @@ admin/staff/superuser, «coarse/transitional» по комментарию са�
 """
 from __future__ import annotations
 
+import datetime
 import json
 
 from django.http import HttpResponse, JsonResponse
@@ -26,12 +27,15 @@ from htqweb.http import api_view, json_error
 
 from . import access as hr_access
 from . import schemas
-from .permissions import LEVEL_PRESETS
+from .permissions import LEVEL_PRESETS, STAFFING_MANAGE, STAFFING_VIEW
 from .services import department_service as svc
 from .services import employee_service as emp_svc
 from .services import org_service
+from .services import personnel_history_service as ph_svc
 from .services import position_service as pos_svc
 from .services import recruitment_service as rec_svc
+from .services import staffing_service as staffing_svc
+from .services import time_service as time_svc
 
 
 def _wants_cascade(request) -> bool:
@@ -879,3 +883,291 @@ def change_application_status(request, id: int, data: schemas.ApplicationStatusC
         return rec_svc.serialize_application(rec_svc.change_status(id, data))
     except rec_svc.ApplicationNotFound:
         return json_error("Application not found", 404)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /time-tracking/* — порт services/hr/app/api/v1/time.py (8 эндпойнтов)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация — БУКВАЛЬНО как в исходнике: ВСЕ 8 эндпойнтов, включая
+# POST/PUT/DELETE, используют ТОЛЬКО get_current_user (обычный jwt) — ни один
+# не зовёт require_hr_write. Странность исходника (тот же паттерн, что и
+# recruiting — см. комментарий там), не баг порта: любой залогиненный
+# пользователь может создавать/менять/удалять чужие тайм-энтри.
+# api_view(auth="jwt") без admin=True на всех 8.
+#
+# Фронт (frontend/src/api/hr.ts) шлёт POST на голый ``time-tracking/`` (не
+# ``time-tracking/entries/``) и PATCH/DELETE на ``time-tracking/{id}/`` (без
+# ``entries/``), плюс ``time-tracking/{id}/approve|reject`` — ни один из этих
+# путей не определён исходником (нет в app/api/v1/time.py, нет в API.md).
+# Вне контракта исходника — НЕ регистрируем (см. отчёт, открытый вопрос).
+# Регистрируем ровно 8 эндпойнтов исходника + PATCH аддитивно на
+# entries/{id}/ рядом с PUT (тот же приём "защитно, по конвенции", что и в
+# остальных под-модулях этой аппки).
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_time_entries(request):
+    try:
+        query = schemas.TimeEntryListQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    items, total = time_svc.list_entries(page=query.page, limit=query.limit)
+    pages = (total + query.limit - 1) // query.limit
+    return {
+        "items": [time_svc.serialize(e) for e in items],
+        "total": total, "page": query.page, "pages": pages, "limit": query.limit,
+    }
+
+
+def time_tracking_root(request):
+    """``GET /time-tracking/`` — алиас /entries/ (порт list_root исходника:
+    "The HR Time Tracking page hits the prefix root directly"). Только GET —
+    исходник не регистрирует POST на корне."""
+    if request.method == "GET":
+        return _list_time_entries(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.TimeEntryCreate, status=201)
+def _create_time_entry(request, data: schemas.TimeEntryCreate):
+    # Странность исходника (контракт, не баг): ни create_entry, ни
+    # update_entry не проверяют коллизию UniqueConstraint(employee, date,
+    # start_time) заранее — дубликат роняет IntegrityError необработанным
+    # (ни сервисом, ни роутером исходника), поэтому FastAPI отдаёт 500;
+    # здесь — то же самое через общий except Exception в htqweb.http.api_view.
+    return time_svc.serialize(time_svc.create_entry(data))
+
+
+def time_entries_collection(request):
+    if request.method == "GET":
+        return _list_time_entries(request)
+    if request.method == "POST":
+        return _create_time_entry(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.TimeEntryUpdate)
+def _update_time_entry(request, id: int, data: schemas.TimeEntryUpdate):
+    # PUT — задокументированный контракт исходника; PATCH регистрируем тоже
+    # (аддитивно), как и во всех остальных под-модулях этой аппки.
+    try:
+        return time_svc.serialize(time_svc.update_entry(id, data))
+    except time_svc.TimeEntryNotFound:
+        return json_error("Time entry not found", 404)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_time_entry(request, id: int):
+    try:
+        time_svc.delete_entry(id)
+    except time_svc.TimeEntryNotFound:
+        return json_error("Time entry not found", 404)
+    return HttpResponse(status=204)
+
+
+def time_entry_detail(request, id: int):
+    if request.method in ("PUT", "PATCH"):
+        return _update_time_entry(request, id=id)
+    if request.method == "DELETE":
+        return _delete_time_entry(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def time_daily_report(request):
+    try:
+        query = schemas.TimeDailyReportQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    day = query.report_date or datetime.date.today()
+    return time_svc.daily_report(query.employee_id, day)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def time_weekly_report(request):
+    try:
+        query = schemas.TimeWeeklyReportQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return time_svc.weekly_report(query.employee_id, query.week_start)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def time_monthly_report(request):
+    try:
+        query = schemas.TimeMonthlyReportQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return time_svc.monthly_report(query.employee_id, query.year, query.month)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /staffing/* — порт services/hr/app/api/v1/staffing.py (6 эндпойнтов)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация — НЕ hr_access.require_hr_access/require_can_write_basic
+# (грубые ворота employees) и НЕ api_view(admin=True) (positions/org):
+# исходник гейтит fine-grained PERMISSION-KEY через module-level
+# ``_VIEW = require_permission("hr.staffing.view")``/``_MANAGE =
+# require_permission("hr.staffing.manage")`` (app/auth/hr_access.py::
+# require_permission) — 403 detail — ТОЧНАЯ строка f"Missing permission:
+# {key}", отличная от HRAccessDenied ("HR access required"/"HR write access
+# required"). Порт: _require_permission(request, key) ниже воспроизводит это
+# буквально через hr_access.resolve_hr_access(request.token).has(key).
+
+def _require_permission(request, key: str):
+    """None, err — err — готовый json_error(403) если ключа нет у вызывающего."""
+    access = hr_access.resolve_hr_access(request.token)
+    if not access.has(key):
+        return None, json_error(f"Missing permission: {key}", 403)
+    return access, None
+
+
+@api_view(methods=("GET",), auth="jwt")
+def staffing_occupancy(request):
+    _, err = _require_permission(request, STAFFING_VIEW)
+    if err:
+        return err
+    return staffing_svc.occupancy()
+
+
+@api_view(methods=("GET",), auth="jwt")
+def staffing_summary(request):
+    _, err = _require_permission(request, STAFFING_VIEW)
+    if err:
+        return err
+    return staffing_svc.payroll_summary()
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_staffing_lines(request):
+    _, err = _require_permission(request, STAFFING_VIEW)
+    if err:
+        return err
+    try:
+        query = schemas.StaffingListQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return [staffing_svc.line_out(line) for line in staffing_svc.list_lines(query.department_id)]
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.StaffingLineIn, status=201)
+def _create_staffing_line(request, data: schemas.StaffingLineIn):
+    _, err = _require_permission(request, STAFFING_MANAGE)
+    if err:
+        return err
+    try:
+        line = staffing_svc.create_line(data.model_dump())
+    except staffing_svc.StaffingRefNotFound as exc:
+        return json_error(exc.detail, 422)
+    return staffing_svc.line_out(line)
+
+
+def staffing_lines_collection(request):
+    if request.method == "GET":
+        return _list_staffing_lines(request)
+    if request.method == "POST":
+        return _create_staffing_line(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.StaffingLineIn)
+def _update_staffing_line(request, line_id: int, data: schemas.StaffingLineIn):
+    # Исходник регистрирует ТОЛЬКО PUT здесь (нет отдельной Update-схемы —
+    # StaffingLineIn используется и для create, и для update, тело всегда
+    # ПОЛНОЕ). Фронт (frontend/src/api/hr.ts) не шлёт PATCH на /staffing/{id}
+    # — в отличие от departments/positions/employees/vacancies/applications/
+    # time-tracking, здесь НЕТ живого мисматча, поэтому PATCH не регистрируем.
+    _, err = _require_permission(request, STAFFING_MANAGE)
+    if err:
+        return err
+    try:
+        line = staffing_svc.update_line(line_id, data.model_dump())
+    except staffing_svc.StaffingLineNotFound:
+        return json_error("Staffing line not found", 404)
+    except staffing_svc.StaffingRefNotFound as exc:
+        return json_error(exc.detail, 422)
+    return staffing_svc.line_out(line)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_staffing_line(request, line_id: int):
+    _, err = _require_permission(request, STAFFING_MANAGE)
+    if err:
+        return err
+    try:
+        staffing_svc.delete_line(line_id)
+    except staffing_svc.StaffingLineNotFound:
+        return json_error("Staffing line not found", 404)
+    return HttpResponse(status=204)
+
+
+def staffing_line_detail(request, line_id: int):
+    if request.method == "PUT":
+        return _update_staffing_line(request, line_id=line_id)
+    if request.method == "DELETE":
+        return _delete_staffing_line(request, line_id=line_id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /personnel-history/* — порт services/hr/app/api/v1/personnel_history.py
+#  (4 эндпойнта)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация (решение контроллера): reads = get_current_user исходника ->
+# auth="jwt"; writes = require_hr_write исходника (is_elevated) ->
+# api_view(admin=True) — ровно та же пара, что у departments/positions/org.
+# Фронт (frontend/src/pages/hr/HRHistory.tsx) шлёт PUT на update — совпадает
+# с исходником буквально, PATCH не регистрируем (нет живого мисматча).
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_personnel_history(request):
+    return [ph_svc.serialize(ph) for ph in ph_svc.list_history()]
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PersonnelHistoryIn, status=201)
+def _create_personnel_history(request, data: schemas.PersonnelHistoryIn):
+    try:
+        ph = ph_svc.create_history(data, created_by=request.token.user_id)
+    except ph_svc.InvalidEventType as exc:
+        # 400, НЕ 422 — буквальный порт (роутер исходника поднимает
+        # HTTPException(status_code=400, ...) для event_type вне EVENT_TYPES).
+        return json_error(exc.detail, 400)
+    return ph_svc.serialize(ph)
+
+
+def personnel_history_collection(request):
+    if request.method == "GET":
+        return _list_personnel_history(request)
+    if request.method == "POST":
+        return _create_personnel_history(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("PUT",), auth="jwt", admin=True, body=schemas.PersonnelHistoryIn)
+def _update_personnel_history(request, id: int, data: schemas.PersonnelHistoryIn):
+    try:
+        ph = ph_svc.update_history(id, data)
+    except ph_svc.PersonnelHistoryNotFound:
+        return json_error("PersonnelHistory not found", 404)
+    except ph_svc.InvalidEventType as exc:
+        return json_error(exc.detail, 400)
+    return ph_svc.serialize(ph)
+
+
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
+def _delete_personnel_history(request, id: int):
+    try:
+        ph_svc.delete_history(id)
+    except ph_svc.PersonnelHistoryNotFound:
+        return json_error("PersonnelHistory not found", 404)
+    return HttpResponse(status=204)
+
+
+def personnel_history_detail(request, id: int):
+    if request.method == "PUT":
+        return _update_personnel_history(request, id=id)
+    if request.method == "DELETE":
+        return _delete_personnel_history(request, id=id)
+    return json_error("Method Not Allowed", 405)
