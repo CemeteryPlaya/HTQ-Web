@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from datetime import date, time
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, RootModel, field_validator, model_validator
@@ -529,3 +530,93 @@ class EmployeeCalendarQuery(BaseModel):
 
     start: date
     end: date
+
+
+# ── docs — порт services/hr/app/api/v1/{documents,mongo_documents}.py ───────
+#
+# DocumentOut/HRDocumentOut (формы ответов) здесь не описываются — как и
+# везде в этом файле, их собирают сериализаторы apps/hr/services/
+# document_service.py.
+
+class DocumentCreate(BaseModel):
+    """Порт schemas/document.py::DocumentBase + DocumentCreate.
+
+    ``metadata_``/``alias="metadata"`` — буквальный порт: исходник называет
+    атрибут ``metadata_`` только из-за резервирования ``metadata`` в
+    SQLAlchemy ``DeclarativeBase`` (см. models.py::Document docstring); здесь
+    это сохранено на уровне wire-контракта (клиент шлёт JSON-ключ
+    ``"metadata"``), хотя модель Django поле называет просто ``metadata``.
+    """
+
+    employee_id: int
+    title: str = Field(..., max_length=255)
+    doc_type: str = Field(..., max_length=50)
+    file_path: str = Field(..., max_length=500)
+    file_size: int = Field(..., gt=0)
+    mime_type: str = Field(default="application/octet-stream", max_length=100)
+    metadata_: dict | None = Field(default=None, alias="metadata")
+    uploaded_by: int
+
+    model_config = {"populate_by_name": True}
+
+
+class DocumentListQuery(BaseModel):
+    """Порт Query(page, limit) роутера ``GET /documents/``."""
+
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class HRDocType(str, Enum):
+    """Порт schemas/mongo_document.py::HRDocType — допустимые типы документа
+    в бывшей Mongo-коллекции ``hr_documents`` (теперь ``EmployeeDocumentBlob``,
+    решение D6)."""
+
+    CONTRACT = "contract"
+    ORDER = "order"
+    CERTIFICATE = "certificate"
+    POLICY = "policy"
+    MEMO = "memo"
+    PERFORMANCE_REVIEW = "performance_review"
+    DISCIPLINARY = "disciplinary"
+    TRAINING = "training"
+    OTHER = "other"
+
+
+class HRDocumentCreate(BaseModel):
+    """Порт schemas/mongo_document.py::HRDocumentCreate."""
+
+    sql_employee_id: int
+    title: str = Field(..., min_length=1, max_length=500)
+    doc_type: HRDocType
+    content: str = ""
+    file_url: str | None = None
+    file_size_bytes: int | None = Field(default=None, ge=0)
+    mime_type: str = "application/octet-stream"
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+
+
+class HRDocumentUpdate(BaseModel):
+    """Порт schemas/mongo_document.py::HRDocumentUpdate — все поля опциональны,
+    патч применяется через ``exclude_unset`` (как и update_data роутера
+    исходника)."""
+
+    title: str | None = None
+    doc_type: HRDocType | None = None
+    content: str | None = None
+    file_url: str | None = None
+    file_size_bytes: int | None = None
+    mime_type: str | None = None
+    tags: list[str] | None = None
+    metadata: dict | None = None
+
+
+class MongoDocumentListQuery(BaseModel):
+    """Порт Query(employee_id, doc_type, page, limit) роутера
+    ``GET /mongo-documents/``."""
+
+    employee_id: int | None = None
+    doc_type: str | None = None
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=20, ge=1, le=200)

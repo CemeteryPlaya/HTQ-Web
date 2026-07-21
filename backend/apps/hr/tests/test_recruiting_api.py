@@ -17,8 +17,9 @@ application.py (ApplicationOut), app/schemas/common.py (PaginatedResponse),
   * DELETE /vacancies/{id}/ — НЕ физическое удаление, closed-статус + closed_at;
   * POST /applications/ с несуществующим vacancy_id -> 404 "Vacancy not found",
     НЕ 422;
-  * /applications/archive/ — литеральный роут ДО /{id}/, documents всегда [],
-    т.к. модель Document ещё не перенесена (hr-docs, отдельная задача);
+  * /applications/archive/ — литеральный роут ДО /{id}/, documents — top-200
+    Document по created_at desc, БЕЗ фильтра по отклику/вакансии (hr-docs,
+    apps/hr/services/document_service.py);
   * change_status пишет notes только если truthy (пустая строка не затирает).
 
 План: docs/plans/2026-07-20-hr-domain.md
@@ -30,7 +31,7 @@ import datetime
 import pytest
 from django.test import Client
 
-from apps.hr.models import Application, Department, Employee, Position, Vacancy
+from apps.hr.models import Application, Department, Document, Employee, Position, Vacancy
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -399,9 +400,33 @@ def test_archive_returns_only_closed_statuses(auth, dep, pos):
     assert set(body) == {"applications", "documents"}
     names = {a["candidate_name"] for a in body["applications"]}
     assert names == {"Нанят", "Отклонён"}
-    # Document ещё не перенесена в apps.hr (hr-docs, отдельная задача) —
-    # documents всегда пустой список.
+    # Пустых Document в БД нет — documents тоже пустой список (не потому,
+    # что модель не перенесена — hr-docs уже перенесена, см.
+    # test_archive_includes_documents_regardless_of_application_status ниже).
     assert body["documents"] == []
+
+
+@pytest.mark.django_db
+def test_archive_includes_documents_regardless_of_application_status(auth, dep, pos):
+    """hr-docs: archive() джойнит ВСЕ документы (буквальный порт исходника —
+    без фильтра по отклику/вакансии), даже когда нет ни одного архивного
+    отклика."""
+    emp = Employee.objects.create(
+        first_name="В", last_name="Г", email="vg@htq.test",
+        department=dep, position=pos, hire_date=datetime.date(2024, 1, 9),
+    )
+    Document.objects.create(
+        employee=emp, uploaded_by=emp, title="Трудовой договор", doc_type="contract",
+        file_path="/files/contract.pdf", file_size=100,
+    )
+
+    resp = Client().get(f"{ABASE}/archive/", **auth)
+    assert resp.status_code == 200
+    docs = resp.json()["documents"]
+    assert len(docs) == 1
+    assert docs[0]["title"] == "Трудовой договор"
+    assert docs[0]["doc_type"] == "contract"
+    assert docs[0]["employee_id"] == emp.id
 
 
 @pytest.mark.django_db

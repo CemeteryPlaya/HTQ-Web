@@ -3,9 +3,10 @@
 Провенанс формы ответов: app/schemas/employee.py (EmployeeOut), поведение —
 app/services/employee_service.py + app/auth/hr_access.py.
 
-9 из 16 эндпойнтов исходника перенесены сейчас; 7 отложены (users/, pmos,
-card, documents — их зависимости в hr-misc/hr-docs/apps.users.interface ещё
-не перенесены) — растяжки внизу файла следят за появлением зависимостей.
+10 из 16 эндпойнтов исходника перенесены сейчас (документы — hr-docs, задача
+5 плана, см. test_documents_api.py); 6 отложены (users/, pmos, card — их
+зависимости в hr-misc/apps.users.interface ещё не перенесены) — растяжки
+внизу файла следят за появлением зависимостей.
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
   * авторизация — ТОНКАЯ роль внутри вьюх (resolve_hr_access + access.can_*),
@@ -701,12 +702,12 @@ def test_history_404_after_soft_delete():
     assert resp.status_code == 404
 
 
-# ── растяжки: 7 отложенных эндпойнтов ────────────────────────────────────────
+# ── растяжки: 6 отложенных эндпойнтов ────────────────────────────────────────
 #
-# Не реализованы — их зависимости ещё не перенесены в apps.hr (модели
-# hr-misc/hr-docs) или apps.users.interface (Р3, без S2S). Каждый тест падает
-# ровно в момент появления соответствующей зависимости, заставляя дописать
-# эндпойнт — как test_cascade_cleanup_todo_is_tracked в test_departments_api.py.
+# Не реализованы — их зависимости ещё не перенесены в apps.hr (модель hr-misc)
+# или apps.users.interface (Р3, без S2S). Каждый тест падает ровно в момент
+# появления соответствующей зависимости, заставляя дописать эндпойнт — как
+# test_cascade_cleanup_todo_is_tracked в test_departments_api.py.
 
 def test_user_options_endpoints_todo_is_tracked():
     """GET/POST /employees/users/ — прокси в user-service в исходнике.
@@ -743,16 +744,4 @@ def test_card_endpoints_todo_is_tracked():
     assert "EmployeeCard" not in existing, (
         "Появилась модель EmployeeCard в apps.hr — допишите GET "
         "/employees/me/card и GET /employees/{id}/card и снимите эту растяжку"
-    )
-
-
-def test_documents_endpoint_todo_is_tracked():
-    """GET /employees/{id}/documents — ждёт модель Document (под-модуль
-    hr-docs, ещё не перенесён)."""
-    from django.apps import apps as django_apps
-
-    existing = {m.__name__ for m in django_apps.get_app_config("hr").get_models()}
-    assert "Document" not in existing, (
-        "Появилась модель Document в apps.hr — допишите GET "
-        "/employees/{id}/documents и снимите эту растяжку"
     )

@@ -14,12 +14,12 @@ repositories/base_repo.py в части, которую он использов�
   (HRAccess/resolve_hr_access) тоже не задействован — recruiting в
   исходнике не использует и его.
 * ``archive()`` (GET /applications/archive/) в исходнике джойнит модель
-  ``Document`` (``app/models/document.py``). Document ещё НЕ перенесена в
-  apps.hr (под-модуль hr-docs, задача 5 плана, ещё не исполнена — растяжка
-  ``test_documents_endpoint_todo_is_tracked`` в test_employees_api.py прямо
-  запрещает вводить модель Document раньше времени). Поэтому здесь
-  ``documents`` — ВСЕГДА пустой список; когда hr-docs перенесётся, дописать
-  реальный запрос и снять эту деградацию.
+  ``Document`` (``app/models/document.py``) — ``select(Document).order_by(
+  Document.created_at.desc()).limit(200)``, без фильтра по employee/vacancy
+  (ВСЕ документы, не только относящиеся к архивным откликам). Document
+  перенесена в apps.hr под-модулем hr-docs (задача 5 плана,
+  apps/hr/services/document_service.py) — деградация "documents всегда []"
+  снята, здесь буквальный порт того же запроса (top-200 по created_at desc).
 * ``closed_statuses`` для archive включает "withdrawn"/"archived" — значения,
   которых НЕТ в ``ApplicationStatusLiteral`` (ни один эндпойнт не может
   реально выставить такой статус через API). Мёртвая ветка фильтра исходника
@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from apps.hr.models import Application, Vacancy
+from apps.hr.models import Application, Document, Vacancy
 
 _ARCHIVE_STATUSES = {"rejected", "hired", "withdrawn", "archived"}
 
@@ -194,10 +194,12 @@ def delete_application(id: int) -> None:
 def archive() -> dict:
     """Порт ``GET /applications/archive/`` — HRArchiveResponse.
 
-    ``documents`` всегда пустой список — см. докстринг модуля (Document
-    ещё не перенесена в apps.hr).
-    """
+    ``documents`` — top-200 ``Document`` по ``created_at`` desc, БЕЗ фильтра
+    по отклику/вакансии (буквальный порт: исходник тоже джойнит ВСЕ
+    документы, не только относящиеся к архивным откликам — читай-как-есть
+    роллап для /hr/archive страницы, см. HRArchiveResponse исходника)."""
     apps_qs = Application.objects.filter(status__in=_ARCHIVE_STATUSES).order_by("-created_at")
+    docs_qs = Document.objects.order_by("-created_at")[:200]
     return {
         "applications": [
             {
@@ -210,5 +212,14 @@ def archive() -> dict:
             }
             for a in apps_qs
         ],
-        "documents": [],
+        "documents": [
+            {
+                "id": d.id,
+                "title": d.title,
+                "doc_type": d.doc_type,
+                "employee_id": d.employee_id,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+            }
+            for d in docs_qs
+        ],
     }

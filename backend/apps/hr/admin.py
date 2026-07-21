@@ -15,8 +15,11 @@ from .models import (
     AuditLog,
     CalendarDay,
     Department,
+    Document,
     Employee,
     EmployeeDayOverride,
+    EmployeeDocumentBlob,
+    EmployeeGroups,
     EmployeeShiftAssignment,
     EmployeeWeekTemplate,
     LevelThreshold,
@@ -177,3 +180,24 @@ class EmployeeDayOverrideAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_filter = ("day_type",)
     autocomplete_fields = ("employee",)
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Document)
+class DocumentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "title", "doc_type", "employee", "uploaded_by", "file_size")
+    list_filter = ("doc_type",)
+    search_fields = ("title",)
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("employee", "uploaded_by")
+
+
+@admin.register(EmployeeDocumentBlob)
+class EmployeeDocumentBlobAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "employee_id", "doc_type", "created_at")
+    list_filter = ("doc_type",)
+    readonly_fields = ("created_at",)
+
+
+@admin.register(EmployeeGroups)
+class EmployeeGroupsAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "employee_id")

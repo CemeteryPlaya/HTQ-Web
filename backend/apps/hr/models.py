@@ -417,6 +417,118 @@ class Application(HrBase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  docs: Document (реляционная) + EmployeeDocumentBlob/EmployeeGroups
+#  (ex-Mongo → JSONB, решение D6) — порт services/hr/app/models/document.py +
+#  services/hr/app/mongo.py (коллекции hr_documents, hr_employee_groups).
+# ═══════════════════════════════════════════════════════════════════════════
+
+class Document(HrBase):
+    """Порт services/hr/app/models/document.py::Document.
+
+    Таблица — дефолтное имя Django: hr_document (не hr_documents исходника,
+    решение D2, как и у остальных моделей домена).
+
+    Оба FK (``employee``/``uploaded_by``) — NOT NULL без явного ondelete в
+    исходнике -> PROTECT (тот же выбор, что для Vacancy.department/position,
+    Application.vacancy). Без ``db_index=False`` — исходник не индексирует их
+    явно, но конвенция порта (см. Vacancy.department/position) не убирает
+    дефолтную индексацию Django FK без документированной причины (составной
+    индекс, левый префикс и т.п.) — здесь такой причины нет.
+
+    ``metadata`` — исходник называет атрибут ``metadata_`` (маппится на
+    колонку ``metadata``) ТОЛЬКО потому, что SQLAlchemy ``DeclarativeBase``
+    резервирует имя ``metadata`` под свой ``MetaData``-реестр на уровне
+    класса; Django такого ограничения не имеет, поэтому колонка и атрибут
+    здесь называются одинаково — ``metadata``. Alias сохраняется на уровне
+    wire-контракта в ``schemas.DocumentCreate`` (``metadata_``, alias
+    ``"metadata"``), а не в модели.
+
+    ``mime_type`` — клиентский SQLAlchemy ``default=...`` (не
+    ``server_default``), но, как и у остальных подобных полей в этом файле
+    (``Vacancy.description``, ``TimeEntry.break_minutes``, ...), порт всё
+    равно ставит ``db_default``: вставка мимо ORM в NOT NULL-колонку иначе
+    упадёт.
+    """
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.PROTECT, related_name="documents",
+    )
+    title = models.CharField(max_length=255)
+    doc_type = models.CharField(max_length=50)  # contract | order | certificate
+    file_path = models.CharField(max_length=500)
+    file_size = models.IntegerField()
+    mime_type = models.CharField(
+        max_length=100,
+        default="application/octet-stream",
+        db_default="application/octet-stream",
+    )
+    uploaded_by = models.ForeignKey(
+        Employee, on_delete=models.PROTECT, related_name="uploaded_documents",
+    )
+    metadata = models.JSONField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"<Document(id={self.id}, title='{self.title}', employee_id={self.employee_id})>"
+
+
+class EmployeeDocumentBlob(models.Model):
+    """Ex-Mongo коллекция ``hr_documents`` → JSONB (решение D6, PLAN.md §6.3).
+
+    Таблица — дефолтное имя Django: hr_employeedocumentblob. ``employee_id``/
+    ``doc_type``/``created_at`` — промотированы в реальные колонки (порт
+    ``mongo.ensure_indexes``: ``create_index("sql_employee_id")``,
+    ``create_index("doc_type")``, составной
+    ``create_index([("sql_employee_id", 1), ("doc_type", 1)])``,
+    ``create_index("created_at")`` — 4 индекса исходника, все воспроизведены
+    ниже). ``data`` — ВСЁ остальное тело mongo-документа (``title``,
+    ``content``, ``file_url``, ``file_size_bytes``, ``mime_type``, ``tags``,
+    ``metadata``, ``updated_at`` как isoformat-строка, ``created_by_user_id``)
+    — целиком, без выделения под-полей в отдельные колонки, буквально как
+    просит бриф ("data (JSONField, всё тело)").
+
+    ``employee_id`` НЕ ``ForeignKey`` — в исходнике это ``sql_employee_id``,
+    "синтетический" внешний ключ, поддерживаемый по конвенции, а не FK-
+    constraint'ом БД (докстринг ``app/mongo.py``/``app/schemas/mongo_document.py``
+    прямо это оговаривает: "The link is maintained by convention, not by a
+    database constraint"). Буквальный порт сохраняет это — обычный
+    ``IntegerField``, не ``ForeignKey``.
+    """
+
+    employee_id = models.IntegerField(db_index=True)
+    doc_type = models.CharField(max_length=50, db_index=True)
+    data = models.JSONField(default=dict, db_default={})
+    created_at = models.DateTimeField(db_default=Now(), db_index=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["employee_id", "doc_type"])]
+
+    def __str__(self) -> str:
+        return f"<EmployeeDocumentBlob(id={self.id}, employee_id={self.employee_id}, doc_type='{self.doc_type}')>"
+
+
+class EmployeeGroups(models.Model):
+    """Ex-Mongo коллекция ``hr_employee_groups`` → JSONB (решение D6).
+
+    Таблица — дефолтное имя Django: hr_employeegroups. Порт
+    ``EmployeeGroupsService``/Т-2 repeating groups (``education``,
+    ``experience``, ``relatives``) — под-модуль ``employee_card``, ещё НЕ
+    перенесённый в apps.hr (см. ``services/hr/app/api/v1/employee_card.py``);
+    здесь появляется только модель данных (бриф, решение D6, п.3) — CRUD и
+    роутинг T-2 groups остаются задачей под-модуля employee_card.
+
+    Ни ``created_at``, ни ``updated_at`` — в исходном mongo-документе их нет
+    (``EmployeeGroupsService.read/replace`` не пишет никаких таймстампов),
+    поэтому ``HrBase`` не наследуется буквально: только 2 поля, как в брифе.
+    """
+
+    employee_id = models.IntegerField(unique=True)
+    data = models.JSONField(default=dict, db_default={})
+
+    def __str__(self) -> str:
+        return f"<EmployeeGroups(employee_id={self.employee_id})>"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  time-core: TimeEntry + StaffingPosition + PersonnelHistory — порт
 #  services/hr/app/models/{time_tracking,staffing,personnel_history}.py
 # ═══════════════════════════════════════════════════════════════════════════

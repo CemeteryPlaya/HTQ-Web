@@ -88,6 +88,9 @@ urlpatterns = [
     path("employees/<int:id>/history", views.employee_history),
     path("employees/<int:id>/history/", views.employee_history),
 
+    path("employees/<int:id>/documents", views.employee_documents),
+    path("employees/<int:id>/documents/", views.employee_documents),
+
     # ── calendar (employee_calendar_router исходника, prefix "/employees") ──
     # Литеральные ``calendar-template``/``shift`` — независимые последние
     # сегменты, не конфликтуют с ``calendar``/``calendar/<str:day>`` (разная
@@ -237,4 +240,24 @@ urlpatterns = [
     # Generic <str:day> — ПОСЛЕДНИЙ (см. комментарий выше).
     path("calendar/<str:day>/", views.calendar_day_override_detail),
     path("calendar/<str:day>", views.calendar_day_override_detail),
+
+    # ── documents ─────────────────────────────────────────────────────────
+    # Порт services/hr/app/api/v1/documents.py (4 эндпойнта, hr_document).
+    path("documents/", views.documents_collection),
+    path("documents", views.documents_collection),
+
+    path("documents/<int:id>/", views.document_detail),
+    path("documents/<int:id>", views.document_detail),
+
+    # ── mongo-documents ──────────────────────────────────────────────────
+    # Порт services/hr/app/api/v1/mongo_documents.py (5 эндпойнтов,
+    # ex-Mongo -> EmployeeDocumentBlob JSONB, решение D6). ``<str:doc_id>``
+    # (не ``<int:...>``) — вьюха сама парсит id и отдаёт 400 "Invalid document
+    # ID format" на не-числовой ввод (тот же смысл, что ObjectId-парсинг
+    # исходника), а не молчаливый 404 от резолвера.
+    path("mongo-documents/", views.mongo_documents_collection),
+    path("mongo-documents", views.mongo_documents_collection),
+
+    path("mongo-documents/<str:doc_id>/", views.mongo_document_detail),
+    path("mongo-documents/<str:doc_id>", views.mongo_document_detail),
 ]

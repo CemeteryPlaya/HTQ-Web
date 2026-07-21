@@ -30,6 +30,7 @@ from . import schemas
 from .permissions import CALENDAR_MANAGE, CALENDAR_VIEW, LEVEL_PRESETS, STAFFING_MANAGE, STAFFING_VIEW
 from .services import calendar_service as cal_svc
 from .services import department_service as svc
+from .services import document_service as doc_svc
 from .services import employee_service as emp_svc
 from .services import org_service
 from .services import personnel_history_service as ph_svc
@@ -621,6 +622,29 @@ def employee_history(request, id: int):
     except emp_svc.EmployeeNotFound:
         return json_error("Employee not found", 404)
     return emp_svc.get_history(id)
+
+
+# ── /employees/{id}/documents ────────────────────────────────────────────────
+#
+# Порт employees.py::employee_documents (исходник, hr-docs под-модуль): та же
+# пара require_hr_access + _require_visible_employee, что и history выше
+# (буквально идентичный auth-пролог исходника: ``require_hr_access(await
+# resolve_hr_access(db, current_user))`` + ``_require_visible_employee``).
+# Раскрыт после переноса модели Document (apps/hr/services/document_service.py)
+# — растяжка test_documents_endpoint_todo_is_tracked в test_employees_api.py
+# снята.
+
+@api_view(methods=("GET",), auth="jwt")
+def employee_documents(request, id: int):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    try:
+        _require_visible_employee(id, access)
+    except emp_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+    return doc_svc.list_for_employee(id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1546,4 +1570,148 @@ def employee_day_override_detail(request, employee_id: int, day: str):
         return _put_employee_day_override(request, employee_id=employee_id, day=day)
     if request.method == "DELETE":
         return _delete_employee_day_override(request, employee_id=employee_id, day=day)
+    return json_error("Method Not Allowed", 405)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /documents/* — порт services/hr/app/api/v1/documents.py (4 эндпойнта,
+#  модель Document / hr_document)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация — БУКВАЛЬНО как в исходнике: ВСЕ 4 эндпойнта (включая POST и
+# DELETE) используют только ``get_current_user`` — исходник НЕ зовёт
+# ``require_hr_write`` нигде в documents.py (странность, как у recruiting/
+# time-core — см. document_service.py докстринг), поэтому ВСЕ 4 —
+# ``api_view(auth="jwt")`` без ``admin=True``.
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_documents(request):
+    try:
+        query = schemas.DocumentListQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    items, total = doc_svc.list_documents(page=query.page, limit=query.limit)
+    return doc_svc.paginate(
+        [doc_svc.serialize(d) for d in items], total=total, page=query.page, limit=query.limit,
+    )
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.DocumentCreate, status=201)
+def _upload_document(request, data: schemas.DocumentCreate):
+    return doc_svc.serialize(doc_svc.create_document(data))
+
+
+def documents_collection(request):
+    if request.method == "GET":
+        return _list_documents(request)
+    if request.method == "POST":
+        return _upload_document(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_document(request, id: int):
+    try:
+        return doc_svc.serialize(doc_svc.get_document(id))
+    except doc_svc.DocumentNotFound:
+        return json_error("Document not found", 404)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_document(request, id: int):
+    try:
+        doc_svc.delete_document(id)
+    except doc_svc.DocumentNotFound:
+        return json_error("Document not found", 404)
+    return HttpResponse(status=204)
+
+
+def document_detail(request, id: int):
+    if request.method == "GET":
+        return _get_document(request, id=id)
+    if request.method == "DELETE":
+        return _delete_document(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /mongo-documents/* — порт services/hr/app/api/v1/mongo_documents.py
+#  (5 эндпойнтов, ex-Mongo коллекция hr_documents → EmployeeDocumentBlob
+#  JSONB, решение D6)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация — БУКВАЛЬНО как в исходнике: reads (list/get) =
+# ``get_current_user`` -> ``api_view(auth="jwt")``; writes (create/update/
+# delete) = ``require_hr_write`` (``current_user.is_elevated``) ->
+# ``api_view(auth="jwt", admin=True)`` — та же пара, что у positions/org.
+#
+# ``_require_collection`` 503-деградация исходника (пустой ``mongo_uri``) не
+# переносится — Postgres не бывает "не настроен" так, как опциональный Mongo
+# (см. document_service.py докстринг).
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_mongo_documents(request):
+    try:
+        query = schemas.MongoDocumentListQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    # Голый список — НЕ PaginatedResponse-конверт (буквально как в исходнике:
+    # response_model=list[HRDocumentOut], без items/total/page/pages).
+    return doc_svc.list_mongo_documents(
+        employee_id=query.employee_id, doc_type=query.doc_type, page=query.page, limit=query.limit,
+    )
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.HRDocumentCreate, status=201)
+def _create_mongo_document(request, data: schemas.HRDocumentCreate):
+    return doc_svc.create_mongo_document(data, created_by_user_id=request.token.user_id)
+
+
+def mongo_documents_collection(request):
+    if request.method == "GET":
+        return _list_mongo_documents(request)
+    if request.method == "POST":
+        return _create_mongo_document(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_mongo_document(request, doc_id: str):
+    pk = doc_svc.parse_blob_id(doc_id)
+    if pk is None:
+        return json_error("Invalid document ID format", 400)
+    out = doc_svc.get_mongo_document(pk)
+    if out is None:
+        return json_error("Document not found", 404)
+    return out
+
+
+@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.HRDocumentUpdate)
+def _update_mongo_document(request, doc_id: str, data: schemas.HRDocumentUpdate):
+    pk = doc_svc.parse_blob_id(doc_id)
+    if pk is None:
+        return json_error("Invalid document ID format", 400)
+    out = doc_svc.update_mongo_document(pk, data)
+    if out is None:
+        return json_error("Document not found", 404)
+    return out
+
+
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
+def _delete_mongo_document(request, doc_id: str):
+    pk = doc_svc.parse_blob_id(doc_id)
+    if pk is None:
+        return json_error("Invalid document ID format", 400)
+    if not doc_svc.delete_mongo_document(pk):
+        return json_error("Document not found", 404)
+    return HttpResponse(status=204)
+
+
+def mongo_document_detail(request, doc_id: str):
+    if request.method == "GET":
+        return _get_mongo_document(request, doc_id=doc_id)
+    if request.method == "PATCH":
+        return _update_mongo_document(request, doc_id=doc_id)
+    if request.method == "DELETE":
+        return _delete_mongo_document(request, doc_id=doc_id)
     return json_error("Method Not Allowed", 405)
