@@ -85,4 +85,24 @@ urlpatterns = [
 
     path("employees/<int:id>/", views.employee_detail),
     path("employees/<int:id>", views.employee_detail),
+
+    # ── org ───────────────────────────────────────────────────────────────
+    # Литеральные сегменты (``tree``, ``subordination-matrix``, ``relations``,
+    # ``settings/deletion-strategy``) — порядок роутера исходника; конфликтов
+    # с ``<int:relation_id>`` нет (int-конвертер слова не матчит), но порядок
+    # сохраняем для ясности, как и в departments/positions.
+    path("org/tree", views.org_tree),
+    path("org/tree/", views.org_tree),
+
+    path("org/subordination-matrix", views.org_subordination_matrix),
+    path("org/subordination-matrix/", views.org_subordination_matrix),
+
+    path("org/relations", views.add_reporting_relation),
+    path("org/relations/", views.add_reporting_relation),
+
+    path("org/relations/<int:relation_id>", views.remove_reporting_relation),
+    path("org/relations/<int:relation_id>/", views.remove_reporting_relation),
+
+    path("org/settings/deletion-strategy", views.org_deletion_strategy),
+    path("org/settings/deletion-strategy/", views.org_deletion_strategy),
 ]

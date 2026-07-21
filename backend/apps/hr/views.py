@@ -29,6 +29,7 @@ from . import schemas
 from .permissions import LEVEL_PRESETS
 from .services import department_service as svc
 from .services import employee_service as emp_svc
+from .services import org_service
 from .services import position_service as pos_svc
 
 
@@ -614,3 +615,87 @@ def employee_history(request, id: int):
     except emp_svc.EmployeeNotFound:
         return json_error("Employee not found", 404)
     return emp_svc.get_history(id)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /org/* — порт services/hr/app/api/v1/org.py (6 эндпойнтов)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация (решение контроллера, docs/plans/2026-07-20-hr-domain.md,
+# под-модуль org): reads = ``get_current_user`` исходника -> ``auth="jwt"``;
+# writes = ``require_hr_write`` исходника (``current_user.is_elevated``) ->
+# ``api_view(auth="jwt", admin=True)`` — ровно тот же предикат, что у
+# positions/*. Тонкий ``hr_access`` (как в employees) здесь НЕ нужен —
+# исходный org.py тоже использует грубую пару get_current_user/require_hr_write,
+# а не HRAccess.
+
+
+@api_view(methods=("GET",), auth="jwt")
+def org_tree(request):
+    try:
+        query = schemas.OrgTreeQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return org_service.get_org_tree(
+        root_id=query.root_id, depth=query.depth, mode=query.mode, lang=query.lang,
+    )
+
+
+# ── /org/subordination-matrix ────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def org_subordination_matrix(request):
+    try:
+        query = schemas.OrgMatrixQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return org_service.get_subordination_matrix(unit_id=query.unit_id)
+
+
+# ── /org/relations — CRUD ─────────────────────────────────────────────────────
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.RelationCreate, status=201)
+def add_reporting_relation(request, data: schemas.RelationCreate):
+    try:
+        rel = org_service.add_relation(
+            superior_id=data.superior_position_id,
+            subordinate_id=data.subordinate_position_id,
+            relation_type=data.relation_type,
+            effective_from=data.effective_from,
+            effective_to=data.effective_to,
+        )
+    except org_service.RelationSelfReferential as exc:
+        return json_error(exc.detail, 422)
+    except org_service.RelationDuplicate as exc:
+        return json_error(exc.detail, 409)
+    return org_service.serialize_relation(rel)
+
+
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
+def remove_reporting_relation(request, relation_id: int):
+    try:
+        org_service.remove_relation(relation_id)
+    except org_service.RelationNotFound as exc:
+        return json_error(exc.detail, 404)
+    return HttpResponse(status=204)
+
+
+# ── /org/settings/deletion-strategy ────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_deletion_strategy(request):
+    return {"deletion_strategy": org_service.get_deletion_strategy()}
+
+
+@api_view(methods=("PUT",), auth="jwt", admin=True, body=schemas.OrgSettingUpdate)
+def _set_deletion_strategy(request, data: schemas.OrgSettingUpdate):
+    org_service.set_deletion_strategy(data.deletion_strategy)
+    return {"deletion_strategy": data.deletion_strategy}
+
+
+def org_deletion_strategy(request):
+    if request.method == "GET":
+        return _get_deletion_strategy(request)
+    if request.method == "PUT":
+        return _set_deletion_strategy(request)
+    return json_error("Method Not Allowed", 405)

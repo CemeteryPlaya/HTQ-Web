@@ -247,6 +247,62 @@ class AuditLog(HrBase):
         return f"<AuditLog(id={self.id}, entity={self.entity_type}:{self.entity_id}, action='{self.action}')>"
 
 
+class RelationType(models.TextChoices):
+    DIRECT = "direct", "Прямое"
+    FUNCTIONAL = "functional", "Функциональное"
+    PROJECT = "project", "Проектное"
+
+
+class ReportingRelation(HrBase):
+    """Ячейка матрицы подчинения — порт services/hr/app/models/reporting_relation.py.
+
+    Таблица — дефолтное имя Django: hr_reportingrelation (не hr_reporting_relations
+    исходника, решение D2, как и у остальных моделей домена).
+
+    Оба FK — ``on_delete=CASCADE`` и БЕЗ ``db_index=False``: в отличие от
+    ``PositionWeightAudit.position`` (там лишний индекс убран, т.к. составной
+    индекс уже покрывал запросы своим левым префиксом), у исходника здесь РОВНО
+    два независимых индекса (``Index("ix_reporting_superior", ...)`` и
+    ``Index("ix_reporting_subordinate", ...)`` — SQLAlchemy FK индекс не создаёт
+    сам по себе). Django FK, наоборот, индексирует колонку по умолчанию — так
+    дефолт Django воспроизводит оба индекса исходника без явного ``indexes=``.
+    """
+
+    superior_position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="subordinate_relations",
+    )
+    subordinate_position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="superior_relations",
+    )
+    relation_type = models.CharField(
+        max_length=20,
+        choices=RelationType.choices,
+        default=RelationType.DIRECT,
+        db_default=RelationType.DIRECT.value,
+    )
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["superior_position", "subordinate_position", "relation_type"],
+                name="uq_reporting_relation",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(superior_position=models.F("subordinate_position")),
+                name="ck_no_self_relation",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(relation_type__in=list(RelationType.values)),
+                name="ck_relation_type",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<ReportingRelation(sup={self.superior_position_id}, sub={self.subordinate_position_id}, type='{self.relation_type}')>"
+
+
 class OrgSettings(models.Model):
     """Key-value настройки поведения оргструктуры.
 

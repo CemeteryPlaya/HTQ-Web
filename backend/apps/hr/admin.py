@@ -10,7 +10,15 @@ from django.contrib import admin
 
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
-from .models import AuditLog, Department, Employee, LevelThreshold, OrgSettings, Position
+from .models import (
+    AuditLog,
+    Department,
+    Employee,
+    LevelThreshold,
+    OrgSettings,
+    Position,
+    ReportingRelation,
+)
 
 
 @admin.register(Department)
@@ -44,6 +52,15 @@ class EmployeeAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 class LevelThresholdAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("level_number", "weight_from", "weight_to", "label", "color")
     ordering = ("level_number",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ReportingRelation)
+class ReportingRelationAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "superior_position", "subordinate_position", "relation_type",
+                    "effective_from", "effective_to")
+    list_filter = ("relation_type",)
+    autocomplete_fields = ("superior_position", "subordinate_position")
     readonly_fields = ("created_at", "updated_at")
 
 

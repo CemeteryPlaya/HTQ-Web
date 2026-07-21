@@ -21,7 +21,7 @@ import datetime
 import pytest
 from django.test import Client
 
-from apps.hr.models import Department, Employee, Position
+from apps.hr.models import Department, Employee, Position, ReportingRelation
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -241,6 +241,30 @@ def test_delete_cascade_clears_manager_pointing_at_deleted_employee(auth):
     assert other.manager_id is None
 
 
+@pytest.mark.django_db
+def test_delete_cascade_drops_reporting_relations_touching_subtree_positions(auth):
+    """Закрывает TODO исходника (department_service.py, шаг «1. Drop reporting
+    relations»): каскадное удаление отдела должно чистить ReportingRelation, где
+    ЛЮБАЯ сторона (superior ИЛИ subordinate) указывает на позицию из удаляемого
+    поддерева — даже если другая сторона связи торчит в отделе, который НЕ
+    удаляется (здесь: "fin" остаётся, связь всё равно должна быть выметена)."""
+    dep = _dep("ИТ", "it")
+    other = _dep("Финансы", "fin")
+    boss = _pos("Начальник", dep, weight=10)
+    outsider = _pos("Финансист", other, weight=20)
+    rel = ReportingRelation.objects.create(
+        superior_position=boss, subordinate_position=outsider,
+        effective_from=datetime.date(2024, 1, 1),
+    )
+
+    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **auth)
+    assert resp.status_code == 204
+    assert not ReportingRelation.objects.filter(id=rel.id).exists()
+    # "fin" и её позиция вне поддерева — не должны быть тронуты.
+    assert Department.objects.filter(id=other.id).exists()
+    assert Position.objects.filter(id=outsider.id).exists()
+
+
 # ── GET /{id}/children и /{id}/employees ────────────────────────────────────
 
 @pytest.mark.django_db
@@ -275,22 +299,24 @@ def test_employees_404_for_missing_department(auth):
 # ── трекер незакрытого TODO ─────────────────────────────────────────────────
 
 def test_cascade_cleanup_todo_is_tracked():
-    """Растяжка на TODO в department_service.delete_department.
+    """Растяжка на оставшийся TODO в department_service.delete_department.
 
     Исходник при cascade=true чистит ReportingRelation (по позициям) и
     PMOMember (по сотрудникам) ПЕРЕД удалением самих позиций/сотрудников.
-    Этих моделей в порту ещё нет — они приходят в под-модулях hr-org/hr-misc,
-    поэтому шага в каскаде нет и осиротеть пока нечему.
+    ReportingRelation уже перенесена (под-модуль hr-org) и её очистка уже
+    реализована и покрыта тестом
+    (test_delete_cascade_drops_reporting_relations_touching_subtree_positions
+    выше) — сужаем растяжку до PMOMember, которая приходит следующим
+    под-модулем (hr-misc) и пока отсутствует в порту.
 
-    Тест падает ровно в тот момент, когда любая из моделей появится, и
-    заставляет дописать очистку — вместо того чтобы каскад начал молча
-    оставлять висячие строки.
+    Тест падает ровно в тот момент, когда PMOMember появится, и заставляет
+    дописать её очистку — вместо того чтобы каскад начал молча оставлять
+    висячие строки.
     """
     from django.apps import apps as django_apps
 
     existing = {m.__name__ for m in django_apps.get_app_config("hr").get_models()}
-    assert not ({"ReportingRelation", "PMOMember"} & existing), (
-        "Появились ReportingRelation/PMOMember — допишите их очистку в "
-        "department_service.delete_department (TODO hr-org/hr-misc) и снимите "
-        "эту растяжку"
+    assert "PMOMember" not in existing, (
+        "Появилась PMOMember — допишите её очистку в "
+        "department_service.delete_department (TODO hr-misc) и снимите эту растяжку"
     )

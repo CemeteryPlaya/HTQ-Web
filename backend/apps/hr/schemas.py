@@ -176,3 +176,36 @@ class EmployeeListQuery(BaseModel):
     search: str | None = None
     page: int = Field(default=1, ge=1)
     limit: int = Field(default=20, ge=1, le=200)
+
+
+# ── org — порт services/hr/app/api/v1/org.py (схемы были inline в роутере) ──
+
+RelationTypeLiteral = Literal["direct", "functional", "project"]
+DeletionStrategyLiteral = Literal["block", "reassign_to_parent", "cascade"]
+
+
+class OrgTreeQuery(BaseModel):
+    """Порт Query(root_id, depth, mode, lang) роутера ``GET /org/tree``."""
+
+    root_id: int | None = Field(default=None)
+    depth: int = Field(default=5, ge=1, le=10)
+    mode: Literal["positions", "employees", "both"] = "positions"
+    lang: Literal["ru", "en"] = "ru"
+
+
+class OrgMatrixQuery(BaseModel):
+    """Порт Query(unit_id) роутера ``GET /org/subordination-matrix``."""
+
+    unit_id: int | None = None
+
+
+class RelationCreate(BaseModel):
+    superior_position_id: int
+    subordinate_position_id: int
+    relation_type: RelationTypeLiteral = "direct"
+    effective_from: date | None = None
+    effective_to: date | None = None
+
+
+class OrgSettingUpdate(BaseModel):
+    deletion_strategy: DeletionStrategyLiteral
