@@ -296,27 +296,29 @@ def test_employees_404_for_missing_department(auth):
     assert Client().get(f"{BASE}/999999/employees", **auth).status_code == 404
 
 
-# ── трекер незакрытого TODO ─────────────────────────────────────────────────
+# ── cascade: PMOMember (под-модуль pmo) ─────────────────────────────────────
 
-def test_cascade_cleanup_todo_is_tracked():
-    """Растяжка на оставшийся TODO в department_service.delete_department.
+@pytest.mark.django_db
+def test_delete_cascade_drops_pmo_memberships_of_subtree_employees(auth):
+    """Закрывает TODO исходника (department_service.py, шаг «2. Drop PMO
+    memberships»): каскадное удаление отдела должно чистить PMOMember по
+    СОТРУДНИКАМ удаляемого поддерева ПЕРЕД удалением самих сотрудников — даже
+    если PMO, в котором состоит сотрудник, никак не относится к отделу
+    (здесь: членство в "PMO-1" переживает удаление сотрудника, только
+    строка PMOMember должна исчезнуть — не сам PMO)."""
+    from apps.hr.models import PMO, PMOMember
 
-    Исходник при cascade=true чистит ReportingRelation (по позициям) и
-    PMOMember (по сотрудникам) ПЕРЕД удалением самих позиций/сотрудников.
-    ReportingRelation уже перенесена (под-модуль hr-org) и её очистка уже
-    реализована и покрыта тестом
-    (test_delete_cascade_drops_reporting_relations_touching_subtree_positions
-    выше) — сужаем растяжку до PMOMember, которая приходит следующим
-    под-модулем (hr-misc) и пока отсутствует в порту.
-
-    Тест падает ровно в тот момент, когда PMOMember появится, и заставляет
-    дописать её очистку — вместо того чтобы каскад начал молча оставлять
-    висячие строки.
-    """
-    from django.apps import apps as django_apps
-
-    existing = {m.__name__ for m in django_apps.get_app_config("hr").get_models()}
-    assert "PMOMember" not in existing, (
-        "Появилась PMOMember — допишите её очистку в "
-        "department_service.delete_department (TODO hr-misc) и снимите эту растяжку"
+    dep = _dep("ИТ", "it")
+    pos = _pos("Инженер", dep, weight=50)
+    emp = _emp(dep, pos, "a@htq.test")
+    pmo = PMO.objects.create(name="PMO-1", code="PMO-1")
+    member = PMOMember.objects.create(
+        pmo=pmo, employee=emp, from_date=datetime.date(2024, 1, 1),
     )
+
+    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **auth)
+    assert resp.status_code == 204
+    assert not PMOMember.objects.filter(id=member.id).exists()
+    assert not Employee.objects.filter(id=emp.id).exists()
+    # PMO сам по себе — вне удаляемого поддерева, не должен быть тронут.
+    assert PMO.objects.filter(id=pmo.id).exists()

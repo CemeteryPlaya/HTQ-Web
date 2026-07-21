@@ -3,10 +3,11 @@
 Провенанс формы ответов: app/schemas/employee.py (EmployeeOut), поведение —
 app/services/employee_service.py + app/auth/hr_access.py.
 
-10 из 16 эндпойнтов исходника перенесены сейчас (документы — hr-docs, задача
-5 плана, см. test_documents_api.py); 6 отложены (users/, pmos, card — их
-зависимости в hr-misc/apps.users.interface ещё не перенесены) — растяжки
-внизу файла следят за появлением зависимостей.
+12 из 16 эндпойнтов исходника перенесены сейчас (документы — hr-docs, задача
+5 плана, см. test_documents_api.py; pmos — под-модуль pmo, см. GET /me/pmos
+и GET /{id}/pmos ниже); 4 отложены (users/, card — их зависимости в
+hr-misc/apps.users.interface ещё не перенесены) — растяжки внизу файла
+следят за появлением зависимостей.
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
   * авторизация — ТОНКАЯ роль внутри вьюх (resolve_hr_access + access.can_*),
@@ -38,7 +39,7 @@ import datetime
 import pytest
 from django.test import Client
 
-from apps.hr.models import AuditLog, Department, Employee, Position
+from apps.hr.models import AuditLog, Department, Employee, PMO, PMOMember, Position
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -702,7 +703,87 @@ def test_history_404_after_soft_delete():
     assert resp.status_code == 404
 
 
-# ── растяжки: 6 отложенных эндпойнтов ────────────────────────────────────────
+# ── GET /me/pmos ─────────────────────────────────────────────────────────────
+#
+# Порт employees.py::my_pmos исходника (зовёт PMOService.get_employee_pmos) —
+# резолвит СВОЙ Employee ровно как /me/ (user_id||email), БЕЗ require_hr_access
+# (любой залогиненный с профилем видит собственные PMO-членства).
+
+@pytest.mark.django_db
+def test_me_pmos_404_when_no_employee_profile(auth):
+    resp = Client().get(f"{BASE}/me/pmos", **auth)
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Employee profile not found"
+
+
+@pytest.mark.django_db
+def test_me_pmos_empty_when_no_memberships(junior):
+    _owner, headers = junior
+    resp = Client().get(f"{BASE}/me/pmos", **headers)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.django_db
+def test_me_pmos_returns_active_membership_shape(junior):
+    emp, headers = junior
+    pmo = PMO.objects.create(name="PMO Alpha", code="ALPHA")
+    PMOMember.objects.create(
+        pmo=pmo, employee=emp, position_in_pmo="Lead", allocation_percent=40,
+        is_primary=True, from_date=datetime.date(2024, 1, 1),
+    )
+
+    resp = Client().get(f"{BASE}/me/pmos", **headers)
+    assert resp.status_code == 200
+    [item] = resp.json()
+    assert item == {
+        "pmo_id": pmo.id, "pmo_name": "PMO Alpha", "pmo_code": "ALPHA",
+        "pmo_status": "active", "membership_type": "permanent",
+        "position_in_pmo": "Lead", "allocation_percent": 40, "is_primary": True,
+        "from_date": "2024-01-01", "to_date": None,
+    }
+
+
+# ── GET /{id}/pmos ────────────────────────────────────────────────────────────
+#
+# Порт employees.py::employee_pmos исходника — та же пара require_hr_access +
+# _require_visible_employee, что и history/documents выше.
+
+@pytest.mark.django_db
+def test_id_pmos_forbidden_without_any_hr_access(auth, hr_dep):
+    target = _emp(hr_dep, _pos("A", hr_dep, weight=173), "p1@htq.test")
+    resp = Client().get(f"{BASE}/{target.id}/pmos", **auth)
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_id_pmos_missing_employee_404(admin_auth):
+    resp = Client().get(f"{BASE}/999999/pmos", **admin_auth)
+    assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_id_pmos_other_department_returns_404_not_403(middle, other_dep):
+    _owner, headers = middle
+    target = _emp(other_dep, _pos("Other", other_dep, weight=174), "p2@htq.test")
+    resp = Client().get(f"{BASE}/{target.id}/pmos", **headers)
+    assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_id_pmos_admin_sees_active_membership(admin_auth, hr_dep):
+    target = _emp(hr_dep, _pos("A", hr_dep, weight=175), "p3@htq.test")
+    pmo = PMO.objects.create(name="PMO Beta", code="BETA")
+    PMOMember.objects.create(pmo=pmo, employee=target, from_date=datetime.date(2024, 1, 1))
+
+    resp = Client().get(f"{BASE}/{target.id}/pmos", **admin_auth)
+    assert resp.status_code == 200
+    [item] = resp.json()
+    assert item["pmo_id"] == pmo.id
+    assert item["membership_type"] == "permanent"
+
+
+# ── растяжки: 4 отложенных эндпойнта ────────────────────────────────────────
 #
 # Не реализованы — их зависимости ещё не перенесены в apps.hr (модель hr-misc)
 # или apps.users.interface (Р3, без S2S). Каждый тест падает ровно в момент
@@ -720,18 +801,6 @@ def test_user_options_endpoints_todo_is_tracked():
         "В apps.users.interface появился list_user_options — допишите "
         "GET/POST /employees/users/ (см. бриф employees, Р3 без S2S) и "
         "снимите эту растяжку"
-    )
-
-
-def test_pmo_endpoints_todo_is_tracked():
-    """GET /employees/me/pmos, GET /employees/{id}/pmos — ждут модель PMO
-    (под-модуль hr-misc, ещё не перенесён)."""
-    from django.apps import apps as django_apps
-
-    existing = {m.__name__ for m in django_apps.get_app_config("hr").get_models()}
-    assert "PMO" not in existing, (
-        "Появилась модель PMO в apps.hr — допишите GET /employees/me/pmos и "
-        "GET /employees/{id}/pmos и снимите эту растяжку"
     )
 
 

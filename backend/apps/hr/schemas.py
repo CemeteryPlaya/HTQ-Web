@@ -620,3 +620,67 @@ class MongoDocumentListQuery(BaseModel):
     doc_type: str | None = None
     page: int = Field(default=1, ge=1)
     limit: int = Field(default=20, ge=1, le=200)
+
+
+# ── pmo — порт services/hr/app/api/v1/pmo.py (схемы были inline в роутере) ──
+
+PMOStatusLiteral = Literal["active", "suspended", "closed"]
+PMOMembershipTypeLiteral = Literal["permanent", "assigned", "consulting"]
+
+
+class PMOCreate(BaseModel):
+    name: str = Field(..., max_length=200)
+    code: str = Field(..., max_length=50)
+    description: str | None = None
+    head_employee_id: int | None = None
+    status: PMOStatusLiteral = "active"
+
+
+class PMOUpdate(BaseModel):
+    """Порт PMOUpdate — все поля опциональны. В отличие от остальных *Update
+    схем этого файла, вьюха применяет патч через ``exclude_none`` (буквально
+    как исходник роутера: ``body.model_dump(exclude_none=True)``), не
+    ``exclude_unset`` — тот же PATCH-контракт, что у Department/Position/…"""
+
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = None
+    head_employee_id: int | None = None
+    status: PMOStatusLiteral | None = None
+
+
+class PMOMemberAdd(BaseModel):
+    employee_id: int
+    membership_type: PMOMembershipTypeLiteral = "permanent"
+    position_in_pmo: str | None = Field(default=None, max_length=200)
+    allocation_percent: int = Field(default=100, ge=0, le=100)
+    is_primary: bool = False
+    from_date: date | None = None
+    to_date: date | None = None
+
+    @model_validator(mode="after")
+    def _check_dates(self) -> "PMOMemberAdd":
+        if self.from_date and self.to_date and self.to_date < self.from_date:
+            raise ValueError("to_date must be >= from_date")
+        return self
+
+
+class PMOMemberUpdate(BaseModel):
+    """Порт MemberUpdate — все поля опциональны, патч через ``exclude_unset``
+    (буквально исходник: ``body.model_dump(exclude_unset=True)``, В ОТЛИЧИЕ
+    от MemberAdd/PMOUpdate/остальных *Update схем этого файла, которые
+    используют ``exclude_none``) — сервис вызывающая сторона обязана
+    вызывать ``model_dump(exclude_unset=True)``, не ``exclude_none``."""
+
+    employee_id: int | None = None
+    membership_type: PMOMembershipTypeLiteral | None = None
+    position_in_pmo: str | None = Field(default=None, max_length=200)
+    allocation_percent: int | None = Field(default=None, ge=0, le=100)
+    is_primary: bool | None = None
+    from_date: date | None = None
+    to_date: date | None = None
+
+    @model_validator(mode="after")
+    def _check_dates(self) -> "PMOMemberUpdate":
+        if self.from_date and self.to_date and self.to_date < self.from_date:
+            raise ValueError("to_date must be >= from_date")
+        return self

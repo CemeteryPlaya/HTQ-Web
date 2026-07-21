@@ -25,6 +25,10 @@ from .models import (
     LevelThreshold,
     OrgSettings,
     PersonnelHistory,
+    PMO,
+    PMODepartment,
+    PMOMember,
+    PMOPosition,
     Position,
     ReportingRelation,
     ShiftPattern,
@@ -201,3 +205,33 @@ class EmployeeDocumentBlobAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 @admin.register(EmployeeGroups)
 class EmployeeGroupsAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "employee_id")
+
+
+@admin.register(PMO)
+class PMOAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "name", "code", "status", "head_employee")
+    list_filter = ("status",)
+    search_fields = ("name", "code")
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("head_employee",)
+
+
+@admin.register(PMOMember)
+class PMOMemberAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "pmo", "employee", "membership_type", "allocation_percent",
+                    "is_primary", "from_date", "to_date")
+    list_filter = ("membership_type", "is_primary")
+    autocomplete_fields = ("pmo", "employee")
+
+
+# PMODepartment/PMOPosition are NOT registered here — Django hard-rejects it.
+# ``AdminSite.register`` (django/contrib/admin/sites.py) raises
+# ``ImproperlyConfigured`` unconditionally for any model whose
+# ``_meta.is_composite_pk`` is True, BEFORE any ModelAdmin subclass or mixin
+# gets a say — there is no override point, ServiceGatedAdminMixin or
+# otherwise. Both models use ``models.CompositePrimaryKey("pmo", ...)``
+# (see models.py docstring above PMODepartment). This does not weaken the
+# gate meta-test (apps/core/tests/test_invariants.py, Test 2): it only
+# requires that a domain app with ≥1 model has ≥1 registered gated admin —
+# ``hr`` already has dozens, including PMO/PMOMember above — not that every
+# model is individually registered.

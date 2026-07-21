@@ -34,6 +34,7 @@ from .services import document_service as doc_svc
 from .services import employee_service as emp_svc
 from .services import org_service
 from .services import personnel_history_service as ph_svc
+from .services import pmo_service as pmo_svc
 from .services import position_service as pos_svc
 from .services import recruitment_service as rec_svc
 from .services import staffing_service as staffing_svc
@@ -645,6 +646,38 @@ def employee_documents(request, id: int):
     except emp_svc.EmployeeNotFound:
         return json_error("Employee not found", 404)
     return doc_svc.list_for_employee(id)
+
+
+# ── /employees/me/pmos, /employees/{id}/pmos ────────────────────────────────
+#
+# Порт employees.py::my_pmos/employee_pmos исходника (растяжки
+# test_pmo_endpoints_todo_is_tracked в test_employees_api.py сняты теперь,
+# когда модель PMO появилась под-модулем pmo). Обе зовут
+# ``PMOService.get_employee_pmos`` исходника — здесь pmo_svc.get_employee_pmos
+# (см. apps/hr/services/pmo_service.py). Auth — идентична соседям: /me/pmos
+# резолвит СВОЙ Employee (как my_employee выше, 404 "Employee profile not
+# found" при отсутствии профиля); /{id}/pmos — require_hr_access +
+# _require_visible_employee (как history/documents выше).
+
+@api_view(methods=("GET",), auth="jwt")
+def my_pmos(request):
+    employee = emp_svc.get_my_employee(request.token)
+    if employee is None:
+        return json_error("Employee profile not found", 404)
+    return pmo_svc.get_employee_pmos(employee.id)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def employee_pmos(request, id: int):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    try:
+        _require_visible_employee(id, access)
+    except emp_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+    return pmo_svc.get_employee_pmos(id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1715,3 +1748,182 @@ def mongo_document_detail(request, doc_id: str):
     if request.method == "DELETE":
         return _delete_mongo_document(request, doc_id=doc_id)
     return json_error("Method Not Allowed", 405)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /pmo/* — порт services/hr/app/api/v1/pmo.py (10 эндпойнтов, модели
+#  PMO/PMODepartment/PMOPosition/PMOMember — hr_pmo/hr_pmodepartment/
+#  hr_pmoposition/hr_pmomember)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация (решение брифа): reads (get_current_user исходника) ->
+# auth="jwt"; writes (require_hr_write исходника, is_elevated) ->
+# api_view(admin=True) — та же пара, что у departments/positions/org.
+#
+# update_pmo — ТОЛЬКО PATCH в исходнике (@router.patch("/{id}")), в отличие
+# от departments/positions/employees/vacancies/applications/time-tracking, у
+# которых порт аддитивно регистрирует и PUT рядом (там был живой мисматч с
+# фронтом). frontend/src/api/hr.ts НЕ шлёт ни один запрос на /pmo/* (только
+# TS-интерфейсы EmployeePmoEntry/EmployeeCard.pmos для employees-эндпойнтов
+# выше) — живого мисматча нет, поэтому здесь регистрируется буквально ТОЛЬКО
+# PATCH, без добавления PUT.
+#
+# add_pmo_member/update_pmo_member — заголовок X-Allocation-Warning
+# (суммарная загрузка сотрудника по всем активным PMO > 100%) добавляется
+# ТОЛЬКО поверх готового JsonResponse (api_view не даёт добавить заголовок к
+# dict-результату — см. htqweb/http.py: "готовый HttpResponse ... status
+# игнорируется", тот же приём здесь для заголовков).
+
+# ── /pmo/ — коллекция ────────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_pmos(request):
+    return pmo_svc.list_pmos(status_filter=request.GET.get("status") or None)
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PMOCreate, status=201)
+def _create_pmo(request, data: schemas.PMOCreate):
+    try:
+        pmo = pmo_svc.create_pmo(data.model_dump())
+    except pmo_svc.PMOCodeExists as exc:
+        return json_error(exc.detail, 409)
+    return pmo_svc.serialize(pmo)
+
+
+def pmo_collection(request):
+    if request.method == "GET":
+        return _list_pmos(request)
+    if request.method == "POST":
+        return _create_pmo(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /pmo/{id}/ — детальный ресурс ────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_pmo(request, id: int):
+    try:
+        return pmo_svc.serialize(pmo_svc.get_pmo(id))
+    except pmo_svc.PMONotFound:
+        return json_error("PMO not found", 404)
+
+
+@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.PMOUpdate)
+def _update_pmo(request, id: int, data: schemas.PMOUpdate):
+    try:
+        pmo = pmo_svc.update_pmo(id, data.model_dump(exclude_none=True))
+    except pmo_svc.PMONotFound:
+        return json_error("PMO not found", 404)
+    return pmo_svc.serialize(pmo)
+
+
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
+def _delete_pmo(request, id: int):
+    try:
+        pmo_svc.delete_pmo(id)
+    except pmo_svc.PMONotFound:
+        return json_error("PMO not found", 404)
+    return HttpResponse(status=204)
+
+
+def pmo_detail(request, id: int):
+    if request.method == "GET":
+        return _get_pmo(request, id=id)
+    if request.method == "PATCH":
+        return _update_pmo(request, id=id)
+    if request.method == "DELETE":
+        return _delete_pmo(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /pmo/{id}/members ─────────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_pmo_members(request, id: int):
+    try:
+        return pmo_svc.list_members(id)
+    except pmo_svc.PMONotFound:
+        return json_error("PMO not found", 404)
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PMOMemberAdd)
+def _add_pmo_member(request, id: int, data: schemas.PMOMemberAdd):
+    try:
+        member, warning_total = pmo_svc.add_member(
+            id, data.model_dump(), actor_user_id=request.token.user_id,
+        )
+    except pmo_svc.PMONotFound:
+        return json_error("PMO not found", 404)
+    except pmo_svc.PMOClosed as exc:
+        return json_error(exc.detail, 409)
+    except pmo_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+    except pmo_svc.PMOMemberDatesInvalid as exc:
+        return json_error(exc.detail, 422)
+    except pmo_svc.PMOMemberDuplicateActive as exc:
+        return json_error(exc.detail, 409)
+    except pmo_svc.PMOMemberPrimaryExists as exc:
+        return json_error(exc.detail, 409)
+    resp = JsonResponse(pmo_svc.serialize_member_created(member), status=201)
+    if warning_total > 100:
+        resp["X-Allocation-Warning"] = str(warning_total)
+    return resp
+
+
+def pmo_members_collection(request, id: int):
+    if request.method == "GET":
+        return _list_pmo_members(request, id=id)
+    if request.method == "POST":
+        return _add_pmo_member(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /pmo/{id}/members/{member_id} ────────────────────────────────────────
+
+@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.PMOMemberUpdate)
+def _update_pmo_member(request, id: int, member_id: int, data: schemas.PMOMemberUpdate):
+    try:
+        member, warning_total = pmo_svc.update_member(
+            id, member_id, data.model_dump(exclude_unset=True), actor_user_id=request.token.user_id,
+        )
+    except pmo_svc.PMOMemberNotFound:
+        return json_error("Member not found in this PMO", 404)
+    except pmo_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+    except pmo_svc.PMOMemberDatesInvalid as exc:
+        return json_error(exc.detail, 422)
+    except pmo_svc.PMOMemberDuplicateActive as exc:
+        return json_error(exc.detail, 409)
+    except pmo_svc.PMOMemberPrimaryExists as exc:
+        return json_error(exc.detail, 409)
+    resp = JsonResponse(pmo_svc.serialize_member_created(member), status=200)
+    if warning_total > 100:
+        resp["X-Allocation-Warning"] = str(warning_total)
+    return resp
+
+
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
+def _remove_pmo_member(request, id: int, member_id: int):
+    try:
+        pmo_svc.remove_member(id, member_id)
+    except pmo_svc.PMOMemberNotFound:
+        return json_error("Member not found in this PMO", 404)
+    return HttpResponse(status=204)
+
+
+def pmo_member_detail(request, id: int, member_id: int):
+    if request.method == "PATCH":
+        return _update_pmo_member(request, id=id, member_id=member_id)
+    if request.method == "DELETE":
+        return _remove_pmo_member(request, id=id, member_id=member_id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /pmo/{id}/org-chart ───────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def pmo_org_chart(request, id: int):
+    try:
+        return pmo_svc.get_pmo_org_chart(id)
+    except pmo_svc.PMONotFound:
+        return json_error("PMO not found", 404)

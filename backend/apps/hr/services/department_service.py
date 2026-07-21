@@ -23,7 +23,7 @@ import uuid
 from django.db import transaction
 from django.db.models import Q
 
-from apps.hr.models import Department, Employee, Position, ReportingRelation
+from apps.hr.models import Department, Employee, PMOMember, Position, ReportingRelation
 
 # Транслитерация из исходника (department_service.create_department), символ
 # в символ — от неё зависят уже существующие пути отделов.
@@ -227,9 +227,7 @@ def delete_department(department_id: int, *, cascade: bool = False) -> None:
         # то же самое молча при Position.delete() ниже — здесь оставлено явно,
         # чтобы порт совпадал с шагами исходника буквально (а не полагался на
         # побочный эффект каскада), и не сломался, если FK-поведение когда-то
-        # изменится. TODO(hr-misc): PMOMember (членство в PMO по сотрудникам)
-        # чистится аналогично, когда появится модель — трекается тестом
-        # test_cascade_cleanup_todo_is_tracked в test_departments_api.py.
+        # изменится.
         position_ids = list(
             Position.objects.filter(department_id__in=dept_ids).values_list("id", flat=True)
         )
@@ -238,6 +236,17 @@ def delete_department(department_id: int, *, cascade: bool = False) -> None:
                 Q(superior_position_id__in=position_ids)
                 | Q(subordinate_position_id__in=position_ids)
             ).delete()
+
+        # 2. Drop PMO memberships of in-scope employees — буквально как в
+        # исходнике (department_service.py, шаг «2. Drop PMO memberships»:
+        # ``sa_delete(PMOMember).where(PMOMember.employee_id.in_(employee_ids))``),
+        # ПЕРЕД удалением самих сотрудников ниже. Django FK
+        # (PMOMember.employee, on_delete=CASCADE) уже сделал бы то же самое
+        # молча при Employee.delete() ниже — оставлено явно по тому же
+        # принципу, что и шаг 1 выше (буквальный паритет шагов, а не
+        # полагание на побочный эффект каскада).
+        if employee_ids:
+            PMOMember.objects.filter(employee_id__in=employee_ids).delete()
 
         # Обнуляем manager_id: и у отделов поддерева, и у любых других
         # отделов, чей руководитель попадает под удаление.

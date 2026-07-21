@@ -79,6 +79,9 @@ urlpatterns = [
     path("employees/me/", views.my_employee),
     path("employees/me", views.my_employee),
 
+    path("employees/me/pmos", views.my_pmos),
+    path("employees/me/pmos/", views.my_pmos),
+
     path("employees/", views.employees_collection),
     path("employees", views.employees_collection),
 
@@ -90,6 +93,9 @@ urlpatterns = [
 
     path("employees/<int:id>/documents", views.employee_documents),
     path("employees/<int:id>/documents/", views.employee_documents),
+
+    path("employees/<int:id>/pmos", views.employee_pmos),
+    path("employees/<int:id>/pmos/", views.employee_pmos),
 
     # ── calendar (employee_calendar_router исходника, prefix "/employees") ──
     # Литеральные ``calendar-template``/``shift`` — независимые последние
@@ -260,4 +266,23 @@ urlpatterns = [
 
     path("mongo-documents/<str:doc_id>/", views.mongo_document_detail),
     path("mongo-documents/<str:doc_id>", views.mongo_document_detail),
+
+    # ── pmo ───────────────────────────────────────────────────────────────
+    # Порт services/hr/app/api/v1/pmo.py (10 эндпойнтов). Литеральный
+    # ``members``/``org-chart`` — ДО ``<int:id>/`` (порядок роутера
+    # исходника, как и везде в этой аппке).
+    path("pmo/", views.pmo_collection),
+    path("pmo", views.pmo_collection),
+
+    path("pmo/<int:id>/members", views.pmo_members_collection),
+    path("pmo/<int:id>/members/", views.pmo_members_collection),
+
+    path("pmo/<int:id>/members/<int:member_id>", views.pmo_member_detail),
+    path("pmo/<int:id>/members/<int:member_id>/", views.pmo_member_detail),
+
+    path("pmo/<int:id>/org-chart", views.pmo_org_chart),
+    path("pmo/<int:id>/org-chart/", views.pmo_org_chart),
+
+    path("pmo/<int:id>/", views.pmo_detail),
+    path("pmo/<int:id>", views.pmo_detail),
 ]

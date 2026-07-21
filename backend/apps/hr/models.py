@@ -808,3 +808,209 @@ class EmployeeDayOverride(HrBase):
 
     def __str__(self) -> str:
         return f"<EmployeeDayOverride(employee_id={self.employee_id}, day={self.day})>"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  pmo: PMO + PMODepartment + PMOPosition + PMOMember — порт
+#  services/hr/app/models/pmo.py (4 таблицы).
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Таблицы — дефолтные имена Django (решение D2, как и весь остальной файл):
+# hr_pmo (не hr_pmos исходника), hr_pmodepartment (не hr_pmo_departments),
+# hr_pmoposition (не hr_pmo_positions), hr_pmomember (не hr_pmo_members).
+#
+# PMODepartment/PMOPosition — составной PK (``pmo_id``, ``department_id``/
+# ``position_id``) в исходнике (оба поля ``primary_key=True`` у SQLAlchemy,
+# без отдельного суррогатного id) -> Django 5.2 ``models.CompositePrimaryKey``
+# (поле обязано называться ``pk``). PMOMember, в отличие от них, наследует
+# ``BaseModel``... нет — НЕ наследует: исходник объявляет её как ``Base``
+# (не ``BaseModel``) с собственным явным ``id: Mapped[int] = mapped_column(
+# Integer, primary_key=True, autoincrement=True)`` — обычный суррогатный PK,
+# как у остальных моделей порта без HrBase (см. OrgSettings). Ни у неё, ни у
+# PMODepartment/PMOPosition НЕТ created_at/updated_at (только PMO наследует
+# BaseModel в исходнике -> здесь HrBase).
+
+
+class PMOStatus(models.TextChoices):
+    ACTIVE = "active", "Активен"
+    SUSPENDED = "suspended", "Приостановлен"
+    CLOSED = "closed", "Закрыт"
+
+
+class PMO(HrBase):
+    """Проектный офис — порт models/pmo.py::PMO."""
+
+    name = models.CharField(max_length=200)
+    code = models.CharField(max_length=50, unique=True)
+    description = models.TextField(null=True, blank=True)
+    # Nullable FK без явного ondelete в исходнике -> SET_NULL (тот же выбор,
+    # что для Department.manager/Vacancy.assigned_recruiter выше в этом файле).
+    head_employee = models.ForeignKey(
+        Employee, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="headed_pmos",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=PMOStatus.choices,
+        default=PMOStatus.ACTIVE,
+        db_default=PMOStatus.ACTIVE.value,
+    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(status__in=list(PMOStatus.values)),
+                name="ck_pmo_status",
+            ),
+        ]
+        # СТРАННОСТЬ исходника, НЕ воспроизводим байт-в-байт: колонка ``code``
+        # несёт И column-level ``unique=True`` (mapped_column), И ОТДЕЛЬНЫЙ
+        # именованный ``Index("ix_hr_pmos_code", "code", unique=True)`` в
+        # __table_args__ — это два независимых SQLAlchemy-конструкта на
+        # одной колонке (в отличие от CalendarDay.day выше, где unique=True
+        # И index=True стоят на ОДНОМ вызове mapped_column и сливаются в один
+        # индекс сами), то есть реально ДВА идентичных уникальных индекса на
+        # ``code`` в БД исходника. Как и в остальных задокументированных
+        # местах этого файла (PositionWeightAudit.position,
+        # EmployeeWeekTemplate/EmployeeShiftAssignment.employee) — не плодим
+        # дубль, оставляем один уникальный индекс (field-level unique=True
+        # выше). ``status`` — обычный некомпозитный индекс исходника
+        # (Index("ix_hr_pmos_status", "status")) -> db_index=True на поле.
+        indexes = [models.Index(fields=["status"], name="ix_hr_pmos_status")]
+
+    def __str__(self) -> str:
+        return f"<PMO(id={self.id}, code='{self.code}', status='{self.status}')>"
+
+
+class PMODepartmentRole(models.TextChoices):
+    OWNER = "owner", "Владелец"
+    STAKEHOLDER = "stakeholder", "Стейкхолдер"
+    SUPPORT = "support", "Поддержка"
+
+
+class PMODepartment(models.Model):
+    """Связь PMO-отдел — порт models/pmo.py::PMODepartment.
+
+    Составной PK (``pmo``, ``department``) — оба поля были ``primary_key=True``
+    у исходника, без суррогатного id (Django 5.2 ``CompositePrimaryKey``).
+    ``pmo`` — ``db_index=False``: составной PK уже покрывает эту колонку
+    ЛЕВЫМ префиксом (тот же приём, что PositionWeightAudit.position выше),
+    отдельный btree-индекс поверх был бы чистым дублем. ``department`` —
+    НЕ левый префикс композитного PK -> обычный авто-индекс Django FK
+    оставлен (правило брифа: db_index=False только когда составной
+    индекс/unique покрывает колонку левым префиксом, иначе — авто-индекс).
+    """
+
+    pmo = models.ForeignKey(PMO, on_delete=models.CASCADE, related_name="pmo_departments", db_index=False)
+    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name="pmo_departments")
+    role = models.CharField(
+        max_length=20,
+        choices=PMODepartmentRole.choices,
+        default=PMODepartmentRole.OWNER,
+        db_default=PMODepartmentRole.OWNER.value,
+    )
+
+    pk = models.CompositePrimaryKey("pmo", "department")
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(role__in=list(PMODepartmentRole.values)),
+                name="ck_pmo_dept_role",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<PMODepartment(pmo_id={self.pmo_id}, department_id={self.department_id})>"
+
+
+class PMOPosition(models.Model):
+    """Требуемая/рекомендуемая должность PMO — порт models/pmo.py::PMOPosition.
+
+    Составной PK (``pmo``, ``position``) — та же схема, что и PMODepartment
+    выше. ``pmo`` — ``db_index=False`` (левый префикс композитного PK);
+    ``position`` — обычный авто-индекс Django FK (не покрыт левым префиксом).
+    Никаких CheckConstraint/явных индексов в исходнике сверх составного PK.
+    """
+
+    pmo = models.ForeignKey(PMO, on_delete=models.CASCADE, related_name="pmo_positions", db_index=False)
+    position = models.ForeignKey(Position, on_delete=models.CASCADE, related_name="pmo_positions")
+    is_required = models.BooleanField(default=False, db_default=False)
+    headcount = models.IntegerField(default=1, db_default=1)
+
+    pk = models.CompositePrimaryKey("pmo", "position")
+
+    def __str__(self) -> str:
+        return f"<PMOPosition(pmo_id={self.pmo_id}, position_id={self.position_id})>"
+
+
+class PMOMembershipType(models.TextChoices):
+    PERMANENT = "permanent", "Постоянное"
+    ASSIGNED = "assigned", "Назначенное"
+    CONSULTING = "consulting", "Консультационное"
+
+
+class PMOMember(models.Model):
+    """Членство сотрудника в PMO — порт models/pmo.py::PMOMember.
+
+    НЕ наследует HrBase (исходник — ``Base``, не ``BaseModel``): ни
+    created_at, ни updated_at. Суррогатный ``id`` — обычный дефолтный
+    AutoField Django (исходник тоже несёт явный autoincrement integer PK,
+    просто без HrBase). ``pmo``/``employee`` — обычные (не составные) FK,
+    оставлены с дефолтным авто-индексом Django: исходник несёт РОВНО те же
+    два одиночных индекса явно (``Index("ix_hr_pmo_members_pmo", "pmo_id")``,
+    ``Index("ix_hr_pmo_members_employee", "employee_id")``) — авто-индекс FK
+    воспроизводит их без доп. пометок (та же логика, что Position.department/
+    Employee.department/position и весь остальной файл).
+
+    Частичные уникальные индексы (``postgresql_where=...`` исходника) —
+    ``UniqueConstraint(condition=Q(...))``:
+      * ``ux_hr_pmo_members_open_employee`` — не более ОДНОГО открытого
+        (``to_date IS NULL``) членства сотрудника в одном PMO;
+      * ``ux_hr_pmo_members_open_primary`` — не более ОДНОГО открытого
+        первичного (``is_primary AND to_date IS NULL``) членства на PMO.
+    """
+
+    pmo = models.ForeignKey(PMO, on_delete=models.CASCADE, related_name="members")
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="pmo_memberships")
+    membership_type = models.CharField(
+        max_length=20,
+        choices=PMOMembershipType.choices,
+        default=PMOMembershipType.PERMANENT,
+        db_default=PMOMembershipType.PERMANENT.value,
+    )
+    position_in_pmo = models.CharField(max_length=200, null=True, blank=True)
+    from_date = models.DateField()
+    to_date = models.DateField(null=True, blank=True)
+    allocation_percent = models.SmallIntegerField(default=100, db_default=100)
+    is_primary = models.BooleanField(default=False, db_default=False)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(membership_type__in=list(PMOMembershipType.values)),
+                name="ck_pmo_member_type",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(allocation_percent__gte=0) & models.Q(allocation_percent__lte=100),
+                name="ck_pmo_member_allocation_pct",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(to_date__isnull=True) | models.Q(to_date__gte=models.F("from_date")),
+                name="ck_pmo_member_dates",
+            ),
+            models.UniqueConstraint(
+                fields=["pmo", "employee"],
+                condition=models.Q(to_date__isnull=True),
+                name="ux_hr_pmo_members_open_employee",
+            ),
+            models.UniqueConstraint(
+                fields=["pmo"],
+                condition=models.Q(is_primary=True, to_date__isnull=True),
+                name="ux_hr_pmo_members_open_primary",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (f"<PMOMember(id={self.id}, pmo_id={self.pmo_id}, "
+                f"employee_id={self.employee_id})>")
