@@ -38,6 +38,58 @@ urlpatterns = [
     path("tasks/<int:task_id>/delegates/<int:user_id>/", views.remove_delegate),
     path("tasks/<int:task_id>/watch/", views.task_watch),
     path("tasks/<int:task_id>/progress/", views.update_progress),
+    # Comments/attachments: the working POST lived on the tasks router
+    # (trailing slash), while a second, broken router registered the
+    # slash-less GET list. Both spellings are served by one dispatcher.
+    path("tasks/<int:task_id>/comments", views.task_comments),
+    path("tasks/<int:task_id>/comments/", views.task_comments),
+    path("tasks/<int:task_id>/attachments", views.task_attachments),
+    path("tasks/<int:task_id>/attachments/", views.task_attachments),
+    path("tasks/<int:task_id>/activity", views.task_activity),
+    path("tasks/<int:task_id>/activity/", views.task_activity),
+
+    # Task links — frontend: 'task-links/', 'task-links/{id}/'.
+    path("task-links/", views.links_collection),
+    path("task-links/<int:link_id>", views.link_detail),
+    path("task-links/<int:link_id>/", views.link_detail),
+
+    # Projects — frontend: 'projects/', 'projects/{id}' and '{id}/',
+    # 'projects/{id}/tasks/'.
+    path("projects/", views.projects_collection),
+    path("projects/<int:project_id>", views.project_detail),
+    path("projects/<int:project_id>/", views.project_detail),
+    path("projects/<int:project_id>/tasks", views.project_tasks),
+    path("projects/<int:project_id>/tasks/", views.project_tasks),
+
+    # Resource assignments — FastAPI declared the detail route without a
+    # trailing slash, the frontend calls it with one.
+    path("assignments/", views.assignments_collection),
+    path("assignments/<int:assignment_id>", views.assignment_detail),
+    path("assignments/<int:assignment_id>/", views.assignment_detail),
+
+    # Gantt reports — FastAPI declared both without a trailing slash; the
+    # frontend calls 'reports/resource-gantt' the same way.
+    path("reports/gantt", views.reports_gantt),
+    path("reports/gantt/", views.reports_gantt),
+    path("reports/resource-gantt", views.resource_gantt),
+    path("reports/resource-gantt/", views.resource_gantt),
+
+    # Notifications — frontend: 'notifications/', 'notifications/history/',
+    # 'notifications/mark-all-read/', 'notifications/{id}/mark_read/',
+    # '{id}/mark_unread/', '{id}/'. ``history/`` and ``mark-all-read/`` are
+    # registered before the ``<int:notification_id>`` routes so a converter
+    # change can never let the id pattern swallow them.
+    path("notifications/", views.notifications_collection),
+    path("notifications/history/", views.notification_history),
+    path("notifications/history", views.notification_history),
+    path("notifications/mark-all-read/", views.notifications_mark_all_read),
+    path("notifications/mark-all-read", views.notifications_mark_all_read),
+    path("notifications/<int:notification_id>/mark_read/",
+         views.notification_mark_read),
+    path("notifications/<int:notification_id>/mark_unread/",
+         views.notification_mark_unread),
+    path("notifications/<int:notification_id>", views.notification_detail),
+    path("notifications/<int:notification_id>/", views.notification_detail),
 
     # Labels — frontend: 'labels/', 'labels/{id}/'.
     path("labels/", views.labels_collection),

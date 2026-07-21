@@ -19,13 +19,20 @@ Two mechanics recur throughout and are worth reading once:
 
 from __future__ import annotations
 
+from datetime import date
+
 from django.http import HttpResponse
 
 from htqweb.http import api_view, json_error
 
 from . import schemas
+from .services import gantt_service
+from .services import link_service
+from .services import notification_service
+from .services import project_service
 from .services import reference_service as ref_svc
 from .services import sequence_service
+from .services import task_content_service
 from .services import task_response
 from .services import task_service
 
@@ -74,6 +81,22 @@ def _bool_param(request, name: str, default: bool) -> bool:
 def _str_param(request, name: str, default=None):
     raw = request.GET.get(name)
     return raw if raw not in (None, "") else default
+
+
+def _date_param(request, name: str, *, required: bool = False):
+    raw = request.GET.get(name)
+    if raw in (None, ""):
+        if required:
+            raise _ParamError(
+                json_error([{"type": "missing", "loc": ["query", name],
+                             "msg": "Field required"}], 422))
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise _ParamError(
+            _param_error(name, "Input should be a valid date in YYYY-MM-DD format")
+        )
 
 
 class _ParamError(Exception):
@@ -463,3 +486,346 @@ def update_progress(request, task_id: int, data: schemas.ProgressUpdate):
     task_service.set_progress(task_id, data.percent,
                               actor_id=request.token.user_id)
     return task_response.build_detail(task_service.get_task(task_id))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Comments / attachments / activity on a task
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",))
+def _list_comments(request, task_id: int):
+    return task_content_service.list_comments(task_id)
+
+
+@api_view(methods=("POST",), body=schemas.CommentCreate, status=201)
+def _create_comment(request, task_id: int, data: schemas.CommentCreate):
+    return task_content_service.create_comment(task_id, data.body,
+                                               request.token.user_id)
+
+
+def task_comments(request, task_id: int):
+    if request.method == "GET":
+        return _list_comments(request, task_id=task_id)
+    if request.method == "POST":
+        return _create_comment(request, task_id=task_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def _list_attachments(request, task_id: int):
+    return task_content_service.list_attachments(task_id)
+
+
+@api_view(methods=("POST",), status=201)
+def _upload_attachment(request, task_id: int):
+    """Store an uploaded file and record it against the task.
+
+    Decision Р3: the bytes go through ``apps.media_files.interface.store_file``
+    instead of the original's local ``uploads/task_attachments`` directory,
+    so attachments get the platform's storage, scope policy and gating.
+
+    ``task_attachment`` is a RESTRICTED scope, so ``store_file`` requires the
+    caller to vouch for the write (``internal_authorized``). This domain does
+    that only after its own soft-edit check passes — the vouch is the result
+    of a permission decision, never a constant.
+    """
+    from apps.media_files import interface as media_interface
+
+    task = task_service.load_for_action(task_id, request.token)
+    task_service.require_soft_edit(task, request.token)
+
+    upload = request.FILES.get("file")
+    if upload is None:
+        return json_error(
+            [{"type": "missing", "loc": ["body", "file"],
+              "msg": "Field required"}], 422)
+
+    try:
+        stored = media_interface.store_file(
+            data=upload.read(),
+            filename=upload.name or "unnamed",
+            mime=upload.content_type or "application/octet-stream",
+            scope="task_attachment",
+            owner_id=request.token.user_id,
+            internal_authorized=True,
+        )
+    except Exception as exc:
+        # media documents ``UploadValidationError`` (oversize / wrong mime /
+        # undecodable image) as part of store_file's contract, but the class
+        # lives in ``apps.media_files.services.upload_service`` and the
+        # isolation lint only permits importing a neighbour's ``interface``
+        # — so it is matched by name. Everything else is a genuine fault:
+        # re-raise and let api_view render its 500 envelope.
+        #
+        # Worth folding into media's interface as a re-export; that is the
+        # owner's change to make, not this domain's (PLAN.md §1.5 п.3).
+        if type(exc).__name__ != "UploadValidationError":
+            raise
+        return json_error(str(exc), 422)
+
+    return task_content_service.create_attachment(
+        task_id,
+        # The storage key, not a local path — what media hands back is the
+        # canonical reference for later reads.
+        file_path=str(stored.get("url") or stored.get("id")),
+        filename=upload.name or "unnamed",
+        uploaded_by_id=request.token.user_id,
+    )
+
+
+def task_attachments(request, task_id: int):
+    if request.method == "GET":
+        return _list_attachments(request, task_id=task_id)
+    if request.method == "POST":
+        return _upload_attachment(request, task_id=task_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def task_activity(request, task_id: int):
+    return task_content_service.list_activity(task_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Task links — /task-links/
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("POST",), body=schemas.LinkCreate, status=201)
+def _create_link(request, data: schemas.LinkCreate):
+    try:
+        link = link_service.create_link(source_id=data.source_id,
+                                        target_id=data.target_id,
+                                        link_type=data.link_type,
+                                        user_id=request.token.user_id)
+    except ValueError as exc:
+        return json_error(str(exc), 400)
+    return schemas.LinkResponse.model_validate({
+        "id": link.id, "source_id": link.source_id,
+        "target_id": link.target_id, "link_type": link.link_type,
+        "created_by_id": link.created_by_id,
+        "source_key": link.source.key, "source_summary": link.source.summary,
+        "target_key": link.target.key, "target_summary": link.target.summary,
+        "created_at": str(link.created_at),
+    })
+
+
+def links_collection(request):
+    if request.method == "POST":
+        return _create_link(request)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("DELETE",), status=204)
+def link_detail(request, link_id: int):
+    link_service.delete_link(link_id)
+    return _no_content()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Projects — /projects/
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",))
+def _list_projects(request):
+    employee_scope, department_id = project_service.scope_for(request.token)
+    return project_service.build_responses(project_service.list_projects(
+        employee_scope=employee_scope, department_id=department_id))
+
+
+@api_view(methods=("POST",), body=schemas.ProjectCreate, status=201)
+def _create_project(request, data: schemas.ProjectCreate):
+    return project_service.build_response(project_service.create_project(
+        data.model_dump(), creator_id=request.token.user_id))
+
+
+def projects_collection(request):
+    if request.method == "GET":
+        return _list_projects(request)
+    if request.method == "POST":
+        return _create_project(request)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def _get_project(request, project_id: int):
+    employee_scope, department_id = project_service.scope_for(request.token)
+    return project_service.build_response(project_service.get_project(
+        project_id, employee_scope=employee_scope,
+        department_id=department_id))
+
+
+@api_view(methods=("PATCH",), body=schemas.ProjectUpdate)
+def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
+    return project_service.build_response(project_service.update_project(
+        project_id, data.model_dump(exclude_unset=True)))
+
+
+@api_view(methods=("DELETE",), status=204)
+def _delete_project(request, project_id: int):
+    project_service.delete_project(project_id)
+    return _no_content()
+
+
+def project_detail(request, project_id: int):
+    if request.method == "GET":
+        return _get_project(request, project_id=project_id)
+    if request.method == "PATCH":
+        return _update_project(request, project_id=project_id)
+    if request.method == "DELETE":
+        return _delete_project(request, project_id=project_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def project_tasks(request, project_id: int):
+    """Flat task list for a project — the UI builds the tree itself."""
+    employee_scope, department_id = project_service.scope_for(request.token)
+    # 404s first if the project is out of scope, so this cannot be used to
+    # enumerate tasks of a project the caller may not see.
+    project_service.get_project(project_id, employee_scope=employee_scope,
+                                department_id=department_id)
+    tasks = task_service.list_tasks(
+        limit=1000, project_id=project_id,
+        department_id=department_id if employee_scope else None,
+    )
+    return task_response.build_list(tasks)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Resource assignments — /assignments/
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",))
+def _list_assignments(request):
+    try:
+        task_id = _int_param(request, "task_id")
+    except _ParamError as exc:
+        return exc.response
+    if task_id is None:
+        # ``task_id`` is a required query param in the original.
+        return json_error([{"type": "missing", "loc": ["query", "task_id"],
+                            "msg": "Field required"}], 422)
+    return task_content_service.list_assignments(task_id)
+
+
+@api_view(methods=("POST",), body=schemas.AssignmentCreate, status=201)
+def _create_assignment(request, data: schemas.AssignmentCreate):
+    try:
+        return task_content_service.create_assignment(data)
+    except ValueError as exc:
+        return json_error(str(exc), 422)
+
+
+def assignments_collection(request):
+    if request.method == "GET":
+        return _list_assignments(request)
+    if request.method == "POST":
+        return _create_assignment(request)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("DELETE",), status=204)
+def assignment_detail(request, assignment_id: int):
+    task_content_service.delete_assignment(assignment_id)
+    return _no_content()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Notifications — /notifications/
+#
+# Every route is caller-scoped; there is no path or body parameter that
+# names a recipient, so one user can never read or mutate another's feed.
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",))
+def notifications_collection(request):
+    try:
+        limit = _int_param(request, "limit", 50, minimum=1, maximum=200)
+    except _ParamError as exc:
+        return exc.response
+    return notification_service.latest(request.token.user_id, limit)
+
+
+@api_view(methods=("GET",))
+def notification_history(request):
+    try:
+        page = _int_param(request, "page", 1, minimum=1)
+        limit = _int_param(request, "limit", 25, minimum=1, maximum=100)
+    except _ParamError as exc:
+        return exc.response
+    status = _str_param(request, "status", "all")
+    if status not in ("all", "unread", "read"):
+        return _param_error("status",
+                            "Input should be 'all', 'unread' or 'read'")
+    return notification_service.history(
+        request.token.user_id, page=page, limit=limit, status=status,
+        target_type=_str_param(request, "target_type"),
+    )
+
+
+@api_view(methods=("POST",), status=204)
+def notification_mark_read(request, notification_id: int):
+    notification_service.mark_read(notification_id, request.token.user_id)
+    return _no_content()
+
+
+@api_view(methods=("POST",), status=204)
+def notification_mark_unread(request, notification_id: int):
+    notification_service.mark_unread(notification_id, request.token.user_id)
+    return _no_content()
+
+
+@api_view(methods=("POST",), status=204)
+def notifications_mark_all_read(request):
+    notification_service.mark_all_read(request.token.user_id)
+    return _no_content()
+
+
+@api_view(methods=("DELETE",), status=204)
+def notification_detail(request, notification_id: int):
+    notification_service.delete(notification_id, request.token.user_id)
+    return _no_content()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Gantt reports — /reports/gantt , /reports/resource-gantt
+# ─────────────────────────────────────────────────────────────────────────
+
+def _csv_ints(value: str | None) -> list[int] | None:
+    if not value:
+        return None
+    return [int(x) for x in value.split(",") if x.strip().isdigit()]
+
+
+def _csv(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [x.strip() for x in value.split(",") if x.strip()]
+
+
+@api_view(methods=("GET",))
+def reports_gantt(request):
+    return schemas.ReportsGanttResponse.model_validate(
+        gantt_service.reports_gantt(_csv_ints(_str_param(request, "ids")),
+                                    _csv(_str_param(request, "status")))
+    )
+
+
+@api_view(methods=("GET",))
+def resource_gantt(request):
+    # ``from``/``to`` are required and are reserved words in Python, hence
+    # the alias in the original's signature; here they are plain query keys.
+    try:
+        dt_from = _date_param(request, "from", required=True)
+        dt_to = _date_param(request, "to", required=True)
+        department_id = _int_param(request, "department_id")
+    except _ParamError as exc:
+        return exc.response
+
+    kinds = {k.strip() for k in
+             (_str_param(request, "kinds", "employee,equipment") or "").split(",")
+             if k.strip()}
+    return schemas.ResourceGanttResponse.model_validate(
+        gantt_service.resource_gantt(dt_from, dt_to, kinds, department_id,
+                                     _str_param(request, "search"))
+    )
