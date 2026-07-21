@@ -14,6 +14,7 @@ as a JSON string, exactly as FastAPI did.
 
 from __future__ import annotations
 
+import warnings
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -122,26 +123,35 @@ class TemplateResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class VersionPublish(BaseModel):
-    schema_json: dict
-    workflow_json: dict
+# ``schema_json`` is the wire field name — the frontend and the stored
+# template version both use it, so it cannot be renamed. Pydantic warns that
+# it shadows ``BaseModel.schema_json`` (a deprecated v1 method); the field
+# itself works correctly, as the round-trip in ``test_schemas.py`` asserts.
+# The filter is scoped to these three class definitions and to that exact
+# message, so a genuine shadowing mistake elsewhere still surfaces — and the
+# suite's "0 warnings" gate keeps meaning something.
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore", message='Field name "schema_json".*', category=UserWarning)
 
+    class VersionPublish(BaseModel):
+        schema_json: dict
+        workflow_json: dict
 
-class VersionResponse(BaseModel):
-    id: int
-    template_id: int
-    version: int
-    schema_json: dict
-    workflow_json: dict
-    published_at: datetime
-    published_by: int | None = None
+    class VersionResponse(BaseModel):
+        id: int
+        template_id: int
+        version: int
+        schema_json: dict
+        workflow_json: dict
+        published_at: datetime
+        published_by: int | None = None
 
-    model_config = {"from_attributes": True}
+        model_config = {"from_attributes": True}
 
-
-class PreviewRequest(BaseModel):
-    schema_json: dict
-    workflow_json: dict
+    class PreviewRequest(BaseModel):
+        schema_json: dict
+        workflow_json: dict
 
 
 class PreviewResponse(BaseModel):
