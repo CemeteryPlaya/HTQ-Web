@@ -283,11 +283,18 @@ def get_permissions_catalog(request):
 def rebalance_positions(request, data: schemas.PositionRebalanceRequest):
     # Http404 из rebalance_level (порог не найден) не ловим здесь нарочно —
     # api_view сам превращает его в {"detail": ...} 404 (см. htqweb/http.py).
-    if data.level is not None:
-        count = pos_svc.rebalance_level(data.level, actor_user_id=request.token.user_id)
-        return {"levels": {data.level: count}, "total": count}
-    levels = pos_svc.rebalance_all(actor_user_id=request.token.user_id)
-    return {"levels": levels, "total": sum(levels.values())}
+    # WeightTaken ловим явно: внутренний ребаланс может упереться в коллизию
+    # веса (реально при рассинхроне weight/level у строк, вставленных мимо API
+    # — сценарий ETL-миграции). Исходник в этом случае отдаёт 409 (HTTPException
+    # всплывает глобально); api_view так не умеет, иначе — молчаливый 500.
+    try:
+        if data.level is not None:
+            count = pos_svc.rebalance_level(data.level, actor_user_id=request.token.user_id)
+            return {"levels": {data.level: count}, "total": count}
+        levels = pos_svc.rebalance_all(actor_user_id=request.token.user_id)
+        return {"levels": levels, "total": sum(levels.values())}
+    except pos_svc.WeightTaken as exc:
+        return json_error(exc.detail, 409)
 
 
 # ── /positions/{id}/ — детальный ресурс (catch-all — В КОНЦЕ) ────────────────
@@ -359,4 +366,8 @@ def move_position(request, id: int, data: schemas.PositionMoveRequest):
         )
     except pos_svc.MoveValidationError as exc:
         return json_error(exc.detail, 422)
+    except pos_svc.WeightTaken as exc:
+        # move с fallback на ребаланс уровня (_rebalance_insert) может упереться
+        # в коллизию веса с должностью вне уровня — исходник отдаёт 409, а не 500.
+        return json_error(exc.detail, 409)
     return pos_svc.serialize(pos)

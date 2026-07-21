@@ -708,3 +708,41 @@ def test_permissions_catalog_shape(auth):
 @pytest.mark.django_db
 def test_permissions_catalog_requires_jwt():
     assert Client().get(f"{BASE}/permissions-catalog/").status_code == 401
+
+
+# ── регрессия ревью: WeightTaken из ребаланса -> 409, а не 500 ──────────────
+#
+# Дефект (найден ревью коммита 100e2af): rebalance/move при внутренней коллизии
+# веса в _rebalance_positions поднимают WeightTaken, но вьюхи её не ловили —
+# api_view (в отличие от глобального перехвата HTTPException в FastAPI) уводил
+# её в generic 500. Исходник в этом случае отдаёт 409. Достижимо, когда weight
+# и level рассинхронизированы у строки, вставленной мимо API (ETL миграции).
+
+@pytest.mark.django_db
+def test_rebalance_level_weight_collision_returns_409_not_500(admin_auth, dep):
+    _threshold(1, 0, 999)
+    _pos("OnlyOne", dep, weight=999, level=1)   # консистентна порогу
+    _pos("Ghost", dep, weight=0, level=2)       # level рассинхронизирован с weight
+    # rebalance level=1 уводит OnlyOne на вес 0 -> коллизия с Ghost(weight=0).
+    resp = Client().post(
+        f"{BASE}/rebalance", data={"level": 1},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409, resp.content
+    assert "detail" in resp.json()
+
+
+@pytest.mark.django_db
+def test_move_into_level_weight_collision_returns_409_not_500(admin_auth, dep):
+    _threshold(1, 0, 999)
+    _pos("Ghost", dep, weight=0, level=2)        # держит вес 0 вне уровня 1
+    _pos("P1", dep, weight=500, level=1)         # существующая должность уровня 1
+    mover = _pos("Mover", dep, weight=700, level=3)
+    # move Mover в уровень 1 -> _rebalance_insert([P1, Mover]) -> P1 на вес 0 ->
+    # коллизия с Ghost(weight=0).
+    resp = Client().patch(
+        f"{BASE}/{mover.id}/move", data={"target_level": 1},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409, resp.content
+    assert "detail" in resp.json()

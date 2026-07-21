@@ -173,8 +173,12 @@ class PositionWeightAudit(models.Model):
     """
 
     id = models.BigAutoField(primary_key=True)
+    # db_index=False: FK по умолчанию создаёт отдельный индекс на position_id,
+    # но составной indexes=[(position, changed_at)] ниже уже покрывает запросы
+    # по одному position_id своим левым префиксом. Исходник имеет РОВНО один
+    # (составной) индекс — не плодим лишний (ревью 100e2af, Minor #2).
     position = models.ForeignKey(
-        Position, on_delete=models.CASCADE, related_name="weight_audits"
+        Position, on_delete=models.CASCADE, related_name="weight_audits", db_index=False,
     )
     old_weight = models.IntegerField(null=True, blank=True)
     new_weight = models.IntegerField(null=True, blank=True)
