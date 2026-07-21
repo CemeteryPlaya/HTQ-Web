@@ -1,4 +1,4 @@
-"""HTTP-вьюхи домена mail — ``/api/email/v1/{accounts,oauth}/*``.
+"""HTTP-вьюхи домена mail — ``/api/email/v1/{accounts,oauth,mailboxes}/*``.
 
 Порт services/email/app/api/v1/{accounts,oauth}.py. Вьюхи тонкие:
 аутентификация, парсинг, коды ответа. Логика — в apps/mail/services/
@@ -15,9 +15,23 @@ apps/mail/services/*, не ослаблена относительно исхо�
 ``get_current_user`` — идентичность пользователя приходит из state-нонса
 (см. oauth_service.connect/callback), а не из JWT → ``api_view(auth=None)``.
 
-Каждый из 9 эндпойнтов этой под-задачи обслуживает РОВНО один HTTP-метод —
+Каждый из 9 эндпойнтов accounts/oauth обслуживает РОВНО один HTTP-метод —
 дублирующий диспетчер (как в apps/hr/views.py для departments/positions/...)
 здесь не нужен, ни один путь не переиспользуется под другим методом.
+
+Mailboxes (mailboxes-под-задача, mail-mailboxes-brief.md — порт
+``services/email/app/api/v1/mailboxes.py``, 12 эндпойнтов) — авторизация
+``require_mailbox_admin`` исходника принимает ЛИБО user-JWT с
+``is_staff``/``is_superuser``/``is_admin``, ЛИБО S2S service-JWT
+(``service=True``, для user-service hook на создание пользователя). PLAN.md
+Р3 ("без S2S", строка 142/322 — снос S2S-механики монолитом) убирает вторую
+ветку: у нас один Django-процесс, S2S-вызов между "сервисами" не существует
+как класс задач. Остаётся первая ветка — тот же ``is_elevated`` предикат,
+что и ``require_hr_write`` в apps/hr (positions/org и т.п.) →
+``api_view(auth="jwt", admin=True)``, единый платформенный admin-гейт (R1,
+htqweb/http.py). 3 пути ("/mailboxes/", "/mailboxes/{id}/",
+"/mailboxes/aliases/") обслуживают больше одного HTTP-метода — те же
+диспетчеры, что в apps/hr/views.py (staffing_lines_collection и т.п.).
 """
 from __future__ import annotations
 
@@ -28,7 +42,9 @@ from htqweb.http import api_view, json_error
 from . import schemas
 from .services import account_service as acct_svc
 from .services import email_service as mail_svc
+from .services import mailbox_service as mbx_svc
 from .services import oauth_service as oauth_svc
+from .services.mailcow_client import MailcowClient
 
 _VALID_PROVIDERS = ("google", "microsoft")
 
@@ -51,6 +67,25 @@ def _int_query(request, name: str, *, default: int, ge: int | None = None,
     if (ge is not None and value < ge) or (le is not None and value > le):
         raise _QueryValidationError(name)
     return value
+
+
+_TRUE_TOKENS = {"1", "true", "yes", "on"}
+_FALSE_TOKENS = {"0", "false", "no", "off"}
+
+
+def _bool_query(request, name: str, *, default: bool) -> bool:
+    """Порт неявной FastAPI ``bool``-query-параметр валидации
+    (``mailboxes.py::list_mailboxes(include_deleted: bool = False)``) —
+    pydantic/FastAPI принимает те же token-варианты (case-insensitive)."""
+    raw = request.GET.get(name)
+    if raw is None or raw == "":
+        return default
+    lowered = raw.strip().lower()
+    if lowered in _TRUE_TOKENS:
+        return True
+    if lowered in _FALSE_TOKENS:
+        return False
+    raise _QueryValidationError(name)
 
 
 # ── /accounts/ ────────────────────────────────────────────────────────────
@@ -203,3 +238,176 @@ def mark_as_read(request, message_id):
 @api_view(methods=("POST",), auth="jwt", body=schemas.DraftIn, status=201)
 def save_draft(request, data: schemas.DraftIn):
     return mail_svc.save_draft(request.token.user_id, subject=data.subject, body=data.body)
+
+
+# ── /mailboxes/* (mailboxes-под-задача, порт api/v1/mailboxes.py) ─────────
+#
+# Все 12 — ``api_view(auth="jwt", admin=True)`` (require_mailbox_admin, см.
+# докстринг модуля выше). "/mailboxes/" и "/mailboxes/{id}/" обслуживают
+# больше одного HTTP-метода — диспетчер (как staffing_lines_collection в
+# apps/hr/views.py) вызывает приватную ``api_view``-обёрнутую функцию per
+# метод, чтобы у GET/POST/PATCH/DELETE были свои коды/тела ответов.
+
+
+# ── /mailboxes/ ─────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def _list_mailboxes(request):
+    try:
+        include_deleted = _bool_query(request, "include_deleted", default=False)
+    except _QueryValidationError as exc:
+        return json_error(f"Invalid query parameter: {exc}", 422)
+    return [mbx_svc.serialize(mb) for mb in mbx_svc.list_mailboxes(include_deleted=include_deleted)]
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.MailboxCreateRequest, status=201)
+def _create_mailbox(request, data: schemas.MailboxCreateRequest):
+    try:
+        mb, generated_password = mbx_svc.create(data)
+    except mbx_svc.MailboxDomainNotConfigured:
+        return json_error("MAILCOW_DOMAIN not configured", 500)
+    except mbx_svc.MailboxUserConflict as exc:
+        return json_error(exc.detail, 409)
+    except mbx_svc.InvalidLocalPart:
+        return json_error("Invalid local_part", 400)
+    return {**mbx_svc.serialize(mb), "generated_password": generated_password}
+
+
+def mailboxes_collection(request):
+    if request.method == "GET":
+        return _list_mailboxes(request)
+    if request.method == "POST":
+        return _create_mailbox(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /mailboxes/{mailbox_id}/ ────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def _get_mailbox(request, mailbox_id: int):
+    try:
+        return mbx_svc.serialize(mbx_svc.get_by_id(mailbox_id))
+    except mbx_svc.MailboxNotFound:
+        return json_error("Mailbox not found", 404)
+
+
+@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.MailboxUpdateRequest)
+def _update_mailbox(request, mailbox_id: int, data: schemas.MailboxUpdateRequest):
+    try:
+        mb = mbx_svc.update(mailbox_id, data)
+    except mbx_svc.MailboxNotFound:
+        return json_error("Mailbox not found", 404)
+    except mbx_svc.MailboxAlreadyDeleted:
+        return json_error("Mailbox already deleted", 409)
+    return mbx_svc.serialize(mb)
+
+
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
+def _delete_mailbox(request, mailbox_id: int):
+    """Stage 2 — only allowed if mailbox is currently in `archived` state."""
+    try:
+        mbx_svc.delete(mailbox_id)
+    except mbx_svc.MailboxNotFound:
+        return json_error("Mailbox not found", 404)
+    except mbx_svc.CannotDelete:
+        return json_error("Mailbox must be archived before permanent deletion", 409)
+    return HttpResponse(status=204)
+
+
+def mailbox_detail(request, mailbox_id: int):
+    if request.method == "GET":
+        return _get_mailbox(request, mailbox_id=mailbox_id)
+    if request.method == "PATCH":
+        return _update_mailbox(request, mailbox_id=mailbox_id)
+    if request.method == "DELETE":
+        return _delete_mailbox(request, mailbox_id=mailbox_id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /mailboxes/{mailbox_id}/reset-password|archive|restore/ ────────────────
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.MailboxResetPasswordRequest)
+def reset_mailbox_password(request, mailbox_id: int, data: schemas.MailboxResetPasswordRequest):
+    try:
+        mb, generated_password = mbx_svc.reset_password(mailbox_id, data)
+    except mbx_svc.MailboxNotFound:
+        return json_error("Mailbox not found", 404)
+    except mbx_svc.MailboxNotActive:
+        return json_error("Mailbox is not active", 409)
+    return {**mbx_svc.serialize(mb), "generated_password": generated_password}
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True)
+def archive_mailbox(request, mailbox_id: int):
+    try:
+        mb = mbx_svc.archive(mailbox_id)
+    except mbx_svc.MailboxNotFound:
+        return json_error("Mailbox not found", 404)
+    except mbx_svc.CannotArchive as exc:
+        return json_error(exc.detail, 409)
+    return mbx_svc.serialize(mb)
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True)
+def restore_mailbox(request, mailbox_id: int):
+    try:
+        mb = mbx_svc.restore(mailbox_id)
+    except mbx_svc.MailboxNotFound:
+        return json_error("Mailbox not found", 404)
+    except mbx_svc.CannotRestore:
+        return json_error("Only archived mailboxes can be restored", 409)
+    return mbx_svc.serialize(mb)
+
+
+# ── /mailboxes/aliases/* (проксируется живьём в Mailcow, локально не
+# зеркалируется) ────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def _list_aliases(request):
+    try:
+        return MailcowClient().list_aliases()
+    except Exception as exc:  # noqa: BLE001 — буквальный порт исходника
+        return json_error(f"Mailcow error: {exc}", 502)
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.AliasCreateRequest, status=201)
+def _create_alias(request, data: schemas.AliasCreateRequest):
+    try:
+        return MailcowClient().add_alias(
+            address=str(data.address), goto=data.goto, active=data.active,
+        )
+    except Exception as exc:  # noqa: BLE001 — буквальный порт исходника
+        return json_error(f"Mailcow error: {exc}", 502)
+
+
+def aliases_collection(request):
+    if request.method == "GET":
+        return _list_aliases(request)
+    if request.method == "POST":
+        return _create_alias(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
+def delete_alias(request, alias_id: int):
+    try:
+        MailcowClient().delete_alias(alias_id)
+    except Exception as exc:  # noqa: BLE001 — буквальный порт исходника
+        return json_error(f"Mailcow error: {exc}", 502)
+    return HttpResponse(status=204)
+
+
+# ── /mailboxes/{mailbox_id}/forwarding/ ────────────────────────────────────
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.ForwardingSetRequest, status=201)
+def set_forwarding(request, mailbox_id: int, data: schemas.ForwardingSetRequest):
+    try:
+        mb = mbx_svc.get_by_id(mailbox_id)
+    except mbx_svc.MailboxNotFound:
+        return json_error("Mailbox not found", 404)
+    try:
+        return MailcowClient().set_forwarding(
+            mb.address, str(data.forward_to), keep_local_copy=data.keep_local_copy,
+        )
+    except Exception as exc:  # noqa: BLE001 — буквальный порт исходника
+        return json_error(f"Mailcow error: {exc}", 502)

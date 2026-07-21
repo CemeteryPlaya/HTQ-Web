@@ -15,6 +15,7 @@ from .models import (
     EmailAttachment,
     EmailMessage,
     OAuthToken,
+    ProvisionedMailbox,
     RecipientStatus,
 )
 
@@ -82,4 +83,12 @@ class RecipientStatusAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "message", "recipient_email", "status", "created_at")
     list_filter = ("status",)
     search_fields = ("recipient_email",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ProvisionedMailbox)
+class ProvisionedMailboxAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "user_id", "address", "status", "quota_mb", "created_at")
+    list_filter = ("status",)
+    search_fields = ("address", "local_part", "domain")
     readonly_fields = ("created_at", "updated_at")

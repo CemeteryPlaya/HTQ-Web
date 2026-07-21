@@ -16,7 +16,13 @@ import pytest
 from django.db import connection
 from django.db.utils import IntegrityError
 
-from apps.mail.models import AccountProvider, AccountType, EmailAccount, OAuthToken
+from apps.mail.models import (
+    AccountProvider,
+    AccountType,
+    EmailAccount,
+    OAuthToken,
+    ProvisionedMailbox,
+)
 
 
 def _cols(table: str) -> dict:
@@ -49,6 +55,15 @@ def _token(**kw):
     )
     defaults.update(kw)
     return OAuthToken.objects.create(**defaults)
+
+
+def _mailbox(**kw):
+    """Реальная ProvisionedMailbox-строка — с приходом mailboxes-под-задачи
+    ``EmailAccount.mailbox`` стал настоящим FK, поэтому тестам, проверяющим
+    corporate-ветку EmailAccount, нужна СУЩЕСТВУЮЩАЯ строка (не голый int)."""
+    defaults = dict(local_part="corp", domain="corp.example.com", address="corp-mb@corp.example.com")
+    defaults.update(kw)
+    return ProvisionedMailbox.objects.create(**defaults)
 
 
 def _account(**kw):
@@ -99,11 +114,12 @@ def test_email_account_server_defaults_and_nullability():
 
 @pytest.mark.django_db
 def test_email_account_field_defaults_on_create():
-    # Corporate (mailbox_id set, никакого oauth_token) — проверяем дефолты,
+    # Corporate (mailbox set, никакого oauth_token) — проверяем дефолты,
     # не завязываясь на consistency-констрейнт по personal-ветке.
+    mb = _mailbox(address="dflt@corp.example.com")
     acc = EmailAccount.objects.create(**_account(
         type=AccountType.CORPORATE, provider=AccountProvider.MAILCOW,
-        address="corp@example.com", mailbox_id=7,
+        address="corp@example.com", mailbox_id=mb.id,
     ))
     assert acc.is_default is False
     assert acc.is_active is True
@@ -111,7 +127,7 @@ def test_email_account_field_defaults_on_create():
     assert acc.connected_at is not None
     assert acc.created_at is not None
     assert acc.updated_at is not None
-    assert acc.mailbox_id == 7
+    assert acc.mailbox_id == mb.id
     assert acc.oauth_token_id is None
 
 
@@ -124,14 +140,15 @@ def test_email_account_unique_user_address():
 
 @pytest.mark.django_db
 def test_email_account_unique_mailbox_id():
+    mb = _mailbox(address="shared@corp.example.com")
     EmailAccount.objects.create(**_account(
         type=AccountType.CORPORATE, provider=AccountProvider.MAILCOW,
-        address="a@corp.example.com", mailbox_id=42,
+        address="a@corp.example.com", mailbox_id=mb.id,
     ))
     with pytest.raises(IntegrityError):
         EmailAccount.objects.create(**_account(
             type=AccountType.CORPORATE, provider=AccountProvider.MAILCOW,
-            address="b@corp.example.com", mailbox_id=42,
+            address="b@corp.example.com", mailbox_id=mb.id,
         ))
 
 
@@ -173,6 +190,19 @@ def test_email_account_invalid_oauth_token_fk_raises_integrity_error():
     транзакции (см. apps/hr/tests/test_documents_api.py, тот же паттерн)."""
     with pytest.raises(IntegrityError):
         EmailAccount.objects.create(**_account(oauth_token_id=999999))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_email_account_invalid_mailbox_fk_raises_integrity_error():
+    """Тот же DEFERRABLE-паттерн, что и оauth_token выше — mailboxes-под-
+    задача (mail-mailboxes-brief.md): ``EmailAccount.mailbox`` теперь
+    настоящий FK на ``ProvisionedMailbox``, несуществующий id должен
+    падать IntegrityError."""
+    with pytest.raises(IntegrityError):
+        EmailAccount.objects.create(**_account(
+            type=AccountType.CORPORATE, provider=AccountProvider.MAILCOW,
+            oauth_token_id=None, mailbox_id=999999,
+        ))
 
 
 # ── OAuthToken ──────────────────────────────────────────────────────────

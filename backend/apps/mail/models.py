@@ -8,10 +8,7 @@ public (PgBouncer transaction-mode роняет search_path, см. CLAUDE.md); �
 исходнике таблицы жили в схеме ``email``, здесь это не переносится.
 
 Область mail-core (бриф prep): EmailAccount + OAuthToken + AuditLog(mail) +
-crypto. ``EmailAccount.mailbox_id`` остаётся голым уникальным int без FK
-(решение 4 брифа mail-core) — ``ProvisionedMailbox`` создаётся под-задачей
-mailboxes, ещё не перенесена (вне зоны mail-messages); растяжка
-``tests/test_stretch.py::test_mailbox_id_fk_todo_is_tracked`` следит за этим.
+crypto.
 
 Под-задача mail-messages (бриф ``mail-messages-brief.md``) добавляет
 EmailMessage/EmailAttachment/RecipientStatus — порт
@@ -19,6 +16,12 @@ EmailMessage/EmailAttachment/RecipientStatus — порт
 ``apps/mail/services/account_service.py::list_accounts`` теперь считает
 реальный коррелированный COUNT (folder=inbox, is_read=false), как исходник
 (accounts.py::list_accounts) — см. тот сервис.
+
+Под-задача mailboxes (бриф ``mail-mailboxes-brief.md``) добавляет
+``ProvisionedMailbox`` — порт ``services/email/app/models/mailbox.py``.
+``EmailAccount.mailbox`` — теперь настоящий ``ForeignKey`` на неё (растяжка
+``tests/test_stretch.py::test_mailbox_id_fk_todo_is_tracked`` снята, см.
+``EmailAccount`` докстринг ниже).
 """
 from __future__ import annotations
 
@@ -87,6 +90,74 @@ class OAuthToken(models.Model):
         return f"<OAuthToken(id={self.id}, provider={self.provider})>"
 
 
+class MailboxStatus(models.TextChoices):
+    """Порт ``MailboxStatus = Literal["active","archived","deleted","error"]``
+    (``services/email/app/schemas/mailbox.py``). Как и ``Folder``/
+    ``OAuthProvider`` выше — исходная SQLAlchemy-колонка (``String(16)``) не
+    несёт CheckConstraint на эти значения (см. ``ProvisionedMailbox.status``
+    докстринг ниже, дословно повторяющий комментарий исходника), поэтому
+    choices здесь чисто для админки, без ограничения на уровне БД."""
+
+    ACTIVE = "active", "Активен"
+    ARCHIVED = "archived", "В архиве"
+    DELETED = "deleted", "Удалён"
+    ERROR = "error", "Ошибка"
+
+
+class ProvisionedMailbox(models.Model):
+    """Порт services/email/app/models/mailbox.py::ProvisionedMailbox
+    (mailboxes-под-задача, бриф ``mail-mailboxes-brief.md``).
+
+    Одна строка — один ящик, реально создаваемый в Mailcow через
+    ``apps/mail/services/mailbox_service.py`` +
+    ``apps/mail/services/mailcow_client.py``. Таблица — дефолтное
+    Django-имя (решение D2, как и остальные модели mail): mail_
+    provisionedmailbox (в исходнике — ``email.provisioned_mailboxes``).
+
+    ``address``/``user_id`` в исходнике несут ОБА конструкции разом:
+    ``index=True`` на колонке (обычный btree-индекс) И отдельный
+    ``UniqueConstraint`` (``uq_provisioned_mailboxes_address``/
+    ``..._user_id``) — то есть буквально ДВА индекса на столбец. Здесь это
+    схлопнуто в один ``unique=True`` (Django-уникальный индекс уже покрывает
+    те же lookup-паттерны, что и отдельный plain-индекс исходника) —
+    наблюдаемо тот же результат (столбец индексирован, значения уникальны),
+    без дублирующего второго индекса, который ничего не добавляет.
+    """
+
+    user_id = models.IntegerField(null=True, blank=True, unique=True)
+
+    local_part = models.CharField(max_length=255)
+    domain = models.CharField(max_length=255)
+    address = models.CharField(max_length=255, unique=True)
+
+    # 'active'/'archived'/'deleted'/'error' — см. MailboxStatus выше;
+    # исходник: default="active" БЕЗ server_default (клиентский Python-
+    # дефолт SQLAlchemy, тот же принцип, что OAuthToken.is_active в
+    # mail-core, D-mail-1) — переносится как default= БЕЗ db_default.
+    status = models.CharField(
+        max_length=16, choices=MailboxStatus.choices, default=MailboxStatus.ACTIVE, db_index=True,
+    )
+
+    # Исходник: default=1024 БЕЗ server_default — тот же D-mail-1 принцип.
+    quota_mb = models.IntegerField(default=1024)
+    display_name = models.CharField(max_length=255, null=True, blank=True)
+    last_error = models.TextField(null=True, blank=True)
+
+    # AES-256-GCM (apps/mail/services/crypto.py) — Mailcow app-password для
+    # SMTP submission/IMAP IDLE, генерируется под-задачей workers при
+    # реальном provision (см. mailbox_service.py докстринг: этот Django-порт
+    # НЕ ставит actor'ы в очередь, поле заведено для паритета схемы).
+    encrypted_smtp_app_password = models.TextField(null=True, blank=True)
+
+    created_at = models.DateTimeField(db_default=Now(), db_index=True)
+    updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"<ProvisionedMailbox(id={self.id}, address={self.address!r}, status={self.status})>"
+
+
 class EmailAccount(models.Model):
     """Порт services/email/app/models/account.py::EmailAccount.
 
@@ -96,14 +167,15 @@ class EmailAccount(models.Model):
     ``mailbox_id``/``oauth_token_id`` заполнено — типовая согласованность
     проверяется CheckConstraint ``ck_email_accounts_type_consistency``.
 
-    D-mail-2 (решение 4 брифа mail-core): ``mailbox_id`` — БЕЗ FK. Исходник
-    ссылается на ``email.provisioned_mailboxes.id``
-    (``ProvisionedMailbox``), модель которой создаётся под-задачей
-    mailboxes (ещё не перенесена — вне зоны этой под-задачи). Поле заведено
-    как голый уникальный int; растяжка
-    ``tests/test_stretch.py::test_mailbox_id_fk_todo_is_tracked`` падает в
-    момент появления ``apps.mail.models.ProvisionedMailbox``, требуя
-    заменить на настоящий FK.
+    ``mailbox`` (mailboxes-под-задача, закрывает D-mail-2 mail-core): теперь
+    настоящий ``ForeignKey`` на ``ProvisionedMailbox`` — порт исходника
+    (``ForeignKey("email.provisioned_mailboxes.id", ondelete="SET NULL")``,
+    ``nullable=True`` + отдельный ``UniqueConstraint("mailbox_id")``).
+    Атрибут ``mailbox`` даёт Django-колонку ``mailbox_id`` (совпадает с
+    именем колонки исходника), доступную и как ``account.mailbox_id`` без
+    похода в БД, и как ``account.mailbox`` (объект) — тот же паттерн, что
+    уже применён к ``oauth_token`` ниже. Растяжка
+    ``tests/test_stretch.py::test_mailbox_id_fk_todo_is_tracked`` снята.
     """
 
     user_id = models.IntegerField(db_index=True)
@@ -121,9 +193,10 @@ class EmailAccount(models.Model):
     # False = синхронизация на паузе (пользователь деактивирован, отвязан и т.д.).
     is_active = models.BooleanField(default=True, db_default=True)
 
-    # TODO(mailboxes-под-задача): заменить на FK на ProvisionedMailbox, когда
-    # модель появится (решение 4 брифа) — см. растяжку в tests/test_stretch.py.
-    mailbox_id = models.IntegerField(null=True, blank=True, unique=True)
+    mailbox = models.ForeignKey(
+        ProvisionedMailbox, null=True, blank=True, unique=True,
+        on_delete=models.SET_NULL, related_name="email_account",
+    )
     # FK-имя атрибута ``oauth_token`` даёт Django-колонку ``oauth_token_id``
     # (совпадает с именем атрибута исходника ``oauth_token_id`` в
     # SQLAlchemy-модели) — доступна и как ``account.oauth_token_id`` без

@@ -23,7 +23,7 @@ import pytest
 from django.core.cache import cache
 from django.test import Client
 
-from apps.mail.models import AccountType, EmailAccount, OAuthToken
+from apps.mail.models import AccountType, EmailAccount, OAuthToken, ProvisionedMailbox
 from apps.mail.services import oauth_clients, oauth_service
 from apps.mail.services.oauth_clients import TokenBundle
 from apps.users.models import User, UserStatus
@@ -294,9 +294,12 @@ def test_disconnect_drops_only_personal_accounts(user, auth, monkeypatch):
         user_id=user.id, type=AccountType.PERSONAL, provider="google",
         address="personal@example.com", oauth_token=tok,
     )
+    mb = ProvisionedMailbox.objects.create(
+        local_part="corp", domain="corp.example.com", address="corp-mb@corp.example.com",
+    )
     corporate = EmailAccount.objects.create(
         user_id=user.id, type=AccountType.CORPORATE, provider="mailcow",
-        address="corp@example.com", mailbox_id=55,
+        address="corp@example.com", mailbox_id=mb.id,
     )
 
     resp = Client().delete(f"{BASE}/disconnect", **auth)

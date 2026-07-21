@@ -21,7 +21,13 @@ import datetime
 import pytest
 from django.test import Client
 
-from apps.mail.models import AccountProvider, AccountType, EmailAccount, OAuthToken
+from apps.mail.models import (
+    AccountProvider,
+    AccountType,
+    EmailAccount,
+    OAuthToken,
+    ProvisionedMailbox,
+)
 from apps.mail.services import account_service, oauth_clients
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
@@ -78,7 +84,16 @@ def _personal_account(user_id, address, **kw):
     return EmailAccount.objects.create(**defaults)
 
 
-def _corporate_account(user_id, address, mailbox_id, **kw):
+def _corporate_account(user_id, address, mailbox_id=None, **kw):
+    """``mailbox_id`` — с приходом mailboxes-под-задачи ``EmailAccount.mailbox``
+    настоящий FK: если вызывающий не передал существующую строку явно,
+    создаём одну здесь (значение ``mailbox_id`` больше не используется как
+    голый int-маркер, только как совместимость сигнатуры для вызывающих)."""
+    if mailbox_id is None:
+        mailbox_id = ProvisionedMailbox.objects.create(
+            local_part=address.split("@")[0], domain="corp.example.com",
+            address=f"mb-{address}",
+        ).id
     defaults = dict(
         user_id=user_id, type=AccountType.CORPORATE, provider=AccountProvider.MAILCOW,
         address=address, mailbox_id=mailbox_id,
@@ -242,7 +257,7 @@ def test_disconnect_404_when_not_owned(other_user, auth):
 
 @pytest.mark.django_db
 def test_disconnect_400_for_corporate_account(user, auth):
-    acc = _corporate_account(user.id, "corp@example.com", mailbox_id=101)
+    acc = _corporate_account(user.id, "corp@example.com")
     resp = Client().delete(f"{BASE}/{acc.id}/", **auth)
     assert resp.status_code == 400
     assert "mailboxes/" in resp.json()["detail"]

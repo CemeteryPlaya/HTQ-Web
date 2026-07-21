@@ -6,7 +6,7 @@ import datetime
 
 import pytest
 
-from apps.mail.models import AccountProvider, AccountType, EmailAccount, OAuthToken
+from apps.mail.models import AccountProvider, AccountType, EmailAccount, OAuthToken, ProvisionedMailbox
 from apps.mail.services.crypto import crypto_service
 from apps.mail.services.oauth_clients import TokenBundle
 from apps.mail.services.sync import gmail as sync_gmail
@@ -67,9 +67,12 @@ def test_gmail_ensure_fresh_token_raises_without_refresh_token():
 
 @pytest.mark.django_db
 def test_gmail_ensure_fresh_token_raises_when_oauth_token_missing():
+    mb = ProvisionedMailbox.objects.create(
+        local_part="corp", domain="corp.example.com", address="corp-mb@corp.example.com",
+    )
     account = EmailAccount.objects.create(
         user_id=1, type=AccountType.CORPORATE, provider=AccountProvider.MAILCOW,
-        address="corp@example.com", mailbox_id=1,
+        address="corp@example.com", mailbox_id=mb.id,
     )
     with pytest.raises(RuntimeError, match="OAuthToken missing"):
         sync_gmail.ensure_fresh_token(account)

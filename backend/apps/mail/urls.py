@@ -83,4 +83,39 @@ urlpatterns = [
 
     path("<uuid:message_id>", views.get_email),
     path("<uuid:message_id>/", views.get_email),
+
+    # ── mailboxes (mailboxes-под-задача, mail-mailboxes-brief.md, 12
+    # эндпойнтов services/email/app/api/v1/mailboxes.py) ────────────────────
+    # Реальные вызовы фронта (frontend/src/pages/AdminMailboxes.tsx): все
+    # мажоритарно СО слешем — ``mailboxes/?include_deleted=true`` (GET),
+    # ``mailboxes/{id}/archive/``/``restore/``/``reset-password/`` (POST),
+    # ``mailboxes/{id}/`` (DELETE), ``mailboxes/aliases/`` (GET/POST),
+    # ``mailboxes/aliases/{id}/`` (DELETE). ``forwarding/`` фронтом сейчас не
+    # вызывается — регистрируется защитно, по конвенции остальных аппок.
+    # Литеральный ``mailboxes/aliases/`` — ДО ``mailboxes/<int:mailbox_id>/``
+    # (конвенция репозитория; <int:...> и так не матчит "aliases", но порядок
+    # соблюдён явно).
+    path("mailboxes/aliases/", views.aliases_collection),
+    path("mailboxes/aliases", views.aliases_collection),
+
+    path("mailboxes/aliases/<int:alias_id>/", views.delete_alias),
+    path("mailboxes/aliases/<int:alias_id>", views.delete_alias),
+
+    path("mailboxes/", views.mailboxes_collection),
+    path("mailboxes", views.mailboxes_collection),
+
+    path("mailboxes/<int:mailbox_id>/reset-password/", views.reset_mailbox_password),
+    path("mailboxes/<int:mailbox_id>/reset-password", views.reset_mailbox_password),
+
+    path("mailboxes/<int:mailbox_id>/archive/", views.archive_mailbox),
+    path("mailboxes/<int:mailbox_id>/archive", views.archive_mailbox),
+
+    path("mailboxes/<int:mailbox_id>/restore/", views.restore_mailbox),
+    path("mailboxes/<int:mailbox_id>/restore", views.restore_mailbox),
+
+    path("mailboxes/<int:mailbox_id>/forwarding/", views.set_forwarding),
+    path("mailboxes/<int:mailbox_id>/forwarding", views.set_forwarding),
+
+    path("mailboxes/<int:mailbox_id>/", views.mailbox_detail),
+    path("mailboxes/<int:mailbox_id>", views.mailbox_detail),
 ]
