@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -615,5 +616,105 @@ class AssignmentResponse(BaseModel):
     equipment_id: int | None = None
     role: str | None = None
     allocation: int
+
+    model_config = {"from_attributes": True}
+
+
+# ── calendar ────────────────────────────────────────────────────────────
+
+EventType = Literal["personal", "department", "common", "conference"]
+RsvpStatus = Literal["pending", "accepted", "declined"]
+DayType = Literal["working", "weekend", "holiday", "short"]
+
+
+class EventExceptionBase(BaseModel):
+    exception_date: date
+    is_cancelled: bool = True
+
+
+class EventExceptionResponse(EventExceptionBase):
+    id: int
+    event_id: int
+
+    model_config = {"from_attributes": True}
+
+
+class CalendarEventBase(BaseModel):
+    title: str
+    description: str | None = None
+    # Precise timestamps. For all-day events the form sends midnight in the
+    # user's local tz with ``is_all_day=True``; the UI hides the time.
+    start_at: datetime
+    end_at: datetime
+    is_all_day: bool = True
+    event_type: EventType = "personal"
+    conference_room_id: str | None = None
+    color: str | None = None
+    is_global: bool = False
+    department_id: int | None = None
+
+
+class CalendarEventCreate(CalendarEventBase):
+    # Users to invite besides the creator. The event then appears on each of
+    # their calendars without needing ``is_global``.
+    participant_user_ids: list[int] = []
+
+    @field_validator("end_at")
+    @classmethod
+    def end_after_start(cls, v: datetime, info):
+        start = info.data.get("start_at")
+        if start is not None and v < start:
+            raise ValueError("end_at must be >= start_at")
+        return v
+
+
+class CalendarEventUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    is_all_day: bool | None = None
+    event_type: EventType | None = None
+    conference_room_id: str | None = None
+    color: str | None = None
+    is_global: bool | None = None
+    department_id: int | None = None
+    # ``None`` means "do not touch participants"; an empty list clears them.
+    participant_user_ids: list[int] | None = None
+
+
+class CalendarEventParticipantInfo(BaseModel):
+    user_id: int
+    full_name: str | None = None
+    email: str | None = None
+    avatar_url: str | None = None
+    rsvp_status: RsvpStatus = "pending"
+
+
+class CalendarEventResponse(CalendarEventBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    creator_id: int | None = None
+    exceptions: list[EventExceptionResponse] = []
+    participants: list[CalendarEventParticipantInfo] = []
+
+    model_config = {"from_attributes": True}
+
+
+class RsvpUpdate(BaseModel):
+    status: RsvpStatus
+
+
+class ProductionDayUpdate(BaseModel):
+    day_type: DayType
+    note: str | None = None
+
+
+class ProductionDayResponse(BaseModel):
+    date: date
+    day_type: DayType
+    working_days_since_epoch: int
+    note: str | None = None
 
     model_config = {"from_attributes": True}

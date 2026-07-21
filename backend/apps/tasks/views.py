@@ -19,13 +19,14 @@ Two mechanics recur throughout and are worth reading once:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from django.http import HttpResponse
 
 from htqweb.http import api_view, json_error
 
 from . import schemas
+from .services import calendar_service
 from .services import gantt_service
 from .services import link_service
 from .services import notification_service
@@ -829,3 +830,154 @@ def resource_gantt(request):
         gantt_service.resource_gantt(dt_from, dt_to, kinds, department_id,
                                      _str_param(request, "search"))
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Calendar — /calendar/ and /production-calendar/
+# ─────────────────────────────────────────────────────────────────────────
+
+def _bounded_range(request, start_key: str, end_key: str):
+    """Shared window parsing for the timeline and the production calendar.
+
+    Both default to "this month plus 31 days" and both reject an inverted or
+    over-long range with the original's 400 (not 422 — these are range
+    *semantics*, which FastAPI could not express as a type either).
+    """
+    start = _date_param(request, start_key)
+    end = _date_param(request, end_key)
+    start = start or date.today().replace(day=1)
+    end = end or (start + timedelta(days=31))
+    if start > end:
+        raise _ParamError(json_error(
+            f"{start_key} must be before {end_key}", 400))
+    if (end - start).days > calendar_service.MAX_RANGE_DAYS:
+        raise _ParamError(json_error("Date range is too large", 400))
+    return start, end
+
+
+@api_view(methods=("GET",))
+def calendar_timeline(request):
+    try:
+        start, end = _bounded_range(request, "start", "end")
+    except _ParamError as exc:
+        return exc.response
+    return calendar_service.timeline(request.token, start, end)
+
+
+@api_view(methods=("GET",))
+def _list_events(request):
+    try:
+        department_id = _int_param(request, "department_id")
+    except _ParamError as exc:
+        return exc.response
+    return [schemas.CalendarEventResponse.model_validate(payload)
+            for payload in calendar_service.build_payloads(
+                calendar_service.list_events(request.token, department_id))]
+
+
+@api_view(methods=("POST",), body=schemas.CalendarEventCreate, status=201)
+def _create_event(request, data: schemas.CalendarEventCreate):
+    event_id = calendar_service.create_event(data.model_dump(),
+                                             creator_id=request.token.user_id)
+    return schemas.CalendarEventResponse.model_validate(
+        calendar_service.reload_payload(event_id))
+
+
+def events_collection(request):
+    if request.method == "GET":
+        return _list_events(request)
+    if request.method == "POST":
+        return _create_event(request)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("PATCH",), body=schemas.CalendarEventUpdate)
+def _update_event(request, event_id: int, data: schemas.CalendarEventUpdate):
+    calendar_service.update_event(event_id,
+                                  data.model_dump(exclude_unset=True),
+                                  request.token)
+    return schemas.CalendarEventResponse.model_validate(
+        calendar_service.reload_payload(event_id))
+
+
+@api_view(methods=("DELETE",), status=204)
+def _delete_event(request, event_id: int):
+    calendar_service.delete_event(event_id, request.token)
+    return _no_content()
+
+
+def event_detail(request, event_id: int):
+    if request.method == "PATCH":
+        return _update_event(request, event_id=event_id)
+    if request.method == "DELETE":
+        return _delete_event(request, event_id=event_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("POST",), body=schemas.RsvpUpdate)
+def event_rsvp(request, event_id: int, data: schemas.RsvpUpdate):
+    calendar_service.rsvp(event_id, request.token.user_id, data.status)
+    return schemas.CalendarEventResponse.model_validate(
+        calendar_service.reload_payload(event_id))
+
+
+@api_view(methods=("POST",), body=schemas.EventExceptionBase, status=201)
+def event_exceptions(request, event_id: int, data: schemas.EventExceptionBase):
+    return schemas.EventExceptionResponse.model_validate(
+        calendar_service.create_exception(
+            event_id, exception_date=data.exception_date,
+            is_cancelled=data.is_cancelled))
+
+
+@api_view(methods=("DELETE",), status=204)
+def event_exception_detail(request, exception_id: int):
+    calendar_service.delete_exception(exception_id)
+    return _no_content()
+
+
+@api_view(methods=("GET",))
+def calendar_user_options(request):
+    """Participant picker — NOT IMPLEMENTED, pending an interface contract.
+
+    The original proxied user-service's ``/api/users/v1/users/options/``
+    over HTTP. In the monolith that has to go through
+    ``apps.users.interface``, whose agreed §7 surface is
+    ``get_user_brief``/``get_users_brief`` — lookup by id, with no search
+    form. ``apps.users.services.options_service.list_user_options(query,
+    limit)`` already exists and is exactly what this needs, but exposing it
+    means adding ``search_user_options`` to the users interface, and a
+    consumer may not extend a neighbour's interface unilaterally
+    (PLAN.md §1.5 п.3, §7).
+
+    Answers 501 rather than an empty list on purpose: an empty picker looks
+    like "no colleagues found" and would be debugged as a data problem. The
+    frontend already calls this route (``frontend/src/api/calendar.ts``), so
+    the gap is real and belongs on the integration checklist (§8), not
+    hidden behind a plausible-looking empty response.
+    """
+    return json_error(
+        "Participant search requires apps.users.interface.search_user_options "
+        "(PLAN.md §7 contract extension, pending A↔B agreement)", 501)
+
+
+@api_view(methods=("GET",))
+def production_calendar(request):
+    try:
+        start, end = _bounded_range(request, "date__gte", "date__lte")
+    except _ParamError as exc:
+        return exc.response
+    return [schemas.ProductionDayResponse.model_validate(row)
+            for row in calendar_service.list_production_days(start, end)]
+
+
+@api_view(methods=("PATCH",), body=schemas.ProductionDayUpdate)
+def production_day_detail(request, target_date: str,
+                          data: schemas.ProductionDayUpdate):
+    try:
+        parsed = date.fromisoformat(target_date)
+    except ValueError:
+        return _param_error("target_date",
+                            "Input should be a valid date in YYYY-MM-DD format")
+    return schemas.ProductionDayResponse.model_validate(
+        calendar_service.update_production_day(parsed, day_type=data.day_type,
+                                               note=data.note))
