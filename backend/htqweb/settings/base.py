@@ -45,6 +45,11 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    # Снимает CSRF с /api/ (JWT-stateless) ДО CsrfViewMiddleware — иначе
+    # метод-диспетчеры (не @csrf_exempt) отдают 403-CSRF на живых POST/PUT/…
+    # (в test Client CSRF отключён, поэтому не ловилось). django-admin свой
+    # CSRF сохраняет. См. htqweb/middleware/api_csrf_exempt.py.
+    "htqweb.middleware.api_csrf_exempt.ApiCsrfExemptMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
