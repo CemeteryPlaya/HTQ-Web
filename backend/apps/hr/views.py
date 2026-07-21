@@ -27,10 +27,21 @@ from htqweb.http import api_view, json_error
 
 from . import access as hr_access
 from . import schemas
-from .permissions import CALENDAR_MANAGE, CALENDAR_VIEW, LEVEL_PRESETS, STAFFING_MANAGE, STAFFING_VIEW
+from .permissions import (
+    CALENDAR_MANAGE,
+    CALENDAR_VIEW,
+    CARD_GROUPS_EDIT,
+    CARD_GROUPS_VIEW,
+    LEVEL_PRESETS,
+    STAFFING_MANAGE,
+    STAFFING_VIEW,
+)
 from .services import calendar_service as cal_svc
 from .services import department_service as svc
 from .services import document_service as doc_svc
+from .services import employee_card_service as card_svc
+from .services import employee_card_t2_service as card_t2_svc
+from .services import employee_groups_service as groups_svc
 from .services import employee_service as emp_svc
 from .services import org_service
 from .services import personnel_history_service as ph_svc
@@ -385,9 +396,10 @@ def move_position(request, id: int, data: schemas.PositionMoveRequest):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  /employees/* — порт services/hr/app/api/v1/employees.py (9 из 16
-#  эндпойнтов; 7 отложены — см. брифы hr-misc/hr-docs/apps.users.interface,
-#  растяжки в tests/test_employees_api.py)
+#  /employees/* — порт services/hr/app/api/v1/employees.py (14 из 16
+#  эндпойнтов; 2 отложены — users/ GET+POST, ждут apps.users.interface (Р3
+#  без S2S), см. растяжку в tests/test_employees_api.py). me/card и
+#  {id}/card — раскрыты под-модулем employee_card (EmployeeCard/build_card).
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Авторизация здесь — НЕ грубый api_view(admin=True) (как в positions):
@@ -678,6 +690,44 @@ def employee_pmos(request, id: int):
     except emp_svc.EmployeeNotFound:
         return json_error("Employee not found", 404)
     return pmo_svc.get_employee_pmos(id)
+
+
+# ── /employees/me/card, /employees/{id}/card ────────────────────────────────
+#
+# Порт employees.py::my_employee_card/employee_card исходника — РАСКРЫТЫ этим
+# под-модулем (модель EmployeeCard появилась, employee_card_service.build_card
+# перенесён). ``/me/card`` — БЕЗ require_hr_access, буквально как исходник
+# (``access = await resolve_hr_access(db, current_user)`` — НЕ обёрнуто в
+# require_hr_access, в отличие от /{id}/card ниже и от /me/pmos выше, который
+# access вообще не резолвит): любой со своим Employee-профилем видит СВОЮ
+# карточку целиком (email/phone/manager/subordinates/pmos — всегда), а Т-2
+# секции внутри неё (``card["t2"]``) гейтятся ПОЛЕВЫМ RBAC card_t2_svc —
+# сотрудник без единого hr.card.*.view ключа получит пустой ``t2: {}``, но не
+# 403 на сам эндпойнт. ``/{id}/card`` — ТА ЖЕ пара require_hr_access +
+# _require_visible_employee, что history/documents/pmos выше (403 "HR access
+# required" при полном отсутствии HR-доступа, 404 "Employee not found" за
+# несуществующего/невидимого — приватность, не различаем случаи).
+
+@api_view(methods=("GET",), auth="jwt")
+def my_employee_card(request):
+    employee = emp_svc.get_my_employee(request.token)
+    if employee is None:
+        return json_error("Employee profile not found", 404)
+    access = hr_access.resolve_hr_access(request.token)
+    return card_svc.build_card(employee.id, mode="full", access=access)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def employee_card(request, id: int):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    try:
+        _require_visible_employee(id, access)
+    except emp_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+    return card_svc.build_card(id, mode="full", access=access)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1747,6 +1797,91 @@ def mongo_document_detail(request, doc_id: str):
         return _update_mongo_document(request, doc_id=doc_id)
     if request.method == "DELETE":
         return _delete_mongo_document(request, doc_id=doc_id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /employees/{id}/card/t2, /employees/{id}/card/groups — порт
+#  services/hr/app/api/v1/employee_card.py (4 эндпойнта, отдельный роутер
+#  исходника с prefix "/employees" — модель hr_employee_card/EmployeeCard).
+#  ``/employees/me/card`` и ``/employees/{id}/card`` (employees.py исходника)
+#  живут в секции /employees/* выше, у my_pmos/employee_pmos — это ТА ЖЕ
+#  пара эндпойнтов, что в исходнике (build_card целиком, а не только t2).
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Auth — ``_visible_access`` (определена выше, секция /calendar/*): БУКВАЛЬНО
+# ``_visible_employee`` роутера исходника (``require_hr_access(await
+# resolve_hr_access(...))`` + ``EmployeeService.get_employee`` +
+# ``can_see_department`` -> 404 "Employee not found") — тот же хелпер, что уже
+# используют employee_calendar*, переиспользуется буквально, не дублируется.
+#
+# Полевой RBAC-гейтинг Т-2 секций (financial/personal/certs) — ВНУТРИ
+# ``card_t2_svc.read_sections``/``upsert``
+# (``apps/hr/services/employee_card_t2_service.py::_SECTIONS`` — секция
+# видна/редактируема ТОЛЬКО при ``access.has(<view|edit_key>)``); вьюха здесь
+# не знает об отдельных Т-2-ключах и не решает, что показать — ровно как
+# роутер исходника (``EmployeeCardT2Service(db).read_sections(...)``/
+# ``.upsert(...)`` без единой permission-проверки в самом роутере). ``groups``
+# — единственный permission-ключ на весь ресурс (``hr.card.groups.view``/
+# ``hr.card.groups.edit``), проверяется прямо во вьюхе — буквальный порт
+# ``if not access.has("hr.card.groups.view"/"edit"): raise 403`` роутера.
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_card_t2(request, employee_id: int):
+    access, err = _visible_access(request, employee_id)
+    if err:
+        return err
+    return card_t2_svc.read_sections(employee_id, access)
+
+
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.EmployeeCardT2Patch)
+def _patch_card_t2(request, employee_id: int, data: schemas.EmployeeCardT2Patch):
+    access, err = _visible_access(request, employee_id)
+    if err:
+        return err
+    patch = data.model_dump(exclude_unset=True)
+    try:
+        return card_t2_svc.upsert(employee_id, patch, access)
+    except PermissionError as exc:
+        return json_error(str(exc), 403)
+    except ValueError as exc:
+        return json_error(str(exc), 422)
+
+
+def card_t2_detail(request, employee_id: int):
+    if request.method == "GET":
+        return _get_card_t2(request, employee_id=employee_id)
+    if request.method == "PATCH":
+        return _patch_card_t2(request, employee_id=employee_id)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _get_card_groups(request, employee_id: int):
+    access, err = _visible_access(request, employee_id)
+    if err:
+        return err
+    if not access.has(CARD_GROUPS_VIEW):
+        return json_error(f"Missing permission: {CARD_GROUPS_VIEW}", 403)
+    return groups_svc.read(employee_id)
+
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.EmployeeGroupsIn)
+def _put_card_groups(request, employee_id: int, data: schemas.EmployeeGroupsIn):
+    access, err = _visible_access(request, employee_id)
+    if err:
+        return err
+    if not access.has(CARD_GROUPS_EDIT):
+        return json_error(f"Missing permission: {CARD_GROUPS_EDIT}", 403)
+    return groups_svc.replace(employee_id, data.model_dump(mode="json"))
+
+
+def card_groups_detail(request, employee_id: int):
+    if request.method == "GET":
+        return _get_card_groups(request, employee_id=employee_id)
+    if request.method == "PUT":
+        return _put_card_groups(request, employee_id=employee_id)
     return json_error("Method Not Allowed", 405)
 
 

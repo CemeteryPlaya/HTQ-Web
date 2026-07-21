@@ -519,6 +519,9 @@ class EmployeeGroups(models.Model):
     Ни ``created_at``, ни ``updated_at`` — в исходном mongo-документе их нет
     (``EmployeeGroupsService.read/replace`` не пишет никаких таймстампов),
     поэтому ``HrBase`` не наследуется буквально: только 2 поля, как в брифе.
+
+    CRUD и роутинг Т-2 groups (``GET``/``PUT /employees/{id}/card/groups``) —
+    под-модуль ``employee_card`` (см. секцию ниже) — перенесены.
     """
 
     employee_id = models.IntegerField(unique=True)
@@ -526,6 +529,59 @@ class EmployeeGroups(models.Model):
 
     def __str__(self) -> str:
         return f"<EmployeeGroups(employee_id={self.employee_id})>"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  employee_card: EmployeeCard — Т-2 скалярные поля (финансы/личные данные/
+#  сертификаты) — порт services/hr/app/models/employee_card.py.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class EmployeeCard(HrBase):
+    """Порт services/hr/app/models/employee_card.py::EmployeeCard.
+
+    Таблица — дефолтное имя Django: hr_employeecard (не hr_employee_card
+    исходника, решение D2, как и у остальных моделей домена). Наследует
+    ``HrBase`` — исходник наследует ``BaseModel`` (created_at/updated_at),
+    как Employee/Department/Position, НЕ голый ``models.Model``, как
+    EmployeeGroups/EmployeeDocumentBlob выше (у тех в исходном mongo-
+    документе таймстампов нет вовсе — здесь же обычная SQL-таблица 1:1 с
+    server_default на обеих колонках).
+
+    ``employee_id`` — ``unique=True`` у исходника (``mapped_column(...,
+    unique=True, index=True)`` — карточка ровно одна на сотрудника) ->
+    ``OneToOneField`` (тот же приём, что EmployeeWeekTemplate/
+    EmployeeShiftAssignment выше: Django W342 рекомендует OneToOneField
+    вместо ``ForeignKey(unique=True)``). ``db_index=False``: unique уже даёт
+    свой уникальный индекс — отдельный btree был бы чистым дублем (исходник
+    тоже несёт ровно один индекс на этой колонке — комбинированный
+    unique+index, не два отдельных).
+
+    Остальные поля — скалярные Т-2 секции (без дефолтов в исходнике, все
+    nullable): financial (salary/bonus/bank_account), personal
+    (passport_data/inn/birth_date/birth_place/citizenship), certs
+    (sro_permit_number/sro_permit_expiry/safety_cert_number/
+    safety_cert_expiry). Полевой RBAC-гейтинг этих секций живёт в
+    ``services/employee_card_t2_service.py``, не в модели.
+    """
+
+    employee = models.OneToOneField(
+        Employee, on_delete=models.CASCADE, related_name="card", db_index=False,
+    )
+    salary = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    bonus = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    bank_account = models.CharField(max_length=64, null=True, blank=True)
+    passport_data = models.TextField(null=True, blank=True)
+    inn = models.CharField(max_length=20, null=True, blank=True)
+    birth_date = models.DateField(null=True, blank=True)
+    birth_place = models.CharField(max_length=255, null=True, blank=True)
+    citizenship = models.CharField(max_length=100, null=True, blank=True)
+    sro_permit_number = models.CharField(max_length=100, null=True, blank=True)
+    sro_permit_expiry = models.DateField(null=True, blank=True)
+    safety_cert_number = models.CharField(max_length=100, null=True, blank=True)
+    safety_cert_expiry = models.DateField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"<EmployeeCard(employee_id={self.employee_id})>"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

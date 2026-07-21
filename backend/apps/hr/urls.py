@@ -82,6 +82,9 @@ urlpatterns = [
     path("employees/me/pmos", views.my_pmos),
     path("employees/me/pmos/", views.my_pmos),
 
+    path("employees/me/card", views.my_employee_card),
+    path("employees/me/card/", views.my_employee_card),
+
     path("employees/", views.employees_collection),
     path("employees", views.employees_collection),
 
@@ -96,6 +99,17 @@ urlpatterns = [
 
     path("employees/<int:id>/pmos", views.employee_pmos),
     path("employees/<int:id>/pmos/", views.employee_pmos),
+
+    path("employees/<int:id>/card", views.employee_card),
+    path("employees/<int:id>/card/", views.employee_card),
+
+    # ── employee_card — порт services/hr/app/api/v1/employee_card.py (роутер
+    # исходника отдельный от employees.py, но тоже под prefix "/employees") ─
+    path("employees/<int:employee_id>/card/t2", views.card_t2_detail),
+    path("employees/<int:employee_id>/card/t2/", views.card_t2_detail),
+
+    path("employees/<int:employee_id>/card/groups", views.card_groups_detail),
+    path("employees/<int:employee_id>/card/groups/", views.card_groups_detail),
 
     # ── calendar (employee_calendar_router исходника, prefix "/employees") ──
     # Литеральные ``calendar-template``/``shift`` — независимые последние

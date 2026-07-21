@@ -3,11 +3,13 @@
 Провенанс формы ответов: app/schemas/employee.py (EmployeeOut), поведение —
 app/services/employee_service.py + app/auth/hr_access.py.
 
-12 из 16 эндпойнтов исходника перенесены сейчас (документы — hr-docs, задача
+14 из 16 эндпойнтов исходника перенесены сейчас (документы — hr-docs, задача
 5 плана, см. test_documents_api.py; pmos — под-модуль pmo, см. GET /me/pmos
-и GET /{id}/pmos ниже); 4 отложены (users/, card — их зависимости в
-hr-misc/apps.users.interface ещё не перенесены) — растяжки внизу файла
-следят за появлением зависимостей.
+и GET /{id}/pmos ниже; card — под-модуль employee_card, см. GET /me/card и
+GET /{id}/card ниже + отдельно test_employee_card_api.py для card/t2 и
+card/groups); 2 отложены (users/ — зависимость в apps.users.interface ещё не
+перенесена, Р3 без S2S) — растяжка внизу файла следит за появлением
+зависимости.
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
   * авторизация — ТОНКАЯ роль внутри вьюх (resolve_hr_access + access.can_*),
@@ -783,12 +785,13 @@ def test_id_pmos_admin_sees_active_membership(admin_auth, hr_dep):
     assert item["membership_type"] == "permanent"
 
 
-# ── растяжки: 4 отложенных эндпойнта ────────────────────────────────────────
+# ── растяжка: 2 отложенных эндпойнта (GET/POST /employees/users/) ───────────
 #
-# Не реализованы — их зависимости ещё не перенесены в apps.hr (модель hr-misc)
-# или apps.users.interface (Р3, без S2S). Каждый тест падает ровно в момент
-# появления соответствующей зависимости, заставляя дописать эндпойнт — как
-# test_cascade_cleanup_todo_is_tracked в test_departments_api.py.
+# Не реализованы — их зависимость (apps.users.interface, Р3 без S2S) ещё не
+# перенесена. Тест падает ровно в момент появления зависимости, заставляя
+# дописать эндпойнт — как test_cascade_cleanup_todo_is_tracked в
+# test_departments_api.py. (card — БЫЛА второй растяжкой здесь, снята: модель
+# EmployeeCard появилась, GET /me/card и GET /{id}/card раскрыты выше.)
 
 def test_user_options_endpoints_todo_is_tracked():
     """GET/POST /employees/users/ — прокси в user-service в исходнике.
@@ -804,13 +807,136 @@ def test_user_options_endpoints_todo_is_tracked():
     )
 
 
-def test_card_endpoints_todo_is_tracked():
-    """GET /employees/me/card, GET /employees/{id}/card — ждут
-    EmployeeCard + EmployeeCardService (под-модуль hr-misc, ещё не перенесён)."""
-    from django.apps import apps as django_apps
+# ── GET /me/card ──────────────────────────────────────────────────────────────
+#
+# Порт employees.py::my_employee_card исходника (зовёт EmployeeCardService.
+# build_card(employee.id, mode="full", access=...)) — резолвит СВОЙ Employee
+# ровно как /me/ и /me/pmos (user_id||email), БЕЗ require_hr_access: полная
+# карточка (email/phone/manager/subordinates/pmos) видна всегда, а секция t2
+# внутри неё гейтится ПОЛЕВЫМ RBAC (см. test_employee_card_api.py) — без
+# единого hr.card.*.view ключа t2 приходит пустым словарём, не 403.
 
-    existing = {m.__name__ for m in django_apps.get_app_config("hr").get_models()}
-    assert "EmployeeCard" not in existing, (
-        "Появилась модель EmployeeCard в apps.hr — допишите GET "
-        "/employees/me/card и GET /employees/{id}/card и снимите эту растяжку"
-    )
+@pytest.mark.django_db
+def test_me_card_404_when_no_employee_profile(auth):
+    resp = Client().get(f"{BASE}/me/card", **auth)
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Employee profile not found"
+
+
+@pytest.mark.django_db
+def test_me_card_returns_full_shape_including_contacts(junior):
+    emp, headers = junior
+    resp = Client().get(f"{BASE}/me/card", **headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == emp.id
+    assert body["full_name"] == f"{emp.last_name} {emp.first_name}".strip()
+    assert body["email"] == emp.email
+    assert body["phone"] == emp.phone
+    assert body["department"] == {"id": emp.department_id, "name": emp.department.name,
+                                   "path": emp.department.path}
+    assert body["position"] == {"id": emp.position_id, "title": emp.position.title,
+                                 "grade": emp.position.grade, "level": emp.position.level}
+    assert body["subordinates"] == []
+    assert body["pmos"] == []
+
+
+@pytest.mark.django_db
+def test_me_card_t2_empty_without_any_card_permission(junior):
+    """junior не несёт ни одного hr.card.* ключа — t2 приходит пустым, но
+    сам эндпойнт НЕ 403: /me/card не завёрнут в require_hr_access."""
+    _emp_, headers = junior
+    resp = Client().get(f"{BASE}/me/card", **headers)
+    assert resp.status_code == 200
+    assert resp.json()["t2"] == {}
+
+
+@pytest.mark.django_db
+def test_me_card_t2_shows_certs_section_for_middle(middle):
+    _emp_, headers = middle
+    resp = Client().get(f"{BASE}/me/card", **headers)
+    assert resp.status_code == 200
+    assert set(resp.json()["t2"].keys()) == {"certs"}
+
+
+@pytest.mark.django_db
+def test_me_card_manager_is_department_head(hr_dep):
+    head_pos = _pos("Head", hr_dep, weight=280)
+    head = _emp(hr_dep, head_pos, "card-head@htq.test")
+    hr_dep.manager = head
+    hr_dep.save()
+
+    sub_pos = _pos("Sub", hr_dep, weight=281)
+    user, headers = _user_auth("card-sub@htq.test")
+    _sub = _emp(hr_dep, sub_pos, "card-sub@htq.test", user_id=user.id)
+
+    resp = Client().get(f"{BASE}/me/card", **headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["manager"]["id"] == head.id
+    assert body["manager"]["email"] == head.email  # mode=full -> contacts included
+
+
+@pytest.mark.django_db
+def test_me_card_subordinates_are_direct_department_reports(hr_dep):
+    head_pos = _pos("Head2", hr_dep, weight=282)
+    user, headers = _user_auth("card-head2@htq.test")
+    head = _emp(hr_dep, head_pos, "card-head2@htq.test", user_id=user.id)
+    hr_dep.manager = head
+    hr_dep.save()
+
+    report_pos = _pos("Report", hr_dep, weight=283)
+    report = _emp(hr_dep, report_pos, "card-report@htq.test")
+
+    resp = Client().get(f"{BASE}/me/card", **headers)
+    assert resp.status_code == 200
+    subs = resp.json()["subordinates"]
+    assert [s["id"] for s in subs] == [report.id]
+
+
+# ── GET /{id}/card ───────────────────────────────────────────────────────────
+#
+# Порт employees.py::employee_card исходника — ТА ЖЕ пара require_hr_access +
+# _require_visible_employee, что history/documents/pmos выше.
+
+@pytest.mark.django_db
+def test_id_card_forbidden_without_any_hr_access(auth, hr_dep):
+    target = _emp(hr_dep, _pos("C1", hr_dep, weight=290), "card-target1@htq.test")
+    resp = Client().get(f"{BASE}/{target.id}/card", **auth)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "HR access required"
+
+
+@pytest.mark.django_db
+def test_id_card_missing_employee_404(admin_auth):
+    resp = Client().get(f"{BASE}/999999/card", **admin_auth)
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Employee not found"
+
+
+@pytest.mark.django_db
+def test_id_card_other_department_returns_404_not_403(middle, other_dep):
+    _owner, headers = middle
+    target = _emp(other_dep, _pos("C2", other_dep, weight=291), "card-target2@htq.test")
+    resp = Client().get(f"{BASE}/{target.id}/card", **headers)
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Employee not found"
+
+
+@pytest.mark.django_db
+def test_id_card_admin_sees_all_t2_sections_and_pmos(admin_auth, hr_dep):
+    target = _emp(hr_dep, _pos("C3", hr_dep, weight=292), "card-target3@htq.test")
+    pmo = PMO.objects.create(name="PMO Card", code="CARD1")
+    PMOMember.objects.create(pmo=pmo, employee=target, from_date=datetime.date(2024, 1, 1))
+
+    resp = Client().get(f"{BASE}/{target.id}/card", **admin_auth)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body["t2"].keys()) == {"financial", "personal", "certs"}
+    assert [p["pmo_id"] for p in body["pmos"]] == [pmo.id]
+
+
+@pytest.mark.django_db
+def test_id_card_trailing_slash_variant(admin_auth, hr_dep):
+    target = _emp(hr_dep, _pos("C4", hr_dep, weight=293), "card-target4@htq.test")
+    assert Client().get(f"{BASE}/{target.id}/card/", **admin_auth).status_code == 200

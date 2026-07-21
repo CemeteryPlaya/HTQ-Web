@@ -684,3 +684,73 @@ class PMOMemberUpdate(BaseModel):
         if self.from_date and self.to_date and self.to_date < self.from_date:
             raise ValueError("to_date must be >= from_date")
         return self
+
+
+# ── employee_card — порт services/hr/app/schemas/employee_card.py +
+# employee_card_groups.py (Т-2 карточка сотрудника) ─────────────────────────
+#
+# Секции PATCH /card/t2 сериализуют денежные поля СТРОКОЙ (Decimal -> str) —
+# та же форма, что читает EmployeeCardT2Patch исходника; сама валюта/точность
+# проверяется сервисом (employee_card_t2_service.upsert), не схемой.
+
+class CardFinancial(BaseModel):
+    salary: str | None = None
+    bonus: str | None = None
+    bank_account: str | None = None
+
+
+class CardPersonal(BaseModel):
+    passport_data: str | None = None
+    inn: str | None = None
+    birth_date: date | None = None
+    birth_place: str | None = None
+    citizenship: str | None = None
+
+
+class CardCerts(BaseModel):
+    sro_permit_number: str | None = None
+    sro_permit_expiry: date | None = None
+    safety_cert_number: str | None = None
+    safety_cert_expiry: date | None = None
+
+
+class EmployeeCardT2Patch(BaseModel):
+    financial: CardFinancial | None = None
+    personal: CardPersonal | None = None
+    certs: CardCerts | None = None
+
+
+class EducationItem(BaseModel):
+    institution: str = ""
+    degree: str = ""
+    field: str = ""
+    year_from: int | None = None
+    year_to: int | None = None
+
+
+class ExperienceItem(BaseModel):
+    org: str = ""
+    position: str = ""
+    date_from: date | None = None
+    date_to: date | None = None
+    note: str = ""
+
+
+class RelativeItem(BaseModel):
+    relation: str = ""
+    full_name: str = ""
+    birth_date: date | None = None
+    note: str = ""
+
+
+class EmployeeGroupsIn(BaseModel):
+    """Порт схемы ``EmployeeGroups`` исходника (``employee_card_groups.py``).
+
+    Переименовано в ``EmployeeGroupsIn`` (не ``EmployeeGroups``) только чтобы
+    не тенить уже существующую ``apps.hr.models.EmployeeGroups`` (JSONB-
+    модель под-модуля docs) — тело схемы идентично исходнику 1:1.
+    """
+
+    education: list[EducationItem] = []
+    experience: list[ExperienceItem] = []
+    relatives: list[RelativeItem] = []

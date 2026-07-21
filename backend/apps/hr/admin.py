@@ -17,6 +17,7 @@ from .models import (
     Department,
     Document,
     Employee,
+    EmployeeCard,
     EmployeeDayOverride,
     EmployeeDocumentBlob,
     EmployeeGroups,
@@ -205,6 +206,13 @@ class EmployeeDocumentBlobAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 @admin.register(EmployeeGroups)
 class EmployeeGroupsAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "employee_id")
+
+
+@admin.register(EmployeeCard)
+class EmployeeCardAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "employee", "salary", "bonus", "sro_permit_expiry")
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("employee",)
 
 
 @admin.register(PMO)
