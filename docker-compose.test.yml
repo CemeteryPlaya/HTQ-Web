@@ -8,3 +8,8 @@ services:
   db:
     ports:
       - "${DB_HOST_PORT:-55432}:5432"
+    # Поднимаем лимит соединений: растущая Django-сюита + тесты с
+    # @django_db(transaction=True) (constraint/FK-проверки) под дефолтными
+    # 100 соединениями к концу длинного прогона упираются в лимит, что даёт
+    # SystemExit-teardown и ERROR в хвосте (например apps/cms/test_cms_disableable).
+    command: ["postgres", "-c", "max_connections=300"]
