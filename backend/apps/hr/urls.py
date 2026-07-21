@@ -88,6 +88,24 @@ urlpatterns = [
     path("employees/<int:id>/history", views.employee_history),
     path("employees/<int:id>/history/", views.employee_history),
 
+    # ── calendar (employee_calendar_router исходника, prefix "/employees") ──
+    # Литеральные ``calendar-template``/``shift`` — независимые последние
+    # сегменты, не конфликтуют с ``calendar``/``calendar/<str:day>`` (разная
+    # длина пути). ``calendar/<str:day>`` — ДО ``calendar-template``/``shift``
+    # не требуется (разные литералы), но объявлен после голого ``calendar``
+    # для читаемости (главное — не после ``employees/<int:id>/``).
+    path("employees/<int:employee_id>/calendar-template", views.employee_calendar_template),
+    path("employees/<int:employee_id>/calendar-template/", views.employee_calendar_template),
+
+    path("employees/<int:employee_id>/shift", views.employee_shift_detail),
+    path("employees/<int:employee_id>/shift/", views.employee_shift_detail),
+
+    path("employees/<int:employee_id>/calendar/<str:day>", views.employee_day_override_detail),
+    path("employees/<int:employee_id>/calendar/<str:day>/", views.employee_day_override_detail),
+
+    path("employees/<int:employee_id>/calendar", views.employee_calendar),
+    path("employees/<int:employee_id>/calendar/", views.employee_calendar),
+
     path("employees/<int:id>/", views.employee_detail),
     path("employees/<int:id>", views.employee_detail),
 
@@ -180,4 +198,43 @@ urlpatterns = [
 
     path("personnel-history/<int:id>/", views.personnel_history_detail),
     path("personnel-history/<int:id>", views.personnel_history_detail),
+
+    # ── calendar ──────────────────────────────────────────────────────────
+    # Порт services/hr/app/api/v1/calendar.py (router prefix "/calendar",
+    # 14 эндпойнтов). Литеральные сегменты (``templates``, ``working-days``,
+    # ``import``, ``shift-patterns``) объявлены ДО ``<str:day>`` — решение
+    # брифа: путь-параметр ``day`` использует ПРОСТОЙ строковый конвертер
+    # (Django не имеет встроенного date-конвертера), который матчит ЛЮБОЙ
+    # непустой сегмент без слеша — включая слова "templates"/"import"/etc,
+    # поэтому порядок объявления здесь КРИТИЧЕН (не просто ради ясности, как
+    # в остальных блоках этого файла): будь ``<str:day>`` объявлен раньше,
+    # он перехватил бы "templates"/"working-days"/"import"/"shift-patterns".
+    path("calendar/templates/", views.calendar_templates_collection),
+    path("calendar/templates", views.calendar_templates_collection),
+
+    path("calendar/templates/<int:template_id>/default", views.calendar_template_set_default),
+    path("calendar/templates/<int:template_id>/default/", views.calendar_template_set_default),
+
+    path("calendar/templates/<int:template_id>/", views.calendar_template_detail),
+    path("calendar/templates/<int:template_id>", views.calendar_template_detail),
+
+    path("calendar/working-days", views.calendar_working_days),
+    path("calendar/working-days/", views.calendar_working_days),
+
+    path("calendar/import", views.calendar_import_year),
+    path("calendar/import/", views.calendar_import_year),
+
+    path("calendar/shift-patterns/", views.shift_patterns_collection),
+    path("calendar/shift-patterns", views.shift_patterns_collection),
+
+    path("calendar/shift-patterns/<int:pattern_id>/", views.shift_pattern_detail),
+    path("calendar/shift-patterns/<int:pattern_id>", views.shift_pattern_detail),
+
+    # GET /calendar/ (год целиком) — bare "" под prefix "/calendar" в исходнике.
+    path("calendar/", views.calendar_year),
+    path("calendar", views.calendar_year),
+
+    # Generic <str:day> — ПОСЛЕДНИЙ (см. комментарий выше).
+    path("calendar/<str:day>/", views.calendar_day_override_detail),
+    path("calendar/<str:day>", views.calendar_day_override_detail),
 ]

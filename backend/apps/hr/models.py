@@ -541,3 +541,158 @@ class PersonnelHistory(HrBase):
 
     def __str__(self) -> str:
         return f"<PersonnelHistory(id={self.id}, employee_id={self.employee_id}, event={self.event_type})>"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  calendar: WeekTemplate + CalendarDay + EmployeeWeekTemplate + ShiftPattern +
+#  EmployeeShiftAssignment + EmployeeDayOverride — порт services/hr/app/models/
+#  calendar.py (6 таблиц).
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# day_type у исходника — ПРОСТАЯ String(16)/String(20), без SQLAlchemy Enum на
+# уровне колонки (валидация набора {"working","weekend","holiday","short"}
+# живёт только в pydantic-схемах роутера — app/schemas/calendar.py). Порт
+# сохраняет это буквально: CharField БЕЗ choices= (никакой TextChoices здесь
+# не было бы у самого исходника — choices были бы ложной строгостью на уровне
+# БД, которой контракт не несёт).
+#
+# default=... у исходника (WeekTemplate.days/is_default, ShiftPattern.slots/
+# holidays_off, CalendarDay/EmployeeDayOverride.norm_hours) — КЛИЕНТСКИЙ
+# SQLAlchemy default (не server_default), но, как и у TimeEntry.break_minutes
+# выше, порт всё равно ставит db_default: тот же принцип HrBase — без него
+# вставка мимо ORM в NOT NULL колонку падает.
+
+class WeekTemplate(HrBase):
+    """Недельный шаблон (5/2, 6/1, ...) — порт models/calendar.py::WeekTemplate.
+
+    Таблица — дефолтное имя Django: hr_weektemplate (не hr_week_templates
+    исходника, решение D2).
+    """
+
+    name = models.CharField(max_length=100)
+    is_default = models.BooleanField(default=False, db_default=False)
+    # {"0": {"type": "working"|"weekend", "hours": <number>}, ..., "6": {...}}
+    # — ключи "0".."6" (понедельник..воскресенье), валидируется в schemas.py.
+    days = models.JSONField(default=dict, db_default={})
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class CalendarDay(HrBase):
+    """Национальный оверрайд дня (праздник/перенос) — порт
+    models/calendar.py::CalendarDay.
+
+    Таблица — дефолтное имя Django: hr_calendarday (не hr_calendar_days
+    исходника, решение D2). ``day`` — ``unique=True`` у исходника даёт И
+    ``unique``, И ``index`` НА ОДНОЙ колонке (SQLAlchemy
+    ``unique=True, index=True`` на одной колонке сливаются в один уникальный
+    индекс, не два) — Django ``unique=True`` уже создаёт ровно такой же
+    единственный уникальный индекс сам по себе, доп. ``db_index`` не нужен.
+    """
+
+    day = models.DateField(unique=True)
+    day_type = models.CharField(max_length=16)
+    norm_hours = models.DecimalField(max_digits=4, decimal_places=2, default=0, db_default=0)
+    note = models.CharField(max_length=255, null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"{self.day} ({self.day_type})"
+
+
+class EmployeeWeekTemplate(HrBase):
+    """Назначение недельного шаблона сотруднику (не более одного) — порт
+    models/calendar.py::EmployeeWeekTemplate.
+
+    Таблица — дефолтное имя Django: hr_employeeweektemplate (не
+    hr_employee_week_template исходника, решение D2). ``employee_id`` —
+    ``unique=True`` у исходника (максимум одна строка на сотрудника) ->
+    ``OneToOneField`` (Django-предупреждение W342 явно рекомендует его вместо
+    ``ForeignKey(unique=True)``). ``db_index=False``: unique-ограничение уже
+    даёт свой уникальный индекс — отдельный btree-индекс поверх него был бы
+    чистым дублем (исходник тоже несёт РОВНО один индекс на этой колонке —
+    комбинированный unique+index).
+    """
+
+    employee = models.OneToOneField(
+        Employee, on_delete=models.CASCADE, related_name="week_template_assignment", db_index=False,
+    )
+    week_template = models.ForeignKey(
+        WeekTemplate, on_delete=models.CASCADE, related_name="employee_assignments",
+    )
+
+    def __str__(self) -> str:
+        return f"<EmployeeWeekTemplate(employee_id={self.employee_id}, week_template_id={self.week_template_id})>"
+
+
+class ShiftPattern(HrBase):
+    """Циклический график смен — порт models/calendar.py::ShiftPattern.
+
+    Таблица — дефолтное имя Django: hr_shiftpattern (не hr_shift_patterns
+    исходника, решение D2).
+    """
+
+    name = models.CharField(max_length=100)
+    # [{"type": "work"|"off", "hours": <number>}, ...]; len(slots) = длина цикла.
+    slots = models.JSONField(default=list, db_default=[])
+    holidays_off = models.BooleanField(default=False, db_default=False)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class EmployeeShiftAssignment(HrBase):
+    """Назначение сменного графика сотруднику (не более одного;
+    взаимоисключающе с EmployeeWeekTemplate на уровне сервиса) — порт
+    models/calendar.py::EmployeeShiftAssignment.
+
+    Таблица — дефолтное имя Django: hr_employeeshiftassignment (не
+    hr_employee_shift_assignment исходника, решение D2). Тот же приём, что и
+    EmployeeWeekTemplate.employee выше: OneToOneField + db_index=False (unique
+    уже покрывает индекс, исходник несёт ровно один индекс на колонке).
+    """
+
+    employee = models.OneToOneField(
+        Employee, on_delete=models.CASCADE, related_name="shift_assignment", db_index=False,
+    )
+    shift_pattern = models.ForeignKey(
+        ShiftPattern, on_delete=models.CASCADE, related_name="employee_assignments",
+    )
+    anchor_date = models.DateField()
+
+    def __str__(self) -> str:
+        return f"<EmployeeShiftAssignment(employee_id={self.employee_id}, shift_pattern_id={self.shift_pattern_id})>"
+
+
+class EmployeeDayOverride(HrBase):
+    """Персональный оверрайд дня сотрудника — порт
+    models/calendar.py::EmployeeDayOverride.
+
+    Таблица — дефолтное имя Django: hr_employeedayoverride (не
+    hr_employee_day_override исходника, решение D2). В ОТЛИЧИЕ от
+    EmployeeWeekTemplate/EmployeeShiftAssignment выше: здесь исходник несёт
+    ДВА независимых индекса на ``employee_id`` — явный ``index=True`` НА
+    КОЛОНКЕ (одиночный) ПЛЮС составной ``UniqueConstraint(employee_id, day)``
+    (у которого employee_id — только левый префикс). Это не совпадает со
+    случаем PositionWeightAudit.position (там был ровно один составной индекс
+    без отдельного одиночного) — тут db_index НЕ убираем: FK
+    ``employee`` оставлен с дефолтным Django db_index=True, что и
+    воспроизводит оба индекса исходника (одиночный от FK + составной от
+    UniqueConstraint ниже).
+    """
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="day_overrides",
+    )
+    day = models.DateField()
+    day_type = models.CharField(max_length=16)
+    norm_hours = models.DecimalField(max_digits=4, decimal_places=2, default=0, db_default=0)
+    note = models.CharField(max_length=255, null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["employee", "day"], name="uq_hr_emp_day_override"),
+        ]
+
+    def __str__(self) -> str:
+        return f"<EmployeeDayOverride(employee_id={self.employee_id}, day={self.day})>"

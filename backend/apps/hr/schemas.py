@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date, time
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, RootModel, field_validator, model_validator
 
 
 class DepartmentCreate(BaseModel):
@@ -409,3 +409,123 @@ class PersonnelHistoryIn(BaseModel):
     to_position: int | None = None
     order_number: str = ""
     comment: str = ""
+
+
+# ── calendar — порт services/hr/app/schemas/calendar.py ─────────────────────
+#
+# WeekTemplateOut/ShiftPatternOut исходника не переносятся как pydantic-модели
+# (как и везде в этом файле — формы ответов собираются сериализаторами в
+# apps/hr/services/calendar_service.py: template_out/shift_pattern_out).
+
+_CALENDAR_DAY_TYPES = {"working", "weekend", "holiday", "short"}
+_CALENDAR_TMPL_TYPES = {"working", "weekend"}
+
+
+class WeekDayConfig(BaseModel):
+    type: str
+    hours: float = Field(ge=0)
+
+    @field_validator("type")
+    @classmethod
+    def _type_ok(cls, v: str) -> str:
+        if v not in _CALENDAR_TMPL_TYPES:
+            raise ValueError(f"type must be one of {_CALENDAR_TMPL_TYPES}")
+        return v
+
+
+class WeekTemplateIn(BaseModel):
+    name: str = Field(max_length=100)
+    days: dict[str, WeekDayConfig]
+
+    @field_validator("days")
+    @classmethod
+    def _days_ok(cls, v: dict[str, WeekDayConfig]) -> dict[str, WeekDayConfig]:
+        if set(v.keys()) != {str(i) for i in range(7)}:
+            raise ValueError('days must have keys "0".."6"')
+        return v
+
+
+class CalendarDayIn(BaseModel):
+    day_type: str
+    norm_hours: float = Field(default=0, ge=0)
+    note: str | None = None
+
+    @field_validator("day_type")
+    @classmethod
+    def _type_ok(cls, v: str) -> str:
+        if v not in _CALENDAR_DAY_TYPES:
+            raise ValueError(f"day_type must be one of {_CALENDAR_DAY_TYPES}")
+        return v
+
+
+class CalendarImportItem(CalendarDayIn):
+    day: date
+
+
+class CalendarImportBody(RootModel[list[CalendarImportItem]]):
+    """Порт ``items: list[CalendarImportItem]`` роутера — тело запроса POST
+    /calendar/import ЦЕЛИКОМ является JSON-массивом (не обёрткой-объектом).
+    ``RootModel`` — единственный способ отдать это через
+    ``htqweb.http.api_view(body=...)``, которое зовёт
+    ``body.model_validate_json(...)`` (принимает произвольный BaseModel-
+    наследник, включая RootModel)."""
+
+
+class AssignTemplateIn(BaseModel):
+    week_template_id: int | None = None
+
+
+class ShiftSlot(BaseModel):
+    type: str
+    hours: float = Field(ge=0)
+
+    @field_validator("type")
+    @classmethod
+    def _slot_type_ok(cls, v: str) -> str:
+        if v not in {"work", "off"}:
+            raise ValueError('slot type must be "work" or "off"')
+        return v
+
+
+class ShiftPatternIn(BaseModel):
+    name: str = Field(max_length=100)
+    slots: list[ShiftSlot] = Field(min_length=1)
+    holidays_off: bool = False
+
+
+class AssignShiftIn(BaseModel):
+    shift_pattern_id: int
+    anchor_date: date
+
+
+class EmployeeDayOverrideIn(BaseModel):
+    day_type: str
+    norm_hours: float = Field(default=0, ge=0)
+    note: str | None = None
+
+    @field_validator("day_type")
+    @classmethod
+    def _ovr_type_ok(cls, v: str) -> str:
+        if v not in _CALENDAR_DAY_TYPES:
+            raise ValueError(f"day_type must be one of {_CALENDAR_DAY_TYPES}")
+        return v
+
+
+class CalendarWorkingDaysQuery(BaseModel):
+    """Порт Query(start, end) роутера ``GET /calendar/working-days``."""
+
+    start: date
+    end: date
+
+
+class CalendarYearQuery(BaseModel):
+    """Порт Query(year) роутера ``GET /calendar/``."""
+
+    year: int
+
+
+class EmployeeCalendarQuery(BaseModel):
+    """Порт Query(start, end) роутера ``GET /employees/{id}/calendar``."""
+
+    start: date
+    end: date

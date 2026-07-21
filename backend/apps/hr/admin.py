@@ -13,16 +13,22 @@ from htqweb.admin_gate import ServiceGatedAdminMixin
 from .models import (
     Application,
     AuditLog,
+    CalendarDay,
     Department,
     Employee,
+    EmployeeDayOverride,
+    EmployeeShiftAssignment,
+    EmployeeWeekTemplate,
     LevelThreshold,
     OrgSettings,
     PersonnelHistory,
     Position,
     ReportingRelation,
+    ShiftPattern,
     StaffingPosition,
     TimeEntry,
     Vacancy,
+    WeekTemplate,
 )
 
 
@@ -126,3 +132,48 @@ class PersonnelHistoryAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_filter = ("event_type",)
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("employee", "from_department", "to_department", "from_position", "to_position")
+
+
+@admin.register(WeekTemplate)
+class WeekTemplateAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "name", "is_default")
+    list_filter = ("is_default",)
+    search_fields = ("name",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(CalendarDay)
+class CalendarDayAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "day", "day_type", "norm_hours")
+    list_filter = ("day_type",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(EmployeeWeekTemplate)
+class EmployeeWeekTemplateAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "employee", "week_template")
+    autocomplete_fields = ("employee", "week_template")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ShiftPattern)
+class ShiftPatternAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "name", "holidays_off")
+    list_filter = ("holidays_off",)
+    search_fields = ("name",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(EmployeeShiftAssignment)
+class EmployeeShiftAssignmentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "employee", "shift_pattern", "anchor_date")
+    autocomplete_fields = ("employee", "shift_pattern")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(EmployeeDayOverride)
+class EmployeeDayOverrideAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "employee", "day", "day_type", "norm_hours")
+    list_filter = ("day_type",)
+    autocomplete_fields = ("employee",)
+    readonly_fields = ("created_at", "updated_at")

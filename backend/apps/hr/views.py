@@ -27,7 +27,8 @@ from htqweb.http import api_view, json_error
 
 from . import access as hr_access
 from . import schemas
-from .permissions import LEVEL_PRESETS, STAFFING_MANAGE, STAFFING_VIEW
+from .permissions import CALENDAR_MANAGE, CALENDAR_VIEW, LEVEL_PRESETS, STAFFING_MANAGE, STAFFING_VIEW
+from .services import calendar_service as cal_svc
 from .services import department_service as svc
 from .services import employee_service as emp_svc
 from .services import org_service
@@ -1170,4 +1171,379 @@ def personnel_history_detail(request, id: int):
         return _update_personnel_history(request, id=id)
     if request.method == "DELETE":
         return _delete_personnel_history(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /calendar/* + /employees/{id}/calendar* — порт services/hr/app/api/v1/
+#  calendar.py (14 + 6 = 20 эндпойнтов: 14 в router "/calendar", 6 в
+#  employee_calendar_router "/employees", оба смонтированы под /api/hr/v1/).
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация /calendar/*, brief-решение (docs/plans/2026-07-20-hr-domain.md):
+# ТА ЖЕ схема, что у staffing выше — module-level _VIEW/_MANAGE исходника
+# (require_permission("hr.calendar.view")/require_permission(
+# "hr.calendar.manage")) -> переиспользуем _require_permission(request, key)
+# уже определённую для staffing (буквально та же fine-grained проверка,
+# app/auth/hr_access.py::require_permission).
+#
+# Авторизация /employees/{id}/calendar* — ОТДЕЛЬНАЯ схема исходника
+# (_visible() роутера calendar.py): СНАЧАЛА require_hr_access (403 "HR access
+# required" при полном отсутствии HR-доступа) -> ЗАТЕМ EmployeeService.
+# get_employee + can_see_department (404 "Employee not found" и за
+# несуществующего, и за невидимого сотрудника) -> ТОЛЬКО ПОТОМ
+# access.has("hr.calendar.view"/"hr.calendar.manage") (403 "Missing
+# permission: ..."). Порт: _visible_access(request, employee_id) ниже
+# буквально воспроизводит этот порядок, переиспользуя
+# _require_visible_employee (employees section выше).
+#
+# Путь-параметр ``day`` — у исходника это pydantic ``date`` (FastAPI сам
+# отдаёт 422 на невалидный формат); Django не имеет встроенного date-
+# конвертера пути. Решение брифа: строковый конвертер (``<str:day>``) +
+# ручной парсинг в вьюхе (``_parse_day``) — И порядок объявления в urls.py
+# (литеральные сегменты ``templates``/``working-days``/``import``/
+# ``shift-patterns`` — ДО generic ``<str:day>``, иначе строковый конвертер
+# перехватил бы их первым).
+
+
+def _parse_day(value: str):
+    """(date, None) | (None, err) — err готов к возврату (422) на невалидный формат."""
+    try:
+        return datetime.date.fromisoformat(value), None
+    except ValueError:
+        return None, json_error(f"Invalid date: {value!r}, expected YYYY-MM-DD", 422)
+
+
+def _visible_access(request, employee_id: int):
+    """(access, None) | (None, err) — порт _visible(employee_id, db,
+    current_user) роутера исходника (БЕЗ финальной проверки конкретного
+    permission-ключа — её делает вызывающая вьюха, ровно как в исходнике)."""
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return None, json_error(exc.detail, 403)
+    try:
+        _require_visible_employee(employee_id, access)
+    except emp_svc.EmployeeNotFound:
+        return None, json_error("Employee not found", 404)
+    return access, None
+
+
+# ── /calendar/templates/ (литеральный сегмент — ДО /calendar/<str:day>) ────
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_calendar_templates(request):
+    _, err = _require_permission(request, CALENDAR_VIEW)
+    if err:
+        return err
+    return [cal_svc.template_out(t) for t in cal_svc.list_templates()]
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.WeekTemplateIn, status=201)
+def _create_calendar_template(request, data: schemas.WeekTemplateIn):
+    _, err = _require_permission(request, CALENDAR_MANAGE)
+    if err:
+        return err
+    tmpl = cal_svc.create_template(data.name, data.model_dump()["days"])
+    return cal_svc.template_out(tmpl)
+
+
+def calendar_templates_collection(request):
+    if request.method == "GET":
+        return _list_calendar_templates(request)
+    if request.method == "POST":
+        return _create_calendar_template(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /calendar/templates/{id} ────────────────────────────────────────────────
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.WeekTemplateIn)
+def _update_calendar_template(request, template_id: int, data: schemas.WeekTemplateIn):
+    _, err = _require_permission(request, CALENDAR_MANAGE)
+    if err:
+        return err
+    try:
+        tmpl = cal_svc.update_template(template_id, data.name, data.model_dump()["days"])
+    except cal_svc.TemplateNotFound:
+        return json_error("Template not found", 404)
+    return cal_svc.template_out(tmpl)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_calendar_template(request, template_id: int):
+    _, err = _require_permission(request, CALENDAR_MANAGE)
+    if err:
+        return err
+    try:
+        cal_svc.delete_template(template_id)
+    except cal_svc.TemplateNotFound:
+        return json_error("Template not found", 404)
+    except cal_svc.CannotDeleteDefaultTemplate:
+        return json_error("Cannot delete the default template", 409)
+    return HttpResponse(status=204)
+
+
+def calendar_template_detail(request, template_id: int):
+    if request.method == "PUT":
+        return _update_calendar_template(request, template_id=template_id)
+    if request.method == "DELETE":
+        return _delete_calendar_template(request, template_id=template_id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /calendar/templates/{id}/default ────────────────────────────────────────
+
+@api_view(methods=("POST",), auth="jwt")
+def calendar_template_set_default(request, template_id: int):
+    _, err = _require_permission(request, CALENDAR_MANAGE)
+    if err:
+        return err
+    try:
+        tmpl = cal_svc.set_default(template_id)
+    except cal_svc.TemplateNotFound:
+        return json_error("Template not found", 404)
+    return cal_svc.template_out(tmpl)
+
+
+# ── /calendar/working-days ───────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def calendar_working_days(request):
+    _, err = _require_permission(request, CALENDAR_VIEW)
+    if err:
+        return err
+    try:
+        query = schemas.CalendarWorkingDaysQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return cal_svc.working_days_between(query.start, query.end)
+
+
+# ── /calendar/import ─────────────────────────────────────────────────────────
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.CalendarImportBody)
+def calendar_import_year(request, data: schemas.CalendarImportBody):
+    _, err = _require_permission(request, CALENDAR_MANAGE)
+    if err:
+        return err
+    items = [
+        {"day": it.day, "day_type": it.day_type, "norm_hours": it.norm_hours, "note": it.note}
+        for it in data.root
+    ]
+    return {"imported": cal_svc.import_year(items)}
+
+
+# ── GET /calendar/ (год целиком) ─────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def calendar_year(request):
+    _, err = _require_permission(request, CALENDAR_VIEW)
+    if err:
+        return err
+    try:
+        query = schemas.CalendarYearQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return cal_svc.list_year(query.year)
+
+
+# ── /calendar/shift-patterns/ ────────────────────────────────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_shift_patterns(request):
+    _, err = _require_permission(request, CALENDAR_VIEW)
+    if err:
+        return err
+    return [cal_svc.shift_pattern_out(p) for p in cal_svc.list_shift_patterns()]
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.ShiftPatternIn, status=201)
+def _create_shift_pattern(request, data: schemas.ShiftPatternIn):
+    _, err = _require_permission(request, CALENDAR_MANAGE)
+    if err:
+        return err
+    slots = [s.model_dump() for s in data.slots]
+    pat = cal_svc.create_shift_pattern(data.name, slots, holidays_off=data.holidays_off)
+    return cal_svc.shift_pattern_out(pat)
+
+
+def shift_patterns_collection(request):
+    if request.method == "GET":
+        return _list_shift_patterns(request)
+    if request.method == "POST":
+        return _create_shift_pattern(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /calendar/shift-patterns/{id} ────────────────────────────────────────────
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.ShiftPatternIn)
+def _update_shift_pattern(request, pattern_id: int, data: schemas.ShiftPatternIn):
+    _, err = _require_permission(request, CALENDAR_MANAGE)
+    if err:
+        return err
+    slots = [s.model_dump() for s in data.slots]
+    try:
+        pat = cal_svc.update_shift_pattern(pattern_id, data.name, slots, data.holidays_off)
+    except cal_svc.ShiftPatternNotFound:
+        return json_error("Shift pattern not found", 404)
+    return cal_svc.shift_pattern_out(pat)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_shift_pattern(request, pattern_id: int):
+    _, err = _require_permission(request, CALENDAR_MANAGE)
+    if err:
+        return err
+    try:
+        cal_svc.delete_shift_pattern(pattern_id)
+    except cal_svc.ShiftPatternNotFound:
+        return json_error("Shift pattern not found", 404)
+    return HttpResponse(status=204)
+
+
+def shift_pattern_detail(request, pattern_id: int):
+    if request.method == "PUT":
+        return _update_shift_pattern(request, pattern_id=pattern_id)
+    if request.method == "DELETE":
+        return _delete_shift_pattern(request, pattern_id=pattern_id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /calendar/{day} — национальный оверрайд (все литералы выше уже
+#    объявлены — см. urls.py — поэтому generic <str:day> их не перехватит) ──
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.CalendarDayIn)
+def _put_calendar_override(request, day: str, data: schemas.CalendarDayIn):
+    _, err = _require_permission(request, CALENDAR_MANAGE)
+    if err:
+        return err
+    d, err = _parse_day(day)
+    if err:
+        return err
+    o = cal_svc.upsert_day(d, data.day_type, data.norm_hours, data.note)
+    return cal_svc.day_override_out(o)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_calendar_override(request, day: str):
+    _, err = _require_permission(request, CALENDAR_MANAGE)
+    if err:
+        return err
+    d, err = _parse_day(day)
+    if err:
+        return err
+    cal_svc.delete_override(d)
+    return HttpResponse(status=204)
+
+
+def calendar_day_override_detail(request, day: str):
+    if request.method == "PUT":
+        return _put_calendar_override(request, day=day)
+    if request.method == "DELETE":
+        return _delete_calendar_override(request, day=day)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /employees/{id}/calendar — employee_calendar_router исходника (6) ──────
+
+@api_view(methods=("GET",), auth="jwt")
+def employee_calendar(request, employee_id: int):
+    access, err = _visible_access(request, employee_id)
+    if err:
+        return err
+    if not access.has(CALENDAR_VIEW):
+        return json_error(f"Missing permission: {CALENDAR_VIEW}", 403)
+    try:
+        query = schemas.EmployeeCalendarQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return cal_svc.employee_calendar(employee_id, query.start, query.end)
+
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.AssignTemplateIn)
+def employee_calendar_template(request, employee_id: int, data: schemas.AssignTemplateIn):
+    access, err = _visible_access(request, employee_id)
+    if err:
+        return err
+    if not access.has(CALENDAR_MANAGE):
+        return json_error(f"Missing permission: {CALENDAR_MANAGE}", 403)
+    try:
+        cal_svc.assign_template(employee_id, data.week_template_id)
+    except cal_svc.TemplateNotFound:
+        return json_error("Template not found", 404)
+    return {"employee_id": employee_id, "week_template_id": data.week_template_id}
+
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.AssignShiftIn)
+def _assign_employee_shift(request, employee_id: int, data: schemas.AssignShiftIn):
+    access, err = _visible_access(request, employee_id)
+    if err:
+        return err
+    if not access.has(CALENDAR_MANAGE):
+        return json_error(f"Missing permission: {CALENDAR_MANAGE}", 403)
+    try:
+        cal_svc.assign_shift(employee_id, data.shift_pattern_id, data.anchor_date)
+    except cal_svc.ShiftPatternNotFound:
+        return json_error("Shift pattern not found", 404)
+    return {
+        "employee_id": employee_id,
+        "shift_pattern_id": data.shift_pattern_id,
+        "anchor_date": data.anchor_date.isoformat(),
+    }
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _unassign_employee_shift(request, employee_id: int):
+    access, err = _visible_access(request, employee_id)
+    if err:
+        return err
+    if not access.has(CALENDAR_MANAGE):
+        return json_error(f"Missing permission: {CALENDAR_MANAGE}", 403)
+    cal_svc.unassign_shift(employee_id)
+    return HttpResponse(status=204)
+
+
+def employee_shift_detail(request, employee_id: int):
+    if request.method == "PUT":
+        return _assign_employee_shift(request, employee_id=employee_id)
+    if request.method == "DELETE":
+        return _unassign_employee_shift(request, employee_id=employee_id)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.EmployeeDayOverrideIn)
+def _put_employee_day_override(request, employee_id: int, day: str, data: schemas.EmployeeDayOverrideIn):
+    access, err = _visible_access(request, employee_id)
+    if err:
+        return err
+    if not access.has(CALENDAR_MANAGE):
+        return json_error(f"Missing permission: {CALENDAR_MANAGE}", 403)
+    d, err = _parse_day(day)
+    if err:
+        return err
+    o = cal_svc.set_employee_day_override(employee_id, d, data.day_type, data.norm_hours, data.note)
+    return cal_svc.day_override_out(o)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_employee_day_override(request, employee_id: int, day: str):
+    access, err = _visible_access(request, employee_id)
+    if err:
+        return err
+    if not access.has(CALENDAR_MANAGE):
+        return json_error(f"Missing permission: {CALENDAR_MANAGE}", 403)
+    d, err = _parse_day(day)
+    if err:
+        return err
+    cal_svc.delete_employee_day_override(employee_id, d)
+    return HttpResponse(status=204)
+
+
+def employee_day_override_detail(request, employee_id: int, day: str):
+    if request.method == "PUT":
+        return _put_employee_day_override(request, employee_id=employee_id, day=day)
+    if request.method == "DELETE":
+        return _delete_employee_day_override(request, employee_id=employee_id, day=day)
     return json_error("Method Not Allowed", 405)
