@@ -43,6 +43,50 @@ def test_user_briefs_issues_one_call_for_the_whole_batch():
 
 
 @pytest.mark.django_db
+def test_task_list_query_count_does_not_grow_with_the_result_set():
+    """The end-to-end proof of the batching design (added in the phase-4
+    final review).
+
+    The deleted replicas existed to make ``assignee_name`` a JOIN. Their
+    replacement is one batched interface call per request — so the query
+    count for ``GET /tasks/`` must be flat, not proportional to the number of
+    tasks. Asserted as "same cost for 15 rows as for 3" rather than a fixed
+    number, so adding a legitimate query does not fail the test spuriously
+    while a reintroduced N+1 still does.
+    """
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    from apps.tasks.models import Label, TaskAssignee
+
+    label = Label.objects.create(name="ops")
+
+    def make(count):
+        start = Task.objects.count()
+        for i in range(start, start + count):
+            task = Task.objects.create(
+                key=f"TASK-{i}", summary=f"s{i}", assignee_id=100 + i,
+                reporter_id=200 + i, supervisor_id=300 + i, department_id=i)
+            TaskAssignee.objects.create(task=task, user_id=100 + i)
+            task.labels.add(label)
+
+    hdr = auth(admin_token())
+    make(3)
+    Client().get(f"{BASE}/tasks/", **hdr)          # warm the service-gate cache
+    with CaptureQueriesContext(connection) as few:
+        Client().get(f"{BASE}/tasks/", **hdr)
+
+    make(12)
+    with CaptureQueriesContext(connection) as many:
+        assert len(Client().get(f"{BASE}/tasks/", **hdr).json()) == 15
+
+    assert len(many.captured_queries) == len(few.captured_queries), (
+        f"N+1 reintroduced: {len(few.captured_queries)} queries for 3 tasks, "
+        f"{len(many.captured_queries)} for 15"
+    )
+
+
+@pytest.mark.django_db
 def test_user_briefs_skips_the_call_entirely_when_there_are_no_ids():
     with patch("apps.tasks.services.hydration.users_interface.get_users_brief") as mock:
         assert hydration.user_briefs([None, None]) == {}

@@ -5,10 +5,11 @@ concurrent creates must never produce the same ``TASK-N``. The original did
 ``SELECT ... FOR UPDATE`` on the counter row; this does the same with
 ``select_for_update()``, and the lock is only meaningful inside a
 transaction — hence the explicit ``transaction.atomic()`` here rather than
-relying on the caller. ``get_or_create`` handles the very first call, and its
-own race (two requests both finding no row) is resolved by the unique index
-on ``name``: the loser gets ``IntegrityError``, retries once, and then takes
-the lock normally.
+relying on the caller. ``get_or_create`` handles the very first call: it
+wraps its INSERT in a savepoint, so when two requests race to create the
+counter the loser's unique-index violation is absorbed inside
+``get_or_create`` and it returns the winner's row. Both then queue on
+``select_for_update()`` and increment in turn.
 
 Note the counter row is locked, not the ``tasks`` table — so key generation
 serialises only against other key generations, not against the rest of the
@@ -19,7 +20,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from django.db import IntegrityError, transaction
+from django.db import transaction
 
 from ..models import ProductionDay, TaskSequence
 from .production_calendar import WORKING_DAY_TYPES
@@ -30,12 +31,16 @@ DEFAULT_PREFIX = "TASK"
 def next_sequence_value(prefix: str = DEFAULT_PREFIX) -> int:
     """Atomically increment and return the next counter value for ``prefix``."""
     with transaction.atomic():
-        try:
-            TaskSequence.objects.get_or_create(name=prefix,
-                                               defaults={"current_value": 0})
-        except IntegrityError:
-            # Lost the create race — the row now exists, fall through and lock it.
-            pass
+        # ``get_or_create`` already resolves the "two requests create the
+        # first row at once" race on its own: it wraps the INSERT in a
+        # savepoint and falls back to a SELECT when that INSERT hits the
+        # unique index. Catching IntegrityError out here would be worse than
+        # useless — it can never fire for that race, and for any OTHER
+        # integrity failure the enclosing transaction is already poisoned, so
+        # the next statement would raise TransactionManagementError and hide
+        # the real cause behind a confusing one.
+        TaskSequence.objects.get_or_create(name=prefix,
+                                           defaults={"current_value": 0})
         row = TaskSequence.objects.select_for_update().get(name=prefix)
         row.current_value += 1
         row.save(update_fields=["current_value", "updated_at"])

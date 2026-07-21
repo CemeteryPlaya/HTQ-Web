@@ -325,6 +325,35 @@ def test_update_writes_activity_log_entries():
 
 
 @pytest.mark.django_db
+def test_status_changes_are_absent_from_the_activity_log():
+    """INHERITED DEFECT, pinned deliberately (phase-4 final review).
+
+    ``status`` is in ``TRACKED_FIELDS``, yet a status change writes no
+    activity row: ``update_task`` pops ``status`` to run the FSM transition
+    *before* the tracked-fields loop, so the loop never sees it. The FastAPI
+    original does exactly the same (``update_data.pop("status")`` ahead of
+    its own loop), and ``activities`` is part of the task detail response —
+    so "fixing" it here would change a response the frontend renders, which
+    PLAN.md §3 forbids doing unilaterally.
+
+    Pinned rather than left implicit: this test fails the day someone
+    reorders those lines, forcing the change to be a decision instead of an
+    accident. Raise it at integration (§8) as a product question — a task
+    history that omits status transitions is arguably missing the single
+    most useful entry.
+    """
+    task = _mk_task(status=Status.TODO)
+    patch_json(Client(), f"{BASE}/tasks/{task.id}/",
+               {"status": "in_progress"}, **auth())
+    assert task.activities.count() == 0
+
+    # …while any other tracked field is logged normally.
+    patch_json(Client(), f"{BASE}/tasks/{task.id}/",
+               {"summary": "renamed"}, **auth())
+    assert list(task.activities.values_list("field_name", flat=True)) == ["summary"]
+
+
+@pytest.mark.django_db
 def test_changing_assignee_syncs_the_crew_table():
     task = _mk_task()
     TaskAssignee.objects.create(task=task, user_id=11, role=AssigneeRole.PRIMARY)
