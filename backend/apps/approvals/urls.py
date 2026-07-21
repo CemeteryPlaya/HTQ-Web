@@ -34,6 +34,12 @@ urlpatterns = [
     path("instances/<int:instance_id>/cancel/", views.cancel),
     path("instances/<int:instance_id>/recall/", views.recall),
 
+    # SSE. The frontend's EventSource hits ``stream?token=…`` with no
+    # trailing slash; the slashed alias is registered per this repo's
+    # convention (APPEND_SLASH=False never redirects on its own).
+    path("stream", views.stream),
+    path("stream/", views.stream),
+
     # Projects and membership.
     path("projects/", views.projects_collection),
     path("projects/<int:project_id>", views.project_detail),

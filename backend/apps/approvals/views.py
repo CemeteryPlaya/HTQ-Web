@@ -23,12 +23,12 @@ from __future__ import annotations
 
 from functools import wraps
 
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 
 from htqweb.http import api_view, json_error
 
 from . import schemas
-from .services import instance_service, permissions
+from .services import dispatch, instance_service, permissions, sse
 from .services import request_runtime as rr
 from .services.request_runtime import Forbidden, RuntimeConflict, RuntimeRejected
 
@@ -304,6 +304,49 @@ def project_members(request, project_id: int):
     if request.method == "POST":
         return _add_member(request, project_id=project_id)
     return _method_not_allowed(request)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# SSE — /stream  (the ASGI surface of Поток B, PLAN.md §1.4 / §6.2)
+# ─────────────────────────────────────────────────────────────────────────
+
+async def stream(request):
+    """Open a Server-Sent Events stream for the authenticated user.
+
+    Deliberately NOT decorated with ``api_view``: that decorator is sync and
+    reads credentials from the ``Authorization`` header only, while this
+    endpoint must accept ``?token=`` because ``EventSource`` cannot set
+    headers (see ``services/sse.py`` for the exposure this implies). Auth is
+    therefore done explicitly here, against the same
+    ``htqweb.authn.jwt.decode_token`` every other route uses — a separate
+    transport, not a separate trust model.
+
+    Service gating still applies: ``ServiceGateMiddleware`` matches on the
+    URL prefix before resolution, so a disabled ``approvals`` answers 503
+    here exactly as it does on every other route.
+
+    Only ``GET`` — ``EventSource`` issues nothing else.
+    """
+    if request.method != "GET":
+        return json_error("Method Not Allowed", 405)
+    try:
+        user_id = sse.authenticate(
+            query_token=request.GET.get("token"),
+            authorization=request.headers.get("Authorization"),
+        )
+    except sse.StreamAuthError as exc:
+        return json_error(str(exc), 401)
+
+    response = StreamingHttpResponse(
+        sse.event_stream(dispatch.sse_channel(user_id)),
+        content_type="text/event-stream",
+    )
+    response["Cache-Control"] = "no-cache"
+    # Tells nginx not to buffer — without it the proxy holds frames until the
+    # response ends, which for a stream is never.
+    response["X-Accel-Buffering"] = "no"
+    response["Connection"] = "keep-alive"
+    return response
 
 
 @api_view(methods=("DELETE",), status=204)
