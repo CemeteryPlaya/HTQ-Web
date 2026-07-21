@@ -21,7 +21,12 @@
 - **Фаза 3** — `media_files`: загрузка/ScopePolicy/варианты, Range/302-отдача, авторизация scope.
 - **Устранение R0–R6**: три **рефлексивных мета-теста** инвариантов (guard задач / миксин админки / свип из резолвера), единый admin-гейт `api_view(admin=True)`, аудит во всех аппках, hardening отдачи.
 
-Осталось: **5 доменов (task, requests, hr, email, messenger)** + подготовка + данные + cutover, ≈157 таблиц. Всё это разделено между двумя потоками ниже.
+Осталось: **5 доменов (task, requests, hr, email, messenger)** + подготовка + данные + cutover, **≈79 таблиц**. Всё это разделено между двумя потоками ниже.
+
+> **Поправка чисел (2026-07-21).** Изначальные счётчики таблиц в этом плане были завышены:
+> метод подсчёта (`grep __tablename__`) захватывал бинарные `.pyc` («Binary file matches»).
+> Реальные числа по `.py`: task **21**, requests **15**, hr **29**, email **7**, messenger **7**
+> (было 50/27/64/7/9). Ниже по тексту цифры и баланс приведены к факту.
 
 ---
 
@@ -32,9 +37,9 @@
 | | **Поток A** | **Поток B** |
 |---|---|---|
 | **Роль** | Домены с интеграциями и оргданными; **производитель** интерфейсов | Инфраструктура параллелизма + движковые домены; **потребитель** интерфейсов + интегратор |
-| **Домены** | `hr` (64) · `mail`/email (7) · `messenger` (9) | **prep 4.0** · `task` (50) · `approvals`/requests (27) |
-| **Таблиц** | **80** | **77** |
-| **Вес сложности** | hr 10 + mail 3 + messenger 4 = **17** | prep 2 + task 8 + requests 7 = **17** |
+| **Домены** | `hr` (29) · `mail`/email (7) · `messenger` (7) | **prep 4.0** · `task` (21) · `approvals`/requests (15) |
+| **Таблиц** | **43** | **36** |
+| **Вес сложности** | hr 8 + mail 3 + messenger 4 = **15** | prep 2 (сделан) + task 7 + requests 7 = **14** |
 | **Ветки** | `phase/6-hr`, `phase/7-mail`, `phase/8-messenger` | `prep/parallel-scaffold`, `phase/4-task`, `phase/5-approvals` |
 | **ASGI-поверхность** | Socket.IO `/ws/messenger/` (messenger) | SSE `/api/requests/v1/stream` (requests) |
 | **Производит interface** | `apps.hr.interface`, `apps.mail.interface`, `apps.messenger.interface` | `apps.tasks.interface` (по необходимости), `apps.approvals.interface` (нет) |
@@ -44,8 +49,8 @@
 
 ### 1.2. Почему нагрузка равная
 
-- **По таблицам: 80 vs 77** — почти поровну.
-- **По сложности: 17 vs 17** — ровно поровну. `hr` — самый тяжёлый домен (Mongo→JSONB, оргдерево `ltree`, 18 роутеров, 64 таблицы, вес 10); он один почти как `task`+`requests` вместе (8+7). Поэтому Поток A = hr + два лёгких интеграционных домена (mail OAuth 3, messenger Socket.IO 4), а Поток B = два движковых домена (task FSM 8, requests workflow-движок+SSE 7) **плюс подготовительная фаза** (prep 2, общий фундамент). Итог 17/17.
+- **По таблицам: 43 vs 36** — Поток A чуть тяжелее; компенсируется тем, что prep (общий фундамент) уже выполнен на ветке Потока A, а Поток B ведёт интеграцию (§8). Переспличивать домены не нужно.
+- **По сложности: ≈15 vs ≈14** — примерно поровну. `hr` — по-прежнему самый сложный домен (Mongo→JSONB, 18 роутеров, оргдерево по строковому пути), хотя и не «монстр»: 29 таблиц, вес 8. Поток A = hr 8 + mail (OAuth) 3 + messenger (Socket.IO) 4 = 15. Поток B = task (FSM/sequences) 7 + requests (workflow-движок+SSE) 7 = 14; prep (вес 2) уже сделан.
 - **Симметрия навыков**: у каждого потока по одной async/ASGI-поверхности (A — Socket.IO, B — SSE), по одному «монстру» логики (A — hr, B — task/requests), по интеграционному узлу (A — OAuth/IMAP в mail, B — движок согласований).
 - **Кросс-поток однонаправлен**: Поток A — чистый **производитель** интерфейсов (зависит только от готового `users`). Поток B — **потребитель** A. Это исключает взаимную блокировку: A может целиком уйти вперёд, B работает против заглушек A (§4.2) и подхватывает живые реализации только на интеграции.
 
@@ -207,22 +212,22 @@
 
 Каждый работает **только** в своих `apps/<домен>/**`. Источник контракта — `services/<домен>/app/api/v1/*` и `.../models/*`, `.../schemas/*`, `.../services/*`. Общий DoD домена — в §6.6.
 
-### 6.1. [Поток B] Фаза 4 — `task` (аппка `apps.tasks`, сервис `tasks`, 50 таблиц)
+### 6.1. [Поток B] Фаза 4 — `task` (аппка `apps.tasks`, сервис `tasks`, 21 таблица)
 - **Роутеры** (`services/task/app/api/v1/`): tasks, comments, attachments, activity, links, labels, calendar, sequences, notifications, projects, task_types, assignments, equipment, reports.
 - **Особое:** FSM 7 статусов (`TRANSITIONS`), матрица прав `_can_edit_task`, **атомарные sequences** (`select_for_update()`), производственный календарь РК, календарь (+ `django-recurrence` — кандидат на recurrence/exceptions), `task_types` как таблица (не enum). Вложения — через `media_files.interface.store_file(scope="task_attachment", internal_authorized=…)`.
 - **Р2:** `replica_sync` user/department **не портируем** — исполнители/супервайзеры/watchers резолвятся через `apps.users.interface`; проекты с `department_id` — через `apps.hr.interface` (**Поток A, кросс-поток → заглушка**).
 - **Produces interface:** `apps.tasks.interface` — по необходимости `get_task_brief(id)` (вероятно не нужен). **Consumes:** `apps.users.interface` (готов), `apps.hr.interface` (Поток A, stub).
 - **Периодика:** если у task-scheduler есть джобы — перенести в beat; мёртвые — `enabled=False`.
 
-### 6.2. [Поток B] Фаза 5 — `requests` (аппка `apps.approvals`, сервис `approvals`, 27 таблиц)
+### 6.2. [Поток B] Фаза 5 — `requests` (аппка `apps.approvals`, сервис `approvals`, 15 таблиц)
 - **Роутеры:** forms, instances, actions, projects, stats, stream (**SSE**), reference. (`example.py` — мусор: сверить и НЕ переносить.)
 - **Особое:** workflow-движок (`workflow_engine`/`form_schema`/`condition_eval`/`assignee_resolver`/`dispatch`/`stats_rollup`) — **самая ценная логика, переносить с юнит-тестами 1:1** (141 тест ветки — регрессионная база). **SSE `/api/requests/v1/stream`** — ASGI-узел Потока B: `async` StreamingHttpResponse, токен в query (`EventSource` не шлёт заголовки) — как в оригинале; mount в **свою SSE-секцию** `htqweb/asgi.py`. nginx-локация без буферизации — деплой-этап.
 - **Р2:** реплики user/department (`request_departments`/`user_replica`) — не портируем; обогащение оргданными через `apps.hr.interface`, диспатч уведомлений — через `apps.messenger.interface` (**обе — Поток A, кросс-поток → заглушки; best-effort деградация:** недоступность hr/messenger не роняет workflow).
 - **Produces:** — (никто не зовёт). **Consumes:** `apps.users` (готов), `apps.hr`, `apps.messenger` (Поток A, stubs).
 
-### 6.3. [Поток A] Фаза 6 — `hr` (аппка `apps.hr`, сервис `hr`, 64 таблицы — самая большая)
+### 6.3. [Поток A] Фаза 6 — `hr` (аппка `apps.hr`, сервис `hr`, 29 таблиц — самый сложный домен)
 - **Роутеры (18):** employees, departments, positions, vacancies, applications, time, documents, mongo_documents, org, pmo, audit, personnel_history, share_links, staffing, calendar, department_files, employee_card, internal.
-- **Особое:** **Mongo → PostgreSQL JSONB** (HR-документы): таблица `hr_document(id, collection, doc JSONB, …)` или помодельно (решить в детальном плане); сам ETL Mongo→JSONB — в фазе 10, здесь только модель+эндпойнты читают JSONB. Оргдерево `ltree` → `django-tree-queries` или raw SQL (решить в детальном плане). LibreTranslate-интеграция (перевод оргдерева) — за настройками, тесты без сети. Публичные share-links. Файлы отделов — через `media_files.interface`. Производственный календарь / табель.
+- **Особое:** **Mongo → PostgreSQL JSONB** (HR-документы) — в исходнике **опционально** (при пустом `mongo_uri` сервис работает SQL-only, деградационный путь есть): две коллекции (`hr_documents`, `hr_employee_groups`) → JSONB-модели; сам ETL Mongo→JSONB — в фазе 10, здесь только модели+эндпойнты. **Оргдерево — НЕ `ltree`** (уточнено 2026-07-21 разведкой): `Department.path` — обычная строка (`String(500)` с индексом), предки = её префиксы; `django-tree-queries`/raw SQL **не нужны** (комментарий «ltree» в исходнике вводит в заблуждение — расширение не подключено). LibreTranslate (перевод оргдерева) — за настройкой, тесты без сети. Публичные share-links. Файлы отделов — через `media_files.interface`. Производственный календарь / табель.
 - **Р2:** `user_identity_sync` **умирает** — сотрудники линкуются на `user_id`, данные пользователя через `apps.users.interface`.
 - **Produces interface:** `apps.hr.interface` — `get_department_brief(id)`, `get_departments_brief(ids)`, `get_employee_brief(user_id)`, `org_ancestors(department_id)` (для task и assignee_resolver requests — **обе задачи Потока B; держи сигнатуры стабильными**). **Consumes:** `apps.users.interface` (готов).
 - Кандидаты: `django-import-export`+`openpyxl` (штатка/T-2/выгрузки), `docxtpl` (генерация HR-документов — новая возможность, если в целях).
@@ -232,7 +237,7 @@
 - **Особое:** OAuth Google/Microsoft (`oauthlib`), sync (`sync/gmail.py`/`microsoft.py`/`mailcow_imap.py`) и sender-стратегии переносятся почти как есть (httpx/imap, от фреймворка не зависят). IMAP IDLE → management command (`run_imap_idle`, отдельный процесс). Вебхуки Gmail Pub/Sub + Graph — **публичная локация без rate-limit**, контрактные тесты на записанных payload; живой прогон — деплой-этап. `pg_try_advisory_lock` сохранить (raw SQL). Dramatiq-актора (`deliver_email`, sync, `final_purge_archived_mailboxes` 03:15) → Celery + beat.
 - **Р2/Р3:** каскад «user SUSPENDED → архивация ящика» — теперь `apps.mail.interface.archive_user_mailboxes(user_id)`, который зовёт `users` при деактивации (подписчик `user_events` на pub/sub умирает). **Consumes:** `apps.users.interface` (готов). **Produces:** `apps.mail.interface.archive_user_mailboxes(user_id)` — вызов в `users` добавляется на интеграции (§8).
 
-### 6.5. [Поток A] Фаза 8 — `messenger` (аппка `apps.messenger`, сервис `messenger`, 9 таблиц)
+### 6.5. [Поток A] Фаза 8 — `messenger` (аппка `apps.messenger`, сервис `messenger`, 7 таблиц)
 - **Роутеры + socket:** messages, rooms, users, read, keys, attachments, admin, internal + `socket.py`.
 - **Особое:** **Socket.IO** — `python-socketio AsyncServer(async_mode="asgi", client_manager=AsyncRedisManager)`, mount в **свою Socket.IO-секцию** `htqweb/asgi.py` (`socketio_path="ws/messenger/socket.io"`); фронтовый socket.io-client не трогаем. **Обработчик `connect` ПЕРВЫМ делом зовёт `require_service("messenger")`** и отклоняет коннект (закрывает риск Р10 — гейт middleware не покрывает WS-scope). Presence, E2EE-ключи (CRUD), недельный S3-архив (сб 04:30 GMT+5) → beat. Аттачменты — через `media_files.interface`. `bot_dispatch` → Celery. `replica_sync` user — Р2, через `apps.users.interface`.
 - **Produces interface:** `apps.messenger.interface.dispatch_notification(user_ids, payload)` / `send_system_message(...)` (зовёт `requests` — **задача Потока B; держи сигнатуры стабильными**). **Consumes:** `apps.users.interface` (готов).
