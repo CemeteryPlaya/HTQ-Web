@@ -2,38 +2,40 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Dual Django migration — streams MERGED (finishing up on this branch)
+## Migration history (done)
 
-The FastAPI→Django reverse migration was done by **two parallel executors** (Поток A = `hr`/`mail`/`messenger`; Поток B = `tasks`/`approvals`) — see **[PLAN.md](PLAN.md)** for the original split. **As of the `ruslan` merge (commit `50fb2a7`), both streams are UNIFIED on this branch** (`sanzhar`). The per-stream zone restriction is **LIFTED** — you may work across **any** `backend/apps/**` (hr, mail, messenger, tasks, approvals, users, cms, media_files, core) as directed. Remaining work is finishing Поток B (approvals `forms`/`reference`/`stats`), extending `apps.users.interface`, then ETL + cutover.
+The FastAPI→Django reverse migration — built by **two parallel executors** (Поток A = `hr`/`mail`/`messenger`, Поток B = `tasks`/`approvals`; see **[PLAN.md](PLAN.md)** for the full phase-by-phase journal) — is **complete and cut over**: all 9 FastAPI microservices and `libs/` (`htqweb_auth`, `htqweb_metrics`) were deleted from the repo, and the platform now runs as **one Django backend** (`backend/`). If you see "Поток A"/"Поток B" or "PLAN.md §..." in code comments, that's just where a piece of code came from — the zone split no longer restricts anything; work across any `backend/apps/**` as directed.
 
-- **Cross-app access is still ONLY via `apps.<x>.interface`** (enforced by `apps/core/tests/test_app_isolation.py`) — no direct imports of another app's models/services, no cross-domain FK. That invariant survives the merge.
+- **Cross-app access is still ONLY via `apps.<x>.interface`** (enforced by `apps/core/tests/test_app_isolation.py`) — no direct imports of another app's models/services, no cross-domain FK. That invariant survived the migration unchanged.
 - **NEVER create git branches yourself.** The user creates and hands off every branch. Do not run `git branch`, `git checkout -b`, `git switch -c`, or `git worktree add`, and do **not** "branch first" before committing — even on the default branch. This overrides the default Claude Code behavior. Work only on the branch you are given; if the expected branch seems missing or wrong, stop and ask.
 
 ## What this is
 
-HTQWeb — Hi-Tech Group's internal enterprise platform. A React + Vite SPA in front of ~9 FastAPI microservices behind an nginx API gateway, migrated (Strangler Fig) out of a now-removed Django monolith. Postgres (via PgBouncer), MongoDB (HR docs + admin panel), Redis (cache + Dramatiq broker + pub/sub), Mediasoup SFU for video.
+HTQWeb — Hi-Tech Group's internal enterprise platform. A React + Vite SPA in front of **one Django backend** (Python 3.14, Django 5.2.7). Postgres (direct connection, app-level pooling), Redis (cache + Celery broker), MinIO/S3 object storage, Mediasoup SFU for video.
+
+For context, the platform's history is a full circle: it started as a Django monolith, was migrated (Strangler Fig) out to ~9 FastAPI microservices behind an nginx gateway, and has now been merged back into a single Django backend (the reverse migration above). MongoDB (previously HR docs + the old admin panel) is gone along with the FastAPI generation.
 
 ## Read these first (don't re-derive the layout)
 
 These are authoritative and maintained — prefer them over scanning the tree:
-- **[STRUCTURE.md](STRUCTURE.md)** — the navigation map: every directory, the per-service anatomy, where each concern lives. Trustworthy (corrected 2026-05-29). Russian.
-- **[API.md](API.md)** — the full nginx routing table (`/api/<service>/v1/*`), auth/JWT contract, per-service endpoints.
-- **[services/README.md](services/README.md)** — microservice anatomy and the shared-code rules.
-- **[docs/architecture.md](docs/architecture.md)** — architectural decisions.
+- **[STRUCTURE.md](STRUCTURE.md)** — the navigation map: every directory, the Django-app anatomy, where each concern lives. Russian.
+- **[API.md](API.md)** — the full nginx routing table (`/api/<domain>/v1/*`), auth/JWT contract, per-domain endpoints.
+- **[backend/README.md](backend/README.md)** — Django app anatomy, `interface`/`api_view` rules, how to add a domain. Replaces the deleted `services/README.md`.
+- **[docs/architecture.md](docs/architecture.md)** — architectural decisions (predates the cutover in places — e.g. it still talks about DRF ViewSets and a `backend/tasks/` layout that doesn't exist; treat it as background, not a source of truth for current layout).
 
-Ignore at the repo root: `backend/` (dead Django remnant, untracked), empty `nginx/`, root `node_modules/`+`package.json` (tooling only). The only authoritative gateway config is `infra/nginx/default.conf`.
+Ignore/discount at the repo root: empty `nginx/`, root `node_modules/`+`package.json` (tooling only). **`docker-compose.django.yml` and `RUN-DJANGO-CHECK.md` describe an earlier, now-superseded proof-of-concept stack** (a parallel `htqweb-django` project from when only `users`/`cms`/`media`/`hr` were ported and everything else was an empty app) — superseded by `docker-compose.yml` + `docker-compose.dev.yml`, which reflect the completed cutover. The only authoritative gateway config is `infra/nginx/default.conf`.
 
 ## Commands
 
-Containers are named `htqweb1-<service>-1` (e.g. `htqweb1-user-service-1`, `htqweb1-db-1`, `htqweb1-pgbouncer-1`).
+Containers are named `htqweb1-<service>-1` (e.g. `htqweb1-backend-web-1`, `htqweb1-db-1`, `htqweb1-pgbouncer-1`).
 
-**Run the stack (dev — Vite HMR on :3000, MinIO, `/docs` enabled):**
+**Run the stack (dev — Vite HMR on :3000, MinIO, DEBUG settings):**
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
-# rebuild + recreate one service after code changes:
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --no-deps <name>-service
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# rebuild + recreate one process after code changes:
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --no-deps backend-web
 ```
-Prod stack is plain `docker compose up -d` (adds nginx/sfu/certbot under the `production` profile).
+Prod stack is plain `docker compose up -d` (adds nginx/sfu/certbot/webtransport under the `production` profile).
 
 **Frontend** (`cd frontend`):
 ```bash
@@ -47,43 +49,46 @@ npm run test:e2e       # playwright
 ```
 Playwright: the chromium binary isn't installed; launch with `{ channel: 'msedge' }` (Edge ships on the Windows host).
 
-**Backend tests** (per service, `cd services/<name>`): pytest with `asyncio_mode = "auto"`; tests use in-memory SQLite (no Postgres needed). `JWT_SECRET` must be in the env *before* app import — conftest sets it.
+**Backend tests** (`cd backend`): pytest-django against **real Postgres** (no SQLite), on a dedicated host port because neither existing route works (`:5432` is a native Windows Postgres install, `:6432`/PgBouncer is transaction-pooled and can't `CREATE DATABASE`). Bring the port up once, then run the suite:
 ```bash
-pytest                                          # whole service
-pytest tests/integration/test_x.py::test_name   # single test
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db   # publishes db on :55432
+cd backend
+.venv/Scripts/python.exe -m pytest -q                                   # whole suite
+.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
+```
+`DJANGO_SETTINGS_MODULE=htqweb.settings.test` and `JWT_SECRET` are both fixed by `pytest.ini`/`settings/test.py` — nothing to export by hand. Full detail (including the `max_connections=300` bump): [backend/README-tests.md](backend/README-tests.md).
+
+**Django management** (`cd backend`, same venv):
+```bash
+.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
+.venv/Scripts/python.exe manage.py migrate
+.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
+.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
 ```
 
 ## Architecture invariants (the load-bearing ones)
 
-- **One service = one isolated FastAPI app** cloned from `services/_template/` (`python services/scaffold.py <name> "<desc>"`). Web and its Dramatiq worker are the **same Docker image**, different `command` in compose (`uvicorn` vs `dramatiq`).
-- **Business logic lives in `app/services/<domain>_service.py`.** Routers in `app/api/v1/` are thin (parse → call service). Look there, not in routers.
-- **Only auth is shared** — `libs/htqweb_auth` (JWT/RBAC/levels), on `PYTHONPATH=/app:/app/libs`, re-exported through each service's `app/auth/dependencies.py`. Everything else is **deliberately duplicated** per service, including `s3_storage.py` (change the media copy → propagate to messenger/cms) and `libs/htqweb_metrics` (media keeps its own copy at `app/core/metrics.py`).
-- **JWT issuer is `htqweb-auth`** (not `user-service`). user-service signs; every service validates locally with the shared `JWT_SECRET` (HS256) — no introspection call. Tokens carry `sub`, `user_id`, `username`, `email`, `is_staff`, `is_superuser`, `is_admin`.
-- **nginx (`infra/nginx/default.conf`) is the gateway**: routes `/api/<service>/v1/*` to each service. In dev, Vite's proxy (`frontend/vite.config.ts`) mirrors that routing instead of nginx.
+- **One Django backend, domains are apps.** `backend/apps/{users,cms,media_files,hr,mail,messenger,tasks,approvals,core}`. `apps.core` is the only shared foundation (JWT/service-registry primitives live in `htqweb/`, not in an app); every other app talks to a neighbour ONLY through that neighbour's `apps.<x>.interface` module — never its `models`/`services` directly (enforced by the isolation test above).
+- **API layer is hand-rolled Django, not DRF.** `htqweb.http.api_view` (`methods=`, `auth="jwt"|"admin_session"|None`, optional Pydantic `body=`, `admin=True` gate) decorates views; the error envelope is always `{"detail": ...}` (401/403/404/422/500/503), matching the old FastAPI contract. Pydantic schemas (`apps/<domain>/schemas.py`) carried over from the FastAPI services essentially as-is and still do request/response validation.
+- **URLs auto-mount by convention.** An app declares `API_PREFIX = "api/<domain>/v1/"` on its `AppConfig` (`apps/<domain>/apps.py`) and defines `apps/<domain>/urls.py`; `htqweb/urls.py` discovers every installed app with that attribute and mounts it — adding a domain never touches `htqweb/urls.py`. `APPEND_SLASH = False`, so `urls.py` registers both the slashed and bare spelling of a path wherever the frontend might send either.
+- **Business logic lives in `apps/<domain>/services/<file>.py`.** `views.py` are thin dispatchers (parse → call service → shape response). Look in `services/`, not in views, for behavior.
+- **JWT issuer is still `htqweb-auth`.** There's no separate user-service anymore — `apps.users` both issues (`htqweb/authn/jwt.py`, called from `apps.users.views`) and every app validates tokens locally via the same shared `JWT_SECRET`/HS256, in-process, no network call. Claims are unchanged: `sub, user_id, username, email, is_staff, is_superuser, is_admin, token_type, iat, exp, iss`.
+- **Apps are disableable at runtime**, same mechanism as before the merge, just in-process now: `apps.core.models.ServiceStatus` (one DB row per domain, 5s-cached) + `htqweb.middleware.service_gate.ServiceGateMiddleware` (gates `/api/<prefix>/` and `/ws/.../` by URL prefix) + `apps.core.services.require_service("<name>")` (the in-process gate — first line of every `interface.py` function and every Celery task) + `htqweb.admin_gate.ServiceGatedAdminMixin` (gates that app's models in `/django-admin/`). Flip one with `manage.py service <name> --on/--off`. A disabled dependency surfaces as 503 `{"detail", "code": "service_disabled", "service"}` everywhere — HTTP edge, an in-process `interface` call turned into `ServiceDisabled`, or `django-admin` (which fails the Django-native way: `PermissionDenied`, not a JSON body).
+- **Processes** (`docker-compose.yml`, all built from the same `backend/Dockerfile` image, differing only in `command`): `backend-web` (gunicorn/WSGI — all of `/api/*`, `/django-admin/`, static; the **only** process that runs `migrate` + seeds the `admin`/`admin12345` account, gated by `RUN_MIGRATIONS=1`), `backend-asgi` (uvicorn/ASGI — SSE `/api/requests/v1/stream` + WebSocket `/ws/`; messenger's Socket.IO mounts at `ws/messenger/socket.io`), `backend-worker` (Celery), `backend-beat` (Celery beat, `django-celery-beat` DB-backed scheduler), `flower` (Celery monitoring UI). Broker/result backend is Redis. Every Celery task's first line is `require_service("<app>")`.
+- **nginx (`infra/nginx/default.conf`) is the gateway**: two upstreams, `backend` (WSGI, everything else) and `backend_asgi` (the SSE route + `/ws/`). In dev, Vite's proxy (`frontend/vite.config.ts`) mirrors that split — every `*ServiceTarget` variable it defines now resolves to the same `VITE_BACKEND_TARGET` (the per-service names only survive because the proxy rule table still keys off them).
 
-## Postgres / PgBouncer gotchas (cost real debugging time — internalize these)
+## Postgres — direct connection now; PgBouncer is legacy-shaped history
 
-- **PgBouncer (transaction mode) silently drops `search_path`.** So a dedicated per-service schema is NOT reachable at runtime. Reality: **all Python services use schema `public` with a table-name prefix** (`hr_*`, `task_*`, `request_*`, `cms_*`, `email_*`); the **only** exception is `user` → schema `auth`. (services/README.md's "one schema per service via search_path" line is the misleading one; STRUCTURE.md §7 is correct.)
-- **Migrations run inside the container against Postgres directly** (`DB_HOST=db DB_PORT=5432`, bypassing PgBouncer) — asyncpg's prepared-statement protocol dies on PgBouncer's transaction pool. The entrypoints already do this.
-- **One-off scripts** (e.g. `create_admin`) need the direct-DB + real-schema env:
-  ```bash
-  docker exec -e DB_HOST=db -e DB_PORT=5432 -e DB_SCHEMA=public htqweb1-user-service-1 \
-    python -m app.scripts.create_admin --username X --email Y --password Z
-  ```
-- **Alembic async data-migrations** must: run the coroutine on a fresh-loop thread (`ThreadPoolExecutor(1).submit(asyncio.run, _run()).result()`), `await engine.dispose()` at the end, set `transaction_per_migration=True` in `env.py`, and keep revision ids ≤32 chars (the version column is `VARCHAR(32)`). Reference: `services/hr/alembic/versions/014_backfill_position_perms.py`. Verify a chain single-pass on a scratch DB: `CREATE DATABASE htqweb_migtest` → `docker exec -e DB_HOST=db -e DB_NAME=htqweb_migtest <svc> alembic upgrade head`.
-- **"Whole app frozen / login hangs ~120s" = PgBouncer pool exhaustion**, not a frontend bug. Check first:
-  ```bash
-  docker exec htqweb1-db-1 psql -U htqweb -d htqweb -c \
-    "SELECT state,count(*) FROM pg_stat_activity WHERE usename='htqweb' GROUP BY 1;"
-  ```
-  ~20 `idle in transaction` (= `DEFAULT_POOL_SIZE`, shared by all services) means orphaned transactions jammed the pool. PgBouncer now reaps them (`IDLE_TRANSACTION_TIMEOUT`/`SERVER_IDLE_TIMEOUT` in compose); recover manually with `pg_terminate_backend` on old idle-in-transaction pids. After recreating PgBouncer, each service's first request 500s once (stale SQLAlchemy pool, no `pool_pre_ping`) then self-heals.
+- **Django talks straight to Postgres**: `DB_HOST=db`, `DB_PORT=5432` (psycopg, sync), `CONN_MAX_AGE=0` — pooling is app-level, not a shared external pooler. PgBouncer (`:6432`) is still in the compose file for host-side tooling/manual `psql`, but it is **not** in the live request path anymore.
+- **History (no longer applies — here so old scars make sense if you trip over them):** the FastAPI generation put every service behind PgBouncer in transaction-pooling mode, which silently drops `search_path`, so all 8 Python services (except `user`→schema `auth`) actually lived in schema `public` with a table-name-prefix convention (`hr_*`, `task_*`, `request_*`, `cms_*`, `email_*`), and Alembic needed a fresh-thread-per-migration dance to survive the pooler. None of that applies to Django: one schema (`public`), natural table names (`<app>_<model>`), `managed=True`, plain `makemigrations`/`migrate`.
+- **Tests need a real, unpooled Postgres** — `CREATE DATABASE`/`DROP DATABASE test_htqweb` cannot pass through PgBouncer's transaction pool. That's what host port `:55432` (`docker-compose.test.yml`) is for; see [backend/README-tests.md](backend/README-tests.md).
 
 ## Host / Windows environment notes
 
 - Shell is PowerShell 5.1; a Bash tool (Git Bash) is also available. **PowerShell mangles `$`, inner quotes, and JSON** in `docker exec`/`psql` args — route anything with `$`, quotes, or JSON bodies through the Bash tool.
-- From the Windows host, reach the project DB via **`localhost:6432`** (PgBouncer). Host `:5432` is a native Windows PostgreSQL install, not the container.
+- From the Windows host: **`:6432`** reaches the project DB through PgBouncer (host tooling/manual queries only); **`:55432`** is the direct, unpooled Postgres the test suite uses; host **`:5432`** is a native Windows PostgreSQL install, not the container.
 - `DB_NAME=htqweb`, `DB_USER=htqweb`, dev password `change-me` (root `.env`).
 
 ## Observability
 
-Prometheus (`:9090/prometheus`) scrapes all services' `/metrics` (added via `htqweb_metrics`), the DB/redis/mongo exporters, MinIO, Loki, and Grafana — 16 targets. Grafana (`:3001`, or `/grafana/` via the edge) has SSO: platform accounts sign in with their JWT (superuser→Admin, staff→Editor); dashboards live in the **HTQWeb** folder. Config in `infra/logging/`. Seed test traffic with `scripts/generate-monitoring-traffic.sh`.
+Prometheus (`:9090/prometheus`) currently scrapes itself + `postgres-exporter`, `redis-exporter`, MinIO, and Loki/Grafana (6 targets total, `infra/logging/prometheus/prometheus.yml`) — **the Django backend does not expose `/metrics` yet**: the old `htqweb_metrics` lib was deleted with the FastAPI services, and a `django-backend` scrape job is pre-written in that file but left commented out pending a `django-prometheus` install. Grafana (`:3001`, or `/grafana/` via the edge) keeps its JWT SSO: platform accounts sign in with their access token (superuser→Admin, staff→Editor); dashboards live in the **HTQWeb** folder. Config in `infra/logging/`. `scripts/generate-monitoring-traffic.sh` predates the cutover and still hardcodes the old per-service ports (`:8005`-`:8012`) — it needs a rewrite before it'll generate any real traffic against this backend.
