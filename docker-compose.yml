@@ -16,6 +16,29 @@
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
+x-django-env: &django-env
+  DJANGO_SETTINGS_MODULE: htqweb.settings.base
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
+  JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
+  # Django (psycopg, sync) идёт НАПРЯМУЮ в Postgres: CONN_MAX_AGE пулит на уровне
+  # приложения, а PgBouncer transaction-mode рвал бы DDL/prepared-statements.
+  # Контейнер pgbouncer (:6432) остаётся для хостовых утилит/совместимости.
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_NAME: ${DB_NAME:-htqweb}
+  DB_USER: ${DB_USER:-htqweb}
+  DB_PASSWORD: ${DB_PASSWORD:-change-me}
+  REDIS_URL: redis://redis:6379/1
+  CELERY_BROKER_URL: redis://redis:6379/2
+  STORAGE_BACKEND: s3
+  S3_ENDPOINT: http://minio:9000
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+  S3_ACCESS_KEY: ${MINIO_ROOT_USER:-qa_superadmin@htq.test}
+  S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-SuperAdmin!2026}
+  S3_BUCKET: htqweb-cms
+  MEDIA_S3_BUCKET: htqweb-media
+  S3_USE_PATH_STYLE: "true"
+
 services:
   # ─── PostgreSQL ───────────────────────────────────
   db:
@@ -98,28 +121,6 @@ services:
         max-size: "5m"
         max-file: "3"
 
-  # ─── MongoDB (HR documents, NoSQL storage) ────
-  mongo:
-    image: mongo:7-jammy
-    restart: unless-stopped
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-htqweb}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-change-me-mongo}
-      MONGO_INITDB_DATABASE: htqweb_docs
-    # Port intentionally NOT exposed to host — access only via Docker network
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      retries: 5
-      start_period: 10s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   # ─── MinIO (S3-compatible object storage) ────
   minio:
     image: minio/minio:latest
@@ -179,22 +180,6 @@ services:
         max-size: "5m"
         max-file: "3"
 
-  mongodb-exporter:
-    image: percona/mongodb_exporter:0.40.0
-    restart: unless-stopped
-    command:
-      - "--mongodb.uri=mongodb://${MONGO_USER:-htqweb}:${MONGO_PASSWORD:-change-me-mongo}@mongo:27017/admin?authSource=admin"
-    ports:
-      - "9216:9216"
-    depends_on:
-      mongo:
-        condition: service_healthy
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "3"
-
   # Optional free translation backend. Start with:
   #   docker compose --profile translation up -d libretranslate
   # and set LIBRE_TRANSLATE_API_URL=http://libretranslate:5000 in services/hr/.env.
@@ -220,830 +205,119 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ─── User/Identity Service (JWT authority) ──────
-  user-service:
+  # ─── Django backend — WSGI (весь /api/*, django-admin, static) ──────────
+  # Единый Django заменил девять FastAPI-микросервисов. migrate + идемпотентный
+  # сид админа (admin/admin12345) — ТОЛЬКО backend-web (RUN_MIGRATIONS=1);
+  # entrypoint ждёт БД и мигрирует напрямую (DB_HOST=db).
+  backend-web:
     build:
-      context: .
-      dockerfile: services/user/Dockerfile
-    env_file: ./services/user/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      DB_SCHEMA: auth
-      REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      JWT_ALGORITHM: HS256
-      JWT_ISSUER: htqweb-auth
-      SERVICE_NAME: user-identity
-      SERVICE_PORT: 8005
-      SERVICE_ENV: ${SERVICE_ENV:-production}
-      # S2S — for avatar upload (user-service → media-service).
-      # MUST match media-service.SERVICE_JWT_SECRET below.
-      SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET:-change-me-service-secret}
-      SERVICE_JWT_ALGORITHM: HS256
-      MEDIA_SERVICE_URL: http://media-service:8009
-    ports:
-      - "8005:8005"
-    depends_on:
-      pgbouncer:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    # Run migrations DIRECTLY against postgres (DB_HOST=db, port 5432) so
-    # asyncpg's prepared-statement protocol survives — pgbouncer in
-    # transaction-pool mode kills the very first BEGIN. After migrations the
-    # actual uvicorn process inherits the env-level DB_HOST=pgbouncer and
-    # uses the connection pool normally.
-    command: >
-      sh -c "
-        DB_HOST=db DB_PORT=5432 PYTHONPATH=/app:/app/libs alembic upgrade head &&
-        uvicorn app.main:app --host 0.0.0.0 --port 8005
-      "
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8005/health/"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 15s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  user-worker:
-    build:
-      context: .
-      dockerfile: services/user/Dockerfile
-    env_file: ./services/user/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_SCHEMA: auth
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["dramatiq", "app.workers.actors", "--processes", "1", "--threads", "2"]
-    healthcheck:
-      disable: true
-
-  user-scheduler:
-    build:
-      context: .
-      dockerfile: services/user/Dockerfile
-    env_file: ./services/user/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_SCHEMA: auth
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["python", "-m", "app.workers.scheduler"]
-    healthcheck:
-      disable: true
-
-  # ─── HR Service ─────────────────────────────────
-  hr-service:
-    build:
-      context: .
-      dockerfile: services/hr/Dockerfile
-    env_file: ./services/hr/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      DB_SCHEMA: public
-      REDIS_URL: redis://redis:6379/1
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      JWT_ALGORITHM: HS256
-      JWT_ISSUER: htqweb-auth
-      SERVICE_NAME: hr-service
-      SERVICE_PORT: 8006
-      SERVICE_ENV: ${SERVICE_ENV:-production}
-      API_PREFIX: /api/hr/v1
-      MONGO_URI: mongodb://${MONGO_USER:-htqweb}:${MONGO_PASSWORD:-change-me-mongo}@mongo:27017/htqweb_docs?authSource=admin
-      MEDIA_SERVICE_URL: http://media-service:8009
-      INTERNAL_S2S_TOKEN: ${INTERNAL_S2S_TOKEN:-internal-dev-secret}
-    ports:
-      - "8006:8006"
-    depends_on:
-      pgbouncer:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      mongo:
-        condition: service_healthy
-    command: ["/app/entrypoint.sh"]
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8006/health/"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 20s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  hr-worker:
-    build:
-      context: .
-      dockerfile: services/hr/Dockerfile
-    env_file: ./services/hr/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_SCHEMA: public
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/1
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["dramatiq", "app.workers.actors", "--processes", "1", "--threads", "2"]
-    healthcheck:
-      disable: true
-
-  hr-scheduler:
-    build:
-      context: .
-      dockerfile: services/hr/Dockerfile
-    env_file: ./services/hr/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_SCHEMA: public
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/1
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["python", "-m", "app.workers.scheduler"]
-    healthcheck:
-      disable: true
-
-  # ─── Task Service ───────────────────────────────
-  task-service:
-    build:
-      context: .
-      dockerfile: services/task/Dockerfile
-    env_file: ./services/task/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      DB_SCHEMA: public
-      REDIS_URL: redis://redis:6379/2
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      JWT_ALGORITHM: HS256
-      JWT_ISSUER: htqweb-auth
-      SERVICE_NAME: task-service
-      SERVICE_PORT: 8007
-      SERVICE_ENV: ${SERVICE_ENV:-production}
-      API_PREFIX: /api/tasks/v1
-    ports:
-      - "8007:8007"
-    depends_on:
-      pgbouncer:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: ["/app/entrypoint.sh"]
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8007/health/"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 20s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  task-worker:
-    build:
-      context: .
-      dockerfile: services/task/Dockerfile
-    env_file: ./services/task/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_SCHEMA: public
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/2
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["dramatiq", "app.workers.actors", "--processes", "1", "--threads", "2"]
-    healthcheck:
-      disable: true
-
-  task-scheduler:
-    build:
-      context: .
-      dockerfile: services/task/Dockerfile
-    env_file: ./services/task/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_SCHEMA: public
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/2
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["python", "-m", "app.workers.scheduler"]
-    healthcheck:
-      disable: true
-
-  # ─── Requests Service ─────────────────────────
-  requests-service:
-    build:
-      context: .
-      dockerfile: services/requests/Dockerfile
-    env_file: ./services/requests/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      DB_SCHEMA: public
-      REDIS_URL: redis://redis:6379/7
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      JWT_ALGORITHM: HS256
-      JWT_ISSUER: htqweb-auth
-      SERVICE_NAME: requests-service
-      SERVICE_PORT: 8013
-      SERVICE_ENV: ${SERVICE_ENV:-production}
-      MESSENGER_INTERNAL_URL: http://messenger-service:8008
-      MESSENGER_INTERNAL_TOKEN: ${MESSENGER_INTERNAL_TOKEN:-internal-dev-secret}
-      HR_INTERNAL_URL: http://hr-service:8006
-      INTERNAL_S2S_TOKEN: ${INTERNAL_S2S_TOKEN:-internal-dev-secret}
-    ports:
-      - "8013:8013"
-    depends_on:
-      pgbouncer:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: ["/app/entrypoint.sh"]
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8013/health/"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 20s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  requests-worker:
-    build:
-      context: .
-      dockerfile: services/requests/Dockerfile
-    env_file: ./services/requests/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_SCHEMA: public
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/7
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      MESSENGER_INTERNAL_URL: http://messenger-service:8008
-      MESSENGER_INTERNAL_TOKEN: ${MESSENGER_INTERNAL_TOKEN:-internal-dev-secret}
-      HR_INTERNAL_URL: http://hr-service:8006
-      INTERNAL_S2S_TOKEN: ${INTERNAL_S2S_TOKEN:-internal-dev-secret}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["dramatiq", "app.workers.actors", "--processes", "1", "--threads", "2"]
-    healthcheck:
-      disable: true
-
-  # ─── Messenger Service ─────────────────────────
-  messenger-service:
-    build:
-      context: .
-      dockerfile: services/messenger/Dockerfile
-    env_file: ./services/messenger/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/3
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      JWT_ALGORITHM: HS256
-      JWT_ISSUER: htqweb-auth
-      SERVICE_NAME: messenger-service
-      SERVICE_PORT: 8008
-      ATTACHMENT_DIR: /app/data/attachments
-      MESSENGER_INTERNAL_TOKEN: ${MESSENGER_INTERNAL_TOKEN:-internal-dev-secret}
-      # ─── S3 storage ──────────────────────────────────────────────────────
-      # Per the "1 service = 1 bucket" rule (services/README.md). MinIO in dev
-      # via docker-compose.dev.yml; in prod swap S3_ENDPOINT for AWS/Yandex.
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
-      S3_BUCKET: ${MESSENGER_S3_BUCKET:-htqweb-messenger}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
-      # HMAC secret for the per-attachment signed redirect URL (browser uses
-      # the URL inside <img src> / <a href> without an Authorization header).
-      ATTACHMENT_SIGNED_URL_SECRET: ${ATTACHMENT_SIGNED_URL_SECRET:-change-me-attachment-signed-secret}
-      ATTACHMENT_SIGNED_URL_TTL: "3600"
-      # Public-facing prefix the signed redirect endpoint uses when issuing
-      # presigned S3 URLs to the browser. In prod set to your S3 / CDN host.
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
-    ports:
-      - "8008:8008"
-    volumes:
-      - messenger_attachments:/app/data/attachments
-    depends_on:
-      pgbouncer:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: ["/app/entrypoint.sh"]
-
-  messenger-worker:
-    build:
-      context: .
-      dockerfile: services/messenger/Dockerfile
-    env_file: ./services/messenger/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/3
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
-      S3_BUCKET: ${MESSENGER_S3_BUCKET:-htqweb-messenger}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
-    volumes:
-      - messenger_attachments:/app/data/attachments
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["dramatiq", "app.workers.actors", "--processes", "2", "--threads", "4"]
-    healthcheck:
-      disable: true
-
-  messenger-scheduler:
-    build:
-      context: .
-      dockerfile: services/messenger/Dockerfile
-    env_file: ./services/messenger/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/3
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
-      S3_BUCKET: ${MESSENGER_S3_BUCKET:-htqweb-messenger}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["python", "-m", "app.workers.scheduler"]
-    healthcheck:
-      disable: true
-
-  # ─── Media Service ────────────────────────────
-  media-service:
-    build:
-      context: ./services/media
-      dockerfile: Dockerfile
-    env_file: ./services/media/.env
-    restart: unless-stopped
-    environment:
-      DB_HOST: pgbouncer
-      DB_PORT: 5432
-      REDIS_URL: redis://redis:6379/4
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      # S2S — MUST match user-service.SERVICE_JWT_SECRET above. When a JWT has
-      # claim `service=True`, media-service accepts the call as internal and
-      # reads X-User-Id header for ownership.
-      SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET:-change-me-service-secret}
-      SERVICE_JWT_ALGORITHM: HS256
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
-      MEDIA_ROOT: /app/media
-      SERVICE_NAME: media-service
-      SERVICE_PORT: 8009
-      # Per the "1 service = 1 bucket" rule (services/README.md).
-      S3_BUCKET: ${MEDIA_S3_BUCKET:-htqweb-media}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
-    ports:
-      - "8009:8009"
-    volumes:
-      - media_files:/app/media
-    depends_on:
-      pgbouncer:
-        condition: service_healthy
-    command: ["/app/entrypoint.sh"]
-
-  media-worker:
-    build: ./services/media
-    env_file: ./services/media/.env
-    restart: unless-stopped
-    environment:
-      DB_HOST: pgbouncer
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/4
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
-      MEDIA_ROOT: /app/media
-      S3_BUCKET: ${MEDIA_S3_BUCKET:-htqweb-media}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
-    volumes:
-      - media_files:/app/media
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["dramatiq", "app.workers.actors", "--processes", "1", "--threads", "2"]
-    healthcheck:
-      disable: true
-
-  media-scheduler:
-    build: ./services/media
-    env_file: ./services/media/.env
-    restart: unless-stopped
-    environment:
-      DB_HOST: pgbouncer
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/4
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
-      MEDIA_ROOT: /app/media
-      S3_BUCKET: ${MEDIA_S3_BUCKET:-htqweb-media}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
-    volumes:
-      - media_files:/app/media
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["python", "-m", "app.workers.scheduler"]
-    healthcheck:
-      disable: true
-
-  # ─── CMS Service ──────────────────────────────
-  cms-service:
-    build:
-      context: .
-      dockerfile: services/cms/Dockerfile
-    env_file: ./services/cms/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      REDIS_URL: redis://redis:6379/5
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      JWT_ALGORITHM: HS256
-      JWT_ISSUER: htqweb-auth
-      SERVICE_NAME: cms-service
-      SERVICE_PORT: 8011
-      # ─── S3 storage (per "1 service = 1 bucket" rule) ────────────────────
-      # Stores news content snapshots (content.md), per-post metadata.json,
-      # cover images and post attachments. See services/cms/app/services/.
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
-      S3_BUCKET: ${CMS_S3_BUCKET:-htqweb-cms}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
-      NEWS_SIGNED_URL_SECRET: ${NEWS_SIGNED_URL_SECRET:-change-me-news-signed-secret}
-      NEWS_SIGNED_URL_TTL: "3600"
-    ports:
-      - "8011:8011"
-    depends_on:
-      pgbouncer:
-        condition: service_healthy
-    command: ["/app/entrypoint.sh"]
-
-  cms-worker:
-    build:
-      context: .
-      dockerfile: services/cms/Dockerfile
-    env_file: ./services/cms/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/5
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
-      S3_BUCKET: ${CMS_S3_BUCKET:-htqweb-cms}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["dramatiq", "app.workers.actors", "--processes", "1", "--threads", "2"]
-    healthcheck:
-      disable: true
-
-  cms-scheduler:
-    build:
-      context: .
-      dockerfile: services/cms/Dockerfile
-    env_file: ./services/cms/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/5
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
-      S3_BUCKET: ${CMS_S3_BUCKET:-htqweb-cms}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["python", "-m", "app.workers.scheduler"]
-    healthcheck:
-      disable: true
-
-  # ─── Email Service ────────────────────────────
-  email-service:
-    build:
-      context: .
-      dockerfile: services/email/Dockerfile
-    env_file: ./services/email/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/6
-      SERVICE_NAME: email-service
-      SERVICE_PORT: 8010
-      # JWT shared with user-service so /api/email/v1/* validates the same
-      # admin_session bearer the rest of the platform issues. Without this
-      # the service falls back to settings default ("change-me") and 401s.
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      JWT_ALGORITHM: HS256
-      JWT_ISSUER: htqweb-auth
-      MICROSOFT_OAUTH_REDIRECT_URI: http://localhost:3000/email/oauth/callback/
-    ports:
-      - "8010:8010"
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: ["/app/entrypoint.sh"]
-
-  email-worker:
-    build:
-      context: .
-      dockerfile: services/email/Dockerfile
-    env_file: ./services/email/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/6
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      MICROSOFT_OAUTH_REDIRECT_URI: http://localhost:3000/email/oauth/callback/
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["dramatiq", "app.workers.actors"]
-    healthcheck:
-      disable: true
-
-  email-scheduler:
-    build:
-      context: .
-      dockerfile: services/email/Dockerfile
-    env_file: ./services/email/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/6
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      MICROSOFT_OAUTH_REDIRECT_URI: http://localhost:3000/email/oauth/callback/
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["python", "-m", "app.workers.scheduler"]
-    healthcheck:
-      disable: true
-
-  # ─── IMAP IDLE supervisor (corporate Mailcow push) ────────────
-  # One process per service replica. Holds an IMAP IDLE session per active
-  # corporate account so new mail lands in the local DB within ~10s without
-  # polling. No-op if MAILCOW_API_URL is empty.
-  email-imap-idle:
-    build:
-      context: .
-      dockerfile: services/email/Dockerfile
-    env_file: ./services/email/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/app/libs
-      DB_HOST: pgbouncer
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      REDIS_URL: redis://redis:6379/6
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-    depends_on:
-      pgbouncer: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    command: ["python", "-m", "app.workers.imap_idle_supervisor"]
-    healthcheck:
-      disable: true
-
-  # ─── Central Admin Aggregator ──────────────────
-  admin-service:
-    build:
-      context: .
-      dockerfile: services/admin/Dockerfile
-    env_file: ./services/admin/.env
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app:/services:/app/libs
-      DB_HOST: pgbouncer
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      USER_SERVICE_URL: http://user-service:8005
-      REDIS_URL: redis://redis:6379/0
-      MONGO_HOST: mongo
-      MONGO_PORT: 27017
-      MONGO_DATABASE: htqweb_docs
-      MONGO_USER: ${MONGO_USER:-htqweb}
-      MONGO_PASSWORD: ${MONGO_PASSWORD:-change-me-mongo}
-      MONGO_URI: mongodb://${MONGO_USER:-htqweb}:${MONGO_PASSWORD:-change-me-mongo}@mongo:27017/htqweb_docs?authSource=admin
-      MINIO_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      MINIO_CONSOLE_URL: ${MINIO_CONSOLE_URL:-http://localhost:9001}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-qa_superadmin@htq.test}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-SuperAdmin!2026}
-      S3_BUCKET: ${S3_BUCKET:-htqweb-media}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      SQLADMIN_URL: /sqladmin/
-      MONGO_ADMIN_URL: /mongo-admin/
-    ports:
-      - "8012:8012"
-    volumes:
-      - ./services/user:/services/user:ro
-      - ./services/hr:/services/hr:ro
-      - ./services/task:/services/task:ro
-      - ./services/cms:/services/cms:ro
-      - ./services/media:/services/media:ro
-      - ./services/messenger:/services/messenger:ro
-      - ./services/email:/services/email:ro
-    depends_on:
-      pgbouncer:
-        condition: service_healthy
-
-  # ─── AdminJS Panel (unified SQL+MongoDB admin) ──
-  adminjs-panel:
-    build:
-      context: ./services/adminjs
+      context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${DB_USER:-htqweb}:${DB_PASSWORD:-change-me}@pgbouncer:5432/${DB_NAME:-htqweb}
-      MONGO_URI: mongodb://${MONGO_USER:-htqweb}:${MONGO_PASSWORD:-change-me-mongo}@mongo:27017/htqweb_docs?authSource=admin
-      ADMIN_EMAIL: ${ADMINJS_EMAIL:-admin@htq.local}
-      ADMIN_PASSWORD: ${ADMINJS_PASSWORD:-admin}
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-      USER_SERVICE_URL: http://user-service:8005
-      ADMIN_ROOT_PATH: /mongo-admin
-      PORT: 3300
-      NODE_ENV: production
+      <<: *django-env
+      RUN_MIGRATIONS: "1"
+    command: ["gunicorn", "htqweb.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "60"]
     ports:
-      - "3300:3300"
+      - "8000:8000"
     depends_on:
-      pgbouncer:
+      db:
         condition: service_healthy
-      mongo:
+      redis:
         condition: service_healthy
     healthcheck:
-      # 127.0.0.1, not localhost: in-container localhost resolves to ::1 first,
-      # but Node binds IPv4 0.0.0.0 only, so the check would always fail.
-      # Path follows ADMIN_ROOT_PATH (/mongo-admin) above.
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3300/mongo-admin/api/health || exit 1"]
-      interval: 10s
-      timeout: 3s
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/core/v1/services/').status==200 else 1)\" || exit 1"]
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 40s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ─── Django backend — ASGI (SSE /api/requests/v1/stream + WS /ws/) ──────
+  backend-asgi:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["uvicorn", "htqweb.asgi:application", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8001:8000"
+    depends_on:
+      backend-web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Celery worker (фоновые задачи всех доменов) ────────────────────────
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["celery", "-A", "htqweb", "worker", "-l", "info"]
+    depends_on:
+      backend-web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Celery beat (периодика из БД: django-celery-beat) ──────────────────
+  backend-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["celery", "-A", "htqweb", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    depends_on:
+      backend-web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Flower (мониторинг Celery) ─────────────────────────────────────────
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["celery", "-A", "htqweb", "flower", "--port=5555"]
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
   # ─── SFU (Mediasoup signaling + media) ──────────
   # Conference / WebRTC — requires TLS certs in production. Disabled in dev
@@ -1107,12 +381,8 @@ services:
     depends_on:
       - frontend
       - sfu
-      - hr-service
-      - user-service
-      - task-service
-      - messenger-service
-      - media-service
-      - cms-service
+      - backend-web
+      - backend-asgi
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
       interval: 10s
@@ -1304,6 +574,5 @@ volumes:
   certbot_webroot:
   loki_data:
   grafana_data:
-  mongo_data:
   minio_data:
   prometheus_data:

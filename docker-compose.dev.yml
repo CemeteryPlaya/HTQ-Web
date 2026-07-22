@@ -1,28 +1,26 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# HTQWeb — Development override
+# HTQWeb — Development override (единый Django-backend)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Usage:
+# Запуск:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 #
-# What changes vs production:
-#   - frontend: Vite dev server with HMR on :3000 (replaces one-shot build)
-#   - All services: SERVICE_ENV=development (enables /docs, verbose logs)
-#   - nginx: disabled in dev (Vite proxy handles routing to microservices)
-#   - frontend source mounted as volume — changes reflect immediately
-#
-# The Vite proxy targets FastAPI services directly; no legacy backend
-# container is part of the dev stack.
-#
+# Отличия от прод-стека:
+#   - frontend: Vite dev-сервер с HMR на :3000 (вместо одноразовой сборки);
+#     его прокси бьёт в ЕДИНЫЙ backend (/api → backend-web, /ws → backend-asgi).
+#   - backend-*: DEBUG-настройки (htqweb.settings.dev), исходники смонтированы
+#     как том (правки видны сразу), runserver/uvicorn --reload вместо gunicorn.
+#   - nginx: выключен (в dev маршрутизацию делает Vite-прокси).
+#   - MinIO: dev-инстанс + одноразовый bootstrap бакетов.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 services:
-  # ─── Turn off nginx in dev (Vite dev server handles proxy) ──────────────────
+  # ─── nginx выключен в dev (маршрутизацию делает Vite) ───────────────────────
   nginx:
     profiles:
       - production-only
 
-  # ─── Vite dev server with HMR ───────────────────────────────────────────────
+  # ─── Vite dev-сервер с HMR ──────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
@@ -38,82 +36,55 @@ services:
     environment:
       VITE_DEV_HTTPS: "false"
       VITE_DISABLE_HMR: "false"
-      VITE_USER_SERVICE_TARGET: "http://user-service:8005"
-      VITE_HR_SERVICE_TARGET: "http://hr-service:8006"
-      VITE_TASKS_SERVICE_TARGET: "http://task-service:8007"
-      VITE_MESSENGER_SERVICE_TARGET: "http://messenger-service:8008"
-      VITE_MEDIA_SERVICE_TARGET: "http://media-service:8009"
-      VITE_EMAIL_SERVICE_TARGET: "http://email-service:8010"
-      VITE_CMS_SERVICE_TARGET: "http://cms-service:8011"
-      VITE_ADMIN_SERVICE_TARGET: "http://admin-service:8012"
-      VITE_MESSENGER_WS_TARGET: "ws://messenger-service:8008"
+      # Единый Django-backend: /api → backend-web (WSGI), /ws → backend-asgi (ASGI).
+      VITE_BACKEND_TARGET: "http://backend-web:8000"
+      VITE_MESSENGER_WS_TARGET: "ws://backend-asgi:8000"
       VITE_SFU_WS_TARGET: "ws://sfu:4443"
     depends_on:
-      user-service:
-        condition: service_healthy
-      hr-service:
-        condition: service_healthy
-      task-service:
+      backend-web:
         condition: service_healthy
 
-  # ─── Enable /docs and dev-mode logs for all services ────────────────────────
-  hr-service:
+  # ─── Django backend (dev): DEBUG + автоперезагрузка + монтирование исходников ─
+  backend-web:
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
     environment:
-      SERVICE_ENV: development
-
-  user-service:
-    environment:
-      SERVICE_ENV: development
-
-  task-service:
+      DJANGO_SETTINGS_MODULE: htqweb.settings.dev
     volumes:
-      - ./services/task:/app
-      # Re-mount the shared libs (auth, metrics, …) that the bind-mount above
-      # otherwise masks (image COPYs them into /app/libs, but `./services/task`
-      # overlays the whole /app and hides them). Read-only is enough — the
-      # service only imports from them.
-      - ./libs:/app/libs:ro
-    command: ["bash", "/app/entrypoint.sh"]
-    environment:
-      SERVICE_ENV: development
-      UVICORN_RELOAD: "true"
+      - ./backend:/app
 
-  cms-service:
+  backend-asgi:
+    command: ["uvicorn", "htqweb.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     environment:
-      SERVICE_ENV: development
+      DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+    volumes:
+      - ./backend:/app
 
-  media-service:
+  backend-worker:
+    command: ["celery", "-A", "htqweb", "worker", "-l", "info"]
     environment:
-      SERVICE_ENV: development
+      DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+    volumes:
+      - ./backend:/app
 
-  messenger-service:
+  backend-beat:
     environment:
-      SERVICE_ENV: development
+      DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+    volumes:
+      - ./backend:/app
 
-  email-service:
-    environment:
-      SERVICE_ENV: development
-
-  admin-service:
-    environment:
-      SERVICE_ENV: development
-
-  # ─── MinIO (S3-compatible object storage, dev-only) ─────────────────────────
-  # Per-service buckets are bootstrapped by `minio-bootstrap` below.
-  # Console UI: http://localhost:9001  (login: minioadmin / minioadmin)
-  # In production: stop this service and point S3_ENDPOINT in root .env at
-  # AWS S3 (or other compatible). Schema-per-service stays the same.
+  # ─── MinIO (dev) ────────────────────────────────────────────────────────────
+  # Консоль: http://localhost:9001 (minioadmin / minioadmin). В проде — остановить
+  # и указать S3_ENDPOINT в корневом .env на AWS S3 (или совместимое).
   minio:
     image: minio/minio:RELEASE.2025-01-20T14-49-07Z
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
-      # Prometheus scrapes /minio/v2/metrics/cluster; without this it gets 403.
       MINIO_PROMETHEUS_AUTH_TYPE: "public"
     ports:
       - "9000:9000"   # S3 API
-      - "9001:9001"   # Web console
+      - "9001:9001"   # Web-консоль
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"
@@ -129,9 +100,7 @@ services:
         max-size: "5m"
         max-file: "3"
 
-  # One-shot job: creates the per-service buckets and "folder" placeholders
-  # (S3 has no folders — we put a `.keep` object so the prefix is browsable
-  # in the MinIO console). Re-running is idempotent (`mb --ignore-existing`).
+  # Одноразовое создание бакетов (идемпотентно, mb --ignore-existing).
   minio-bootstrap:
     image: minio/mc:RELEASE.2025-01-17T23-25-50Z
     depends_on:
