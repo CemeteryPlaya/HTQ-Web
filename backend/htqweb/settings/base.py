@@ -140,6 +140,33 @@ STORAGES = {
 }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# ── LOGGING (P2.1) — единый вывод в stdout (promtail собирает логи контейнеров).
+# До этого LOGGING не был сконфигурирован — работали Django-дефолты. Уровни по
+# аппкам через env (LOG_LEVEL/APP_LOG_LEVEL); request_id пишется в заголовок
+# ответа RequestIDMiddleware'ом, привязка его к строкам лога — отдельный follow-up
+# (нужен logging-фильтр поверх contextvar). django.request/db.backends приглушены.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "app": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "app"},
+    },
+    "root": {"handlers": ["console"], "level": env("LOG_LEVEL", "INFO")},
+    # Логгеры БЕЗ собственных handlers + propagate=True (дефолт): записи идут в
+    # единственный console-handler root'а (без дублей), а pytest caplog (слушает
+    # root) их видит. Здесь — только уровни.
+    "loggers": {
+        "django": {"level": "INFO"},
+        "django.request": {"level": "WARNING"},
+        "django.db.backends": {"level": "WARNING"},
+        "apps": {"level": env("APP_LOG_LEVEL", "INFO")},
+        "htqweb": {"level": env("APP_LOG_LEVEL", "INFO")},
+    },
+}
+
 # ── Object storage (S3/MinIO) — htqweb/storage/, ported from
 # services/cms/app/services/s3_storage.py + signed_url.py. Names/defaults
 # match docker-compose.yml's cms-service environment block byte-for-byte so
