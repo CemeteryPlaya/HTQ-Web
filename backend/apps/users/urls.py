@@ -10,13 +10,6 @@ urlpatterns = [
     # detail routes — nothing in the frontend calls these without one).
     path("token/", views.obtain_token),
     path("token/refresh/", views.refresh_token),
-    # admin-session/login, admin-session/logout — posted by sqladmin's own
-    # login page (server-rendered HTML form), not the SPA; the FastAPI
-    # original registers these WITHOUT a trailing slash
-    # (services/user/app/api/v1/auth.py's admin_router), so that's the only
-    # spelling registered here too.
-    path("admin-session/login", views.admin_login),
-    path("admin-session/logout", views.admin_logout),
     # profile/me + profile/ alias — confirmed frontend call sites use
     # 'profile/me' (frontend/src/api/users.ts, useActiveProfile.ts,
     # Settings.tsx, MyProfile.tsx, ConferencePage.tsx, hr/*.tsx); '/' alias
@@ -44,14 +37,6 @@ urlpatterns = [
     path("admin/users/", views.admin_users_collection),
     path("admin/users/<int:user_id>/set-password/", views.admin_set_password),
     path("admin/users/<int:user_id>/", views.admin_user_detail),
-    # items/ — Task 2.5. Frontend call sites (frontend/src/components/
-    # ItemsList.jsx, ItemCreate.jsx) use 'items/' WITH a trailing slash for
-    # list/create; nothing in the SPA calls the detail routes today, but the
-    # source (services/user/app/api/v1/items.py) only registers
-    # '/{item_id}/' (trailing slash, no bare alias) — reproduced exactly,
-    # no extra alias invented.
-    path("items/", views.items_collection),
-    path("items/<int:item_id>/", views.item_detail),
     # client-errors, client-events — Task 2.5. Public/optional-JWT telemetry
     # sinks (frontend/src/lib/telemetry.ts calls these WITHOUT a trailing
     # slash); the FastAPI original

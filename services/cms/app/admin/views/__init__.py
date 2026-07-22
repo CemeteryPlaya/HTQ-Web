@@ -1,1 +1,0 @@
-"""CMS admin views."""

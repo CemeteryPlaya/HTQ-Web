@@ -21,6 +21,7 @@ import logging
 import httpx
 from celery import shared_task
 from django.conf import settings
+from django.core.mail import mail_admins
 from django.utils import timezone
 
 from apps.core.services import require_service
@@ -88,57 +89,43 @@ def translate_news(news_id: int, target_lang: str) -> None:
 
 @shared_task
 def notify_admins_on_contact_request(contact_request_id: int) -> None:
-    """Notify administrators about a new contact request via email-service.
+    """Notify administrators about a new contact request.
 
-    Ported from ``actors.py::notify_admins_on_contact_request``. Makes an
-    HTTP call to the (still FastAPI, not yet ported) email-service to
-    dispatch the notification. Fails silently (logs error) if email-service
-    is unavailable — matches the original's fire-and-forget contract.
+    Ported from ``actors.py::notify_admins_on_contact_request`` — originally
+    an HTTP call to the (now-deleted) FastAPI email-service. P1.5
+    (2026-07-22 audit spec) replaces that dead S2S call with Django's
+    built-in ``django.core.mail.mail_admins``, which reads ``ADMINS``/
+    ``SERVER_EMAIL``/``EMAIL_BACKEND`` (``htqweb/settings/base.py``).
 
     Wired from ``apps.cms.views._create_contact_request`` (Task 1.4
     deliberately deferred this side effect to this task landing).
 
-    ``settings.EMAIL_SERVICE_URL`` is blank in tests
-    (``htqweb/settings/test.py``) so this no-ops there instead of making a
-    real HTTP call — same style of settings-gated no-op as
-    ``translate_news`` above. Production keeps the FastAPI original's
-    default (``http://email-service:8011``) and always calls out.
+    ``mail_admins`` itself no-ops when ``settings.ADMINS`` is empty (the
+    default — ``DJANGO_ADMINS`` env var unset), so this stays a safe no-op
+    out of the box, same as the old blank-``EMAIL_SERVICE_URL`` behaviour,
+    without needing an explicit guard here.
     """
     require_service("cms")
 
-    if not settings.EMAIL_SERVICE_URL:
-        logger.info(
-            "notify_admins_on_contact_request no-op: EMAIL_SERVICE_URL not "
-            "set (id=%d)",
-            contact_request_id,
-        )
-        return
-
     logger.info("notify_admins_on_contact_request: id=%d", contact_request_id)
 
+    subject = f"Новая заявка на связь #{contact_request_id}"
+    message = (
+        f"Поступила новая contact-request заявка (id={contact_request_id}).\n\n"
+        f"Посмотреть в CMS-панели: /api/cms/v1/contact-requests/{contact_request_id}"
+    )
     try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.post(
-                f"{settings.EMAIL_SERVICE_URL}/api/email/v1/internal/notify",
-                json={
-                    "event": "contact_request_submitted",
-                    "contact_request_id": contact_request_id,
-                },
-            )
-            if resp.status_code < 300:
-                logger.info(
-                    "notify_admins_on_contact_request: email-service accepted id=%d",
-                    contact_request_id,
-                )
-            else:
-                logger.warning(
-                    "notify_admins_on_contact_request: email-service returned %d for id=%d",
-                    resp.status_code,
-                    contact_request_id,
-                )
-    except httpx.HTTPError as exc:
+        mail_admins(subject, message)
+        logger.info(
+            "notify_admins_on_contact_request: mail_admins dispatched for id=%d",
+            contact_request_id,
+        )
+    except OSError as exc:
+        # SMTP connect/auth failures land here (django.core.mail wraps them
+        # as socket/SMTP errors) — fail silently and log, matching the
+        # original's fire-and-forget contract for an unreachable mail sink.
         logger.error(
-            "notify_admins_on_contact_request: email-service unreachable for id=%d: %s",
+            "notify_admins_on_contact_request: mail dispatch failed for id=%d: %s",
             contact_request_id,
             exc,
         )

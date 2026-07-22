@@ -13,7 +13,7 @@ import logging
 import pytest
 from django.test import Client
 
-from apps.users.models import Item, User, UserStatus
+from apps.users.models import AuditLog, User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/users/v1"
@@ -169,9 +169,9 @@ def test_client_events_with_resource_fields(alice):
 def test_telemetry_persists_nothing(alice):
     """Both endpoints are log-only sinks — no model, no table. Fire a batch
     of requests (anonymous + authenticated + malformed-body-adjacent
-    optional fields) and assert user/item row counts are unchanged."""
+    optional fields) and assert user/audit row counts are unchanged."""
     user_count_before = User.objects.count()
-    item_count_before = Item.objects.count()
+    audit_count_before = AuditLog.objects.count()
 
     client = Client()
     client.post(f"{BASE}/client-errors", data=ERROR_PAYLOAD, content_type="application/json")
@@ -182,4 +182,4 @@ def test_telemetry_persists_nothing(alice):
     }, content_type="application/json", **_auth(alice))
 
     assert User.objects.count() == user_count_before
-    assert Item.objects.count() == item_count_before
+    assert AuditLog.objects.count() == audit_count_before

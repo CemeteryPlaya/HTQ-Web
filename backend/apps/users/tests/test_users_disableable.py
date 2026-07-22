@@ -18,9 +18,7 @@ expanding every method each view actually accepts:
 
   1. token/                                          POST
   2. token/refresh/                                  POST
-  3. admin-session/login                             POST
-  4. admin-session/logout                             POST
-  5. profile/me                                       GET, PATCH
+  3. profile/me                                       GET, PATCH
   6. profile/                                          GET, PATCH
   7. profile/change-password (+ /)                    POST x2
   8. profile/avatar (+ /)                              DELETE x2
@@ -31,13 +29,11 @@ expanding every method each view actually accepts:
  13. admin/users/                                       GET, POST
  14. admin/users/<id>/set-password/                     POST
  15. admin/users/<id>/                                  PATCH, DELETE
- 16. items/                                             GET, POST
- 17. items/<id>/                                        GET, PATCH, DELETE
- 18. client-errors (+ /)                                POST x2
+ 16. client-errors (+ /)                                POST x2
  19. client-events (+ /)                                POST x2
  20. users/options/                                     GET
 
-24 url() lines -> 31 (method, path) combinations below (cross-checked
+20 url() lines -> 24 (method, path) combinations below (cross-checked
 against urls.py so nothing is missed, same method the cms review used to
 verify 14/14).
 
@@ -62,16 +58,13 @@ from apps.core.services import ServiceDisabled
 
 BASE = "/api/users/v1"
 USER_ID = 1  # the gate intercepts before URL resolution — the row need not exist
-ITEM_ID = 1
 
 # Every (method, path) apps/users/urls.py registers today, expanded per
-# HTTP method each view actually dispatches. 31 entries covering all 24
+# HTTP method each view actually dispatches. 24 entries covering all 20
 # url() lines (see module docstring for the line-by-line mapping).
 ENDPOINTS: list[tuple[str, str]] = [
     ("post", f"{BASE}/token/"),
     ("post", f"{BASE}/token/refresh/"),
-    ("post", f"{BASE}/admin-session/login"),
-    ("post", f"{BASE}/admin-session/logout"),
     ("get", f"{BASE}/profile/me"),
     ("patch", f"{BASE}/profile/me"),
     ("get", f"{BASE}/profile/"),
@@ -89,11 +82,6 @@ ENDPOINTS: list[tuple[str, str]] = [
     ("post", f"{BASE}/admin/users/{USER_ID}/set-password/"),
     ("patch", f"{BASE}/admin/users/{USER_ID}/"),
     ("delete", f"{BASE}/admin/users/{USER_ID}/"),
-    ("get", f"{BASE}/items/"),
-    ("post", f"{BASE}/items/"),
-    ("get", f"{BASE}/items/{ITEM_ID}/"),
-    ("patch", f"{BASE}/items/{ITEM_ID}/"),
-    ("delete", f"{BASE}/items/{ITEM_ID}/"),
     ("post", f"{BASE}/client-errors"),
     ("post", f"{BASE}/client-errors/"),
     ("post", f"{BASE}/client-events"),
@@ -102,7 +90,7 @@ ENDPOINTS: list[tuple[str, str]] = [
 ]
 ENDPOINT_IDS = [f"{m.upper()} {p}" for m, p in ENDPOINTS]
 
-assert len(ENDPOINTS) == 31
+assert len(ENDPOINTS) == 24
 
 
 def _disable_users():

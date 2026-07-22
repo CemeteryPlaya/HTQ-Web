@@ -1,0 +1,162 @@
+# ─── ПРОВЕРОЧНАЯ Django-сборка (отдельно от FastAPI-стека htqweb1) ──────────
+#
+# Отдельный проект `htqweb-django` (контейнеры htqweb-django-*, свои тома и
+# хост-порты) — можно поднимать ПАРАЛЛЕЛЬНО с существующим htqweb1, ничего не
+# конфликтует.
+#
+# Запуск:
+#   docker compose -f docker-compose.django.yml up -d --build
+# Открыть:   http://localhost:8090        (React-SPA)
+#   вход:     admin / admin12345
+# Django-admin: http://localhost:8090/django-admin/  (или http://localhost:8001/django-admin/)
+# API напрямую: http://localhost:8001/api/core/v1/services/
+# MinIO-консоль: http://localhost:9011    (minioadmin / minioadmin)
+# Остановить:   docker compose -f docker-compose.django.yml down
+# Снести с данными: docker compose -f docker-compose.django.yml down -v
+#
+# ⚠️ Миграция НЕ завершена: работают перенесённые домены (users, cms, media,
+# hr). Не перенесённые (tasks, requests, mail, messenger) — пустые аппки:
+# их страницы во фронте вернут 404/недоступность. Это ожидаемо.
+
+name: htqweb-django
+
+# Общий env всех Django-процессов. web дополнительно ставит RUN_MIGRATIONS=1
+# (migrate + сид админа выполняет ТОЛЬКО web, чтобы worker/beat не гонялись).
+x-django-env: &django-env
+  DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-insecure-change-me}
+  JWT_SECRET: ${JWT_SECRET:-dev-insecure-jwt-secret-change-me-32b}
+  # прямое подключение к Postgres (без PgBouncer)
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_NAME: ${DB_NAME:-htqweb}
+  DB_USER: ${DB_USER:-htqweb}
+  DB_PASSWORD: ${DB_PASSWORD:-change-me}
+  REDIS_URL: redis://redis:6379/8
+  CELERY_BROKER_URL: redis://redis:6379/9
+  # объектное хранилище
+  STORAGE_BACKEND: s3
+  S3_ENDPOINT: http://minio:9000
+  S3_PUBLIC_ENDPOINT: http://localhost:9010   # чтобы signed-URL открывались из браузера
+  S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+  S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+  S3_BUCKET: htqweb-cms
+  MEDIA_S3_BUCKET: htqweb-media
+  S3_USE_PATH_STYLE: "true"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-htqweb}
+      POSTGRES_USER: ${DB_USER:-htqweb}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change-me}
+    ports:
+      - "5435:5432"           # отличается от htqweb1 (5432) и тестового (55432)
+    volumes:
+      - django_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-htqweb}"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9010:9000"           # S3 API (хост)
+      - "9011:9001"           # консоль
+    volumes:
+      - django_minio_data:/data
+
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin}; do echo 'ждём minio...'; sleep 2; done;
+      mc mb --ignore-existing local/htqweb-media;
+      mc mb --ignore-existing local/htqweb-cms;
+      mc anonymous set download local/htqweb-media;
+      mc anonymous set download local/htqweb-cms;
+      echo 'бакеты готовы';
+      "
+    restart: "no"
+
+  web:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000", "--noreload"]
+    environment:
+      <<: *django-env
+      RUN_MIGRATIONS: "1"     # ← migrate + сид админа только здесь
+    ports:
+      - "8001:8000"           # прямой доступ к API / django-admin
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "htqweb", "worker", "-l", "info"]
+    environment:
+      <<: *django-env
+    depends_on:
+      web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "htqweb", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    environment:
+      <<: *django-env
+    depends_on:
+      web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.check
+    restart: unless-stopped
+    ports:
+      - "8090:80"             # ← ОТКРЫВАТЬ ЭТО: http://localhost:8090
+    volumes:
+      - ./infra/django-check/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      web:
+        condition: service_started
+
+volumes:
+  django_pg_data:
+  django_minio_data:

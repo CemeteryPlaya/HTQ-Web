@@ -39,7 +39,7 @@ from pathlib import Path
 import pytest
 from django.test import Client
 
-from apps.users.models import Item, User, UserStatus
+from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -213,41 +213,6 @@ def test_pending_user_response_matches_fastapi_schema_shape():
     assert isinstance(body, list) and body
     for row in body:
         _assert_matches_contract(row, contract)
-
-
-# ── ItemResponse ──────────────────────────────────────────────────────────────
-
-
-@pytest.mark.django_db
-def test_item_response_matches_fastapi_schema_shape():
-    """Shape derived from services/user/app/api/v1/items.py::ItemResponse —
-    NOT a live FastAPI capture (see module docstring)."""
-    contract = _load("item_response.json")
-    owner = _make_user(username="itemowner", email="itemowner@htq.test")
-    Item.objects.create(title="Note", description="d", owner=owner)
-    resp = Client().get(f"{BASE}/items/", **_auth(owner))
-    assert resp.status_code == 200
-    body = resp.json()
-    assert isinstance(body, list) and body
-    for row in body:
-        _assert_matches_contract(row, contract)
-
-
-@pytest.mark.django_db
-def test_item_response_create_matches_same_schema():
-    """POST /items/ shares ``ItemResponse`` with GET /items/ in the FastAPI
-    original (same ``response_model``) — assert the create response against
-    the same contract, not a bespoke one."""
-    contract = _load("item_response.json")
-    owner = _make_user(username="itemcreator", email="itemcreator@htq.test")
-    resp = Client().post(
-        f"{BASE}/items/",
-        data=json.dumps({"title": "New", "description": "d"}),
-        content_type="application/json",
-        **_auth(owner),
-    )
-    assert resp.status_code == 201
-    _assert_matches_contract(resp.json(), contract)
 
 
 # ── UserOption ────────────────────────────────────────────────────────────────

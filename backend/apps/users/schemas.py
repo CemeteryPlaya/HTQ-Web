@@ -32,17 +32,6 @@ class TokenRefreshResponse(BaseModel):
     token_type: str = "Bearer"
 
 
-class AdminSessionLoginRequest(BaseModel):
-    """``POST admin-session/login`` is form-urlencoded (sqladmin login
-    pages), not JSON — this schema validates the parsed ``request.POST``
-    dict by hand in the view rather than through ``htqweb.http.api_view``'s
-    JSON ``body=`` machinery."""
-
-    username: str
-    password: str
-    next: str = "/sqladmin/"
-
-
 class ChangePasswordRequest(BaseModel):
     """``POST profile/change-password`` payload.
 
@@ -214,29 +203,6 @@ class AdminSetPasswordRequest(BaseModel):
 
     new_password: str = Field(..., min_length=8)
     must_change_password: bool = True
-
-
-# ── Items (Task 2.5) ─────────────────────────────────────────────────────────
-#
-# Ported from ``services/user/app/api/v1/items.py``'s inline schemas.
-
-
-class ItemResponse(BaseModel):
-    id: int
-    title: str
-    description: str
-    owner_id: int
-    created_at: str
-
-
-class ItemCreateRequest(BaseModel):
-    title: str
-    description: str = ""
-
-
-class ItemUpdateRequest(BaseModel):
-    title: str | None = None
-    description: str | None = None
 
 
 # ── Client telemetry (Task 2.5) ─────────────────────────────────────────────

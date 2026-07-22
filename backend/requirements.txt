@@ -13,7 +13,9 @@ bcrypt==4.3.0
 httpx==0.28.1
 django-storages[boto3]==1.14.6
 boto3==1.43.51
-uvicorn[standard]==0.34.0   # локальный ASGI-запуск (SSE/socketio позже)
+uvicorn[standard]==0.34.0   # ASGI-процесс (SSE /api/requests/v1/stream + WS /ws/ messenger)
+gunicorn==23.0.0            # WSGI-процесс (весь /api/*, django-admin) в проде
+whitenoise==6.8.2           # отдача собранной статики (collectstatic) из WSGI/ASGI
 pytest==9.0.3
 pytest-django==4.12.0
 django-json-widget==2.1.1   # JSONField editing in django-admin (task 2.6)
@@ -33,3 +35,20 @@ python-socketio==5.11.4   # messenger (Поток A, фаза 8) — Socket.IO A
 oauthlib==3.2.2           # mail (Поток A, фаза 7) — OAuth Google/Microsoft
 requests-oauthlib==2.0.0  # mail (Поток A, фаза 7) — OAuth-обвязка над requests
 django-recurrence==1.11.1 # task (Поток B, фаза 4) — повторяющиеся события календаря
+
+# ── mail-core (Поток A, фаза 7) — AES-256-GCM шифрование OAuth-токенов в
+# apps/mail/services/crypto.py, буквальный порт services/email/app/services/
+# crypto.py. Тот же пин, что services/email/requirements (см. там).
+cryptography==49.0.0
+
+# ── mail webhooks+workers (Поток A, фаза 7, финальная под-задача) — верифи-
+# кация Google Pub/Sub Bearer JWT на POST /api/email/v1/webhooks/gmail
+# (apps/mail/webhooks.py::_verify_pubsub_jwt), буквальный порт
+# services/email/app/api/v1/webhooks.py. Тот же пин, что
+# services/email/requirements.txt.
+google-auth==2.36.0
+# google.auth.transport.requests.Request (used by the above) needs `requests`
+# installed — NOT pinned in services/email/requirements.txt (it gets it
+# transitively via some other FastAPI-side dependency this Django port
+# doesn't carry), so pinned explicitly here.
+requests==2.34.2
