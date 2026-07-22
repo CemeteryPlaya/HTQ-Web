@@ -79,14 +79,9 @@ urlpatterns = [
     path("admin/history/archive/", views.admin_trigger_history_archive),
     path("admin/history/archive", views.admin_trigger_history_archive),
 
-    # ── /internal/* (internal.py, 1 эндпойнт, S2S — БЕЗ JWT) ────────────────
-    path("internal/bot-message/", views.internal_bot_message),
-    path("internal/bot-message", views.internal_bot_message),
-
-    # ── /users/* (users.py, 5 регистраций: ingest×1 + me×2 + search×2) ──────
-    path("users/ingest/", views.ingest_user_replica),
-    path("users/ingest", views.ingest_user_replica),
-
+    # ── /users/* (users.py, 4 регистрации: me×2 + search×2 — ingest снесён,
+    # P1.2 2026-07-22 audit-спека: ChatUserReplica в Django нет, приёмник без
+    # цели) ───────────────────────────────────────────────────────────────
     path("users/me/", views.me),
     path("users/me", views.me),
 

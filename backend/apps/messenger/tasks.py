@@ -27,17 +27,17 @@ Ported here:
   * ``dispatch_bot_message``   — Celery-task seam around
     ``services/system_bots.py::post_bot_message``. The FastAPI source has NO
     actor/task wrapping this call — ``app/api/v1/internal.py``'s
-    ``/bot-message`` endpoint calls ``post_bot_message`` directly and
-    ``await``s its result to answer the HTTP request synchronously (ported
-    as-is: ``apps/messenger/views.py::internal_bot_message`` calls
-    ``system_bots_service.post_bot_message`` inline, NOT this task, for the
-    same reason — the response body needs ``delivered``/``message_id``
-    immediately). This task exists as the async-enqueueable counterpart
-    (``.delay(...)``) for callers that don't need to wait on the result —
-    the closest genuine Celery-task home for what the brief calls
-    "``system_bots``/``bot_dispatch`` (обработка бот-сообщений)". Not
-    scheduled on beat (invoked ad hoc, same as the FastAPI original's
-    Dramatiq actors were — none of THEM were on a cron either).
+    ``/bot-message`` endpoint called ``post_bot_message`` directly and
+    ``await``ed its result to answer the HTTP request synchronously. That
+    HTTP endpoint (``apps/messenger/views.py::internal_bot_message``) was
+    removed — P1.3 audit-spec (2026-07-22): it was an S2S port with no
+    in-process consumer after cutover. This task remains the sole
+    async-enqueueable path (``.delay(...)``) to ``post_bot_message`` for
+    callers that don't need to wait on the result — the closest genuine
+    Celery-task home for what the brief calls "``system_bots``/
+    ``bot_dispatch`` (обработка бот-сообщений)". Not scheduled on beat
+    (invoked ad hoc, same as the FastAPI original's Dramatiq actors were —
+    none of THEM were on a cron either).
   * ``dispatch_push_notification`` — port of ``app/workers/actors.py::
     dispatch_push_notification`` (Dramatiq actor → Celery task). No-ops when
     neither FCM nor APNS is configured (``getattr(settings, ..., "")`` dev

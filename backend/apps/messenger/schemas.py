@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class RoomCreateRequest(BaseModel):
@@ -63,31 +63,9 @@ class UserKeyUploadRequest(BaseModel):
     signature: str
 
 
-class UserReplicaIngestRequest(BaseModel):
-    """Порт ``schemas/messenger.py::UserReplicaRead`` — используется ИСКЛЮЧИТЕЛЬНО
-    как тело ``POST /users/ingest`` (workers/admin под-задача, PLAN.md §6.5).
-
-    Р2 (см. ``apps/messenger/views.py::ingest_user_replica`` докстринг):
-    ``chat_user_replicas`` не портируется — этот эндпойнт ничего не
-    сохраняет, только валидирует форму тела ради обратной совместимости с
-    любым ещё не мигрированным вызывающим. Поля — буквальный список исходной
-    ``UserReplicaRead`` (``id``/``username``/``first_name``/``last_name``/
-    ``avatar_url``/``is_active``/``is_bot``)."""
-
-    id: int
-    username: str
-    first_name: str
-    last_name: str
-    avatar_url: Optional[str] = None
-    is_active: bool
-    is_bot: bool = False
-
-
-class InternalBotMessageRequest(BaseModel):
-    """Порт ``app/api/v1/internal.py::BotMessageRequest`` (workers/admin
-    под-задача, PLAN.md §6.5) — тело ``POST /internal/bot-message``."""
-
-    bot: str
-    user_id: int
-    text: str = Field(..., min_length=1, max_length=4000)
-    metadata: Optional[dict] = None
+# ``UserReplicaIngestRequest`` (тело ``POST /users/ingest``) и
+# ``InternalBotMessageRequest`` (тело ``POST /internal/bot-message``) удалены
+# — P1.2/P1.3 audit-спеки (2026-07-22-django-native-audit-spec.md):
+# ``ChatUserReplica`` в Django не существует, а S2S-эндпойнт не имел
+# in-process потребителей после cutover. См. ``apps/messenger/views.py``
+# докстринг секции ``/users/*`` для полного обоснования.

@@ -348,8 +348,10 @@ urlpatterns = [
     path("logs/", views.audit_logs),
     path("logs", views.audit_logs),
 
-    # ── internal (S2S, БЕЗ JWT) — порт services/hr/app/api/v1/internal.py.
-    # Смонтирован исходником под prefix=f"{API_PREFIX}/internal".
-    path("internal/supervisor", views.internal_supervisor),
-    path("internal/supervisor/", views.internal_supervisor),
+    # ── internal/supervisor (S2S, БЕЗ JWT) — снесён P1.3 (2026-07-22 audit
+    # spec): S2S-эндпойнт вызывался другим FastAPI-сервисом (requests);
+    # теперь все домены — один процесс, потребитель (apps.approvals)
+    # резолвит руководителя через apps.hr.interface напрямую
+    # (assignee_resolver._supervisor_of), без HTTP. Живых потребителей у
+    # роута не было (grep по backend+frontend перед сносом — пусто).
 ]

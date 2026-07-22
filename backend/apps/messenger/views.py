@@ -34,20 +34,25 @@ app/api/v1/read.py`` регистрирует ТОТ ЖЕ итоговый пу�
 
 Плюс workers/admin под-задача (PLAN.md §6.5, последняя под-задача messenger):
 ``admin.py`` (3 эндпойнта, ``require_admin`` исходника -> ``api_view(auth=
-"jwt", admin=True)``), ``internal.py`` (1 эндпойнт, S2S общий секрет — см.
-``_check_internal_token`` ниже, тот же приём, что ``apps/hr/views.py::
-_check_internal_token``), ``users.py`` (5 регистраций роутов — ``ingest``×1 +
-``me``×2 + ``search``×2, Р2 у всех трёх — см. докстринги секций ниже).
+"jwt", admin=True)``), ``users.py`` (4 регистрации роутов — ``me``×2 +
+``search``×2, Р2 у обоих — см. докстринги секций ниже).
+
+``internal.py`` (S2S ``/internal/bot-message``, общий секрет
+``X-Internal-Token``) и ``users.py::ingest_user_replica`` (``/users/ingest``)
+снесены — P1.2/P1.3 audit-спеки (2026-07-22, ``docs/superpowers/plans/
+2026-07-22-django-native-audit-spec.md``): ``ChatUserReplica`` в Django нет
+(приёмник был без цели), а S2S-эндпойнт не имел ни одного in-process
+потребителя после cutover (grep по backend/frontend/sfu пуст — единственный
+вызывающий был HTTP-путь из ``system_bots_service.post_bot_message``,
+которая по-прежнему достижима из ``apps.messenger.tasks.dispatch_bot_message``
+напрямую, без HTTP).
 """
 from __future__ import annotations
 
 import datetime
-import json
-import os
 import uuid
 
 from django.http import HttpResponse, HttpResponseRedirect
-from pydantic import ValidationError
 
 from htqweb.http import _authenticate_jwt, api_view, json_error
 
@@ -414,87 +419,19 @@ def admin_trigger_history_archive(request):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  /internal/* — порт services/messenger/app/api/v1/internal.py (1 эндпойнт)
+#  /users/* — порт services/messenger/app/api/v1/users.py (4 регистрации:
+#  me×2 + search×2)
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# РЕШЕНИЕ (бриф п.1, internal — S2S): исходный ``require_internal_token``
-# (общий секрет из ``MESSENGER_INTERNAL_TOKEN``) уже имеет ЖИВОЙ прецедент в
-# этом монолите — ``apps/hr/views.py::_check_internal_token``/``internal_
-# supervisor`` (общий секрет ``INTERNAL_S2S_TOKEN``, легаси-fallback на имя
-# переменной конкретного домена — ТАМ ``MESSENGER_INTERNAL_TOKEN`` сам и есть
-# буквальное legacy-имя из ЭТОГО исходника). Порт переиспользует ТОТ ЖЕ
-# механизм byte-for-byte (``auth=None`` + ручная проверка заголовка
-# ``X-Internal-Token`` ДО парсинга тела — тот же порядок, что hr), вместо
-# перевода на ``admin=True``: это буквально более точный порт исходного
-# S2S-контракта (source сам никогда не требовал JWT/admin для этого пути),
-# и общий секрет уже согласован форматом с hr — заводить второй, другой
-# механизм ради того же самого эндпойнта было бы немотивированной
-# рассинхронизацией.
-
-def _check_internal_token(request):
-    """None — авторизован; иначе готовый json_error. Тот же приём, что
-    ``apps/hr/views.py::_check_internal_token`` — см. докстринг секции выше."""
-    expected = os.environ.get("INTERNAL_S2S_TOKEN") or os.environ.get("MESSENGER_INTERNAL_TOKEN") or ""
-    if not expected:
-        return json_error("MESSENGER_INTERNAL_TOKEN not configured", 503)
-    got = request.headers.get("X-Internal-Token")
-    if not got or got != expected:
-        return json_error("invalid internal token", 401)
-    return None
-
-
-@api_view(methods=("POST",), auth=None, status=202)
-def internal_bot_message(request):
-    """Порт ``internal.py::send_bot_message_endpoint`` — POST /internal/bot-message.
-
-    Токен проверяется ПЕРВЫМ, до парсинга тела (тот же порядок, что
-    ``apps/hr/views.py::internal_supervisor``)."""
-    err = _check_internal_token(request)
-    if err is not None:
-        return err
-
-    try:
-        data = schemas.InternalBotMessageRequest.model_validate_json(request.body or b"{}")
-    except ValidationError as exc:
-        # 422 — тот же envelope, что собственный body-парсинг htqweb.http.
-        # api_view (``{"detail": [...]}``); здесь парсим вручную, потому что
-        # проверка токена должна строго предшествовать парсингу тела (см.
-        # докстринг секции выше).
-        return json_error(json.loads(exc.json()), 422)
-
-    from .services import system_bots_service
-
-    bot = system_bots_service.BOTS_BY_USERNAME.get(data.bot)
-    if bot is None:
-        return json_error(f"unknown bot '{data.bot}'", 400)
-
-    msg = system_bots_service.post_bot_message(
-        user_id=data.user_id, bot=bot, text=data.text, metadata=data.metadata,
-    )
-    return {"delivered": msg is not None, "message_id": str(msg.id) if msg is not None else None}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  /users/* — порт services/messenger/app/api/v1/users.py (5 регистраций:
-#  ingest×1 + me×2 + search×2)
-# ═══════════════════════════════════════════════════════════════════════════
-#
-# Р2 (все три — см. apps/messenger/models.py докстринг файла): исходник читал/
+# Р2 (оба — см. apps/messenger/models.py докстринг файла): исходник читал/
 # писал ``chat_user_replicas``, которая здесь не портируется.
-
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.UserReplicaIngestRequest, status=201)
-def ingest_user_replica(request, data: schemas.UserReplicaIngestRequest):
-    """Порт ``users.py::ingest_user_replica`` — POST /users/ingest.
-
-    НИЧЕГО не сохраняет (Р2: нет целевой ``chat_user_replicas`` таблицы, и
-    некому больше сюда писать — прежний вызывающий, репликационный воркер
-    user-service, в этом монолите не существует; ``apps.users`` уже
-    единственный источник истины о пользователях). Эхо-ответ (та же форма,
-    что тело запроса) сохранён ради обратной совместимости пути/статуса/
-    полей/auth с любым ещё не мигрированным вызывающим — намеренный no-op,
-    не забытая реализация."""
-    return data.model_dump(mode="json")
-
+#
+# ``internal/bot-message`` (S2S, ``X-Internal-Token``) и ``users/ingest``
+# (``ChatUserReplica``-приёмник) удалены — P1.2/P1.3 audit-спеки
+# (2026-07-22): целевых таблиц/потребителей в Django не существует, grep по
+# backend/frontend/sfu на in-process вызовы не нашёл ничего живого.
+# ``system_bots_service.post_bot_message`` остаётся достижим напрямую из
+# ``apps.messenger.tasks.dispatch_bot_message`` (Celery), без HTTP-обвязки.
 
 @api_view(methods=("GET",), auth="jwt")
 def me(request):

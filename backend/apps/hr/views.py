@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 
 from django.conf import settings as django_settings
 from django.http import HttpResponse, JsonResponse
@@ -49,7 +48,6 @@ from .services import employee_card_service as card_svc
 from .services import employee_card_t2_service as card_t2_svc
 from .services import employee_groups_service as groups_svc
 from .services import employee_service as emp_svc
-from .services import internal_service as internal_svc
 from .services import org_service
 from .services import personnel_history_service as ph_svc
 from .services import pmo_service as pmo_svc
@@ -2140,9 +2138,10 @@ def pmo_org_chart(request, id: int):
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  final: /share-links/*, /public/{org,employee}/{token}, /department-*/*,
-#  /logs/, /internal/supervisor — порт services/hr/app/api/v1/{share_links,
-#  department_files,audit,internal}.py + app/api/public/{org,employee}.py.
-#  Последний под-модуль домена hr.
+#  /logs/ — порт services/hr/app/api/v1/{share_links,department_files,audit}.py
+#  + app/api/public/{org,employee}.py. Последний под-модуль домена hr.
+#  (``internal/supervisor`` — порт ``.../internal.py`` — снесён P1.3, см.
+#  комментарий на месте бывшей секции ниже.)
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Авторизация (решение контроллера, брифа под-модуля final) — разнобой,
@@ -2160,10 +2159,7 @@ def pmo_org_chart(request, id: int):
 #     исходника, отдел сотрудника == department_id ИЛИ is_elevated);
 #   * /logs/ (audit) — обычный ``get_current_user`` -> auth="jwt", БЕЗ
 #     admin=True — любой залогиненный видит весь журнал (буквальный порт,
-#     странность исходника, не баг);
-#   * /internal/supervisor — S2S, НЕ JWT: общий секрет в заголовке
-#     ``X-Internal-Token`` (``auth=None`` + ручная проверка), буквальный порт
-#     ``require_internal_token`` исходника.
+#     странность исходника, не баг).
 
 
 # ── /share-links/ — коллекция ────────────────────────────────────────────────
@@ -2446,29 +2442,11 @@ def audit_logs(request):
     )
 
 
-# ── /internal/supervisor — S2S, БЕЗ JWT ────────────────────────────────────
-
-def _check_internal_token(request):
-    """None — авторизован; иначе готовый json_error. Буквальный порт
-    ``require_internal_token`` исходника: общий секрет
-    ``INTERNAL_S2S_TOKEN`` (или legacy ``MESSENGER_INTERNAL_TOKEN`` на время
-    перехода) сверяется с заголовком ``X-Internal-Token``."""
-    expected = os.environ.get("INTERNAL_S2S_TOKEN") or os.environ.get("MESSENGER_INTERNAL_TOKEN") or ""
-    if not expected:
-        return json_error("INTERNAL_S2S_TOKEN not configured", 503)
-    got = request.headers.get("X-Internal-Token")
-    if not got or got != expected:
-        return json_error("invalid internal token", 401)
-    return None
-
-
-@api_view(methods=("GET",), auth=None)
-def internal_supervisor(request):
-    err = _check_internal_token(request)
-    if err is not None:
-        return err
-    try:
-        query = schemas.InternalSupervisorQuery.model_validate(dict(request.GET.items()))
-    except ValidationError as exc:
-        return _query_error(exc)
-    return {"supervisor_user_id": internal_svc.get_supervisor_user_id(query.user_id)}
+# ── /internal/supervisor — снесён P1.3 ─────────────────────────────────────
+# S2S-эндпойнт (общий секрет в X-Internal-Token, auth=None) вызывался другим
+# FastAPI-сервисом (requests); после cutover'а единственный потребитель
+# (apps.approvals.services.assignee_resolver._supervisor_of) резолвит
+# руководителя через apps.hr.interface.get_employee_brief/
+# get_department_brief in-process — HTTP-роут и X-Internal-Token-проверка
+# больше не нужны (живых потребителей не найдено ни в backend, ни во
+# frontend). См. docs/superpowers/plans/2026-07-22-django-native-audit-spec.md §P1.3.

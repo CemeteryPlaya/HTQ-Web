@@ -839,9 +839,3 @@ class AuditLogQuery(BaseModel):
     entity_id: int | None = None
     page: int = Field(default=1, ge=1)
     limit: int = Field(default=50, ge=1, le=500)
-
-
-class InternalSupervisorQuery(BaseModel):
-    """Query-параметр ``user_id`` — GET /internal/supervisor (порт internal.py)."""
-
-    user_id: int
