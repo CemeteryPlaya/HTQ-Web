@@ -85,6 +85,9 @@ urlpatterns = [
     path("employees/me/card", views.my_employee_card),
     path("employees/me/card/", views.my_employee_card),
 
+    path("employees/users/", views.employees_users_collection),
+    path("employees/users", views.employees_users_collection),
+
     path("employees/", views.employees_collection),
     path("employees", views.employees_collection),
 

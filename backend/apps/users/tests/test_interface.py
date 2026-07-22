@@ -130,3 +130,138 @@ def test_get_users_brief_one_query(alice, bob_no_name, django_assert_num_queries
     interface.get_users_brief([alice.id])
     with django_assert_num_queries(1):
         interface.get_users_brief([alice.id, bob_no_name.id])
+
+
+# ── list_users_brief ──────────────────────────────────────────────────────────
+
+
+OPTION_FIELDS = {"id", "username", "email", "first_name", "last_name", "full_name", "is_active"}
+
+
+@pytest.mark.django_db
+def test_list_users_brief_shape(alice):
+    rows = interface.list_users_brief()
+    row = next(r for r in rows if r["id"] == alice.id)
+    assert set(row) == OPTION_FIELDS
+    assert row["username"] == "alice"
+    assert row["email"] == "alice@htq.test"
+    assert row["first_name"] == "Alice"
+    assert row["last_name"] == "Smith"
+    assert row["full_name"] == "Alice Smith"
+    assert row["is_active"] is True
+
+
+@pytest.mark.django_db
+def test_list_users_brief_includes_non_active_users(alice, suspended):
+    """Unlike apps.users.services.options_service.list_user_options (the
+    ACTIVE-only picker), this interface primitive does NOT filter by status —
+    hr's original list_user_options proxied user-service's admin listing,
+    which returns every user regardless of status. Callers filter further
+    (messenger) using the returned is_active if they need to."""
+    ids = {r["id"] for r in interface.list_users_brief()}
+    assert suspended.id in ids
+    assert alice.id in ids
+
+
+@pytest.mark.django_db
+def test_list_users_brief_is_active_reflects_status(suspended):
+    row = next(r for r in interface.list_users_brief() if r["id"] == suspended.id)
+    assert row["is_active"] is False
+
+
+@pytest.mark.django_db
+def test_list_users_brief_search_matches_first_name(alice, bob_no_name):
+    rows = interface.list_users_brief(search="Alice")
+    assert {r["id"] for r in rows} == {alice.id}
+
+
+@pytest.mark.django_db
+def test_list_users_brief_search_matches_last_name(alice):
+    rows = interface.list_users_brief(search="smith")
+    assert {r["id"] for r in rows} == {alice.id}
+
+
+@pytest.mark.django_db
+def test_list_users_brief_search_matches_email_case_insensitive(alice):
+    rows = interface.list_users_brief(search="ALICE@HTQ")
+    assert {r["id"] for r in rows} == {alice.id}
+
+
+@pytest.mark.django_db
+def test_list_users_brief_search_matches_username(bob_no_name):
+    rows = interface.list_users_brief(search="bobnoname")
+    assert {r["id"] for r in rows} == {bob_no_name.id}
+
+
+@pytest.mark.django_db
+def test_list_users_brief_search_no_match_returns_empty(alice):
+    assert interface.list_users_brief(search="zzznomatchzzz") == []
+
+
+@pytest.mark.django_db
+def test_list_users_brief_limit_respected(alice, bob_no_name):
+    rows = interface.list_users_brief(limit=1)
+    assert len(rows) == 1
+
+
+@pytest.mark.django_db
+def test_list_users_brief_raises_when_users_disabled(alice):
+    _disable_users()
+    with pytest.raises(ServiceDisabled):
+        interface.list_users_brief()
+
+
+# ── create_user ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_create_user_shape():
+    row = interface.create_user(email="Newton@HTQ.test", first_name="Isaac", last_name="Newton")
+    assert set(row) == OPTION_FIELDS
+    assert row["email"] == "newton@htq.test"
+    assert row["first_name"] == "Isaac"
+    assert row["last_name"] == "Newton"
+    assert row["full_name"] == "Isaac Newton"
+    assert row["is_active"] is True
+
+
+@pytest.mark.django_db
+def test_create_user_derives_username_from_email_local_part():
+    row = interface.create_user(email="jane.doe@htq.test")
+    assert row["username"] == "jane.doe"
+
+
+@pytest.mark.django_db
+def test_create_user_persists_must_change_password():
+    row = interface.create_user(email="reset-me@htq.test")
+    user = User.objects.get(id=row["id"])
+    assert user.must_change_password is True
+
+
+@pytest.mark.django_db
+def test_create_user_sets_unusable_temp_password_not_blank():
+    row = interface.create_user(email="haspass@htq.test")
+    user = User.objects.get(id=row["id"])
+    assert user.password  # a real (random) hash was set, not left blank
+
+
+@pytest.mark.django_db
+def test_create_user_duplicate_email_raises(alice):
+    with pytest.raises(interface.DuplicateEmail):
+        interface.create_user(email="ALICE@htq.test", first_name="Someone", last_name="Else")
+
+
+@pytest.mark.django_db
+def test_create_user_duplicate_username_raises(alice):
+    """alice's username is "alice" — an email whose local part derives to the
+    same username (but a different address) collides on username, not
+    email."""
+    with pytest.raises(interface.DuplicateUsername):
+        interface.create_user(email="alice@otherdomain.test")
+
+
+@pytest.mark.django_db
+def test_create_user_raises_when_users_disabled():
+    _disable_users()
+    with pytest.raises(ServiceDisabled):
+        interface.create_user(email="whatever@htq.test")

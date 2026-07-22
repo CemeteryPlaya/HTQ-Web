@@ -3,13 +3,12 @@
 Провенанс формы ответов: app/schemas/employee.py (EmployeeOut), поведение —
 app/services/employee_service.py + app/auth/hr_access.py.
 
-14 из 16 эндпойнтов исходника перенесены сейчас (документы — hr-docs, задача
+16 из 16 эндпойнтов исходника перенесены сейчас (документы — hr-docs, задача
 5 плана, см. test_documents_api.py; pmos — под-модуль pmo, см. GET /me/pmos
 и GET /{id}/pmos ниже; card — под-модуль employee_card, см. GET /me/card и
 GET /{id}/card ниже + отдельно test_employee_card_api.py для card/t2 и
-card/groups); 2 отложены (users/ — зависимость в apps.users.interface ещё не
-перенесена, Р3 без S2S) — растяжка внизу файла следит за появлением
-зависимости.
+card/groups; users/ — GET/POST через apps.users.interface.{list_users_brief,
+create_user}, Р3 без S2S, см. блок ниже).
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
   * авторизация — ТОНКАЯ роль внутри вьюх (resolve_hr_access + access.can_*),
@@ -785,26 +784,178 @@ def test_id_pmos_admin_sees_active_membership(admin_auth, hr_dep):
     assert item["membership_type"] == "permanent"
 
 
-# ── растяжка: 2 отложенных эндпойнта (GET/POST /employees/users/) ───────────
+# ── GET/POST /employees/users/ — порт list_user_options/create_user_option ──
 #
-# Не реализованы — их зависимость (apps.users.interface, Р3 без S2S) ещё не
-# перенесена. Тест падает ровно в момент появления зависимости, заставляя
-# дописать эндпойнт — как test_cascade_cleanup_todo_is_tracked в
-# test_departments_api.py. (card — БЫЛА второй растяжкой здесь, снята: модель
-# EmployeeCard появилась, GET /me/card и GET /{id}/card раскрыты выше.)
+# Р3 (без S2S): исходник проксировал user-service; здесь оба зовут
+# apps.users.interface.{list_users_brief,create_user} напрямую. Гейтинг —
+# access.can_list_user_options (senior+)/can_manage_user_options (lead) —
+# ровно как HR-исходник, НЕ грубый api_view(admin=True).
 
-def test_user_options_endpoints_todo_is_tracked():
-    """GET/POST /employees/users/ — прокси в user-service в исходнике.
+USER_OPTION_FIELDS = {"id", "full_name", "email", "first_name", "last_name"}
 
-    Р3 (без S2S) требует list_user_options/create_user_option в
-    apps.users.interface — это вне зоны apps/hr (её нельзя трогать здесь)."""
-    import apps.users.interface as users_interface
 
-    assert not hasattr(users_interface, "list_user_options"), (
-        "В apps.users.interface появился list_user_options — допишите "
-        "GET/POST /employees/users/ (см. бриф employees, Р3 без S2S) и "
-        "снимите эту растяжку"
+@pytest.mark.django_db
+def test_users_get_requires_jwt():
+    resp = Client().get(f"{BASE}/users/")
+    assert resp.status_code == 401
+
+
+@pytest.mark.django_db
+def test_users_get_403_without_hr_access(auth):
+    resp = Client().get(f"{BASE}/users/", **auth)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "HR access required"
+
+
+@pytest.mark.django_db
+def test_users_get_403_below_senior(middle):
+    _emp, headers = middle
+    resp = Client().get(f"{BASE}/users/", **headers)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Senior HR access required"
+
+
+@pytest.mark.django_db
+def test_users_get_200_for_senior(senior):
+    _emp, headers = senior
+    resp = Client().get(f"{BASE}/users/", **headers)
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+@pytest.mark.django_db
+def test_users_get_200_for_lead(lead):
+    _emp, headers = lead
+    resp = Client().get(f"{BASE}/users/", **headers)
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_users_get_200_for_admin(admin_auth):
+    resp = Client().get(f"{BASE}/users/", **admin_auth)
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_users_get_shape_and_includes_seeded_users(senior):
+    _emp, headers = senior
+    resp = Client().get(f"{BASE}/users/", **headers)
+    body = resp.json()
+    assert len(body) >= 1
+    row = body[0]
+    assert set(row) == USER_OPTION_FIELDS
+
+
+@pytest.mark.django_db
+def test_users_get_no_slash_variant(senior):
+    _emp, headers = senior
+    resp = Client().get(f"{BASE}/users", **headers)
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_users_post_requires_jwt():
+    resp = Client().post(
+        f"{BASE}/users/", data='{"email": "x@htq.test"}', content_type="application/json",
     )
+    assert resp.status_code == 401
+
+
+@pytest.mark.django_db
+def test_users_post_403_without_hr_access(auth):
+    resp = Client().post(
+        f"{BASE}/users/", data='{"email": "x@htq.test"}', content_type="application/json", **auth,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "HR access required"
+
+
+@pytest.mark.django_db
+def test_users_post_403_below_lead(senior):
+    """can_list_user_options (senior) is NOT enough to create — needs
+    can_manage_user_options (lead)."""
+    _emp, headers = senior
+    resp = Client().post(
+        f"{BASE}/users/", data='{"email": "x@htq.test"}', content_type="application/json", **headers,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "CO HR access required"
+
+
+@pytest.mark.django_db
+def test_users_post_201_for_lead_creates_user(lead):
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "New", "last_name": "Hire", "patronymic": "P", "email": "new-hire@htq.test"}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert set(body) == USER_OPTION_FIELDS
+    assert body["email"] == "new-hire@htq.test"
+    assert body["first_name"] == "New"
+    assert body["last_name"] == "Hire"
+    assert body["full_name"] == "New Hire"
+
+    from apps.users.models import User as _User
+    created = _User.objects.get(email="new-hire@htq.test")
+    assert created.must_change_password is True
+    assert created.username == "new-hire"
+
+
+@pytest.mark.django_db
+def test_users_post_201_for_admin(admin_auth):
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "Admin", "last_name": "Made", "email": "admin-made@htq.test"}',
+        content_type="application/json",
+        **admin_auth,
+    )
+    assert resp.status_code == 201
+
+
+@pytest.mark.django_db
+def test_users_post_409_on_duplicate_email(lead):
+    _emp, headers = lead
+    Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "First", "last_name": "One", "email": "dupe@htq.test"}',
+        content_type="application/json",
+        **headers,
+    )
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "Second", "last_name": "One", "email": "dupe@htq.test"}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.django_db
+def test_users_post_422_invalid_email(lead):
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "Bad", "last_name": "Email", "email": "not-an-email"}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.django_db
+def test_users_post_no_slash_variant(lead):
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users",
+        data='{"first_name": "No", "last_name": "Slash", "email": "no-slash@htq.test"}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 201
 
 
 # ── GET /me/card ──────────────────────────────────────────────────────────────

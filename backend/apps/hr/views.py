@@ -27,6 +27,8 @@ from pydantic import ValidationError
 
 from htqweb.http import api_view, json_error
 
+from apps.users import interface as users_interface
+
 from . import access as hr_access
 from . import schemas
 from .permissions import (
@@ -459,6 +461,72 @@ def my_employee(request):
     if employee is None:
         return json_error("Employee profile not found", 404)
     return svc.serialize_employee(employee)
+
+
+# ── /employees/users/ (литеральный роут — ДО /{id}/) ─────────────────────────
+#
+# Порт services/hr/app/api/v1/employees.py::list_user_options/
+# create_user_option — исходник проксировал user-service (никакого S2S в
+# этом монолите); здесь оба зовут apps.users.interface напрямую (Р3, без
+# S2S). Форма ответа — HRUserOption исходника: {id, full_name, email,
+# first_name, last_name} — username/patronymic, которые interface тоже
+# отдаёт, здесь намеренно отброшены (исходник тоже их не выставляет в
+# HRUserOption, хотя create_user_option пытается их туда положить —
+# pydantic молча игнорирует лишние поля конструктора).
+
+def _serialize_user_option(user: dict) -> dict:
+    return {
+        "id": user["id"],
+        "full_name": user["full_name"],
+        "email": user["email"],
+        "first_name": user.get("first_name", ""),
+        "last_name": user.get("last_name", ""),
+    }
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_user_options(request):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    if not access.can_list_user_options:
+        return json_error("Senior HR access required", 403)
+
+    users = users_interface.list_users_brief()
+    return [_serialize_user_option(u) for u in users]
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.HRUserCreateRequest, status=201)
+def _create_user_option(request, data: schemas.HRUserCreateRequest):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    if not access.can_manage_user_options:
+        return json_error("CO HR access required", 403)
+
+    if not data.email or "@" not in data.email:
+        return json_error("Email обязателен и должен быть валидным", 422)
+
+    try:
+        user = users_interface.create_user(
+            email=data.email,
+            first_name=data.first_name,
+            last_name=data.last_name,
+            patronymic=data.patronymic,
+        )
+    except (users_interface.DuplicateEmail, users_interface.DuplicateUsername):
+        return json_error("Пользователь с такими данными уже существует", 409)
+    return _serialize_user_option(user)
+
+
+def employees_users_collection(request):
+    if request.method == "GET":
+        return _list_user_options(request)
+    if request.method == "POST":
+        return _create_user_option(request)
+    return json_error("Method Not Allowed", 405)
 
 
 # ── /employees/ — коллекция ───────────────────────────────────────────────

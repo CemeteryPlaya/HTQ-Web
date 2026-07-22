@@ -527,14 +527,37 @@ def me(request):
 def search_users(request):
     """Порт ``users.py::search_users`` — GET /users/search (оба написания).
 
-    Р2, ОТКРЫТЫЙ ВОПРОС (см. отчёт задачи): полнотекстовый поиск по РЕАЛЬНЫМ
-    ``apps.users.User`` (``username``/``first_name``/``last_name``) здесь
-    невозможен без одного из двух запрещённых шагов — расширения
-    ``apps.users.interface`` новой функцией поиска (домен ``users`` закрыт,
-    вне периметра Потока A, см. CLAUDE.md) ИЛИ восстановления таблицы-реплики
-    (явно запрещено брифом: «НЕ создавай таблицу-реплику»). Деградирует к
-    пустому списку — путь/auth/код (200) сохранены, тело — всегда ``[]``.
-    Фронтовый picker «новый чат» будет показывать пустой список до
-    последующей фазы, которая либо добавит ``apps.users.interface.
-    search_users_brief(...)``, либо примет эту деградацию окончательной."""
-    return []
+    Больше не деградирует к ``[]`` — ``apps.users.interface`` теперь несёт
+    ``list_users_brief`` (задача Р3 без S2S, см. её докстринг), так что
+    поиск по реальным ``apps.users.User`` (``username``/``first_name``/
+    ``last_name``/``email``) больше не требует ни расширения closed-домена,
+    ни воскрешения ``ChatUserReplica``. Форма ответа — ``list_users_brief``'s
+    ``{id, username, email, first_name, last_name, full_name, is_active}``,
+    НЕ исходная ``UserReplicaRead`` (та же деградация формы, что ``/users/
+    me`` уже принял выше — first_name/last_name ЕСТЬ здесь, но нет
+    ``avatar_url``).
+
+    Сохранено из исходника: текущий пользователь исключается из результатов
+    (нельзя начать чат с самим собой) и активность фильтруется — исходник
+    исключал ботов через ``ChatUserReplica.is_bot``, но у ``apps.users.User``
+    такого флага нет и не будет (Р2, см. ``system_bots_service.py``
+    докстринг) — эта часть исходного фильтра просто неприменима здесь, не
+    забыта."""
+    try:
+        limit = _int_query(request, "limit", default=20, ge=1, le=100)
+    except _QueryValidationError as exc:
+        return json_error(f"Invalid query parameter: {exc}", 422)
+
+    q = (request.GET.get("q") or "").strip()
+    # Filtering (is_active, self-exclusion) happens here, not inside
+    # list_users_brief (see that function's docstring — the interface
+    # doesn't filter by status, callers do). Fetched batch is generously
+    # larger than ``limit`` so those two filters — which can only ever
+    # SHRINK the result — don't leave us short after truncating to
+    # ``limit``; 500 mirrors options_service's own picker ceiling.
+    candidates = users_interface.list_users_brief(search=q or None, limit=500)
+    matches = [
+        u for u in candidates
+        if u["is_active"] and u["id"] != request.token.user_id
+    ]
+    return matches[:limit]
