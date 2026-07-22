@@ -21,9 +21,23 @@ prefix="/api/email/v1/oauth".
 """
 from django.urls import path
 
-from . import views
+from . import views, webhooks
 
 urlpatterns = [
+    # ── webhooks (webhooks-workers-под-задача, порт api/v1/webhooks.py, 3
+    # эндпойнта) — PUBLIC (auth=None), провайдер шлёт push без JWT. Мажори-
+    # тарно СО слешем (source router mounted under prefix="/api/email/v1/
+    # webhooks", each path literal e.g. "/gmail" — no trailing slash there,
+    # both written defensively here per repo convention).
+    path("webhooks/gmail", webhooks.gmail_push),
+    path("webhooks/gmail/", webhooks.gmail_push),
+
+    path("webhooks/microsoft", webhooks.microsoft_push),
+    path("webhooks/microsoft/", webhooks.microsoft_push),
+
+    path("webhooks/mailcow", webhooks.mailcow_push),
+    path("webhooks/mailcow/", webhooks.mailcow_push),
+
     # ── accounts (4 эндпойнта, services/email/app/api/v1/accounts.py) ──────
     path("accounts/", views.accounts_collection),
     path("accounts", views.accounts_collection),

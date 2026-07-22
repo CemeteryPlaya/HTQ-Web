@@ -38,3 +38,15 @@ django-recurrence==1.11.1 # task (Поток B, фаза 4) — повторяю
 # apps/mail/services/crypto.py, буквальный порт services/email/app/services/
 # crypto.py. Тот же пин, что services/email/requirements (см. там).
 cryptography==49.0.0
+
+# ── mail webhooks+workers (Поток A, фаза 7, финальная под-задача) — верифи-
+# кация Google Pub/Sub Bearer JWT на POST /api/email/v1/webhooks/gmail
+# (apps/mail/webhooks.py::_verify_pubsub_jwt), буквальный порт
+# services/email/app/api/v1/webhooks.py. Тот же пин, что
+# services/email/requirements.txt.
+google-auth==2.36.0
+# google.auth.transport.requests.Request (used by the above) needs `requests`
+# installed — NOT pinned in services/email/requirements.txt (it gets it
+# transitively via some other FastAPI-side dependency this Django port
+# doesn't carry), so pinned explicitly here.
+requests==2.34.2
