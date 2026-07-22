@@ -47,4 +47,35 @@ urlpatterns = [
     path("projects/<int:project_id>/members/", views.project_members),
     path("projects/<int:project_id>/members/<int:user_id>/",
          views.remove_member),
+
+    # Form templates. ``templates/preview`` is registered BEFORE the
+    # ``<int:template_id>`` routes for the same reason ``batch-approve`` is
+    # (see module docstring) even though the int converter would not match
+    # the literal "preview" anyway -- consistency with that convention.
+    path("templates/preview", views.preview_template),
+    path("templates/preview/", views.preview_template),
+    path("templates/", views.templates_collection),
+    path("templates/<int:template_id>", views.template_detail),
+    path("templates/<int:template_id>/", views.template_detail),
+    path("templates/<int:template_id>/deactivate/", views.deactivate_template),
+    path("templates/<int:template_id>/activate/", views.activate_template),
+    path("templates/<int:template_id>/versions/", views.publish_version),
+    path("templates/<int:template_id>/versions/<int:version_id>",
+         views.get_version),
+    path("templates/<int:template_id>/versions/<int:version_id>/",
+         views.get_version),
+
+    # Statistics. Registered without a trailing slash first (the frontend's
+    # own client calls these bare, per the FastAPI original's router), plus
+    # the slashed alias per this repo's "register both spellings" rule.
+    path("stats/overview", views.stats_overview),
+    path("stats/overview/", views.stats_overview),
+    path("stats/by-project", views.stats_by_project),
+    path("stats/by-project/", views.stats_by_project),
+    path("stats/by-template", views.stats_by_template),
+    path("stats/by-template/", views.stats_by_template),
+    path("stats/by-actor", views.stats_by_actor),
+    path("stats/by-actor/", views.stats_by_actor),
+    path("stats/heatmap", views.stats_heatmap),
+    path("stats/heatmap/", views.stats_heatmap),
 ]
