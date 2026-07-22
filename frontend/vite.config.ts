@@ -88,6 +88,10 @@ export default defineConfig(({ mode }) => {
   const adminServiceTarget = backendTarget;
   const requestsServiceTarget = backendTarget;
   const adminJsTarget = backendTarget;
+  // SSE-стрим одобрений (/api/requests/v1/stream) — async-вью, требует ASGI:
+  // WSGI (runserver/gunicorn) его не стримит. В dev шлём на отдельный ASGI-процесс
+  // (backend-asgi), как это делает прод-nginx. Переопределяется VITE_ASGI_TARGET.
+  const asgiTarget = env.VITE_ASGI_TARGET || "http://127.0.0.1:8001";
   // Grafana's HOST port is 3001 (container 3000 is taken by Vite itself);
   // 3100 is Loki — proxying there breaks /grafana with a 404.
   const grafanaTarget = env.VITE_GRAFANA_TARGET || "http://127.0.0.1:3001";
@@ -280,6 +284,10 @@ export default defineConfig(({ mode }) => {
     },
     "^/api/email/": {
       target: emailServiceTarget,
+      changeOrigin: true,
+    },
+    "^/api/requests/v1/stream": {
+      target: asgiTarget,
       changeOrigin: true,
     },
     "^/api/requests/": {

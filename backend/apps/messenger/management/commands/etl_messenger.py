@@ -77,7 +77,7 @@ import sys
 from dataclasses import dataclass
 
 from django.core.management.base import BaseCommand
-from django.db import transaction
+from django.db import connection, transaction
 
 from apps.core.etl import (
     DEFAULT_SOURCE_DSN,
@@ -226,6 +226,30 @@ def _would_create(spec: _TableSpec, fields: dict) -> bool:
     return not spec.model.objects.filter(**lookup_kwargs).exists()
 
 
+def _reset_sequence(model) -> None:
+    """setval identity-последовательности PK на MAX(id).
+
+    Room и AuditLog — обычный integer ``AutoField``-PK, ETL переносит legacy ``id``
+    ЯВНО (lookup=("id",)), поэтому последовательность остаётся на 1 и первое же
+    живое ``.create()`` (напр. ``messenger_service`` создаёт Room/бот-комнаты)
+    упало бы с ``duplicate key ... _pkey``. Двигаем sequence на MAX(id). setval
+    НЕ транзакционен → зовётся ПОСЛЕ коммита загрузки (и не в --dry-run).
+    Модели с UUID/составным PK (Message/ChatAttachment/RoomParticipant/UserKey)
+    последовательности не имеют — их не трогаем.
+    """
+    table = connection.ops.quote_name(model._meta.db_table)
+    pk = connection.ops.quote_name(model._meta.pk.column)
+    with connection.cursor() as c:
+        c.execute(
+            "SELECT setval("
+            "  pg_get_serial_sequence(%s, %s),"
+            f"  COALESCE((SELECT MAX({pk}) FROM {table}), 1),"
+            f"  (SELECT MAX({pk}) IS NOT NULL FROM {table})"
+            ")",
+            [model._meta.db_table, model._meta.pk.column],
+        )
+
+
 def _render_report(report: Report, skip_src: int) -> str:
     """``report.render()`` + информационная ``[SKIP]``-строка про
     ``chat_user_replicas`` ПЕРЕД строкой ``ИТОГ:``.
@@ -304,6 +328,12 @@ class Command(BaseCommand):
                     f"{len(rows)} legacy строк (создано {created}, "
                     f"обновлено {updated})"
                 )
+
+        # C1 (ревью): сдвинуть identity-последовательности AutoField-PK ПОСЛЕ
+        # коммита загрузки — иначе первое живое Room/AuditLog .create() упадёт на
+        # duplicate pkey (legacy id перенесены явно). setval вне atomic (не транзакц.).
+        for _model in (Room, AuditLog):
+            _reset_sequence(_model)
 
         skip_src = legacy_count(cur, SKIP_TABLE, schema=SCHEMA)
         self.stdout.write(self.style.WARNING(

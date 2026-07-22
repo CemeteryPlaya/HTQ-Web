@@ -567,7 +567,6 @@ volumes:
   postgres_data:
   static_files:
   media_files:
-  messenger_attachments:
   wt_certs:
   frontend_dist:
   certbot_conf:

@@ -38,6 +38,7 @@ services:
       VITE_DISABLE_HMR: "false"
       # Единый Django-backend: /api → backend-web (WSGI), /ws → backend-asgi (ASGI).
       VITE_BACKEND_TARGET: "http://backend-web:8000"
+      VITE_ASGI_TARGET: "http://backend-asgi:8000"   # SSE /api/requests/v1/stream
       VITE_MESSENGER_WS_TARGET: "ws://backend-asgi:8000"
       VITE_SFU_WS_TARGET: "ws://sfu:4443"
     depends_on:
