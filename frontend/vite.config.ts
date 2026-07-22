@@ -72,16 +72,22 @@ export default defineConfig(({ mode }) => {
   // NOTE:
   // 0.0.0.0 is valid as a server bind address, but not as an outbound proxy target.
   // Use loopback defaults so /api and /ws proxies work reliably in local/LAN dev.
-  const hrServiceTarget = env.VITE_HR_SERVICE_TARGET || "http://127.0.0.1:8006";
-  const tasksServiceTarget = env.VITE_TASKS_SERVICE_TARGET || "http://127.0.0.1:8007";
-  const userServiceTarget = env.VITE_USER_SERVICE_TARGET || "http://127.0.0.1:8005";
-  const messengerServiceTarget = env.VITE_MESSENGER_SERVICE_TARGET || "http://127.0.0.1:8008";
-  const mediaServiceTarget = env.VITE_MEDIA_SERVICE_TARGET || "http://127.0.0.1:8009";
-  const emailServiceTarget = env.VITE_EMAIL_SERVICE_TARGET || "http://127.0.0.1:8010";
-  const cmsServiceTarget = env.VITE_CMS_SERVICE_TARGET || "http://127.0.0.1:8011";
-  const adminServiceTarget = env.VITE_ADMIN_SERVICE_TARGET || "http://127.0.0.1:8012";
-  const requestsServiceTarget = env.VITE_REQUESTS_SERVICE_TARGET || "http://127.0.0.1:8013";
-  const adminJsTarget = env.VITE_ADMINJS_TARGET || "http://127.0.0.1:3300";
+  //
+  // Миграция FastAPI → Django (фаза 11): девять микросервисов схлопнуты в ОДИН
+  // Django-backend. Имена *ServiceTarget сохранены (правила proxy ниже их
+  // используют), но все указывают на единый backend; переопределяется одним
+  // VITE_BACKEND_TARGET. WS (messenger socket.io) — тот же backend (ASGI).
+  const backendTarget = env.VITE_BACKEND_TARGET || "http://127.0.0.1:8000";
+  const hrServiceTarget = backendTarget;
+  const tasksServiceTarget = backendTarget;
+  const userServiceTarget = backendTarget;
+  const messengerServiceTarget = backendTarget;
+  const mediaServiceTarget = backendTarget;
+  const emailServiceTarget = backendTarget;
+  const cmsServiceTarget = backendTarget;
+  const adminServiceTarget = backendTarget;
+  const requestsServiceTarget = backendTarget;
+  const adminJsTarget = backendTarget;
   // Grafana's HOST port is 3001 (container 3000 is taken by Vite itself);
   // 3100 is Loki — proxying there breaks /grafana with a 404.
   const grafanaTarget = env.VITE_GRAFANA_TARGET || "http://127.0.0.1:3001";
@@ -90,7 +96,7 @@ export default defineConfig(({ mode }) => {
   // is terminated at reverse proxy edge). If your SFU listens with TLS locally,
   // override via VITE_SFU_WS_TARGET=wss://127.0.0.1:4443.
   const sfuWsTarget = env.VITE_SFU_WS_TARGET || "ws://127.0.0.1:4443";
-  const messengerWsTarget = env.VITE_MESSENGER_WS_TARGET || "ws://127.0.0.1:8008";
+  const messengerWsTarget = env.VITE_MESSENGER_WS_TARGET || "ws://127.0.0.1:8000";
   const disableHmr = env.VITE_DISABLE_HMR === "true";
   const tunnelPublicHost = String(env.VITE_TUNNEL_PUBLIC_HOST || "").trim();
   const hmrConfig = disableHmr
