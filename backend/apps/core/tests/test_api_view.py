@@ -60,11 +60,6 @@ def empty_model_list_view(request):
     return []
 
 
-@api_view(methods=("GET",), auth="admin_session")
-def admin_only_view(request):
-    return {"user_id": request.token.user_id}
-
-
 @api_view(methods=("POST",), auth="jwt", admin=True)
 def admin_gated_view(request):
     return {"ok": True}
@@ -192,37 +187,6 @@ def test_raw_http_response_passed_through_untouched():
     assert resp.content == b"raw"
 
 
-def _admin_token(**over):
-    claims = {"user_id": 9, "username": "a", "email": "a@htq.test",
-              "is_staff": False, "is_superuser": False, "is_admin": False,
-              "token_type": "access", "iat": 1, "exp": 9_999_999_999,
-              "iss": "htqweb-auth", "sub": "9", **over}
-    return pyjwt.encode(claims, settings.JWT_SECRET, algorithm="HS256")
-
-
-def test_admin_session_elevated_authenticates():
-    rf = RequestFactory()
-    token = _admin_token(is_staff=True)
-    resp = admin_only_view(rf.get("/admin-x/", HTTP_COOKIE=f"admin_session={token}"))
-    assert resp.status_code == 200
-    assert json.loads(resp.content) == {"user_id": 9}
-
-
-def test_admin_session_non_elevated_401():
-    rf = RequestFactory()
-    token = _admin_token()  # is_admin/is_staff/is_superuser all false
-    resp = admin_only_view(rf.get("/admin-x/", HTTP_COOKIE=f"admin_session={token}"))
-    assert resp.status_code == 401
-    assert "detail" in json.loads(resp.content)
-
-
-def test_admin_session_missing_cookie_401():
-    rf = RequestFactory()
-    resp = admin_only_view(rf.get("/admin-x/"))
-    assert resp.status_code == 401
-    assert "detail" in json.loads(resp.content)
-
-
 def test_request_id_middleware_echoes(client):
     resp = Client().get("/health/", HTTP_X_REQUEST_ID="req-123")
     assert resp["X-Request-ID"] == "req-123"
@@ -250,17 +214,6 @@ def test_no_auth_view_gets_token_none_not_attributeerror():
     resp = no_auth_view(rf.get("/no-auth/"))
     assert resp.status_code == 200
     assert json.loads(resp.content) == {"token_is_none": True}
-
-
-def test_admin_session_refresh_token_rejected():
-    """Finding 4: admin_session must require token_type == 'access', not just
-    is_elevated — otherwise a 7-day refresh token placed in the cookie
-    authenticates as admin."""
-    rf = RequestFactory()
-    token = _admin_token(is_staff=True, token_type="refresh")
-    resp = admin_only_view(rf.get("/admin-x/", HTTP_COOKIE=f"admin_session={token}"))
-    assert resp.status_code == 401
-    assert "detail" in json.loads(resp.content)
 
 
 @pytest.mark.django_db

@@ -34,21 +34,7 @@ def _authenticate_jwt(request):
     return payload if payload.token_type == "access" else None
 
 
-def _authenticate_admin_session(request):
-    raw = request.COOKIES.get("admin_session")
-    if not raw:
-        return None
-    try:
-        payload = decode_token(raw)
-    except (AuthError, ValidationError):
-        return None
-    if payload.token_type != "access":  # 7-дневный refresh-токен не должен пускать в admin-панель
-        return None
-    return payload if payload.is_elevated else None
-
-
-_AUTHENTICATORS = {"jwt": _authenticate_jwt,
-                   "admin_session": _authenticate_admin_session}
+_AUTHENTICATORS = {"jwt": _authenticate_jwt}
 
 
 def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
@@ -58,7 +44,7 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
         # populates — auth=None always sets it to None (see below), so the
         # admin predicate would have nothing to check. Programming error:
         # fail loudly at decoration time, not as a confusing 403 later.
-        raise ValueError("api_view(admin=True) requires auth='jwt' or auth='admin_session'")
+        raise ValueError("api_view(admin=True) requires auth='jwt'")
 
     def deco(fn):
         @csrf_exempt

@@ -182,11 +182,6 @@ export default defineConfig(({ mode }) => {
       changeOrigin: true,
       rewrite: rewriteApiPrefix(/^\/api\/v1\/admin\/users(?=\/|\?|$)/, "/api/users/v1/admin/users"),
     },
-    "^/api/items(?=/|\\?|$)": {
-      target: userServiceTarget,
-      changeOrigin: true,
-      rewrite: rewriteApiPrefix(/^\/api\/items(?=\/|\?|$)/, "/api/users/v1/items"),
-    },
     "^/api/users/(?!v1(?:/|\\?|$))": {
       target: userServiceTarget,
       changeOrigin: true,

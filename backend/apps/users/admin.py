@@ -3,7 +3,7 @@ from django.db import models as db_models
 
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
-from .models import AuditLog, Item, User
+from .models import AuditLog, User
 
 try:
     from django_json_widget.widgets import JSONEditorWidget
@@ -44,15 +44,6 @@ class UserAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
         # route creation through the API, which already hashes properly:
         # POST /api/users/v1/admin/users/.
         return False
-
-
-@admin.register(Item)
-class ItemAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "title", "owner", "created_at")
-    search_fields = ("title", "description")
-    list_filter = ("created_at",)
-    readonly_fields = ("created_at",)
-    autocomplete_fields = ("owner",)
 
 
 @admin.register(AuditLog)
