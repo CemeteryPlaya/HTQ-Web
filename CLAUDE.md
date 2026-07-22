@@ -2,11 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Dual Django migration — this working branch is Поток A
+## Dual Django migration — streams MERGED (finishing up on this branch)
 
-The FastAPI→Django reverse migration is being finished by **two parallel executors** — see **[PLAN.md](PLAN.md)** (authoritative). **This branch is Поток A.** Its scope is **only**: `backend/apps/hr/**`, `backend/apps/mail/**`, `backend/apps/messenger/**` (+ append-only edits to `backend/requirements.txt`, + its own Socket.IO section of `htqweb/asgi.py`). Поток A **produces** the `hr`/`mail`/`messenger` interfaces and depends only on the finished `users`.
+The FastAPI→Django reverse migration was done by **two parallel executors** (Поток A = `hr`/`mail`/`messenger`; Поток B = `tasks`/`approvals`) — see **[PLAN.md](PLAN.md)** for the original split. **As of the `ruslan` merge (commit `50fb2a7`), both streams are UNIFIED on this branch** (`sanzhar`). The per-stream zone restriction is **LIFTED** — you may work across **any** `backend/apps/**` (hr, mail, messenger, tasks, approvals, users, cms, media_files, core) as directed. Remaining work is finishing Поток B (approvals `forms`/`reference`/`stats`), extending `apps.users.interface`, then ETL + cutover.
 
-- **Do NOT touch Поток B's zone:** `backend/apps/tasks/**`, `backend/apps/approvals/**`, and the prep-owned shared files (`htqweb/urls.py`, `INSTALLED_APPS`, `service_gate.py`, `apps/core/tests/test_invariants.py`, the `asgi.py` scaffold). Need cross-domain data → call the neighbour's `interface` stub; never implement another domain (PLAN.md §1.3, §1.5).
+- **Cross-app access is still ONLY via `apps.<x>.interface`** (enforced by `apps/core/tests/test_app_isolation.py`) — no direct imports of another app's models/services, no cross-domain FK. That invariant survives the merge.
 - **NEVER create git branches yourself.** The user creates and hands off every branch. Do not run `git branch`, `git checkout -b`, `git switch -c`, or `git worktree add`, and do **not** "branch first" before committing — even on the default branch. This overrides the default Claude Code behavior. Work only on the branch you are given; if the expected branch seems missing or wrong, stop and ask.
 
 ## What this is
