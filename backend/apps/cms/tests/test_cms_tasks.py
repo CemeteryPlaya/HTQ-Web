@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from django.core import mail
 from django.test import override_settings
 
 from apps.cms.models import News
@@ -104,15 +105,32 @@ def test_translate_news_noops_without_api_key():
     assert translate_news(1, "en") is None
 
 
-# ── notify_admins_on_contact_request: settings-gated no-op (network-free) ───
+# ── notify_admins_on_contact_request: django.core.mail.mail_admins ─────────
 
 
 @pytest.mark.django_db
-@override_settings(EMAIL_SERVICE_URL="")
-def test_notify_admins_noops_without_email_service_url():
+@override_settings(ADMINS=[])
+def test_notify_admins_noops_without_admins_configured():
     from apps.cms.tasks import notify_admins_on_contact_request
 
+    # No ADMINS configured => mail_admins() is a no-op (Django built-in
+    # behaviour) — no exception, no mail sent.
     assert notify_admins_on_contact_request(1) is None
+    assert len(mail.outbox) == 0
+
+
+@pytest.mark.django_db
+@override_settings(ADMINS=[("Admin", "admin@example.com")])
+def test_notify_admins_sends_mail_when_admins_configured():
+    from apps.cms.tasks import notify_admins_on_contact_request
+
+    assert notify_admins_on_contact_request(42) is None
+
+    assert len(mail.outbox) == 1
+    sent = mail.outbox[0]
+    assert sent.to == ["admin@example.com"]
+    assert "42" in sent.subject
+    assert "42" in sent.body
 
 
 # ── publish_scheduled_news: query semantics ported byte-identical ──────────
