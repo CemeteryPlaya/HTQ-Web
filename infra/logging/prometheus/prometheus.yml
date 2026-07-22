@@ -11,28 +11,17 @@ scrape_configs:
         labels:
           app_name: "prometheus"
 
-  # ─── FastAPI Microservices ─────────────────────────────────────
-  - job_name: "fastapi-services"
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["user-service:8005"]
-        labels: { app_name: "user-service" }
-      - targets: ["hr-service:8006"]
-        labels: { app_name: "hr-service" }
-      - targets: ["task-service:8007"]
-        labels: { app_name: "task-service" }
-      - targets: ["messenger-service:8008"]
-        labels: { app_name: "messenger-service" }
-      - targets: ["media-service:8009"]
-        labels: { app_name: "media-service" }
-      - targets: ["admin-service:8012"]
-        labels: { app_name: "admin-service" }
-      - targets: ["cms-service:8011"]
-        labels: { app_name: "cms-service" }
-      - targets: ["email-service:8010"]
-        labels: { app_name: "email-service" }
-      - targets: ["requests-service:8013"]
-        labels: { app_name: "requests-service" }
+  # ─── Django backend ────────────────────────────────────────────
+  # Девять FastAPI-сервисов схлопнуты в единый Django-backend (миграция, фаза 11).
+  # Раскомментировать, КОГДA у бэкенда появится /metrics: поставить
+  # django-prometheus, добавить в INSTALLED_APPS + middleware (Prometheus{Before,
+  # After}Middleware) и роут /metrics. До тех пор эндпойнта нет — не скрейпим,
+  # чтобы не плодить down-таргеты.
+  # - job_name: "django-backend"
+  #   metrics_path: /metrics
+  #   static_configs:
+  #     - targets: ["backend-web:8000"]
+  #       labels: { app_name: "django-backend" }
 
   # ─── Database Exporters ────────────────────────────────────────
   - job_name: "postgres"
@@ -44,11 +33,6 @@ scrape_configs:
     static_configs:
       - targets: ["redis-exporter:9121"]
         labels: { component: "redis" }
-
-  - job_name: "mongodb"
-    static_configs:
-      - targets: ["mongodb-exporter:9216"]
-        labels: { component: "mongodb" }
 
   # ─── MinIO Built-in Metrics ────────────────────────────────────
   # Requires MINIO_PROMETHEUS_AUTH_TYPE=public on the minio container,
