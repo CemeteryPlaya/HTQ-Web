@@ -161,6 +161,9 @@ def _make_legacy_cursor(fixtures: dict[str, list[dict]], missing_tables: frozens
 def test_oauth_token_mapping_row_hash_matches_after_create():
     row = OAUTH_TOKEN_ROWS[0]
     OAuthToken.objects.create(id=row["id"], **etl_mail._oauth_row(row))
+    # auto_now(updated_at) затирается save()-ом — команда чинит через follow-up
+    # .update(); зеркалим здесь, иначе hash не сойдётся (как и в реальном --verify).
+    OAuthToken.objects.filter(pk=row["id"]).update(updated_at=row["updated_at"])
     obj = OAuthToken.objects.get(pk=row["id"])
 
     assert row_hash(etl_mail._oauth_row(row)) == row_hash(etl_mail._oauth_obj(obj))
@@ -198,6 +201,7 @@ def test_email_message_mapping_row_hash_matches_after_create():
         "updated_at": datetime.datetime(2026, 2, 1, tzinfo=UTC),
     }
     EmailMessage.objects.create(id=row["id"], **etl_mail._msg_row(row))
+    EmailMessage.objects.filter(pk=msg_id).update(updated_at=row["updated_at"])
     obj = EmailMessage.objects.get(pk=msg_id)
 
     assert row_hash(etl_mail._msg_row(row)) == row_hash(etl_mail._msg_obj(obj))
