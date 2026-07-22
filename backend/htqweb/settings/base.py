@@ -177,7 +177,10 @@ TRANSLATION_API_BASE = env("TRANSLATION_API_BASE", "https://api-free.deepl.com")
 
 # notify_admins_on_contact_request calls out to the still-running FastAPI
 # email-service over HTTP (Strangler Fig — no Django email app exists yet).
-EMAIL_SERVICE_URL = env("EMAIL_SERVICE_URL", "http://email-service:8011")
+# Legacy S2S-нотификация о contact-request (apps/cms/tasks.py). email-service снесён
+# при cutover → по умолчанию ПУСТО, и задача no-op (см. notify_admins_on_contact_request).
+# TODO: перевести на прямой вызов mail-домена (notify в apps.mail.interface) вместо HTTP S2S.
+EMAIL_SERVICE_URL = env("EMAIL_SERVICE_URL", "")
 
 # ── media upload pipeline (apps/media_files, task 3.2) — ported defaults
 # from services/media/app/core/settings.py, byte-for-byte where the setting

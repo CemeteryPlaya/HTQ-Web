@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Generate test traffic across every HTQWeb service so Prometheus/Grafana
-# dashboards have data to show. Safe: GET-only + a few intentional 404/401s
-# (they feed the error-rate panels).
+# Generate test traffic across the Django backend's endpoints so Prometheus/
+# Grafana dashboards have data to show. Safe: GET-only + a few intentional
+# 404/401s (they feed the error-rate panels).
 #
-# Usage:  ./scripts/generate-monitoring-traffic.sh [rounds] [email] [password]
+# Usage:  ./scripts/generate-monitoring-traffic.sh [rounds] [email] [password] [port]
 #         rounds — how many passes over the endpoint list (default 20)
+#         port   — backend port (default 8000; use 80 to go through nginx)
 
 set -euo pipefail
 
@@ -17,50 +18,49 @@ if [ -z "$PASSWORD" ]; then
     read -r -s -p "Password for $EMAIL: " PASSWORD; echo
 fi
 
-TOKEN=$(curl -s -X POST "$BASE:8005/api/users/v1/token/" \
+# Единый Django-backend (WSGI) — все домены на одном порту (в dev :8000,
+# в проде — через nginx :80). PORT переопределяется 4-м аргументом.
+PORT="${4:-8000}"
+
+TOKEN=$(curl -s -X POST "$BASE:$PORT/api/users/v1/token/" \
     -H 'Content-Type: application/json' \
     -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
     | python -c "import sys,json;print(json.load(sys.stdin)['access'])")
 AUTH="Authorization: Bearer $TOKEN"
 
-# port  path                                    auth?
+# path                                          auth?
 ENDPOINTS=(
-    "8005 /api/users/v1/profile/                 yes"
-    "8005 /api/users/v1/users/                   yes"
-    "8005 /health/                               no"
-    "8006 /api/hr/v1/employees/                  yes"
-    "8006 /api/hr/v1/departments/                yes"
-    "8006 /api/hr/v1/positions/                  yes"
-    "8006 /health/                               no"
-    "8007 /api/tasks/v1/tasks/                   yes"
-    "8007 /api/tasks/v1/equipment/               yes"
-    "8007 /api/tasks/v1/reports/resource-gantt?from=2026-07-01&to=2026-07-31 yes"
-    "8007 /api/tasks/v1/notifications/           yes"
-    "8008 /api/messenger/v1/rooms/               yes"
-    "8008 /health/                               no"
-    "8009 /health/                               no"
-    "8010 /health/                               no"
-    "8011 /api/cms/v1/news/                      no"
-    "8011 /api/cms/v1/news/?page=2               no"
-    "8013 /api/requests/v1/templates/            yes"
-    "8013 /health/                               no"
+    "/api/core/v1/services/                      no"
+    "/api/users/v1/profile/                      yes"
+    "/api/users/v1/users/                        yes"
+    "/api/hr/v1/employees/                       yes"
+    "/api/hr/v1/departments/                     yes"
+    "/api/hr/v1/positions/                       yes"
+    "/api/tasks/v1/tasks/                        yes"
+    "/api/tasks/v1/equipment/                    yes"
+    "/api/tasks/v1/notifications/                yes"
+    "/api/messenger/v1/rooms/                    yes"
+    "/api/cms/v1/news/                           no"
+    "/api/cms/v1/news/?page=2                    no"
+    "/api/requests/v1/templates/                 yes"
+    "/api/mail/v1/accounts/                      yes"
+    "/api/media/v1/files/                        yes"
     # Deliberate misses — feed the 4xx/error panels:
-    "8007 /api/tasks/v1/tasks/999999/            yes"
-    "8006 /api/hr/v1/does-not-exist/             no"
-    "8005 /api/users/v1/profile/                 no"
+    "/api/tasks/v1/tasks/999999/                 yes"
+    "/api/hr/v1/does-not-exist/                  no"
+    "/api/users/v1/profile/                      no"
 )
 
-echo "Generating traffic: $ROUNDS rounds x ${#ENDPOINTS[@]} endpoints..."
+echo "Generating traffic: $ROUNDS rounds x ${#ENDPOINTS[@]} endpoints (backend :$PORT)..."
 total=0
 for _ in $(seq 1 "$ROUNDS"); do
     for entry in "${ENDPOINTS[@]}"; do
-        port=$(echo "$entry" | awk '{print $1}')
-        path=$(echo "$entry" | awk '{print $2}')
-        needs_auth=$(echo "$entry" | awk '{print $3}')
+        path=$(echo "$entry" | awk '{print $1}')
+        needs_auth=$(echo "$entry" | awk '{print $2}')
         if [ "$needs_auth" = "yes" ]; then
-            curl -s -o /dev/null -H "$AUTH" "$BASE:$port$path" || true
+            curl -s -o /dev/null -H "$AUTH" "$BASE:$PORT$path" || true
         else
-            curl -s -o /dev/null "$BASE:$port$path" || true
+            curl -s -o /dev/null "$BASE:$PORT$path" || true
         fi
         total=$((total + 1))
     done

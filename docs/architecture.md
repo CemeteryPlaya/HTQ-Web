@@ -1,5 +1,13 @@
 # Architecture Guide
 
+> ⚠️ **Устарело (написано до cutover'а FastAPI→Django).** Структура ниже
+> (`backend/tasks/viewsets/`, DRF ViewSets, `backend/tasks/views.py`) БОЛЬШЕ НЕ
+> СУЩЕСТВУЕТ. Актуально: единый Django-backend, домены в `backend/apps/<домен>`,
+> HTTP-слой — `htqweb.http.api_view` (НЕ DRF). Источники истины —
+> [STRUCTURE.md](../STRUCTURE.md), [API.md](../API.md),
+> [backend/README.md](../backend/README.md), [CLAUDE.md](../CLAUDE.md). Ниже — как
+> исторический фон.
+
 ## Goal
 Make the codebase understandable for a new teammate within 30-60 minutes.
 
