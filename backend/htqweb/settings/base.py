@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -43,6 +44,9 @@ MIDDLEWARE = [
     "htqweb.middleware.request_id.RequestIDMiddleware",
     "htqweb.middleware.service_gate.ServiceGateMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    # WhiteNoise отдаёт собранную (collectstatic) статику прямо из WSGI/ASGI-процесса
+    # — gunicorn/uvicorn сами статику не отдают. Должен идти СРАЗУ после Security.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     # Снимает CSRF с /api/ (JWT-stateless) ДО CsrfViewMiddleware — иначе
@@ -126,6 +130,14 @@ USE_TZ = True
 CELERY_TIMEZONE = TIME_ZONE
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# WhiteNoise: сжатие + manifest-хэши собранной статики (django-admin CSS/JS). S3/медиа
+# идут через htqweb.storage напрямую (не через Django default_storage), поэтому
+# default-сторедж — обычная ФС. В dev manifest отключён (см. settings/dev.py), иначе
+# runserver+DEBUG падает на {% static %} без предварительного collectstatic.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ── Object storage (S3/MinIO) — htqweb/storage/, ported from
@@ -175,12 +187,53 @@ TRANSLATION_API_KEY = env("TRANSLATION_API_KEY", "")
 TRANSLATION_PROVIDER = env("TRANSLATION_PROVIDER", "deepl")
 TRANSLATION_API_BASE = env("TRANSLATION_API_BASE", "https://api-free.deepl.com")
 
-# notify_admins_on_contact_request calls out to the still-running FastAPI
-# email-service over HTTP (Strangler Fig — no Django email app exists yet).
-# Legacy S2S-нотификация о contact-request (apps/cms/tasks.py). email-service снесён
-# при cutover → по умолчанию ПУСТО, и задача no-op (см. notify_admins_on_contact_request).
-# TODO: перевести на прямой вызов mail-домена (notify в apps.mail.interface) вместо HTTP S2S.
-EMAIL_SERVICE_URL = env("EMAIL_SERVICE_URL", "")
+# ── outbound e-mail (P1.5, 2026-07-22 audit spec) ────────────────────────
+# ``notify_admins_on_contact_request`` (apps/cms/tasks.py) used to POST to
+# ``settings.EMAIL_SERVICE_URL`` — the FastAPI email-service, deleted with
+# the rest of ``services/`` at cutover, which left the default ("") no-op'ing
+# forever. Replaced with Django's built-in ``django.core.mail.mail_admins``,
+# which reads ``ADMINS``/``SERVER_EMAIL``/``EMAIL_BACKEND`` below. SMTP
+# target is mailcow; ``EMAIL_HOST_*`` stay blank by default so an
+# unconfigured environment falls back to the console backend instead of
+# failing to connect.
+def _parse_admins(raw: str) -> list[tuple[str, str]]:
+    """``DJANGO_ADMINS`` env var → Django's ``ADMINS`` list of
+    ``(name, email)`` pairs. Comma-separated entries, each either
+    ``"Имя <mail@example.com>"`` or a bare ``mail@example.com`` (bare
+    addresses use the address itself as the display name — Django's tuple
+    shape requires one). Default ("") → empty list, i.e. no admin emails
+    configured and ``mail_admins`` silently no-ops (matches the old
+    blank-``EMAIL_SERVICE_URL`` no-op behaviour when nobody has set anything
+    up yet)."""
+    admins: list[tuple[str, str]] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        match = re.match(r"^(?P<name>.*)<(?P<email>[^<>]+)>$", chunk)
+        if match:
+            email = match.group("email").strip()
+            name = match.group("name").strip().strip('"') or email
+        else:
+            name = email = chunk
+        admins.append((name, email))
+    return admins
+
+
+ADMINS = _parse_admins(env("DJANGO_ADMINS", ""))
+MANAGERS = ADMINS
+
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "noreply@htq.group")
+# mail_admins() sends From=SERVER_EMAIL (not DEFAULT_FROM_EMAIL) — keep them
+# in sync by default so a single env var covers both unless overridden.
+SERVER_EMAIL = env("SERVER_EMAIL", DEFAULT_FROM_EMAIL)
+
+EMAIL_BACKEND = env("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = env("EMAIL_HOST", "")
+EMAIL_PORT = int(env("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = env("EMAIL_USE_TLS", "true").lower() in ("1", "true", "yes")
 
 # ── media upload pipeline (apps/media_files, task 3.2) — ported defaults
 # from services/media/app/core/settings.py, byte-for-byte where the setting

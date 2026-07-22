@@ -24,6 +24,9 @@ sys.exit(1)
 PY
 
 if [ "${RUN_MIGRATIONS}" = "1" ]; then
+    echo "[entrypoint] collectstatic ..."
+    python manage.py collectstatic --noinput
+
     echo "[entrypoint] migrate ..."
     python manage.py migrate --noinput
 
