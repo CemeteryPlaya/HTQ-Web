@@ -78,4 +78,28 @@ urlpatterns = [
     path("stats/by-actor/", views.stats_by_actor),
     path("stats/heatmap", views.stats_heatmap),
     path("stats/heatmap/", views.stats_heatmap),
+
+    # Reference data sources (Lark-Base-style lookup tables). ``my-data-
+    # tables`` and ``by-slug/...`` are literal paths registered BEFORE
+    # ``<int:source_id>`` for the same reason ``batch-approve`` is (see the
+    # instances comment above), even though the int converter cannot match
+    # them anyway.
+    path("reference-sources/my-data-tables", views.my_data_tables),
+    path("reference-sources/my-data-tables/", views.my_data_tables),
+    path("reference-sources/by-slug/<str:slug>/options",
+         views.reference_options),
+    path("reference-sources/by-slug/<str:slug>/options/",
+         views.reference_options),
+    path("reference-sources/", views.sources_collection),
+    path("reference-sources/<int:source_id>", views.source_detail),
+    path("reference-sources/<int:source_id>/", views.source_detail),
+    path("reference-sources/<int:source_id>/access",
+         views.set_data_table_access),
+    path("reference-sources/<int:source_id>/access/",
+         views.set_data_table_access),
+    path("reference-sources/<int:source_id>/rows/", views.rows_collection),
+    path("reference-sources/<int:source_id>/rows/<int:row_id>",
+         views.delete_row),
+    path("reference-sources/<int:source_id>/rows/<int:row_id>/",
+         views.delete_row),
 ]

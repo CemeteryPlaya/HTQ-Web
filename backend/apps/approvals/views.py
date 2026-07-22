@@ -796,3 +796,213 @@ def remove_member(request, project_id: int, user_id: int):
     if not deleted:
         raise Http404("Member not found")
     return _no_content()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Reference data sources -- /reference-sources/*  (Lark-Base-style lookup
+# tables that ``reference`` form widgets read their options from)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Ported from ``services/requests/app/api/v1/reference.py``. Management
+# (create/update/delete a source, add/remove rows) is platform-admin only
+# (``admin=True`` -- ``htqweb.authn.rbac.require_admin``, i.e. ``is_elevated``,
+# the same predicate the original's own ``_require_admin`` checked); reading
+# a source's metadata/rows and ``options`` needs only authentication.
+#
+# A template's auto-maintained data table (``template_id`` set) is the one
+# exception: its rows, and the ``my-data-tables``/``access`` endpoints, are
+# additionally gated through ``template_data_table.can_view_data_table`` /
+# ``can_manage_data_table`` (owner, process admins, granted viewers, or a
+# platform admin) -- see that module's docstring.
+
+def _elevated(request) -> bool:
+    return bool(request.token.is_elevated)
+
+
+def _source_or_404(source_id: int):
+    from django.http import Http404
+
+    from .models import RequestReferenceSource
+    src = RequestReferenceSource.objects.filter(pk=source_id).first()
+    if src is None:
+        raise Http404("Reference source not found")
+    return src
+
+
+def _source_dto(src) -> schemas.ReferenceSourceResponse:
+    return schemas.ReferenceSourceResponse.model_validate(src)
+
+
+@api_view(methods=("GET",))
+def list_sources(request):
+    from .models import RequestReferenceSource
+    qs = RequestReferenceSource.objects.order_by("name")
+    return [_source_dto(s) for s in qs]
+
+
+@api_view(methods=("POST",), body=schemas.ReferenceSourceCreate, admin=True, status=201)
+def create_source(request, data: schemas.ReferenceSourceCreate):
+    from .models import RequestReferenceSource
+
+    slug = data.slug or slugify(data.name)
+    if RequestReferenceSource.objects.filter(slug=slug).exists():
+        return json_error(f"slug '{slug}' already exists", 409)
+    src = RequestReferenceSource.objects.create(
+        slug=slug, name=data.name, columns_json=data.columns,
+        created_by=request.token.user_id,
+    )
+    return _source_dto(src)
+
+
+def sources_collection(request):
+    if request.method == "GET":
+        return list_sources(request)
+    if request.method == "POST":
+        return create_source(request)
+    return _method_not_allowed(request)
+
+
+def _data_table_dto(src, request) -> schemas.DataTableResponse:
+    return schemas.DataTableResponse(
+        id=src.id, slug=src.slug, name=src.name, columns=list(src.columns),
+        template_id=src.template_id,
+        access_ids=[int(x) for x in (src.access_ids or [])],
+        can_manage=template_data_table.can_manage_data_table(
+            src, request.token.user_id, _elevated(request)),
+    )
+
+
+@api_view(methods=("GET",))
+def my_data_tables(request):
+    """Template data tables the current user may see: created by them, a
+    process admin of the template, explicitly granted access, or a platform
+    admin."""
+    from .models import RequestReferenceSource
+
+    qs = (RequestReferenceSource.objects.filter(template_id__isnull=False)
+          .order_by("name"))
+    out = []
+    for src in qs:
+        if template_data_table.can_view_data_table(
+                src, request.token.user_id, _elevated(request)):
+            out.append(_data_table_dto(src, request))
+    return out
+
+
+@api_view(methods=("PATCH",), body=schemas.AccessUpdate)
+def set_data_table_access(request, source_id: int, data: schemas.AccessUpdate):
+    src = _source_or_404(source_id)
+    if src.template_id is None:
+        return json_error("not a template data table", 400)
+    if not template_data_table.can_manage_data_table(
+            src, request.token.user_id, _elevated(request)):
+        return json_error("only the table owner can manage access", 403)
+    src.access_ids = [int(x) for x in data.viewer_ids]
+    src.save(update_fields=["access_ids", "updated_at"])
+    return _data_table_dto(src, request)
+
+
+@api_view(methods=("GET",))
+def get_source(request, source_id: int):
+    return _source_dto(_source_or_404(source_id))
+
+
+@api_view(methods=("PATCH",), body=schemas.ReferenceSourceUpdate, admin=True)
+def update_source(request, source_id: int, data: schemas.ReferenceSourceUpdate):
+    src = _source_or_404(source_id)
+    if data.name is not None:
+        src.name = data.name
+    if data.columns is not None:
+        src.columns_json = data.columns
+    src.save()
+    return _source_dto(src)
+
+
+@api_view(methods=("DELETE",), admin=True, status=204)
+def delete_source(request, source_id: int):
+    _source_or_404(source_id).delete()
+    return _no_content()
+
+
+def source_detail(request, source_id: int):
+    if request.method == "GET":
+        return get_source(request, source_id=source_id)
+    if request.method == "PATCH":
+        return update_source(request, source_id=source_id)
+    if request.method == "DELETE":
+        return delete_source(request, source_id=source_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def list_rows(request, source_id: int):
+    from .models import RequestReferenceRow
+
+    src = _source_or_404(source_id)
+    if (src.template_id is not None
+            and not template_data_table.can_view_data_table(
+                src, request.token.user_id, _elevated(request))):
+        return json_error("no access to this data table", 403)
+    qs = RequestReferenceRow.objects.filter(source_id=source_id).order_by("id")
+    return [schemas.ReferenceRowResponse.model_validate(r) for r in qs]
+
+
+@api_view(methods=("POST",), body=schemas.ReferenceRowCreate, admin=True, status=201)
+def add_row(request, source_id: int, data: schemas.ReferenceRowCreate):
+    from .models import RequestReferenceRow
+
+    _source_or_404(source_id)
+    row = RequestReferenceRow.objects.create(source_id=source_id, data_json=data.data)
+    return schemas.ReferenceRowResponse.model_validate(row)
+
+
+def rows_collection(request, source_id: int):
+    if request.method == "GET":
+        return list_rows(request, source_id=source_id)
+    if request.method == "POST":
+        return add_row(request, source_id=source_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("DELETE",), admin=True, status=204)
+def delete_row(request, source_id: int, row_id: int):
+    from django.http import Http404
+
+    from .models import RequestReferenceRow
+
+    row = RequestReferenceRow.objects.filter(pk=row_id).first()
+    if row is None or row.source_id != source_id:
+        raise Http404("Row not found")
+    row.delete()
+    return _no_content()
+
+
+@api_view(methods=("GET",))
+def reference_options(request, slug: str):
+    """Distinct values of ``column`` from the named source, optionally
+    filtered where ``filter_col`` == ``filter_val`` (drives dependent
+    selects)."""
+    from .models import RequestReferenceRow, RequestReferenceSource
+
+    column = _str_param(request, "column")
+    if not column:
+        return json_error("field required: column", 422)
+    filter_col = _str_param(request, "filter_col")
+    filter_val = _str_param(request, "filter_val")
+
+    src = RequestReferenceSource.objects.filter(slug=slug).first()
+    if src is None:
+        return json_error("Reference source not found", 404)
+    rows = RequestReferenceRow.objects.filter(source_id=src.id)
+    seen: list[str] = []
+    for row in rows:
+        d = row.data_json or {}
+        if filter_col and str(d.get(filter_col, "")) != str(filter_val):
+            continue
+        val = d.get(column)
+        if val is None:
+            continue
+        s = str(val)
+        if s not in seen:
+            seen.append(s)
+    return {"slug": slug, "column": column, "options": seen}
