@@ -128,15 +128,3 @@ class AuditLog(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True, db_default=Now())
 
 
-class Item(models.Model):
-    """Пользовательские заметки/черновики — 1:N к User.
-
-    Порт services/user/app/models/item.py. У источника нет updated_at —
-    только created_at; не выдумываем лишнюю колонку.
-    """
-
-    title = models.CharField(max_length=200)
-    description = models.TextField(blank=True, default="", db_default="")
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
-                              related_name="items")
-    created_at = models.DateTimeField(auto_now_add=True, db_default=Now(), db_index=True)

@@ -1,1 +1,0 @@
-"""Admin aggregator application package."""

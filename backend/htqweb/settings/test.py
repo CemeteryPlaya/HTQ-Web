@@ -21,6 +21,13 @@ DATABASES = {
 }
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
+# manifest-сторедж (base) требует collectstatic и падает на {% static %} без него
+# (напр. рендер django-admin в тестах) — в тестах берём обычный staticfiles-сторедж.
+STORAGES = {
+    **STORAGES,  # noqa: F405
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+
 # Celery eager mode: tasks run inline, synchronously, with no broker — this
 # reproduces the old django-q2 Q_CLUSTER["sync"]=True behaviour the tests
 # rely on (notify_admins_on_contact_request fires synchronously from the
@@ -31,8 +38,11 @@ CELERY_BROKER_URL = "memory://"
 CELERY_RESULT_BACKEND = "cache+memory://"
 JWT_SECRET = "test-secret-key-for-htqweb-tests-32b"
 
-# Eager mode runs .delay(...) inline — so
-# notify_admins_on_contact_request fires synchronously from the
-# contact-request POST view during tests. Blank EMAIL_SERVICE_URL makes that
-# task no-op instead of attempting a real HTTP call (see apps/cms/tasks.py).
-EMAIL_SERVICE_URL = ""
+# Eager mode runs .delay(...) inline — so notify_admins_on_contact_request
+# fires synchronously from the contact-request POST view during tests.
+# ADMINS defaults to [] (base.py, DJANGO_ADMINS unset) so mail_admins()
+# no-ops by default there too; individual tests opt in with
+# @override_settings(ADMINS=[...]) to assert on django.core.mail.outbox.
+# pytest-django's test environment also force-swaps EMAIL_BACKEND to the
+# locmem backend for the duration of the run regardless of what's
+# configured, so no EMAIL_BACKEND override is needed here.

@@ -1,4 +1,4 @@
-"""Authentication business logic — login, refresh, admin-session.
+"""Authentication business logic — login, refresh.
 
 Ported from ``services/user/app/api/v1/auth.py`` (the FastAPI original
 inlines this directly in the router; split out here into
@@ -20,10 +20,6 @@ class InvalidCredentials(Exception):
 
 class AccountNotActivated(Exception):
     """User found (and password not yet checked) but ``status != ACTIVE``."""
-
-
-class NotAnAdminUser(Exception):
-    """User found, active, correct credentials, but no elevated flag."""
 
 
 def _find_user(login_id: str) -> User | None:
@@ -54,24 +50,4 @@ def authenticate(login_id: str, password: str) -> User:
 
     user.last_login = timezone.now()
     user.save(update_fields=["last_login"])
-    return user
-
-
-def authenticate_admin(login_id: str, password: str) -> User:
-    """``POST admin-session/login``.
-
-    Different check order/error set than ``authenticate`` above — ported
-    verbatim from the FastAPI original's ``admin_login``: missing user OR
-    not ``ACTIVE`` -> ``InvalidCredentials``; active but neither
-    ``is_staff`` nor ``is_superuser`` -> ``NotAnAdminUser``; active +
-    elevated but wrong password -> ``InvalidCredentials``. Does not touch
-    ``last_login`` (the source doesn't either).
-    """
-    user = _find_user(login_id)
-    if user is None or user.status != UserStatus.ACTIVE:
-        raise InvalidCredentials()
-    if not (user.is_staff or user.is_superuser):
-        raise NotAnAdminUser()
-    if not user.check_password(password):
-        raise InvalidCredentials()
     return user

@@ -101,7 +101,7 @@ const AdminUsers = () => {
                             <h1 className="text-3xl font-bold">{t('admin.users.title', 'Управление пользователями')}</h1>
                             <p className="text-sm text-muted-foreground mt-1">
                                 {t('admin.users.subtitle', 'Создавайте новых пользователей и редактируйте существующих. Для прямого доступа к таблицам БД — ')}
-                                <a href="/sqladmin/" className="text-primary hover:underline inline-flex items-center gap-1">sqladmin <ExternalLink className="h-3 w-3"/></a>.
+                                <a href="/django-admin/" className="text-primary hover:underline inline-flex items-center gap-1">Django admin <ExternalLink className="h-3 w-3"/></a>.
                             </p>
                         </div>
                         <div className="flex items-center gap-3">

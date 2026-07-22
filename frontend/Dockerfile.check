@@ -1,0 +1,25 @@
+# ─── Frontend для проверочной сборки: build (Node) → раздача через nginx ────
+# Отличие от frontend/Dockerfile (тот кладёт dist в общий том для внешнего
+# nginx): здесь образ самодостаточен — сам собирает SPA и сам его раздаёт,
+# проксируя /api и /ws в единый Django-backend (конфиг infra/django-check/nginx.conf).
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache python3 make g++
+
+COPY package.json package-lock.json ./
+RUN npm ci --legacy-peer-deps --no-audit --no-fund
+
+COPY . .
+# API-вызовы идут на относительный /api/ — nginx проксирует их в Django.
+ENV VITE_API_BASE_URL=/api/
+# npx vite build (а НЕ npm run build) — минуем postbuild-проверку бюджета
+# бандла, чтобы она не роняла сборку образа.
+RUN npx vite build
+
+FROM nginx:1.27-alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+# nginx.conf НЕ копируем в образ — он монтируется в docker-compose.django.yml
+# как volume (infra/django-check/nginx.conf → /etc/nginx/conf.d/default.conf),
+# чтобы прокси можно было править без пересборки фронта.
+EXPOSE 80

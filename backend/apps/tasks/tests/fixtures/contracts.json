@@ -1,0 +1,380 @@
+{
+  "source": "services/task/app/schemas/*.py — Pydantic response models read directly, NOT live captures. The FastAPI task-service is not running in this environment (see backend/README-tests.md), so no shape here was recorded from a real response. A later engineer who spins up the original stack should replace these with captured responses; the checking helpers can stay. cms keeps one file per schema; tasks has a dozen response models, so they share one keyed file — same provenance rule, one place to look.",
+  "contracts": {
+    "LabelResponse": {
+      "source": "services/task/app/schemas/label.py::LabelResponse",
+      "fields": {
+        "id": "int",
+        "name": "str",
+        "color": "str"
+      }
+    },
+    "TaskTypeResponse": {
+      "source": "services/task/app/schemas/task_type.py::TaskTypeResponse",
+      "fields": {
+        "id": "int",
+        "slug": "str",
+        "name": "str",
+        "color": "str",
+        "icon": "str|null",
+        "is_system": "bool",
+        "created_at": "str",
+        "updated_at": "str"
+      }
+    },
+    "EquipmentResponse": {
+      "source": "services/task/app/schemas/gantt.py::EquipmentResponse",
+      "fields": {
+        "id": "int",
+        "name": "str",
+        "inventory_no": "str|null",
+        "category": "str|null",
+        "is_active": "bool"
+      }
+    },
+    "AssignmentResponse": {
+      "source": "services/task/app/schemas/gantt.py::AssignmentResponse",
+      "fields": {
+        "id": "int",
+        "task_id": "int",
+        "employee_id": "int|null",
+        "equipment_id": "int|null",
+        "role": "str|null",
+        "allocation": "int"
+      }
+    },
+    "TaskListResponse": {
+      "source": "services/task/app/schemas/task.py::TaskListResponse",
+      "fields": {
+        "id": "int",
+        "key": "str",
+        "summary": "str",
+        "task_type_id": "int|null",
+        "task_type": "str",
+        "task_type_name": "str|null",
+        "task_type_color": "str|null",
+        "priority": "str",
+        "status": "str",
+        "progress_percent": "int",
+        "reporter_id": "int|null",
+        "reporter_name": "str|null",
+        "assignee_id": "int|null",
+        "assignee_name": "str|null",
+        "supervisor_id": "int|null",
+        "supervisor_name": "str|null",
+        "department_id": "int|null",
+        "department_name": "str|null",
+        "department_ids": "list",
+        "departments": "list",
+        "project_id": "int|null",
+        "project_name": "str|null",
+        "project_color": "str|null",
+        "parent_id": "int|null",
+        "parent_key": "str|null",
+        "assignees": "list",
+        "labels": "list",
+        "due_date": "str|null",
+        "start_date": "str|null",
+        "effective_start_date": "str|null",
+        "effective_due_date": "str|null",
+        "date_warnings": "list",
+        "completed_at": "str|null",
+        "subtask_count": "int",
+        "created_at": "str",
+        "updated_at": "str"
+      }
+    },
+    "TaskDetailResponse": {
+      "source": "services/task/app/schemas/task.py::TaskDetailResponse",
+      "fields": {
+        "id": "int",
+        "key": "str",
+        "summary": "str",
+        "description": "str",
+        "task_type_id": "int|null",
+        "task_type": "str",
+        "task_type_name": "str|null",
+        "task_type_color": "str|null",
+        "priority": "str",
+        "status": "str",
+        "progress_percent": "int",
+        "reporter_id": "int|null",
+        "reporter_name": "str|null",
+        "assignee_id": "int|null",
+        "assignee_name": "str|null",
+        "supervisor_id": "int|null",
+        "supervisor_name": "str|null",
+        "department_id": "int|null",
+        "department_name": "str|null",
+        "department_ids": "list",
+        "departments": "list",
+        "project_id": "int|null",
+        "project_name": "str|null",
+        "project_color": "str|null",
+        "parent_id": "int|null",
+        "parent_key": "str|null",
+        "assignees": "list",
+        "delegates": "list",
+        "watchers": "list",
+        "labels": "list",
+        "label_ids": "list",
+        "due_date": "str|null",
+        "start_date": "str|null",
+        "effective_start_date": "str|null",
+        "effective_due_date": "str|null",
+        "date_warnings": "list",
+        "completed_at": "str|null",
+        "comments": "list",
+        "attachments": "list",
+        "subtasks": "list",
+        "activities": "list",
+        "outgoing_links": "list",
+        "incoming_links": "list",
+        "created_at": "str",
+        "updated_at": "str"
+      }
+    },
+    "TaskStats": {
+      "source": "services/task/app/schemas/task.py::TaskStats",
+      "fields": {
+        "total": "int",
+        "by_status": "dict",
+        "by_priority": "dict",
+        "by_type": "dict",
+        "by_department": "list",
+        "by_assignee": "list",
+        "created_per_day": "list",
+        "resolved_per_day": "list"
+      }
+    },
+    "ProjectResponse": {
+      "source": "services/task/app/schemas/project.py::ProjectResponse",
+      "fields": {
+        "id": "int",
+        "name": "str",
+        "description": "str",
+        "status": "str",
+        "color": "str",
+        "start_date": "str|null",
+        "end_date": "str|null",
+        "owner_id": "int|null",
+        "owner_name": "str|null",
+        "department_id": "int|null",
+        "department_name": "str|null",
+        "task_count": "int",
+        "done_count": "int",
+        "progress": "float",
+        "created_at": "str",
+        "updated_at": "str"
+      }
+    },
+    "CommentResponse": {
+      "source": "services/task/app/schemas/comment.py::CommentResponse",
+      "fields": {
+        "id": "int",
+        "task_id": "int",
+        "author_id": "int|null",
+        "author_name": "str|null",
+        "body": "str",
+        "created_at": "str",
+        "updated_at": "str"
+      }
+    },
+    "AttachmentResponse": {
+      "source": "services/task/app/schemas/attachment.py::AttachmentResponse",
+      "fields": {
+        "id": "int",
+        "task_id": "int",
+        "file_path": "str",
+        "filename": "str",
+        "uploaded_by_id": "int|null",
+        "uploaded_by_name": "str|null",
+        "created_at": "str"
+      }
+    },
+    "ActivityResponse": {
+      "source": "services/task/app/schemas/activity.py::ActivityResponse",
+      "fields": {
+        "id": "int",
+        "task_id": "int",
+        "actor_id": "int|null",
+        "actor_name": "str|null",
+        "field_name": "str",
+        "old_value": "str|null",
+        "new_value": "str|null",
+        "created_at": "str"
+      }
+    },
+    "LinkResponse": {
+      "source": "services/task/app/schemas/link.py::LinkResponse — note created_at is declared `str` in the original, not datetime, so pydantic emitted str(datetime) rather than ISO-8601. Preserved deliberately.",
+      "fields": {
+        "id": "int",
+        "source_id": "int",
+        "target_id": "int",
+        "link_type": "str",
+        "created_by_id": "int|null",
+        "source_key": "str|null",
+        "source_summary": "str|null",
+        "target_key": "str|null",
+        "target_summary": "str|null",
+        "created_at": "str"
+      }
+    },
+    "NotificationResponse": {
+      "source": "services/task/app/schemas/notification.py::NotificationResponse",
+      "fields": {
+        "id": "int",
+        "recipient_id": "int",
+        "actor_id": "int|null",
+        "actor_name": "str|null",
+        "actor_avatar_url": "str|null",
+        "verb": "str",
+        "task_id": "int|null",
+        "task_key": "str|null",
+        "target_type": "str|null",
+        "target_id": "int|null",
+        "is_read": "bool",
+        "read_at": "str|null",
+        "created_at": "str"
+      }
+    },
+    "NotificationsPage": {
+      "source": "services/task/app/schemas/notification.py::NotificationsPage",
+      "fields": {
+        "items": "list",
+        "total": "int",
+        "page": "int",
+        "pages": "int",
+        "limit": "int",
+        "unread_total": "int"
+      }
+    },
+    "CalendarEventResponse": {
+      "source": "services/task/app/schemas/calendar.py::CalendarEventResponse (CalendarEventBase + id/created_at/updated_at/creator_id/exceptions/participants)",
+      "fields": {
+        "id": "int",
+        "title": "str",
+        "description": "str|null",
+        "start_at": "str",
+        "end_at": "str",
+        "is_all_day": "bool",
+        "event_type": "str",
+        "conference_room_id": "str|null",
+        "color": "str|null",
+        "is_global": "bool",
+        "department_id": "int|null",
+        "creator_id": "int|null",
+        "exceptions": "list",
+        "participants": "list",
+        "created_at": "str",
+        "updated_at": "str"
+      }
+    },
+    "EventExceptionResponse": {
+      "source": "services/task/app/schemas/calendar.py::EventExceptionResponse",
+      "fields": {
+        "id": "int",
+        "event_id": "int",
+        "exception_date": "str",
+        "is_cancelled": "bool"
+      }
+    },
+    "ProductionDayResponse": {
+      "source": "services/task/app/schemas/calendar.py::ProductionDayResponse",
+      "fields": {
+        "date": "str",
+        "day_type": "str",
+        "working_days_since_epoch": "int",
+        "note": "str|null"
+      }
+    },
+    "ReportsGanttResponse": {
+      "source": "services/task/app/schemas/gantt.py::ReportsGanttResponse",
+      "fields": {
+        "tasks": "list"
+      }
+    },
+    "GanttTask": {
+      "source": "services/task/app/schemas/gantt.py::GanttTask",
+      "fields": {
+        "id": "str",
+        "key": "str",
+        "text": "str",
+        "start_date": "str|null",
+        "end_date": "str|null",
+        "progress": "float",
+        "status": "str",
+        "parent": "str|null",
+        "assignees": "list"
+      }
+    },
+    "ResourceGanttResponse": {
+      "source": "services/task/app/schemas/gantt.py::ResourceGanttResponse",
+      "fields": {
+        "range": "dict",
+        "resources": "list"
+      }
+    },
+    "ResourceRow": {
+      "source": "services/task/app/schemas/gantt.py::ResourceRow",
+      "fields": {
+        "resource_id": "str",
+        "resource_kind": "str",
+        "resource_name": "str",
+        "meta": "dict",
+        "allocated_tasks": "list"
+      }
+    },
+    "AllocatedTask": {
+      "source": "services/task/app/schemas/gantt.py::AllocatedTask",
+      "fields": {
+        "task_id": "str",
+        "key": "str",
+        "title": "str",
+        "start_date": "str|null",
+        "end_date": "str|null",
+        "progress": "float",
+        "status": "str",
+        "allocation": "int"
+      }
+    },
+    "AssigneeResponse": {
+      "source": "services/task/app/schemas/task.py::AssigneeResponse",
+      "fields": {
+        "user_id": "int",
+        "role": "str",
+        "name": "str|null",
+        "avatar_url": "str|null"
+      }
+    },
+    "DelegateResponse": {
+      "source": "services/task/app/schemas/task.py::DelegateResponse",
+      "fields": {
+        "user_id": "int",
+        "name": "str|null",
+        "avatar_url": "str|null",
+        "granted_by_id": "int|null",
+        "granted_by_name": "str|null",
+        "granted_at": "str|null"
+      }
+    },
+    "WatcherResponse": {
+      "source": "services/task/app/schemas/task.py::WatcherResponse",
+      "fields": {
+        "user_id": "int",
+        "name": "str|null",
+        "avatar_url": "str|null"
+      }
+    },
+    "CalendarEventParticipantInfo": {
+      "source": "services/task/app/schemas/calendar.py::CalendarEventParticipantInfo",
+      "fields": {
+        "user_id": "int",
+        "full_name": "str|null",
+        "email": "str|null",
+        "avatar_url": "str|null",
+        "rsvp_status": "str"
+      }
+    }
+  }
+}

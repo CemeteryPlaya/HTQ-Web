@@ -1,8 +1,10 @@
 # API Documentation — HTQWeb Platform
 
-> **State as of `0.1.2` (Phase 5 complete).** Django removed; 8 FastAPI
-> microservices behind a Vite dev proxy (`:3000`) or nginx prod gateway
-> (`:80`). Real-time chat over Socket.IO. Per-service Postgres schemas.
+> **State: post-cutover (phase 11 complete).** The nine FastAPI microservices
+> and the Django monolith that preceded them are both gone. One Django
+> backend (Python 3.14, Django 5.2.7) now serves every domain behind a Vite
+> dev proxy (`:3000`) or the nginx prod gateway (`:80`). Real-time chat over
+> Socket.IO, served by the backend's ASGI process. One Postgres schema.
 
 ## Architecture
 
@@ -20,31 +22,40 @@
           │  Proxy by URL prefix
           ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ Microservices (Docker network — not directly user-reachable in prod) │
+│ One Django backend (Docker network — not directly user-reachable     │
+│ in prod), same image, different `command` per process:               │
 │                                                                       │
-│   user-service       :8005   /api/users/v1/*                         │
-│   hr-service         :8006   /api/hr/v1/*                            │
-│   task-service       :8007   /api/tasks/v1/*                         │
-│   messenger-service  :8008   /api/messenger/v1/*  +  Socket.IO       │
-│   media-service      :8009   /api/media/v1/*                         │
-│   email-service      :8010   /api/email/v1/*                         │
-│   cms-service        :8011   /api/cms/v1/*                           │
-│   admin-service      :8012   /sqladmin/*                             │
-│                                                                       │
-│   user-worker, user-scheduler, hr-worker, ... (Dramatiq + APScheduler)│
-└──────────────────────────────────────────────────────────────────────┘
+│   backend-web    :8000   gunicorn/WSGI — all of /api/*, /django-admin/,│
+│                          static. Only this process runs `migrate` +   │
+│                          seeds the admin account (RUN_MIGRATIONS=1)   │
+│   backend-asgi   :8000   uvicorn/ASGI  — SSE /api/requests/v1/stream +│
+│                          WebSocket /ws/ (messenger Socket.IO)         │
+│   backend-worker         Celery worker (all domains' @shared_task)   │
+│   backend-beat           Celery beat (django-celery-beat schedule)   │
+│   flower         :5555   Celery monitoring UI                        │
+└─────────┬────────────────────────────────────────────────────────────┘
           │
           ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ Postgres :5432                                                        │
-│   schemas: auth, hr, tasks, cms, media, messenger, email             │
-│   PgBouncer :6432 (transaction pooling)                              │
-│ Redis :6379  (Dramatiq broker, Socket.IO adapter, pub/sub)           │
-│ Loki :3100, Grafana :3001                                            │
+│ Postgres :5432 (direct — no pooling middleman in the request path)   │
+│   one schema: public. Table names are Django's own default           │
+│   (<app_label>_<model>, e.g. hr_department, mail_emailaccount)       │
+│   PgBouncer :6432 kept for host tooling only, not live traffic       │
+│ Redis :6379  (cache, Celery broker/results, SSE pub/sub bridge)      │
+│ Loki :3100, Grafana :3001, Prometheus :9090                          │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-## Access URLs (dev mode — `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`)
+Domains are Django apps under `backend/apps/`: `users`, `hr`, `tasks`,
+`approvals` (mounted at `/api/requests/`), `cms`, `media_files` (mounted at
+`/api/media/`), `mail` (mounted at `/api/email/`), `messenger`, plus `core`
+(health checks + the service registry, no domain of its own). Each domain's
+URLs live in `apps/<domain>/urls.py` — that is now the source of truth this
+document is checked against, not a FastAPI router. See
+[STRUCTURE.md](STRUCTURE.md) §3 and [backend/README.md](backend/README.md)
+for the app anatomy.
+
+## Access URLs (dev mode — `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`)
 
 The Vite dev server binds `0.0.0.0:3000` with `allowedHosts: true`, so any
 of the following work identically over **plain HTTP**:
@@ -64,39 +75,66 @@ of the following work identically over **plain HTTP**:
 > 2. Or open in Incognito (HSTS isn't applied there) → confirm HTTP works.
 > 3. Then go back to the regular tab and reload — HTTP should stick.
 
-> ⚠️ **`{"detail":"Not Found"}` from microservices** typically means the
-> request is missing its service prefix. Use the routing table below — every
-> canonical prefix is `/api/<service>/v1/...`.
+> ⚠️ **`{"detail":"Not Found"}`** typically means the request is missing its
+> domain prefix. Use the routing table below — every canonical prefix is
+> `/api/<domain>/v1/...`, and it now always resolves to the same backend.
+
+The backend's own ports are also reachable directly in dev (both published
+by `docker-compose.yml`): `:8000` (WSGI — `backend-web`), `:8001` (ASGI —
+`backend-asgi`). Vite's proxy only forwards `/api/*` and `/ws/*` — hitting
+`/health/` bare (not under `/api/`) against `:3000` will 404 from Vite
+itself; hit `:8000`/`:8001` directly for that, or use the gateway-level
+`/health` (nginx, prod) described below.
 
 ## Production access (nginx :80)
 
-`docker compose up -d` (without `-f docker-compose.dev.yml`) brings up
-nginx on `:80`. Same routing table, but the Vite dev server isn't running.
+`docker compose up -d` (without `-f docker-compose.dev.yml`, and note the
+`production` compose profile that adds `nginx`/`sfu`/`certbot`/
+`webtransport`) brings up nginx on `:80`. Same routing table, but the Vite
+dev server isn't running.
 
 ---
 
 ## Routing table
 
-| Prefix                              | Service           | Notes                                        |
-|-------------------------------------|-------------------|----------------------------------------------|
+Source of truth: [infra/nginx/default.conf](infra/nginx/default.conf) (two
+upstreams — `backend` for WSGI, `backend_asgi` for ASGI — plus
+longest-match `location` blocks). In dev, `frontend/vite.config.ts` mirrors
+the same split via one `VITE_BACKEND_TARGET` (WSGI) +
+`VITE_MESSENGER_WS_TARGET` (ASGI); the per-domain `*ServiceTarget` variable
+names in that file are historical — every one of them now points at the
+same backend.
+
+| Prefix                              | Backed by         | Notes                                        |
+|-------------------------------------|--------------------|-----------------------------------------------|
 | `/`, `/login`, `/register`, `/admin/users`, `/admin/chats`, … | Frontend SPA  | All other paths fall through to React Router |
-| `/api/users/v1/*`                   | user-service      | Auth, profile, registrations, items, admin   |
-| `/api/hr/v1/*`                      | hr-service        | Employees, departments, vacancies, time      |
-| `/api/tasks/v1/*`                   | task-service      | Tasks, calendar, sequences, attachments      |
-| `/api/messenger/v1/*`               | messenger-service | Rooms, messages, keys (E2EE), attachments    |
-| `/api/media/v1/files/*`             | media-service     | Uploads, downloads with Range, thumbnails    |
-| `/api/email/v1/*`                   | email-service     | OAuth (Google/Microsoft), SMTP/IMAP, DLP     |
-| `/api/cms/v1/news/*`                | cms-service       | News articles                                |
-| `/api/cms/v1/contact-requests/*`    | cms-service       | Public contact form + admin queue            |
-| `/api/cms/v1/conference/config`     | cms-service       | SFU/WebRTC runtime config                    |
-| `/sqladmin/*`                       | admin-service     | sqladmin DB dashboard (NOT the SPA admin)    |
-| `/ws/messenger/socket.io/*`         | messenger-service | Real-time chat (Socket.IO)                   |
-| `/ws/sfu/*`                         | sfu (mediasoup)   | WebRTC signalling for /conference            |
+| `/api/requests/v1/stream`           | `backend_asgi`     | SSE, exact match, unbuffered, 3600s timeout — **before** the general `/api/` rule |
+| `/api/hr/v1/public/`                | `backend` (WSGI)   | Public org-chart-by-token, strict rate limit, no auth |
+| `/api/email/v1/webhooks/`           | `backend` (WSGI)   | Gmail Pub/Sub + Graph + Mailcow push — **no** rate limit |
+| `/api/media/v1/files/` (POST)       | `backend` (WSGI)   | Upload — hard size/rate limit, buffering off |
+| `/api/media/`                       | `backend` (WSGI)   | Read/metadata + edge cache of public variants |
+| `/api/users/v1/*`                   | `backend` (WSGI)   | Auth, profile, registrations, items, admin   |
+| `/api/hr/v1/*`                      | `backend` (WSGI)   | Employees, departments, vacancies, time      |
+| `/api/tasks/v1/*`                   | `backend` (WSGI)   | Tasks, calendar, sequences, attachments      |
+| `/api/requests/v1/*`                | `backend` (WSGI)   | Approvals: forms, instances, projects, stats, reference sources |
+| `/api/messenger/v1/*`               | `backend` (WSGI)   | Rooms, messages, keys (E2EE), attachments    |
+| `/api/email/v1/*`                   | `backend` (WSGI)   | OAuth (Google/Microsoft), Mailcow, mailboxes |
+| `/api/cms/v1/*`                     | `backend` (WSGI)   | News, categories/tags, contact-requests, ConferenceConfig |
+| `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
+| `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django |
+| `/django-admin/`                    | `backend` (WSGI)   | Django's own admin, session-authenticated (see Authentication) |
+| `/static/`                          | `backend` (WSGI)   | `collectstatic` output |
+| `/grafana/`, `/prometheus/`         | grafana / prometheus | Observability — see below |
+
+`/sqladmin/*` and `/mongo-admin` are **gone** — there is no nginx location
+for either anymore (the old sqladmin aggregator and AdminJS panel were
+deleted with the FastAPI services). Database administration is now
+`/django-admin/`.
 
 ### Temporary compatibility aliases
 
 Vite dev/preview and nginx rewrite cached old frontend paths to canonical
-service prefixes. Examples:
+domain prefixes. Examples:
 
 | Old path | Canonical path |
 |----------|----------------|
@@ -106,7 +144,7 @@ service prefixes. Examples:
 | `/api/calendar-events/*` | `/api/tasks/v1/calendar/...` |
 | `/api/calendar-timeline/*` | `/api/tasks/v1/calendar/timeline/...` |
 | `/api/media/v1/{not files}/*` | `/api/media/v1/files/...` |
-| `/api/users/*`, `/api/hr/*`, `/api/tasks/*`, `/api/cms/*`, `/api/email/*`, `/api/messenger/*` without `/v1/` | matching `/api/<service>/v1/...` |
+| `/api/users/*`, `/api/hr/*`, `/api/tasks/*`, `/api/cms/*`, `/api/email/*`, `/api/messenger/*` without `/v1/` | matching `/api/<domain>/v1/...` |
 
 Unknown `/api/*` returns JSON 404. Legacy `/media/*` returns JSON 410.
 
@@ -126,13 +164,16 @@ Content-Type: application/json
 → 401 { "detail": "Account is not activated" }   # status != ACTIVE
 ```
 
-JWT claims (HS256 with `JWT_SECRET`, issuer `htqweb-auth`):
+JWT claims (HS256 with `JWT_SECRET`, issuer `htqweb-auth` — unchanged from
+the FastAPI generation, even though there's no separate user-service
+anymore):
 ```
 { user_id, username, email, is_staff, is_superuser, is_admin,
   token_type: "access" | "refresh", iat, exp, iss }
 ```
-`is_admin = is_staff OR is_superuser`. All microservices validate JWTs
-locally — no introspection round-trip.
+`is_admin = is_staff OR is_superuser`. `apps.users` (`htqweb/authn/jwt.py`)
+both issues and validates every token, in-process, for every app — no
+introspection round-trip, no separate identity service.
 
 ### Refresh token
 
@@ -144,7 +185,7 @@ Content-Type: application/json
 → 200 { "access": "<jwt>", "token_type": "Bearer" }
 ```
 
-### Admin-session cookie (sqladmin login)
+### Admin-session cookie — legacy, kept for contract parity, no live consumer
 
 ```
 POST /api/users/v1/admin-session/login
@@ -153,27 +194,35 @@ Content-Type: application/x-www-form-urlencoded
 username=admin&password=...&next=/sqladmin/
 → 303 Set-Cookie: admin_session=<jwt>; HttpOnly; SameSite=Lax; Path=/
        Location: /sqladmin/
-```
-The cookie is recognised by every service's sqladmin backend
-(`JWTAdminAuthBackend`); a single login lights up DB admin across the platform.
-
-```
 POST /api/users/v1/admin-session/logout   →   { "ok": true } + clears cookie
 ```
+This pair still exists (`apps/users/views.py::admin_login`/`admin_logout`,
+ported byte-for-byte) and `htqweb.http.api_view` still accepts
+`auth="admin_session"` for a route that wants it — but **its original
+consumer, sqladmin, is gone**, and its default `next` still points at the
+now-nonexistent `/sqladmin/`. `/django-admin/` (Django's built-in admin)
+does **not** use this cookie; it authenticates with Django's own
+session/login form against the same `User` model. Don't wire new code to
+`admin_session` expecting it to gate `/django-admin/` — it doesn't.
 
 ### Bootstrap an admin user
 
+The `backend-web` process seeds one automatically and idempotently on every
+start (`RUN_MIGRATIONS=1` → `docker-entrypoint.sh` → `migrate` then a
+`manage.py shell` one-liner):
 ```
-docker compose exec user-service \
-  python -m app.scripts.create_admin \
-    --username admin --email admin@htqweb.local --password admin123 \
-    --first-name Admin --last-name Root
+username=admin, password=admin12345, is_staff=is_superuser=True, status=ACTIVE
 ```
-Creates or upgrades the user to `status=ACTIVE`, `is_staff=is_superuser=True`.
+To create another admin by hand:
+```bash
+docker compose exec backend-web python manage.py createsuperuser
+# or, to promote an existing user without Django's interactive prompt,
+# use /api/users/v1/admin/users/{id}/ (PATCH, admin only) from an existing admin session.
+```
 
 ---
 
-## user-service `/api/users/v1`
+## `apps.users` — `/api/users/v1`
 
 ### Profile
 
@@ -183,25 +232,28 @@ GET  /api/users/v1/profile/          → ProfileResponse (alias)
 PATCH /api/users/v1/profile/me       multipart/form-data → ProfileResponse
 PATCH /api/users/v1/profile/         multipart/form-data → ProfileResponse
 POST /api/users/v1/profile/change-password  { current_password?, new_password }
+DELETE /api/users/v1/profile/avatar          → removes the current avatar
 ```
 PATCH body fields: `display_name`, `firstName`/`first_name`, `lastName`/
 `last_name`, `patronymic`, `bio`, `phone`, `settings` (JSON string), and
-optional `avatar` (UploadFile — forwarded to media-service via S2S JWT).
+optional `avatar` (UploadFile — stored via `apps.media_files.interface`,
+not forwarded over HTTP to a separate media service anymore).
 
 ### Registration
 
 ```
 POST /api/users/v1/register/                          { email, password, full_name }
 GET  /api/users/v1/pending-registrations/             admin only
-POST /api/users/v1/pending-registrations/{id}/approve/  → 204, publishes user.upserted
-POST /api/users/v1/pending-registrations/{id}/reject/   → 204, publishes user.deactivated
+POST /api/users/v1/pending-registrations/{id}/approve/  → 204
+POST /api/users/v1/pending-registrations/{id}/reject/   → 204
 ```
 
 ### Admin user management
 
 ```
 GET  /api/users/v1/admin/users/                       admin only
-PATCH /api/users/v1/admin/users/{id}/                 admin only, publishes user.upserted/deactivated
+PATCH /api/users/v1/admin/users/{id}/                 admin only
+POST /api/users/v1/admin/users/{id}/set-password/     admin only
 ```
 
 ### Items (personal notes)
@@ -209,9 +261,15 @@ PATCH /api/users/v1/admin/users/{id}/                 admin only, publishes user
 ```
 GET    /api/users/v1/items/
 POST   /api/users/v1/items/                           { title, description }
-GET    /api/users/v1/items/{id}/
+GET    /api/users/v1/items/{id}/          (no bare-slash alias — not called that way by the frontend)
 PATCH  /api/users/v1/items/{id}/
 DELETE /api/users/v1/items/{id}/
+```
+
+### Options / picker
+
+```
+GET /api/users/v1/users/options/       any authenticated user — used by other domains' "assign to user" pickers
 ```
 
 ### Client-side error/event ingestion
@@ -223,31 +281,41 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 
 ---
 
-## hr-service `/api/hr/v1`
+## `apps.hr` — `/api/hr/v1`
 
 | Endpoint                                  | Method | Notes                          |
-|-------------------------------------------|--------|--------------------------------|
+|-------------------------------------------|--------|---------------------------------|
 | `/api/hr/v1/employees/`                   | GET, POST | Employee CRUD               |
 | `/api/hr/v1/employees/{id}/`              | GET, PATCH, DELETE |                       |
+| `/api/hr/v1/employees/me`                 | GET    | Current user's own employee row |
+| `/api/hr/v1/employees/me/card`            | GET    | Т-2 employee card (field-gated) |
+| `/api/hr/v1/employees/users/`             | GET, POST | User picker for "create employee from user"; POST creates the platform user via `apps.users.interface.create_user` |
 | `/api/hr/v1/departments/`                 | GET, POST | Tree (`ltree path`)         |
+| `/api/hr/v1/departments/tree`             | GET    | Full tree                      |
 | `/api/hr/v1/positions/`                   | GET, POST |                              |
+| `/api/hr/v1/positions/levels/`            | GET, POST | Level thresholds                |
 | `/api/hr/v1/vacancies/`                   | GET, POST |                              |
 | `/api/hr/v1/applications/`                | GET, POST | Candidate applications      |
 | `/api/hr/v1/time/`                        | GET, POST | Time tracking               |
-| `/api/hr/v1/documents/`                   | GET, POST | HR documents                |
+| `/api/hr/v1/documents/`                   | GET, POST | HR documents (now plain Django models, MongoDB is gone) |
 | `/api/hr/v1/department-folders/`          | GET    | Department folders visible to current user |
 | `/api/hr/v1/department-file-folders/`     | GET, POST | User-created folders inside a department |
-| `/api/hr/v1/department-files/`            | GET, POST | Department-scoped files; POST forwards bytes to media-service |
+| `/api/hr/v1/department-files/`            | GET, POST | Department-scoped files; stored via `apps.media_files.interface` |
 | `/api/hr/v1/department-files/{id}/`       | DELETE | Remove HR metadata for a department file |
 | `/api/hr/v1/audit/`                       | GET    | Read-only audit log            |
 | `/api/hr/v1/org/`                         | GET    | Organisational settings        |
 | `/api/hr/v1/pmo/`                         | GET, POST | Project management office   |
 | `/api/hr/v1/share-links/`                 | GET, POST |                              |
-| `/api/hr/v1/public/org/{token}`           | GET    | Public org-chart by share link |
+| `/api/hr/v1/public/org/{token}`           | GET    | Public org-chart by share link — nginx `api_public` rate limit |
+
+Source: `backend/apps/hr/urls.py` (170 registered patterns, counting both
+slash spellings — see [STRUCTURE.md §4.2](STRUCTURE.md) for HR-adjacent
+detail and [backend/apps/hr/services/](backend/apps/hr/services/) for the
+business logic).
 
 ---
 
-## task-service `/api/tasks/v1`
+## `apps.tasks` — `/api/tasks/v1`
 
 | Endpoint                                          | Method | Notes                       |
 |---------------------------------------------------|--------|-----------------------------|
@@ -257,192 +325,327 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/tasks/v1/tasks/{id}/attachments/`           | GET, POST |                           |
 | `/api/tasks/v1/tasks/{id}/activity/`              | GET    | Activity log                 |
 | `/api/tasks/v1/tasks/{id}/links/`                 | GET, POST | Cross-task links          |
+| `/api/tasks/v1/tasks/{id}/supervisor/`            | PATCH  | `{user_id\|null}`             |
+| `/api/tasks/v1/tasks/{id}/assignees/`             | PATCH  | `[{user_id, role}]`           |
+| `/api/tasks/v1/tasks/{id}/delegates/`             | POST   | `{user_id}` — supervisor only |
+| `/api/tasks/v1/tasks/{id}/delegates/{user_id}/`   | DELETE |                               |
+| `/api/tasks/v1/tasks/{id}/watch/`                 | POST, DELETE |                         |
+| `/api/tasks/v1/tasks/{id}/progress/`              | PATCH  | `{percent}`                   |
 | `/api/tasks/v1/labels/`                           | GET, POST |                           |
 | `/api/tasks/v1/versions/`                         | GET, POST | Project versions          |
+| `/api/tasks/v1/projects/`                         | GET, POST |                            |
+| `/api/tasks/v1/projects/{id}/`                    | GET, PATCH, DELETE |                  |
+| `/api/tasks/v1/projects/{id}/tasks/`              | GET    |                              |
+| `/api/tasks/v1/task-types/`                       | GET, POST | User-extensible registry  |
+| `/api/tasks/v1/task-types/{id}/`                  | GET, PATCH, DELETE |                  |
 | `/api/tasks/v1/calendar/`                         | GET, POST | Calendar events           |
 | `/api/tasks/v1/calendar/{id}/`                    | PATCH, DELETE | Calendar event         |
 | `/api/tasks/v1/calendar/{id}/exceptions/`         | POST   | Calendar event exception      |
 | `/api/tasks/v1/calendar/timeline/`                | GET    | `{ tasks, events }` by `start`/`end` |
 | `/api/tasks/v1/production-calendar/`              | GET, PATCH | Production days, Kazakhstan holidays |
-| `/api/tasks/v1/sequences/`                        | GET    | Atomic key generators        |
+| `/api/tasks/v1/sequences/`                        | GET    | Jira-style key generators     |
 | `/api/tasks/v1/notifications/`                    | GET    |                              |
+
+Source: `backend/apps/tasks/urls.py`. FSM transitions and the role model
+(reporter/supervisor/assignee/delegate/watcher) are unchanged from the
+FastAPI original — see [STRUCTURE.md §4.2](STRUCTURE.md).
 
 ---
 
-## messenger-service `/api/messenger/v1` + Socket.IO
+## `apps.approvals` — `/api/requests/v1` (+ SSE)
+
+Mounted at `/api/requests/`, even though the Django app label is
+`approvals` (`ApprovalsConfig.API_PREFIX = "api/requests/v1/"` —
+deliberate, see `apps/approvals/urls.py`'s docstring).
+
+| Endpoint                                                   | Method | Notes |
+|-------------------------------------------------------------|--------|-------|
+| `/api/requests/v1/instances/`                               | GET, POST |     |
+| `/api/requests/v1/instances/batch-approve`                  | POST   | Registered before the `<id>` routes |
+| `/api/requests/v1/instances/{id}/`                          | GET, PATCH | PATCH only while still a draft |
+| `/api/requests/v1/instances/{id}/submit/` … `/resubmit/`, `/approve/`, `/reject/`, `/request-changes/`, `/cancel/`, `/recall/` | POST | Workflow actions |
+| `/api/requests/v1/templates/`                                | GET, POST | Form templates |
+| `/api/requests/v1/templates/{id}/`                            | GET, PATCH, DELETE |     |
+| `/api/requests/v1/templates/{id}/versions/`                   | POST   | Publish a version |
+| `/api/requests/v1/templates/{id}/versions/{version_id}`        | GET    | Read a version |
+| `/api/requests/v1/templates/{id}/activate/` / `/deactivate/`  | POST   |     |
+| `/api/requests/v1/templates/preview`                          | POST   | Registered before `{id}` routes |
+| `/api/requests/v1/projects/`                                  | GET, POST |     |
+| `/api/requests/v1/projects/{id}/`                              | GET, PATCH, DELETE |     |
+| `/api/requests/v1/projects/{id}/members/`                      | GET, POST |     |
+| `/api/requests/v1/projects/{id}/members/{user_id}/`             | DELETE |     |
+| `/api/requests/v1/reference-sources/`                          | GET, POST | Lark-Base-style lookup tables |
+| `/api/requests/v1/reference-sources/{id}/`                      | GET, PATCH, DELETE |     |
+| `/api/requests/v1/reference-sources/{id}/access`                | PATCH  |     |
+| `/api/requests/v1/reference-sources/{id}/rows/`                 | GET, POST |     |
+| `/api/requests/v1/reference-sources/{id}/rows/{row_id}`          | DELETE |     |
+| `/api/requests/v1/reference-sources/my-data-tables`              | GET    |     |
+| `/api/requests/v1/reference-sources/by-slug/{slug}/options`      | GET    |     |
+| `/api/requests/v1/stats/{overview,by-project,by-template,by-actor,heatmap}` | GET |  |
+| `/api/requests/v1/stream`                                      | GET    | SSE, see below |
+
+### SSE — `GET /api/requests/v1/stream`
+
+Served by the **ASGI** process (`backend-asgi`), not WSGI — nginx routes
+this one path to the `backend_asgi` upstream with buffering off and a
+3600s timeout (see the routing table above). Cross-process bridge: an
+action performed against `backend-web` (WSGI) publishes to a Redis
+pub/sub channel (`apps/approvals/services/dispatch.py::publish_sse`);
+`backend-asgi`'s open SSE connection subscribes and forwards
+(`apps/approvals/services/sse.py`). This is the one place Redis pub/sub is
+still load-bearing in the new architecture (see "Internal conventions"
+below).
+
+---
+
+## `apps.messenger` — `/api/messenger/v1` + Socket.IO
 
 ### REST
 
 | Endpoint                                                | Method | Notes                            |
-|---------------------------------------------------------|--------|----------------------------------|
+|-----------------------------------------------------------|--------|----------------------------------|
 | `/api/messenger/v1/rooms/`                              | GET, POST | Create/list rooms             |
-| `/api/messenger/v1/rooms/{id}`                          | GET, DELETE |                               |
+| `/api/messenger/v1/rooms/{id}`                          | GET, PATCH |                               |
 | `/api/messenger/v1/messages/`                           | POST   | Send message → emits `message_new` |
 | `/api/messenger/v1/messages/room/{id}`                  | GET    | Paginated history                 |
 | `/api/messenger/v1/messages/room/{id}/read/{msg_id}`    | POST   | → emits `message_read`            |
-| `/api/messenger/v1/messages/room/{id}/typing`           | POST   | → emits `user_typing`             |
+| `/api/messenger/v1/messages/room/{id}/typing`           | POST   | → emits `user_typing` (frontend actually uses the Socket.IO `typing` event instead, see below) |
 | `/api/messenger/v1/keys/`                               | POST   | Upload E2EE pre-key bundle       |
 | `/api/messenger/v1/keys/{user_id}`                      | GET    | Fetch peer's pre-keys             |
-| `/api/messenger/v1/users/ingest`                        | POST   | Internal: replicate user from user-service |
 | `/api/messenger/v1/attachments/upload`                  | POST   | Multipart upload                  |
+| `/api/messenger/v1/attachments/file/{id}`               | GET    | Serve attachment                  |
+| `/api/messenger/v1/attachments/file/{id}/thumb`         | GET    | Serve attachment thumbnail        |
+| `/api/messenger/v1/users/ingest`                        | POST   | Replicate/upsert a user replica row |
+| `/api/messenger/v1/users/me`                            | GET    | Current user's messenger identity |
+| `/api/messenger/v1/users/search`                        | GET    | User picker for starting a chat  |
+| `/api/messenger/v1/internal/bot-message`                | POST   | Internal/bot-only, `X-Internal-Token` header (not JWT) |
 | `/api/messenger/v1/admin/rooms`                         | GET    | Admin: all rooms                 |
 | `/api/messenger/v1/admin/rooms/{id}/messages`           | GET    | Admin: full history               |
+| `/api/messenger/v1/admin/history/archive`               | POST   | Admin: trigger the weekly history archive job |
 
 ### Socket.IO
 
 ```
-URL:  ws://<host>:3000/ws/messenger/socket.io/
+URL:  ws://<host>:3000/ws/messenger/socket.io/     (dev, via Vite)
+      ws://<host>/ws/messenger/socket.io/           (prod, via nginx → backend_asgi)
 Auth: { token: "<JWT>" }   (also accepted as ?token=… or Authorization: Bearer …)
 ```
+Served by the ASGI process (`backend-asgi`) — `python-socketio`'s
+`ASGIApp` wraps Django's ASGI app in `htqweb/asgi.py`; handlers live in
+`apps/messenger/socket.py`. The `connect` handler itself calls
+`require_service("messenger")` (`ServiceGateMiddleware` doesn't cover the
+WebSocket scope, so the app checks its own gate here).
 
 **Server → Client events:**
 
 | Event           | Payload                                                      |
-|-----------------|--------------------------------------------------------------|
+|-----------------|----------------------------------------------------------------|
 | `message_new`   | `{ room_id, message: {...} }`                                |
 | `message_read`  | `{ room_id, message_id, reader_user_id }`                    |
-| `user_typing`   | `{ room_id, user_id, is_typing }`                            |
+| `user_typing`   | `{ room_id, user_id, is_typing }`                             |
 
 **Client → Server events:**
 
 | Event       | Payload                       | ack                                         |
-|-------------|-------------------------------|---------------------------------------------|
+|-------------|--------------------------------|-----------------------------------------------|
 | `join_room` | `{ room_id }`                 | `{ ok: true }` or `{ ok: false, error: "not_a_member" }` |
-| `leave_room`| `{ room_id }`                 | `{ ok: true }`                              |
-| `typing`    | `{ room_id, is_typing }`      | —                                            |
-| `mark_read` | `{ room_id, message_id }`     | — (also persists `last_read_message_id`)    |
+| `leave_room`| `{ room_id }`                 | `{ ok: true }`                                |
+| `typing`    | `{ room_id, is_typing }`      | —                                              |
+| `mark_read` | `{ room_id, message_id }`     | — (also persists `last_read_message_id`)      |
 
 ---
 
-## media-service `/api/media/v1`
+## `apps.media_files` — `/api/media/v1`
 
-| Endpoint                          | Method | Notes                                   |
-|-----------------------------------|--------|-----------------------------------------|
-| `/api/media/v1/files/`            | POST   | multipart upload → `{ id, url, mime }`  |
-| `/api/media/v1/files/{path:path}` | GET    | Download with HTTP Range, ETag, 8K chunks |
+| Endpoint                            | Method | Notes                                   |
+|--------------------------------------|--------|-------------------------------------------|
+| `/api/media/v1/files/`              | GET, POST | GET lists (admin only); POST uploads → `FileMetadataRead` |
+| `/api/media/v1/files/{id}/sign`     | POST   | Issue a signed URL for a private file |
+| `/api/media/v1/files/{id}/{variant}`| GET    | Download a variant (Range, ETag support) |
+| `/api/media/v1/files/{path:path}`   | GET    | Raw storage-key fallback — files with no `FileMetadata` row (avatars) |
 
-S2S uploads (e.g. avatar from user-service) authenticate with a JWT signed
-by `SERVICE_JWT_SECRET` and an `X-User-Id` header.
-
----
-
-## email-service `/api/email/v1`
-
-| Endpoint                                  | Method | Notes                            |
-|-------------------------------------------|--------|----------------------------------|
-| `/api/email/v1/inbox`                     | GET    |                                  |
-| `/api/email/v1/sent`                      | GET    |                                  |
-| `/api/email/v1/drafts`                    | GET, POST |                               |
-| `/api/email/v1/trash`                     | GET    |                                  |
-| `/api/email/v1/send`                      | POST   | Enqueues `send_email` actor      |
-| `/api/email/v1/read/{id}`                 | GET    |                                  |
-| `/api/email/v1/oauth/init`                | POST   | Google / Microsoft OAuth start   |
-| `/api/email/v1/oauth/callback`            | GET    |                                  |
-| `/api/email/v1/oauth/status`              | GET    |                                  |
-| `/api/email/v1/oauth/disconnect`          | POST   |                                  |
+This app is the **shared file domain** now — `hr` (department files),
+`mail` (attachment seam), `messenger` (attachments), and `users`
+(avatars) all store through `apps.media_files.interface`
+(`store_file`/`get_file_url`/`delete_file`) instead of each keeping its own
+storage client. `cms` is the one exception; it kept its own bucket and
+calls `htqweb.storage` directly (it predates `media_files` as an app). See
+[STRUCTURE.md §7.1](STRUCTURE.md).
 
 ---
 
-## cms-service `/api/cms/v1`
+## `apps.mail` — `/api/email/v1`
+
+Grew considerably during the port relative to the old `email-service`
+surface — this table reflects `backend/apps/mail/urls.py` as it stands now,
+not the FastAPI original.
+
+| Endpoint                                            | Method | Notes                            |
+|-------------------------------------------------------|--------|-----------------------------------|
+| `/api/email/v1/accounts/`                            | GET    | List mail accounts (corporate + personal) — connecting one happens via `oauth/connect/{provider}` or mailbox provisioning, not a direct POST here |
+| `/api/email/v1/accounts/{id}/`                       | DELETE | Disconnect a personal account (corporate mailboxes go through `/mailboxes/{id}/archive/` instead) |
+| `/api/email/v1/accounts/{id}/set-default/`           | POST   |                                    |
+| `/api/email/v1/accounts/{id}/sync/`                  | POST   | Trigger an incremental sync        |
+| `/api/email/v1/folder/{folder}`                      | GET    | List messages in a folder (inbox/sent/drafts/trash/outbox) |
+| `/api/email/v1/unread-counts/`                       | GET    |                                    |
+| `/api/email/v1/send`                                 | POST   | `folder='outbox'` + `deliver_email.delay(...)` (Celery) |
+| `/api/email/v1/draft`                                | POST   | Save a draft                       |
+| `/api/email/v1/{message_id}`                         | GET    |                                    |
+| `/api/email/v1/{message_id}/read`                    | POST   | Mark as read                       |
+| `/api/email/v1/oauth/status`                         | GET    |                                    |
+| `/api/email/v1/oauth/accounts`                       | GET    |                                    |
+| `/api/email/v1/oauth/connect/{provider}`             | POST   | `provider` = `google`\|`microsoft` — returns the provider's consent URL |
+| `/api/email/v1/oauth/callback`                       | GET    | `auth=None` — the provider redirects the browser here directly |
+| `/api/email/v1/oauth/disconnect`                     | DELETE | Disconnects all of the caller's OAuth accounts |
+| `/api/email/v1/mailboxes/`                           | GET, POST | Corporate mailbox provisioning (admin) |
+| `/api/email/v1/mailboxes/{id}/`                      | GET, PATCH |                                 |
+| `/api/email/v1/mailboxes/{id}/reset-password/`       | POST   |                                    |
+| `/api/email/v1/mailboxes/{id}/archive/` / `/restore/`| POST   |                                    |
+| `/api/email/v1/mailboxes/{id}/forwarding/`           | POST   |                                    |
+| `/api/email/v1/mailboxes/aliases/`                   | GET, POST |                                 |
+| `/api/email/v1/mailboxes/aliases/{id}/`              | DELETE |                                    |
+| `/api/email/v1/webhooks/gmail`                       | POST   | Public, no rate limit — Gmail Pub/Sub, Bearer JWT verified in-app |
+| `/api/email/v1/webhooks/microsoft`                   | POST   | Public, no rate limit — Graph subscriptions (`validationToken` echo) |
+| `/api/email/v1/webhooks/mailcow`                     | POST   | Public, no rate limit |
+
+**Attachments are metadata-only** — `EmailAttachment` rows exist, but no
+route on this list accepts attachment bytes (true of the FastAPI original
+too, not a migration regression). `apps/mail/services/attachment_service.py`
+has a `store_attachment` seam ready (via `apps.media_files.interface`,
+scope `generic`) for whenever that's wired up.
+
+Sync engine (`apps/mail/services/sync/{gmail,microsoft,mailcow_imap}.py`),
+send strategy (`apps/mail/services/sender/`), OAuth-token encryption
+(`apps/mail/services/crypto.py`, AES-256-GCM) and the mailbox-archive/purge
+Celery beat job (`final_purge_archived_mailboxes`, cron 03:15) are ported
+from `services/email` — see [STRUCTURE.md §4.1](STRUCTURE.md) for the deep
+dive.
+
+---
+
+## `apps.cms` — `/api/cms/v1`
 
 | Endpoint                                       | Method | Notes                              |
-|------------------------------------------------|--------|------------------------------------|
-| `/api/cms/v1/news/`                            | GET, POST | Public list + admin create     |
-| `/api/cms/v1/news/{id}`                        | GET, PATCH, DELETE |                          |
-| `/api/cms/v1/news/{id}/translate`              | POST   | Enqueues translation actor      |
-| `/api/cms/v1/contact-requests/`                | POST   | **Public**, rate-limited (3/min) |
-| `/api/cms/v1/contact-requests/`                | GET    | Admin queue                       |
-| `/api/cms/v1/contact-requests/stats`           | GET    | `{ total, unread, ... }`          |
-| `/api/cms/v1/contact-requests/{id}`            | GET, PATCH, DELETE |                          |
-| `/api/cms/v1/contact-requests/{id}/reply`      | POST   |                                    |
-| `/api/cms/v1/conference/config`                | GET    | SFU runtime config (no DB)        |
+|---------------------------------------------------|--------|----------------------------------|
+| `/api/cms/v1/news/`                              | GET, POST | Public list + admin create     |
+| `/api/cms/v1/news/{id}`                          | GET, PATCH, DELETE |                          |
+| `/api/cms/v1/news/by-slug/{slug}`                | GET    |                                    |
+| `/api/cms/v1/categories/`                        | GET, POST |                                 |
+| `/api/cms/v1/categories/{id}`                    | PATCH, DELETE | admin only, no single-item GET |
+| `/api/cms/v1/tags/`                              | GET, POST |                                 |
+| `/api/cms/v1/tags/{id}`                          | PATCH, DELETE | admin only, no single-item GET |
+| `/api/cms/v1/contact-requests/`                  | POST   | **Public**, rate-limited          |
+| `/api/cms/v1/contact-requests/`                  | GET    | Admin queue                       |
+| `/api/cms/v1/contact-requests/stats`             | GET    | `{ total, unread, ... }`          |
+| `/api/cms/v1/contact-requests/{id}`              | GET, PATCH, DELETE |                          |
+| `/api/cms/v1/contact-requests/{id}/reply`        | POST   |                                    |
+| `/api/cms/v1/conference/config`                  | GET    | Static SFU/ICE config (no DB) — `apps.cms.services.conference_service` |
 
 ---
 
-## sqladmin (admin-service) `/sqladmin`
+## Django admin — `/django-admin/`
 
-Browser-based DB dashboard. Protected by the `admin_session` cookie issued by
-`POST /api/users/v1/admin-session/login`. Mounted at **`/sqladmin/`** so it
-doesn't collide with the SPA's own `/admin/users`, `/admin/chats`, and
-`/admin/registrations` React pages.
+Replaces the old `sqladmin` aggregator. Standard Django admin, session +
+login-form authenticated against the same `User` model (**not** the
+`admin_session` JWT cookie — see Authentication above). Every domain's
+`ModelAdmin` is wrapped in `htqweb.admin_gate.ServiceGatedAdminMixin`, so a
+disabled app (`ServiceStatus.enabled=False`) disappears from the admin
+index and its change/add/delete views 403 — the one exception is
+`ServiceStatus` itself (`apps/core/admin.py`), reachable unconditionally so
+disabling `core` can never lock an operator out of the only switch that
+could re-enable it.
 
 ```
-GET /sqladmin/        → 302 /sqladmin/login if no cookie, else 200 dashboard
-GET /sqladmin/login   → login form (POSTs to user-service)
+GET /django-admin/         → redirect to /django-admin/login/ if not authenticated, else the index
 ```
-
-The aggregator service mounts **every microservice's ModelViews** under one
-sqladmin instance (it imports models from all 7 service packages via
-PYTHONPATH volumes; see `services/admin/Dockerfile`).
 
 ---
 
 ## Health checks
 
-Every service answers:
+Two layers now — don't confuse them:
 
+**Gateway (nginx, prod only):**
 ```
-GET /health/         → 200 {"status":"ok","service":"<name>","timestamp":"..."}
-GET /health/ready/   → 200 (or 503 if its own DB/Redis are not reachable)
+GET /health         → 200 {"status":"ok","gateway":"nginx"}        (static; doesn't touch Django)
+GET /health/ready    → 200, or 503 {"status":"degraded","gateway":"nginx","upstream":"backend"}
+                       (proxies to the backend's /api/core/v1/services/)
 ```
 
-The Vite dev proxy doesn't expose `/health/` directly — hit each service on
-its host port (`8005`–`8012`) for a liveness check. nginx in production
-exposes the gateway-level `/health` and `/health/ready`.
+**Backend (Django, `apps/core`, mounted at the URL root — hit the backend's
+own port directly, these are not under `/api/`):**
+```
+GET /health/               → 200 {"status":"ok","service":"backend","timestamp":"..."}
+GET /health/ready/         → 200 {"status":"ok"} or 503 {"status":"unavailable"}  (checks DB with SELECT 1)
+GET /api/core/v1/services/ → 200 {"services": {"users": true, "hr": true, ..., "conference": false}}
+```
+`/api/core/v1/services/` is what `docker-compose.yml`'s own healthcheck for
+`backend-web` polls, and what nginx's `/health/ready` proxies to — it's the
+more useful one operationally (per-domain enabled/disabled, not just "the
+process is up").
 
 ---
 
-## Cross-service contract
+## Internal conventions (replacing the old cross-service contract)
+
+There is one process family now, not nine independently-deployed services —
+most of what used to be a network contract between services is an
+in-process Python contract instead.
 
 | Concern              | Rule                                                              |
-|----------------------|-------------------------------------------------------------------|
-| **HTTP API**         | Each service binds `0.0.0.0:<port>`. All HTTP errors use FastAPI's default `{"detail": "..."}` envelope; client-side parsers should read `detail`. |
-| **Health**           | `/health/` (liveness) + `/health/ready/` (readiness, checks DB).  |
-| **Request ID**       | Gateway emits `X-Request-ID`; services log it via `RequestIDMiddleware` and propagate to downstream calls. |
-| **JWT validation**   | Every service decodes the JWT locally with the shared `JWT_SECRET` (HS256). No introspection. |
-| **User context**     | `payload.user_id` (int) is the source of truth.                   |
-| **Authorisation**    | `is_staff` / `is_superuser` / `is_admin` claims gate admin paths. |
-| **Service-to-service** | When a service calls another, it issues an S2S JWT (`SERVICE_JWT_SECRET` claim `sub: "<service-name>"`) and adds `X-User-Id` for audit. |
-| **Logging**          | structlog → JSON to stdout → Promtail → Loki. Every record includes `service`, `correlation_id` (= request id when available). |
-| **Database**         | Each service uses its own schema (`auth, hr, tasks, cms, media, messenger, email`). Connection through `pgbouncer:5432`, transaction pooling, `IGNORE_STARTUP_PARAMETERS=search_path`. |
-| **Migrations**       | `alembic upgrade head` runs at container start (`entrypoint.sh`). Per-service `alembic_version_<svc>` table in the service's schema. |
-| **Pub/Sub**          | Redis channels: `user.upserted`, `user.deactivated` (replica fan-out from user-service to messenger + task). |
-| **Worker queue**     | Dramatiq with Redis broker. One `<svc>-worker` and `<svc>-scheduler` container per service. |
+|------------------------|---------------------------------------------------------------------|
+| **HTTP API**          | `htqweb.http.api_view` normalizes every response; errors are always `{"detail": ...}` (401/403/404/422/500/503), matching the old FastAPI envelope. |
+| **Health**            | See above — gateway-level `/health`/`/health/ready` and Django-level `/health/`/`/health/ready/`/`/api/core/v1/services/` are different things. |
+| **Request ID**        | Gateway emits `X-Request-ID`; `htqweb.middleware.request_id.RequestIDMiddleware` echoes/generates it and puts it on `request.request_id`. |
+| **JWT validation**    | Every app decodes the JWT the same way, in-process (`htqweb/authn/jwt.py`), HS256, shared `JWT_SECRET`. No introspection, no S2S JWT anymore — the Django port explicitly dropped the old `SERVICE_JWT_SECRET`/`X-User-Id` service-to-service concept (see `apps/media_files/views.py`'s `_can_access_private` docstring). |
+| **User context**      | `request.token.user_id` (int) is the source of truth for the calling user. |
+| **Authorisation**     | `is_staff`/`is_superuser`/`is_admin` claims (`TokenPayload.is_elevated`) gate admin paths, via `api_view(admin=True)` / `htqweb.authn.rbac.require_admin`. |
+| **Cross-app calls**   | A neighbour app is reached only through its `apps.<x>.interface` module — a plain Python function call, not HTTP. Every `interface.py` function starts with `require_service("<name>")`, so a disabled dependency degrades the same way an external call would (`ServiceDisabled` → 503 envelope), instead of a raw exception. |
+| **Logging**           | structlog-style JSON to stdout → Promtail → Loki. |
+| **Database**           | One Postgres schema (`public`), one connection per app process (`CONN_MAX_AGE=0`, direct to `db:5432`, no PgBouncer in the request path). Table names are Django's own `<app_label>_<model>` default. |
+| **Migrations**        | Plain Django `makemigrations`/`migrate`, `managed=True`. No Alembic. |
+| **Pub/Sub**            | Redis pub/sub survives for exactly one purpose now: bridging `apps.approvals`' SSE stream across the WSGI/ASGI process split (see the SSE section above). The old `user.upserted`/`user.deactivated` replication channels were dropped — neighbours call `apps.users.interface` directly instead of consuming an async replica. |
+| **Worker queue**      | Celery, Redis broker. One `backend-worker` + one `backend-beat` for the whole platform (not one pair per domain anymore). Every task's first line is `require_service("<app>")`. |
 
 ---
 
 ## Rate limiting (nginx prod only)
 
-| Zone               | Limit       | Burst |
-|--------------------|-------------|-------|
-| `api_auth`         | 5 req/min   | 2     |
-| `api_general`      | 30 req/s    | 20    |
-| `api_public`       | 10 req/min  | 5     |
-| `websocket`        | 10 req/s    | 5     |
+| Zone            | Rate        | Applied to                                              | Burst |
+|-------------------|-------------|------------------------------------------------------------|-------|
+| `api_general`     | 30 req/s    | `/api/` (catch-all), `/api/media/`                          | 20    |
+| `api_public`      | 10 req/min  | `/api/hr/v1/public/`                                        | 5     |
+| `media_upload`    | 5 req/s     | `POST /api/media/v1/files/`                                  | 10    |
+| `websocket`       | 10 req/s    | `/ws/sfu/` (burst 5), `/ws/` (burst 20)                       | 5–20  |
+| `api_auth`        | 5 req/min   | *(zone defined in nginx, not currently attached to any `location`)* | —     |
 
-Vite dev proxy doesn't enforce rate limits.
+`/api/email/v1/webhooks/` is explicitly exempt from rate limiting (webhook
+senders retry aggressively; false-positive 429s would just cause more
+retries). Vite dev proxy doesn't enforce rate limits at all.
 
 ---
 
 ## Error responses
 
-FastAPI's default envelope, plus the standard HTTP status meaning:
+Same envelope as the FastAPI generation — `htqweb.http.api_view` was built
+to match it byte-for-byte so the frontend's error handling didn't need to
+change:
 
 ```json
 { "detail": "human-readable message" }
 ```
 
 | Status | Meaning                                                           |
-|--------|-------------------------------------------------------------------|
-| 400    | Validation / malformed request                                    |
-| 401    | Missing or invalid JWT                                            |
-| 403    | Authenticated but not authorised (e.g. non-admin on admin route)  |
-| 404    | Resource (or route) not found — see the routing table above       |
-| 409    | Conflict (e.g. duplicate email on register)                       |
-| 422    | Pydantic validation error (FastAPI built-in)                       |
-| 429    | Rate limit exceeded (nginx prod only)                             |
-| 500    | Unhandled service exception                                       |
-| 502/503| Upstream service unhealthy                                        |
+|----------|---------------------------------------------------------------------|
+| 400      | Validation / malformed request (`SuspiciousOperation`)               |
+| 401      | Missing or invalid JWT                                               |
+| 403      | Authenticated but not authorised (e.g. non-admin on admin route), or `django-admin` `PermissionDenied` |
+| 404      | Resource (or route) not found — see the routing table above          |
+| 409      | Conflict (e.g. duplicate email on register)                          |
+| 422      | Pydantic validation error (`body=` schema on `api_view`)              |
+| 429      | Rate limit exceeded (nginx prod only)                                |
+| 500      | Unhandled exception — `api_view` catches everything and logs it       |
+| 503      | A dependency's `ServiceStatus` is disabled (`{"detail","code":"service_disabled","service"}`), or upstream unhealthy at the gateway |
 
 ---
 

@@ -1,1 +1,0 @@
-"""Admin service API package."""

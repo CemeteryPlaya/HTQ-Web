@@ -1,21 +1,21 @@
 # STRUCTURE.md — навигационная карта проекта HTQWeb
 
-Путеводитель по репозиторию для людей и ИИ-агентов: где что лежит, по каким правилам устроены каталоги, куда смотреть в первую очередь. Цель — не сканировать весь проект.
+Путеводитель по репозиторию для людей и ИИ-агентов: где что лежит, по каким правилам устроены каталоги, куда смотреть в первую очередь. Цель — не сканировать весь проект. Актуализировано под завершённый cutover (единый Django-backend). Дата сверки — 2026-07-22.
 
-> Дополняющие документы: [README.md](./README.md) (как поднять), [API.md](./API.md) (роутинг и контракты), [services/README.md](./services/README.md) (анатомия микросервиса), [docs/architecture.md](./docs/architecture.md) (архитектурные решения).
+> Дополняющие документы: [README.md](./README.md) (как поднять), [API.md](./API.md) (роутинг и контракты), [backend/README.md](./backend/README.md) (анатомия Django-аппки), [docs/architecture.md](./docs/architecture.md) (заметки по слоям — местами не в ногу с реальным деревом, см. предупреждение в CLAUDE.md).
 
 ---
 
 ## 1. Что это за проект
 
-Внутренняя enterprise-платформа Hi-Tech Group. Мигрирована по паттерну **Strangler Fig** из Django-монолита в FastAPI-микросервисы. Django удалён (фаза 4.8); все домены — в `services/*`. Фронтенд — React + Vite SPA.
+Внутренняя enterprise-платформа Hi-Tech Group. Прошла полный круг: изначально Django-монолит → мигрирована (Strangler Fig) в ~9 FastAPI-микросервисов → и теперь **обратно смёрстана в один Django-backend** (`backend/`, реверс-миграция завершена — журнал в [PLAN.md](./PLAN.md)). Фронтенд — React + Vite SPA, не менялся.
 
 **Стек:**
 - **Frontend:** React 18 + Vite + TypeScript, shadcn/ui (Radix+Tailwind), TanStack Query, i18next. Тесты: Vitest + Playwright.
-- **Backend:** FastAPI + SQLAlchemy 2.0 async + Alembic + Dramatiq (на Redis).
-- **Данные:** PostgreSQL (через PgBouncer) — **одна схема `public` + префиксы таблиц** (исключение: `user`→схема `auth`; подробности §7). MongoDB (`htqweb_docs`) для HR-документов и admin-панели. Redis.
-- **Шлюз:** Nginx как API Gateway.
-- **Видео:** Mediasoup SFU + WebTransport.
+- **Backend:** Django 5.2.7 (Python 3.14), Celery 5.6 (Redis-брокер, `django-celery-beat`/`django-celery-results`), API-слой — собственное ядро `htqweb.http.api_view` (не DRF).
+- **Данные:** PostgreSQL — **одна схема `public`**, обычные Django-таблицы `<app_label>_<model>` (никаких схем-на-сервис и префиксов-руками — это была PgBouncer-специфика FastAPI-эпохи, см. §7). MongoDB **убрана вместе с FastAPI-поколением** — HR-документы, ранее лежавшие в Mongo, теперь обычные Django-модели.
+- **Шлюз:** Nginx как API Gateway (два upstream'а — WSGI и ASGI, см. §6).
+- **Видео:** Mediasoup SFU + WebTransport (Node/Python, не тронуты миграцией).
 - **Опц.:** LibreTranslate (перевод оргдерева HR, compose-профиль `translation`).
 - **Логи:** Loki/Promtail/Grafana.
 
@@ -25,119 +25,117 @@
 
 ```
 HTQWeb1/
-├── frontend/             # React + Vite SPA (см. §4)
-├── services/             # FastAPI-микросервисы (см. §3)
-│   ├── _template/        # Канонический шаблон нового сервиса
-│   ├── scaffold.py       # Генератор: python scaffold.py <name> <desc>
-│   ├── user/ hr/ task/ requests/ cms/ media/ messenger/ email/   # бизнес-сервисы (Python)
-│   ├── admin/            # sqladmin-агрегатор (Python)
-│   ├── adminjs/          # ⭐ Unified AdminJS panel (Node.js, PG+Mongo)
-│   └── README.md         # Анатомия сервиса + правила
-├── libs/
-│   └── htqweb_auth/      # ⭐ ОБЩАЯ auth-библиотека (JWT, RBAC, levels) — см. §3, §10
+├── frontend/             # React + Vite SPA (см. §4) — без изменений
+├── backend/               # ⭐ ЕДИНЫЙ Django-backend (см. §3)
+│   ├── htqweb/            # Проектный пакет: settings/, urls.py, asgi.py/wsgi.py,
+│   │                       #   authn/ (JWT), http.py (api_view), middleware/, storage/
+│   ├── apps/               # Доменные Django-аппки — units изоляции (см. §3.1)
+│   ├── manage.py   requirements.txt   pytest.ini   conftest.py
+│   ├── Dockerfile   docker-entrypoint.sh
+│   ├── README.md          # ⭐ Анатомия аппки + правила (заменяет снесённый services/README.md)
+│   └── README-tests.md    # Как поднять тестовый Postgres на :55432 и гонять pytest
+├── infra/
+│   ├── nginx/default.conf  # ⭐ API Gateway: вся маршрутизация /api/* → backend/backend_asgi
+│   ├── db/init-ltree.sql   # Инициализация ltree-расширения PG
+│   ├── logging/            # Loki + Promtail + Grafana + Prometheus provisioning
+│   └── certs/              # Локальные TLS (gitignored)
 ├── sfu/                  # Mediasoup SFU (Node.js, медиа-роутинг конференций)
 ├── webtransport/         # QUIC signalling proxy (Python aioquic) для SFU
-├── infra/
-│   ├── nginx/default.conf  # ⭐ API Gateway: вся маршрутизация /api/* → сервисы
-│   ├── db/init-ltree.sql   # Инициализация ltree-расширения PG
-│   ├── logging/            # Loki + Promtail + Grafana provisioning
-│   └── certs/              # Локальные TLS (gitignored)
 ├── docs/                 # Архитектура, аудиты, ngrok/tunnel-инструкции
-├── scripts/              # PS/JS-утилиты (TLS, firewall, туннели)
+├── scripts/              # PS/JS/bash-утилиты (TLS, firewall, туннели, monitoring traffic)
 ├── tools/                # Локальные бинари туннелей (gitignored)
-├── docker-compose.yml      # Прод-стек (полный)
-├── docker-compose.dev.yml  # Dev-overlay (Vite HMR, MinIO, /docs включены)
-├── README.md   API.md   PLAN.md (план миграции + журнал)
-└── backend/              # ⚠️ мёртвые остатки Django (untracked, ждёт удаления)
+├── docker-compose.yml       # Прод-стек (полный)
+├── docker-compose.dev.yml   # Dev-overlay (Vite HMR, MinIO, DEBUG-настройки Django)
+├── docker-compose.test.yml  # Test-overlay: публикует db на :55432 для pytest-django
+├── README.md   API.md   PLAN.md (журнал миграции, читать как историю, не как план "что впереди")
+└── docker-compose.django.yml, RUN-DJANGO-CHECK.md   # ⚠️ мёртвый снапшот промежуточного
+                                                        #   proof-of-concept'а (только users/cms/
+                                                        #   media/hr были перенесены) — вытеснен
+                                                        #   docker-compose.yml, не обновлять
 ```
 
-> ⚠️ Игнорировать на верхнем уровне: `backend/` (мёртвый Django), пустой `nginx/`, корневые `node_modules/`/`package.json` (служебный tooling). Авторитетный nginx-конфиг — только `infra/nginx/default.conf`.
+> ⚠️ Игнорировать на верхнем уровне: пустой `nginx/` (авторитетный конфиг только `infra/nginx/default.conf`), корневые `node_modules/`/`package.json` (служебный tooling, не фронтенд). `docker-compose.django.yml` и `RUN-DJANGO-CHECK.md` описывают промежуточное состояние миграции (до того, как `tasks`/`requests`/`mail`/`messenger` были перенесены) — оставлены как артефакт, реальный прод-стек — `docker-compose.yml`.
 
 ---
 
-## 3. Микросервисы (`services/`)
+## 3. Backend — Django-аппки (`backend/apps/`)
 
-**Правило об общем коде (важно):** разделяемая логика **аутентификации** вынесена в пакет `libs/htqweb_auth` (примитивы JWT/RBAC/levels), доступный сервисам через `PYTHONPATH=/app:/app/libs`. Всё остальное (storage `s3_storage.py`, middleware и т.п.) **намеренно дублируется** в каждом сервисе. Каждый сервис — изолированное FastAPI-приложение по шаблону `services/_template/`. Источник правды по структуре — [services/README.md](./services/README.md).
+**Правило изоляции (важно, исполняемое):** сосед обращается к аппке **только** через её `apps.<x>.interface` — прямой импорт `apps.<x>.models`/`apps.<x>.services` из другой аппки запрещён и ловится тестом [`apps/core/tests/test_app_isolation.py`](./backend/apps/core/tests/test_app_isolation.py) (сканирует все `.py`, включая сам `interface.py`). Исключение — `apps.core`: общий фундамент (реестр отключаемости), его можно импортировать откуда угодно. Источник правды по анатомии аппки — [backend/README.md](./backend/README.md).
 
-### 3.1 Карта сервисов
+### 3.1 Карта аппок
 
-Порты согласованы между [README.md](./README.md), `infra/nginx/default.conf` и `docker-compose.yml` (прежнего расхождения портов больше нет).
+| Аппка (`backend/apps/`) | URL-префикс (`API_PREFIX`) | Имя в реестре `ServiceStatus` | Домен |
+|---|---|---|---|
+| **core** | — (примонтирована в корень `htqweb/urls.py`, свой префикс `api/core/v1/` объявляет сама) | — (сам реестр) | `/health/`, `/health/ready/`, `/api/core/v1/services/`; общий ETL-хелпер (`etl.py`) |
+| **users** | `api/users/v1/` | `users` | Identity, JWT issuer+validator, профиль, регистрация, админ-юзеры, items |
+| **hr** | `api/hr/v1/` | `hr` | Сотрудники, отделы, должности, вакансии, табель, документы, аудит, оргдерево, PMO |
+| **tasks** | `api/tasks/v1/` | `tasks` | Workflow-движок Jira+SharePoint (см. §4.2) |
+| **approvals** | `api/requests/v1/` | `approvals` | ⭐ Lark-style конструктор форм + workflow согласований (см. §3.4). Префикс URL (`requests`) и app_label (`approvals`) сознательно расходятся — см. `apps/approvals/urls.py` докстринг |
+| **cms** | `api/cms/v1/` | `cms` | Новости, категории/теги, contact-requests, ConferenceConfig |
+| **media_files** | `api/media/v1/` | `media` | ⭐ Общее файловое хранилище — единая точка входа для аватарок, HR-документов, вложений мессенджера и почты (см. §7.1). `AppConfig.label = "media_files"`, но реестр знает его как `media` |
+| **mail** | `api/email/v1/` | `mail` | Дуальная почта: Mailcow + OAuth Gmail/Outlook (см. §4.1) |
+| **messenger** | `api/messenger/v1/` | `messenger` | Чат, Socket.IO (ASGI), presence, E2EE-ключи |
 
-| Сервис | Порт | Schema | Стек | Домен | Главные роутеры (`app/api/v1/`) |
-|---|---|---|---|---|---|
-| **user** | 8005 | `auth` | Py | Identity, JWT, регистрация, профиль, админ-юзеры | `auth.py`, `profile.py`, `admin.py`, `registration.py`, `items.py`, `client_errors.py` |
-| **hr** | 8006 | `public` (`hr_*`) + Mongo | Py | Сотрудники, отделы, должности, вакансии, заявки, табель, документы (в Mongo), аудит, оргдерево | `employees.py`, `departments.py`, `positions.py`, `vacancies.py`, `applications.py`, `time.py`, `documents.py`, `mongo_documents.py`, `org.py`, `pmo.py`, `audit.py`, `personnel_history.py`, `share_links.py` |
-| **task** | 8007 | `public` (`task_*`) | Py | Workflow-движок Jira+SharePoint (см. §4.2) | `tasks.py`, `comments.py`, `attachments.py`, `calendar.py`, `labels.py`, `links.py`, `activity.py`, `versions.py`, `sequences.py`, `notifications.py` |
-| **requests** | 8013 | `public` (`request_*`) | Py | ⭐ Lark-style approval-движок: конструктор форм + workflow (см. §3.4) | `forms.py`, `instances.py`, `actions.py`, `projects.py`, `stats.py`, `stream.py` (SSE) |
-| **cms** | 8011 | `public` (`cms_*`) | Py | Новости, contact-requests, ConferenceConfig | `news.py`, `contact_requests.py`, `conference.py` |
-| **media** | 8009 | `public` | Py | Файловое хранилище (S3 + local), Range-стриминг | `files.py` |
-| **messenger** | 8008 | `public` | Py | Чат, WebSocket/Socket.IO, presence, E2EE-ключи | `messages.py`, `rooms.py`, `users.py`, `read.py`, `keys.py`, `attachments.py`, `admin.py` + `socket.py` |
-| **email** | 8010 | `public` (`email_*`) | Py | Дуальная почта: Mailcow + OAuth Gmail/Outlook, sync, push, DLP (см. §4.1) | `accounts.py`, `emails.py`, `oauth.py`, `webhooks.py`, `mailboxes.py` |
-| **admin** | 8012 | — | Py | sqladmin-агрегатор (`/sqladmin/`) | (без public API, только admin UI) |
-| **adminjs** | 3300 | PG + Mongo | Node | ⭐ Unified AdminJS panel (sequelize+mongoose), напрямую на `:3300/admin` | (Node.js, не через основной nginx) |
+Полный список канонических имён сервисов — `apps.core.models.KNOWN_SERVICES` (включает ещё `conference`, зарезервированное под SFU-стек, у которого нет своей Django-аппки).
 
-> **Schema:** только `user` живёт в выделенной PG-схеме `auth`. Все остальные Python-сервисы используют схему `public` с префиксом таблиц по домену (`hr_*`, `task_*`, `request_*`, `cms_*`, `email_*`). Причина — PgBouncer в transaction-режиме сбрасывает `search_path` (см. §7).
-
-### 3.2 Анатомия одного Python-сервиса (user / hr / task / requests / cms / media / messenger / email)
+### 3.2 Анатомия одной Django-аппки
 
 ```
-services/<name>/
-├── Dockerfile               # multi-stage builder + runtime; COPY-пути от корня репо
-├── entrypoint.sh            # alembic upgrade head → uvicorn
-├── requirements.txt   pyproject.toml
-├── alembic.ini   alembic/   # миграции (env.py владеет своей транзакцией)
-├── tests/
-└── app/
-    ├── main.py              # FastAPI factory + lifespan + router include
-    ├── db.py                # SQLAlchemy 2.0 async engine + session, search_path
-    ├── mongo.py             # (только hr) Motor-клиент к htqweb_docs
-    ├── core/
-    │   ├── settings.py      # Pydantic BaseSettings (env-driven)
-    │   └── health.py        # /health/, /health/ready/
-    ├── auth/
-    │   └── dependencies.py  # ⭐ ТОНКИЙ shim: re-export из htqweb_auth + сервис-специфичные гейты
-    ├── middleware/
-    │   └── request_id.py    # X-Request-ID propagation
-    ├── models/              # SQLAlchemy ORM (1 файл = 1 модель/группа)
-    ├── schemas/             # Pydantic DTO (request/response)
-    ├── repositories/        # DB access layer (там, где имеет смысл)
-    ├── services/            # ⭐ Бизнес-логика (искать тут, не в роутерах)
-    ├── api/v1/              # HTTP-роуты (тонкие, только парсинг → service)
-    ├── admin/               # sqladmin ModelViews + create_admin()
-    └── workers/
-        ├── __init__.py      # broker init (Redis)
-        ├── actors.py        # @dramatiq.actor
-        └── scheduler.py     # APScheduler periodics (опц.)
+backend/apps/<domain>/
+├── __init__.py
+├── apps.py            # AppConfig; API_PREFIX = "api/<domain>/v1/" — по нему автодискавери
+│                       # монтирует urls.py в htqweb/urls.py (никаких ручных include())
+├── models.py           # Django ORM, managed=True, обычные таблицы <app_label>_<model>
+├── schemas.py          # Pydantic DTO (request/response) — перенесены из FastAPI почти без изменений
+├── services/           # ⭐ Бизнес-логика (искать тут, не в views.py), 1 файл = 1 подсистема
+├── views.py             # HTTP-вьюхи — тонкие (parse → service → shape), задекорированы @api_view
+├── urls.py              # path()-роуты; APPEND_SLASH=False → регистрируются ОБА написания
+│                       # (со слешем и без), если фронт может дёрнуть любое
+├── interface.py         # ⭐ Публичный API для ДРУГИХ аппок — единственная точка входа соседа.
+│                       # Каждая функция начинается с require_service("<name>"); отдаёт только
+│                       # dict/примитивы, никогда ORM-объекты
+├── admin.py             # django-admin ModelAdmin, обычно обёрнутые в
+│                       # htqweb.admin_gate.ServiceGatedAdminMixin (гейт по реестру)
+├── tasks.py              # @shared_task (Celery); первая строка каждой — require_service("<name>")
+├── migrations/           # Django-миграции (makemigrations/migrate, никакого Alembic)
+├── management/commands/  # etl_<domain>.py (разовый перелив legacy-данных, фаза 10) + прочие команды
+└── tests/                # pytest-django
 ```
 
 **Запомнить:**
-- Бизнес-логика — всегда в `app/services/<domain>_service.py`. Роуты её только вызывают.
-- Web и worker — **один Docker-образ**, разные `command` в compose (`uvicorn` vs `dramatiq`).
-- Auth: примитивы из `htqweb_auth`, реэкспорт через `app/auth/dependencies.py`. JWT с `iss=htqweb-auth` (НЕ `user-service`), валидация общая.
+- Бизнес-логика — всегда в `services/<file>.py`. `views.py` её только вызывает.
+- API-слой — `htqweb.http.api_view` (декоратор), НЕ Django REST Framework: `methods=`, `auth="jwt"|"admin_session"|None`, опц. `body=<PydanticModel>`, `admin=True` (гейт через `htqweb.authn.rbac.require_admin`). Конверт ошибок — всегда `{"detail": ...}`.
+- JWT: issuer `htqweb-auth` (см. `htqweb/settings/base.py::JWT_ISSUER`) — не путать с доменом `users`, который его лишь выпускает/валидирует. Проверка — `htqweb/authn/jwt.py`, HS256, общий `JWT_SECRET`.
+- Отключаемость: `apps.core.models.ServiceStatus` (строка на аппку) + `htqweb.middleware.service_gate.ServiceGateMiddleware` (гейт по URL-префиксу `/api/...`, `/ws/...`) + `apps.core.services.require_service()` (внутрипроцессный гейт — обязателен первой строкой в `interface.py` и `tasks.py`) + `htqweb.admin_gate.ServiceGatedAdminMixin` (гейт `django-admin`). Переключатель: `python manage.py service <name> --on/--off`.
 
-### 3.3 Создание нового сервиса
+### 3.3 Как добавить новую аппку/домен
 
 ```bash
-python services/scaffold.py <name> "<short description>"
-# Затем: добавить <name>-service / <name>-worker в docker-compose.yml
-#        + location /api/<name>/ в infra/nginx/default.conf
-# Шаблон по умолчанию: DB_SCHEMA=public, PYTHONPATH=/app:/app/libs (htqweb_auth доступен).
+cd backend
+.venv/Scripts/python.exe manage.py startapp <domain> apps/<domain>   # каркас Django
+# затем: добавить "apps.<domain>" в INSTALLED_APPS (htqweb/settings/base.py),
+#        API_PREFIX = "api/<domain>/v1/" в apps/<domain>/apps.py (автодискавери сделает остальное),
+#        имя сервиса — в apps.core.models.KNOWN_SERVICES + htqweb.middleware.service_gate.PREFIX_TO_SERVICE
+#        (+ APP_LABEL_TO_SERVICE, если app_label ≠ имени в реестре, как у media_files/approvals/mail),
+#        interface.py с require_service() в каждой функции,
+#        ServiceGatedAdminMixin на все ModelAdmin в admin.py.
 ```
+Подробный чек-лист и объяснение каждого шага — [backend/README.md](./backend/README.md).
 
-### 3.4 Requests — Lark-style approval-движок
+### 3.4 Approvals — Lark-style approval-движок
 
-`requests` (:8013, схема `public`/`request_*`) — конструктор **форм + цепочек согласования** (no-code), вдохновлён Lark Approvals.
+`apps.approvals` (URL-префикс `api/requests/v1/`, app_label `approvals`) — конструктор **форм + цепочек согласования** (no-code), вдохновлён Lark Approvals. Самый большой перенесённый домен Потока B.
 
-- **Модели:** `request_form_templates` (+ `_versions`), `request_instances`, `request_approval_actions`, `request_projects` (+ `_project_members`), `request_activity`, `request_watchers`, `request_notifications_log`, `request_departments`/`user_replica` (реплики из hr/user через Redis), `stats_daily`.
-- **Сервисы (`app/services/`):** `workflow_engine.py` + `workflow_schema.py` (исполнение цепочки), `form_schema.py`/`form_template`/`template_validation.py`/`value_validation.py` (формы), `condition_eval.py` (ветвления), `assignee_resolver.py` (кто согласует), `dispatch.py` (рассылка), `hr_client.py`/`messenger_client.py` (S2S к hr/messenger), `stats_rollup.py`, `audit.py`.
-- **Роуты:** base `/api/requests/v1` → `/forms`, `/instances` (+ `/actions` на инстансах), `/projects`, `/stats`, `/stream` (SSE-нотификации, отдельная nginx-локация без буферизации).
-- **Frontend:** [frontend/src/features/requests/](frontend/src/features/requests/) (RequestsLayout, pages, components, hooks.ts, types.ts) + [frontend/src/api/requests.ts](frontend/src/api/requests.ts).
+- **Сервисы (`apps/approvals/services/`):** `workflow_engine.py` + `workflow_schema.py` (исполнение цепочки), `form_schema.py`/`template_validation.py`/`value_validation.py`/`template_data_table.py`/`template_settings.py` (формы и справочники), `condition_eval.py` (ветвления), `assignee_resolver.py` (кто согласует), `dispatch.py` (рассылка уведомлений), `instance_service.py`/`request_runtime.py`, `hydration.py`, `permissions.py`, `stats_rollup.py`, `audit.py`, `sse.py` (поток `/stream`).
+- **Роуты:** `instances/` (+ `batch-approve`, `<id>/submit|resubmit|approve|reject|request-changes|cancel|recall`), `templates/` (+ `versions`, `preview`, `activate`/`deactivate`), `projects/` (+ `members`), `stats/{overview,by-project,by-template,by-actor,heatmap}`, `reference-sources/` (Lark-Base-style справочники, + `rows/`, `access`, `my-data-tables`, `by-slug/<slug>/options`), `stream` (SSE).
+- **SSE:** `/api/requests/v1/stream` обслуживается **ASGI-процессом** (`backend-asgi`) через обычную async-вьюху (`StreamingHttpResponse`), не через `asgi.py`-обёртку — см. `apps/approvals/urls.py`.
+- **Frontend:** [frontend/src/features/requests/](frontend/src/features/requests/) + [frontend/src/api/requests.ts](frontend/src/api/requests.ts) — без изменений.
 
 ---
 
 ## 4. Frontend (`frontend/`)
 
-React 18 + Vite + TypeScript. shadcn/ui (Radix + Tailwind), TanStack Query, i18next. Тесты: Vitest + Playwright.
+React 18 + Vite + TypeScript. shadcn/ui (Radix + Tailwind), TanStack Query, i18next. Тесты: Vitest + Playwright. **Не затронут миграцией бэкенда** — тот же код, тот же роутинг по `/api/<domain>/v1/*` (пути не изменились, изменился только сервер, который на них отвечает).
 
 ```
 frontend/src/
@@ -176,94 +174,90 @@ frontend/src/
 **Где что искать:**
 - Новый роут — `app/routing/routeDefinitions.ts` + лениво в `lazyPages.ts` + страница в `pages/`.
 - Новый API-клиент — `api/<domain>.ts`, базовый axios + JWT-интерсептор в `api/client.ts`, префиксы — в `api/endpoints.ts`.
-- Глобальный поиск (`api/search.ts`) — fan-out: параллельно дёргает list-эндпойнты доменов и мёржит (упавший источник, напр. 403, молча игнорится).
+- Глобальный поиск (`api/search.ts`) — fan-out: параллельно дёргает list-эндпойнты доменов и мёржит (упавший источник, напр. 403/503-disabled, молча игнорится).
 - Доменная фича крупнее одной страницы — `features/<name>/` (как `messenger`, `requests`).
 - UI-примитив — `components/ui/` (shadcn). Доменный — `components/<domain>/`.
 
+**Известный хвост:** несколько мест во фронтенде (`pages/AdminUsers.tsx`, `components/profile/ProfileSidebar.tsx`, `components/admin/UserEditDialog.tsx`, `App.tsx`) всё ещё ссылаются на `/sqladmin` — этой панели больше нет (см. §3.1, §6, [API.md](./API.md)). Не бэкенд-докой чинится — фронтенд-код вне скоупа этого файла, но имей в виду при отладке "битой" ссылки на админку.
+
 ---
 
-## 4.1 Email — дуальная архитектура (corp + personal)
+## 4.1 Email (`apps.mail`) — дуальная архитектура (corp + personal)
 
-С одной страницы [/email](frontend/src/pages/Email/EmailPage.tsx) пользователь работает с **корпоративным ящиком** (Mailcow) и подключёнными **личными** Gmail / Outlook — переключение через account-selector в сайдбаре. Подробности — [services/email/README.md](./services/email/README.md).
+С одной страницы [/email](frontend/src/pages/Email/EmailPage.tsx) пользователь работает с **корпоративным ящиком** (Mailcow) и подключёнными **личными** Gmail / Outlook — переключение через account-selector в сайдбаре. Код — [backend/apps/mail/](./backend/apps/mail/), перенесён из `services/email` практически 1:1 по контракту.
 
-**Pivot-таблица:** одна `email_accounts` строка на mailbox. CHECK-constraint гарантирует консистентность с провайдером:
+**Pivot-таблица:** одна `mail_emailaccount` строка на mailbox (Django-имя таблицы; логически — та же `email_accounts`). CHECK-consistency с провайдером сохранена в `apps/mail/models.py`:
 ```
-email_accounts(id, user_id, type=corporate|personal, provider=mailcow|google|microsoft,
-               address, is_default, is_active,
-               mailbox_id → provisioned_mailboxes (1:1, corporate),
-               oauth_token_id → oauth_tokens (1:1, personal),
-               sync_state JSONB, last_sync_at, watch_expires_at)
+EmailAccount(id, user_id, type=corporate|personal, provider=mailcow|google|microsoft,
+             address, is_default, is_active,
+             mailbox → ProvisionedMailbox (1:1, corporate),
+             oauth_token → OAuthToken (1:1, personal),
+             sync_state JSONB, last_sync_at, watch_expires_at)
 ```
-`EmailMessage.account_id` указывает сюда (FK `ON DELETE SET NULL`).
 
-**Sync** ([services/email/app/services/sync/](services/email/app/services/sync/)):
+**Sync** ([apps/mail/services/sync/](backend/apps/mail/services/sync/)):
 - `gmail.py` — `users.history.list` + `messages.list`/`get`; push через `users.watch` → Pub/Sub
 - `microsoft.py` — `/me/messages/delta` + persisted `@odata.deltaLink`; push через Graph subscriptions
-- `mailcow_imap.py` — IMAP backfill; live-push через контейнер `email-imap-idle`
+- `mailcow_imap.py` — IMAP backfill; live-push через `python manage.py run_imap_idle` (замена отдельного `email-imap-idle`-контейнера FastAPI-эпохи)
 - UPSERT с `(account_id, message_id)` UNIQUE → идемпотентно
-- `pg_try_advisory_lock(0x454D4149, account_id)` сериализует concurrent runs
+- `pg_try_advisory_lock` сериализует concurrent runs (`_try_advisory_lock` в `apps/mail/tasks.py`)
 
-**Push receivers** ([webhooks.py](services/email/app/api/v1/webhooks.py)) — public, `nginx /api/email/v1/webhooks/` БЕЗ rate-limit. Auth: Gmail Bearer JWT (google-auth) + fallback token; Graph initial `validationToken` echo + `clientState`.
+**Push-приёмники** ([apps/mail/webhooks.py](backend/apps/mail/webhooks.py)) — `POST /api/email/v1/webhooks/{gmail,microsoft,mailcow}`, public, БЕЗ rate-limit на nginx-уровне (см. §6). Auth: Gmail Bearer JWT (google-auth) + fallback token; Graph initial `validationToken` echo.
 
-**Send** ([services/email/app/services/sender/](services/email/app/services/sender/)) — стратегия по `provider`: Gmail API `messages.send` (base64url MIME), Graph `/me/sendMail` (JSON), Mailcow SMTP 587 STARTTLS. `POST /api/email/v1/send` ставит `folder='outbox'` + enqueue `deliver_email` actor.
+**Send** ([apps/mail/services/sender/](backend/apps/mail/services/sender/)) — стратегия по `provider`: Gmail API `messages.send` (base64url MIME), Graph `/me/sendMail` (JSON), Mailcow SMTP 587 STARTTLS. `POST /api/email/v1/send` ставит `folder='outbox'` + `deliver_email.delay(...)` (Celery-таск, `apps/mail/tasks.py`, вместо Dramatiq-актора).
 
-**Cascade delete:** `DELETE /api/users/v1/admin/users/{id}/` → user.status=SUSPENDED + S2S archive Mailcow + Redis `user.deactivated`/`user.deleted` → email-подписчик ([user_events.py](services/email/app/workers/user_events.py)) деактивирует personal accounts + `archived_at=now()` → cron `final_purge_archived_mailboxes` (03:15 daily) hard-delete после `MAILBOX_PURGE_AFTER_DAYS` (default 30).
+**Вложения писем — НЕ полноценно подключены** (не регрессия миграции, так было и в FastAPI-исходнике): `EmailAttachment` остаётся metadata-only, ни один из `emails.py`-роутов не принимает байты. `apps/mail/services/attachment_service.py::store_attachment` — подготовленный сеам на будущее, хранит через `apps.media_files.interface` (scope `generic`), а не через собственный бакет.
 
-**Контейнеры email-стека:** `email-service`, `email-worker`, `email-scheduler`, `email-imap-idle` (IDLE supervisor).
-**Бакет S3/MinIO:** `htqweb-mail-attachments`.
+**Архивация ящиков:** `apps.mail.interface.archive_user_mailboxes(user_id)` — приостанавливает personal-аккаунты + архивирует corporate mailbox (`archived_at=now()`); `final_purge_archived_mailboxes` — периодика **Celery beat** (cron 03:15, зарегистрирована миграцией `apps/mail/migrations/0004_mail_periodic_tasks.py`, а не APScheduler) hard-delete'ит после `MAILBOX_PURGE_AFTER_DAYS` (default 30). Раньше это была Redis pub/sub подписка на `user.deactivated` от user-service — в монолите это прямой вызов `interface`.
+
+**Шифрование:** OAuth-токены — AES-256-GCM в `apps/mail/services/crypto.py` (буквальный порт `services/email/app/services/crypto.py`).
 
 ---
 
-## 4.2 Task workflow — Jira + SharePoint модель
+## 4.2 Task workflow (`apps.tasks`) — Jira + SharePoint модель
 
-`task` — не «трекер для разработчиков», а универсальный движок процессов: Jira (key, FSM, types, links, labels, versions) + SharePoint (supervisor с делегатами, мульти-исполнители, watchers, progress %, inline-quick-edit на Kanban-карточке).
+`apps.tasks` — не «трекер для разработчиков», а универсальный движок процессов: Jira (key, FSM, types, links, labels, versions) + SharePoint (supervisor с делегатами, мульти-исполнители, watchers, progress %, inline-quick-edit на Kanban-карточке). Код — [backend/apps/tasks/](./backend/apps/tasks/), перенесён из `services/task`.
 
-**Роли на задаче** (миграция 012):
+**Роли на задаче** (модель не изменилась при переносе):
 ```
-tasks
+Task
   ├── reporter_id       — кто создал
   ├── supervisor_id     — руководитель (может делегировать)
-  ├── assignee_id       — primary-исполнитель (denormalized из task_assignees)
+  ├── assignee_id       — primary-исполнитель (denormalized из TaskAssignee)
   └── progress_percent  — 0..100
-task_assignees(task_id, user_id, role)   # M:M, role = primary|collaborator
-task_delegates(task_id, user_id, granted_by, granted_at)
-task_watchers(task_id, user_id)
+TaskAssignee(task_id, user_id, role)   # M:M, role = primary|collaborator
+TaskDelegate(task_id, user_id, granted_by, granted_at)
+TaskWatcher(task_id, user_id)
 ```
 
-**FSM-статусы (7):** `backlog → todo → in_progress → in_review → blocked → done → cancelled` (с обратными переходами; `TRANSITIONS` в [task.py](services/task/app/models/task.py)). Старая 5-статусная модель мигрирует автоматически (`open→todo`, `closed→cancelled`).
+**FSM-статусы (7):** `backlog → todo → in_progress → in_review → blocked → done → cancelled` (с обратными переходами; `TRANSITIONS` в [apps/tasks/models.py](backend/apps/tasks/models.py) — скопирован дословно из `services/task/app/models/task.py`).
 
-**Permissions** ([tasks.py](services/task/app/api/v1/tasks.py) — `_can_edit_task`):
-- Полное редактирование: `is_elevated`, reporter, supervisor, активные delegates
-- Статус/progress/комментарии: + все assignees
-- Видимость: + watchers
-
-**Endpoints управления ролями:**
+**Endpoints управления ролями** (см. [apps/tasks/urls.py](backend/apps/tasks/urls.py) — пути не изменились):
 ```
-PATCH  /api/tasks/v1/tasks/{id}/supervisor    body: {user_id|null}
-PATCH  /api/tasks/v1/tasks/{id}/assignees     body: [{user_id, role}]
-POST   /api/tasks/v1/tasks/{id}/delegates     body: {user_id}   (только supervisor)
-DELETE /api/tasks/v1/tasks/{id}/delegates/{user_id}
-POST   /api/tasks/v1/tasks/{id}/watch  •  DELETE …/watch
-PATCH  /api/tasks/v1/tasks/{id}/progress      body: {percent}
+PATCH  /api/tasks/v1/tasks/{id}/supervisor/    body: {user_id|null}
+PATCH  /api/tasks/v1/tasks/{id}/assignees/     body: [{user_id, role}]
+POST   /api/tasks/v1/tasks/{id}/delegates/     body: {user_id}   (только supervisor)
+DELETE /api/tasks/v1/tasks/{id}/delegates/{user_id}/
+POST   /api/tasks/v1/tasks/{id}/watch/  •  DELETE …/watch/
+PATCH  /api/tasks/v1/tasks/{id}/progress/      body: {percent}
 ```
 
-**Projects + TaskType registry** (миграция 013, заменила `ProjectVersion`):
+**Projects + TaskType registry:**
 ```
-projects(id, name, status=active|completed|archived, color, start_date, end_date, owner_id, department_id)
-task_types(id, slug UNIQUE, name, color, icon, is_system)   # user-extensible
-tasks.project_id   → projects(id)   ON DELETE SET NULL   # NULL = standalone
-tasks.task_type_id → task_types(id) ON DELETE SET NULL   # заменил enum tasktype
+Project(id, name, status=active|completed|archived, color, start_date, end_date, owner_id, department_id)
+TaskType(id, slug UNIQUE, name, color, icon, is_system)   # user-extensible, 5 системных строк
+Task.project_id   → Project(id)   ON DELETE SET NULL   # NULL = standalone
+Task.task_type_id → TaskType(id) ON DELETE SET NULL
 ```
-- Тип задачи — таблица `task_types` (не PG-enum). Seeded 5 system-строк (task/bug/story/epic/subtask, `is_system=true`). `Task.task_type` — computed-свойство → slug (back-compat фронта).
-- Project — durable-инициатива (не «релиз»). Задача либо в проекте (`project_id`), либо «свободная» (`project_id IS NULL`).
-- Роудмап ([HRRoadmap.tsx](frontend/src/pages/hr/HRRoadmap.tsx)) рендерит проекты → дерево задач по `parent_id`.
+Роудмап ([HRRoadmap.tsx](frontend/src/pages/hr/HRRoadmap.tsx)) рендерит проекты → дерево задач по `parent_id`.
 ```
 GET/POST/PATCH/DELETE /api/tasks/v1/projects/[{id}/]   •   GET …/projects/{id}/tasks/
 GET/POST/PATCH/DELETE /api/tasks/v1/task-types/[{id}/]
-GET /api/tasks/v1/tasks/?standalone=true   •   ?project_id=N
 ```
 
-**Kanban** ([KanbanBoard.tsx](frontend/src/components/tasks/KanbanBoard.tsx)): 7 колонок по ширине (flex-1, без гор.скролла на ≥xl); карточки пагинируются (`CARDS_PER_PAGE=6`). Inline popover-edit прямо на карточке: приоритет, primary+collaborators, supervisor, progress %, метки.
+**Сервисы** ([apps/tasks/services/](backend/apps/tasks/services/)): `task_service.py`, `task_content_service.py`, `task_response.py`, `project_service.py`, `sequence_service.py` (Jira-style ключи), `calendar_service.py`, `production_calendar.py` (казахстанские праздники), `gantt_service.py`, `link_service.py`, `notification_service.py`, `reference_service.py`, `hydration.py`.
+
+**Kanban** ([KanbanBoard.tsx](frontend/src/components/tasks/KanbanBoard.tsx)) — без изменений на фронте.
 
 ---
 
@@ -271,11 +265,11 @@ GET /api/tasks/v1/tasks/?standalone=true   •   ?project_id=N
 
 | Компонент | Где | Что делает |
 |---|---|---|
-| **SFU** | [sfu/src/server.ts](./sfu/src/server.ts), [sfu/src/room.ts](./sfu/src/room.ts) | Mediasoup SFU, медиа-роутинг. Кодеки: `media-codecs.config.json`. |
-| **WebTransport proxy** | [webtransport/server.py](./webtransport/server.py) | QUIC-сигнализация (aioquic) для SFU. |
+| **SFU** | [sfu/src/server.ts](./sfu/src/server.ts), [sfu/src/room.ts](./sfu/src/room.ts) | Mediasoup SFU, медиа-роутинг. Кодеки: `media-codecs.config.json`. Не тронут миграцией. |
+| **WebTransport proxy** | [webtransport/server.py](./webtransport/server.py) | QUIC-сигнализация (aioquic) для SFU. Не тронут миграцией. |
 | **Frontend WebRTC** | [frontend/src/lib/webrtc/](./frontend/src/lib/webrtc/) | `MediaEngine`, `WebRTCManager`, `SignalingClient`(WS)/`WebTransportSignalingClient`, `SdpMunger`, `BitrateController`. |
 | **UI** | [frontend/src/pages/ConferencePage.tsx](./frontend/src/pages/ConferencePage.tsx) | Страница конференции. |
-| **Конфиг конференции** | `services/cms/app/api/v1/conference.py` | ConferenceConfig (CMS-сервис). |
+| **Конфиг конференции** | `apps.cms.services.conference_service` ([backend/apps/cms/services/conference_service.py](backend/apps/cms/services/conference_service.py)), `GET /api/cms/v1/conference/config` | Статический ICE/SFU-конфиг из `htqweb/settings/base.py` (`CONFERENCE_SFU_URL`/`_PATH`/`ICE_SERVERS`) — порт `services/cms/app/data/conference.yaml`. Сам SFU-стек (`conference` в реестре) по умолчанию выключен через `ServiceStatus`, но статический конфиг отдаётся всегда. |
 
 Туннели/HTTPS для LAN: [docs/TUNNEL_SETUP.md](./docs/TUNNEL_SETUP.md), скрипты — [scripts/start-sfu-tunnel.ps1](./scripts/start-sfu-tunnel.ps1).
 
@@ -283,56 +277,50 @@ GET /api/tasks/v1/tasks/?standalone=true   •   ?project_id=N
 
 ## 6. Маршрутизация: «куда улетает запрос»
 
-**Источник правды:** [infra/nginx/default.conf](./infra/nginx/default.conf) (upstream-блоки `server <svc>:<port>` + `location` longest-match).
+**Источник правды:** [infra/nginx/default.conf](./infra/nginx/default.conf) (upstream-блоки `backend`/`backend_asgi` + `location` longest-match). Прод-only — в dev маршрутизацию делает Vite (`frontend/vite.config.ts`, один `VITE_BACKEND_TARGET` для WSGI-трафика + `VITE_MESSENGER_WS_TARGET` для ASGI/WS; исторические per-service `*ServiceTarget`-переменные в конфиге все указывают на один и тот же таргет).
 
 ```
-/api/tasks/             → task-service:8007
-/api/requests/v1/stream → requests-service:8013   (SSE: без буферизации/таймаута)
-/api/requests/          → requests-service:8013
-/api/hr/v1/public/      → hr-service:8006          (публичные)
-/api/hr/                → hr-service:8006
-/api/users/v1/          → user-service:8005
-/api/messenger/         → messenger-service:8008   (+ /ws/ Socket.IO upgrade)
-/api/media/             → media-service:8009
-/api/cms/               → cms-service:8011
-/api/email/v1/webhooks/ → email-service:8010       (БЕЗ rate-limit, Gmail Pub/Sub + Graph)
-/api/email/             → email-service:8010
-/ws/sfu/                → sfu:4443
-/sqladmin/              → admin-service:8012        (sqladmin-агрегатор)
-/                       → frontend (Vite-сборка через nginx)
+/api/requests/v1/stream  → backend_asgi   (SSE, БЕЗ буферизации/с таймаутом 3600s — location = /api/requests/v1/stream)
+/ws/                     → backend_asgi   (Socket.IO мессенджера, ws/messenger/socket.io)
+/api/hr/v1/public/       → backend        (публичные HR-эндпойнты, строгий rate-limit, БЕЗ auth)
+/api/email/v1/webhooks/  → backend        (БЕЗ rate-limit — Gmail Pub/Sub + Graph + Mailcow push)
+/api/media/v1/files/     → backend        (upload — жёсткий лимит, буфер выключен)
+/api/media/              → backend        (+ edge-кэш публичных вариантов, proxy_cache media_cache)
+/api/                    → backend        (все остальные домены — users/hr/tasks/requests/cms/mail/messenger)
+/ws/sfu/                 → sfu:4443       (WebRTC-сигналинг, не Django)
+/django-admin/           → backend
+/static/                 → backend        (collectstatic)
+/grafana/  /prometheus/  → grafana / prometheus (наблюдаемость, см. §8)
+/                        → frontend (Vite-сборка через nginx)
 ```
-> AdminJS-панель (`adminjs-panel`) НЕ проходит через основной nginx — слушает напрямую `:3300/admin`.
+> `/sqladmin/*` и `/mongo-admin` **убраны** — старой sqladmin/AdminJS-панели больше нет, база администрируется через `/django-admin/` (см. §3.1, §10).
 
-При добавлении эндпойнта: роутер в `services/<name>/app/api/v1/<file>.py` → подключить в `app/main.py` → если новый префикс, добавить upstream + `location` в `infra/nginx/default.conf`. Полный контракт — в [API.md](./API.md).
+При добавлении эндпойнта: роутер в `backend/apps/<domain>/views.py` → зарегистрировать в `backend/apps/<domain>/urls.py` (оба написания — со слешем и без, `APPEND_SLASH=False`) → nginx трогать НЕ нужно (уже проксирует весь `/api/`, кроме уже выделенных под особые лимиты location'ов выше). Полный контракт — в [API.md](./API.md).
 
 ---
 
 ## 7. БД, миграции, фоновые задачи
 
-- **PostgreSQL** один на все сервисы, через **PgBouncer** (порт `55432` снаружи).
-- **Схемы:** PgBouncer в transaction-режиме **сбрасывает `search_path`**, поэтому изначальная «schema-per-service» модель свёрнута. Реальность: **все сервисы пишут в схему `public`** и изолируются **префиксом таблиц** по домену (`hr_*`, `task_*`, `request_*`, `cms_*`, `email_*`). Единственное исключение — `user-service`, у которого выделенная схема `auth` (`DB_SCHEMA: auth`). `search_path` задаётся в `app/db.py`, но на него нельзя полагаться между транзакциями — отсюда префиксы.
-- **MongoDB** (`htqweb_docs`): хранит **HR-документы** (`hr/app/mongo.py` + `api/v1/mongo_documents.py`, Motor). Также используется `adminjs-panel`.
-- **Миграции:** Alembic per-service (`services/<name>/alembic/versions/`). `entrypoint.sh` гонит `alembic upgrade head` перед стартом. ⚠️ `alembic/env.py` должен сам владеть транзакцией (PgBouncer).
-- **Фоновые задачи:** Dramatiq + Redis. Объявление — `app/workers/actors.py`, периодика — `app/workers/scheduler.py` (APScheduler). Worker — отдельный compose-сервис из того же образа.
-- **Идентификация:** один `user-service` выпускает JWT с claim **`iss=htqweb-auth`** (НЕ `user-service`!); остальные только валидируют через `htqweb_auth`.
+- **PostgreSQL** — Django ходит **напрямую** (`DB_HOST=db DB_PORT=5432`, `psycopg`, синхронно, `CONN_MAX_AGE=0` — пул на уровне приложения, не внешнего пулера). PgBouncer (`:6432`) остаётся в compose для хостовых утилит/ручного `psql`, но в путь живого запроса больше не входит.
+- **Схема:** одна `public`. Имена таблиц — **стандартные Django** `<app_label>_<model>` (например `hr_department`, `tasks_task`, `mail_emailaccount`, `users_user`) — никакого ручного префиксования: раньше (`hr_*`, `task_*`, `request_*`…) это было вынужденной адаптацией под то, что PgBouncer в transaction-режиме сбрасывал `search_path`; в Django-монолите такой проблемы нет (см. §10 — как было).
+- **MongoDB — убрана.** HR-документы, раньше лежавшие в `htqweb_docs`, теперь обычные Django-модели/файлы через `apps.media_files`.
+- **Миграции:** обычные Django `makemigrations`/`migrate`, `managed=True`. Никакого Alembic, никакого ручного управления транзакцией миграции.
+- **Фоновые задачи:** Celery (Redis-брокер `redis://redis:6379/2` — задаётся `x-django-env` в `docker-compose.yml` и одинаков в проде и dev-оверлее, который эту переменную не переопределяет; `/9` — это лишь запасной дефолт в `htqweb/settings/base.py` на случай запуска `manage.py` вне docker-compose. Результаты — `django-celery-results`, периодика — `django-celery-beat` DatabaseScheduler). Объявление — `apps/<domain>/tasks.py`, `@shared_task`, обязательная первая строка `require_service("<name>")` (метатест-конвенция потоков). Мониторинг — Flower (`:5555`). Отдельные `<svc>-worker`/`<svc>-scheduler`-контейнеры на домен — история; теперь один `backend-worker` + один `backend-beat` на всю платформу.
+- **Идентификация:** `apps.users` сам выпускает и валидирует JWT, `iss=htqweb-auth` (см. `htqweb/settings/base.py::JWT_ISSUER`) — имя issuer'а не изменилось с FastAPI-эпохи, хотя отдельного `user-service` больше нет.
+- **ETL (фаза 10, разовая операция при cutover):** `apps/<domain>/management/commands/etl_<domain>.py` (hr/mail/messenger/task/requests(`etl_requests`)/media) + общий хелпер [`apps/core/etl.py`](backend/apps/core/etl.py) — read-only курсор в legacy-Postgres (порт `:55432`) + детерминированный per-row hash для сверки count+hash между legacy-схемой и новыми Django-таблицами. `--dry-run`/`--verify`/`--limit`/`--source-dsn` флаги у каждой команды.
 
 ### 7.1 Объектное хранилище (S3 / MinIO)
 
-> **Манифест: 1 микросервис = 1 бакет** (та же изоляция, что и для таблиц). Кросс-сервисные файловые потоки — через HTTP. Подробности — [services/README.md §Object storage](./services/README.md#object-storage).
+> Манифест поменялся с миграцией: раньше было «1 микросервис = 1 бакет»; теперь файловый ввод-вывод **консолидирован** — большинство доменов (hr, mail, messenger) пишут через `apps.media_files.interface` (`store_file`/`get_file_url`/`delete_file`), а не держат свой собственный `s3_storage.py`-клон. Исключение — `cms`, у которого остался свой бакет и прямой доступ к `htqweb.storage` (пилотная аппка, появилась раньше `media_files`).
 
-В dev — контейнер **MinIO** в [docker-compose.dev.yml](./docker-compose.dev.yml) (консоль `:9001`, `minioadmin`/`minioadmin`). При первом запуске `minio-bootstrap` создаёт бакеты. В проде — настоящий S3, сменой `S3_ENDPOINT` без правок кода.
+В dev — контейнер **MinIO** в [docker-compose.dev.yml](./docker-compose.dev.yml) (консоль `:9001`). При первом запуске `minio-bootstrap` создаёт бакеты (в т.ч. исторические `htqweb-messenger`/`htqweb-mail-attachments`/`htqweb-conferences`, которые сейчас ничем не заполняются — см. ниже). В проде — настоящий S3, сменой `S3_ENDPOINT` без правок кода.
 
-| Бакет | Сервис | Для чего |
+| Бакет (env, `htqweb/settings/base.py`) | Кто пишет | Для чего |
 |---|---|---|
-| `htqweb-media` | media | Аватарки, общее медиа |
-| `htqweb-messenger` | messenger | Чат-аттачменты + еженедельный архив (`history/YYYY/MM/DD.jsonl`, сб 04:30 GMT+5) |
-| `htqweb-cms` | cms | Снапшоты новостей (`content.md`, `metadata.json`), обложки, аттачменты |
-| `htqweb-mail-attachments` | email | Аттачменты писем. Layout: `inbound/<account_id>/<message_id>/<filename>` |
-| `htqweb-conferences` | _(future SFU)_ | Заготовка под записи конференций |
+| `S3_BUCKET` = `htqweb-cms` | `apps.cms` напрямую (`htqweb.storage.get_storage()`) | Новости: `content.md`, `metadata.json`, обложки, аттачменты |
+| `MEDIA_S3_BUCKET` = `htqweb-media` | `apps.media_files` (и через него — `apps.hr`/`apps.mail`/`apps.messenger`/аватарки `apps.users` — все вызовы идут через `apps.media_files.interface`) | Общее файловое хранилище платформы: аватарки, HR-документы/файлы отделов, вложения мессенджера, (заготовка) вложения писем |
 
-URL-флоу приватных файлов: API возвращает стабильный signed URL (`?sig=&exp=`) → endpoint валидирует подпись+ACL → **302** на свежий presigned S3 URL. Работает в `<img src>` без JWT.
-
-Storage-абстракция (`s3_storage.py` + `signed_url.py`) **дублируется в каждом сервисе** — сознательно (см. §10).
+URL-флоу приватных файлов: API возвращает стабильный signed URL (`?sig=&exp=`) → endpoint валидирует подпись+ACL → **302** на свежий presigned S3 URL (`htqweb/storage/signed_url.py`). Работает в `<img src>` без JWT.
 
 ---
 
@@ -340,12 +328,13 @@ Storage-абстракция (`s3_storage.py` + `signed_url.py`) **дублир�
 
 | Что | Где |
 |---|---|
-| Структурные логи | каждый сервис → stdout → Promtail → Loki |
-| Конфиги стека логов | [infra/logging/](./infra/logging/) (Loki, Promtail, Grafana) |
-| Health checks | `GET /health/` и `/health/ready/` (`app/core/health.py`) |
-| Request tracing | `X-Request-ID` через `app/middleware/request_id.py` |
-| Аудиты/анализы | [docs/audit-2026-04-28/](./docs/audit-2026-04-28/), [docs/static-analysis-2026-04-28.md](./docs/static-analysis-2026-04-28.md), [docs/dependency-audit-2026-04-28.md](./docs/dependency-audit-2026-04-28.md) |
-| План миграции + журнал | [PLAN.md](./PLAN.md) |
+| Структурные логи | `backend-web`/`backend-asgi`/`backend-worker` → stdout → Promtail → Loki |
+| Конфиги стека логов/метрик | [infra/logging/](./infra/logging/) (Prometheus, Loki, Promtail, Grafana) |
+| Health checks | `GET /health/`, `/health/ready/`, `GET /api/core/v1/services/` (реестр отключаемости) — [apps/core/views.py](backend/apps/core/views.py) |
+| Request tracing | `X-Request-ID` через `htqweb/middleware/request_id.py` |
+| Метрики backend'а | ⚠️ Пока НЕТ: `/metrics` не выставлен (старая `libs/htqweb_metrics` снесена вместе с FastAPI; `django-prometheus` не установлен — задача закомментирована в `infra/logging/prometheus/prometheus.yml`). Prometheus сейчас скрейпит только себя + postgres/redis-exporter + MinIO + Loki + Grafana. |
+| Аудиты/анализы | [docs/audit-2026-04-28/](./docs/audit-2026-04-28/), [docs/static-analysis-2026-04-28.md](./docs/static-analysis-2026-04-28.md), [docs/dependency-audit-2026-04-28.md](./docs/dependency-audit-2026-04-28.md) — из FastAPI-эпохи, не обновлялись под Django |
+| План/журнал миграции | [PLAN.md](./PLAN.md) — теперь это журнал ЗАВЕРШЁННОЙ миграции, не план на будущее |
 
 ---
 
@@ -353,35 +342,38 @@ Storage-абстракция (`s3_storage.py` + `signed_url.py`) **дублир�
 
 | Задача | Куда смотреть |
 |---|---|
-| Поменять/добавить роут API | `services/<name>/app/api/v1/<file>.py` (+ возможно `infra/nginx/default.conf`) |
-| Изменить бизнес-логику | `services/<name>/app/services/<domain>_service.py` |
-| Новая ORM-таблица | `services/<name>/app/models/` (`__tablename__` с доменным префиксом!) + `alembic revision --autogenerate` |
-| DTO запроса/ответа | `services/<name>/app/schemas/` |
-| Auth/JWT/RBAC примитив | `libs/htqweb_auth/` (общий) → реэкспорт в `app/auth/dependencies.py` |
-| HR-документ в Mongo | `services/hr/app/mongo.py` + `api/v1/mongo_documents.py` |
-| Фоновая задача | `services/<name>/app/workers/actors.py` |
-| Админ-страница sqladmin | `services/<name>/app/admin/views/<model>.py` + регистрация в `admin/__init__.py` |
+| Поменять/добавить роут API | `backend/apps/<domain>/views.py` + `urls.py` (оба написания пути — со слешем и без) |
+| Изменить бизнес-логику | `backend/apps/<domain>/services/<file>.py` |
+| Новая ORM-таблица | `backend/apps/<domain>/models.py` + `manage.py makemigrations <domain>` |
+| DTO запроса/ответа | `backend/apps/<domain>/schemas.py` (Pydantic) |
+| Дать соседней аппке доступ к своим данным | `backend/apps/<domain>/interface.py` — новая функция, начинается с `require_service("<name>")`, отдаёт только dict/примитивы |
+| Auth/JWT примитив | `backend/htqweb/authn/` (issue/decode — `jwt.py`; уровни/роли — `levels.py`/`rbac.py`) |
+| Фоновая задача | `backend/apps/<domain>/tasks.py` (`@shared_task`, первая строка `require_service`) |
+| Периодика (cron) | Django-миграция данных для `django_celery_beat.PeriodicTask` — см. `apps/mail/migrations/0004_mail_periodic_tasks.py` как образец |
+| Включить/выключить домен | `manage.py service <name> --on/--off` (см. `apps/core/management/commands/service.py`) |
+| Django-admin страница | `backend/apps/<domain>/admin.py` — `ModelAdmin`, обёрнутый в `htqweb.admin_gate.ServiceGatedAdminMixin` |
 | Новый фронтенд-роут/страница | `frontend/src/app/routing/routeDefinitions.ts` + `pages/<Name>.tsx` |
-| HTTP-вызов из фронтенда | `frontend/src/api/<domain>.ts` (axios через `client.ts`, префиксы в `endpoints.ts`) |
+| HTTP-вызов из фронтенда | `frontend/src/api/<domain>.ts` (axios через `client.ts`, префиксы в `endpoints.ts`) — без изменений |
 | Доменная UI-фича | `frontend/src/features/<name>/` (масштаб > одной страницы) |
 | Локализация | `frontend/src/locales/{ru,kz,en}/*.json` (валидатор `check-i18n.mjs`) |
 | Конференц-логика на клиенте | `frontend/src/lib/webrtc/` |
 | SFU/медиа | `sfu/src/` |
-| Шлюз/маршрутизация | `infra/nginx/default.conf` |
-| Compose / порты / переменные | `docker-compose.yml` (+ `docker-compose.dev.yml` для dev) |
-| Создать новый микросервис | `python services/scaffold.py <name> "<desc>"` (затем compose + nginx) |
-| Залить файл в S3 | `app/services/s3_storage.py` → `await get_storage().save(key, bytes, content_type=...)` |
-| Приватный файл в `<img>` | вернуть в API `url=...?sig=&exp=` (`signed_url.py`); endpoint 302 → presigned URL |
+| Загрузить/отдать файл (из бэкенда) | `apps.media_files.interface.store_file()`/`.get_file_url()` (соседи); `htqweb.storage.get_storage()` напрямую — только `apps.cms` |
+| Шлюз/маршрутизация | `infra/nginx/default.conf` (прод) / `frontend/vite.config.ts` (dev) |
+| Compose / порты / переменные | `docker-compose.yml` (+ `docker-compose.dev.yml` dev, `docker-compose.test.yml` тесты) |
+| Перелить legacy-данные (cutover) | `manage.py etl_<domain>` — см. `apps/core/etl.py` за общими хелперами |
 
 ---
 
 ## 10. Известные «ловушки»
 
-- **Schema ≠ schema-per-service.** Все сервисы (кроме `user`→`auth`) пишут в `public` и изолируются **префиксом таблиц**. PgBouncer (transaction-режим) сбрасывает `search_path` — не полагаться на него между транзакциями.
-- **JWT issuer — `htqweb-auth`**, не `user-service`. Это частая ошибка при настройке валидации.
-- **Общий код есть, но только auth.** `libs/htqweb_auth` (через `PYTHONPATH=/app:/app/libs`) — единственная разделяемая библиотека. Storage/middleware дублируются намеренно; не выносить в shared без явного решения.
-- **`backend/`** — мёртвый Django, untracked. Не дополнять, ждёт удаления. Корневые `nginx/`, `node_modules/`, `package.json` — служебные/пустые, игнорировать.
-- Все сервисы делят одну PG-инстанцию через PgBouncer, но логически изолированы. Не ходить в чужие таблицы напрямую — общаться через HTTP/JWT (+ Redis pub/sub для реплик user/department).
-- **Dockerfile `COPY`** — пути относительно корня репозитория (build context = `.`), не относительно папки сервиса.
-- **`alembic/env.py`** должен сам управлять транзакцией (PgBouncer-совместимость).
-- Новые Python-сервисы регистрируются в **трёх местах**: compose (web+worker[+scheduler]), nginx (upstream + location), опц. `services/admin/` или `adminjs`. Node-сервисы (`adminjs`, `sfu`) — отдельные образы.
+- **`/sqladmin/`, `/mongo-admin` больше не существуют.** Несколько мест во фронтенде всё ещё на них ссылаются (см. §4) — это не 503 «сервис выключен», это честный 404/дохлая ссылка, потому что маршрута нет вовсе ни в nginx, ни во Vite-proxy. Админка — `/django-admin/`.
+- **`POST /api/users/v1/admin-session/login`/`/logout` — код существует, но реального потребителя больше нет.** Эти эндпойнты ставили `admin_session`-cookie для входа в sqladmin; сам sqladmin снесён, а `django-admin` использует свою обычную Django session-аутентификацию (не эту JWT-cookie). Не удивляться, что "рабочий" эндпойнт никуда не ведёт.
+- **Схема ≠ schema-per-service — эта проблема ИСЧЕЗЛА, а не "решена префиксами".** В FastAPI-эпоху PgBouncer (transaction-режим) сбрасывал `search_path`, что вынуждало держать все сервисы в `public` с ручными префиксами таблиц. В Django-монолите Postgres — прямое подключение, префиксы — стандартные Django `<app_label>_<model>`, руками ничего не мэнеджится. Если видишь код/комментарий про «schema-per-service» — это history, не текущая реальность.
+- **JWT issuer — `htqweb-auth`**, как и раньше (не `users`, не `django`). `apps.users` выпускает и валидирует сам, без отдельного identity-сервиса.
+- **`docker-compose.django.yml`/`RUN-DJANGO-CHECK.md`** описывают промежуточный, давно перегнанный proof-of-concept (только 4 домена из 8 были перенесены на момент их написания). Не путать с боевым `docker-compose.yml` — актуальны только `docker-compose.yml`+`docker-compose.dev.yml`(+`.test.yml`).
+- **`docs/architecture.md` не в ногу с реальным деревом** — упоминает DRF ViewSets и `backend/tasks/viewsets/`, чего в репозитории нет (реальность: `htqweb.http.api_view`, `backend/apps/tasks/`). Похоже на неадаптированный шаблон; не источник истины по структуре, см. §1/CLAUDE.md.
+- **`scripts/generate-monitoring-traffic.sh`** всё ещё бьёт по старым портам микросервисов (`:8005`–`:8012`) — не работает против текущего `backend-web:8000`/`backend-asgi:8001` без переписывания.
+- **`apps.media_files` — общая точка отказа для файлов** трёх доменов (hr/mail/messenger) плюс аватарок users. Если он выключен через `ServiceStatus` (`manage.py service media --off`), у соседей это всплывёт как `ServiceDisabled`/503, а не как их собственная ошибка — смотреть на `service` в JSON-конверте, прежде чем искать баг в вызывающей аппке.
+- **Изоляция аппок — всё ещё исполняемое правило, не конвенция на доверии.** `apps/core/tests/test_app_isolation.py` гоняется в обычном test run'е (`pytest`, `cd backend`) — а не отдельным линтом, который можно забыть запустить.
+- **Метрик backend'а нет.** Не искать `/metrics` на `backend-web`/`backend-asgi` — не выставлен (см. §8). Дашборды Grafana, которые ссылаются на метрики Django-процесса, будут пустыми до тех пор, пока не поставят `django-prometheus`.

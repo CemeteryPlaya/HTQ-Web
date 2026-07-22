@@ -1,16 +1,11 @@
-"""HTTP views — ``/api/users/v1/{token,token/refresh,admin-session}/*``.
+"""HTTP views — ``/api/users/v1/*`` (token, profile, registration, admin/users).
 
 Ported from ``services/user/app/api/v1/auth.py``. Views stay thin: parsing,
 auth, and status codes only — domain logic lives in
-``apps.users.services.auth_service``.
+``apps.users.services.auth_service`` (and the other ``*_service`` modules).
 
 ``token/`` and ``token/refresh/`` are plain JSON bodies and go through
-``htqweb.http.api_view``'s ``body=`` machinery like every other app. The
-``admin-session/*`` routes don't: ``login`` is form-urlencoded (sqladmin's
-login page posts a plain HTML form, not JSON) and needs a redirect response
-with a ``Set-Cookie`` header, which ``api_view`` doesn't model — both are
-hand-rolled thin views instead, following the same "thin view, real logic in
-the service" shape.
+``htqweb.http.api_view``'s ``body=`` machinery like every other app.
 """
 
 from __future__ import annotations
@@ -32,16 +27,12 @@ from .services import (
     admin_service,
     audit,
     auth_service,
-    items_service,
     options_service,
     profile_service,
     registration_service,
 )
 
 logger = logging.getLogger(__name__)
-
-
-ADMIN_COOKIE_NAME = "admin_session"
 
 
 # ── POST token/ — login by email or username ────────────────────────────────
@@ -77,85 +68,6 @@ def refresh_token(request, data: schemas.TokenRefreshRequest):
 
     tokens = issue_token_pair(user)
     return schemas.TokenRefreshResponse(access=tokens["access"])
-
-
-# ── POST admin-session/login ─────────────────────────────────────────────────
-
-@csrf_exempt
-def admin_login(request):
-    """Set the ``admin_session`` cookie so sqladmin backends accept the
-    user. After submission the user is redirected back to the original
-    admin URL (``next``). Only ``is_staff``/``is_superuser`` users are
-    accepted — ported verbatim from the FastAPI original's ``admin_login``.
-    """
-    if request.method != "POST":
-        return json_error("Method Not Allowed", 405)
-
-    # ``username``/``password`` are ``Form(...)`` (required) in the FastAPI
-    # original — an OMITTED field must 422, same as there. Reading via
-    # ``.get(..., "")`` before validation would silently turn "absent" into
-    # "empty string", which the schema (str, no default) happily accepts,
-    # so we check presence in request.POST ourselves first. A field that IS
-    # present but empty is a value, not an absence — that still reaches the
-    # schema/auth flow unchanged (matching the source).
-    missing = [f for f in ("username", "password") if f not in request.POST]
-    if missing:
-        detail = [
-            {"loc": ["body", f], "msg": "Field required", "type": "missing"}
-            for f in missing
-        ]
-        return JsonResponse({"detail": detail}, status=422)
-
-    try:
-        data = schemas.AdminSessionLoginRequest(
-            username=request.POST.get("username", ""),
-            password=request.POST.get("password", ""),
-            next=request.POST.get("next", "/sqladmin/"),
-        )
-    except ValidationError as exc:
-        return JsonResponse({"detail": json.loads(exc.json())}, status=422)
-
-    try:
-        user = auth_service.authenticate_admin(data.username, data.password)
-    except auth_service.NotAnAdminUser:
-        return json_error("Not an admin user", 403)
-    except auth_service.InvalidCredentials:
-        return json_error("Invalid credentials", 401)
-
-    tokens = issue_token_pair(user)
-
-    # Flag the cookie Secure only when the request itself is HTTPS —
-    # otherwise browsers on HTTP localhost would silently drop it. The
-    # X-Forwarded-Proto header (set by nginx) wins over the raw request
-    # scheme — same reasoning as the FastAPI original.
-    forwarded_proto = request.headers.get("x-forwarded-proto", request.scheme)
-    is_https = forwarded_proto == "https"
-
-    response = HttpResponse(status=303)
-    response["Location"] = data.next
-    response.set_cookie(
-        ADMIN_COOKIE_NAME,
-        tokens["access"],
-        max_age=settings.JWT_ACCESS_TTL_MIN * 60,
-        httponly=True,
-        secure=is_https,
-        samesite="Lax",
-        path="/",
-    )
-    logger.info("admin_session_issued user_id=%s username=%s next=%s",
-                user.id, user.username, data.next)
-    return response
-
-
-# ── POST admin-session/logout ────────────────────────────────────────────────
-
-@csrf_exempt
-def admin_logout(request):
-    if request.method != "POST":
-        return json_error("Method Not Allowed", 405)
-    response = JsonResponse({"ok": True})
-    response.delete_cookie(ADMIN_COOKIE_NAME, path="/")
-    return response
 
 
 # ── Profile — GET/PATCH profile/me (+alias), change-password, avatar ────────
@@ -559,80 +471,6 @@ def admin_set_password(request, user_id: int, data: schemas.AdminSetPasswordRequ
         changes={"must_change_password": data.must_change_password},
     )
     return {"detail": "Password updated"}
-
-
-# ── Items — GET/POST items/, GET/PATCH/DELETE items/{id}/ (Task 2.5) ───────
-#
-# Ported from ``services/user/app/api/v1/items.py``. Strictly scoped to the
-# caller: list only ever returns the caller's own rows, and detail/patch/
-# delete 404 (never 403) on another user's item — see
-# ``apps.users.services.items_service`` module docstring for why 404 is the
-# faithful reproduction (the source's WHERE clause makes "not yours" and
-# "doesn't exist" indistinguishable).
-
-
-@api_view(methods=("GET",), auth="jwt")
-def _list_items(request):
-    items = items_service.list_items(request.token.user_id)
-    return [schemas.ItemResponse(**items_service.serialize(i)) for i in items]
-
-
-@api_view(methods=("POST",), auth="jwt", body=schemas.ItemCreateRequest, status=201)
-def _create_item(request, data: schemas.ItemCreateRequest):
-    item = items_service.create_item(
-        request.token.user_id, title=data.title, description=data.description,
-    )
-    return schemas.ItemResponse(**items_service.serialize(item))
-
-
-@csrf_exempt
-def items_collection(request, *args, **kwargs):
-    if request.method == "GET":
-        return _list_items(request, *args, **kwargs)
-    if request.method == "POST":
-        return _create_item(request, *args, **kwargs)
-    return json_error("Method Not Allowed", 405)
-
-
-@api_view(methods=("GET",), auth="jwt")
-def _get_item(request, item_id: int):
-    try:
-        item = items_service.get_item_or_404(request.token.user_id, item_id)
-    except items_service.ItemNotFound:
-        return json_error("Item not found", 404)
-    return schemas.ItemResponse(**items_service.serialize(item))
-
-
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.ItemUpdateRequest)
-def _update_item(request, item_id: int, data: schemas.ItemUpdateRequest):
-    try:
-        item = items_service.get_item_or_404(request.token.user_id, item_id)
-    except items_service.ItemNotFound:
-        return json_error("Item not found", 404)
-    changes = data.model_dump(exclude_unset=True)
-    item = items_service.update_item(item, changes)
-    return schemas.ItemResponse(**items_service.serialize(item))
-
-
-@api_view(methods=("DELETE",), auth="jwt")
-def _delete_item(request, item_id: int):
-    try:
-        item = items_service.get_item_or_404(request.token.user_id, item_id)
-    except items_service.ItemNotFound:
-        return json_error("Item not found", 404)
-    items_service.delete_item(item)
-    return HttpResponse(status=204)
-
-
-@csrf_exempt
-def item_detail(request, item_id: int, *args, **kwargs):
-    if request.method == "GET":
-        return _get_item(request, item_id, *args, **kwargs)
-    if request.method == "PATCH":
-        return _update_item(request, item_id, *args, **kwargs)
-    if request.method == "DELETE":
-        return _delete_item(request, item_id, *args, **kwargs)
-    return json_error("Method Not Allowed", 405)
 
 
 # ── Client telemetry — POST client-errors(/), client-events(/) (Task 2.5) ──
