@@ -28,15 +28,20 @@ application = django_asgi_app
 
 # ─────────────────────────────────────────────────────────────────────────
 # >>> messenger:socketio  (Поток A · фаза 8 · PLAN.md §6.5)
-#     Смонтировать python-socketio поверх `application`, например:
-#         import socketio
-#         sio = socketio.AsyncServer(async_mode="asgi",
-#                                    client_manager=socketio.AsyncRedisManager(...))
-#         application = socketio.ASGIApp(sio, other_asgi_app=application,
-#                                        socketio_path="ws/messenger/socket.io")
-#     Обработчик `connect` ПЕРВЫМ делом зовёт require_service("messenger") и
-#     отклоняет коннект при выключенном сервисе (ServiceGateMiddleware не
-#     покрывает WS-scope). Правьте ТОЛЬКО эту секцию.
+#     python-socketio поверх `application` — сервер (`sio`, все @sio.event
+#     хендлеры, выбор client_manager) целиком в apps/messenger/socket.py;
+#     здесь только финальная обёртка ASGIApp вокруг django_asgi_app.
+#     Обработчик `connect` (apps/messenger/socket.py) ПЕРВЫМ делом зовёт
+#     require_service("messenger") и отклоняет коннект при выключенном
+#     сервисе (ServiceGateMiddleware не покрывает WS-scope). Правьте ТОЛЬКО
+#     эту секцию.
+import socketio
+
+from apps.messenger.socket import sio as messenger_sio
+
+application = socketio.ASGIApp(
+    messenger_sio, other_asgi_app=application, socketio_path="ws/messenger/socket.io",
+)
 # <<< messenger:socketio
 # ─────────────────────────────────────────────────────────────────────────
 # >>> approvals:sse  (Поток B · фаза 5 · PLAN.md §6.2)
