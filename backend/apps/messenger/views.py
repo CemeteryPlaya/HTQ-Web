@@ -31,18 +31,30 @@ app/api/v1/read.py`` регистрирует ТОТ ЖЕ итоговый пу�
 Плюс 5 эндпойнтов attachments-под-задачи (PLAN.md §6.5): ``attachments.py``
 (``upload_attachment``/``serve_attachment``/``serve_attachment_thumb``) +
 ``keys.py`` (``upload_keys``/``get_user_keys``).
+
+Плюс workers/admin под-задача (PLAN.md §6.5, последняя под-задача messenger):
+``admin.py`` (3 эндпойнта, ``require_admin`` исходника -> ``api_view(auth=
+"jwt", admin=True)``), ``internal.py`` (1 эндпойнт, S2S общий секрет — см.
+``_check_internal_token`` ниже, тот же приём, что ``apps/hr/views.py::
+_check_internal_token``), ``users.py`` (5 регистраций роутов — ``ingest``×1 +
+``me``×2 + ``search``×2, Р2 у всех трёх — см. докстринги секций ниже).
 """
 from __future__ import annotations
 
 import datetime
+import json
+import os
 import uuid
 
 from django.http import HttpResponse, HttpResponseRedirect
+from pydantic import ValidationError
 
 from htqweb.http import _authenticate_jwt, api_view, json_error
 
+from apps.users import interface as users_interface
+
 from . import schemas
-from .models import RoomParticipant
+from .models import Message, Room, RoomParticipant
 from .services import attachment_service, key_service
 from .services import messenger_service as msg_svc
 
@@ -306,3 +318,223 @@ def get_user_keys(request, user_id: int):
     """Порт ``keys.py::get_user_keys``."""
     keys = key_service.get_user_keys(user_id)
     return [key_service.serialize_key(k) for k in keys]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /admin/* — порт services/messenger/app/api/v1/admin.py (3 эндпойнта)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Авторизация: ``require_admin`` исходника -> ``api_view(auth="jwt",
+# admin=True)`` (единый платформенный admin-гейт, см. htqweb/http.py). Ни
+# один из трёх не участвует в participant-scoping — это модерация/аудит,
+# admin видит ВСЁ.
+#
+# Ни один из трёх эндпойнтов исходника не объявляет ``response_model`` —
+# FastAPI-сторона сериализует «сырые» ORM-объекты как есть, без
+# зафиксированной формы ответа. Порт ниже отдаёт явный dict со всеми
+# реальными колонками моделей (см. ``_serialize_room_admin``/
+# ``_serialize_message_admin``) — тот же наблюдаемый набор полей, без
+# гадания по незафиксированной форме источника.
+
+def _serialize_room_admin(room: Room) -> dict:
+    return {
+        "id": room.id,
+        "name": room.name,
+        "storage_key": str(room.storage_key),
+        "room_type": room.room_type,
+        "department_path": room.department_path,
+        "is_e2ee": room.is_e2ee,
+        "avatar_url": room.avatar_url,
+        "created_at": room.created_at.isoformat(),
+        "updated_at": room.updated_at.isoformat() if room.updated_at else None,
+    }
+
+
+def _serialize_message_admin(message: Message) -> dict:
+    return {
+        "id": str(message.id),
+        "room_id": message.room_id,
+        "sender_id": message.sender_id,
+        "content": message.content,
+        "is_encrypted": message.is_encrypted,
+        "is_edited": message.is_edited,
+        "metadata_json": message.metadata_json,
+        "created_at": message.created_at.isoformat(),
+        "updated_at": message.updated_at.isoformat() if message.updated_at else None,
+        "attachments": [attachment_service.serialize_attachment(a) for a in message.attachments.all()],
+    }
+
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def admin_list_rooms(request):
+    """Порт ``admin.py::list_all_rooms`` — GET /admin/rooms (``limit``/
+    ``offset`` query, буквальные границы источника: ``limit`` 1..500
+    (по умолчанию 50), ``offset`` >= 0 (по умолчанию 0))."""
+    try:
+        limit = _int_query(request, "limit", default=50, ge=1, le=500)
+        offset = _int_query(request, "offset", default=0, ge=0)
+    except _QueryValidationError as exc:
+        return json_error(f"Invalid query parameter: {exc}", 422)
+
+    rooms = Room.objects.order_by("id")[offset:offset + limit]
+    return [_serialize_room_admin(r) for r in rooms]
+
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def admin_list_room_messages(request, room_id: int):
+    """Порт ``admin.py::list_messages_in_room`` — GET /admin/rooms/{id}/messages.
+
+    Источник не пагинирует и не задаёт явный ``order_by`` (полагается на
+    случайный порядок вставки БД) — порт добавляет детерминированную
+    сортировку по ``created_at`` (хронологический порядок чтения для
+    модерации), без изменения набора возвращаемых строк."""
+    messages = (
+        Message.objects.filter(room_id=room_id)
+        .prefetch_related("attachments")
+        .order_by("created_at")
+    )
+    return [_serialize_message_admin(m) for m in messages]
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True)
+def admin_trigger_history_archive(request):
+    """Порт ``admin.py::trigger_history_archive`` — POST /admin/history/archive
+    (``days`` query, 1..90, по умолчанию 7). Ручной backfill/re-run —
+    вызывает ТУ ЖЕ ``history_archive_service.archive_recent_history``, что и
+    еженедельный beat-крон (``apps/messenger/tasks.py::archive_room_history``),
+    без дублирования логики."""
+    try:
+        days = _int_query(request, "days", default=7, ge=1, le=90)
+    except _QueryValidationError as exc:
+        return json_error(f"Invalid query parameter: {exc}", 422)
+
+    from .services import history_archive_service
+
+    return history_archive_service.archive_recent_history(days=days)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /internal/* — порт services/messenger/app/api/v1/internal.py (1 эндпойнт)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# РЕШЕНИЕ (бриф п.1, internal — S2S): исходный ``require_internal_token``
+# (общий секрет из ``MESSENGER_INTERNAL_TOKEN``) уже имеет ЖИВОЙ прецедент в
+# этом монолите — ``apps/hr/views.py::_check_internal_token``/``internal_
+# supervisor`` (общий секрет ``INTERNAL_S2S_TOKEN``, легаси-fallback на имя
+# переменной конкретного домена — ТАМ ``MESSENGER_INTERNAL_TOKEN`` сам и есть
+# буквальное legacy-имя из ЭТОГО исходника). Порт переиспользует ТОТ ЖЕ
+# механизм byte-for-byte (``auth=None`` + ручная проверка заголовка
+# ``X-Internal-Token`` ДО парсинга тела — тот же порядок, что hr), вместо
+# перевода на ``admin=True``: это буквально более точный порт исходного
+# S2S-контракта (source сам никогда не требовал JWT/admin для этого пути),
+# и общий секрет уже согласован форматом с hr — заводить второй, другой
+# механизм ради того же самого эндпойнта было бы немотивированной
+# рассинхронизацией.
+
+def _check_internal_token(request):
+    """None — авторизован; иначе готовый json_error. Тот же приём, что
+    ``apps/hr/views.py::_check_internal_token`` — см. докстринг секции выше."""
+    expected = os.environ.get("INTERNAL_S2S_TOKEN") or os.environ.get("MESSENGER_INTERNAL_TOKEN") or ""
+    if not expected:
+        return json_error("MESSENGER_INTERNAL_TOKEN not configured", 503)
+    got = request.headers.get("X-Internal-Token")
+    if not got or got != expected:
+        return json_error("invalid internal token", 401)
+    return None
+
+
+@api_view(methods=("POST",), auth=None, status=202)
+def internal_bot_message(request):
+    """Порт ``internal.py::send_bot_message_endpoint`` — POST /internal/bot-message.
+
+    Токен проверяется ПЕРВЫМ, до парсинга тела (тот же порядок, что
+    ``apps/hr/views.py::internal_supervisor``)."""
+    err = _check_internal_token(request)
+    if err is not None:
+        return err
+
+    try:
+        data = schemas.InternalBotMessageRequest.model_validate_json(request.body or b"{}")
+    except ValidationError as exc:
+        # 422 — тот же envelope, что собственный body-парсинг htqweb.http.
+        # api_view (``{"detail": [...]}``); здесь парсим вручную, потому что
+        # проверка токена должна строго предшествовать парсингу тела (см.
+        # докстринг секции выше).
+        return json_error(json.loads(exc.json()), 422)
+
+    from .services import system_bots_service
+
+    bot = system_bots_service.BOTS_BY_USERNAME.get(data.bot)
+    if bot is None:
+        return json_error(f"unknown bot '{data.bot}'", 400)
+
+    msg = system_bots_service.post_bot_message(
+        user_id=data.user_id, bot=bot, text=data.text, metadata=data.metadata,
+    )
+    return {"delivered": msg is not None, "message_id": str(msg.id) if msg is not None else None}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  /users/* — порт services/messenger/app/api/v1/users.py (5 регистраций:
+#  ingest×1 + me×2 + search×2)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Р2 (все три — см. apps/messenger/models.py докстринг файла): исходник читал/
+# писал ``chat_user_replicas``, которая здесь не портируется.
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.UserReplicaIngestRequest, status=201)
+def ingest_user_replica(request, data: schemas.UserReplicaIngestRequest):
+    """Порт ``users.py::ingest_user_replica`` — POST /users/ingest.
+
+    НИЧЕГО не сохраняет (Р2: нет целевой ``chat_user_replicas`` таблицы, и
+    некому больше сюда писать — прежний вызывающий, репликационный воркер
+    user-service, в этом монолите не существует; ``apps.users`` уже
+    единственный источник истины о пользователях). Эхо-ответ (та же форма,
+    что тело запроса) сохранён ради обратной совместимости пути/статуса/
+    полей/auth с любым ещё не мигрированным вызывающим — намеренный no-op,
+    не забытая реализация."""
+    return data.model_dump(mode="json")
+
+
+@api_view(methods=("GET",), auth="jwt")
+def me(request):
+    """Порт ``users.py::me`` — GET /users/me (оба написания).
+
+    Р2: отдаёт ``apps.users.interface.get_user_brief`` — ``{id, username,
+    email, full_name, is_active}`` (НЕ форма исходной ``UserReplicaRead``:
+    ``first_name``/``last_name``/``avatar_url`` не выставлены users.interface,
+    а прямой импорт ``apps.users.models`` отсюда запрещён, apps/core/tests/
+    test_app_isolation.py). Фолбэк на минимальный профиль из JWT-claims
+    сохранён (тот же случай источника — «реплика ещё не подтянута»), хотя в
+    этом монолите ``apps.users.User`` практически ВСЕГДА резолвится по
+    ``user_id`` живого JWT (единственная гипотетическая брешь — запись,
+    удалённая из-под живого токена; ``apps.users`` физически не удаляет
+    пользователей, только меняет ``UserStatus``, см. apps/users/models.py, так
+    что и эта брешь на практике недостижима)."""
+    brief = users_interface.get_user_brief(request.token.user_id)
+    if brief is not None:
+        return brief
+    return {
+        "id": request.token.user_id,
+        "username": request.token.username or "",
+        "email": None,
+        "full_name": request.token.username or f"user-{request.token.user_id}",
+        "is_active": True,
+    }
+
+
+@api_view(methods=("GET",), auth="jwt")
+def search_users(request):
+    """Порт ``users.py::search_users`` — GET /users/search (оба написания).
+
+    Р2, ОТКРЫТЫЙ ВОПРОС (см. отчёт задачи): полнотекстовый поиск по РЕАЛЬНЫМ
+    ``apps.users.User`` (``username``/``first_name``/``last_name``) здесь
+    невозможен без одного из двух запрещённых шагов — расширения
+    ``apps.users.interface`` новой функцией поиска (домен ``users`` закрыт,
+    вне периметра Потока A, см. CLAUDE.md) ИЛИ восстановления таблицы-реплики
+    (явно запрещено брифом: «НЕ создавай таблицу-реплику»). Деградирует к
+    пустому списку — путь/auth/код (200) сохранены, тело — всегда ``[]``.
+    Фронтовый picker «новый чат» будет показывать пустой список до
+    последующей фазы, которая либо добавит ``apps.users.interface.
+    search_users_brief(...)``, либо примет эту деградацию окончательной."""
+    return []

@@ -67,4 +67,29 @@ urlpatterns = [
 
     path("keys/<int:user_id>/", views.get_user_keys),
     path("keys/<int:user_id>", views.get_user_keys),
+
+    # ── /admin/* (admin.py, 3 эндпойнта, require_admin — workers/admin
+    # под-задача, PLAN.md §6.5, последняя под-задача messenger) ─────────────
+    path("admin/rooms/", views.admin_list_rooms),
+    path("admin/rooms", views.admin_list_rooms),
+
+    path("admin/rooms/<int:room_id>/messages/", views.admin_list_room_messages),
+    path("admin/rooms/<int:room_id>/messages", views.admin_list_room_messages),
+
+    path("admin/history/archive/", views.admin_trigger_history_archive),
+    path("admin/history/archive", views.admin_trigger_history_archive),
+
+    # ── /internal/* (internal.py, 1 эндпойнт, S2S — БЕЗ JWT) ────────────────
+    path("internal/bot-message/", views.internal_bot_message),
+    path("internal/bot-message", views.internal_bot_message),
+
+    # ── /users/* (users.py, 5 регистраций: ingest×1 + me×2 + search×2) ──────
+    path("users/ingest/", views.ingest_user_replica),
+    path("users/ingest", views.ingest_user_replica),
+
+    path("users/me/", views.me),
+    path("users/me", views.me),
+
+    path("users/search/", views.search_users),
+    path("users/search", views.search_users),
 ]
