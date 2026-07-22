@@ -13,6 +13,15 @@ read; Socket.IO-вещание и ``notify_publish`` — Р2, НЕ портир�
 будут прокинуты через users.interface или отдельный канал — вне scope
 messenger-core). Батчится (``get_users_brief``) там, где сериализуется
 больше одного сообщения/участника разом — без N+1.
+
+Вложения (attachments-под-задача, PLAN.md §6.5): ``_serialize_message``
+теперь отдаёт РЕАЛЬНЫЙ список ``ChatAttachment`` сообщения (через
+``apps.messenger.services.attachment_service.attachments_for_messages`` —
+тот же батч-принцип, что ``_briefs_by_id``), и ``send_message`` привязывает
+``MessageCreateRequest.attachment_ids`` к созданному сообщению
+(``attachment_service.attach_to_message``) — оба места раньше несли
+пустую заглушку ``[]``/не принимали ``attachment_ids`` (см. историю этого
+файла до attachments-под-задачи).
 """
 from __future__ import annotations
 
@@ -20,9 +29,11 @@ import uuid
 from typing import Iterable
 
 from django.db import transaction
+from django.db.models import Q
 
 from apps.messenger import schemas
 from apps.messenger.models import Message, Room, RoomParticipant, RoomParticipantRole, RoomType
+from apps.messenger.services import attachment_service
 from apps.users import interface as users_interface
 
 
@@ -71,7 +82,7 @@ def _serialize_participant(rp: RoomParticipant, briefs: dict[int, dict], *, unre
     }
 
 
-def _serialize_message(msg: Message, briefs: dict[int, dict]) -> dict:
+def _serialize_message(msg: Message, briefs: dict[int, dict], *, attachments: list[dict] | None = None) -> dict:
     return {
         "id": str(msg.id),
         "room_id": msg.room_id,
@@ -81,10 +92,15 @@ def _serialize_message(msg: Message, briefs: dict[int, dict]) -> dict:
         "is_edited": msg.is_edited,
         "created_at": msg.created_at.isoformat(),
         "sender": briefs.get(msg.sender_id) if msg.sender_id is not None else None,
-        # ChatAttachment — attachments-под-задача (см. models.py докстринг);
-        # MessageRead.attachments исходника — list[ChatAttachmentRead] = [],
-        # здесь всегда пустой список-заглушка до той под-задачи.
-        "attachments": [],
+        # attachments-под-задача: реальный список ChatAttachment этого
+        # сообщения. Вызывающий по возможности передаёт предзагруженный
+        # батч (``attachments=``, см. list_messages/_last_messages_for
+        # ниже) — без него делаем разовый запрос на само сообщение (лишний
+        # только для одиночных путей вроде send_message, где батчить нечего).
+        "attachments": (
+            attachments if attachments is not None
+            else attachment_service.attachments_for_messages([msg.id]).get(msg.id, [])
+        ),
     }
 
 
@@ -222,7 +238,8 @@ def _last_messages_for(room_ids: list[int]) -> dict[int, dict]:
         .distinct("room_id")
     )
     briefs = _briefs_by_id(m.sender_id for m in msgs)
-    return {m.room_id: _serialize_message(m, briefs) for m in msgs}
+    atts = attachment_service.attachments_for_messages([m.id for m in msgs])
+    return {m.room_id: _serialize_message(m, briefs, attachments=atts.get(m.id, [])) for m in msgs}
 
 
 def _unread_counts_for(user_id: int, room_ids: list[int]) -> dict[int, int]:
@@ -267,7 +284,15 @@ def send_message(sender_id: int, data: schemas.MessageCreateRequest) -> dict:
     """Порт ``send_message``. Socket.IO-вещание (``message_new`` в комнату и
     в персональные каналы участников) и ``notify_publish``-событие
     (``CHANNEL_NEW_CHAT_MESSAGE``) — Р2, НЕ портируются (см. бриф п.6:
-    Socket.IO — отдельная под-задача)."""
+    Socket.IO — отдельная под-задача).
+
+    ``attachment_ids`` (attachments-под-задача): привязка через
+    ``attachment_service.attach_to_message`` — её исключения (комната/
+    отправитель не совпадают, уже прикреплено к другому сообщению)
+    пробрасываются как есть; вызывающая вьюха ловит ИМЕННО их, наравне с
+    ``NotAParticipant``/``RoomNotFound`` — исходник заворачивает все три
+    случая в один и тот же ``except ValueError`` и ВСЕГДА отвечает 403 (см.
+    apps/messenger/views.py::send_message)."""
     if not RoomParticipant.objects.filter(room_id=data.room_id, user_id=sender_id).exists():
         raise NotAParticipant("Sender is not a participant in this room")
     room = Room.objects.filter(id=data.room_id).first()
@@ -278,26 +303,38 @@ def send_message(sender_id: int, data: schemas.MessageCreateRequest) -> dict:
         room=room, sender_id=sender_id, content=data.content,
         is_encrypted=data.is_encrypted, metadata_json=data.metadata_json,
     )
+    attachment_service.attach_to_message(
+        msg, attachment_ids=data.attachment_ids, room_id=data.room_id, sender_id=sender_id,
+    )
     return _serialize_message(msg, _briefs_by_id([sender_id]))
 
 
 def list_messages(room_id: int, *, q: str | None = None, since=None, until=None,
-                   limit: int = 50, offset: int = 0) -> list[dict]:
-    """Порт ``list_messages``. ``data_type``-фильтр (attachments-под-задача,
-    см. ``ChatAttachment``) обрабатывается в ``apps/messenger/views.py`` —
-    ходит в БД без совпадений, поскольку вложений здесь ещё нет; свободный
-    текстовый поиск ``q`` — ``ILIKE`` только по ``content`` (совпадение с
-    именами файлов вложений — тоже attachments-под-задача)."""
+                   data_type: str | None = None, limit: int = 50, offset: int = 0) -> list[dict]:
+    """Порт ``list_messages``. ``q`` — ``ILIKE`` по содержимому ИЛИ по имени
+    файла любого вложения сообщения (``exists()``-подзапрос исходника ->
+    ``Q(attachments__filename__icontains=...)`` + ``.distinct()`` здесь, чтобы
+    JOIN не размножал строки при >1 совпавшем вложении). ``data_type`` —
+    сообщения, несущие хотя бы одно вложение этого вида (та же логика)."""
     qs = Message.objects.filter(room_id=room_id).order_by("-created_at")
+    needs_distinct = False
     if q:
-        qs = qs.filter(content__icontains=q.strip())
+        pattern = q.strip()
+        qs = qs.filter(Q(content__icontains=pattern) | Q(attachments__filename__icontains=pattern))
+        needs_distinct = True
     if since is not None:
         qs = qs.filter(created_at__gte=since)
     if until is not None:
         qs = qs.filter(created_at__lt=until)
+    if data_type:
+        qs = qs.filter(attachments__data_type=data_type)
+        needs_distinct = True
+    if needs_distinct:
+        qs = qs.distinct()
     msgs = list(qs[offset:offset + limit])
     briefs = _briefs_by_id(m.sender_id for m in msgs)
-    return [_serialize_message(m, briefs) for m in msgs]
+    atts = attachment_service.attachments_for_messages([m.id for m in msgs])
+    return [_serialize_message(m, briefs, attachments=atts.get(m.id, [])) for m in msgs]
 
 
 def mark_read(user_id: int, room_id: int, message_id: uuid.UUID) -> None:

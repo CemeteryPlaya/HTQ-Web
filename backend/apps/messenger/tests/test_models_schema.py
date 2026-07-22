@@ -20,7 +20,7 @@ import pytest
 from django.db import connection
 from django.db.utils import IntegrityError
 
-from apps.messenger.models import Message, Room, RoomParticipant
+from apps.messenger.models import ChatAttachment, Message, Room, RoomParticipant, UserKey
 
 
 def _cols(table: str) -> dict:
@@ -198,3 +198,116 @@ def test_message_invalid_room_fk_raises_integrity_error():
     SystemExit при teardown — перепроверяй в изоляции, это не дефект теста."""
     with pytest.raises(IntegrityError):
         Message.objects.create(room_id=999999, content="orphan")
+
+
+# ── ChatAttachment (attachments-под-задача) ─────────────────────────────
+
+@pytest.mark.django_db
+def test_chat_attachment_columns_and_defaults():
+    cols = _cols("messenger_chatattachment")
+    assert cols["message_id"]["nullable"]
+    assert cols["room_id"]["nullable"]
+    assert cols["file_metadata_id"]["nullable"]
+    assert not cols["filename"]["nullable"]
+    assert not cols["size"]["nullable"]
+    assert not cols["content_type"]["nullable"]
+    assert cols["data_type"]["default"] is not None
+    assert cols["storage_path"]["nullable"]
+    assert cols["public_url"]["nullable"]
+    assert cols["thumbnail_path"]["nullable"]
+    assert cols["width"]["nullable"]
+    assert cols["height"]["nullable"]
+    assert not cols["uploaded_by"]["nullable"]
+    assert cols["created_at"]["default"] is not None
+    assert cols["updated_at"]["default"] is not None
+    # message_id/room_id — авто-индекс FK (паритет с ix_chat_attachments_*
+    # исходника); uploaded_by — БЕЗ отдельного индекса (Р2: не FK, источник
+    # тоже не индексировал эту колонку отдельно).
+    assert {"message_id", "room_id", "created_at"} <= _indexed_columns("messenger_chatattachment")
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT indexdef FROM pg_indexes WHERE tablename = %s", ["messenger_chatattachment"],
+        )
+        defs = [r[0] for r in cur.fetchall()]
+    assert [d for d in defs if "(uploaded_by)" in d] == []
+
+
+@pytest.mark.django_db
+def test_chat_attachment_field_defaults_on_create():
+    room = Room.objects.create()
+    att = ChatAttachment.objects.create(
+        room=room, filename="a.png", size=10, content_type="image/png", uploaded_by=1,
+    )
+    assert att.data_type == "other"
+    assert att.message_id is None
+    assert att.storage_path is None
+    assert att.thumbnail_path is None
+    assert att.width is None
+    assert att.height is None
+    assert isinstance(att.id, uuid.UUID)
+
+
+@pytest.mark.django_db
+def test_chat_attachment_cascade_delete_on_room():
+    room = Room.objects.create()
+    att = ChatAttachment.objects.create(
+        room=room, filename="a.png", size=10, content_type="image/png", uploaded_by=1,
+    )
+    room.delete()
+    assert not ChatAttachment.objects.filter(id=att.id).exists()
+
+
+@pytest.mark.django_db
+def test_chat_attachment_cascade_delete_on_message():
+    room = Room.objects.create()
+    msg = Message.objects.create(room=room, content="hi")
+    att = ChatAttachment.objects.create(
+        room=room, message=msg, filename="a.png", size=10, content_type="image/png", uploaded_by=1,
+    )
+    msg.delete()
+    assert not ChatAttachment.objects.filter(id=att.id).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_chat_attachment_invalid_room_fk_raises_integrity_error():
+    """⚠️ env-флак: transaction=True в комбинированном прогоне иногда даёт
+    SystemExit при teardown — перепроверяй в изоляции, это не дефект теста."""
+    with pytest.raises(IntegrityError):
+        ChatAttachment.objects.create(
+            room_id=999999, filename="a.png", size=1, content_type="x", uploaded_by=1,
+        )
+
+
+# ── UserKey (attachments-под-задача) ────────────────────────────────────
+
+@pytest.mark.django_db
+def test_user_key_composite_pk_columns():
+    cols = _cols("messenger_userkey")
+    assert not cols["user_id"]["nullable"]
+    assert not cols["device_id"]["nullable"]
+    assert not cols["public_identity_key"]["nullable"]
+    assert not cols["signed_pre_key"]["nullable"]
+    assert not cols["signature"]["nullable"]
+    assert cols["created_at"]["default"] is not None
+
+
+@pytest.mark.django_db
+def test_user_key_composite_pk_uniqueness():
+    UserKey.objects.create(
+        user_id=1, device_id="dev-1", public_identity_key="a", signed_pre_key="b", signature="c",
+    )
+    with pytest.raises(IntegrityError):
+        UserKey.objects.create(
+            user_id=1, device_id="dev-1", public_identity_key="x", signed_pre_key="y", signature="z",
+        )
+
+
+@pytest.mark.django_db
+def test_user_key_different_devices_allowed():
+    UserKey.objects.create(
+        user_id=1, device_id="dev-1", public_identity_key="a", signed_pre_key="b", signature="c",
+    )
+    UserKey.objects.create(
+        user_id=1, device_id="dev-2", public_identity_key="a2", signed_pre_key="b2", signature="c2",
+    )
+    assert UserKey.objects.filter(user_id=1).count() == 2

@@ -4,22 +4,26 @@
 Порт ``services/messenger/app/api/v1/{rooms,messages,read}.py``
 (messenger-core под-задача) — 8 реально достижимых роутов (не 9: см.
 ``apps/messenger/views.py`` докстринг про ``read.py``-дубликат, поглощённый
-в ``mark_message_read``).
+в ``mark_message_read``) + ``{attachments,keys}.py`` (attachments-под-задача,
+PLAN.md §6.5) — 5 роутов (attachments 3, keys 2).
 
 Реальные вызовы фронта (frontend/src/features/messenger/api/messengerApi.ts):
 ``rooms/`` (GET/POST, СО слешем), ``rooms/{id}`` (GET/PATCH, БЕЗ слеша),
 ``messages/`` (POST, СО слешем), ``messages/room/{id}`` (GET, БЕЗ слеша),
-``messages/room/{id}/read/{messageId}`` (POST, БЕЗ слеша). ``.../typing``
-фронтом по REST не вызывается (только через Socket.IO ``emit('typing', …)``,
-см. ``frontend/src/features/messenger/hooks/useMessengerSocket.ts``) —
+``messages/room/{id}/read/{messageId}`` (POST, БЕЗ слеша),
+``attachments/upload/`` (POST, СО слешем), ``keys/`` (POST, СО слешем),
+``keys/{userId}`` (GET, БЕЗ слеша). ``.../typing`` фронтом по REST не
+вызывается (только через Socket.IO ``emit('typing', …)``, см.
+``frontend/src/features/messenger/hooks/useMessengerSocket.ts``) —
 регистрируется защитно, по конвенции остальных аппок (оба написания).
 
 ``APPEND_SLASH=False`` — каждое написание пути регистрируется явно (как
 ``apps/hr/urls.py``/``apps/mail/urls.py``). Более специфичные литеральные
-роуты (``read/<uuid:...>``, ``typing``) — ДО общего
-``messages/room/<int:room_id>`` (список): порядок не критичен для
-корректности (регекспы не пересекаются — разное число сегментов), но
-соблюдает конвенцию репозитория «специфичное прежде общего».
+роуты (``read/<uuid:...>``, ``typing``, ``attachments/file/<uuid:...>/thumb``)
+— ДО более общих (``messages/room/<int:room_id>``,
+``attachments/file/<uuid:...>``): порядок не критичен для корректности
+(регекспы не пересекаются — разное число сегментов), но соблюдает конвенцию
+репозитория «специфичное прежде общего».
 """
 from django.urls import path
 
@@ -46,4 +50,21 @@ urlpatterns = [
 
     path("messages/room/<int:room_id>/", views.list_messages),
     path("messages/room/<int:room_id>", views.list_messages),
+
+    # ── /attachments/* (attachments.py, 3 эндпойнта, attachments-под-задача) ─
+    path("attachments/upload/", views.upload_attachment),
+    path("attachments/upload", views.upload_attachment),
+
+    path("attachments/file/<uuid:attachment_id>/thumb/", views.serve_attachment_thumb),
+    path("attachments/file/<uuid:attachment_id>/thumb", views.serve_attachment_thumb),
+
+    path("attachments/file/<uuid:attachment_id>/", views.serve_attachment),
+    path("attachments/file/<uuid:attachment_id>", views.serve_attachment),
+
+    # ── /keys/* (keys.py, 2 эндпойнта, attachments-под-задача) ──────────────
+    path("keys/", views.upload_keys),
+    path("keys", views.upload_keys),
+
+    path("keys/<int:user_id>/", views.get_user_keys),
+    path("keys/<int:user_id>", views.get_user_keys),
 ]

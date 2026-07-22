@@ -20,12 +20,13 @@ test_app_isolation.py). Данные пользователя (имя, приз�
 ТОЛЬКО через ``apps.users.interface.get_user_brief``/``get_users_brief``, см.
 ``apps/messenger/services/messenger_service.py``.
 
-``ChatAttachment``/``UserKey`` (attachments/keys под-задачи, PLAN.md §6.5) —
-НЕ переносятся сейчас: ``Message`` не несёт accessor к вложениям,
-сериализация ``attachments`` — пустой список-заглушка до той под-задачи (см.
-``messenger_service.py``). ``Room.storage_key`` (нужен только вложениям)
-перенесён для паритета схемы модели ``Room``, хоть и не используется до
-attachments-под-задачи.
+``ChatAttachment``/``UserKey`` (attachments/keys под-задача, PLAN.md §6.5) —
+портированы ниже. Байты вложений хранятся В apps.media_files (через
+``apps.media_files.interface`` — межаппные FK запрещены, см.
+apps/core/tests/test_app_isolation.py), НЕ в этой аппке напрямую — тот же
+принцип, что ``apps.hr.models.DepartmentFile``/``apps.mail.models.
+EmailAttachment``. Подробности сверки полей/дизайна — докстринг
+``ChatAttachment`` ниже и ``apps/messenger/services/attachment_service.py``.
 """
 from __future__ import annotations
 
@@ -204,3 +205,149 @@ class AuditLog(models.Model):
 
     def __str__(self) -> str:
         return f"<AuditLog(id={self.id}, action={self.action!r})>"
+
+
+class ChatAttachmentDataType(models.TextChoices):
+    """Порт классификации ``services/messenger/app/services/
+    attachment_storage.py::classify_attachment`` — исходная колонка
+    (``String(40)``) НЕ несёт CheckConstraint на это множество (тот же
+    принцип, что ``RoomType``/``RoomParticipantRole`` выше), choices здесь
+    чисто для админки/документации."""
+
+    IMAGES = "images", "Изображения"
+    AUDIO = "audio", "Аудио"
+    VIDEO = "video", "Видео"
+    ARCHIVES = "archives", "Архивы"
+    DOCUMENTS = "documents", "Документы"
+    OTHER = "other", "Другое"
+
+
+class ChatAttachment(models.Model):
+    """Порт ``services/messenger/app/models/domain.py::ChatAttachment``
+    (attachments/keys под-задача).
+
+    Р3 (media.interface, decision — attachments-brief п.4): исходник хранил
+    байты сам (``app/services/{attachment_storage,s3_storage}.py`` — S3 PUT
+    напрямую), с ``storage_path``/``public_url`` как raw S3-ключ/подписанный
+    URL, и НИКОГДА не заполнял свою же ``file_metadata_id`` (модель несёт
+    комментарий "Refers to media-service if used" — мёртвая, forward-looking
+    колонка в исходнике). Этот порт наконец включает её: байты идут через
+    ``apps.media_files.interface.store_file(scope="chat")`` (Django-монолит —
+    сосед по процессу, НЕ отдельный сервис; свой ``s3_storage.py``-клон
+    запрещён, см. ``apps/mail/services/attachment_service.py`` докстринг).
+    Поля источника сохранены 1:1 по имени/типу/nullable, СЕМАНТИКА трёх из
+    них адаптирована под эту межаппную индирекцию (задокументировано на
+    каждом поле ниже) — см. ``apps/messenger/services/attachment_service.py``
+    для полной картины upload/serve потоков.
+
+    ``message``/``room`` — РЕАЛЬНЫЕ FK (обе модели свои, внутри этой же
+    аппки) ``ondelete=CASCADE``, nullable — буквальный порт (исходник:
+    ``ForeignKey("messages.id", ondelete="CASCADE")``/``ForeignKey("rooms.id",
+    ondelete="CASCADE")``, оба nullable). Django авто-индексирует FK —
+    совпадает с исходником (``ix_chat_attachments_message_id``/
+    ``ix_chat_attachments_room_id``, обе явные в alembic).
+
+    ``uploaded_by`` — Р2 (тот же принцип, что ``RoomParticipant.user_id``/
+    ``Message.sender_id`` в models.py докстринге файла): ГОЛЫЙ
+    ``IntegerField`` БЕЗ FK (исходник — ``ForeignKey("chat_user_replicas.id",
+    ondelete="CASCADE")``, которой здесь нет). Источник НЕ несёт отдельный
+    индекс на этой колонке (``index=True`` отсутствует у ``mapped_column``) —
+    здесь тоже нет ``db_index`` (совпадает естественно: обычный
+    ``IntegerField` без FK не индексируется по умолчанию).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    message = models.ForeignKey(
+        Message, on_delete=models.CASCADE, related_name="attachments", null=True, blank=True,
+    )
+    room = models.ForeignKey(
+        Room, on_delete=models.CASCADE, related_name="attachments", null=True, blank=True,
+    )
+    # UUID apps.media_files.models.FileMetadata.id ОСНОВНОГО файла — НЕ FK
+    # (межаппные FK запрещены). Источник объявлял это же поле, но никогда не
+    # заполнял его (см. докстринг класса выше) — здесь это реальная ссылка,
+    # заполняемая apps.media_files.interface.store_file().
+    file_metadata_id = models.UUIDField(null=True, blank=True)
+    filename = models.CharField(max_length=255)
+    size = models.IntegerField()
+    content_type = models.CharField(max_length=255)
+    data_type = models.CharField(
+        max_length=40, choices=ChatAttachmentDataType.choices,
+        default=ChatAttachmentDataType.OTHER, db_default=ChatAttachmentDataType.OTHER,
+    )
+    # Р3-адаптация (см. докстринг класса): исходник хранил здесь свой S3-ключ
+    # (``chats/<room>/<data_type>/<id>_<filename>``); этот порт хранит
+    # ``apps.media_files.models.FileMetadata.path`` (взятое из ответа
+    # ``interface.store_file()``) — информационное поле, НЕ читается
+    # обратно ни одним путём serve/redirect (те идут через
+    # ``interface.get_file_url(file_metadata_id)``, см. attachment_service.py).
+    storage_path = models.CharField(max_length=2048, null=True, blank=True)
+    # Заполняется ОДИН раз при загрузке (``_public_url`` в
+    # attachment_service.py) и НИКОГДА не перечитывается сериализатором
+    # (тот же самый "write-only" паритет с исходником: ``ChatAttachmentRead.
+    # url`` — computed_field, каждый раз заново подписывающий URL, игнорируя
+    # эту сырую колонку — буквальная странность исходника, воспроизведена
+    # как есть).
+    public_url = models.CharField(max_length=2048, null=True, blank=True)
+    # Р3-адаптация (см. докстринг класса): исходник хранил здесь S3-ключ
+    # WebP-превью (``image_thumb.py``, ≤256×256, генерируется ТОЛЬКО для
+    # ``data_type == "images"``, NULL иначе/при сбое генерации). Этот порт
+    # хранит str(UUID) ВТОРОЙ apps.media_files.FileMetadata-строки — превью,
+    # загруженное ОТДЕЛЬНЫМ вызовом ``interface.store_file()`` (НЕ через
+    # media_files' собственный "variant"-пайплайн: тот кроп квадратный
+    # (``image_service.make_variant``, ``square=True``), тогда как контракт
+    # чата — превью С СОХРАНЕНИЕМ пропорций, как ``image_thumb.py`` исходника
+    # — см. attachment_service.py::make_thumbnail).
+    thumbnail_path = models.CharField(max_length=2048, null=True, blank=True)
+    # Внутренний размер ОРИГИНАЛА (не превью) — буквальный порт, тот же
+    # смысл, что у исходника: UI резервирует aspect-ratio по этим значениям.
+    width = models.IntegerField(null=True, blank=True)
+    height = models.IntegerField(null=True, blank=True)
+    uploaded_by = models.IntegerField()
+
+    created_at = models.DateTimeField(db_default=Now(), db_index=True)
+    updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
+
+    @property
+    def url(self) -> str | None:
+        """Порт ``ChatAttachment.url`` исходника (``return self.public_url``)
+        — сырое, потенциально протухшее значение; сериализатор API НЕ
+        использует это свойство (см. ``attachment_service.serialize_attachment``,
+        который каждый раз заново подписывает через ``attachment_url()``)."""
+        return self.public_url
+
+    def __str__(self) -> str:
+        return f"<ChatAttachment(id={self.id}, filename={self.filename!r})>"
+
+
+class UserKey(models.Model):
+    """Порт ``services/messenger/app/models/domain.py::UserKey`` — публичные
+    ключи для E2EE. Составной PK (``user_id``, ``device_id``) — оба поля
+    были ``primary_key=True`` у исходника, без суррогатного id -> Django 5.2
+    ``CompositePrimaryKey`` (тот же приём, что ``RoomParticipant`` выше).
+
+    ``user_id`` — Р2: ГОЛЫЙ ``IntegerField`` БЕЗ FK (исходник — ``ForeignKey
+    ("chat_user_replicas.id", ondelete="CASCADE")``, которой здесь нет; та
+    же логика, что ``RoomParticipant.user_id``/``ChatAttachment.uploaded_by``
+    выше) — это платформенный ``apps.users.User.id`` (JWT ``user_id``), а не
+    ссылка на реплику.
+
+    ВНИМАНИЕ (админка): как и ``RoomParticipant``, модель с
+    ``CompositePrimaryKey`` НЕ регистрируется в apps/messenger/admin.py —
+    ``AdminSite.register`` безусловно поднимает ``ImproperlyConfigured`` для
+    любой модели с ``_meta.is_composite_pk``.
+    """
+
+    user_id = models.IntegerField()
+    device_id = models.CharField(max_length=255)
+    public_identity_key = models.TextField()
+    signed_pre_key = models.TextField()
+    signature = models.TextField()
+
+    created_at = models.DateTimeField(db_default=Now(), db_index=True)
+    updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
+
+    pk = models.CompositePrimaryKey("user_id", "device_id")
+
+    def __str__(self) -> str:
+        return f"<UserKey(user_id={self.user_id}, device_id={self.device_id!r})>"

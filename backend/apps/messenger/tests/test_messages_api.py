@@ -194,13 +194,161 @@ def test_list_messages_invalid_data_type_422(room, auth):
 
 
 @pytest.mark.django_db
-def test_list_messages_data_type_filter_returns_empty_until_attachments(user, room, auth):
-    """attachments-под-задача ещё не перенесена — валидный data_type проходит
-    валидацию, но не находит ничего (ChatAttachment здесь не существует)."""
+def test_list_messages_data_type_filter_returns_empty_without_matching_attachment(user, room, auth):
+    """Валидный data_type проходит валидацию, но не находит сообщение без
+    вложений подходящего вида (attachments-под-задача — реальная фильтрация,
+    см. test_attachments_and_data_type_filter_wired ниже для позитивного
+    случая)."""
     _msg(room, user.id, content="hi")
     resp = Client().get(f"{BASE}/room/{room.id}", {"data_type": "images"}, **auth)
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+# ── attachment_ids (attachments-под-задача, PLAN.md §6.5) ────────────────
+
+def _upload(room, auth, *, filename="report.txt", content=b"hello", content_type="text/plain"):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    upload = SimpleUploadedFile(filename, content, content_type=content_type)
+    resp = Client().post(
+        "/api/messenger/v1/attachments/upload/",
+        data={"room_id": str(room.id), "file": upload}, **auth,
+    )
+    assert resp.status_code == 201, resp.content
+    return resp.json()
+
+
+@pytest.fixture(autouse=False)
+def fake_media_storage_for_attachments(monkeypatch):
+    """Attachments в этом файле нужны только для attachment_ids/data_type
+    интеграции — переиспользуем тот же storage-double, что
+    ``test_attachments_api.py`` (без него upload бы ушёл в реальную сеть)."""
+    from apps.media_files import tasks as media_tasks
+    from apps.media_files.services import upload_service as media_upload_service
+
+    class _FakeStorage:
+        def __init__(self):
+            self.objects: dict[str, bytes] = {}
+
+        def save(self, path, data, content_type=None):
+            self.objects[path] = data
+
+        def open(self, path, byte_range=None):
+            data = self.objects[path]
+            if byte_range is not None:
+                start, end = byte_range
+                return data[start: end + 1]
+            return data
+
+        def delete(self, path):
+            self.objects.pop(path, None)
+
+        def exists(self, path):
+            return path in self.objects
+
+        def size(self, path):
+            return len(self.objects[path])
+
+    storage = _FakeStorage()
+    monkeypatch.setattr(media_upload_service, "get_storage", lambda bucket=None: storage)
+    monkeypatch.setattr(media_tasks, "get_storage", lambda bucket=None: storage)
+    return storage
+
+
+@pytest.mark.usefixtures("fake_media_storage_for_attachments")
+@pytest.mark.django_db
+def test_send_message_attaches_uploaded_attachment(user, room, auth):
+    att = _upload(room, auth, filename="pic.txt", content=b"data")
+    resp = Client().post(
+        f"{BASE}/", data=json.dumps({"room_id": room.id, "content": "look", "attachment_ids": [att["id"]]}),
+        content_type="application/json", **auth,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert len(body["attachments"]) == 1
+    assert body["attachments"][0]["id"] == att["id"]
+
+    from apps.messenger.models import ChatAttachment
+
+    row = ChatAttachment.objects.get(id=att["id"])
+    assert str(row.message_id) == body["id"]
+
+
+@pytest.mark.usefixtures("fake_media_storage_for_attachments")
+@pytest.mark.django_db
+def test_send_message_403_attachment_not_available_for_room(user, other_user, room, auth, other_auth):
+    other_room = Room.objects.create(room_type="direct")
+    RoomParticipant.objects.create(room=other_room, user_id=other_user.id, role="admin")
+    att = _upload(other_room, other_auth, filename="pic.txt", content=b"data")
+
+    resp = Client().post(
+        f"{BASE}/", data=json.dumps({"room_id": room.id, "content": "hi", "attachment_ids": [att["id"]]}),
+        content_type="application/json", **auth,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "One or more attachments are not available for this room"
+
+
+@pytest.mark.usefixtures("fake_media_storage_for_attachments")
+@pytest.mark.django_db
+def test_send_message_403_attachment_already_attached(user, room, auth):
+    att = _upload(room, auth, filename="pic.txt", content=b"data")
+    Client().post(
+        f"{BASE}/", data=json.dumps({"room_id": room.id, "content": "first", "attachment_ids": [att["id"]]}),
+        content_type="application/json", **auth,
+    )
+    resp = Client().post(
+        f"{BASE}/", data=json.dumps({"room_id": room.id, "content": "second", "attachment_ids": [att["id"]]}),
+        content_type="application/json", **auth,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "One or more attachments are already attached to a message"
+
+
+def _png_bytes() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (0, 0, 255)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.mark.usefixtures("fake_media_storage_for_attachments")
+@pytest.mark.django_db
+def test_list_messages_data_type_filter_matches_real_attachment(user, room, auth):
+    att = _upload(room, auth, filename="pic.png", content=_png_bytes(), content_type="image/png")
+    Client().post(
+        f"{BASE}/", data=json.dumps({"room_id": room.id, "content": "photo", "attachment_ids": [att["id"]]}),
+        content_type="application/json", **auth,
+    )
+    _msg(room, user.id, content="plain text, no attachment")
+
+    resp = Client().get(f"{BASE}/room/{room.id}", {"data_type": "images"}, **auth)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["content"] == "photo"
+    assert len(body[0]["attachments"]) == 1
+
+
+@pytest.mark.usefixtures("fake_media_storage_for_attachments")
+@pytest.mark.django_db
+def test_list_messages_q_matches_attachment_filename(user, room, auth):
+    att = _upload(room, auth, filename="invoice-2026.txt", content=b"data")
+    Client().post(
+        f"{BASE}/", data=json.dumps({"room_id": room.id, "content": "", "attachment_ids": [att["id"]]}),
+        content_type="application/json", **auth,
+    )
+    _msg(room, user.id, content="unrelated")
+
+    resp = Client().get(f"{BASE}/room/{room.id}", {"q": "invoice"}, **auth)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["attachments"][0]["filename"] == "invoice-2026.txt"
 
 
 @pytest.mark.django_db

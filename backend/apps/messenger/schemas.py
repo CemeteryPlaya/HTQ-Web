@@ -6,6 +6,7 @@ messenger_service.py``, тот же принцип, что ``apps/hr/schemas.py`
 """
 from __future__ import annotations
 
+import uuid
 from typing import Optional
 
 from pydantic import BaseModel
@@ -38,14 +39,25 @@ class RoomUpdateRequest(BaseModel):
 class MessageCreateRequest(BaseModel):
     """Порт ``schemas/messenger.py::MessageCreate``.
 
-    ``attachment_ids`` исходника — НЕ портируется (attachments — отдельная
-    под-задача, ``ChatAttachment`` здесь ещё не существует, см.
-    ``apps/messenger/models.py`` докстринг). Поле не объявлено здесь: если
-    клиент всё же пришлёт его в теле, pydantic v2 молча проигнорирует лишний
-    ключ (дефолтный ``model_config`` — ``extra="ignore"``), запрос не упадёт.
+    ``attachment_ids`` (attachments-под-задача, PLAN.md §6.5): ссылки на
+    ранее загруженные (``POST /attachments/upload/``), ещё не прикреплённые
+    вложения этой же комнаты — сервис привязывает их к создаваемому
+    сообщению (``apps.messenger.services.attachment_service.
+    attach_to_message``), см. ``messenger_service.py::send_message``.
     """
 
     room_id: int
     content: str
     is_encrypted: bool = False
     metadata_json: Optional[dict] = None
+    attachment_ids: list[uuid.UUID] = []
+
+
+class UserKeyUploadRequest(BaseModel):
+    """Порт ``schemas/messenger.py::UserKeyCreate`` (attachments-под-задача,
+    PLAN.md §6.5)."""
+
+    device_id: str
+    public_identity_key: str
+    signed_pre_key: str
+    signature: str
