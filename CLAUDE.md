@@ -23,19 +23,23 @@ These are authoritative and maintained — prefer them over scanning the tree:
 - **[backend/README.md](backend/README.md)** — Django app anatomy, `interface`/`api_view` rules, how to add a domain. Replaces the deleted `services/README.md`.
 - **[docs/architecture.md](docs/architecture.md)** — architectural decisions (predates the cutover in places — e.g. it still talks about DRF ViewSets and a `backend/tasks/` layout that doesn't exist; treat it as background, not a source of truth for current layout).
 
-Ignore/discount at the repo root: empty `nginx/`, root `node_modules/`+`package.json` (tooling only). **`docker-compose.django.yml` and `RUN-DJANGO-CHECK.md` describe an earlier, now-superseded proof-of-concept stack** (a parallel `htqweb-django` project from when only `users`/`cms`/`media`/`hr` were ported and everything else was an empty app) — superseded by `docker-compose.yml` + `docker-compose.dev.yml`, which reflect the completed cutover. The only authoritative gateway config is `infra/nginx/default.conf`.
+Ignore/discount at the repo root: empty `nginx/`, root `node_modules/`+`package.json` (tooling only). **Ровно два compose-файла:** `docker-compose.yml` (прод/основной — единый Django-backend; боевая БД в Docker на VPS `45.10.110.212:5432`) и `docker-compose.test.yml` (одноразовый Postgres на :55432 для pytest). Старые `docker-compose.dev.yml`, `docker-compose.django.yml`, `RUN-DJANGO-CHECK.md` удалены. The only authoritative gateway config is `infra/nginx/default.conf`.
 
 ## Commands
 
 Containers are named `htqweb1-<service>-1` (e.g. `htqweb1-backend-web-1`, `htqweb1-db-1`, `htqweb1-pgbouncer-1`).
 
-**Run the stack (dev — Vite HMR on :3000, MinIO, DEBUG settings):**
+**БД — боевая в Docker на VPS** (`DB_HOST=45.10.110.212`, `DB_PORT=5432` в `.env` +
+`x-django-env`). Локальные `db`/`pgbouncer` в `docker-compose.yml` — только под
+профилем `local-db` (офлайн-разработка без VPS: `--profile local-db up -d db` + `DB_HOST=db`).
+
+**Run the stack:**
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-# rebuild + recreate one process after code changes:
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --no-deps backend-web
+docker compose up -d --build                       # backend(web/asgi/worker/beat)/flower + redis/minio + мониторинг
+docker compose --profile production up -d --build  # + nginx/sfu/certbot/webtransport (SPA раздаётся nginx)
+docker compose up -d --build --no-deps backend-web # пересобрать один процесс после правок
 ```
-Prod stack is plain `docker compose up -d` (adds nginx/sfu/certbot/webtransport under the `production` profile).
+Фронт-дев с HMR — отдельно: `cd frontend && npm run dev` (Vite :3000, проксирует в backend).
 
 **Frontend** (`cd frontend`):
 ```bash
@@ -51,7 +55,7 @@ Playwright: the chromium binary isn't installed; launch with `{ channel: 'msedge
 
 **Backend tests** (`cd backend`): pytest-django against **real Postgres** (no SQLite), on a dedicated host port because neither existing route works (`:5432` is a native Windows Postgres install, `:6432`/PgBouncer is transaction-pooled and can't `CREATE DATABASE`). Bring the port up once, then run the suite:
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db   # publishes db on :55432
+docker compose -f docker-compose.test.yml up -d   # самодостаточный тест-Postgres на :55432 (НЕ docker restart!)
 cd backend
 .venv/Scripts/python.exe -m pytest -q                                   # whole suite
 .venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test

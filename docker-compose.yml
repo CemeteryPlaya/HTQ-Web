@@ -23,8 +23,8 @@ x-django-env: &django-env
   # Django (psycopg, sync) идёт НАПРЯМУЮ в Postgres: CONN_MAX_AGE пулит на уровне
   # приложения, а PgBouncer transaction-mode рвал бы DDL/prepared-statements.
   # Контейнер pgbouncer (:6432) остаётся для хостовых утилит/совместимости.
-  DB_HOST: db
-  DB_PORT: "5432"
+  DB_HOST: ${DB_HOST:-45.10.110.212}   # БД в Docker на VPS; офлайн — DB_HOST=db + --profile local-db
+  DB_PORT: "${DB_PORT:-5432}"
   DB_NAME: ${DB_NAME:-htqweb}
   DB_USER: ${DB_USER:-htqweb}
   DB_PASSWORD: ${DB_PASSWORD:-change-me}
@@ -40,8 +40,12 @@ x-django-env: &django-env
   S3_USE_PATH_STYLE: "true"
 
 services:
-  # ─── PostgreSQL ───────────────────────────────────
+  # ─── PostgreSQL (ЛОКАЛЬНАЯ, опционально) ──────────
+  # Боевая БД — в Docker на VPS (DB_HOST=45.10.110.212, см. x-django-env). Этот
+  # локальный контейнер под профилем local-db — только для офлайн-разработки без
+  # VPS: `docker compose --profile local-db up -d db` + DB_HOST=db в .env.
   db:
+    profiles: ["local-db"] 
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -63,8 +67,9 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ─── PgBouncer (connection pooler) ───────────────
+  # ─── PgBouncer (только с локальной БД) ───────────
   pgbouncer:
+    profiles: ["local-db"]   # для VPS-БД не нужен (Django ходит напрямую)
     image: edoburu/pgbouncer:v1.25.1-p0
     restart: unless-stopped
     environment:
@@ -152,12 +157,9 @@ services:
     image: prometheuscommunity/postgres-exporter:v0.15.0
     restart: unless-stopped
     environment:
-      DATA_SOURCE_NAME: postgresql://${DB_USER:-htqweb}:${DB_PASSWORD:-change-me}@db:5432/${DB_NAME:-htqweb}?sslmode=disable
+      DATA_SOURCE_NAME: postgresql://${DB_USER:-htqweb}:${DB_PASSWORD:-change-me}@${DB_HOST:-45.10.110.212}:${DB_PORT:-5432}/${DB_NAME:-htqweb}?sslmode=disable
     ports:
       - "9187:9187"
-    depends_on:
-      db:
-        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -220,9 +222,8 @@ services:
     command: ["gunicorn", "htqweb.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "60"]
     ports:
       - "8000:8000"
+    # БД внешняя (VPS) — depends_on не нужен; docker-entrypoint.sh сам ждёт DB_HOST:DB_PORT.
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:

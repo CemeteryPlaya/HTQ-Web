@@ -16,22 +16,25 @@ pytest-django needs a **direct** connection to Postgres so it can
   transaction-pooled, and `CREATE DATABASE`/`DROP DATABASE` cannot pass through a
   pooled connection.
 
-So `docker-compose.test.yml` (repo root, new file) publishes the `db` container on a
-free port, `55432` (from the already-present but previously-unwired `.env` var
-`DB_HOST_PORT`), **without touching `docker-compose.yml`/`docker-compose.dev.yml`** —
-deploy configuration is untouched; this override is test-only infrastructure.
+So `docker-compose.test.yml` (repo root) — **самодостаточный** стек: поднимает
+ТОЛЬКО одноразовый Postgres на `55432` (`.env`-var `DB_HOST_PORT`), в отдельном
+проекте `htqweb-test` и отдельном volume. Боевую БД (в Docker на VPS `45.10.110.212`,
+`docker-compose.yml`) НЕ трогает.
 
 ## What to start
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db
+docker compose -f docker-compose.test.yml up -d          # тест-Postgres на :55432
+# ...прогнать pytest...
+docker compose -f docker-compose.test.yml down -v        # снести с данными
 ```
 
-This recreates just the `db` service with the extra port mapping
-(`${DB_HOST_PORT:-55432}:5432`, additive to the existing `5432:5432` mapping — it
-does not remove or change the production port). Verified after bringing it up that
-`localhost:55432` really reaches the **container** (schemas `auth, cms, email, media,
-messenger` — Postgres 16.13 Alpine) and not the native Windows Postgres 18.
+⚠️ Поднимать/пересоздавать db ТОЛЬКО через `compose up -d` — **НЕ `docker restart`**:
+плоский restart НЕ применяет публикацию порта `:55432` → pytest виснет на
+`psycopg ConnectionTimeout` (localhost→`::1`+`127.0.0.1`, timeout 130s каждый).
+Проверка: `docker port htqweb-test-db-1` должен показать `0.0.0.0:55432`.
+Креды тестовой БД (`htqweb/change-me`) независимы от боевых (`settings/test.py`
+читает `TEST_DB_*`, не `DB_*`), поэтому VPS-креды из `.env` сюда не текут.
 
 ## Env vars (all have working defaults, override only if needed)
 
