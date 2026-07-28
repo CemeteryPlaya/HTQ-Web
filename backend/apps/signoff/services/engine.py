@@ -1,0 +1,502 @@
+"""Движок согласования: запуск процесса, приём решений, продвижение по этапам.
+
+Вся логика домена живёт здесь; вьюхи только разбирают запрос и зовут эти
+функции.
+
+Три правила, из которых следует всё остальное:
+
+1. **Отказ решает сразу.** Любой отказ на любом этапе отклоняет весь
+   процесс немедленно — остальные этапы не получают запросов, уже выданные
+   запросы гасятся как «не потребовалось». Это требование заказчика и
+   одновременно безопасное поведение: «отклонено» — состояние, из которого
+   ничего плохого не произойдёт, в отличие от молча продолжающегося
+   согласования.
+2. **Группа этапов проходится целиком.** Этапы с одинаковым ``order`` идут
+   параллельно; следующая группа активируется, только когда ВСЕ этапы
+   текущей согласованы.
+3. **Колбэк предметной аппки — внутри транзакции, уведомление — после
+   коммита.** Состояние процесса и состояние предметного объекта обязаны
+   стать согласованными атомарно (иначе «процесс согласован, бюджет нет»);
+   уведомление же — внешний эффект, и рассылать его по откатившейся
+   транзакции нельзя.
+
+Гонки. Все переходы берут ``SELECT … FOR UPDATE`` на строку процесса. Без
+этого два согласующих, закрывающих последний этап одновременно, оба увидят
+«все остальные согласовали» и оба вызовут ``on_approved`` — предметная
+аппка получит команду дважды.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import timezone as _tz
+from datetime import datetime
+
+from django.db import IntegrityError, transaction
+from django.http import Http404
+
+from apps.core.services import ServiceDisabled
+from apps.signoff.models import (
+    ApprovalEvent,
+    ApprovalProcess,
+    ApprovalProcessStage,
+    ApprovalRoute,
+    ApprovalState,
+    ApprovalTask,
+    ProcessState,
+    Quorum,
+    StageState,
+    TaskState,
+)
+from apps.signoff.services import registry
+# Соседи — только через interface (apps/core/tests/test_app_isolation.py).
+from apps.messenger import interface as messenger
+from apps.users import interface as users
+
+logger = logging.getLogger(__name__)
+
+APPROVE = "approve"
+REJECT = "reject"
+DECISIONS = (APPROVE, REJECT)
+
+# Вид события журнала под каждое решение. Таблицей, а не склейкой строки
+# из самого решения: "reject" + "d" даёт "task_rejectd".
+_EVENT_KIND = {APPROVE: "task_approved", REJECT: "task_rejected"}
+
+
+class SignoffError(Exception):
+    """Базовая ошибка домена — вьюха переводит её в 409."""
+
+
+class RouteNotConfigured(SignoffError):
+    """Для типа объекта нет активного маршрута."""
+
+
+class AlreadyInApproval(SignoffError):
+    """У объекта уже идёт согласование."""
+
+
+class NotAnApprover(SignoffError):
+    """Пользователь пытается решить не свой запрос."""
+
+
+class ProcessClosed(SignoffError):
+    """Процесс уже завершён — решения больше не принимаются."""
+
+
+class RouteUnusable(SignoffError):
+    """Маршрут нельзя исполнить: пустой этап или ни одного активного согласующего.
+
+    Согласующие в маршруте заданы поимённо, а люди увольняются: маршрут,
+    все согласующие которого деактивированы, породил бы процесс, который
+    физически некому двигать. Лучше отказать на запуске с внятным текстом,
+    чем создать заявку, навсегда зависшую на первом этапе.
+    """
+
+
+def _now() -> datetime:
+    return datetime.now(_tz.utc)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Запуск
+# ═══════════════════════════════════════════════════════════════════════
+
+@transaction.atomic
+def start(*, subject_type: str, subject_id: int,
+          initiator_id: int | None = None) -> ApprovalProcess:
+    """Запустить согласование объекта по активному маршруту его типа."""
+    subject = registry.get_subject(subject_type)  # UnknownSubject → 409/422
+
+    route = (ApprovalRoute.objects
+             .filter(subject_type=subject_type, is_active=True)
+             .prefetch_related("stages__approvers").first())
+    if route is None:
+        raise RouteNotConfigured(
+            f"Для «{subject.label}» не настроен маршрут согласования"
+        )
+
+    stages = list(route.stages.all())
+    if not stages:
+        raise RouteUnusable(f"В маршруте «{route.name}» нет ни одного этапа")
+
+    plan = _resolve_stages(stages)
+
+    try:
+        process = ApprovalProcess.objects.create(
+            subject_type=subject_type, subject_id=subject_id,
+            route_id=route.pk, initiator_id=initiator_id,
+            state=ProcessState.PENDING,
+        )
+    except IntegrityError as exc:
+        # Частичный уникальный индекс uq_signoff_one_pending_process_per_subject.
+        raise AlreadyInApproval(
+            f"«{subject.label}» уже находится на согласовании"
+        ) from exc
+
+    first_order = min(order for order, _, _ in plan)
+    for order, stage, approver_ids in plan:
+        process_stage = ApprovalProcessStage.objects.create(
+            process=process, order=order, name=stage.name, quorum=stage.quorum,
+            state=StageState.ACTIVE if order == first_order else StageState.WAITING,
+        )
+        ApprovalTask.objects.bulk_create([
+            ApprovalTask(stage=process_stage, user_id=user_id)
+            for user_id in approver_ids
+        ])
+
+    process.current_order = first_order
+    process.save(update_fields=["current_order", "updated_at"])
+
+    _log(process, "started", actor_id=initiator_id,
+         payload={"route_id": route.pk, "route_name": route.name})
+
+    if subject.on_started is not None:
+        subject.on_started(subject_id)
+    _set_subject_state(subject_type, subject_id, ApprovalState.PENDING)
+
+    _notify_active_stages(process)
+    return process
+
+
+def _resolve_stages(stages) -> list[tuple[int, object, list[int]]]:
+    """Проверить исполнимость маршрута и вернуть ``(order, stage, user_ids)``.
+
+    Проверяется на ЗАПУСКЕ, а не при сохранении маршрута: между настройкой
+    и запуском проходит время, за которое согласующий успевает уволиться.
+    """
+    plan: list[tuple[int, object, list[int]]] = []
+    all_ids: set[int] = set()
+    for stage in stages:
+        user_ids = [row.user_id for row in stage.approvers.all()]
+        if not user_ids:
+            raise RouteUnusable(
+                f"На этапе «{stage.name}» не назначен ни один согласующий"
+            )
+        all_ids.update(user_ids)
+        plan.append((stage.order, stage, user_ids))
+
+    active = _active_user_ids(all_ids)
+    for _, stage, user_ids in plan:
+        if not any(user_id in active for user_id in user_ids):
+            raise RouteUnusable(
+                f"На этапе «{stage.name}» не осталось ни одного активного "
+                f"согласующего — поправьте маршрут"
+            )
+    return plan
+
+
+def _active_user_ids(user_ids) -> set[int]:
+    """Кто из перечисленных — действующий пользователь платформы.
+
+    Ошибку ``users`` НЕ глушим: здесь решается, кто вправе согласовать, и
+    молча считать всех активными значило бы пропустить запуск маршрута,
+    двигать который некому.
+    """
+    ids = list(user_ids)
+    if not ids:
+        return set()
+    briefs = users.get_users_brief(ids)
+    return {row["id"] for row in briefs if row.get("is_active")}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Решение
+# ═══════════════════════════════════════════════════════════════════════
+
+@transaction.atomic
+def act(*, task_id: int, actor_id: int, decision: str,
+        comment: str = "") -> ApprovalProcess:
+    """Принять решение по запросу и продвинуть процесс.
+
+    Возвращает процесс в состоянии ПОСЛЕ решения.
+    """
+    if decision not in DECISIONS:
+        raise SignoffError(f"Неизвестное решение: {decision}")
+
+    task = (ApprovalTask.objects
+            .select_related("stage", "stage__process")
+            .filter(pk=task_id).first())
+    if task is None:
+        raise Http404("Запрос на согласование не найден")
+    if task.user_id != actor_id:
+        # 409, а не 403: сам факт существования запроса не секрет, а
+        # «это не ваш запрос» — состояние данных, не нехватка прав.
+        raise NotAnApprover("Этот запрос адресован другому согласующему")
+
+    # Блокировка ПОСЛЕ проверок и до любых записей: дальше идут решения,
+    # опирающиеся на состояние остальных этапов процесса.
+    process = _lock(task.stage.process_id)
+    if process.state != ProcessState.PENDING:
+        raise ProcessClosed(
+            f"Согласование уже завершено ({process.get_state_display()})"
+        )
+    # Перечитываем задачу под блокировкой — между первым чтением и
+    # блокировкой её мог закрыть параллельный запрос.
+    task.refresh_from_db()
+    if task.state != TaskState.PENDING:
+        raise ProcessClosed("По этому запросу решение уже принято")
+
+    task.state = TaskState.APPROVED if decision == APPROVE else TaskState.REJECTED
+    task.comment = comment
+    task.acted_at = _now()
+    task.save(update_fields=["state", "comment", "acted_at"])
+
+    stage = task.stage
+    _log(process, _EVENT_KIND[decision], actor_id=actor_id,
+         payload={"stage": stage.name, "task_id": task.pk, "comment": comment})
+
+    if decision == REJECT:
+        _reject(process, stage, actor_id=actor_id, comment=comment)
+        return process
+
+    if _settle_stage(stage):
+        _advance(process, actor_id=actor_id)
+    return process
+
+
+def _settle_stage(stage: ApprovalProcessStage) -> bool:
+    """Закрыть этап, если его кворум набран. ``True`` — этап согласован.
+
+    Отказ здесь не обрабатывается: он до этой функции не доходит (``act``
+    уводит его в ``_reject``), потому что отказ решает судьбу всего
+    процесса, а не одного этапа.
+    """
+    tasks = list(stage.tasks.all())
+    approved = [t for t in tasks if t.state == TaskState.APPROVED]
+
+    if stage.quorum == Quorum.ANY:
+        enough = bool(approved)
+    else:
+        enough = len(approved) == len(tasks)
+
+    if not enough:
+        return False
+
+    stage.state = StageState.APPROVED
+    stage.decided_at = _now()
+    stage.save(update_fields=["state", "decided_at"])
+    # При кворуме «достаточно одного» остальные запросы этапа больше не
+    # нужны — гасим, чтобы они исчезли из чужих списков «ждёт решения».
+    stage.tasks.filter(state=TaskState.PENDING).update(state=TaskState.SKIPPED)
+    return True
+
+
+def _advance(process: ApprovalProcess, *, actor_id: int | None) -> None:
+    """Перейти к следующей группе этапов или завершить процесс согласованием."""
+    current = list(process.stages.filter(order=process.current_order))
+    if not all(stage.state == StageState.APPROVED for stage in current):
+        return  # в текущей группе ещё есть незакрытые параллельные этапы
+
+    next_order = (process.stages
+                  .filter(order__gt=process.current_order)
+                  .order_by("order")
+                  .values_list("order", flat=True).first())
+
+    if next_order is None:
+        _finish(process, ProcessState.APPROVED, actor_id=actor_id)
+        return
+
+    process.stages.filter(order=next_order).update(state=StageState.ACTIVE)
+    process.current_order = next_order
+    process.save(update_fields=["current_order", "updated_at"])
+    _log(process, "stage_activated", actor_id=actor_id,
+         payload={"order": next_order})
+    _notify_active_stages(process)
+
+
+def _reject(process: ApprovalProcess, stage: ApprovalProcessStage, *,
+            actor_id: int | None, comment: str = "") -> None:
+    """Отказ на этапе отклоняет весь процесс."""
+    stage.state = StageState.REJECTED
+    stage.decided_at = _now()
+    stage.save(update_fields=["state", "decided_at"])
+
+    # Всё, до чего дело не дошло, — «не потребовалось», а не «отклонено»:
+    # в карточке должно быть видно, кто именно отказал.
+    ApprovalTask.objects.filter(
+        stage__process=process, state=TaskState.PENDING,
+    ).update(state=TaskState.SKIPPED)
+    process.stages.filter(
+        state__in=(StageState.WAITING, StageState.ACTIVE),
+    ).update(state=StageState.SKIPPED)
+
+    _finish(process, ProcessState.REJECTED, actor_id=actor_id, comment=comment)
+
+
+@transaction.atomic
+def cancel(*, process_id: int, actor_id: int | None = None) -> ApprovalProcess:
+    """Отозвать согласование (инициатором или администратором).
+
+    Объект возвращается в черновик — отозванное согласование не отказ, и
+    отправить объект заново можно сразу.
+    """
+    process = _lock(process_id)
+    if process.state != ProcessState.PENDING:
+        raise ProcessClosed(
+            f"Согласование уже завершено ({process.get_state_display()})"
+        )
+
+    ApprovalTask.objects.filter(
+        stage__process=process, state=TaskState.PENDING,
+    ).update(state=TaskState.SKIPPED)
+    process.stages.filter(
+        state__in=(StageState.WAITING, StageState.ACTIVE),
+    ).update(state=StageState.SKIPPED)
+
+    _finish(process, ProcessState.CANCELLED, actor_id=actor_id)
+    return process
+
+
+def _finish(process: ApprovalProcess, state: str, *, actor_id: int | None,
+            comment: str = "") -> None:
+    """Закрыть процесс и сообщить результат предметной аппке.
+
+    Колбэк вызывается ЗДЕСЬ, внутри транзакции движка: предметный объект и
+    процесс обязаны перейти в согласованные состояния атомарно. Вынести
+    колбэк в ``on_commit`` значило бы допустить окно, в котором процесс уже
+    согласован, а бюджет ещё нет — и падение колбэка в этом окне уже никто
+    не откатит.
+    """
+    process.state = state
+    process.current_order = None
+    process.finished_at = _now()
+    process.save(update_fields=["state", "current_order", "finished_at",
+                                "updated_at"])
+    _log(process, state, actor_id=actor_id, payload={"comment": comment})
+
+    subject = registry.get_subject(process.subject_type)
+    callback = {
+        ProcessState.APPROVED: subject.on_approved,
+        ProcessState.REJECTED: subject.on_rejected,
+        ProcessState.CANCELLED: subject.on_cancelled,
+    }.get(state)
+    if callback is not None:
+        callback(process.subject_id)
+
+    _set_subject_state(process.subject_type, process.subject_id, {
+        ProcessState.APPROVED: ApprovalState.APPROVED,
+        ProcessState.REJECTED: ApprovalState.REJECTED,
+        ProcessState.CANCELLED: ApprovalState.DRAFT,
+    }[state])
+
+    _notify_initiator(process)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Служебное
+# ═══════════════════════════════════════════════════════════════════════
+
+def _lock(process_id: int) -> ApprovalProcess:
+    """Взять процесс с ``SELECT … FOR UPDATE``.
+
+    Обязательно для любого перехода: решения читают состояние соседних
+    этапов и на его основании завершают процесс. Без блокировки два
+    согласующих, одновременно закрывающих последнюю параллельную пару
+    этапов, оба увидят «все согласовали» и оба дёрнут ``on_approved``.
+    """
+    process = ApprovalProcess.objects.select_for_update().filter(pk=process_id).first()
+    if process is None:
+        raise Http404("Процесс согласования не найден")
+    return process
+
+
+def _set_subject_state(subject_type: str, subject_id: int, state: str) -> None:
+    """Проставить ``approval_state`` предметному объекту.
+
+    Пишет сам signoff — через класс модели, который предметная аппка отдала
+    при регистрации (``Subject.model``; см. её докстринг о том, почему это
+    не нарушает правило границ). Колонка объявлена примесью ``Approvable``,
+    то есть принадлежит signoff: перекладывать её ведение на колбэк каждой
+    предметной аппки значило бы размножить одну и ту же строчку по всем
+    доменам и получить домен, который однажды забудет её написать.
+
+    Доменные последствия — не здесь: их делает ``Subject.on_*`` (у договора
+    это перевод собственного ``status`` по таблице переходов).
+
+    ``update()``, а не ``save()``: сигналы и ``full_clean`` предметной
+    модели тут не нужны и небезопасны — signoff не знает, что они делают.
+    """
+    subject = registry.get_subject(subject_type)
+    updated = subject.model.objects.filter(pk=subject_id).update(
+        approval_state=state)
+    if not updated:
+        # Строку удалили, пока шло согласование. Межаппного FK нет, каскад
+        # не сработал — процесс остался висеть. Ронять на этом уже поздно
+        # (решение принято), но в логе это должно быть видно.
+        logger.warning("signoff: объект %s#%s не найден — approval_state=%s "
+                       "не проставлен", subject_type, subject_id, state)
+
+
+def _log(process: ApprovalProcess, kind: str, *, actor_id: int | None,
+         payload: dict | None = None) -> None:
+    ApprovalEvent.objects.create(process=process, kind=kind, actor_id=actor_id,
+                                 payload=payload or {})
+
+
+def _notify_active_stages(process: ApprovalProcess) -> None:
+    """Уведомить тех, на ком сейчас висит решение."""
+    user_ids = list(ApprovalTask.objects.filter(
+        stage__process=process, stage__state=StageState.ACTIVE,
+        state=TaskState.PENDING,
+    ).values_list("user_id", flat=True))
+    if not user_ids:
+        return
+
+    described = _describe(process)
+    _notify(user_ids, {
+        "type": "signoff.awaiting_you",
+        "process_id": process.pk,
+        "subject_type": process.subject_type,
+        "subject_id": process.subject_id,
+        "title": described.get("title"),
+        "url": described.get("url"),
+    })
+
+
+def _notify_initiator(process: ApprovalProcess) -> None:
+    if process.initiator_id is None:
+        return
+    described = _describe(process)
+    _notify([process.initiator_id], {
+        "type": f"signoff.{process.state}",
+        "process_id": process.pk,
+        "subject_type": process.subject_type,
+        "subject_id": process.subject_id,
+        "title": described.get("title"),
+        "url": described.get("url"),
+    })
+
+
+def _describe(process: ApprovalProcess) -> dict:
+    """Человекочитаемая карточка чужого объекта — через колбэк его аппки."""
+    subject = registry.get_subject(process.subject_type)
+    if subject.describe is None:
+        return {"title": f"{subject.label} #{process.subject_id}", "url": None}
+    try:
+        return subject.describe(process.subject_id) or {}
+    except Exception:
+        # Оформление карточки не должно ронять согласование.
+        logger.warning("signoff: describe() для %s#%s упал",
+                       process.subject_type, process.subject_id, exc_info=True)
+        return {"title": f"{subject.label} #{process.subject_id}", "url": None}
+
+
+def _notify(user_ids: list[int], payload: dict) -> None:
+    """Разослать уведомление ПОСЛЕ коммита, best-effort.
+
+    ``on_commit`` — потому что рассылать по откатившейся транзакции нечего:
+    согласующий получил бы запрос, которого нет. Проглатывание ошибок —
+    потому что выключенный messenger не повод отказать в согласовании
+    (в отличие от выключенного ``users``, который решает, КТО согласует).
+    """
+    def send() -> None:
+        try:
+            messenger.dispatch_notification(user_ids, payload)
+        except ServiceDisabled:
+            logger.info("signoff: messenger выключен, уведомление не отправлено")
+        except Exception:
+            logger.warning("signoff: не удалось отправить уведомление",
+                           exc_info=True)
+
+    transaction.on_commit(send)
