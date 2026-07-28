@@ -68,6 +68,8 @@ export const protectedRoutes: RouteConfig[] = [
   // сопоставляет в порядке объявления, и иначе "new" ушёл бы в параметр.
   { path: '/contracts/budgets', component: lazyPages.ContractsBudgetList, requiresAuth: true },
   { path: '/contracts/budgets/new', component: lazyPages.ContractsBudgetCreate, requiresAuth: true },
+  { path: '/contracts/counterparties', component: lazyPages.ContractsCounterpartyList, requiresAuth: true },
+  { path: '/contracts/counterparties/new', component: lazyPages.ContractsCounterpartyCreate, requiresAuth: true },
 
   { path: '/email', component: lazyPages.EmailInbox, requiresAuth: true },
   { path: '/email/oauth/callback', component: lazyPages.OAuthCallbackPage, requiresAuth: true },

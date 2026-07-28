@@ -147,6 +147,16 @@ export interface ProgramInput {
   code?: string;
 }
 
+export interface CounterpartyFullCreatePayload {
+  bin_iin: string;
+  name: string;
+  country: CountryInput;
+  vat: string;
+  contacts: string;
+  address: string;
+  status?: CounterpartyStatus;
+}
+
 export interface BudgetFullCreatePayload {
   administrator: AdministratorInput;
   program: ProgramInput;

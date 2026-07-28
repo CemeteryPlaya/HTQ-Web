@@ -240,6 +240,24 @@ class CounterpartyUpdate(BaseModel):
     status: Optional[CounterpartyStatus] = None
 
 
+class CounterpartyFullCreate(BaseModel):
+    """Карточка контрагента вместе со страной — одним запросом.
+
+    Та же причина, что и у ``BudgetFullCreate``: страна в форме выбирается
+    из списка ИЛИ вписывается новой, и заводить её отдельным POST'ом из
+    браузера значило бы оставить её висеть, если создание самого
+    контрагента следом упадёт (например, на дубле БИН/ИИН).
+    """
+
+    bin_iin: str = Field(..., min_length=1, max_length=32)
+    name: str = Field(..., min_length=1, max_length=300)
+    country: CountryInput
+    vat: str = Field("", max_length=100)
+    contacts: str = ""
+    address: str = ""
+    status: Optional[CounterpartyStatus] = None
+
+
 class CounterpartyRead(BaseModel):
     model_config = _ORM
 

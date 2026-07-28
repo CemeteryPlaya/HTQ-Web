@@ -1,0 +1,328 @@
+import { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ArrowLeft, Building2, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+
+import { Header } from '@/components/Header';
+import { Footer } from '@/components/Footer';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  ReferenceCombobox,
+  type ReferenceValue,
+} from '@/components/contracts/ReferenceCombobox';
+import { contractsApi } from '@/api/contracts';
+import type { CounterpartyStatus } from '@/types/contracts';
+
+/**
+ * Карточка контрагента («Реестр контрактов» в терминах заказчика).
+ *
+ * Устроена как форма бюджета: страну можно выбрать из справочника или
+ * вписать новую прямо здесь, и всё уходит одним запросом
+ * (POST /counterparties/full), который бэкенд разбирает в одной
+ * транзакции. Отдельно заводить страну не нужно.
+ *
+ * Поля «НДС» и «Контакты» — свободный текст. Заказчик пока не уточнил,
+ * значит ли «НДС» признак плательщика или ставку, а «Контакты» — одну
+ * строку или список лиц; разворачивать текст в структуру потом дешевле,
+ * чем угадать её неверно сейчас.
+ */
+
+/** Казахстанский БИН/ИИН — 12 цифр. Иностранные номера другой формы, поэтому
+ *  это подсказка, а не жёсткая проверка: бэкенд их тоже принимает. */
+const KZ_BIN_RE = /^\d{12}$/;
+
+type Errors = Record<string, string>;
+
+const CounterpartyCreate = () => {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const { data: countries = [], isLoading: countriesLoading } = useQuery({
+    queryKey: ['contracts', 'countries'],
+    queryFn: () => contractsApi.listCountries().then((r) => r.data),
+  });
+  const { data: enums } = useQuery({
+    queryKey: ['contracts', 'enums'],
+    queryFn: () => contractsApi.getEnums().then((r) => r.data),
+  });
+
+  const [binIin, setBinIin] = useState('');
+  const [name, setName] = useState('');
+  const [country, setCountry] = useState<ReferenceValue>(null);
+  const [isoCode, setIsoCode] = useState('');
+  const [vat, setVat] = useState('');
+  const [contacts, setContacts] = useState('');
+  const [address, setAddress] = useState('');
+  const [status, setStatus] = useState<CounterpartyStatus>('active');
+
+  const [errors, setErrors] = useState<Errors>({});
+
+  const countryOptions = useMemo(
+    () => countries.map((row) => ({ id: row.id, label: row.name, hint: row.iso_code })),
+    [countries],
+  );
+
+  const statusOptions = enums?.counterparty_status ?? [
+    { value: 'active', label: 'Активен' },
+    { value: 'inactive', label: 'Неактивен' },
+    { value: 'blocked', label: 'Заблокирован' },
+  ];
+
+  const binLooksForeign = binIin.trim().length > 0 && !KZ_BIN_RE.test(binIin.trim());
+
+  const validate = (): Errors => {
+    const next: Errors = {};
+    if (!binIin.trim()) next.binIin = 'Укажите БИН/ИИН';
+    if (!name.trim()) next.name = 'Укажите наименование';
+    if (!country) next.country = 'Выберите страну или впишите новую';
+    return next;
+  };
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      contractsApi
+        .createCounterpartyFull({
+          bin_iin: binIin.trim(),
+          name: name.trim(),
+          country:
+            country!.kind === 'existing'
+              ? { id: country!.id }
+              : { name: country!.label, iso_code: isoCode.trim().toUpperCase() },
+          vat: vat.trim(),
+          contacts: contacts.trim(),
+          address: address.trim(),
+          status,
+        })
+        .then((r) => r.data),
+    onSuccess: (row) => {
+      queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      toast.success(`Контрагент добавлен: ${row.name}`);
+      navigate('/contracts/counterparties');
+    },
+    onError: (error: any) => {
+      const httpStatus = error?.response?.status;
+      const detail = error?.response?.data?.detail;
+      if (httpStatus === 409 && typeof detail === 'string') {
+        // Практически всегда — дубль БИН/ИИН. Текст с бэкенда осмысленный.
+        toast.error(detail);
+        return;
+      }
+      if (httpStatus === 422 && Array.isArray(detail)) {
+        toast.error(detail.map((item: any) => item.msg).join('; '));
+        return;
+      }
+      toast.error('Не удалось добавить контрагента');
+    },
+  });
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const found = validate();
+    setErrors(found);
+    if (Object.keys(found).length > 0) {
+      toast.error('Проверьте заполнение формы');
+      return;
+    }
+    mutation.mutate();
+  };
+
+  const fieldError = (key: string) =>
+    errors[key] ? <p className="text-sm text-destructive mt-1">{errors[key]}</p> : null;
+
+  return (
+    <div className="min-h-screen bg-background flex flex-col">
+      <Header />
+      <main className="flex-1 container mx-auto px-4 py-8 max-w-3xl">
+        <div className="mb-6 flex flex-col gap-4">
+          <Link
+            to="/contracts/counterparties"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            К реестру контрактов
+          </Link>
+          <div className="flex items-center gap-3">
+            <Building2 className="h-7 w-7 text-muted-foreground" />
+            <div>
+              <h1 className="text-3xl font-bold">Новый контрагент</h1>
+              <p className="text-muted-foreground text-sm mt-1">
+                Карточка заводится один раз и дальше просто выбирается при
+                оформлении договоров.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Реквизиты</CardTitle>
+              <CardDescription>
+                БИН/ИИН уникален по реестру — повторно завести ту же
+                организацию не получится.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="bin-iin">БИН / ИИН</Label>
+                  <Input
+                    id="bin-iin"
+                    value={binIin}
+                    onChange={(event) => setBinIin(event.target.value)}
+                    placeholder="123456789012"
+                    className={errors.binIin ? 'border-destructive' : undefined}
+                  />
+                  {fieldError('binIin')}
+                  {binLooksForeign && !errors.binIin && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Не похоже на казахстанский БИН/ИИН (12 цифр) — для
+                      иностранного контрагента это нормально.
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <Label htmlFor="name">Наименование</Label>
+                  <Input
+                    id="name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="ТОО «Альфа»"
+                    className={errors.name ? 'border-destructive' : undefined}
+                  />
+                  {fieldError('name')}
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="country">Страна</Label>
+                  <ReferenceCombobox
+                    id="country"
+                    options={countryOptions}
+                    value={country}
+                    onChange={(next) => {
+                      setCountry(next);
+                      if (next?.kind !== 'new') setIsoCode('');
+                    }}
+                    placeholder="Выберите или впишите новую"
+                    createLabel={(input) => `Создать страну «${input}»`}
+                    loading={countriesLoading}
+                    invalid={Boolean(errors.country)}
+                  />
+                  {fieldError('country')}
+                </div>
+
+                <div>
+                  <Label htmlFor="status">Статус</Label>
+                  <Select
+                    value={status}
+                    onValueChange={(value) => setStatus(value as CounterpartyStatus)}
+                  >
+                    <SelectTrigger id="status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {statusOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Код ISO нужен только для новой страны — у выбранной он уже есть. */}
+              {country?.kind === 'new' && (
+                <div className="sm:w-40">
+                  <Label htmlFor="iso-code">Код ISO (необязательно)</Label>
+                  <Input
+                    id="iso-code"
+                    value={isoCode}
+                    onChange={(event) => setIsoCode(event.target.value)}
+                    placeholder="KZ"
+                    maxLength={3}
+                  />
+                </div>
+              )}
+
+              <div>
+                <Label htmlFor="vat">НДС</Label>
+                <Input
+                  id="vat"
+                  value={vat}
+                  onChange={(event) => setVat(event.target.value)}
+                  placeholder="плательщик НДС, сер. 0001"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Свободный текст — признак плательщика, номер свидетельства
+                  или ставка, как принято у вас.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Контактные данные</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="contacts">Контакты</Label>
+                <Textarea
+                  id="contacts"
+                  value={contacts}
+                  onChange={(event) => setContacts(event.target.value)}
+                  rows={3}
+                  placeholder="Петров П., директор, +7 700 000 00 00, info@alfa.kz"
+                />
+              </div>
+              <div>
+                <Label htmlFor="address">Адрес</Label>
+                <Textarea
+                  id="address"
+                  value={address}
+                  onChange={(event) => setAddress(event.target.value)}
+                  rows={2}
+                  placeholder="Алматы, ул. Абая 1"
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="flex gap-3">
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Добавить контрагента
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate('/contracts/counterparties')}
+              disabled={mutation.isPending}
+            >
+              Отмена
+            </Button>
+          </div>
+        </form>
+      </main>
+      <Footer />
+    </div>
+  );
+};
+
+export default CounterpartyCreate;

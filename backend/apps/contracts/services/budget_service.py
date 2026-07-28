@@ -9,15 +9,15 @@ from __future__ import annotations
 from django.db import transaction
 from django.http import Http404
 
-from apps.contracts.models import Administrator, Budget, Country, Program
+from apps.contracts.models import Administrator, Budget, Program
 from apps.contracts.services import budget_calc
 from apps.contracts.services.reference_service import (
     ReferenceConflict,
     conflict_as,
     delete_protected,
     get_administrator_or_404,
-    get_country_or_404,
     get_program_or_404,
+    resolve_country_input,
 )
 
 
@@ -115,19 +115,10 @@ def create_budget_full(*, administrator, program, amount, period_year,
         )
 
 
-def _resolve_country(data) -> Country:
-    if data.id is not None:
-        return get_country_or_404(data.id)
-    country, _ = Country.objects.get_or_create(
-        name=data.name.strip(), defaults={"iso_code": data.iso_code},
-    )
-    return country
-
-
 def _resolve_administrator(data) -> Administrator:
     if data.id is not None:
         return get_administrator_or_404(data.id)
-    country = _resolve_country(data.country)
+    country = resolve_country_input(data.country)
     # Ключ совпадения — ФИО + проект + страна: один и тот же человек может
     # вести несколько проектов, и это РАЗНЫЕ записи администратора (у них
     # разные бюджеты). По одному ФИО их схлопывать нельзя.

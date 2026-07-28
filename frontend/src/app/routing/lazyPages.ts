@@ -22,6 +22,8 @@ export const lazyPages = {
 
   ContractsBudgetList: React.lazy(() => import('@/pages/contracts/BudgetList')),
   ContractsBudgetCreate: React.lazy(() => import('@/pages/contracts/BudgetCreate')),
+  ContractsCounterpartyList: React.lazy(() => import('@/pages/contracts/CounterpartyList')),
+  ContractsCounterpartyCreate: React.lazy(() => import('@/pages/contracts/CounterpartyCreate')),
 
   AdminNews: React.lazy(() => import('@/pages/AdminNews')),
   AdminContacts: React.lazy(() => import('@/pages/AdminContacts')),

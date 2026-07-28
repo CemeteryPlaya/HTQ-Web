@@ -328,6 +328,22 @@ class CounterpartyCollectionView(ContractsView):
         return schemas.CounterpartyRead.model_validate(row)
 
 
+class CounterpartyFullCreateView(ContractsView):
+    """Карточка контрагента вместе со страной — то, что шлёт форма."""
+
+    @write("POST", body=schemas.CounterpartyFullCreate, status=201)
+    def post(self, request, data: schemas.CounterpartyFullCreate):
+        try:
+            row = cp_svc.create_counterparty_full(
+                bin_iin=data.bin_iin, name=data.name, country=data.country,
+                vat=data.vat, contacts=data.contacts, address=data.address,
+                status=data.status,
+            )
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.CounterpartyRead.model_validate(row)
+
+
 class CounterpartyDetailView(ContractsView):
     @read
     def get(self, request, counterparty_id: int):

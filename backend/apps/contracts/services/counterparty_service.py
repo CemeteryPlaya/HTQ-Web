@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 
@@ -15,6 +16,7 @@ from apps.contracts.services.reference_service import (
     conflict_as,
     delete_protected,
     get_country_or_404,
+    resolve_country_input,
 )
 
 
@@ -49,6 +51,30 @@ def create_counterparty(*, bin_iin: str, name: str, country_id: int, vat: str = 
                   contacts=contacts, address=address)
     if status is not None:
         fields["status"] = status
+    with conflict_as(f"Контрагент с БИН/ИИН {bin_iin} уже есть в реестре"):
+        return Counterparty.objects.create(**fields)
+
+
+@transaction.atomic
+def create_counterparty_full(*, bin_iin: str, name: str, country, vat: str = "",
+                             contacts: str = "", address: str = "",
+                             status: str | None = None) -> Counterparty:
+    """Завести контрагента вместе со страной — одной транзакцией.
+
+    ``country`` — это ``schemas.CountryInput``: либо ``id`` существующей
+    записи, либо название новой. Так работает форма карточки контрагента.
+
+    Транзакция здесь не формальность: самая частая ошибка при заведении —
+    дубль БИН/ИИН, и без отката только что созданная страна осталась бы
+    висеть после каждой такой неудачной попытки.
+    """
+    country_obj = resolve_country_input(country)
+
+    fields = dict(bin_iin=bin_iin.strip(), name=name.strip(), country=country_obj,
+                  vat=vat, contacts=contacts, address=address)
+    if status is not None:
+        fields["status"] = status
+
     with conflict_as(f"Контрагент с БИН/ИИН {bin_iin} уже есть в реестре"):
         return Counterparty.objects.create(**fields)
 

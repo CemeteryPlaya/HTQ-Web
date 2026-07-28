@@ -39,6 +39,24 @@ def create_country(*, name: str, iso_code: str = "") -> Country:
         return Country.objects.create(name=name, iso_code=iso_code)
 
 
+def resolve_country_input(data) -> Country:
+    """``schemas.CountryInput`` → запись ``Country``: по ``id`` либо
+    get_or_create по названию.
+
+    Живёт здесь, а не в budget_service, потому что потребителей два —
+    составная заявка на бюджет и составная карточка контрагента, и обе
+    должны схлопывать одинаковые названия в одну страну. Двое заполняющих,
+    независимо вписавших «Казахстан», обязаны получить одну запись, а не
+    две одинаковые.
+    """
+    if data.id is not None:
+        return get_country_or_404(data.id)
+    country, _ = Country.objects.get_or_create(
+        name=data.name.strip(), defaults={"iso_code": data.iso_code},
+    )
+    return country
+
+
 def update_country(country_id: int, **fields) -> Country:
     country = get_country_or_404(country_id)
     return _apply(country, fields, conflict=f"Страна «{fields.get('name')}» уже существует")

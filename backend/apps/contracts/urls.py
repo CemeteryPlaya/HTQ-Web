@@ -58,6 +58,10 @@ urlpatterns = [
     path("budgets/<int:budget_id>/", views.BudgetDetailView.as_view()),
 
     # ── Реестр контрактов (контрагенты) ──
+    # Составное создание (форма). До `<int:counterparty_id>` — иначе "full"
+    # ушло бы в int-конвертер и дало 404.
+    path("counterparties/full", views.CounterpartyFullCreateView.as_view()),
+    path("counterparties/full/", views.CounterpartyFullCreateView.as_view()),
     path("counterparties", views.CounterpartyCollectionView.as_view()),
     path("counterparties/", views.CounterpartyCollectionView.as_view()),
     path("counterparties/<int:counterparty_id>", views.CounterpartyDetailView.as_view()),

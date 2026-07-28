@@ -17,6 +17,7 @@ import type {
   BudgetFullCreatePayload,
   ContractsEnums,
   Counterparty,
+  CounterpartyFullCreatePayload,
   Country,
   Program,
 } from '@/types/contracts';
@@ -91,6 +92,14 @@ export const contractsApi = {
     contacts?: string;
     address?: string;
   }) => api.post<Counterparty>(path('counterparties'), data),
+  /**
+   * Карточка контрагента вместе со страной — одним запросом, одной
+   * транзакцией. Это шлёт форма: страну в ней можно вписать новой, и
+   * заводить её отдельным вызовом значило бы оставить её висеть, если
+   * следом упадёт создание самого контрагента (чаще всего — дубль БИН).
+   */
+  createCounterpartyFull: (payload: CounterpartyFullCreatePayload) =>
+    api.post<Counterparty>(path('counterparties/full'), payload),
   updateCounterparty: (id: number, data: Partial<Counterparty>) =>
     api.patch<Counterparty>(path(`counterparties/${id}`), data),
 
