@@ -38,6 +38,9 @@ INSTALLED_APPS = [
     "apps.messenger",   # Поток A · фаза 8 · /api/messenger/v1/
     "apps.tasks",       # Поток B · фаза 4 · /api/tasks/v1/
     "apps.approvals",   # Поток B · фаза 5 · /api/requests/v1/
+    # Домен, появившийся уже после обратной миграции (не из FastAPI-поколения):
+    # бюджеты, реестр контрагентов, договоры. /api/contracts/v1/
+    "apps.contracts",
 ]
 
 MIDDLEWARE = [

@@ -120,6 +120,7 @@ same backend.
 | `/api/messenger/v1/*`               | `backend` (WSGI)   | Rooms, messages, keys (E2EE), attachments    |
 | `/api/email/v1/*`                   | `backend` (WSGI)   | OAuth (Google/Microsoft), Mailcow, mailboxes |
 | `/api/cms/v1/*`                     | `backend` (WSGI)   | News, categories/tags, contact-requests, ConferenceConfig |
+| `/api/contracts/v1/*`               | `backend` (WSGI)   | Budgets, counterparty registry, agreements   |
 | `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
 | `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django |
 | `/django-admin/`                    | `backend` (WSGI)   | Django's own admin, session-authenticated (see Authentication) |
@@ -540,6 +541,45 @@ dive.
 | `/api/cms/v1/contact-requests/{id}`              | GET, PATCH, DELETE |                          |
 | `/api/cms/v1/contact-requests/{id}/reply`        | POST   |                                    |
 | `/api/cms/v1/conference/config`                  | GET    | Static SFU/ICE config (no DB) — `apps.cms.services.conference_service` |
+
+---
+
+## `apps.contracts` — `/api/contracts/v1`
+
+Budgets, the counterparty registry, and agreements. **Read = any valid JWT,
+write = platform admin** (`api_view(admin=True)`) — the module handles money
+and the platform has no finer-grained role than `require_admin` yet.
+
+Every path is registered in **both** the slashed and bare spelling
+(`APPEND_SLASH = False`). No frontend consumes this yet.
+
+| Endpoint                                          | Method | Notes                          |
+|---------------------------------------------------|--------|--------------------------------|
+| `/api/contracts/v1/enums`                        | GET    | Choice labels + `committing_statuses` + status-transition table, so the frontend doesn't keep its own copy |
+| `/api/contracts/v1/countries`                    | GET, POST | Reference                   |
+| `/api/contracts/v1/countries/{id}`               | GET, PATCH, DELETE |                    |
+| `/api/contracts/v1/programs`                     | GET, POST | «Программа» + «Статья расходов» in one row; `?is_active=` |
+| `/api/contracts/v1/programs/{id}`                | GET, PATCH, DELETE |                    |
+| `/api/contracts/v1/administrators`               | GET, POST | «Администратор бюджета» — a person, holds no money; `?is_active=&country_id=` |
+| `/api/contracts/v1/administrators/{id}`          | GET, PATCH, DELETE |                    |
+| `/api/contracts/v1/budgets`                      | GET, POST | Budget lines; `?administrator_id=&program_id=&period_year=&status=` |
+| `/api/contracts/v1/budgets/{id}`                 | GET, PATCH, DELETE | Response carries computed `committed`/`remaining` — no such columns exist |
+| `/api/contracts/v1/budgets/{id}/agreements`      | GET    | What the budget's remaining is made of |
+| `/api/contracts/v1/counterparties`               | GET, POST | «Реестр контрактов»; `?search=` matches name **or** БИН/ИИН |
+| `/api/contracts/v1/counterparties/{id}`          | GET, PATCH, DELETE |                    |
+| `/api/contracts/v1/agreements`                   | GET, POST | `?budget_id=&counterparty_id=&administrator_id=&program_id=&period_year=&status=` |
+| `/api/contracts/v1/agreements/{id}`              | GET, PATCH, DELETE | PATCH ignores `status`; DELETE only for drafts |
+| `/api/contracts/v1/agreements/{id}/status`       | POST   | The only way to change status — validates the transition |
+| `/api/contracts/v1/agreements/{id}/file`         | POST   | multipart, field `file` → stored via `apps.media_files.interface.store_file` |
+| `/api/contracts/v1/agreements/{id}/file-url`     | GET    | Signed URL for the stored scan |
+
+**409 Conflict** is used throughout for "well-formed request, impossible
+given the data": duplicate budget line / agreement number / БИН, an amount
+that exceeds the budget's remaining, a currency mismatch with the budget
+line, a disallowed status transition, a `PROTECT`ed reference still in use.
+It is deliberately distinct from the `422` `api_view` returns for schema
+violations — the frontend needs to show the message rather than "check your
+fields".
 
 ---
 

@@ -3,7 +3,7 @@ from django.db import models
 # Канонические имена сервисов платформы (совпадают с именами аппок,
 # кроме исторических: approvals ↔ /api/requests/, mail ↔ /api/email/).
 KNOWN_SERVICES = ["users", "hr", "tasks", "approvals", "cms",
-                  "media", "mail", "messenger", "conference"]
+                  "media", "mail", "messenger", "conference", "contracts"]
 
 
 class ServiceStatus(models.Model):

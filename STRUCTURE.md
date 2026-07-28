@@ -75,6 +75,7 @@ HTQWeb1/
 | **media_files** | `api/media/v1/` | `media` | ⭐ Общее файловое хранилище — единая точка входа для аватарок, HR-документов, вложений мессенджера и почты (см. §7.1). `AppConfig.label = "media_files"`, но реестр знает его как `media` |
 | **mail** | `api/email/v1/` | `mail` | Дуальная почта: Mailcow + OAuth Gmail/Outlook (см. §4.1) |
 | **messenger** | `api/messenger/v1/` | `messenger` | Чат, Socket.IO (ASGI), presence, E2EE-ключи |
+| **contracts** | `api/contracts/v1/` | `contracts` | Бюджеты (программа × статья расходов × администратор), реестр контрагентов, договоры с контролем остатка бюджета (см. §3.5). Единственная аппка, появившаяся уже после обратной миграции — FastAPI-предка у неё нет |
 
 Полный список канонических имён сервисов — `apps.core.models.KNOWN_SERVICES` (включает ещё `conference`, зарезервированное под SFU-стек, у которого нет своей Django-аппки).
 
@@ -130,6 +131,22 @@ cd backend
 - **Роуты:** `instances/` (+ `batch-approve`, `<id>/submit|resubmit|approve|reject|request-changes|cancel|recall`), `templates/` (+ `versions`, `preview`, `activate`/`deactivate`), `projects/` (+ `members`), `stats/{overview,by-project,by-template,by-actor,heatmap}`, `reference-sources/` (Lark-Base-style справочники, + `rows/`, `access`, `my-data-tables`, `by-slug/<slug>/options`), `stream` (SSE).
 - **SSE:** `/api/requests/v1/stream` обслуживается **ASGI-процессом** (`backend-asgi`) через обычную async-вьюху (`StreamingHttpResponse`), не через `asgi.py`-обёртку — см. `apps/approvals/urls.py`.
 - **Frontend:** [frontend/src/features/requests/](frontend/src/features/requests/) + [frontend/src/api/requests.ts](frontend/src/api/requests.ts) — без изменений.
+
+### 3.5 Contracts — бюджеты, контрагенты, договоры
+
+`apps.contracts` (URL-префикс `api/contracts/v1/`) — учёт договоров с контролем бюджета. Отвечает на один вопрос: **сколько из выделенного бюджета уже законтрактовано и сколько осталось.** Frontend'а пока нет — только API и django-admin.
+
+Три слоя моделей (`apps/contracts/models.py`):
+
+- **Справочники бюджета** — `Country`, `Program` (название + статья расходов в одной строке), `Administrator` (физлицо-держатель, **денег на нём нет**), `Budget` (выделенная сумма на связку администратор × программа × год, уникальную).
+- **Реестр контрагентов** — `Counterparty` (БИН/ИИН, НДС, контакты, адрес, страна, статус). В спецификации заказчика таблица называется «Реестр контрактов», но её поля — атрибуты контрагента, а не договора.
+- **`Agreement`** — единственная транзакционная сущность. Ссылается на ОДНУ бюджетную строку; администратор и программа читаются через неё, отдельных колонок на договоре нет (иначе было бы две версии правды о том, из какого кармана деньги).
+
+**Ключевой инвариант: остаток бюджета не хранится.** `committed`/`remaining` считаются в `services/budget_calc.py` как `amount − SUM(договоры в COMMITTING_STATUSES)`. Хранимый баланс, который декрементируют при создании договора, расходится с реальностью при первом же редактировании суммы, удалении или расторжении — и потом нет способа узнать, какая цифра верна. Колонок под эти поля в таблице нет и заводить их не нужно.
+
+`COMMITTING_STATUSES` (там же) — единственное место, где зафиксировано, **с какого статуса договор занимает бюджет**: сейчас всё, кроме `draft` и `terminated`. Это открытый вопрос к заказчику; меняется правкой одного множества, ни модели, ни схемы, ни вьюхи трогать не придётся.
+
+Согласование договоров (`apps.approvals`) в первой фазе НЕ подключено — `Agreement.status` это обычное choice-поле с таблицей разрешённых переходов в `services/agreement_service.ALLOWED_TRANSITIONS`. Также отложены: учёт фактических платежей/актов, несколько файлов на договор, финансирование из нескольких бюджетных строк, мультивалютность.
 
 ---
 
