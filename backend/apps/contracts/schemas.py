@@ -17,7 +17,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apps.contracts.models import (
     AgreementStatus,
@@ -123,6 +123,72 @@ class BudgetUpdate(BaseModel):
     currency: Optional[str] = Field(None, min_length=3, max_length=3)
     status: Optional[BudgetStatus] = None
     note: Optional[str] = None
+
+
+class CountryInput(BaseModel):
+    """Ссылка на страну ИЛИ данные для её создания.
+
+    Часть составной формы «заявка на бюджет» (см. ``BudgetFullCreate``):
+    заполняющий может выбрать существующую страну из списка или вписать
+    новую, и форма не должна заставлять его сначала уходить в отдельный
+    справочник.
+    """
+
+    id: Optional[int] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    iso_code: str = Field("", max_length=3)
+
+    @model_validator(mode="after")
+    def _id_or_fields(self):
+        if self.id is None and not self.name:
+            raise ValueError("нужен либо id страны, либо её название")
+        return self
+
+
+class AdministratorInput(BaseModel):
+    id: Optional[int] = None
+    full_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    project_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    country: Optional[CountryInput] = None
+
+    @model_validator(mode="after")
+    def _id_or_fields(self):
+        if self.id is None and not (self.full_name and self.project_name and self.country):
+            raise ValueError(
+                "нужен либо id администратора, либо ФИО + название проекта + страна")
+        return self
+
+
+class ProgramInput(BaseModel):
+    id: Optional[int] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    expense_item: Optional[str] = Field(None, min_length=1, max_length=200)
+    code: str = Field("", max_length=50)
+
+    @model_validator(mode="after")
+    def _id_or_fields(self):
+        if self.id is None and not (self.name and self.expense_item):
+            raise ValueError(
+                "нужен либо id программы, либо название + статья расходов")
+        return self
+
+
+class BudgetFullCreate(BaseModel):
+    """Заявка на бюджет одним запросом — вместе со справочниками.
+
+    Форма на фронтенде заполняется целиком: администратор (ФИО, проект,
+    страна), программа (название, статья расходов) и сама сумма. Собирать
+    это четырьмя отдельными POST'ами из браузера нельзя — упавший третий
+    запрос оставил бы в справочниках наполовину заведённую заявку, которую
+    никто не убирает. Здесь всё создаётся в одной транзакции.
+    """
+
+    administrator: AdministratorInput
+    program: ProgramInput
+    amount: Decimal = Field(..., ge=0)
+    period_year: int = Field(..., ge=2000, le=2100)
+    currency: str = Field("KZT", min_length=3, max_length=3)
+    note: str = ""
 
 
 class BudgetRead(BaseModel):

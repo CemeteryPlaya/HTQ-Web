@@ -63,6 +63,12 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/tasks/reports', component: lazyPages.HRReports, requiresAuth: true },
   { path: '/tasks/resources', component: lazyPages.HRResourceSchedule, requiresAuth: true },
   { path: '/tasks/equipment', component: lazyPages.HREquipment, requiresAuth: true },
+  // ─── Contracts (бюджеты / реестр контрактов / договоры) ───────────────
+  // Статический `/new` объявлен ПЕРЕД будущим `/:id` — react-router
+  // сопоставляет в порядке объявления, и иначе "new" ушёл бы в параметр.
+  { path: '/contracts/budgets', component: lazyPages.ContractsBudgetList, requiresAuth: true },
+  { path: '/contracts/budgets/new', component: lazyPages.ContractsBudgetCreate, requiresAuth: true },
+
   { path: '/email', component: lazyPages.EmailInbox, requiresAuth: true },
   { path: '/email/oauth/callback', component: lazyPages.OAuthCallbackPage, requiresAuth: true },
 

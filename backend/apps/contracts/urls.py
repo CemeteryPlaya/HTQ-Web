@@ -48,6 +48,10 @@ urlpatterns = [
     # сломается при добавлении соседних вложенных маршрутов.
     path("budgets/<int:budget_id>/agreements", views.BudgetAgreementsView.as_view()),
     path("budgets/<int:budget_id>/agreements/", views.BudgetAgreementsView.as_view()),
+    # Составное создание (форма-заявка). Регистрируется ДО `<int:budget_id>`,
+    # иначе "full" попал бы в конвертер int и дал бы 404 вместо маршрута.
+    path("budgets/full", views.BudgetFullCreateView.as_view()),
+    path("budgets/full/", views.BudgetFullCreateView.as_view()),
     path("budgets", views.BudgetCollectionView.as_view()),
     path("budgets/", views.BudgetCollectionView.as_view()),
     path("budgets/<int:budget_id>", views.BudgetDetailView.as_view()),

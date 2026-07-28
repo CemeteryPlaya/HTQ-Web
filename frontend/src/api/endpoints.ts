@@ -7,6 +7,8 @@ export const API_ENDPOINTS = {
   email: 'email/v1',
   messenger: 'messenger/v1',
   requests: 'requests/v1',
+  // Бюджеты / реестр контрактов / договоры (Django app apps.contracts).
+  contracts: 'contracts/v1',
   admin: 'admin/v1',
   // Django "core" app (Phase 0) — service on/off registry (Task 0.5/0.7).
   // Not fronted by nginx yet; see hooks/useServiceStatus.ts for the

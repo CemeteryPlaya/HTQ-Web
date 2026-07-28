@@ -246,6 +246,31 @@ class BudgetCollectionView(ContractsView):
         return schemas.BudgetRead.model_validate(budget_svc.serialize_budget(budget))
 
 
+class BudgetFullCreateView(ContractsView):
+    """Заявка на бюджет вместе со справочниками — то, что шлёт форма.
+
+    Отдельный маршрут, а не флаг на ``POST /budgets``: у обычного создания
+    плоское тело со ссылками (``administrator_id``/``program_id``), у этого
+    — вложенное, и склеивать их в одну схему значило бы получить объект,
+    половина полей которого всегда пустая.
+    """
+
+    @write("POST", body=schemas.BudgetFullCreate, status=201)
+    def post(self, request, data: schemas.BudgetFullCreate):
+        try:
+            # Схемы передаются объектами, а не через model_dump(): сервис
+            # читает вложенные administrator/program как модели (.id, .name),
+            # и dump превратил бы их в словари.
+            budget = budget_svc.create_budget_full(
+                administrator=data.administrator, program=data.program,
+                amount=data.amount, period_year=data.period_year,
+                currency=data.currency, note=data.note,
+            )
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.BudgetRead.model_validate(budget_svc.serialize_budget(budget))
+
+
 class BudgetDetailView(ContractsView):
     @read
     def get(self, request, budget_id: int):

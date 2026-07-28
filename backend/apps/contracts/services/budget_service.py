@@ -6,15 +6,17 @@
 
 from __future__ import annotations
 
+from django.db import transaction
 from django.http import Http404
 
-from apps.contracts.models import Budget
+from apps.contracts.models import Administrator, Budget, Country, Program
 from apps.contracts.services import budget_calc
 from apps.contracts.services.reference_service import (
     ReferenceConflict,
     conflict_as,
     delete_protected,
     get_administrator_or_404,
+    get_country_or_404,
     get_program_or_404,
 )
 
@@ -82,6 +84,70 @@ def create_budget(*, administrator_id: int, program_id: int, amount,
             administrator_id=administrator_id, program_id=program_id,
             amount=amount, period_year=period_year, currency=currency, note=note,
         )
+
+
+@transaction.atomic
+def create_budget_full(*, administrator, program, amount, period_year,
+                       currency: str = "KZT", note: str = "") -> Budget:
+    """Создать бюджет вместе со справочниками — одной транзакцией.
+
+    ``administrator`` и ``program`` — это ``schemas.AdministratorInput`` /
+    ``ProgramInput``: либо ``id`` уже существующей записи, либо поля для её
+    заведения. Так работает форма «заявка на бюджет»: заполняющий не должен
+    сначала уходить в три отдельных справочника и возвращаться.
+
+    Всё внутри одного ``atomic``: если бюджет не пройдёт (например, такая
+    связка администратор × программа × год уже есть), заведённые по пути
+    страна/администратор/программа откатятся вместе с ним. Иначе каждая
+    неудачная попытка оставляла бы за собой мусор в справочниках.
+
+    Совпадения переиспользуются, а не дублируются (``get_or_create``): двое
+    заполняющих, независимо вписавших «Казахстан», должны получить одну
+    страну, а не две с одинаковым названием.
+    """
+    administrator_obj = _resolve_administrator(administrator)
+    program_obj = _resolve_program(program)
+
+    with conflict_as("Бюджет на эту связку «администратор / программа / год» уже существует"):
+        return Budget.objects.create(
+            administrator=administrator_obj, program=program_obj,
+            amount=amount, period_year=period_year, currency=currency, note=note,
+        )
+
+
+def _resolve_country(data) -> Country:
+    if data.id is not None:
+        return get_country_or_404(data.id)
+    country, _ = Country.objects.get_or_create(
+        name=data.name.strip(), defaults={"iso_code": data.iso_code},
+    )
+    return country
+
+
+def _resolve_administrator(data) -> Administrator:
+    if data.id is not None:
+        return get_administrator_or_404(data.id)
+    country = _resolve_country(data.country)
+    # Ключ совпадения — ФИО + проект + страна: один и тот же человек может
+    # вести несколько проектов, и это РАЗНЫЕ записи администратора (у них
+    # разные бюджеты). По одному ФИО их схлопывать нельзя.
+    administrator, _ = Administrator.objects.get_or_create(
+        full_name=data.full_name.strip(),
+        project_name=data.project_name.strip(),
+        country=country,
+    )
+    return administrator
+
+
+def _resolve_program(data) -> Program:
+    if data.id is not None:
+        return get_program_or_404(data.id)
+    program, _ = Program.objects.get_or_create(
+        name=data.name.strip(),
+        expense_item=data.expense_item.strip(),
+        defaults={"code": data.code},
+    )
+    return program
 
 
 def update_budget(budget_id: int, **fields) -> Budget:
