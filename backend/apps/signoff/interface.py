@@ -34,7 +34,7 @@ from apps.signoff.models import (
     StageState,
     TaskState,
 )
-from apps.signoff.services import engine, registry
+from apps.signoff.services import engine, presentation, registry
 from apps.signoff.services.registry import UnknownSubject, register_subject
 
 __all__ = [
@@ -126,39 +126,13 @@ def count_awaiting(user_id: int) -> int:
 
 
 def serialize_process(process: ApprovalProcess) -> dict:
-    """Карточка процесса простыми типами — ORM-объекты наружу не отдаются."""
-    stages = list(process.stages.prefetch_related("tasks"))
-    return {
-        "id": process.pk,
-        "subject_type": process.subject_type,
-        "subject_id": process.subject_id,
-        "state": process.state,
-        "initiator_id": process.initiator_id,
-        "current_order": process.current_order,
-        "created_at": process.created_at,
-        "finished_at": process.finished_at,
-        "stages": [
-            {
-                "id": stage.pk,
-                "order": stage.order,
-                "name": stage.name,
-                "quorum": stage.quorum,
-                "state": stage.state,
-                "decided_at": stage.decided_at,
-                "tasks": [
-                    {
-                        "id": task.pk,
-                        "user_id": task.user_id,
-                        "state": task.state,
-                        "comment": task.comment,
-                        "acted_at": task.acted_at,
-                    }
-                    for task in stage.tasks.all()
-                ],
-            }
-            for stage in stages
-        ],
-    }
+    """Карточка процесса простыми типами — ORM-объекты наружу не отдаются.
+
+    Без ``enrich``: соседу нужны данные, а не оформление, и разворачивать
+    для него имена согласующих значило бы тянуть ``apps.users`` в каждый
+    межаппный вызов. HTTP-слой зовёт тот же сериализатор с ``enrich=True``.
+    """
+    return presentation.serialize_process(process, enrich=False)
 
 
 def registered_subjects() -> list[dict]:

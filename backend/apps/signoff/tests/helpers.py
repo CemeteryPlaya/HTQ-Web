@@ -1,6 +1,16 @@
-"""Общие помощники тестов домена signoff."""
+"""Общие помощники тестов домена signoff.
+
+Токены собираются настоящим ``jwt.encode`` против ``settings.JWT_SECRET`` —
+тот же стиль, что в ``apps/contracts/tests`` и ``apps/cms/tests``.
+"""
 
 from __future__ import annotations
+
+import json
+
+import jwt as pyjwt
+from django.conf import settings
+from django.test import Client
 
 from apps.signoff.models import (
     ApprovalRoute,
@@ -15,6 +25,43 @@ from apps.signoff.tests.testapp.models import ProbeDoc
 from apps.users.models import User, UserStatus
 
 SUBJECT = ProbeDoc.SIGNOFF_SUBJECT_TYPE
+BASE = "/api/signoff/v1"
+
+
+def token(**over) -> str:
+    claims = {
+        "user_id": 7, "username": "u", "email": "u@htq.test",
+        "is_staff": False, "is_superuser": False, "is_admin": False,
+        "token_type": "access", "iat": 1, "exp": 9_999_999_999,
+        "iss": "htqweb-auth", "sub": "7",
+        **over,
+    }
+    return pyjwt.encode(claims, settings.JWT_SECRET, algorithm="HS256")
+
+
+def admin_token(**over) -> str:
+    return token(user_id=9, sub="9", is_admin=True, **over)
+
+
+def user_token(user: "User", **over) -> str:
+    """Токен КОНКРЕТНОГО пользователя — нужен там, где решение принимает
+    названный в маршруте человек, а не абстрактный носитель токена."""
+    return token(user_id=user.pk, sub=str(user.pk), username=user.username,
+                 email=user.email, **over)
+
+
+def auth(tok: str) -> dict:
+    return {"HTTP_AUTHORIZATION": f"Bearer {tok}"}
+
+
+def post_json(client: Client, path: str, body: dict, **extra):
+    return client.post(path, data=json.dumps(body, default=str),
+                       content_type="application/json", **extra)
+
+
+def patch_json(client: Client, path: str, body: dict, **extra):
+    return client.patch(path, data=json.dumps(body, default=str),
+                        content_type="application/json", **extra)
 
 
 def make_user(username: str, *, active: bool = True) -> User:
