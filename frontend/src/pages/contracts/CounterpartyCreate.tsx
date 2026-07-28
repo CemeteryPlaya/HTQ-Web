@@ -4,8 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Building2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { Header } from '@/components/Header';
-import { Footer } from '@/components/Footer';
+import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -142,9 +141,8 @@ const CounterpartyCreate = () => {
     errors[key] ? <p className="text-sm text-destructive mt-1">{errors[key]}</p> : null;
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <Header />
-      <main className="flex-1 container mx-auto px-4 py-8 max-w-3xl">
+    <ContractsShell>
+    <div className="max-w-3xl">
         <div className="mb-6 flex flex-col gap-4">
           <Link
             to="/contracts/counterparties"
@@ -319,9 +317,8 @@ const CounterpartyCreate = () => {
             </Button>
           </div>
         </form>
-      </main>
-      <Footer />
     </div>
+    </ContractsShell>
   );
 };
 

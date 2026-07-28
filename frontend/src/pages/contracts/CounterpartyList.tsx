@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Building2, Plus, Search } from 'lucide-react';
+import { Building2, Plus, Search } from 'lucide-react';
 
-import { Header } from '@/components/Header';
-import { Footer } from '@/components/Footer';
+import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -56,17 +55,8 @@ const CounterpartyList = () => {
   });
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <Header />
-      <main className="flex-1 container mx-auto px-4 py-8">
+    <ContractsShell>
         <div className="mb-6 flex flex-col gap-4">
-          <Link
-            to="/myprofile"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Назад в профиль
-          </Link>
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3">
               <Building2 className="h-7 w-7 text-muted-foreground" />
@@ -160,9 +150,7 @@ const CounterpartyList = () => {
             </Table>
           )}
         </div>
-      </main>
-      <Footer />
-    </div>
+    </ContractsShell>
   );
 };
 
