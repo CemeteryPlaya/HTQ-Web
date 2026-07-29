@@ -121,6 +121,7 @@ same backend.
 | `/api/email/v1/*`                   | `backend` (WSGI)   | OAuth (Google/Microsoft), Mailcow, mailboxes |
 | `/api/cms/v1/*`                     | `backend` (WSGI)   | News, categories/tags, contact-requests, ConferenceConfig |
 | `/api/contracts/v1/*`               | `backend` (WSGI)   | Budgets, counterparty registry, agreements   |
+| `/api/signoff/v1/*`                 | `backend` (WSGI)   | Approval routes + running approvals — **not** `apps.approvals` (`/api/requests/v1`) |
 | `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
 | `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django |
 | `/django-admin/`                    | `backend` (WSGI)   | Django's own admin, session-authenticated (see Authentication) |
@@ -546,9 +547,26 @@ dive.
 
 ## `apps.contracts` — `/api/contracts/v1`
 
-Budgets, the counterparty registry, and agreements. **Read = any valid JWT,
-write = platform admin** (`api_view(admin=True)`) — the module handles money
-and the platform has no finer-grained role than `require_admin` yet.
+Budgets, the counterparty registry, and agreements.
+
+**Permissions are no longer a flat "read = JWT, write = admin".** Since
+`apps.signoff` was wired in, approval — not the admin flag — is the control
+on the three approvable models:
+
+| Operation | Auth |
+|-----------|------|
+| All reads | any valid JWT |
+| **Create** a budget / counterparty / agreement (incl. the `/full` variants) | any valid JWT |
+| **Submit** one for approval (`/submit`) | any valid JWT |
+| **Attach a scan** (`agreements/{id}/file`) | author while the agreement is `draft`, or admin always — checked on the row, not by decorator |
+| Everything else — PATCH, DELETE, `/status`, and the whole reference layer (countries, programs, administrators) | admin |
+
+The rationale: if only an admin can create a budget line, a three-stage
+approval route over budget lines has nothing to approve. Attaching the scan
+is bundled with creation because an agreement without its document isn't
+worth submitting; replacing it after submission stays admin-only, since
+`attach_file` **replaces** the reference and swapping the scan mid-approval
+would mean approvers signed off on a document that is no longer in the card.
 
 Every path is registered in **both** the slashed and bare spelling
 (`APPEND_SLASH = False`). No frontend consumes this yet.
@@ -562,24 +580,119 @@ Every path is registered in **both** the slashed and bare spelling
 | `/api/contracts/v1/programs/{id}`                | GET, PATCH, DELETE |                    |
 | `/api/contracts/v1/administrators`               | GET, POST | «Администратор бюджета» — a person, holds no money; `?is_active=&country_id=` |
 | `/api/contracts/v1/administrators/{id}`          | GET, PATCH, DELETE |                    |
-| `/api/contracts/v1/budgets`                      | GET, POST | Budget lines; `?administrator_id=&program_id=&period_year=&status=` |
+| `/api/contracts/v1/budgets`                      | GET, POST | Budget lines; `?administrator_id=&program_id=&period_year=&status=&approval_state=` |
+| `/api/contracts/v1/budgets/full`                 | POST   | Budget + its reference rows in one transaction (the "заявка на бюджет" form) |
 | `/api/contracts/v1/budgets/{id}`                 | GET, PATCH, DELETE | Response carries computed `committed`/`remaining` — no such columns exist |
 | `/api/contracts/v1/budgets/{id}/agreements`      | GET    | What the budget's remaining is made of |
-| `/api/contracts/v1/counterparties`               | GET, POST | «Реестр контрактов»; `?search=` matches name **or** БИН/ИИН |
+| `/api/contracts/v1/budgets/{id}/submit`          | POST   | **→ approval.** Returns a signoff process card (201), not the budget |
+| `/api/contracts/v1/counterparties`               | GET, POST | «Реестр контрактов»; `?search=` matches name **or** БИН/ИИН; `?approval_state=` |
+| `/api/contracts/v1/counterparties/full`          | POST   | Counterparty + country in one transaction |
 | `/api/contracts/v1/counterparties/{id}`          | GET, PATCH, DELETE |                    |
+| `/api/contracts/v1/counterparties/{id}/submit`   | POST   | **→ approval.** Returns a signoff process card (201) |
 | `/api/contracts/v1/agreements`                   | GET, POST | `?budget_id=&counterparty_id=&administrator_id=&program_id=&period_year=&status=` |
 | `/api/contracts/v1/agreements/{id}`              | GET, PATCH, DELETE | PATCH ignores `status`; DELETE only for drafts |
-| `/api/contracts/v1/agreements/{id}/status`       | POST   | The only way to change status — validates the transition |
+| `/api/contracts/v1/agreements/{id}/submit`       | POST   | **→ approval.** Draft only; re-checks currency, references and the budget limit *before* starting, because `on_review` already commits budget |
+| `/api/contracts/v1/agreements/{id}/status`       | POST   | Manual status change — validates the transition. Approval drives the same machine automatically |
 | `/api/contracts/v1/agreements/{id}/file`         | POST   | multipart, field `file` → stored via `apps.media_files.interface.store_file` |
 | `/api/contracts/v1/agreements/{id}/file-url`     | GET    | Signed URL for the stored scan |
+
+### Approval fields and the two axes
+
+All three approvable models now return **`approval_state`** (`draft` /
+`pending` / `approved` / `rejected`) alongside their existing `status`.
+These are **different axes and both stay**: `status` is the record's own
+lifecycle (budget closed, counterparty blocked, agreement terminated),
+`approval_state` is where it sits in a signoff route. An agreement can be
+`approved` by route and `terminated` in substance.
+
+`Agreement` is the only one where approval has a domain consequence — it
+drives the existing `status` machine through `ALLOWED_TRANSITIONS`:
+
+```
+submit   → draft      → on_review     (and on_review already commits budget)
+approve  → on_review  → approved
+reject   → on_review  → draft         (rework and resubmit; not a terminal state)
+cancel   → on_review  → draft
+```
+
+### The gate: unapproved things can't be spent or contracted
+
+`agreement_service._validate_context` refuses an unapproved `Budget` as a
+funding source and an unapproved `Counterparty` as a party — **but only when
+an active route exists for that subject type** (`signoff.has_active_route`).
+With no route configured nothing is blocked, because every pre-existing row
+is `draft` and an unconditional check would have bricked the module on day
+one. Configuring a budget route is therefore a consequential act: from that
+moment unapproved budget lines stop being spendable.
+
+The gate fires on create and when the reference is re-pointed, never on an
+ordinary edit — otherwise revoking a budget's approval after the fact would
+lock you out of fixing a typo in a long-signed agreement.
+
+If `signoff` is disabled (`manage.py service signoff --off`) the gate lifts
+rather than failing: contracts keeps working, and only `/submit` returns
+503. A disabled approval module should stop *requiring* approval, not stop
+the contract registry.
 
 **409 Conflict** is used throughout for "well-formed request, impossible
 given the data": duplicate budget line / agreement number / БИН, an amount
 that exceeds the budget's remaining, a currency mismatch with the budget
-line, a disallowed status transition, a `PROTECT`ed reference still in use.
-It is deliberately distinct from the `422` `api_view` returns for schema
-violations — the frontend needs to show the message rather than "check your
-fields".
+line, a disallowed status transition, a `PROTECT`ed reference still in use,
+and — since the signoff wiring — no route configured, the object already
+under approval, or an unapproved budget/counterparty. It is deliberately
+distinct from the `422` `api_view` returns for schema violations — the
+frontend needs to show the message rather than "check your fields".
+
+---
+
+## `apps.signoff` — `/api/signoff/v1`
+
+Generic multi-stage approval. **Do not confuse with `apps.approvals`
+(`/api/requests/v1`)** — that one is a form *designer*: it approves
+`RequestInstance` rows holding JSON field values it owns. `signoff` approves
+rows that already exist in **another app's own table**, addressed by a
+`(subject_type, subject_id)` pair — `"contracts.budget"` + a pk. There is no
+`ContentType` and no cross-app FK; the domain app hands over its model class
+and callbacks at startup (`AppConfig.ready()` → `signoff.register_subject`),
+so the dependency only ever points *domain → signoff*.
+
+**Route shape.** A route is an ordered list of stages. Stages with the
+**same `order` run in parallel**; different `order` runs sequentially. Each
+stage names its approvers explicitly (user ids — the platform has no groups;
+`User` deliberately omits `PermissionsMixin`) and a `quorum` of `any` or
+`all`. **Any rejection at any stage rejects the whole process immediately**;
+outstanding requests are marked `skipped`, not left hanging. Exactly one
+active route per subject type (partial unique index).
+
+Stages are **snapshotted onto the process at start**, so editing a route
+never disturbs approvals already in flight.
+
+| Endpoint                                    | Method | Auth | Notes |
+|---------------------------------------------|--------|------|-------|
+| `/api/signoff/v1/enums`                     | GET    | jwt   | Choice labels for quorum + all four state enums |
+| `/api/signoff/v1/subjects`                  | GET    | jwt   | Registered subject types, their labels, and `has_active_route` — this is what the route builder picks from |
+| `/api/signoff/v1/routes`                    | GET    | jwt   | `?subject_type=&is_active=` |
+| `/api/signoff/v1/routes`                    | POST   | admin | 409 if the subject type isn't registered, or a second active route |
+| `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | jwt / admin | |
+| `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, approver_ids[]}`; ≥1 approver enforced by the schema, unknown ids → 409 |
+| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `approver_ids` **wholesale**; omitting the key leaves them alone. The last stage of a route can't be deleted |
+| `/api/signoff/v1/processes`                 | GET    | jwt   | `?subject_type=&subject_id=&state=&initiator_id=` |
+| `/api/signoff/v1/processes`                 | POST   | admin | Deliberately narrow — it accepts *any* `subject_id` of any type and so would bypass domain permissions. **The real submit path is the domain endpoint** (`/api/contracts/v1/budgets/{id}/submit`, …) |
+| `/api/signoff/v1/processes/{id}`            | GET    | jwt   | Full card: stages, tasks, approver names, subject title/url |
+| `/api/signoff/v1/processes/{id}/cancel`     | POST   | jwt   | Initiator **or** admin — checked on the row. Cancel ≠ reject: the object returns to `draft` |
+| `/api/signoff/v1/tasks/mine`                | GET    | jwt   | The inbox. Only `pending` tasks on **active** stages — a request on a stage the process may never reach is not "waiting on you" |
+| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject", comment?}`. The **named approver** decides; an admin token on someone else's task gets 409 |
+
+`subject_title` / `subject_url` on process cards and inbox rows come from the
+domain app's `describe` callback — signoff cannot name a row it isn't allowed
+to import. For contracts those URLs are `/contracts/budgets/{id}`,
+`/contracts/counterparties/{id}`, `/contracts/agreements/{id}`; **those SPA
+routes do not exist yet.**
+
+**409 Conflict** covers: no route configured, the object is already under
+approval, every approver on a stage is deactivated, the process is closed,
+the task is addressed to someone else, or it was already decided. `403` is
+only ever a permissions answer; `422` only ever a schema one.
 
 ---
 
