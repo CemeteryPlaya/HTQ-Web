@@ -72,6 +72,11 @@ class ProgramRead(BaseModel):
     name: str
     expense_item: str
     code: str
+    # Готовая подпись «код название» — как у AdministratorRead, чтобы
+    # склейка не повторялась во фронтовых списках. ``name`` при этом
+    # остаётся: там, где код уже показан отдельной колонкой, дублировать
+    # его в подписи незачем.
+    display_name: str
     is_active: bool
 
 

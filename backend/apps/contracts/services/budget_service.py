@@ -77,7 +77,11 @@ def serialize_budget(budget: Budget, *, committed=None) -> dict:
         # `administrator__country`, иначе это N+1.
         "administrator_name": budget.administrator.display_name,
         "program_id": budget.program_id,
-        "program_name": budget.program.name,
+        # Как и у администратора, подпись собирает модель
+        # (Program.display_name — «код название»), чтобы формат не
+        # расползался по фронтенду. `expense_item` рядом отдельным полем:
+        # в подпись он не входит.
+        "program_name": budget.program.display_name,
         "expense_item": budget.program.expense_item,
         "amount": budget.amount,
         "currency": budget.currency,

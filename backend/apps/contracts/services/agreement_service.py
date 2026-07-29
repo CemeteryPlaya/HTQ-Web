@@ -195,7 +195,7 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "administrator_id": budget.administrator_id,
         "administrator_name": budget.administrator.display_name,
         "program_id": budget.program_id,
-        "program_name": budget.program.name,
+        "program_name": budget.program.display_name,
         "expense_item": budget.program.expense_item,
         "period_year": budget.period_year,
         "counterparty_id": agreement.counterparty_id,

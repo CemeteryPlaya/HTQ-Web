@@ -78,6 +78,10 @@ const BudgetCreate = () => {
 
   const [program, setProgram] = useState<ReferenceValue>(null);
   const [expenseItem, setExpenseItem] = useState('');
+  // Код программы — отдельное поле, а НЕ часть вводимого названия: подпись
+  // существующих программ в списке — «код название», и без своего поля
+  // заполняющий вписывал бы код в название, чтобы получить такую же строку.
+  const [programCode, setProgramCode] = useState('');
 
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('KZT');
@@ -102,6 +106,7 @@ const BudgetCreate = () => {
   const programLocked = Boolean(existingProgram);
 
   const effectiveExpenseItem = existingProgram?.expense_item ?? expenseItem;
+  const effectiveProgramCode = existingProgram?.code ?? programCode;
   // У существующей записи страна приходит с ней самой (`country_name`) —
   // искать её в справочнике по id больше не нужно.
   const effectiveCountryName = existingAdministrator
@@ -118,7 +123,12 @@ const BudgetCreate = () => {
     [administrators],
   );
   const programOptions = useMemo(
-    () => programs.map((row) => ({ id: row.id, label: row.name, hint: row.expense_item })),
+    () =>
+      programs.map((row) => ({
+        id: row.id,
+        label: row.display_name,
+        hint: row.expense_item,
+      })),
     [programs],
   );
   const countryOptions = useMemo(
@@ -170,7 +180,11 @@ const BudgetCreate = () => {
     program:
       program!.kind === 'existing'
         ? { id: program!.id }
-        : { name: program!.label, expense_item: expenseItem.trim() },
+        : {
+            name: program!.label.trim(),
+            expense_item: expenseItem.trim(),
+            code: programCode.trim(),
+          },
     // Запятую в сумме бэкенд не примет — Decimal ждёт точку.
     amount: amount.trim().replace(',', '.'),
     period_year: Number(periodYear),
@@ -332,7 +346,7 @@ const BudgetCreate = () => {
               <CardDescription>
                 Программа и статья расходов — одна запись справочника. Вместе с
                 администратором и годом они образуют уникальную бюджетную
-                строку.
+                строку. В списках программа подписана как «код название».
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -344,7 +358,10 @@ const BudgetCreate = () => {
                   value={program}
                   onChange={(next) => {
                     setProgram(next);
-                    if (next?.kind !== 'new') setExpenseItem('');
+                    if (next?.kind !== 'new') {
+                      setExpenseItem('');
+                      setProgramCode('');
+                    }
                   }}
                   placeholder="Выберите или впишите новую"
                   searchPlaceholder="Поиск по программе или статье…"
@@ -366,6 +383,18 @@ const BudgetCreate = () => {
                   className={errors.expenseItem ? 'border-destructive' : undefined}
                 />
                 {fieldError('expenseItem')}
+              </div>
+
+              <div className="sm:w-40">
+                <Label htmlFor="program-code">Код (необязательно)</Label>
+                <Input
+                  id="program-code"
+                  value={effectiveProgramCode}
+                  onChange={(event) => setProgramCode(event.target.value)}
+                  disabled={programLocked || !program}
+                  placeholder="EDU-01"
+                  maxLength={50}
+                />
               </div>
             </CardContent>
           </Card>
@@ -456,7 +485,10 @@ const BudgetCreate = () => {
               )}
               {program?.kind === 'new' && (
                 <p>
-                  Программа <strong>{program.label}</strong>
+                  Программа{' '}
+                  <strong>
+                    {[programCode.trim(), program.label].filter(Boolean).join(' ')}
+                  </strong>
                   {expenseItem && <> — статья «{expenseItem}»</>}
                 </p>
               )}

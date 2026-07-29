@@ -25,7 +25,7 @@ class CountryAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 @admin.register(Program)
 class ProgramAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "name", "expense_item", "code", "is_active")
+    list_display = ("id", "code", "name", "expense_item", "is_active")
     list_filter = ("is_active",)
     search_fields = ("name", "expense_item", "code")
     readonly_fields = ("created_at", "updated_at")

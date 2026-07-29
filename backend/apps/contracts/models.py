@@ -129,7 +129,20 @@ class Program(models.Model):
         verbose_name_plural = "Программы"
 
     def __str__(self) -> str:
-        return f"{self.name} / {self.expense_item}"
+        return self.display_name
+
+    # Подпись программы — «код название». Собирается здесь и берётся отсюда
+    # всеми, кто её показывает (``ProgramRead.display_name``, django-admin),
+    # тем же приёмом, что и у ``Administrator.display_name``.
+    #
+    # ``code`` необязателен, поэтому склейка идёт по непустым частям: у
+    # программы без кода подпись — просто название, а не пробел и название.
+    # Статьи расходов в подписи НЕТ намеренно: она не различает программы в
+    # выпадающем списке настолько, чтобы удлинять на неё каждую строку, и
+    # показывается отдельным полем/подсказкой.
+    @property
+    def display_name(self) -> str:
+        return " ".join(part for part in (self.code, self.name) if part)
 
 
 class Administrator(models.Model):

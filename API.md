@@ -576,7 +576,7 @@ Every path is registered in **both** the slashed and bare spelling
 | `/api/contracts/v1/enums`                        | GET    | Choice labels + `committing_statuses` + status-transition table, so the frontend doesn't keep its own copy |
 | `/api/contracts/v1/countries`                    | GET, POST | Reference                   |
 | `/api/contracts/v1/countries/{id}`               | GET, PATCH, DELETE |                    |
-| `/api/contracts/v1/programs`                     | GET, POST | «Программа» + «Статья расходов» in one row; `?is_active=` |
+| `/api/contracts/v1/programs`                     | GET, POST | «Программа» + «Статья расходов» in one row. Reads carry `display_name` (`"<code> <name>"`, name alone when the optional code is empty) — the same string budget/agreement cards return as `program_name`; `?is_active=` |
 | `/api/contracts/v1/programs/{id}`                | GET, PATCH, DELETE |                    |
 | `/api/contracts/v1/administrators`               | GET, POST | «Администратор бюджета» — a **project in a country** (no person's name, holds no money). Reads carry `country_name` + `display_name` (`"<project> <country>"`); `?is_active=&country_id=` |
 | `/api/contracts/v1/administrators/{id}`          | GET, PATCH, DELETE |                    |

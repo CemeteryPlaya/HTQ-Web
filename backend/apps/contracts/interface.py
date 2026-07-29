@@ -43,7 +43,7 @@ def get_budget_summary(budget_id: int) -> dict | None:
     return {
         "id": budget.pk,
         "administrator_name": budget.administrator.display_name,
-        "program_name": budget.program.name,
+        "program_name": budget.program.display_name,
         "expense_item": budget.program.expense_item,
         "period_year": budget.period_year,
         "allocated": totals["allocated"],

@@ -93,7 +93,7 @@ def _describe_budget(subject_id: int) -> dict | None:
         return None
     return {
         "title": (f"Бюджет {budget.period_year}: {budget.administrator.display_name} / "
-                  f"{budget.program.name} — {budget.amount} {budget.currency}"),
+                  f"{budget.program.display_name} — {budget.amount} {budget.currency}"),
         "url": f"/contracts/budgets/{budget.pk}",
     }
 

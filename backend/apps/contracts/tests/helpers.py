@@ -63,8 +63,9 @@ def make_country(name: str = "Казахстан", iso_code: str = "KZ") -> Coun
     return Country.objects.get_or_create(name=name, defaults={"iso_code": iso_code})[0]
 
 
-def make_program(name: str = "Образование", expense_item: str = "Оборудование") -> Program:
-    return Program.objects.create(name=name, expense_item=expense_item)
+def make_program(name: str = "Образование", expense_item: str = "Оборудование",
+                 code: str = "") -> Program:
+    return Program.objects.create(name=name, expense_item=expense_item, code=code)
 
 
 def make_administrator(country: Country | None = None,

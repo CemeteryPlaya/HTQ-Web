@@ -39,13 +39,32 @@ def test_program_crud():
     assert created.status_code == 201, created.content
     program_id = created.json()["id"]
 
+    # Без кода подпись — просто название: код необязателен, и ведущий
+    # пробел в «код название» появиться не должен.
+    assert created.json()["display_name"] == "Образование"
+
     patched = patch_json(client, f"{BASE}/programs/{program_id}",
                          {"code": "EDU-01"}, **auth(admin_token()))
     assert patched.json()["code"] == "EDU-01"
+    assert patched.json()["display_name"] == "EDU-01 Образование"
 
     assert client.delete(f"{BASE}/programs/{program_id}",
                          **auth(admin_token())).status_code == 204
     assert Program.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_budget_card_labels_the_program_with_its_code():
+    """`program_name` в карточке бюджета — подпись «код название», а не
+    голое имя: код заказчик ведёт как основной идентификатор программы."""
+    budget = make_budget(program=make_program(name="Образование", code="EDU-01"))
+
+    resp = Client().get(f"{BASE}/budgets/{budget.pk}", **auth(token()))
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    assert body["program_name"] == "EDU-01 Образование"
+    # Статья расходов в подпись не входит — она отдельным полем.
+    assert body["expense_item"] == budget.program.expense_item
 
 
 @pytest.mark.django_db

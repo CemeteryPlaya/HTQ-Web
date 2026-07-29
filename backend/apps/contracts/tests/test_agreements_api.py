@@ -54,7 +54,7 @@ def test_agreement_reduces_budget_remaining_end_to_end():
     assert resp.status_code == 201, resp.content
     created = resp.json()
     assert created["administrator_name"] == budget.administrator.display_name
-    assert created["program_name"] == budget.program.name
+    assert created["program_name"] == budget.program.display_name
     assert created["expense_item"] == budget.program.expense_item
 
     budget_resp = client.get(f"{BASE}/budgets/{budget.pk}", **auth(token()))
