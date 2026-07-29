@@ -14,6 +14,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
+import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { contractsApi } from '@/api/contracts';
 import type { Budget } from '@/types/contracts';
 
@@ -95,6 +96,10 @@ const BudgetList = () => {
                   <TableHead className="text-right">Законтрактовано</TableHead>
                   <TableHead className="text-right">Остаток</TableHead>
                   <TableHead>Статус</TableHead>
+                  {/* Согласование — ОТДЕЛЬНАЯ ось от статуса: закрытый
+                      бюджет и отклонённый бюджет — разные вещи, и колонка
+                      у них поэтому тоже разная. */}
+                  <TableHead className="text-right">Согласование</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -129,6 +134,15 @@ const BudgetList = () => {
                       >
                         {budget.status === 'active' ? 'Активен' : 'Закрыт'}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <SubmitForApproval
+                        subjectType="contracts.budget"
+                        subjectId={budget.id}
+                        state={budget.approval_state}
+                        submit={contractsApi.submitBudget}
+                        invalidate={[['contracts', 'budgets']]}
+                      />
                     </TableCell>
                   </TableRow>
                 ))}

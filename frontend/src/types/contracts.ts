@@ -8,6 +8,8 @@
  * на сервере, здесь они просто переносятся.
  */
 
+import type { ApprovalState } from './signoff';
+
 export interface Country {
   id: number;
   name: string;
@@ -45,6 +47,13 @@ export interface Budget {
   currency: string;
   period_year: number;
   status: BudgetStatus;
+  /**
+   * Вторая, НЕЗАВИСИМАЯ ось состояния — место записи в маршруте
+   * согласования (примесь `signoff.Approvable`). `status` — жизненный цикл
+   * самой записи, и путать их нельзя: отклонённый бюджет не «закрывается»,
+   * его как раз собираются переделать и отправить снова.
+   */
+  approval_state: ApprovalState;
   note: string;
   /** Вычисляется на бэкенде из договоров — колонки в БД нет. */
   committed: string;
@@ -65,6 +74,8 @@ export interface Counterparty {
   contacts: string;
   address: string;
   status: CounterpartyStatus;
+  /** Ось согласования — отдельно от `status`. См. Budget.approval_state. */
+  approval_state: ApprovalState;
   created_at: string;
   updated_at: string;
 }
@@ -100,6 +111,14 @@ export interface Agreement {
   file_id: string | null;
   signed_date: string | null;
   status: AgreementStatus;
+  /**
+   * Единственный из трёх, где согласование имеет доменное последствие: оно
+   * двигает `status` по своей же таблице переходов (`draft → on_review` на
+   * отправку, `→ approved` на согласование, отказ и отзыв возвращают в
+   * `draft`). Оси всё равно разные — договор бывает согласован по маршруту
+   * и расторгнут по существу.
+   */
+  approval_state: ApprovalState;
   created_by: number | null;
   created_at: string;
   updated_at: string;

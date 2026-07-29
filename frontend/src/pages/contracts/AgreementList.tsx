@@ -14,6 +14,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
+import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { contractsApi } from '@/api/contracts';
 import type { AgreementStatus } from '@/types/contracts';
 
@@ -103,6 +104,11 @@ const AgreementList = () => {
                 <TableHead className="text-right">Сумма</TableHead>
                 <TableHead>Оплата</TableHead>
                 <TableHead>Статус</TableHead>
+                {/* Из трёх согласуемых типов только у договора согласование
+                    имеет доменное последствие — оно двигает его же `status`.
+                    Оси всё равно разные: согласованный по маршруту договор
+                    бывает расторгнут по существу. */}
+                <TableHead className="text-right">Согласование</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -139,6 +145,18 @@ const AgreementList = () => {
                     <Badge variant={STATUS_VARIANTS[row.status]}>
                       {statusLabel(row.status)}
                     </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <SubmitForApproval
+                      subjectType="contracts.agreement"
+                      subjectId={row.id}
+                      state={row.approval_state}
+                      submit={contractsApi.submitAgreement}
+                      // Отправка переводит договор в on_review, а он уже
+                      // занимает бюджет — остаток бюджетных строк меняется
+                      // тем же действием.
+                      invalidate={[['contracts', 'agreements'], ['contracts', 'budgets']]}
+                    />
                   </TableCell>
                 </TableRow>
               ))}

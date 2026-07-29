@@ -9,6 +9,7 @@
 
 import api from './client';
 import { apiPath } from './endpoints';
+import type { ApprovalProcess } from '@/types/signoff';
 import type {
   Administrator,
   Agreement,
@@ -40,6 +41,16 @@ export interface AgreementListParams {
   status?: string;
 }
 
+/**
+ * Отправка на согласование живёт ЗДЕСЬ, а не в api/signoff.ts, и это не
+ * случайность. У signoff есть общий `POST /processes`, но он принимает
+ * `subject_id` любого типа и потому обходит доменные права мимо их
+ * владельца — на бэкенде он оставлен операторским. Штатный путь — эндпоинт
+ * предметной аппки, которая только и знает, кому её объект разрешено
+ * отправлять.
+ *
+ * Ответ — карточка ПРОЦЕССА (201), а не отправленного объекта.
+ */
 export const contractsApi = {
   // ─── Справочники ───────────────────────────────────────────────────────
   getEnums: () => api.get<ContractsEnums>(path('enums')),
@@ -78,6 +89,8 @@ export const contractsApi = {
   deleteBudget: (id: number) => api.delete(path(`budgets/${id}`)),
   listBudgetAgreements: (id: number) =>
     api.get<Agreement[]>(path(`budgets/${id}/agreements`)),
+  submitBudget: (id: number) =>
+    api.post<ApprovalProcess>(path(`budgets/${id}/submit`)),
 
   // ─── Реестр контрактов ─────────────────────────────────────────────────
   listCounterparties: (params?: { search?: string; status?: string }) =>
@@ -102,6 +115,8 @@ export const contractsApi = {
     api.post<Counterparty>(path('counterparties/full'), payload),
   updateCounterparty: (id: number, data: Partial<Counterparty>) =>
     api.patch<Counterparty>(path(`counterparties/${id}`), data),
+  submitCounterparty: (id: number) =>
+    api.post<ApprovalProcess>(path(`counterparties/${id}/submit`)),
 
   // ─── Договоры ──────────────────────────────────────────────────────────
   listAgreements: (params?: AgreementListParams) =>
@@ -120,6 +135,13 @@ export const contractsApi = {
   }) => api.post<Agreement>(path('agreements'), data),
   updateAgreement: (id: number, data: Record<string, unknown>) =>
     api.patch<Agreement>(path(`agreements/${id}`), data),
+  /**
+   * Только из черновика. Бэкенд перед запуском заново проверяет валюту,
+   * справочники и лимит бюджета: `on_review` уже занимает бюджет, так что
+   * проверять его ПОСЛЕ старта было бы поздно.
+   */
+  submitAgreement: (id: number) =>
+    api.post<ApprovalProcess>(path(`agreements/${id}/submit`)),
   /** Единственный путь смены статуса — переход проверяется на бэкенде. */
   changeAgreementStatus: (id: number, status: AgreementStatus) =>
     api.post<Agreement>(path(`agreements/${id}/status`), { status }),

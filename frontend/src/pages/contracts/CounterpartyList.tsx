@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
+import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { contractsApi } from '@/api/contracts';
 import type { CounterpartyStatus } from '@/types/contracts';
 
@@ -119,6 +120,9 @@ const CounterpartyList = () => {
                   <TableHead>НДС</TableHead>
                   <TableHead>Адрес</TableHead>
                   <TableHead>Статус</TableHead>
+                  {/* Ось согласования — отдельная от статуса: «заблокирован»
+                      и «отклонён» говорят о разном. */}
+                  <TableHead className="text-right">Согласование</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -143,6 +147,15 @@ const CounterpartyList = () => {
                       <Badge variant={STATUS_VARIANTS[row.status]}>
                         {STATUS_LABELS[row.status]}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <SubmitForApproval
+                        subjectType="contracts.counterparty"
+                        subjectId={row.id}
+                        state={row.approval_state}
+                        submit={contractsApi.submitCounterparty}
+                        invalidate={[['contracts', 'counterparties']]}
+                      />
                     </TableCell>
                   </TableRow>
                 ))}

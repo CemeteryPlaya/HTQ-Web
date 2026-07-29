@@ -74,6 +74,17 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/contracts/agreements', component: lazyPages.ContractsAgreementList, requiresAuth: true },
   { path: '/contracts/agreements/new', component: lazyPages.ContractsAgreementCreate, requiresAuth: true },
 
+  // ─── Signoff (универсальное согласование, apps.signoff) ───────────────
+  // Очередь и карточки открыты любому сотруднику: решает НАЗВАННЫЙ в
+  // маршруте человек, а не обладатель админского флага, и право проверяет
+  // бэкенд по самой задаче. Админской является только настройка маршрутов —
+  // писать их разрешено лишь администратору (`api_view(admin=True)`).
+  { path: '/signoff', component: lazyPages.SignoffInbox, requiresAuth: true },
+  { path: '/signoff/processes', component: lazyPages.SignoffProcessList, requiresAuth: true },
+  { path: '/signoff/processes/:id', component: lazyPages.SignoffProcessDetail, requiresAuth: true },
+  { path: '/signoff/routes', component: lazyPages.SignoffRouteList, requiresAuth: true, requiresRole: 'admin' },
+  { path: '/signoff/routes/:id', component: lazyPages.SignoffRouteEditor, requiresAuth: true, requiresRole: 'admin' },
+
   { path: '/email', component: lazyPages.EmailInbox, requiresAuth: true },
   { path: '/email/oauth/callback', component: lazyPages.OAuthCallbackPage, requiresAuth: true },
 
