@@ -64,15 +64,24 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/tasks/resources', component: lazyPages.HRResourceSchedule, requiresAuth: true },
   { path: '/tasks/equipment', component: lazyPages.HREquipment, requiresAuth: true },
   // ─── Contracts (бюджеты / реестр контрактов / договоры) ───────────────
-  // Статический `/new` объявлен ПЕРЕД будущим `/:id` — react-router
-  // сопоставляет в порядке объявления, и иначе "new" ушёл бы в параметр.
+  // Статический `/new` объявлен ПЕРЕД `/:id` — react-router сопоставляет в
+  // порядке объявления, и иначе "new" ушёл бы в параметр.
+  //
+  // Карточки открыты любому сотруднику, как и списки: читать домен разрешено
+  // всем (`api_view(auth="jwt")`), а операции внутри карточки бэкенд
+  // проверяет сам — смена статуса админская, загрузка скана разрешена автору
+  // черновика. Роутером это не закрывается: право здесь зависит от строки, а
+  // не от раздела.
   { path: '/contracts', component: lazyPages.ContractsOverview, requiresAuth: true },
   { path: '/contracts/budgets', component: lazyPages.ContractsBudgetList, requiresAuth: true },
   { path: '/contracts/budgets/new', component: lazyPages.ContractsBudgetCreate, requiresAuth: true },
+  { path: '/contracts/budgets/:id', component: lazyPages.ContractsBudgetDetail, requiresAuth: true },
   { path: '/contracts/counterparties', component: lazyPages.ContractsCounterpartyList, requiresAuth: true },
   { path: '/contracts/counterparties/new', component: lazyPages.ContractsCounterpartyCreate, requiresAuth: true },
+  { path: '/contracts/counterparties/:id', component: lazyPages.ContractsCounterpartyDetail, requiresAuth: true },
   { path: '/contracts/agreements', component: lazyPages.ContractsAgreementList, requiresAuth: true },
   { path: '/contracts/agreements/new', component: lazyPages.ContractsAgreementCreate, requiresAuth: true },
+  { path: '/contracts/agreements/:id', component: lazyPages.ContractsAgreementDetail, requiresAuth: true },
 
   // ─── Signoff (универсальное согласование, apps.signoff) ───────────────
   // Очередь и карточки открыты любому сотруднику: решает НАЗВАННЫЙ в

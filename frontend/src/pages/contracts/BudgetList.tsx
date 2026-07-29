@@ -15,8 +15,8 @@ import {
 } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
+import { formatAmount, remainingTone } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
-import type { Budget } from '@/types/contracts';
 
 /**
  * Список бюджетных строк.
@@ -26,23 +26,6 @@ import type { Budget } from '@/types/contracts';
  * нужно и нельзя: фронтенд не видит договоров в неучитываемых статусах и
  * получил бы своё, неверное число.
  */
-
-/** 5000000.00 → «5 000 000,00». Intl не подходит: суммы приходят строками
- *  (Decimal), и прогон через Number терял бы копейки на больших числах. */
-function formatAmount(value: string): string {
-  const [whole, fraction = '00'] = value.split('.');
-  const spaced = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  return `${spaced},${fraction}`;
-}
-
-function remainingTone(budget: Budget): string {
-  const remaining = Number(budget.remaining);
-  const total = Number(budget.amount);
-  if (!Number.isFinite(remaining) || !Number.isFinite(total) || total === 0) return '';
-  if (remaining <= 0) return 'text-destructive font-medium';
-  if (remaining / total < 0.15) return 'text-amber-600 dark:text-amber-500 font-medium';
-  return '';
-}
 
 const BudgetList = () => {
   const { data: budgets = [], isLoading, isError } = useQuery({
@@ -106,7 +89,12 @@ const BudgetList = () => {
                 {budgets.map((budget) => (
                   <TableRow key={budget.id}>
                     <TableCell className="font-medium">
-                      {budget.administrator_name}
+                      <Link
+                        to={`/contracts/budgets/${budget.id}`}
+                        className="hover:underline underline-offset-2"
+                      >
+                        {budget.administrator_name}
+                      </Link>
                     </TableCell>
                     <TableCell>
                       <div>{budget.program_name}</div>
@@ -124,7 +112,10 @@ const BudgetList = () => {
                       {formatAmount(budget.committed)}
                     </TableCell>
                     <TableCell
-                      className={`text-right tabular-nums ${remainingTone(budget)}`}
+                      className={`text-right tabular-nums ${remainingTone(
+                        budget.remaining,
+                        budget.amount,
+                      )}`}
                     >
                       {formatAmount(budget.remaining)}
                     </TableCell>

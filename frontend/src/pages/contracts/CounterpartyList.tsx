@@ -129,7 +129,12 @@ const CounterpartyList = () => {
                 {rows.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell className="font-medium">
-                      <div>{row.name}</div>
+                      <Link
+                        to={`/contracts/counterparties/${row.id}`}
+                        className="hover:underline underline-offset-2"
+                      >
+                        {row.name}
+                      </Link>
                       {row.contacts && (
                         <div className="text-xs text-muted-foreground">
                           {row.contacts}

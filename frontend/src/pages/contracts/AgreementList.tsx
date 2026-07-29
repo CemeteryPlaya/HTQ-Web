@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
+import { formatAmount } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
 import type { AgreementStatus } from '@/types/contracts';
 
@@ -37,11 +38,6 @@ const STATUS_VARIANTS: Record<
   executed: 'default',
   terminated: 'destructive',
 };
-
-function formatAmount(value: string): string {
-  const [whole, fraction = '00'] = value.split('.');
-  return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')},${fraction}`;
-}
 
 const AgreementList = () => {
   const { data: rows = [], isLoading, isError } = useQuery({
@@ -116,7 +112,12 @@ const AgreementList = () => {
                 <TableRow key={row.id}>
                   <TableCell className="font-medium whitespace-nowrap">
                     <span className="inline-flex items-center gap-1.5">
-                      {row.number}
+                      <Link
+                        to={`/contracts/agreements/${row.id}`}
+                        className="hover:underline underline-offset-2"
+                      >
+                        {row.number}
+                      </Link>
                       {row.file_id && (
                         <Paperclip className="h-3 w-3 text-muted-foreground" />
                       )}
