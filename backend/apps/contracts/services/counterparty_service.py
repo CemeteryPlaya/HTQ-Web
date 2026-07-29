@@ -52,7 +52,7 @@ def get_counterparty_or_404(counterparty_id: int) -> Counterparty:
     return row
 
 
-def create_counterparty(*, bin_iin: str, name: str, country_id: int, vat: str = "",
+def create_counterparty(*, bin_iin: str, name: str, country_id: int, vat: bool = False,
                         contacts: str = "", address: str = "",
                         status: str | None = None) -> Counterparty:
     get_country_or_404(country_id)
@@ -65,7 +65,7 @@ def create_counterparty(*, bin_iin: str, name: str, country_id: int, vat: str = 
 
 
 @transaction.atomic
-def create_counterparty_full(*, bin_iin: str, name: str, country, vat: str = "",
+def create_counterparty_full(*, bin_iin: str, name: str, country, vat: bool = False,
                              contacts: str = "", address: str = "",
                              status: str | None = None) -> Counterparty:
     """Завести контрагента вместе со страной — одной транзакцией.

@@ -103,7 +103,10 @@ def _describe_counterparty(subject_id: int) -> dict | None:
     if counterparty is None:
         return None
     return {
-        "title": f"Контрагент {counterparty.name} ({counterparty.bin_iin})",
+        # Признак НДС — в заголовке: согласующему по карточке контрагента
+        # он нужен ровно так же, как БИН/ИИН (тот же набор, что и в __str__).
+        "title": (f"Контрагент {counterparty.name} "
+                  f"({counterparty.bin_iin}, {counterparty.vat_label})"),
         "url": f"/contracts/counterparties/{counterparty.pk}",
     }
 

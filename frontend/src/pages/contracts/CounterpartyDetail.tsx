@@ -142,7 +142,7 @@ const CounterpartyDetail = () => {
                   <span className="tabular-nums">{counterparty.bin_iin}</span>
                 </Field>
                 <Field label="Страна">{countryName}</Field>
-                <Field label="НДС">{counterparty.vat || '—'}</Field>
+                <Field label="НДС">{counterparty.vat_label}</Field>
                 <Field label="Контакты">{counterparty.contacts || '—'}</Field>
                 <Field label="Адрес" className="sm:col-span-2">
                   {counterparty.address || '—'}

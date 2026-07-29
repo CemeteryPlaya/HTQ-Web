@@ -8,6 +8,7 @@ import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -61,7 +62,7 @@ const CounterpartyCreate = () => {
   const [name, setName] = useState('');
   const [country, setCountry] = useState<ReferenceValue>(null);
   const [isoCode, setIsoCode] = useState('');
-  const [vat, setVat] = useState('');
+  const [vat, setVat] = useState(false);
   const [contacts, setContacts] = useState('');
   const [address, setAddress] = useState('');
   const [status, setStatus] = useState<CounterpartyStatus>('active');
@@ -99,7 +100,7 @@ const CounterpartyCreate = () => {
             country!.kind === 'existing'
               ? { id: country!.id }
               : { name: country!.label, iso_code: isoCode.trim().toUpperCase() },
-          vat: vat.trim(),
+          vat,
           contacts: contacts.trim(),
           address: address.trim(),
           status,
@@ -258,18 +259,15 @@ const CounterpartyCreate = () => {
                 </div>
               )}
 
-              <div>
-                <Label htmlFor="vat">НДС</Label>
-                <Input
-                  id="vat"
-                  value={vat}
-                  onChange={(event) => setVat(event.target.value)}
-                  placeholder="плательщик НДС, сер. 0001"
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Свободный текст — признак плательщика, номер свидетельства
-                  или ставка, как принято у вас.
-                </p>
+              <div className="flex items-start gap-3">
+                <Switch id="vat" checked={vat} onCheckedChange={setVat} />
+                <div>
+                  <Label htmlFor="vat">Плательщик НДС</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Только признак «с НДС / без НДС». Ставка и номер
+                    свидетельства здесь не ведутся.
+                  </p>
+                </div>
               </div>
             </CardContent>
           </Card>

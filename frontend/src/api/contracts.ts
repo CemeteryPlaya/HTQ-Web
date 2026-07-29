@@ -98,7 +98,7 @@ export const contractsApi = {
     bin_iin: string;
     name: string;
     country_id: number;
-    vat?: string;
+    vat?: boolean;
     contacts?: string;
     address?: string;
   }) => api.post<Counterparty>(path('counterparties'), data),

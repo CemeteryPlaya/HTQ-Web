@@ -240,11 +240,17 @@ class Budget(signoff.Approvable, models.Model):
 class Counterparty(signoff.Approvable, models.Model):
     """Контрагент — «Реестр контрактов» в терминах заказчика.
 
-    ``vat`` и ``contacts`` намеренно оставлены свободным текстом: заказчик
-    пока не уточнил, значит ли «НДС» признак плательщика (булево + номер
-    свидетельства) или ставку, а «Контакты» — одну строку или список
-    контактных лиц. Разворачивать текстовое поле в структуру дешевле, чем
-    угадать структуру неверно и потом её ломать.
+    ``vat`` — ПРИЗНАК плательщика НДС, «с НДС / без НДС». Поле было
+    свободным текстом, пока заказчик не уточнил, что за ним стоит: ни
+    ставки, ни номера свидетельства здесь не ведётся. Понадобится номер —
+    это отдельное поле рядом (``vat_certificate``), а не возврат булева
+    признака в строку: два разных факта в одной колонке — то, из-за чего
+    поле и переписывалось.
+
+    ``contacts`` намеренно оставлены свободным текстом: заказчик пока не
+    уточнил, одна это строка или список контактных лиц. Разворачивать
+    текстовое поле в структуру дешевле, чем угадать структуру неверно и
+    потом её ломать.
     """
 
     SIGNOFF_SUBJECT_TYPE = "contracts.counterparty"
@@ -254,7 +260,8 @@ class Counterparty(signoff.Approvable, models.Model):
     # намеренно (см. схему CounterpartyCreate).
     bin_iin = models.CharField(max_length=32, unique=True)
     name = models.CharField(max_length=300)
-    vat = models.CharField(max_length=100, default="", blank=True, db_default="")
+    vat = models.BooleanField(default=False, db_default=False,
+                              verbose_name="Плательщик НДС")
     contacts = models.TextField(default="", blank=True, db_default="")
     address = models.TextField(default="", blank=True, db_default="")
     country = models.ForeignKey(Country, on_delete=models.PROTECT,
@@ -272,7 +279,15 @@ class Counterparty(signoff.Approvable, models.Model):
         verbose_name_plural = "Реестр контрактов"
 
     def __str__(self) -> str:
-        return f"{self.name} ({self.bin_iin})"
+        return f"{self.name} ({self.bin_iin}, {self.vat_label})"
+
+    # «с НДС» / «без НДС». Подпись живёт на модели, а не в шаблоне и не
+    # во фронтенде: её показывают и __str__ (django-admin, заголовки
+    # signoff), и карточка контрагента в API — один булев признак не
+    # должен получить два разных словесных перевода.
+    @property
+    def vat_label(self) -> str:
+        return "с НДС" if self.vat else "без НДС"
 
 
 class Agreement(signoff.Approvable, models.Model):

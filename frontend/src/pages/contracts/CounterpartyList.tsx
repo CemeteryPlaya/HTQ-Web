@@ -143,7 +143,7 @@ const CounterpartyList = () => {
                     </TableCell>
                     <TableCell className="tabular-nums">{row.bin_iin}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {row.vat || '—'}
+                      {row.vat_label}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
                       {row.address || '—'}

@@ -585,7 +585,7 @@ Every path is registered in **both** the slashed and bare spelling
 | `/api/contracts/v1/budgets/{id}`                 | GET, PATCH, DELETE | Response carries computed `committed`/`remaining` — no such columns exist |
 | `/api/contracts/v1/budgets/{id}/agreements`      | GET    | What the budget's remaining is made of |
 | `/api/contracts/v1/budgets/{id}/submit`          | POST   | **→ approval.** Returns a signoff process card (201), not the budget |
-| `/api/contracts/v1/counterparties`               | GET, POST | «Реестр контрактов»; `?search=` matches name **or** БИН/ИИН; `?approval_state=` |
+| `/api/contracts/v1/counterparties`               | GET, POST | «Реестр контрактов»; `vat` is a **boolean** (payer / not — no rate, no certificate number), reads also carry `vat_label` (`"с НДС"`/`"без НДС"`); `?search=` matches name **or** БИН/ИИН; `?approval_state=` |
 | `/api/contracts/v1/counterparties/full`          | POST   | Counterparty + country in one transaction |
 | `/api/contracts/v1/counterparties/{id}`          | GET, PATCH, DELETE |                    |
 | `/api/contracts/v1/counterparties/{id}/submit`   | POST   | **→ approval.** Returns a signoff process card (201) |

@@ -79,7 +79,10 @@ export interface Counterparty {
   bin_iin: string;
   name: string;
   country_id: number;
-  vat: string;
+  /** Признак плательщика НДС — «с НДС / без НДС», не ставка и не номер свидетельства. */
+  vat: boolean;
+  /** Словесная форма признака, с бэкенда: «с НДС» / «без НДС». */
+  vat_label: string;
   contacts: string;
   address: string;
   status: CounterpartyStatus;
@@ -178,7 +181,7 @@ export interface CounterpartyFullCreatePayload {
   bin_iin: string;
   name: string;
   country: CountryInput;
-  vat: string;
+  vat: boolean;
   contacts: string;
   address: string;
   status?: CounterpartyStatus;

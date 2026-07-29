@@ -175,15 +175,42 @@ def test_counterparty_crud_and_search():
     client = Client()
     created = post_json(client, f"{BASE}/counterparties",
                         {"bin_iin": "123456789012", "name": "ТОО «Альфа»",
-                         "country_id": country.pk, "vat": "плательщик НДС",
+                         "country_id": country.pk, "vat": True,
                          "address": "Алматы", "contacts": "+7 700 000 00 00"},
                         **auth(admin_token()))
     assert created.status_code == 201, created.content
+    assert created.json()["vat"] is True
+    assert created.json()["vat_label"] == "с НДС"
 
     by_name = client.get(f"{BASE}/counterparties?search=Альфа", **auth(token()))
     assert len(by_name.json()) == 1
     by_bin = client.get(f"{BASE}/counterparties?search=1234", **auth(token()))
     assert len(by_bin.json()) == 1
+
+
+@pytest.mark.django_db
+def test_counterparty_vat_defaults_to_false_and_is_togglable():
+    """НДС — признак «с / без», а не текст: он необязателен в теле запроса,
+    по умолчанию False, и PATCH'ем переключается в обе стороны (False здесь
+    значит «снять», а не «поле не пришло» — ср. соглашение по PATCH-схемам)."""
+    country = make_country()
+    client = Client()
+    created = post_json(client, f"{BASE}/counterparties",
+                        {"bin_iin": "987654321098", "name": "ИП Бета",
+                         "country_id": country.pk},
+                        **auth(admin_token()))
+    assert created.status_code == 201, created.content
+    assert created.json()["vat"] is False
+    assert created.json()["vat_label"] == "без НДС"
+
+    on = patch_json(client, f"{BASE}/counterparties/{created.json()['id']}",
+                    {"vat": True}, **auth(admin_token()))
+    assert on.json()["vat"] is True
+
+    off = patch_json(client, f"{BASE}/counterparties/{created.json()['id']}",
+                     {"vat": False}, **auth(admin_token()))
+    assert off.json()["vat"] is False
+    assert off.json()["vat_label"] == "без НДС"
 
 
 @pytest.mark.django_db

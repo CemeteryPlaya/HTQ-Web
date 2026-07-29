@@ -234,7 +234,9 @@ class CounterpartyCreate(BaseModel):
     bin_iin: str = Field(..., min_length=1, max_length=32)
     name: str = Field(..., min_length=1, max_length=300)
     country_id: int
-    vat: str = Field("", max_length=100)
+    # Признак плательщика НДС, не ставка и не номер свидетельства
+    # (см. докстринг модели Counterparty).
+    vat: bool = False
     contacts: str = ""
     address: str = ""
     status: Optional[CounterpartyStatus] = None
@@ -244,7 +246,7 @@ class CounterpartyUpdate(BaseModel):
     bin_iin: Optional[str] = Field(None, min_length=1, max_length=32)
     name: Optional[str] = Field(None, min_length=1, max_length=300)
     country_id: Optional[int] = None
-    vat: Optional[str] = Field(None, max_length=100)
+    vat: Optional[bool] = None
     contacts: Optional[str] = None
     address: Optional[str] = None
     status: Optional[CounterpartyStatus] = None
@@ -262,7 +264,7 @@ class CounterpartyFullCreate(BaseModel):
     bin_iin: str = Field(..., min_length=1, max_length=32)
     name: str = Field(..., min_length=1, max_length=300)
     country: CountryInput
-    vat: str = Field("", max_length=100)
+    vat: bool = False
     contacts: str = ""
     address: str = ""
     status: Optional[CounterpartyStatus] = None
@@ -275,7 +277,10 @@ class CounterpartyRead(BaseModel):
     bin_iin: str
     name: str
     country_id: int
-    vat: str
+    vat: bool
+    # Словесная форма признака («с НДС» / «без НДС») — с модели, чтобы у
+    # одного булева значения не завелось двух переводов.
+    vat_label: str
     contacts: str
     address: str
     status: str
