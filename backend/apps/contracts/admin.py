@@ -33,9 +33,10 @@ class ProgramAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 @admin.register(Administrator)
 class AdministratorAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "full_name", "project_name", "country", "user_id", "is_active")
+    list_display = ("id", "project_name", "country", "user_id", "is_active")
     list_filter = ("is_active", "country")
-    search_fields = ("full_name", "project_name")
+    search_fields = ("project_name", "country__name")
+    list_select_related = ("country",)
     readonly_fields = ("created_at", "updated_at")
 
 
@@ -45,7 +46,7 @@ class BudgetAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
                     "amount", "currency", "committed_display", "remaining_display",
                     "status", "approval_state")
     list_filter = ("status", "approval_state", "period_year", "currency")
-    search_fields = ("administrator__full_name", "program__name", "program__expense_item")
+    search_fields = ("administrator__project_name", "program__name", "program__expense_item")
     readonly_fields = ("created_at", "updated_at", "committed_display",
                        "remaining_display", "approval_state")
     # ``approval_state`` показывается, но не правится: его единственный
@@ -53,7 +54,9 @@ class BudgetAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     # транзакции с состоянием процесса. Правка отсюда развела бы их, и
     # «согласовано» на объекте перестало бы значить, что согласование было.
 
-    list_select_related = ("administrator", "program")
+    # Страна администратора — в `list_select_related`, потому что его
+    # подпись в списке («проект страна») читает её на каждой строке.
+    list_select_related = ("administrator", "administrator__country", "program")
 
     @admin.display(description="Законтрактовано")
     def committed_display(self, obj):

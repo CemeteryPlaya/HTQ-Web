@@ -104,7 +104,7 @@ def test_the_process_card_shows_a_human_readable_subject(client):
     assert submitted.status_code == 201, submitted.content
     body = submitted.json()
     # describe() из approval_hooks: signoff сам не умеет назвать чужую строку.
-    assert "Иванов И." in body["subject_title"]
+    assert budget.administrator.display_name in body["subject_title"]
     assert body["subject_url"] == f"/contracts/budgets/{budget.pk}"
 
 

@@ -78,7 +78,6 @@ class ProgramRead(BaseModel):
 # ── Administrator ───────────────────────────────────────────────────────
 
 class AdministratorCreate(BaseModel):
-    full_name: str = Field(..., min_length=1, max_length=200)
     country_id: int
     project_name: str = Field(..., min_length=1, max_length=200)
     user_id: Optional[int] = None
@@ -86,7 +85,6 @@ class AdministratorCreate(BaseModel):
 
 
 class AdministratorUpdate(BaseModel):
-    full_name: Optional[str] = Field(None, min_length=1, max_length=200)
     country_id: Optional[int] = None
     project_name: Optional[str] = Field(None, min_length=1, max_length=200)
     user_id: Optional[int] = None
@@ -97,9 +95,14 @@ class AdministratorRead(BaseModel):
     model_config = _ORM
 
     id: int
-    full_name: str
     country_id: int
+    # Страна отдаётся и id, и названием: без ФИО подпись записи — это
+    # «проект + страна», и фронтенд не должен собирать её вторым запросом в
+    # справочник стран. ``display_name`` — та же подпись целиком, чтобы
+    # формат жил в одном месте (свойства на модели).
+    country_name: str
     project_name: str
+    display_name: str
     user_id: Optional[int]
     is_active: bool
 
@@ -147,15 +150,14 @@ class CountryInput(BaseModel):
 
 class AdministratorInput(BaseModel):
     id: Optional[int] = None
-    full_name: Optional[str] = Field(None, min_length=1, max_length=200)
     project_name: Optional[str] = Field(None, min_length=1, max_length=200)
     country: Optional[CountryInput] = None
 
     @model_validator(mode="after")
     def _id_or_fields(self):
-        if self.id is None and not (self.full_name and self.project_name and self.country):
+        if self.id is None and not (self.project_name and self.country):
             raise ValueError(
-                "нужен либо id администратора, либо ФИО + название проекта + страна")
+                "нужен либо id администратора, либо название проекта + страна")
         return self
 
 
@@ -176,7 +178,7 @@ class ProgramInput(BaseModel):
 class BudgetFullCreate(BaseModel):
     """Заявка на бюджет одним запросом — вместе со справочниками.
 
-    Форма на фронтенде заполняется целиком: администратор (ФИО, проект,
+    Форма на фронтенде заполняется целиком: администратор (проект +
     страна), программа (название, статья расходов) и сама сумма. Собирать
     это четырьмя отдельными POST'ами из браузера нельзя — упавший третий
     запрос оставил бы в справочниках наполовину заведённую заявку, которую

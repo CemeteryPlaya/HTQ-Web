@@ -27,9 +27,12 @@ export interface Program {
 
 export interface Administrator {
   id: number;
-  full_name: string;
   country_id: number;
+  /** Название страны — подпись записи собирается из проекта и страны. */
+  country_name: string;
   project_name: string;
+  /** Готовая подпись «проект страна». Собирает бэкенд, чтобы формат жил в одном месте. */
+  display_name: string;
   user_id: number | null;
   is_active: boolean;
 }
@@ -154,7 +157,6 @@ export interface CountryInput {
 
 export interface AdministratorInput {
   id?: number;
-  full_name?: string;
   project_name?: string;
   country?: CountryInput;
 }

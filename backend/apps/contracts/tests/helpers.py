@@ -67,11 +67,10 @@ def make_program(name: str = "Образование", expense_item: str = "Об
     return Program.objects.create(name=name, expense_item=expense_item)
 
 
-def make_administrator(country: Country | None = None, full_name: str = "Иванов И.",
+def make_administrator(country: Country | None = None,
                        project_name: str = "Проект А") -> Administrator:
     return Administrator.objects.create(
-        full_name=full_name, country=country or make_country(),
-        project_name=project_name,
+        country=country or make_country(), project_name=project_name,
     )
 
 

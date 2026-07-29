@@ -119,14 +119,17 @@ def get_administrator_or_404(administrator_id: int) -> Administrator:
     return admin
 
 
-def create_administrator(*, full_name: str, country_id: int, project_name: str,
+def create_administrator(*, country_id: int, project_name: str,
                          user_id: int | None = None, is_active: bool = True) -> Administrator:
     # Существование страны проверяется явно: без этого несуществующий
     # country_id ушёл бы в БД и вернулся IntegrityError → 500, вместо
     # честного 404 про конкретно ненайденную страну.
-    get_country_or_404(country_id)
+    # Страна передаётся объектом, а не ``country_id=``: ответ отдаёт
+    # ``display_name``/``country_name``, и по объекту они читаются из
+    # закэшированной связи, а по id — лишним запросом.
+    country = get_country_or_404(country_id)
     return Administrator.objects.create(
-        full_name=full_name, country_id=country_id, project_name=project_name,
+        country=country, project_name=project_name,
         user_id=user_id, is_active=is_active,
     )
 

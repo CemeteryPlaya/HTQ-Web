@@ -66,11 +66,8 @@ export const contractsApi = {
 
   listAdministrators: (params?: { is_active?: boolean; country_id?: number }) =>
     api.get<Administrator[]>(path('administrators'), { params }),
-  createAdministrator: (data: {
-    full_name: string;
-    country_id: number;
-    project_name: string;
-  }) => api.post<Administrator>(path('administrators'), data),
+  createAdministrator: (data: { country_id: number; project_name: string }) =>
+    api.post<Administrator>(path('administrators'), data),
 
   // ─── Бюджеты ───────────────────────────────────────────────────────────
   listBudgets: (params?: BudgetListParams) =>

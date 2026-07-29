@@ -53,7 +53,7 @@ def test_agreement_reduces_budget_remaining_end_to_end():
                      **auth(admin_token()))
     assert resp.status_code == 201, resp.content
     created = resp.json()
-    assert created["administrator_name"] == budget.administrator.full_name
+    assert created["administrator_name"] == budget.administrator.display_name
     assert created["program_name"] == budget.program.name
     assert created["expense_item"] == budget.program.expense_item
 

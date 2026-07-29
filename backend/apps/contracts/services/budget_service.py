@@ -38,7 +38,7 @@ def list_budgets(*, administrator_id: int | None = None, program_id: int | None 
     ``approval_state=approved`` сам — там несогласованная строка не вариант
     (та же проверка на бэкенде: ``agreement_service._validate_context``).
     """
-    query = Budget.objects.select_related("administrator", "program")
+    query = Budget.objects.select_related("administrator", "administrator__country", "program")
     if administrator_id is not None:
         query = query.filter(administrator_id=administrator_id)
     if program_id is not None:
@@ -59,7 +59,9 @@ def list_budgets(*, administrator_id: int | None = None, program_id: int | None 
 
 
 def get_budget_or_404(budget_id: int) -> Budget:
-    budget = Budget.objects.select_related("administrator", "program").filter(pk=budget_id).first()
+    budget = (Budget.objects
+              .select_related("administrator", "administrator__country", "program")
+              .filter(pk=budget_id).first())
     if budget is None:
         raise Http404("Бюджет не найден")
     return budget
@@ -70,7 +72,10 @@ def serialize_budget(budget: Budget, *, committed=None) -> dict:
     return {
         "id": budget.pk,
         "administrator_id": budget.administrator_id,
-        "administrator_name": budget.administrator.full_name,
+        # Подпись администратора («проект страна») собирает сама модель —
+        # см. Administrator.display_name. Читающие пути обязаны тянуть
+        # `administrator__country`, иначе это N+1.
+        "administrator_name": budget.administrator.display_name,
         "program_id": budget.program_id,
         "program_name": budget.program.name,
         "expense_item": budget.program.expense_item,
@@ -89,11 +94,15 @@ def serialize_budget(budget: Budget, *, committed=None) -> dict:
 
 def create_budget(*, administrator_id: int, program_id: int, amount,
                   period_year: int, currency: str = "KZT", note: str = "") -> Budget:
-    get_administrator_or_404(administrator_id)
-    get_program_or_404(program_id)
+    # Справочные записи передаются объектами, а не id: обе проверки всё
+    # равно ходят в БД, а по объекту ответ соберёт `administrator_name`
+    # (и `program_name`) из уже загруженных связей, без второго круга
+    # запросов на сериализации.
+    administrator = get_administrator_or_404(administrator_id)
+    program = get_program_or_404(program_id)
     with conflict_as("Бюджет на эту связку «администратор / программа / год» уже существует"):
         return Budget.objects.create(
-            administrator_id=administrator_id, program_id=program_id,
+            administrator=administrator, program=program,
             amount=amount, period_year=period_year, currency=currency, note=note,
         )
 
@@ -131,11 +140,11 @@ def _resolve_administrator(data) -> Administrator:
     if data.id is not None:
         return get_administrator_or_404(data.id)
     country = resolve_country_input(data.country)
-    # Ключ совпадения — ФИО + проект + страна: один и тот же человек может
-    # вести несколько проектов, и это РАЗНЫЕ записи администратора (у них
-    # разные бюджеты). По одному ФИО их схлопывать нельзя.
+    # Ключ совпадения — проект + страна, и это ВСЯ идентичность записи после
+    # снятия ФИО: один проект в одной стране — один администратор бюджета.
+    # Тот же проект в другой стране — отдельная запись с отдельными
+    # бюджетами, поэтому страна из ключа не убирается.
     administrator, _ = Administrator.objects.get_or_create(
-        full_name=data.full_name.strip(),
         project_name=data.project_name.strip(),
         country=country,
     )

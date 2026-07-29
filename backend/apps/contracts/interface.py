@@ -33,7 +33,8 @@ def get_budget_summary(budget_id: int) -> dict | None:
     бюджетной строки нет."""
     require_service("contracts")
 
-    budget = (Budget.objects.select_related("administrator", "program")
+    budget = (Budget.objects
+              .select_related("administrator", "administrator__country", "program")
               .filter(pk=budget_id).first())
     if budget is None:
         return None
@@ -41,7 +42,7 @@ def get_budget_summary(budget_id: int) -> dict | None:
     totals = budget_calc.totals_for(budget)
     return {
         "id": budget.pk,
-        "administrator_name": budget.administrator.full_name,
+        "administrator_name": budget.administrator.display_name,
         "program_name": budget.program.name,
         "expense_item": budget.program.expense_item,
         "period_year": budget.period_year,

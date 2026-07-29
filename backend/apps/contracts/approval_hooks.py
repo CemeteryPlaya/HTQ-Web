@@ -86,12 +86,13 @@ def _agreement_on_cancelled(subject_id: int) -> None:
 # куда ведёт каждый, может только его владелец.
 
 def _describe_budget(subject_id: int) -> dict | None:
-    budget = (Budget.objects.select_related("administrator", "program")
+    budget = (Budget.objects
+              .select_related("administrator", "administrator__country", "program")
               .filter(pk=subject_id).first())
     if budget is None:
         return None
     return {
-        "title": (f"Бюджет {budget.period_year}: {budget.administrator.full_name} / "
+        "title": (f"Бюджет {budget.period_year}: {budget.administrator.display_name} / "
                   f"{budget.program.name} — {budget.amount} {budget.currency}"),
         "url": f"/contracts/budgets/{budget.pk}",
     }

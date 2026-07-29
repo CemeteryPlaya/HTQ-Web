@@ -133,10 +133,16 @@ class Program(models.Model):
 
 
 class Administrator(models.Model):
-    """Администратор бюджета — физическое лицо, держатель бюджетных строк.
+    """Администратор бюджета — держатель бюджетных строк.
 
     Денег на этой записи НЕТ: суммы лежат на ``Budget``. Это и есть отличие
     варианта B от «плоского» варианта A, где сумма была бы здесь.
+
+    Запись опознаётся ПРОЕКТОМ и СТРАНОЙ, а не именем человека: ФИО здесь
+    было, но заказчик его снял — бюджет ведётся по проекту, а кто именно им
+    занимается, меняется чаще, чем сам проект, и в бюджетной строке этого
+    знать не нужно. Кто отвечает за запись в платформе, при необходимости
+    говорит ``user_id``.
 
     ``user_id`` — необязательная ссылка на учётную запись платформы. Хранится
     голым ``IntegerField``, а не FK: ``apps.users`` — соседняя аппка, и
@@ -146,7 +152,6 @@ class Administrator(models.Model):
     администратор бюджета».
     """
 
-    full_name = models.CharField(max_length=200)
     country = models.ForeignKey(Country, on_delete=models.PROTECT,
                                 related_name="administrators")
     project_name = models.CharField(max_length=200)
@@ -156,12 +161,25 @@ class Administrator(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
-        ordering = ("full_name",)
+        ordering = ("project_name",)
         verbose_name = "Администратор бюджета"
         verbose_name_plural = "Администраторы бюджета"
 
     def __str__(self) -> str:
-        return f"{self.full_name} ({self.project_name})"
+        return f"{self.project_name} {self.country.name}"
+
+    # Читаемое имя записи собирается ЗДЕСЬ и берётся отсюда всеми, кто его
+    # показывает (``AdministratorRead.display_name``, ``administrator_name``
+    # в карточках бюджета и договора, заголовки signoff). Иначе формат
+    # «проект + страна» пришлось бы повторить в пяти местах и он разъехался
+    # бы при первой же правке.
+    @property
+    def display_name(self) -> str:
+        return str(self)
+
+    @property
+    def country_name(self) -> str:
+        return self.country.name
 
 
 class Budget(signoff.Approvable, models.Model):

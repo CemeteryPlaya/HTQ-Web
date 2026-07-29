@@ -74,7 +74,7 @@ def _lock_budget(budget_id: int) -> Budget:
     ``select_for_update()`` в Django поднимает ``TransactionManagementError``.
     """
     budget = (Budget.objects.select_for_update()
-              .select_related("administrator", "program")
+              .select_related("administrator", "administrator__country", "program")
               .filter(pk=budget_id).first())
     if budget is None:
         raise Http404("Бюджет не найден")
@@ -152,7 +152,8 @@ def list_agreements(*, budget_id: int | None = None, counterparty_id: int | None
                     administrator_id: int | None = None, program_id: int | None = None,
                     status: str | None = None, period_year: int | None = None):
     query = Agreement.objects.select_related(
-        "budget", "budget__administrator", "budget__program", "counterparty",
+        "budget", "budget__administrator", "budget__administrator__country",
+        "budget__program", "counterparty",
     )
     if budget_id is not None:
         query = query.filter(budget_id=budget_id)
@@ -171,7 +172,9 @@ def list_agreements(*, budget_id: int | None = None, counterparty_id: int | None
 
 def get_agreement_or_404(agreement_id: int) -> Agreement:
     row = (Agreement.objects
-           .select_related("budget", "budget__administrator", "budget__program", "counterparty")
+           .select_related("budget", "budget__administrator",
+                           "budget__administrator__country",
+                           "budget__program", "counterparty")
            .filter(pk=agreement_id).first())
     if row is None:
         raise Http404("Договор не найден")
@@ -190,7 +193,7 @@ def serialize_agreement(agreement: Agreement) -> dict:
         # рисует их в списке. Читаются они всегда через бюджетную строку, так
         # что разойтись с ней не могут.
         "administrator_id": budget.administrator_id,
-        "administrator_name": budget.administrator.full_name,
+        "administrator_name": budget.administrator.display_name,
         "program_id": budget.program_id,
         "program_name": budget.program.name,
         "expense_item": budget.program.expense_item,
@@ -231,8 +234,11 @@ def create_agreement(*, number: str, name: str, budget_id: int, counterparty_id:
 
     with conflict_as(f"Договор с номером {number} уже зарегистрирован"):
         return Agreement.objects.create(
-            number=number, name=name, budget_id=budget_id,
-            counterparty_id=counterparty_id, amount=amount,
+            # Объектами, а не id: обе записи уже загружены проверками выше
+            # (`_lock_budget` тянет и администратора со страной), и ответ
+            # соберётся из закэшированных связей, а не новыми запросами.
+            number=number, name=name, budget=budget,
+            counterparty=counterparty, amount=amount,
             payment_type=payment_type, currency=currency,
             signed_date=signed_date, status=status, created_by=created_by,
         )

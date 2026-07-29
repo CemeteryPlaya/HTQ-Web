@@ -29,7 +29,7 @@ import type { BudgetFullCreatePayload } from '@/types/contracts';
  * Заявка на бюджет — одна форма на всё.
  *
  * Заполняющий вводит и сам бюджет, и справочники, от которых тот зависит:
- * администратора (ФИО, проект, страна) и программу (название, статья
+ * администратора (проект + страна) и программу (название, статья
  * расходов). Уходить в три отдельных экрана справочников и возвращаться не
  * нужно — в этом весь смысл страницы.
  *
@@ -69,8 +69,10 @@ const BudgetCreate = () => {
   });
 
   // ─── Состояние формы ───────────────────────────────────────────────────
+  // Комбобокс администратора ДЕРЖИТ название проекта: после снятия ФИО
+  // подпись записи — это «проект страна», и отдельное поле «название
+  // проекта» рядом с ним было бы вторым вводом одного и того же значения.
   const [administrator, setAdministrator] = useState<ReferenceValue>(null);
-  const [projectName, setProjectName] = useState('');
   const [country, setCountry] = useState<ReferenceValue>(null);
   const [isoCode, setIsoCode] = useState('');
 
@@ -99,18 +101,19 @@ const BudgetCreate = () => {
   const administratorLocked = Boolean(existingAdministrator);
   const programLocked = Boolean(existingProgram);
 
-  const effectiveProjectName = existingAdministrator?.project_name ?? projectName;
   const effectiveExpenseItem = existingProgram?.expense_item ?? expenseItem;
+  // У существующей записи страна приходит с ней самой (`country_name`) —
+  // искать её в справочнике по id больше не нужно.
   const effectiveCountryName = existingAdministrator
-    ? (countries.find((row) => row.id === existingAdministrator.country_id)?.name ?? '—')
+    ? existingAdministrator.country_name
     : country?.label ?? '';
 
   const administratorOptions = useMemo(
     () =>
       administrators.map((row) => ({
         id: row.id,
-        label: row.full_name,
-        hint: row.project_name,
+        label: row.project_name,
+        hint: row.country_name,
       })),
     [administrators],
   );
@@ -128,10 +131,9 @@ const BudgetCreate = () => {
     const next: Errors = {};
 
     if (!administrator) {
-      next.administrator = 'Выберите администратора или впишите нового';
-    } else if (administrator.kind === 'new') {
-      if (!projectName.trim()) next.projectName = 'Укажите название проекта';
-      if (!country) next.country = 'Выберите страну или впишите новую';
+      next.administrator = 'Выберите проект или впишите новый';
+    } else if (administrator.kind === 'new' && !country) {
+      next.country = 'Выберите страну или впишите новую';
     }
 
     if (!program) {
@@ -159,8 +161,7 @@ const BudgetCreate = () => {
       administrator!.kind === 'existing'
         ? { id: administrator!.id }
         : {
-            full_name: administrator!.label,
-            project_name: projectName.trim(),
+            project_name: administrator!.label.trim(),
             country:
               country!.kind === 'existing'
                 ? { id: country!.id }
@@ -248,48 +249,34 @@ const BudgetCreate = () => {
             <CardHeader>
               <CardTitle>Администратор бюджета</CardTitle>
               <CardDescription>
-                Держатель бюджетной строки. Денег на самой записи нет — суммы
-                живут на бюджетах, и у одного администратора их может быть
-                несколько под разные программы.
+                Держатель бюджетной строки — проект в стране. Денег на самой
+                записи нет: суммы живут на бюджетах, и у одного проекта их
+                может быть несколько под разные программы.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="administrator">ФИО администратора</Label>
-                <ReferenceCombobox
-                  id="administrator"
-                  options={administratorOptions}
-                  value={administrator}
-                  onChange={(next) => {
-                    setAdministrator(next);
-                    // Сброс на смену: поля ниже относятся к прежнему выбору.
-                    if (next?.kind !== 'new') {
-                      setProjectName('');
-                      setCountry(null);
-                      setIsoCode('');
-                    }
-                  }}
-                  placeholder="Выберите или впишите нового"
-                  searchPlaceholder="Поиск по ФИО или проекту…"
-                  createLabel={(input) => `Создать администратора «${input}»`}
-                  loading={administratorsLoading}
-                  invalid={Boolean(errors.administrator)}
-                />
-                {fieldError('administrator')}
-              </div>
-
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <Label htmlFor="project-name">Название проекта</Label>
-                  <Input
-                    id="project-name"
-                    value={effectiveProjectName}
-                    onChange={(event) => setProjectName(event.target.value)}
-                    disabled={administratorLocked || !administrator}
-                    placeholder="Проект А"
-                    className={errors.projectName ? 'border-destructive' : undefined}
+                  <Label htmlFor="administrator">Название проекта</Label>
+                  <ReferenceCombobox
+                    id="administrator"
+                    options={administratorOptions}
+                    value={administrator}
+                    onChange={(next) => {
+                      setAdministrator(next);
+                      // Сброс на смену: страна относится к прежнему выбору.
+                      if (next?.kind !== 'new') {
+                        setCountry(null);
+                        setIsoCode('');
+                      }
+                    }}
+                    placeholder="Выберите или впишите новый"
+                    searchPlaceholder="Поиск по проекту или стране…"
+                    createLabel={(input) => `Создать проект «${input}»`}
+                    loading={administratorsLoading}
+                    invalid={Boolean(errors.administrator)}
                   />
-                  {fieldError('projectName')}
+                  {fieldError('administrator')}
                 </div>
 
                 <div>
@@ -331,8 +318,8 @@ const BudgetCreate = () => {
 
               {administratorLocked && (
                 <p className="text-xs text-muted-foreground">
-                  Проект и страна принадлежат выбранной записи справочника —
-                  чтобы изменить их, правьте самого администратора, а не заявку.
+                  Страна принадлежит выбранной записи справочника — чтобы
+                  изменить её, правьте самого администратора, а не заявку.
                 </p>
               )}
             </CardContent>
@@ -457,8 +444,9 @@ const BudgetCreate = () => {
             <CardContent className="text-sm space-y-1">
               {administrator?.kind === 'new' && (
                 <p>
-                  Администратор <strong>{administrator.label}</strong>
-                  {projectName && <> — проект «{projectName}»</>}
+                  Администратор бюджета — проект{' '}
+                  <strong>{administrator.label}</strong>
+                  {country && <> в стране «{country.label}»</>}
                 </p>
               )}
               {country?.kind === 'new' && administrator?.kind === 'new' && (
@@ -482,7 +470,7 @@ const BudgetCreate = () => {
                 {(existingAdministrator || administrator?.kind === 'new') && (
                   <>
                     {' '}
-                    для {existingAdministrator?.full_name ?? administrator?.label}
+                    для {existingAdministrator?.display_name ?? administrator?.label}
                   </>
                 )}
               </p>

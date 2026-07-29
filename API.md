@@ -578,7 +578,7 @@ Every path is registered in **both** the slashed and bare spelling
 | `/api/contracts/v1/countries/{id}`               | GET, PATCH, DELETE |                    |
 | `/api/contracts/v1/programs`                     | GET, POST | «Программа» + «Статья расходов» in one row; `?is_active=` |
 | `/api/contracts/v1/programs/{id}`                | GET, PATCH, DELETE |                    |
-| `/api/contracts/v1/administrators`               | GET, POST | «Администратор бюджета» — a person, holds no money; `?is_active=&country_id=` |
+| `/api/contracts/v1/administrators`               | GET, POST | «Администратор бюджета» — a **project in a country** (no person's name, holds no money). Reads carry `country_name` + `display_name` (`"<project> <country>"`); `?is_active=&country_id=` |
 | `/api/contracts/v1/administrators/{id}`          | GET, PATCH, DELETE |                    |
 | `/api/contracts/v1/budgets`                      | GET, POST | Budget lines; `?administrator_id=&program_id=&period_year=&status=&approval_state=` |
 | `/api/contracts/v1/budgets/full`                 | POST   | Budget + its reference rows in one transaction (the "заявка на бюджет" form) |
