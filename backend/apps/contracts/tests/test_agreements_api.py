@@ -7,6 +7,7 @@
 from decimal import Decimal
 
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 
 from apps.contracts.models import Agreement, AgreementStatus, BudgetStatus, CounterpartyStatus
@@ -283,6 +284,71 @@ def test_reading_needs_a_token_creating_does_not_need_an_admin():
     resp = post_json(client, f"{BASE}/agreements",
                      _agreement_body(budget, counterparty), **auth(token()))
     assert resp.status_code == 201, resp.content
+
+
+def _upload(client, agreement_id: int, tok: str):
+    return client.post(
+        f"{BASE}/agreements/{agreement_id}/file",
+        {"file": SimpleUploadedFile("scan.pdf", b"%PDF-1.4", "application/pdf")},
+        **auth(tok),
+    )
+
+
+@pytest.fixture
+def stub_storage(monkeypatch):
+    """Хранилище подменяется: проверяются права и запись ``file_id``, а не
+    работоспособность MinIO — за неё отвечают тесты media_files."""
+    monkeypatch.setattr(
+        "apps.contracts.services.agreement_service.media.store_file",
+        lambda **kw: {"id": "stored-1"},
+    )
+
+
+@pytest.mark.django_db
+def test_the_author_attaches_a_scan_to_their_own_draft(stub_storage):
+    """Право завести договор без права приложить к нему скан — половина
+    права: на согласование уходит договор с файлом."""
+    budget = make_budget()
+    agreement = make_agreement(budget=budget, status=AgreementStatus.DRAFT,
+                               created_by=7)
+
+    resp = _upload(Client(), agreement.pk, token())
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["file_id"] == "stored-1"
+
+
+@pytest.mark.django_db
+def test_a_stranger_cannot_attach_a_scan(stub_storage):
+    budget = make_budget()
+    agreement = make_agreement(budget=budget, status=AgreementStatus.DRAFT,
+                               created_by=999)
+
+    resp = _upload(Client(), agreement.pk, token())
+    assert resp.status_code == 403
+    assert "автор договора или администратор" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_the_author_cannot_replace_the_scan_once_it_left_draft(stub_storage):
+    """Повторная загрузка ЗАМЕЩАЕТ ссылку, поэтому после отправки на
+    согласование подмена скана означала бы, что согласующие одобрили не тот
+    документ, который в итоге лежит в карточке."""
+    budget = make_budget()
+    agreement = make_agreement(budget=budget, status=AgreementStatus.ON_REVIEW,
+                               created_by=7)
+
+    resp = _upload(Client(), agreement.pk, token())
+    assert resp.status_code == 403
+    assert "только администратор" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_an_admin_attaches_a_scan_to_anyones_agreement(stub_storage):
+    budget = make_budget()
+    agreement = make_agreement(budget=budget, status=AgreementStatus.SIGNED,
+                               created_by=999)
+
+    assert _upload(Client(), agreement.pk, admin_token()).status_code == 200
 
 
 @pytest.mark.django_db
