@@ -11,17 +11,20 @@ from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 
-from apps.contracts.models import Counterparty
+from apps.contracts.models import Counterparty, CounterpartyStatus
 from apps.contracts.services.reference_service import (
+    ReferenceConflict,
     conflict_as,
     delete_protected,
     get_country_or_404,
     resolve_country_input,
 )
+from apps.signoff import interface as signoff
 
 
 def list_counterparties(*, search: str | None = None, status: str | None = None,
-                        country_id: int | None = None):
+                        country_id: int | None = None,
+                        approval_state: str | None = None):
     query = Counterparty.objects.select_related("country")
     if search:
         # Один поисковый параметр на наименование и на БИН/ИИН: в реальном
@@ -33,6 +36,12 @@ def list_counterparties(*, search: str | None = None, status: str | None = None,
         query = query.filter(status=status)
     if country_id is not None:
         query = query.filter(country_id=country_id)
+    if approval_state is not None:
+        # Фильтр, а не жёсткое условие: реестр показывает и несогласованных
+        # контрагентов (иначе автор не увидел бы собственную карточку, пока
+        # она идёт по маршруту). Выбор контрагента в форме договора
+        # запрашивает approved сам.
+        query = query.filter(approval_state=approval_state)
     return list(query)
 
 
@@ -91,6 +100,24 @@ def update_counterparty(counterparty_id: int, **fields) -> Counterparty:
         with conflict_as("Контрагент с таким БИН/ИИН уже есть в реестре"):
             row.save()
     return row
+
+
+def submit_for_approval(counterparty_id: int, *, actor_id: int | None = None) -> dict:
+    """Отправить карточку контрагента на согласование.
+
+    Штатный путь отправки — общий ``POST /api/signoff/v1/processes`` админский
+    и предметных проверок не делает. Здесь она одна: заблокированного
+    контрагента согласовывать нечего, решение по нему уже принято и оно
+    отрицательное.
+    """
+    counterparty = get_counterparty_or_404(counterparty_id)
+    if counterparty.status == CounterpartyStatus.BLOCKED:
+        raise ReferenceConflict(
+            "Заблокированный контрагент на согласование не отправляется")
+    return signoff.start_process(
+        subject_type=Counterparty.SIGNOFF_SUBJECT_TYPE,
+        subject_id=counterparty.pk, initiator_id=actor_id, enrich=True,
+    )
 
 
 def delete_counterparty(counterparty_id: int) -> None:

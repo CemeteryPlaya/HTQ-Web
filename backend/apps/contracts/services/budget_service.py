@@ -9,7 +9,7 @@ from __future__ import annotations
 from django.db import transaction
 from django.http import Http404
 
-from apps.contracts.models import Administrator, Budget, Program
+from apps.contracts.models import Administrator, Budget, BudgetStatus, Program
 from apps.contracts.services import budget_calc
 from apps.contracts.services.reference_service import (
     ReferenceConflict,
@@ -19,15 +19,24 @@ from apps.contracts.services.reference_service import (
     get_program_or_404,
     resolve_country_input,
 )
+from apps.signoff import interface as signoff
 
 
 def list_budgets(*, administrator_id: int | None = None, program_id: int | None = None,
-                 period_year: int | None = None, status: str | None = None) -> list[dict]:
+                 period_year: int | None = None, status: str | None = None,
+                 approval_state: str | None = None) -> list[dict]:
     """Список бюджетов, уже с ``allocated``/``committed``/``remaining``.
 
     Занятость всех строк берётся ОДНИМ агрегирующим запросом
     (``budget_calc.committed_map``), а не по запросу на строку — иначе
     список из 200 бюджетов означал бы 201 запрос.
+
+    ``approval_state`` — фильтр, а не жёсткое условие: список бюджетов
+    показывает и несогласованные строки, иначе автор не увидел бы
+    собственную заявку, пока она идёт по маршруту. Выпадающий список
+    «источник денег» в форме договора запрашивает
+    ``approval_state=approved`` сам — там несогласованная строка не вариант
+    (та же проверка на бэкенде: ``agreement_service._validate_context``).
     """
     query = Budget.objects.select_related("administrator", "program")
     if administrator_id is not None:
@@ -38,6 +47,8 @@ def list_budgets(*, administrator_id: int | None = None, program_id: int | None 
         query = query.filter(period_year=period_year)
     if status is not None:
         query = query.filter(status=status)
+    if approval_state is not None:
+        query = query.filter(approval_state=approval_state)
 
     budgets = list(query)
     committed = budget_calc.committed_map([b.pk for b in budgets])
@@ -67,6 +78,7 @@ def serialize_budget(budget: Budget, *, committed=None) -> dict:
         "currency": budget.currency,
         "period_year": budget.period_year,
         "status": budget.status,
+        "approval_state": budget.approval_state,
         "note": budget.note,
         "committed": totals["committed"],
         "remaining": totals["remaining"],
@@ -176,6 +188,26 @@ def update_budget(budget_id: int, **fields) -> Budget:
         with conflict_as("Бюджет на эту связку «администратор / программа / год» уже существует"):
             budget.save()
     return budget
+
+
+def submit_for_approval(budget_id: int, *, actor_id: int | None = None) -> dict:
+    """Отправить бюджетную строку на согласование.
+
+    Штатный путь отправки — общий ``POST /api/signoff/v1/processes`` админский
+    и предметных проверок не делает. Здесь она одна: закрытую строку
+    согласовывать нечего, её жизненный цикл уже завершён.
+
+    Повторная отправка уже идущего согласования отбивается самим движком
+    (``AlreadyInApproval`` → 409): частичный уникальный индекс на
+    ``(subject_type, subject_id)`` при ``state = pending``.
+    """
+    budget = get_budget_or_404(budget_id)
+    if budget.status != BudgetStatus.ACTIVE:
+        raise ReferenceConflict(
+            "Закрытая бюджетная строка на согласование не отправляется")
+    return signoff.start_process(subject_type=Budget.SIGNOFF_SUBJECT_TYPE,
+                                 subject_id=budget.pk, initiator_id=actor_id,
+                                 enrich=True)
 
 
 def delete_budget(budget_id: int) -> None:

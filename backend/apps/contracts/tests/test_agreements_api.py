@@ -269,7 +269,10 @@ def test_only_drafts_can_be_deleted():
 # ── Права ────────────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_reading_needs_a_token_writing_needs_admin():
+def test_reading_needs_a_token_creating_does_not_need_an_admin():
+    """Заводить договор может любой сотрудник — контролем служит
+    согласование (``apps.signoff``), а не админский флаг. Правка и удаление
+    при этом остались административными (проверяется ниже)."""
     budget = make_budget()
     counterparty = make_counterparty(country=budget.administrator.country)
     client = Client()
@@ -279,7 +282,20 @@ def test_reading_needs_a_token_writing_needs_admin():
 
     resp = post_json(client, f"{BASE}/agreements",
                      _agreement_body(budget, counterparty), **auth(token()))
-    assert resp.status_code == 403
+    assert resp.status_code == 201, resp.content
+
+
+@pytest.mark.django_db
+def test_editing_and_deleting_an_agreement_still_need_an_admin():
+    budget = make_budget()
+    agreement = make_agreement(budget=budget, status=AgreementStatus.DRAFT)
+    client = Client()
+
+    edited = patch_json(client, f"{BASE}/agreements/{agreement.pk}",
+                        {"name": "Другое"}, **auth(token()))
+    assert edited.status_code == 403
+    assert client.delete(f"{BASE}/agreements/{agreement.pk}",
+                         **auth(token())).status_code == 403
 
 
 @pytest.mark.django_db

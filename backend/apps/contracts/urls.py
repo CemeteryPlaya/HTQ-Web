@@ -48,6 +48,8 @@ urlpatterns = [
     # сломается при добавлении соседних вложенных маршрутов.
     path("budgets/<int:budget_id>/agreements", views.BudgetAgreementsView.as_view()),
     path("budgets/<int:budget_id>/agreements/", views.BudgetAgreementsView.as_view()),
+    path("budgets/<int:budget_id>/submit", views.BudgetSubmitView.as_view()),
+    path("budgets/<int:budget_id>/submit/", views.BudgetSubmitView.as_view()),
     # Составное создание (форма-заявка). Регистрируется ДО `<int:budget_id>`,
     # иначе "full" попал бы в конвертер int и дал бы 404 вместо маршрута.
     path("budgets/full", views.BudgetFullCreateView.as_view()),
@@ -60,6 +62,8 @@ urlpatterns = [
     # ── Реестр контрактов (контрагенты) ──
     # Составное создание (форма). До `<int:counterparty_id>` — иначе "full"
     # ушло бы в int-конвертер и дало 404.
+    path("counterparties/<int:counterparty_id>/submit", views.CounterpartySubmitView.as_view()),
+    path("counterparties/<int:counterparty_id>/submit/", views.CounterpartySubmitView.as_view()),
     path("counterparties/full", views.CounterpartyFullCreateView.as_view()),
     path("counterparties/full/", views.CounterpartyFullCreateView.as_view()),
     path("counterparties", views.CounterpartyCollectionView.as_view()),
@@ -68,6 +72,8 @@ urlpatterns = [
     path("counterparties/<int:counterparty_id>/", views.CounterpartyDetailView.as_view()),
 
     # ── Договоры ──
+    path("agreements/<int:agreement_id>/submit", views.AgreementSubmitView.as_view()),
+    path("agreements/<int:agreement_id>/submit/", views.AgreementSubmitView.as_view()),
     path("agreements/<int:agreement_id>/status", views.AgreementStatusView.as_view()),
     path("agreements/<int:agreement_id>/status/", views.AgreementStatusView.as_view()),
     path("agreements/<int:agreement_id>/file", views.AgreementFileView.as_view()),

@@ -18,6 +18,7 @@ from apps.contracts.models import (
     AgreementStatus,
     Budget,
     BudgetStatus,
+    Counterparty,
     CounterpartyStatus,
 )
 from apps.contracts.services import budget_calc
@@ -27,6 +28,7 @@ from apps.contracts.services.reference_service import ReferenceConflict, conflic
 # interface — прямой импорт apps.media_files.models/services запрещён
 # (apps/core/tests/test_app_isolation.py).
 from apps.media_files import interface as media
+from apps.signoff import interface as signoff
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +40,11 @@ class AgreementRuleViolation(Exception):
 # Разрешённые переходы статуса. Чего здесь нет — то запрещено; «исполнен» и
 # «расторгнут» терминальны.
 #
-# Это НЕ движок согласования: apps.approvals с его шаблонами, версиями
-# workflow и маршрутизацией по ролям сюда сознательно не подключён (первая
-# фаза). Когда подключат, эта таблица станет его внутренним делом, а здесь
-# останется только сам факт «статус сменился».
+# Таблица осталась за этой аппкой и после подключения ``apps.signoff``:
+# движок согласования знает только «согласовано / отклонено», а какой статус
+# договора этому соответствует и разрешён ли такой переход — вопрос предметный.
+# Переводит договор по ней ``approval_hooks``, вызываемый движком из его
+# транзакции.
 ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     AgreementStatus.DRAFT: frozenset({AgreementStatus.ON_REVIEW,
                                       AgreementStatus.TERMINATED}),
@@ -78,6 +81,22 @@ def _lock_budget(budget_id: int) -> Budget:
     return budget
 
 
+def approval_required_for(subject_type: str) -> bool:
+    """Действует ли гейт согласования для этого типа объектов.
+
+    Проверка «объект согласован?» включается ТОЛЬКО там, где заведён активный
+    маршрут. Иначе установка без единого настроенного маршрута сломалась бы
+    целиком: все существующие бюджеты и контрагенты имеют
+    ``approval_state = draft``, и безусловная проверка запретила бы заводить
+    договоры вообще — при том что согласование никто не включал.
+
+    Обратная сторона осознанная: заведение маршрута на бюджеты — действие с
+    последствиями, после него несогласованные строки перестают быть
+    источником денег. Это и есть смысл включения согласования.
+    """
+    return signoff.has_active_route(subject_type)
+
+
 def _validate_context(budget: Budget, counterparty, currency: str, *,
                       check_budget_status: bool = True,
                       check_counterparty_status: bool = True) -> None:
@@ -90,17 +109,36 @@ def _validate_context(budget: Budget, counterparty, currency: str, *,
     договор целиком: нельзя было бы исправить даже опечатку в названии, а
     ровно в такой ситуации правки и требуются чаще всего.
 
+    Согласование бюджета и контрагента проверяется ТАМ ЖЕ и по той же
+    причине: несогласованная строка не должна становиться источником денег,
+    но и отозванное задним числом согласование не должно запирать правку
+    названия у давно заключённого договора.
+
     Валюта проверяется всегда: она обязана совпадать с бюджетной строкой в
     любой момент, иначе «остаток» станет суммой разных валют.
     """
-    if check_budget_status and budget.status != BudgetStatus.ACTIVE:
-        raise AgreementRuleViolation(
-            "Бюджетная строка закрыта — новые договоры к ней не привязываются")
-    if check_counterparty_status and counterparty.status != CounterpartyStatus.ACTIVE:
-        raise AgreementRuleViolation(
-            f"Контрагент «{counterparty.name}» в статусе {counterparty.status} — "
-            "договор с ним заключить нельзя"
-        )
+    if check_budget_status:
+        if budget.status != BudgetStatus.ACTIVE:
+            raise AgreementRuleViolation(
+                "Бюджетная строка закрыта — новые договоры к ней не привязываются")
+        if (not budget.is_approved
+                and approval_required_for(Budget.SIGNOFF_SUBJECT_TYPE)):
+            raise AgreementRuleViolation(
+                "Бюджетная строка не согласована — деньги с неё расходовать "
+                "нельзя, отправьте её на согласование"
+            )
+    if check_counterparty_status:
+        if counterparty.status != CounterpartyStatus.ACTIVE:
+            raise AgreementRuleViolation(
+                f"Контрагент «{counterparty.name}» в статусе {counterparty.status} — "
+                "договор с ним заключить нельзя"
+            )
+        if (not counterparty.is_approved
+                and approval_required_for(Counterparty.SIGNOFF_SUBJECT_TYPE)):
+            raise AgreementRuleViolation(
+                f"Контрагент «{counterparty.name}» не согласован — "
+                "договор с ним заключить нельзя"
+            )
     if currency != budget.currency:
         # Конвертации в первой фазе нет: договор в USD, списанный с бюджета
         # в KZT, сделал бы «остаток» суммой разных валют — числом, которое
@@ -166,6 +204,7 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "file_id": agreement.file_id,
         "signed_date": agreement.signed_date,
         "status": agreement.status,
+        "approval_state": agreement.approval_state,
         "created_by": agreement.created_by,
         "created_at": agreement.created_at,
         "updated_at": agreement.updated_at,
@@ -271,6 +310,40 @@ def change_status(agreement_id: int, new_status: str, *, actor_id: int | None = 
     logger.info("agreement %s: %s -> %s by user=%s",
                 agreement.number, current, new_status, actor_id)
     return agreement
+
+
+@transaction.atomic
+def submit_for_approval(agreement_id: int, *, actor_id: int | None = None) -> dict:
+    """Отправить договор на согласование. Возвращает карточку процесса.
+
+    Штатный путь отправки — в отличие от общего ``POST /api/signoff/v1/processes``,
+    который принимает любой ``subject_id`` любого типа и потому админский.
+    Здесь проверки предметные, и они обязаны пройти ДО запуска процесса:
+    договор в статусе ``on_review`` уже занимает бюджет
+    (``budget_calc.COMMITTING_STATUSES``), а именно в этот статус его
+    переведёт ``approval_hooks._agreement_on_started``.
+
+    Всё в одной транзакции с ``SELECT … FOR UPDATE`` на бюджетной строке:
+    иначе два договора, одновременно отправленные на согласование, оба
+    увидели бы один и тот же остаток и вместе вышли бы за лимит.
+    """
+    agreement = get_agreement_or_404(agreement_id)
+    if agreement.status != AgreementStatus.DRAFT:
+        raise AgreementRuleViolation(
+            f"На согласование отправляется черновик; договор в статусе "
+            f"«{agreement.get_status_display()}»"
+        )
+
+    budget = _lock_budget(agreement.budget_id)
+    _validate_context(budget, agreement.counterparty, agreement.currency)
+    budget_calc.check_capacity(budget, agreement.amount,
+                               exclude_agreement_id=agreement.pk)
+
+    # enrich=True: карточка уходит прямо в HTTP-ответ, и фронтенду после
+    # отправки нужно показать «кто согласует», а не голые user_id.
+    return signoff.start_process(subject_type=Agreement.SIGNOFF_SUBJECT_TYPE,
+                                 subject_id=agreement.pk, initiator_id=actor_id,
+                                 enrich=True)
 
 
 def attach_file(agreement_id: int, *, data: bytes, filename: str, mime: str,

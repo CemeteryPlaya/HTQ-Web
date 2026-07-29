@@ -12,12 +12,20 @@ django-вьюха ``View``): ``dispatch`` разводит методы сам, 
 пометодно через ``method_decorator``, потому что режим авторизации у
 методов одного URL разный (GET — любой токен, POST/PATCH/DELETE — админ).
 
-Права: читать справочники и договоры может любой аутентифицированный
-пользователь (``auth="jwt"``), писать — только администратор платформы
-(``admin=True``). Модуль про деньги; заводить бюджеты и договоры «всем
-подряд» нельзя, а более тонкой ролевой модели («финансист», «инициатор») в
-платформе пока нет — ``htqweb.authn.rbac.require_admin`` это единственный
-существующий уровень. Появятся роли — правится только этот файл.
+Права. Читать — любой аутентифицированный пользователь (``auth="jwt"``).
+С записью два уровня:
+
+- **Создание и отправка на согласование** бюджета, контрагента и договора —
+  ``auth="jwt"``. Контролем служит согласование, а не админский флаг: если
+  завести бюджет может только администратор, маршрут из трёх этапов над
+  бюджетами нечего согласовывать. Заявку подаёт сотрудник, решение принимают
+  названные в маршруте люди (``apps.signoff``).
+- **Правка, удаление, смена статуса, загрузка файла и весь справочный слой**
+  (страны, программы, администраторы бюджета) — по-прежнему ``admin=True``.
+
+Более тонкой ролевой модели («финансист», «инициатор») в платформе нет:
+``htqweb.authn.rbac.require_admin`` — единственный существующий уровень.
+Появятся роли — правится только этот файл.
 """
 
 from __future__ import annotations
@@ -25,6 +33,7 @@ from __future__ import annotations
 from django.http import Http404, HttpResponse
 from django.utils.decorators import method_decorator
 
+from apps.signoff import interface as signoff
 from htqweb.http import ApiView, api_view, json_error
 
 from . import schemas
@@ -41,7 +50,13 @@ from .services.reference_service import ReferenceConflict
 # Конфликты доменного уровня, которые вьюха переводит в 409. Собраны в один
 # кортеж, чтобы каждый `except` не перечислял их заново и не разъезжался с
 # соседними при добавлении четвёртого.
-CONFLICTS = (ReferenceConflict, AgreementRuleViolation, BudgetExceeded)
+#
+# ``signoff.SignoffError`` — сюда же: «маршрут не настроен», «объект уже на
+# согласовании», «в этапе не осталось активных согласующих» — это ровно
+# такие же конфликты состояния, и различать их для фронтенда незачем, ему
+# нужен текст. Импортируется из signoff.interface (правило границ).
+CONFLICTS = (ReferenceConflict, AgreementRuleViolation, BudgetExceeded,
+             signoff.SignoffError, signoff.UnknownSubject)
 
 
 class ContractsView(ApiView):
@@ -85,9 +100,11 @@ class ContractsView(ApiView):
 read = method_decorator(api_view(methods=("GET",), auth="jwt"))
 
 
-def write(method: str, body=None, status: int = 200):
+def write(method: str, body=None, status: int = 200, admin: bool = True):
+    """Пишущий метод. ``admin=True`` по умолчанию — снимается точечно там,
+    где заявку подаёт сотрудник, а решение принимает согласование."""
     return method_decorator(api_view(methods=(method,), auth="jwt",
-                                     body=body, status=status, admin=True))
+                                     body=body, status=status, admin=admin))
 
 
 # DELETE отдаёт 204 без тела — конвенция репозитория (apps/cms/views.py).
@@ -234,10 +251,11 @@ class BudgetCollectionView(ContractsView):
             program_id=self.int_param("program_id"),
             period_year=self.int_param("period_year"),
             status=self.str_param("status"),
+            approval_state=self.str_param("approval_state"),
         )
         return [schemas.BudgetRead.model_validate(row) for row in rows]
 
-    @write("POST", body=schemas.BudgetCreate, status=201)
+    @write("POST", body=schemas.BudgetCreate, status=201, admin=False)
     def post(self, request, data: schemas.BudgetCreate):
         try:
             budget = budget_svc.create_budget(**data.model_dump())
@@ -255,7 +273,7 @@ class BudgetFullCreateView(ContractsView):
     половина полей которого всегда пустая.
     """
 
-    @write("POST", body=schemas.BudgetFullCreate, status=201)
+    @write("POST", body=schemas.BudgetFullCreate, status=201, admin=False)
     def post(self, request, data: schemas.BudgetFullCreate):
         try:
             # Схемы передаются объектами, а не через model_dump(): сервис
@@ -294,6 +312,45 @@ class BudgetDetailView(ContractsView):
         return HttpResponse(status=204)
 
 
+class SubmitView(ContractsView):
+    """База трёх эндпоинтов «отправить на согласование».
+
+    Отдельная база, потому что все три отличаются одной строкой — какой
+    сервис позвать, — а общего у них ровно то, что важно: права
+    (``admin=False``, заявку подаёт сотрудник), перевод доменных конфликтов
+    в 409 и форма ответа — карточка процесса из ``apps.signoff``, а не
+    предметный объект. Фронтенду после отправки нужно показать «на каком
+    этапе и кто согласует», и это знает signoff.
+    """
+
+    def submitted(self, call):
+        try:
+            return call(actor_id=self.request.token.user_id)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+
+
+class BudgetSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, budget_id: int):
+        return self.submitted(
+            lambda **kw: budget_svc.submit_for_approval(budget_id, **kw))
+
+
+class CounterpartySubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, counterparty_id: int):
+        return self.submitted(
+            lambda **kw: cp_svc.submit_for_approval(counterparty_id, **kw))
+
+
+class AgreementSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, agreement_id: int):
+        return self.submitted(
+            lambda **kw: agr_svc.submit_for_approval(agreement_id, **kw))
+
+
 class BudgetAgreementsView(ContractsView):
     """Договоры одной бюджетной строки — то, из чего сложился её остаток."""
 
@@ -316,10 +373,11 @@ class CounterpartyCollectionView(ContractsView):
             search=self.str_param("search"),
             status=self.str_param("status"),
             country_id=self.int_param("country_id"),
+            approval_state=self.str_param("approval_state"),
         )
         return [schemas.CounterpartyRead.model_validate(row) for row in rows]
 
-    @write("POST", body=schemas.CounterpartyCreate, status=201)
+    @write("POST", body=schemas.CounterpartyCreate, status=201, admin=False)
     def post(self, request, data: schemas.CounterpartyCreate):
         try:
             row = cp_svc.create_counterparty(**data.model_dump())
@@ -331,7 +389,7 @@ class CounterpartyCollectionView(ContractsView):
 class CounterpartyFullCreateView(ContractsView):
     """Карточка контрагента вместе со страной — то, что шлёт форма."""
 
-    @write("POST", body=schemas.CounterpartyFullCreate, status=201)
+    @write("POST", body=schemas.CounterpartyFullCreate, status=201, admin=False)
     def post(self, request, data: schemas.CounterpartyFullCreate):
         try:
             row = cp_svc.create_counterparty_full(
@@ -386,7 +444,7 @@ class AgreementCollectionView(ContractsView):
         return [schemas.AgreementRead.model_validate(agr_svc.serialize_agreement(row))
                 for row in rows]
 
-    @write("POST", body=schemas.AgreementCreate, status=201)
+    @write("POST", body=schemas.AgreementCreate, status=201, admin=False)
     def post(self, request, data: schemas.AgreementCreate):
         try:
             agreement = agr_svc.create_agreement(created_by=request.token.user_id,

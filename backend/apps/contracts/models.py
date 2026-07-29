@@ -27,10 +27,31 @@
 Все внешние ключи — ``PROTECT``: справочник, на который ссылается живой
 бюджет или договор, удалить нельзя. Вывод из оборота — через
 ``is_active=False`` / ``status``.
+
+Согласование. ``Budget``, ``Counterparty`` и ``Agreement`` наследуют примесь
+``signoff.Approvable``: она добавляет в ИХ ЖЕ таблицы колонку
+``approval_state`` и связывает запись с движком ``apps.signoff`` через пару
+``(SIGNOFF_SUBJECT_TYPE, pk)``. Межаппного FK при этом не возникает —
+signoff адресует чужие строки строкой типа и числом, а не ключом
+(см. докстринг ``apps/signoff/models.py``). Импорт идёт через
+``apps.signoff.interface`` — единственную форму, разрешённую
+``apps/core/tests/test_app_isolation.py``.
+
+``status`` и ``approval_state`` — РАЗНЫЕ оси и обе остаются. ``status`` —
+жизненный цикл записи в предметной области («бюджет закрыт», «контрагент
+заблокирован», «договор расторгнут»); ``approval_state`` — где запись
+находится в согласовании. Договор может быть одновременно «согласован» по
+маршруту и «расторгнут» по существу. Единственное место, где оси связаны, —
+``approval_hooks``: у договора результат согласования двигает его
+``status`` по ``ALLOWED_TRANSITIONS``.
 """
 
 from django.db import models
 from django.db.models.functions import Now
+
+# Сосед — только через interface (apps/core/tests/test_app_isolation.py).
+# Из signoff здесь берётся ровно один класс — абстрактная примесь.
+from apps.signoff import interface as signoff
 
 
 class BudgetStatus(models.TextChoices):
@@ -143,13 +164,18 @@ class Administrator(models.Model):
         return f"{self.full_name} ({self.project_name})"
 
 
-class Budget(models.Model):
+class Budget(signoff.Approvable, models.Model):
     """Бюджетная строка — выделенная сумма на связку (администратор × программа × год).
 
     ``amount`` — сколько выделено. Сколько законтрактовано и сколько осталось,
     здесь НЕ хранится (см. докстринг модуля); эти числа считает
     ``services.budget_calc``.
+
+    Несогласованная строка не может быть источником денег для договора —
+    проверка в ``agreement_service._validate_context``.
     """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.budget"
 
     administrator = models.ForeignKey(Administrator, on_delete=models.PROTECT,
                                       related_name="budgets")
@@ -180,7 +206,7 @@ class Budget(models.Model):
         return f"{self.administrator_id}/{self.program_id} {self.period_year}: {self.amount} {self.currency}"
 
 
-class Counterparty(models.Model):
+class Counterparty(signoff.Approvable, models.Model):
     """Контрагент — «Реестр контрактов» в терминах заказчика.
 
     ``vat`` и ``contacts`` намеренно оставлены свободным текстом: заказчик
@@ -189,6 +215,8 @@ class Counterparty(models.Model):
     контактных лиц. Разворачивать текстовое поле в структуру дешевле, чем
     угадать структуру неверно и потом её ломать.
     """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.counterparty"
 
     # 12 у казахстанского БИН/ИИН, но справочник стран общий и иностранный
     # контрагент приходит с номером другой формы — поле шире номинала
@@ -216,7 +244,7 @@ class Counterparty(models.Model):
         return f"{self.name} ({self.bin_iin})"
 
 
-class Agreement(models.Model):
+class Agreement(signoff.Approvable, models.Model):
     """Договор — единственная транзакционная сущность модуля.
 
     Ссылается на ОДНУ бюджетную строку. В интерфейсе пользователь выбирает
@@ -232,7 +260,15 @@ class Agreement(models.Model):
 
     Первая фаза — один файл на договор. Дополнительные соглашения и акты
     потребуют дочерней таблицы ``AgreementFile``; это осознанно отложено.
+
+    Единственная из трёх согласуемых моделей, у которой результат
+    согласования имеет ДОМЕННОЕ последствие: он двигает ``status`` по
+    ``ALLOWED_TRANSITIONS`` (``draft`` → ``on_review`` → ``approved``, отказ
+    возвращает в ``draft``). Делает это ``approval_hooks``, а не сам движок:
+    таблица переходов — дело этой аппки.
     """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.agreement"
 
     number = models.CharField(max_length=100, unique=True)
     name = models.CharField(max_length=300)

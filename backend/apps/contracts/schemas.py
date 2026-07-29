@@ -206,6 +206,9 @@ class BudgetRead(BaseModel):
     currency: str
     period_year: int
     status: str
+    # Состояние согласования (примесь signoff.Approvable). Отдельная ось от
+    # ``status``: строка может быть активной и при этом несогласованной.
+    approval_state: str
     note: str
     committed: Decimal
     remaining: Decimal
@@ -269,6 +272,7 @@ class CounterpartyRead(BaseModel):
     contacts: str
     address: str
     status: str
+    approval_state: str
     created_at: datetime
     updated_at: datetime
 
@@ -331,6 +335,7 @@ class AgreementRead(BaseModel):
     file_id: Optional[str]
     signed_date: Optional[date]
     status: str
+    approval_state: str
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime

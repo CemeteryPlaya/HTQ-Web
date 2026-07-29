@@ -43,10 +43,16 @@ class AdministratorAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 class BudgetAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "administrator", "program", "period_year",
                     "amount", "currency", "committed_display", "remaining_display",
-                    "status")
-    list_filter = ("status", "period_year", "currency")
+                    "status", "approval_state")
+    list_filter = ("status", "approval_state", "period_year", "currency")
     search_fields = ("administrator__full_name", "program__name", "program__expense_item")
-    readonly_fields = ("created_at", "updated_at", "committed_display", "remaining_display")
+    readonly_fields = ("created_at", "updated_at", "committed_display",
+                       "remaining_display", "approval_state")
+    # ``approval_state`` показывается, но не правится: его единственный
+    # писатель — ``apps.signoff.services.engine``, и он пишет его в одной
+    # транзакции с состоянием процесса. Правка отсюда развела бы их, и
+    # «согласовано» на объекте перестало бы значить, что согласование было.
+
     list_select_related = ("administrator", "program")
 
     @admin.display(description="Законтрактовано")
@@ -60,20 +66,23 @@ class BudgetAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 @admin.register(Counterparty)
 class CounterpartyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "name", "bin_iin", "country", "vat", "status")
-    list_filter = ("status", "country")
+    list_display = ("id", "name", "bin_iin", "country", "vat", "status",
+                    "approval_state")
+    list_filter = ("status", "approval_state", "country")
     search_fields = ("name", "bin_iin", "address", "contacts")
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = ("created_at", "updated_at", "approval_state")
     list_select_related = ("country",)
 
 
 @admin.register(Agreement)
 class AgreementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "number", "name", "counterparty", "budget",
-                    "amount", "currency", "payment_type", "status", "signed_date")
-    list_filter = ("status", "payment_type", "currency", "budget__period_year")
+                    "amount", "currency", "payment_type", "status",
+                    "approval_state", "signed_date")
+    list_filter = ("status", "approval_state", "payment_type", "currency",
+                   "budget__period_year")
     search_fields = ("number", "name", "counterparty__name", "counterparty__bin_iin")
-    readonly_fields = ("created_at", "updated_at", "file_id")
+    readonly_fields = ("created_at", "updated_at", "file_id", "approval_state")
     raw_id_fields = ("budget", "counterparty")
     list_select_related = ("budget", "counterparty")
 
