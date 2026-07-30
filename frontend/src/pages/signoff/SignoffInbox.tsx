@@ -16,7 +16,6 @@
  */
 
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Inbox as InboxIcon, X } from 'lucide-react';
 
@@ -111,20 +110,16 @@ const SignoffInbox = () => {
               {items.map((item) => (
                 <TableRow key={item.task_id}>
                   <TableCell>
+                    {/* Заголовок ведёт на карточку процесса, а не на сам
+                        документ: там и решение, и меню раздела, и документ
+                        внутри. */}
                     <SubjectLink
                       title={item.subject_title}
                       url={item.subject_url}
                       subjectType={item.subject_type}
                       subjectId={item.subject_id}
+                      processId={item.process_id}
                     />
-                    <div className="text-xs text-muted-foreground">
-                      <Link
-                        to={`/signoff/processes/${item.process_id}`}
-                        className="hover:underline underline-offset-2"
-                      >
-                        согласование #{item.process_id}
-                      </Link>
-                    </div>
                   </TableCell>
                   <TableCell>
                     <div>{item.stage_name}</div>

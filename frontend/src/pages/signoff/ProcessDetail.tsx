@@ -1,5 +1,17 @@
 /**
- * Карточка согласования: ход по этапам, решения, отзыв.
+ * Карточка согласования: сам документ, ход по этапам, решения, отзыв.
+ *
+ * Документ показывается ЗДЕСЬ, а не по ссылке в чужой раздел: уходя на
+ * страницу бюджета, согласующий терял и боковое меню согласований, и кнопки
+ * решения — а именно за решением он и пришёл. Тело карточки предметной
+ * аппки берётся из `app/signoffSubjectViews` (там же объяснено, почему карта
+ * лежит в слое сборки приложения).
+ *
+ * Раскладка — как в системах документооборота: документ занимает основную
+ * колонку, а всё про процесс (кнопки, реквизиты отправки, этапы) собрано в
+ * липкой панели справа. Порядок отражает, чем человек занят: читает он
+ * документ, а маршрут подсматривает. На узком экране панель встаёт первой —
+ * кнопка решения важнее реквизитов.
  *
  * Две кнопки решения появляются здесь только тогда, когда у текущего
  * пользователя на АКТИВНОМ этапе есть свой запрос в состоянии «ожидает».
@@ -12,14 +24,16 @@
  * снова. Отказ — решение согласующего, и он отклоняет весь процесс сразу.
  */
 
-import { useMemo, useState } from 'react';
+import { Suspense, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Check, Loader2, Undo2, X } from 'lucide-react';
+import { ArrowLeft, Check, ExternalLink, Loader2, Undo2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { SIGNOFF_SUBJECT_VIEWS } from '@/app/signoffSubjectViews';
 import { SignoffShell } from '@/components/signoff/SignoffShell';
 import { SubjectLink } from '@/components/signoff/SubjectLink';
+import { isRoutableUrl } from '@/components/signoff/routable';
 import {
   DecisionDialog,
   type DecisionKind,
@@ -144,6 +158,12 @@ const ProcessDetail = () => {
     ? process.subject_title ?? `${process.subject_type} #${process.subject_id}`
     : '';
 
+  /** Чем показать сам документ. Тип, не заявивший представления, обходится
+   *  заголовком и ссылкой — карточка от этого не ломается. */
+  const SubjectView = process
+    ? SIGNOFF_SUBJECT_VIEWS[process.subject_type]
+    : undefined;
+
   return (
     <SignoffShell>
       <Link
@@ -165,139 +185,185 @@ const ProcessDetail = () => {
         </p>
       ) : (
         <>
-          <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-3xl font-bold">Согласование #{process.id}</h1>
-                <ProcessStateBadge
-                  state={process.state}
-                  label={labelMap(enums?.process_state)[process.state]}
-                />
-              </div>
-              <p className="text-sm text-muted-foreground mt-1">
-                Запущено {formatMoment(process.created_at)}
-                {process.finished_at
-                  && ` · завершено ${formatMoment(process.finished_at)}`}
-              </p>
+          <div className="mb-6 min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-3xl font-bold">Согласование #{process.id}</h1>
+              <ProcessStateBadge
+                state={process.state}
+                label={labelMap(enums?.process_state)[process.state]}
+              />
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              {myPendingTask && (
-                <>
-                  <Button
-                    onClick={() =>
-                      setTarget({
-                        taskId: myPendingTask.id,
-                        kind: 'approve',
-                        subjectLabel,
-                      })
-                    }
-                  >
-                    <Check className="mr-1.5 h-4 w-4" />
-                    Согласовать
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      setTarget({
-                        taskId: myPendingTask.id,
-                        kind: 'reject',
-                        subjectLabel,
-                      })
-                    }
-                  >
-                    <X className="mr-1.5 h-4 w-4" />
-                    Отклонить
-                  </Button>
-                </>
-              )}
-
-              {canCancel && (
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="ghost" disabled={cancel.isPending}>
-                      {cancel.isPending ? (
-                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                      ) : (
-                        <Undo2 className="mr-1.5 h-4 w-4" />
-                      )}
-                      Отозвать
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Отозвать согласование?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Уже принятые решения погаснут, а объект вернётся в
-                        черновик — его можно будет доработать и отправить
-                        заново. Это не отказ: причину указывать не нужно.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Не отзывать</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => cancel.mutate()}>
-                        Отозвать
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              )}
-            </div>
+            <p className="text-sm text-muted-foreground mt-1">
+              Запущено {formatMoment(process.created_at)}
+              {process.finished_at
+                && ` · завершено ${formatMoment(process.finished_at)}`}
+            </p>
           </div>
 
-          <Card className="mb-6">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Что согласуется</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <SubjectLink
-                title={process.subject_title}
-                url={process.subject_url}
-                subjectType={process.subject_type}
-                subjectId={process.subject_id}
-                className="text-base"
-              />
-              <p className="text-xs text-muted-foreground">
-                {process.subject_type} · id {process.subject_id}
-                {process.initiator_id !== null
-                  && ` · отправил пользователь #${process.initiator_id}`}
-              </p>
-              {!process.subject_title && (
-                <p className="text-xs text-muted-foreground">
-                  Заголовок объекта недоступен — его аппка не смогла его
-                  построить (тип не зарегистрирован или строка удалена).
-                </p>
-              )}
+          {/* Документ — основное содержимое, ход согласования — панель рядом.
+              Так это устроено в системах документооборота, и по делу: читают
+              документ, а маршрут подсматривают. Панель липкая — решение
+              должно быть под рукой на любой прокрутке длинного документа, —
+              и на узком экране встаёт ПЕРВОЙ: кнопки важнее реквизитов. */}
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
+            {/* `top-20` — под шапкой приложения: она `sticky top-0` и в
+                неприжатом состоянии занимает 5rem. Меньший отступ загнал бы
+                панель под неё. */}
+            <aside className="min-w-0 space-y-4 lg:order-2 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pb-2">
+              {(myPendingTask || canCancel) && (
+                <div className="flex flex-wrap gap-2">
+                  {myPendingTask && (
+                    <>
+                      <Button
+                        onClick={() =>
+                          setTarget({
+                            taskId: myPendingTask.id,
+                            kind: 'approve',
+                            subjectLabel,
+                          })
+                        }
+                      >
+                        <Check className="mr-1.5 h-4 w-4" />
+                        Согласовать
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          setTarget({
+                            taskId: myPendingTask.id,
+                            kind: 'reject',
+                            subjectLabel,
+                          })
+                        }
+                      >
+                        <X className="mr-1.5 h-4 w-4" />
+                        Отклонить
+                      </Button>
+                    </>
+                  )}
 
-              {readableFacts.length > 0 && (
-                <div className="pt-2">
-                  <p className="text-xs text-muted-foreground mb-1.5">
-                    Каким объект был на момент отправки — по этим значениям
-                    выбирались этапы. Позднейшие правки объекта состав
-                    согласующих уже не меняют.
-                  </p>
-                  <dl className="flex flex-wrap gap-x-4 gap-y-1">
-                    {readableFacts.map((fact) => (
-                      <div key={fact.key} className="flex items-baseline gap-1.5">
-                        <dt className="text-xs text-muted-foreground">
-                          {fact.label}:
-                        </dt>
-                        <dd className="text-xs font-medium">{fact.value}</dd>
-                      </div>
-                    ))}
-                  </dl>
+                  {canCancel && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="ghost" disabled={cancel.isPending}>
+                          {cancel.isPending ? (
+                            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Undo2 className="mr-1.5 h-4 w-4" />
+                          )}
+                          Отозвать
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Отозвать согласование?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Уже принятые решения погаснут, а объект вернётся в
+                            черновик — его можно будет доработать и отправить
+                            заново. Это не отказ: причину указывать не нужно.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Не отзывать</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => cancel.mutate()}>
+                            Отозвать
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
                 </div>
               )}
-            </CardContent>
-          </Card>
 
-          <h2 className="text-lg font-semibold mb-3">Ход согласования</h2>
-          <ProcessTimeline
-            process={process}
-            stageStateLabels={labelMap(enums?.stage_state)}
-            taskStateLabels={labelMap(enums?.task_state)}
-            fields={fields}
-          />
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Что согласуется</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-1">
+                  <SubjectLink
+                    title={process.subject_title}
+                    url={process.subject_url}
+                    subjectType={process.subject_type}
+                    subjectId={process.subject_id}
+                    className="text-base"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {process.subject_type} · id {process.subject_id}
+                    {process.initiator_id !== null
+                      && ` · отправил пользователь #${process.initiator_id}`}
+                  </p>
+                  {!process.subject_title && (
+                    <p className="text-xs text-muted-foreground">
+                      Заголовок объекта недоступен — его аппка не смогла его
+                      построить (тип не зарегистрирован или строка удалена).
+                    </p>
+                  )}
+
+                  {readableFacts.length > 0 && (
+                    <div className="pt-2">
+                      <p className="text-xs text-muted-foreground mb-1.5">
+                        Каким объект был на момент отправки — по этим значениям
+                        выбирались этапы. Позднейшие правки объекта состав
+                        согласующих уже не меняют.
+                      </p>
+                      <dl className="flex flex-wrap gap-x-4 gap-y-1">
+                        {readableFacts.map((fact) => (
+                          <div key={fact.key} className="flex items-baseline gap-1.5">
+                            <dt className="text-xs text-muted-foreground">
+                              {fact.label}:
+                            </dt>
+                            <dd className="text-xs font-medium">{fact.value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <div>
+                <h2 className="text-lg font-semibold mb-3">Ход согласования</h2>
+                <ProcessTimeline
+                  process={process}
+                  stageStateLabels={labelMap(enums?.stage_state)}
+                  taskStateLabels={labelMap(enums?.task_state)}
+                  fields={fields}
+                  compact
+                />
+              </div>
+            </aside>
+
+            <section className="min-w-0 lg:order-1">
+              <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-lg font-semibold">Документ</h2>
+                {isRoutableUrl(process.subject_url) && (
+                  <Link
+                    to={process.subject_url as string}
+                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline underline-offset-2"
+                  >
+                    открыть карточку в своём разделе
+                    <ExternalLink className="h-3 w-3 shrink-0 opacity-60" />
+                  </Link>
+                )}
+              </div>
+              {SubjectView ? (
+                // Тело карточки предметной аппки. Свои ошибки (404 объекта,
+                // 503 выключенного домена) оно показывает само — страница
+                // согласования от этого не разваливается.
+                <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+                  <SubjectView id={process.subject_id} embedded />
+                </Suspense>
+              ) : (
+                // Тип есть в реестре бэкенда, но своего представления во
+                // фронтенде не заявил. Согласовать всё равно можно — по
+                // заголовку, фактам и ссылке в панели.
+                <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+                  Показать документ этого типа интерфейс пока не умеет —
+                  откройте его карточку по ссылке выше.
+                </p>
+              )}
+            </section>
+          </div>
 
           <DecisionDialog
             target={target}

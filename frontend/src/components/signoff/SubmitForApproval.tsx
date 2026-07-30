@@ -93,9 +93,13 @@ export function SubmitForApproval({
     return (
       <div className="flex items-center justify-end gap-2">
         <ApprovalStateBadge state={state} />
+        {/* Решать — там же: на карточке процесса есть и кнопки решения, и
+            этот самый документ внутри. Здесь их нет намеренно. */}
         {activeProcessId !== null && (
           <Button asChild size={size} variant="ghost">
-            <Link to={`/signoff/processes/${activeProcessId}`}>Карточка</Link>
+            <Link to={`/signoff/processes/${activeProcessId}`}>
+              Карточка согласования
+            </Link>
           </Button>
         )}
       </div>

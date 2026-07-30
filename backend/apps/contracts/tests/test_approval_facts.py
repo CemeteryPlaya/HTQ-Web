@@ -15,6 +15,8 @@ import pytest
 
 from apps.contracts.models import Agreement, Budget, Counterparty
 from apps.contracts.tests.helpers import (
+    BASE,
+    auth,
     make_administrator,
     make_agreement,
     make_budget,
@@ -22,7 +24,13 @@ from apps.contracts.tests.helpers import (
     make_country,
     make_line,
     make_program,
+    post_json,
+    token,
 )
+# Сборка маршрута и пользователя — те же, что в test_approval_wiring: этот
+# файл про факты, и дублировать их фабрики значило бы завести им вторую
+# версию правды.
+from apps.contracts.tests.test_approval_wiring import make_user, route_for
 from apps.signoff.services import registry
 
 pytestmark = pytest.mark.django_db
@@ -142,6 +150,31 @@ def test_facts_of_a_deleted_object_are_empty_not_an_exception(model):
     внятным «не сошлось ни одно условие», безусловный отработает как прежде —
     решать судьбу висячей ссылки не задача снятия фактов."""
     assert registry.facts_for(model.SIGNOFF_SUBJECT_TYPE, 10_000_000) == {}
+
+
+def test_submit_response_carries_the_branch_data_the_frontend_types_promise(client):
+    """Карточка процесса из СВОЕГО эндпоинта отправки — та же, что у signoff.
+
+    Она уходит прямо в HTTP-ответ (``enrich=True``), и фронтенд типизирует её
+    как `ApprovalProcess`, где `subject_facts` и `matched_by` обязательные.
+    Пропади они здесь — на карточке договора после отправки был бы не
+    отсутствующий блок, а падение рендера. Тест пришит именно к этому пути:
+    у signoff свои эндпоинты и своё покрытие, а этот проходит через
+    ``interface.serialize_process`` и мог бы разойтись с ним незаметно.
+    """
+    approver = make_user("submit-facts-approver")
+    line = make_line()
+    route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
+
+    submitted = post_json(client, f"{BASE}/budgets/{line.budget_id}/submit", {},
+                          **auth(token()))
+
+    assert submitted.status_code == 201, submitted.content
+    body = submitted.json()
+    assert body["subject_facts"]["admin_country_id"] == \
+        line.budget.administrator.country_id
+    assert all(stage["matched_by"] == "always" for stage in body["stages"])
+    assert all(stage["condition"] == [] for stage in body["stages"])
 
 
 @pytest.mark.parametrize("model", [Budget, Counterparty, Agreement])
