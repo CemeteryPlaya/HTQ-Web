@@ -135,9 +135,12 @@ const CounterpartyList = () => {
                       >
                         {row.name}
                       </Link>
-                      {row.contacts && (
+                      {/* Склейка трёх контактных полей приходит с бэкенда
+                          (Counterparty.contact_summary) — в строку реестра
+                          помещается только она. */}
+                      {row.contact_summary && (
                         <div className="text-xs text-muted-foreground">
-                          {row.contacts}
+                          {row.contact_summary}
                         </div>
                       )}
                     </TableCell>

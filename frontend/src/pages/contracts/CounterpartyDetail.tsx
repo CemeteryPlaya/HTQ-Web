@@ -143,7 +143,33 @@ const CounterpartyDetail = () => {
                 </Field>
                 <Field label="Страна">{countryName}</Field>
                 <Field label="НДС">{counterparty.vat_label}</Field>
-                <Field label="Контакты">{counterparty.contacts || '—'}</Field>
+                <Field label="Контактное лицо">
+                  {counterparty.contact_name || '—'}
+                </Field>
+                <Field label="Телефон">
+                  {counterparty.phone ? (
+                    <a
+                      href={`tel:${counterparty.phone.replace(/[^\d+]/g, '')}`}
+                      className="hover:underline underline-offset-2"
+                    >
+                      {counterparty.phone}
+                    </a>
+                  ) : (
+                    '—'
+                  )}
+                </Field>
+                <Field label="E-mail">
+                  {counterparty.email ? (
+                    <a
+                      href={`mailto:${counterparty.email}`}
+                      className="hover:underline underline-offset-2 break-all"
+                    >
+                      {counterparty.email}
+                    </a>
+                  ) : (
+                    '—'
+                  )}
+                </Field>
                 <Field label="Адрес" className="sm:col-span-2">
                   {counterparty.address || '—'}
                 </Field>

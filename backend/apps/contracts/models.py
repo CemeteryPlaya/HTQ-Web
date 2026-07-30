@@ -328,10 +328,17 @@ class Counterparty(signoff.Approvable, models.Model):
     признака в строку: два разных факта в одной колонке — то, из-за чего
     поле и переписывалось.
 
-    ``contacts`` намеренно оставлены свободным текстом: заказчик пока не
-    уточнил, одна это строка или список контактных лиц. Разворачивать
-    текстовое поле в структуру дешевле, чем угадать структуру неверно и
-    потом её ломать.
+    Контакты — три отдельных поля (``contact_name``, ``phone``, ``email``),
+    а не бывшая свободная строка ``contacts``: из неё нельзя было ни взять
+    адрес для письма, ни проверить, что e-mail вообще похож на e-mail, ни
+    показать телефон отдельной колонкой.
+
+    Должности контактного лица среди них НЕТ: ею пришлось бы отдельно
+    заниматься при каждой кадровой перестановке у контрагента, а звонят и
+    пишут всё равно по телефону и адресу. Понадобится подписант с
+    должностью — это отдельная пара полей про подписанта, а не «должность»
+    у контакта. Список лиц вместо одного — дочерняя таблица
+    ``CounterpartyContact``, а не возврат к строке.
     """
 
     SIGNOFF_SUBJECT_TYPE = "contracts.counterparty"
@@ -343,7 +350,13 @@ class Counterparty(signoff.Approvable, models.Model):
     name = models.CharField(max_length=300)
     vat = models.BooleanField(default=False, db_default=False,
                               verbose_name="Плательщик НДС")
-    contacts = models.TextField(default="", blank=True, db_default="")
+    contact_name = models.CharField(max_length=200, blank=True, default="",
+                                    db_default="",
+                                    verbose_name="Контактное лицо")
+    phone = models.CharField(max_length=30, blank=True, default="",
+                             db_default="", verbose_name="Телефон")
+    email = models.EmailField(max_length=254, blank=True, default="",
+                              db_default="", verbose_name="E-mail")
     address = models.TextField(default="", blank=True, db_default="")
     country = models.ForeignKey(Country, on_delete=models.PROTECT,
                                 related_name="counterparties")
@@ -369,6 +382,16 @@ class Counterparty(signoff.Approvable, models.Model):
     @property
     def vat_label(self) -> str:
         return "с НДС" if self.vat else "без НДС"
+
+    # Однострочная склейка контактов — для списков и заголовков, где место
+    # есть только под одну строку. Живёт на модели по той же причине, что и
+    # vat_label: иначе порядок и разделители разойдутся между реестром,
+    # карточкой и django-admin. Хранимого поля за ней нет — только три
+    # колонки выше.
+    @property
+    def contact_summary(self) -> str:
+        parts = [self.contact_name, self.phone, self.email]
+        return ", ".join(part for part in parts if part)
 
 
 class Agreement(signoff.Approvable, models.Model):

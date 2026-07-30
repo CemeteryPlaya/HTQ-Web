@@ -53,11 +53,13 @@ def get_counterparty_or_404(counterparty_id: int) -> Counterparty:
 
 
 def create_counterparty(*, bin_iin: str, name: str, country_id: int, vat: bool = False,
-                        contacts: str = "", address: str = "",
+                        contact_name: str = "", phone: str = "", email: str = "",
+                        address: str = "",
                         status: str | None = None) -> Counterparty:
     get_country_or_404(country_id)
     fields = dict(bin_iin=bin_iin, name=name, country_id=country_id, vat=vat,
-                  contacts=contacts, address=address)
+                  contact_name=contact_name, phone=phone, email=email,
+                  address=address)
     if status is not None:
         fields["status"] = status
     with conflict_as(f"Контрагент с БИН/ИИН {bin_iin} уже есть в реестре"):
@@ -66,7 +68,8 @@ def create_counterparty(*, bin_iin: str, name: str, country_id: int, vat: bool =
 
 @transaction.atomic
 def create_counterparty_full(*, bin_iin: str, name: str, country, vat: bool = False,
-                             contacts: str = "", address: str = "",
+                             contact_name: str = "", phone: str = "",
+                             email: str = "", address: str = "",
                              status: str | None = None) -> Counterparty:
     """Завести контрагента вместе со страной — одной транзакцией.
 
@@ -80,7 +83,8 @@ def create_counterparty_full(*, bin_iin: str, name: str, country, vat: bool = Fa
     country_obj = resolve_country_input(country)
 
     fields = dict(bin_iin=bin_iin.strip(), name=name.strip(), country=country_obj,
-                  vat=vat, contacts=contacts, address=address)
+                  vat=vat, contact_name=contact_name.strip(),
+                  phone=phone.strip(), email=email, address=address)
     if status is not None:
         fields["status"] = status
 

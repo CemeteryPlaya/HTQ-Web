@@ -463,8 +463,8 @@ class CounterpartyFullCreateView(ContractsView):
         try:
             row = cp_svc.create_counterparty_full(
                 bin_iin=data.bin_iin, name=data.name, country=data.country,
-                vat=data.vat, contacts=data.contacts, address=data.address,
-                status=data.status,
+                vat=data.vat, contact_name=data.contact_name, phone=data.phone,
+                email=data.email, address=data.address, status=data.status,
             )
         except CONFLICTS as exc:
             return self.conflict(exc)

@@ -126,7 +126,9 @@ export const contractsApi = {
     name: string;
     country_id: number;
     vat?: boolean;
-    contacts?: string;
+    contact_name?: string;
+    phone?: string;
+    email?: string;
     address?: string;
   }) => api.post<Counterparty>(path('counterparties'), data),
   /**

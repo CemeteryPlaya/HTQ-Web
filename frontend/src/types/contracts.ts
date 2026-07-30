@@ -124,7 +124,13 @@ export interface Counterparty {
   vat: boolean;
   /** Словесная форма признака, с бэкенда: «с НДС» / «без НДС». */
   vat_label: string;
-  contacts: string;
+  /** Контактное лицо — ФИО, телефон, e-mail: три поля, не свободная строка.
+   *  Должности среди них нет намеренно, см. модель Counterparty. */
+  contact_name: string;
+  phone: string;
+  email: string;
+  /** Склейка трёх полей выше одной строкой — с бэкенда, для списков. */
+  contact_summary: string;
   address: string;
   status: CounterpartyStatus;
   /** Ось согласования — отдельно от `status`. См. Budget.approval_state. */
@@ -226,7 +232,9 @@ export interface CounterpartyFullCreatePayload {
   name: string;
   country: CountryInput;
   vat: boolean;
-  contacts: string;
+  contact_name: string;
+  phone: string;
+  email: string;
   address: string;
   status?: CounterpartyStatus;
 }

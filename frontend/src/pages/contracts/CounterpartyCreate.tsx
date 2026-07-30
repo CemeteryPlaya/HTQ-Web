@@ -33,15 +33,19 @@ import type { CounterpartyStatus } from '@/types/contracts';
  * (POST /counterparties/full), который бэкенд разбирает в одной
  * транзакции. Отдельно заводить страну не нужно.
  *
- * Поля «НДС» и «Контакты» — свободный текст. Заказчик пока не уточнил,
- * значит ли «НДС» признак плательщика или ставку, а «Контакты» — одну
- * строку или список лиц; разворачивать текст в структуру потом дешевле,
- * чем угадать её неверно сейчас.
+ * «НДС» — переключатель признака плательщика, не ставка. Контакты — три
+ * отдельных поля (ФИО, телефон, e-mail) вместо прежней свободной строки: по
+ * ним теперь можно и написать, и позвонить, не разбирая текст глазами.
+ * Должности среди них нет намеренно — см. модель Counterparty.
  */
 
 /** Казахстанский БИН/ИИН — 12 цифр. Иностранные номера другой формы, поэтому
  *  это подсказка, а не жёсткая проверка: бэкенд их тоже принимает. */
 const KZ_BIN_RE = /^\d{12}$/;
+
+/** Черновая проверка e-mail — ровно чтобы поймать опечатку до запроса;
+ *  окончательное слово за бэкендом (схема CounterpartyFullCreate). */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 type Errors = Record<string, string>;
 
@@ -63,7 +67,9 @@ const CounterpartyCreate = () => {
   const [country, setCountry] = useState<ReferenceValue>(null);
   const [isoCode, setIsoCode] = useState('');
   const [vat, setVat] = useState(false);
-  const [contacts, setContacts] = useState('');
+  const [contactName, setContactName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
   const [status, setStatus] = useState<CounterpartyStatus>('active');
 
@@ -87,6 +93,9 @@ const CounterpartyCreate = () => {
     if (!binIin.trim()) next.binIin = 'Укажите БИН/ИИН';
     if (!name.trim()) next.name = 'Укажите наименование';
     if (!country) next.country = 'Выберите страну или впишите новую';
+    // E-mail необязателен, но заполненный обязан быть адресом: бэкенд его
+    // проверяет и вернёт 422 — лучше сказать об этом до отправки формы.
+    if (email.trim() && !EMAIL_RE.test(email.trim())) next.email = 'Похоже, это не e-mail';
     return next;
   };
 
@@ -101,7 +110,9 @@ const CounterpartyCreate = () => {
               ? { id: country!.id }
               : { name: country!.label, iso_code: isoCode.trim().toUpperCase() },
           vat,
-          contacts: contacts.trim(),
+          contact_name: contactName.trim(),
+          phone: phone.trim(),
+          email: email.trim(),
           address: address.trim(),
           status,
         })
@@ -277,15 +288,41 @@ const CounterpartyCreate = () => {
               <CardTitle>Контактные данные</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="contacts">Контакты</Label>
-                <Textarea
-                  id="contacts"
-                  value={contacts}
-                  onChange={(event) => setContacts(event.target.value)}
-                  rows={3}
-                  placeholder="Петров П., директор, +7 700 000 00 00, info@alfa.kz"
-                />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="sm:col-span-2">
+                  <Label htmlFor="contact-name">Контактное лицо</Label>
+                  <Input
+                    id="contact-name"
+                    value={contactName}
+                    onChange={(event) => setContactName(event.target.value)}
+                    placeholder="Петров Пётр Петрович"
+                    maxLength={200}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="phone">Телефон</Label>
+                  <Input
+                    id="phone"
+                    type="tel"
+                    value={phone}
+                    onChange={(event) => setPhone(event.target.value)}
+                    placeholder="+7 700 000 00 00"
+                    maxLength={30}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="email">E-mail</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="info@alfa.kz"
+                    maxLength={254}
+                    className={errors.email ? 'border-destructive' : undefined}
+                  />
+                  {fieldError('email')}
+                </div>
               </div>
               <div>
                 <Label htmlFor="address">Адрес</Label>

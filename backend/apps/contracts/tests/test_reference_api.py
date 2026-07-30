@@ -204,11 +204,14 @@ def test_counterparty_crud_and_search():
     created = post_json(client, f"{BASE}/counterparties",
                         {"bin_iin": "123456789012", "name": "ТОО «Альфа»",
                          "country_id": country.pk, "vat": True,
-                         "address": "Алматы", "contacts": "+7 700 000 00 00"},
+                         "address": "Алматы", "contact_name": "Петров П.",
+                         "phone": "+7 700 000 00 00", "email": "info@alfa.kz"},
                         **auth(admin_token()))
     assert created.status_code == 201, created.content
     assert created.json()["vat"] is True
     assert created.json()["vat_label"] == "с НДС"
+    assert created.json()["phone"] == "+7 700 000 00 00"
+    assert created.json()["email"] == "info@alfa.kz"
 
     by_name = client.get(f"{BASE}/counterparties?search=Альфа", **auth(token()))
     assert len(by_name.json()) == 1
@@ -239,6 +242,45 @@ def test_counterparty_vat_defaults_to_false_and_is_togglable():
                      {"vat": False}, **auth(admin_token()))
     assert off.json()["vat"] is False
     assert off.json()["vat_label"] == "без НДС"
+
+
+@pytest.mark.django_db
+def test_counterparty_contacts_are_three_fields_with_a_ready_summary():
+    """Контакты разложены по полям, а склейку для списков даёт бэкенд.
+
+    Пустой контакт — это пустая строка во всех трёх полях: карточку заводят
+    и по одному БИН'у, контакты дописывают позже.
+    """
+    country = make_country()
+    client = Client()
+    created = post_json(client, f"{BASE}/counterparties",
+                        {"bin_iin": "111111111111", "name": "ТОО «Гамма»",
+                         "country_id": country.pk},
+                        **auth(admin_token()))
+    assert created.status_code == 201, created.content
+    body = created.json()
+    assert (body["contact_name"], body["phone"], body["email"],
+            body["contact_summary"]) == ("", "", "", "")
+
+    filled = patch_json(client, f"{BASE}/counterparties/{body['id']}",
+                        {"contact_name": "Петров П.",
+                         "phone": "+7 700 000 00 00", "email": "info@gamma.kz"},
+                        **auth(admin_token()))
+    assert filled.status_code == 200, filled.content
+    assert filled.json()["contact_summary"] == (
+        "Петров П., +7 700 000 00 00, info@gamma.kz")
+
+
+@pytest.mark.django_db
+def test_counterparty_email_must_look_like_an_email():
+    """Ради этого поле и вынули из свободной строки: мусор не проходит,
+    а пустое значение остаётся законным."""
+    country = make_country()
+    resp = post_json(Client(), f"{BASE}/counterparties",
+                     {"bin_iin": "222222222222", "name": "ТОО «Дельта»",
+                      "country_id": country.pk, "email": "директор, звонить днём"},
+                     **auth(admin_token()))
+    assert resp.status_code == 422, resp.content
 
 
 @pytest.mark.django_db

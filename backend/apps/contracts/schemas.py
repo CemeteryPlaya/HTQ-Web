@@ -15,9 +15,17 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    TypeAdapter,
+    model_validator,
+)
 
 from apps.contracts.models import (
     AgreementStatus,
@@ -330,6 +338,24 @@ class BudgetLineFlatRead(BaseModel):
 
 # ── Counterparty ────────────────────────────────────────────────────────
 
+_EMAIL = TypeAdapter(EmailStr)
+
+
+def _blank_or_email(value: str) -> str:
+    """Пустая строка — «контакт не заполнен», непустая обязана быть адресом.
+
+    Прямой ``EmailStr`` здесь не годится: он отбивает пустую строку, а
+    обязательным e-mail контрагента не является — карточку заводят и по
+    одному БИН'у. Но и принимать под видом адреса произвольный текст
+    нельзя: именно ради этого поле и вынули из свободных ``contacts``.
+    """
+    value = value.strip()
+    return str(_EMAIL.validate_python(value)) if value else ""
+
+
+BlankableEmail = Annotated[str, AfterValidator(_blank_or_email)]
+
+
 class CounterpartyCreate(BaseModel):
     # Казахстанский БИН/ИИН — ровно 12 цифр, но справочник стран у контрагента
     # общий, и у иностранного поставщика номер налогоплательщика другой формы.
@@ -342,7 +368,13 @@ class CounterpartyCreate(BaseModel):
     # Признак плательщика НДС, не ставка и не номер свидетельства
     # (см. докстринг модели Counterparty).
     vat: bool = False
-    contacts: str = ""
+    # Контакты — три поля вместо прежней свободной строки; см. докстринг
+    # модели Counterparty (там же — почему без должности). Ни одно не
+    # обязательно: карточку заводят и по одному БИН'у, контакты дописывают
+    # позже.
+    contact_name: str = Field("", max_length=200)
+    phone: str = Field("", max_length=30)
+    email: BlankableEmail = Field("", max_length=254)
     address: str = ""
     status: Optional[CounterpartyStatus] = None
 
@@ -352,7 +384,9 @@ class CounterpartyUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=300)
     country_id: Optional[int] = None
     vat: Optional[bool] = None
-    contacts: Optional[str] = None
+    contact_name: Optional[str] = Field(None, max_length=200)
+    phone: Optional[str] = Field(None, max_length=30)
+    email: Optional[BlankableEmail] = Field(None, max_length=254)
     address: Optional[str] = None
     status: Optional[CounterpartyStatus] = None
 
@@ -370,7 +404,9 @@ class CounterpartyFullCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=300)
     country: CountryInput
     vat: bool = False
-    contacts: str = ""
+    contact_name: str = Field("", max_length=200)
+    phone: str = Field("", max_length=30)
+    email: BlankableEmail = Field("", max_length=254)
     address: str = ""
     status: Optional[CounterpartyStatus] = None
 
@@ -386,7 +422,12 @@ class CounterpartyRead(BaseModel):
     # Словесная форма признака («с НДС» / «без НДС») — с модели, чтобы у
     # одного булева значения не завелось двух переводов.
     vat_label: str
-    contacts: str
+    contact_name: str
+    phone: str
+    email: str
+    # Однострочная склейка трёх полей выше — с модели, чтобы реестр и
+    # карточка не собирали её порознь и по-разному (см. Counterparty).
+    contact_summary: str
     address: str
     status: str
     approval_state: str

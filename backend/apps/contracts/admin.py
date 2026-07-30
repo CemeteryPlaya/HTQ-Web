@@ -113,10 +113,11 @@ class BudgetAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 @admin.register(Counterparty)
 class CounterpartyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "name", "bin_iin", "country", "vat", "status",
-                    "approval_state")
+    list_display = ("id", "name", "bin_iin", "country", "vat", "contact_name",
+                    "phone", "status", "approval_state")
     list_filter = ("status", "approval_state", "country", "vat")
-    search_fields = ("name", "bin_iin", "address", "contacts")
+    search_fields = ("name", "bin_iin", "address", "contact_name", "phone",
+                     "email")
     readonly_fields = ("created_at", "updated_at", "approval_state")
     list_select_related = ("country",)
 
