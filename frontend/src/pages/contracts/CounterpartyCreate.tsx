@@ -290,7 +290,7 @@ const CounterpartyCreate = () => {
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <Label htmlFor="contact-name">Контактное лицо</Label>
+                  <Label htmlFor="contact-name">Генеральный директор</Label>
                   <Input
                     id="contact-name"
                     value={contactName}

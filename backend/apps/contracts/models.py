@@ -333,12 +333,12 @@ class Counterparty(signoff.Approvable, models.Model):
     адрес для письма, ни проверить, что e-mail вообще похож на e-mail, ни
     показать телефон отдельной колонкой.
 
-    Должности контактного лица среди них НЕТ: ею пришлось бы отдельно
-    заниматься при каждой кадровой перестановке у контрагента, а звонят и
-    пишут всё равно по телефону и адресу. Понадобится подписант с
-    должностью — это отдельная пара полей про подписанта, а не «должность»
-    у контакта. Список лиц вместо одного — дочерняя таблица
-    ``CounterpartyContact``, а не возврат к строке.
+    ``contact_name`` подписан «Генеральный директор»: должность задана самой
+    подписью поля, отдельной колонки под должность НЕТ — иначе ею пришлось бы
+    заниматься при каждой кадровой перестановке у контрагента. Понадобится
+    контакт с другой должностью — это дочерняя таблица
+    ``CounterpartyContact``, а не «должность» рядом с ``contact_name`` и не
+    возврат к свободной строке.
     """
 
     SIGNOFF_SUBJECT_TYPE = "contracts.counterparty"
@@ -352,7 +352,7 @@ class Counterparty(signoff.Approvable, models.Model):
                               verbose_name="Плательщик НДС")
     contact_name = models.CharField(max_length=200, blank=True, default="",
                                     db_default="",
-                                    verbose_name="Контактное лицо")
+                                    verbose_name="Генеральный директор")
     phone = models.CharField(max_length=30, blank=True, default="",
                              db_default="", verbose_name="Телефон")
     email = models.EmailField(max_length=254, blank=True, default="",

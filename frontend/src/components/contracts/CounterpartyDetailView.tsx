@@ -143,7 +143,7 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
             </Field>
             <Field label="Страна">{countryName}</Field>
             <Field label="НДС">{counterparty.vat_label}</Field>
-            <Field label="Контактное лицо">
+            <Field label="Генеральный директор">
               {counterparty.contact_name || '—'}
             </Field>
             <Field label="Телефон">
