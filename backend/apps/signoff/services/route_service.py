@@ -17,6 +17,7 @@ from apps.signoff.models import (
     ApprovalRoute,
     ApprovalRouteStage,
     ApprovalRouteStageApprover,
+    ApproverKind,
 )
 from apps.signoff.services import conditions, registry
 from apps.users import interface as users
@@ -114,14 +115,25 @@ def get_stage_or_404(stage_id: int) -> ApprovalRouteStage:
 @transaction.atomic
 def add_stage(route_id: int, *, order: int, name: str, quorum: str,
               approver_ids: list[int], condition=None,
-              is_fallback: bool = False) -> ApprovalRouteStage:
+              is_fallback: bool = False,
+              approver_kind: str = ApproverKind.NAMED,
+              requires_attachment: bool = False) -> ApprovalRouteStage:
     route = get_route_or_404(route_id)
-    _check_approvers_exist(approver_ids)
+    _check_approver_kind(approver_kind, approver_ids, stage_name=name)
+    if approver_kind == ApproverKind.NAMED:
+        _check_approvers_exist(approver_ids)
+    else:
+        # Список к этому виду этапа не относится: согласующий вычисляется на
+        # запуске. Хранить его «на случай переключения обратно» значило бы
+        # держать в маршруте настройку, которую администратор в интерфейсе
+        # не видит.
+        approver_ids = []
     condition = _check_condition(route.subject_type, condition, is_fallback)
 
     stage = ApprovalRouteStage.objects.create(
         route=route, order=order, name=name, quorum=quorum,
-        condition=condition, is_fallback=is_fallback)
+        condition=condition, is_fallback=is_fallback,
+        approver_kind=approver_kind, requires_attachment=requires_attachment)
     _set_approvers(stage, approver_ids)
     return stage
 
@@ -131,14 +143,32 @@ def update_stage(stage_id: int, **fields) -> ApprovalRouteStage:
     stage = get_stage_or_404(stage_id)
 
     approver_ids = fields.pop("approver_ids", None)
-    if approver_ids is not None:
-        if not approver_ids:
-            # Этап без согласующих не исполнится (engine._resolve_stages) —
-            # отказываем здесь, а не через час на отправке заявки.
-            raise RouteConflict(
-                f"В этапе «{stage.name}» должен остаться хотя бы один согласующий")
-        _check_approvers_exist(approver_ids)
-        _set_approvers(stage, approver_ids)
+
+    # Вид согласующих и список — свойство ПАРЫ, поэтому пересматриваются
+    # вместе, даже когда пришло одно из двух (тот же случай, что у
+    # condition/is_fallback ниже). Иначе переключение этапа на инициатора
+    # оставило бы в нём названных поимённо людей, которых движок игнорирует,
+    # а редактор больше не показывает.
+    kind = fields.get("approver_kind") or stage.approver_kind
+    if approver_ids is not None or "approver_kind" in fields:
+        if kind != ApproverKind.NAMED:
+            # Явно присланный непустой список — противоречие в одном
+            # запросе, и молча выбросить половину его нельзя. А вот
+            # оставшийся от прежней настройки список стираем: он к новому
+            # виду этапа не относится.
+            _check_approver_kind(kind, approver_ids or [], stage_name=stage.name)
+            _set_approvers(stage, [])
+        else:
+            effective = (approver_ids if approver_ids is not None
+                         else [row.user_id for row in stage.approvers.all()])
+            if not effective:
+                # Этап без согласующих не исполнится (engine._approver_ids) —
+                # отказываем здесь, а не через час на отправке заявки.
+                raise RouteConflict(
+                    f"В этапе «{stage.name}» должен остаться хотя бы один "
+                    f"согласующий")
+            _check_approvers_exist(effective)
+            _set_approvers(stage, effective)
 
     # Условие и «иначе» проверяются вместе, даже когда меняется только одно
     # из них: их несочетаемость — свойство ПАРЫ, и проверить пришедшее поле
@@ -193,6 +223,26 @@ def _set_approvers(stage: ApprovalRouteStage, user_ids: list[int]) -> None:
     ])
 
 
+def _check_approver_kind(approver_kind: str, approver_ids: list[int], *,
+                         stage_name: str) -> None:
+    """Совместимость вида согласующих со списком.
+
+    Названный поимённо список у этапа, который согласует инициатор, —
+    настройка, которую невозможно исполнить так, как она читается: движок
+    возьмёт инициатора и проигнорирует людей (``engine._approver_ids``).
+    Отказываем на настройке, а не гадаем за администратора.
+    """
+    if approver_kind == ApproverKind.NAMED:
+        if not approver_ids:
+            raise RouteConflict(
+                f"На этапе «{stage_name}» не назначен ни один согласующий")
+        return
+    if approver_ids:
+        raise RouteConflict(
+            f"На этапе «{stage_name}» согласует инициатор — названных "
+            f"поимённо согласующих у него быть не может")
+
+
 def _check_condition(subject_type: str, condition, is_fallback: bool) -> list:
     """Проверить условие этапа против схемы фактов его типа.
 
@@ -238,6 +288,33 @@ def coverage_gaps(route: ApprovalRoute) -> list[dict]:
     return conditions.coverage_gaps(route.stages.all(), fields)
 
 
+def initiator_stage_not_last(route: ApprovalRoute) -> bool:
+    """Стоит ли этап подписи инициатора НЕ в последней группе маршрута.
+
+    Предупреждение, а не запрет — по тому же принципу, что ``coverage_gaps``,
+    и по вполне практической причине: запрет означал бы, что после этапа
+    подписи в маршрут нельзя добавить ни одного этапа, то есть любая
+    последующая правка требовала бы сначала переставить подпись. Такой
+    редактор чинят обходом, а не пользуются им.
+
+    Смысл же предупреждения в том, что «подпись автора» задумана как ФИНАЛ:
+    движок завершает процесс, когда пройдена группа с наибольшим ``order``
+    (``engine._advance``), и этап, оказавшийся не последним, тихо превращается
+    из подписи в промежуточное подтверждение.
+
+    Считается по маршруту, а не по процессу: в процессе последняя группа
+    зависит от сработавших веток, и там этот вопрос имеет другой ответ на
+    каждый объект.
+    """
+    orders = [stage.order for stage in route.stages.all()]
+    if not orders:
+        return False
+    last = max(orders)
+    return any(stage.approver_kind == ApproverKind.INITIATOR
+               and stage.order != last
+               for stage in route.stages.all())
+
+
 def _check_approvers_exist(user_ids: list[int]) -> None:
     """Все ли перечисленные id — существующие пользователи.
 
@@ -279,6 +356,7 @@ def serialize_route(route: ApprovalRoute, *,
     }
     if gaps:
         card["coverage_gaps"] = coverage_gaps(route)
+        card["initiator_stage_not_last"] = initiator_stage_not_last(route)
     return card
 
 
@@ -294,6 +372,8 @@ def serialize_stage(stage: ApprovalRouteStage, *,
         "quorum": stage.quorum,
         "condition": stage.condition or [],
         "is_fallback": stage.is_fallback,
+        "approver_kind": stage.approver_kind,
+        "requires_attachment": stage.requires_attachment,
         "approvers": [
             {
                 "user_id": user_id,

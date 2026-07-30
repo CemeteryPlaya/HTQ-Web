@@ -22,7 +22,7 @@ from apps.signoff.models import (
     StageState,
     TaskState,
 )
-from apps.signoff.services import registry
+from apps.signoff.services import attachments, registry
 from apps.users import interface as users
 
 logger = logging.getLogger(__name__)
@@ -58,16 +58,11 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "state": stage.state,
                 "condition": stage.condition or [],
                 "matched_by": stage.matched_by,
+                "approver_kind": stage.approver_kind,
+                "requires_attachment": stage.requires_attachment,
                 "decided_at": stage.decided_at,
                 "tasks": [
-                    {
-                        "id": task.pk,
-                        "user_id": task.user_id,
-                        "full_name": names.get(task.user_id, {}).get("full_name", ""),
-                        "state": task.state,
-                        "comment": task.comment,
-                        "acted_at": task.acted_at,
-                    }
+                    serialize_task(task, names=names, urls=enrich)
                     for task in stage.tasks.all()
                 ],
             }
@@ -81,6 +76,35 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
         card["subject_title"] = card_info.get("title")
         card["subject_url"] = card_info.get("url")
 
+    return card
+
+
+def serialize_task(task: ApprovalTask, *, names: dict[int, dict] | None = None,
+                   urls: bool = False) -> dict:
+    """Карточка одного запроса на согласование.
+
+    Вынесена из ``serialize_process`` не ради красоты, а потому что её отдаёт
+    ещё и эндпоинт загрузки документа: два места, собирающие одну и ту же
+    строку по-своему, разъедутся на первом же новом поле.
+
+    ``urls=True`` добавляет подписанную ссылку на приложенный документ —
+    поход в media_files НА КАЖДЫЙ файл. Поэтому только под ``enrich`` (то
+    есть для HTTP-ответа) и только там, где файл действительно есть:
+    ``GET /processes`` иначе превратился бы в поход к соседу на каждую
+    задачу каждого процесса.
+    """
+    names = names or {}
+    card = {
+        "id": task.pk,
+        "user_id": task.user_id,
+        "full_name": names.get(task.user_id, {}).get("full_name", ""),
+        "state": task.state,
+        "comment": task.comment,
+        "acted_at": task.acted_at,
+        "file_id": task.file_id or None,
+    }
+    if urls and task.file_id:
+        card["file_url"] = attachments.file_url(task.file_id)
     return card
 
 
@@ -117,6 +141,10 @@ def list_inbox(user_id: int) -> list[dict]:
             "subject_url": info.get("url"),
             "stage_name": task.stage.name,
             "quorum": task.stage.quorum,
+            # Чтобы в очереди было видно, что решение потребует документа, —
+            # до того, как человек откроет диалог и упрётся в отказ.
+            "requires_attachment": task.stage.requires_attachment,
+            "file_id": task.file_id or None,
             "initiator_id": process.initiator_id,
             "created_at": process.created_at,
         })

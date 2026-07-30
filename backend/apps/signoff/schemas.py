@@ -13,7 +13,13 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from apps.signoff.models import ProcessState, Quorum, StageState, TaskState
+from apps.signoff.models import (
+    ApproverKind,
+    ProcessState,
+    Quorum,
+    StageState,
+    TaskState,
+)
 from apps.signoff.services.conditions import OPS
 
 _ORM = ConfigDict(from_attributes=True)
@@ -64,24 +70,41 @@ class StageCreate(BaseModel):
     """Этап маршрута вместе со списком согласующих.
 
     ``approver_ids`` принимается прямо здесь, а не отдельным запросом на
-    каждого: этап без согласующих нельзя исполнить (``engine._resolve_stages``
+    каждого: этап без согласующих нельзя исполнить (``engine._approver_ids``
     отказывает на запуске), так что создавать его отдельно от людей значило
     бы штатно проходить через заведомо нерабочее состояние.
+
+    Обязательность списка при этом проверяет валидатор, а не
+    ``min_length=1``: у этапа, который согласует инициатор, списка нет по
+    определению, и требовать его схемой значило бы заставлять фронтенд
+    присылать фиктивного человека.
     """
 
     order: int = Field(1, ge=1, le=999)
     name: str = Field(..., min_length=1, max_length=200)
     quorum: Quorum = Quorum.ALL
-    approver_ids: list[int] = Field(..., min_length=1)
+    approver_ids: list[int] = Field(default_factory=list)
     # Пустое условие — «этап нужен всегда»; это и есть поведение всех этапов
     # до появления ветвления, поэтому значение по умолчанию именно такое.
     condition: Condition = Field(default_factory=list)
     is_fallback: bool = False
+    approver_kind: ApproverKind = ApproverKind.NAMED
+    requires_attachment: bool = False
 
     @model_validator(mode="after")
-    def _unique_approvers(self):
+    def _approvers_match_kind(self):
         if len(set(self.approver_ids)) != len(self.approver_ids):
             raise ValueError("согласующие в этапе повторяются")
+        # Смысл сочетаний — в route_service._check_approver_kind; здесь
+        # проверяется ровно то, что видно из схемы: список либо нужен, либо
+        # неуместен. Дубль осознанный — 422 на форме понятнее, чем 409 из
+        # сервиса, а сервис обязан защищаться и без схемы (его зовёт и
+        # django-admin).
+        if self.approver_kind == ApproverKind.NAMED and not self.approver_ids:
+            raise ValueError("нужен хотя бы один согласующий")
+        if self.approver_kind != ApproverKind.NAMED and self.approver_ids:
+            raise ValueError(
+                "у этапа с этим видом согласующих список не заполняется")
         return self
 
 
@@ -96,6 +119,11 @@ class StageUpdate(BaseModel):
     # трогать» позволяет exclude_unset во вьюхе (см. StageDetailView.patch).
     condition: Optional[Condition] = None
     is_fallback: Optional[bool] = None
+    # Переключение на «инициатора» стирает названных согласующих само —
+    # присылать вместе с ним ``approver_ids: []`` не нужно (и непустой список
+    # вместе с ним сервис отвергнет как противоречие).
+    approver_kind: Optional[ApproverKind] = None
+    requires_attachment: Optional[bool] = None
 
 
 class ApproverRead(BaseModel):
@@ -113,6 +141,10 @@ class StageRead(BaseModel):
     quorum: str
     condition: Condition = Field(default_factory=list)
     is_fallback: bool = False
+    approver_kind: ApproverKind = ApproverKind.NAMED
+    requires_attachment: bool = False
+    # Пустой у этапа, который согласует инициатор: конкретный человек станет
+    # известен только на запуске процесса.
     approvers: list[ApproverRead]
 
 
@@ -136,9 +168,13 @@ class RouteRead(BaseModel):
     name: str
     is_active: bool
     stages: list[StageRead]
-    # Считается только для карточки одного маршрута — в списке этого поля
+    # Считаются только для карточки одного маршрута — в списке этих полей
     # нет (см. route_service.serialize_route).
     coverage_gaps: Optional[list[CoverageGap]] = None
+    # Подпись инициатора стоит не в последней группе: движок завершит процесс
+    # раньше, чем до неё дойдёт очередь смысла. Предупреждение, не запрет —
+    # см. route_service.initiator_stage_not_last.
+    initiator_stage_not_last: Optional[bool] = None
     created_at: datetime
     updated_at: datetime
 
@@ -158,6 +194,11 @@ class TaskRead(BaseModel):
     state: TaskState
     comment: str
     acted_at: Optional[datetime]
+    # Приложенный к решению документ. ``file_url`` подписанная и живёт
+    # недолго, поэтому её нет в ответах без ``enrich`` — и её может не быть
+    # даже там, если media выключен (см. attachments.file_url).
+    file_id: Optional[str] = None
+    file_url: Optional[str] = None
 
 
 class ProcessStageRead(BaseModel):
@@ -171,6 +212,11 @@ class ProcessStageRead(BaseModel):
     # пустое, и без этого поля они в карточке неразличимы.
     condition: Condition = Field(default_factory=list)
     matched_by: str = "always"
+    # Снимок «этапа подписи» на момент запуска: ``approver_kind`` объясняет,
+    # почему на этапе один человек и именно этот, ``requires_attachment``
+    # — рабочее поле, его читает engine.act на каждом решении.
+    approver_kind: ApproverKind = ApproverKind.NAMED
+    requires_attachment: bool = False
     decided_at: Optional[datetime]
     tasks: list[TaskRead]
 
@@ -212,6 +258,10 @@ class InboxItem(BaseModel):
     subject_url: Optional[str]
     stage_name: str
     quorum: str
+    # Решение по этому запросу требует приложенного PDF — видно в очереди, а
+    # не только в диалоге решения.
+    requires_attachment: bool = False
+    file_id: Optional[str] = None
     initiator_id: Optional[int]
     created_at: datetime
 

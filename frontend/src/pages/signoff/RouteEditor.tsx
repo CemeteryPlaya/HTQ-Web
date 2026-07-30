@@ -34,7 +34,9 @@ import {
   ArrowLeft,
   GitBranch,
   Loader2,
+  Paperclip,
   Pencil,
+  PenLine,
   Plus,
   Split,
   Trash2,
@@ -45,7 +47,7 @@ import { SignoffShell } from '@/components/signoff/SignoffShell';
 import { ApproverPicker } from '@/components/signoff/ApproverPicker';
 import { ConditionEditor } from '@/components/signoff/ConditionEditor';
 import { conditionText } from '@/components/signoff/format';
-import { QUORUM_LABELS } from '@/components/signoff/labels';
+import { APPROVER_KIND_LABELS, QUORUM_LABELS } from '@/components/signoff/labels';
 import { reportApiError } from '@/components/signoff/apiError';
 import {
   AlertDialog,
@@ -80,7 +82,12 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { signoffApi } from '@/api/signoff';
-import type { Condition, Quorum, RouteStage } from '@/types/signoff';
+import type {
+  ApproverKind,
+  Condition,
+  Quorum,
+  RouteStage,
+} from '@/types/signoff';
 
 /** Черновик этапа в диалоге. `id === null` — этап ещё не создан. */
 interface StageDraft {
@@ -91,6 +98,8 @@ interface StageDraft {
   approverIds: number[];
   condition: Condition;
   isFallback: boolean;
+  approverKind: ApproverKind;
+  requiresAttachment: boolean;
 }
 
 const emptyDraft = (order: number): StageDraft => ({
@@ -101,6 +110,8 @@ const emptyDraft = (order: number): StageDraft => ({
   approverIds: [],
   condition: [],
   isFallback: false,
+  approverKind: 'named',
+  requiresAttachment: false,
 });
 
 /** Этапы по группам `order`, группы — по возрастанию. */
@@ -177,11 +188,15 @@ const RouteEditor = () => {
         order: stage.order,
         name: stage.name.trim(),
         quorum: stage.quorum,
-        approver_ids: stage.approverIds,
+        // У этапа подписи список обязан быть пустым: непустой бэкенд
+        // отвергнет как противоречие, а не «поймёт, что имелось в виду».
+        approver_ids: stage.approverKind === 'named' ? stage.approverIds : [],
         // Условие шлём всегда, в том числе пустым: для PATCH пустой массив —
         // это «снять ветку», и не прислать его значило бы не уметь её снять.
         condition: stage.isFallback ? [] : stage.condition,
         is_fallback: stage.isFallback,
+        approver_kind: stage.approverKind,
+        requires_attachment: stage.requiresAttachment,
       };
       return stage.id === null
         ? signoffApi.addStage(routeId, payload).then((r) => r.data)
@@ -213,6 +228,8 @@ const RouteEditor = () => {
       approverIds: stage.approvers.map((approver) => approver.user_id),
       condition: stage.condition ?? [],
       isFallback: stage.is_fallback,
+      approverKind: stage.approver_kind,
+      requiresAttachment: stage.requires_attachment,
     });
 
   const knownNames = useMemo(() => {
@@ -232,7 +249,7 @@ const RouteEditor = () => {
         + 'ролей у платформы нет.');
       return;
     }
-    if (draft.approverIds.length === 0) {
+    if (draft.approverKind === 'named' && draft.approverIds.length === 0) {
       setDraftError('Нужен хотя бы один согласующий: этап без них движок не '
         + 'запустит.');
       return;
@@ -341,6 +358,24 @@ const RouteEditor = () => {
             </div>
           )}
 
+          {route.initiator_stage_not_last && (
+            <div className="mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3">
+              <div className="flex gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+                <div className="text-sm space-y-1">
+                  <p className="font-medium">Подпись инициатора стоит не последней</p>
+                  <p className="text-muted-foreground">
+                    Согласование завершается, когда пройден последний шаг, — а
+                    после этапа подписи в маршруте есть ещё шаги. Значит подпись
+                    здесь превращается из финальной в промежуточное
+                    подтверждение. Если задумывалась именно подпись автора,
+                    перенесите этап на последний шаг.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-lg font-semibold">Этапы</h2>
@@ -411,8 +446,16 @@ const RouteEditor = () => {
                           <div className="min-w-0">
                             <p className="font-medium break-words">{stage.name}</p>
                             <p className="text-xs text-muted-foreground">
-                              {QUORUM_LABELS[stage.quorum] ?? stage.quorum}
+                              {stage.approver_kind === 'initiator'
+                                ? APPROVER_KIND_LABELS.initiator.toLowerCase()
+                                : QUORUM_LABELS[stage.quorum] ?? stage.quorum}
                             </p>
+                            {stage.requires_attachment && (
+                              <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                                только с приложенным PDF
+                              </p>
+                            )}
                             {(stage.condition.length > 0 || stage.is_fallback) && (
                               <p className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground">
                                 <Split className="h-3.5 w-3.5 shrink-0 mt-px" />
@@ -475,7 +518,12 @@ const RouteEditor = () => {
                         </div>
 
                         <div className="mt-2 flex flex-wrap gap-1.5">
-                          {stage.approvers.length === 0 ? (
+                          {stage.approver_kind === 'initiator' ? (
+                            <Badge variant="outline" className="text-muted-foreground">
+                              <PenLine className="mr-1 h-3 w-3" />
+                              инициатор согласования
+                            </Badge>
+                          ) : stage.approvers.length === 0 ? (
                             <span className="text-sm text-destructive">
                               согласующих нет — этап не исполнится
                             </span>
@@ -557,39 +605,103 @@ const RouteEditor = () => {
                       />
                     </div>
 
-                    <div className="space-y-1.5">
-                      <Label>Кворум</Label>
-                      <Select
-                        value={draft.quorum}
-                        onValueChange={(value) =>
-                          setDraft({ ...draft, quorum: value as Quorum })
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">{QUORUM_LABELS.all}</SelectItem>
-                          <SelectItem value="any">{QUORUM_LABELS.any}</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    {/* У этапа подписи согласующий ровно один, и кворум
+                        «нужны все» из одного человека только путал бы. */}
+                    {draft.approverKind === 'named' && (
+                      <div className="space-y-1.5">
+                        <Label>Кворум</Label>
+                        <Select
+                          value={draft.quorum}
+                          onValueChange={(value) =>
+                            setDraft({ ...draft, quorum: value as Quorum })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">{QUORUM_LABELS.all}</SelectItem>
+                            <SelectItem value="any">{QUORUM_LABELS.any}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label>Согласующие</Label>
-                    <ApproverPicker
-                      value={draft.approverIds}
-                      knownNames={knownNames}
-                      onChange={(ids) => setDraft({ ...draft, approverIds: ids })}
-                    />
-                    {draft.id !== null && (
+                    <Label>Кто согласует</Label>
+                    <Select
+                      value={draft.approverKind}
+                      onValueChange={(value) =>
+                        // Список согласующих сбрасываем сразу: у этапа
+                        // подписи его быть не может, и держать невидимый
+                        // черновик значило бы вернуть его при обратном
+                        // переключении уже как неожиданность (тот же приём,
+                        // что с условием у «иначе» ниже).
+                        setDraft({
+                          ...draft,
+                          approverKind: value as ApproverKind,
+                          approverIds: value === 'named' ? draft.approverIds : [],
+                        })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="named">
+                          {APPROVER_KIND_LABELS.named}
+                        </SelectItem>
+                        <SelectItem value="initiator">
+                          {APPROVER_KIND_LABELS.initiator}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {draft.approverKind === 'initiator' && (
                       <p className="text-xs text-muted-foreground">
-                        Список заменяется целиком: сохранится ровно то, что
-                        выбрано сейчас.
+                        Согласует тот, кто отправил объект на согласование —
+                        конкретный человек станет известен при запуске. Такой
+                        этап ставят последним: он и есть подпись автора.
                       </p>
                     )}
                   </div>
+
+                  <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                    <div className="min-w-0">
+                      <Label htmlFor="stage-attachment" className="text-sm">
+                        Требуется документ (PDF)
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Согласовать этап будет можно только приложив файл. На
+                        отказ это не влияет: документа, который отказавшему
+                        полагалось бы подписать, не существует.
+                      </p>
+                    </div>
+                    <Switch
+                      id="stage-attachment"
+                      checked={draft.requiresAttachment}
+                      onCheckedChange={(checked) =>
+                        setDraft({ ...draft, requiresAttachment: checked })
+                      }
+                    />
+                  </div>
+
+                  {draft.approverKind === 'named' && (
+                    <div className="space-y-1.5">
+                      <Label>Согласующие</Label>
+                      <ApproverPicker
+                        value={draft.approverIds}
+                        knownNames={knownNames}
+                        onChange={(ids) => setDraft({ ...draft, approverIds: ids })}
+                      />
+                      {draft.id !== null && (
+                        <p className="text-xs text-muted-foreground">
+                          Список заменяется целиком: сохранится ровно то, что
+                          выбрано сейчас.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {fields.length > 0 && (
                     <div className="space-y-2 border-t pt-4">

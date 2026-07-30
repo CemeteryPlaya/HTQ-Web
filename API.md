@@ -664,6 +664,30 @@ stage names its approvers explicitly (user ids — the platform has no groups;
 outstanding requests are marked `skipped`, not left hanging. Exactly one
 active route per subject type (partial unique index).
 
+**Signature stages.** Two independent stage flags cover "the author signs
+last, with the signed PDF attached":
+
+* `approver_kind` — `named` (the default: approvers listed in the route) or
+  `initiator`, where the single approver is resolved **at start** from
+  `ApprovalProcess.initiator_id`. It is deliberately *initiator*, not
+  "creator": signoff cannot read a domain model's `created_by`, and in
+  contracts the two are the same person by business process. Such a stage
+  must carry **no** `approver_ids` (409/422 otherwise), and its `quorum` is
+  meaningless — there is exactly one task.
+* `requires_attachment` — the stage can only be **approved** with a PDF
+  already attached to the task (`ApprovalTask.file_id`). Rejection needs no
+  document: there is nothing for the refuser to sign. Both flags are part of
+  the start-time snapshot, so unticking them mid-flight does not release
+  approvers who haven't decided yet.
+
+There is no "final stage" concept: a process completes when the highest
+`order` group is approved (`engine._advance`). A signature stage that isn't
+last therefore silently degrades to an intermediate confirmation, so
+`GET /routes/{id}` reports `initiator_stage_not_last` — a warning for the
+editor, not a block (blocking would forbid ever appending a stage after a
+signature). A signature stage on a process started **without** an initiator,
+or whose initiator is deactivated, refuses the start with 409.
+
 **Conditional branches.** A stage may carry a `condition` — a flat list of
 predicates, ANDed, over *facts* the domain app supplies. Within an `order`
 group, only stages whose condition matched enter the process; a stage flagged
@@ -689,19 +713,20 @@ or the subject — never disturbs approvals already in flight.
 
 | Endpoint                                    | Method | Auth | Notes |
 |---------------------------------------------|--------|------|-------|
-| `/api/signoff/v1/enums`                     | GET    | jwt   | Choice labels for quorum + all four state enums |
+| `/api/signoff/v1/enums`                     | GET    | jwt   | Choice labels for quorum, `approver_kind`, and all four state enums |
 | `/api/signoff/v1/subjects`                  | GET    | jwt   | Registered subject types, their labels, `has_active_route`, and `fields[]` — the facts that type allows branching on, with `options` for `choice` fields. This is what the route builder picks from |
 | `/api/signoff/v1/routes`                    | GET    | jwt   | `?subject_type=&is_active=` |
 | `/api/signoff/v1/routes`                    | POST   | admin | 409 if the subject type isn't registered, or a second active route |
-| `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | jwt / admin | GET also returns `coverage_gaps[]` — `choice` values with no branch in their group. A warning for the editor, not a block; the list endpoint omits it (too costly per row) |
-| `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, approver_ids[], condition?, is_fallback?}`; ≥1 approver enforced by the schema, unknown ids → 409, and a condition naming an unknown field or an out-of-book value → 409 |
-| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `approver_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. The last stage of a route can't be deleted |
+| `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | jwt / admin | GET also returns `coverage_gaps[]` — `choice` values with no branch in their group — and `initiator_stage_not_last`. Both are warnings for the editor, not blocks; the list endpoint omits them (too costly per row) |
+| `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, approver_ids[], condition?, is_fallback?, approver_kind?, requires_attachment?}`; ≥1 approver for `named` and **none** for `initiator` — both enforced by the schema (422). Unknown ids → 409, and a condition naming an unknown field or an out-of-book value → 409 |
+| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `approver_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. Switching `approver_kind` to `initiator` clears the approver list for you; sending a non-empty list alongside it is a 409. The last stage of a route can't be deleted |
 | `/api/signoff/v1/processes`                 | GET    | jwt   | `?subject_type=&subject_id=&state=&initiator_id=` |
 | `/api/signoff/v1/processes`                 | POST   | admin | Deliberately narrow — it accepts *any* `subject_id` of any type and so would bypass domain permissions. **The real submit path is the domain endpoint** (`/api/contracts/v1/budgets/{id}/submit`, …) |
 | `/api/signoff/v1/processes/{id}`            | GET    | jwt   | Full card: stages, tasks, approver names, subject title/url, plus `subject_facts` and each stage's `condition`/`matched_by` (`always`\|`condition`\|`fallback`) — the record of *why* these approvers |
 | `/api/signoff/v1/processes/{id}/cancel`     | POST   | jwt   | Initiator **or** admin — checked on the row. Cancel ≠ reject: the object returns to `draft` |
 | `/api/signoff/v1/tasks/mine`                | GET    | jwt   | The inbox. Only `pending` tasks on **active** stages — a request on a stage the process may never reach is not "waiting on you" |
-| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject", comment?}`. The **named approver** decides; an admin token on someone else's task gets 409 |
+| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject", comment?}`. The **named approver** decides; an admin token on someone else's task gets 409. On a `requires_attachment` stage, approving before the document is uploaded is a 409 |
+| `/api/signoff/v1/tasks/{id}/attachment`     | POST   | jwt   | **multipart**, field `file` — the PDF for a `requires_attachment` stage, uploaded *before* the decision (the upload must not sit inside the transaction holding the process lock). Only the task's own addressee: **no admin override**, since uploading for someone else would forge their signature. PDF-only and ≤25 MB by media_files scope policy (`signoff_doc`, magic-byte checked) → 415/413 pass through verbatim. Re-uploading replaces the previous file while the task is still pending |
 
 `subject_title` / `subject_url` on process cards and inbox rows come from the
 domain app's `describe` callback — signoff cannot name a row it isn't allowed
@@ -712,8 +737,10 @@ routes do not exist yet.**
 **409 Conflict** covers: no route configured, the object is already under
 approval, every approver on a stage is deactivated, no branch matched in a
 group (and no fallback), a condition naming a fact the subject doesn't
-supply, the process is closed, the task is addressed to someone else, or it
-was already decided. `403` is only ever a permissions answer; `422` only ever
+supply, the process is closed, the task is addressed to someone else, it was
+already decided, a signature stage with no (or a deactivated) initiator,
+approving a `requires_attachment` stage with no document, or attaching one to
+a stage that doesn't ask for it. `403` is only ever a permissions answer; `422` only ever
 a schema one (an unknown condition operator lands here, not in 409).
 
 ---

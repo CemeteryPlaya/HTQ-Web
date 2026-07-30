@@ -53,13 +53,16 @@ class ApprovalRouteStageAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     """
 
     list_display = ("id", "route", "order", "name", "quorum", "branch",
-                    "approver_count")
-    list_filter = ("route", "quorum", "is_fallback")
+                    "approver_kind", "requires_attachment", "approver_count")
+    list_filter = ("route", "quorum", "is_fallback", "approver_kind",
+                   "requires_attachment")
     search_fields = ("name",)
     inlines = [ApproverInline]
 
     @admin.display(description="Согласующих")
     def approver_count(self, obj) -> int:
+        """У этапа, который согласует инициатор, здесь ноль — и это норма:
+        человек станет известен на запуске процесса."""
         return obj.approvers.count()
 
     @admin.display(description="Ветка")
@@ -78,7 +81,8 @@ class ApprovalRouteStageAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 class StageInline(admin.TabularInline):
     model = ApprovalRouteStage
     extra = 1
-    fields = ("order", "name", "quorum", "condition", "is_fallback")
+    fields = ("order", "name", "quorum", "condition", "is_fallback",
+              "approver_kind", "requires_attachment")
     show_change_link = True  # отсюда — в карточку этапа за согласующими
     verbose_name = "Этап"
     verbose_name_plural = "Этапы (одинаковая очередь = параллельно)"
@@ -122,7 +126,8 @@ class ReadOnlyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 class ProcessStageInline(admin.TabularInline):
     model = ApprovalProcessStage
     extra = 0
-    fields = ("order", "name", "quorum", "state", "matched_by", "decided_at")
+    fields = ("order", "name", "quorum", "state", "matched_by",
+              "approver_kind", "requires_attachment", "decided_at")
     readonly_fields = fields
     can_delete = False
     show_change_link = True
@@ -154,7 +159,7 @@ class ApprovalProcessAdmin(ReadOnlyAdmin):
 class TaskInline(admin.TabularInline):
     model = ApprovalTask
     extra = 0
-    fields = ("user_id", "state", "comment", "acted_at")
+    fields = ("user_id", "state", "comment", "file_id", "acted_at")
     readonly_fields = fields
     can_delete = False
 
@@ -165,14 +170,16 @@ class TaskInline(admin.TabularInline):
 @admin.register(ApprovalProcessStage)
 class ApprovalProcessStageAdmin(ReadOnlyAdmin):
     list_display = ("id", "process", "order", "name", "quorum", "state",
-                    "matched_by", "decided_at")
-    list_filter = ("state", "quorum", "matched_by")
+                    "matched_by", "approver_kind", "requires_attachment",
+                    "decided_at")
+    list_filter = ("state", "quorum", "matched_by", "approver_kind",
+                   "requires_attachment")
     inlines = [TaskInline]
 
 
 @admin.register(ApprovalTask)
 class ApprovalTaskAdmin(ReadOnlyAdmin):
-    list_display = ("id", "stage", "user_id", "state", "acted_at")
+    list_display = ("id", "stage", "user_id", "state", "file_id", "acted_at")
     list_filter = ("state",)
     search_fields = ("user_id",)
 

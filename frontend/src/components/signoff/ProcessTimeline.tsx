@@ -24,7 +24,16 @@
  * маршрута в карточке вообще отсутствует.
  */
 
-import { CheckCircle2, Circle, CircleDot, MinusCircle, Split, XCircle } from 'lucide-react';
+import {
+  CheckCircle2,
+  Circle,
+  CircleDot,
+  FileText,
+  MinusCircle,
+  PenLine,
+  Split,
+  XCircle,
+} from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -65,6 +74,29 @@ function TaskRow({
         {task.comment && (
           <p className="text-sm text-muted-foreground mt-0.5 whitespace-pre-wrap break-words">
             {task.comment}
+          </p>
+        )}
+        {/* Подписанный документ — то, ЧТО именно согласовано, и добираться до
+            него из карточки должно быть можно. Ссылка подписанная и
+            короткоживущая: без неё (media недоступен) остаётся сам факт
+            приложенного файла, и это лучше пустоты. */}
+        {task.file_id && (
+          <p className="mt-0.5 flex items-center gap-1.5 text-sm">
+            <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+            {task.file_url ? (
+              <a
+                href={task.file_url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline break-all"
+              >
+                Приложенный документ
+              </a>
+            ) : (
+              <span className="text-muted-foreground">
+                Документ приложен (ссылка недоступна)
+              </span>
+            )}
           </p>
         )}
       </div>
@@ -157,9 +189,20 @@ export function ProcessTimeline({
                     />
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {QUORUM_LABELS[stage.quorum] ?? stage.quorum}
+                    {/* У этапа подписи кворум не значит ничего: согласующий
+                        там ровно один, и «нужны все» из одного человека
+                        только путало бы. */}
+                    {stage.approver_kind === 'initiator'
+                      ? 'подписывает инициатор'
+                      : QUORUM_LABELS[stage.quorum] ?? stage.quorum}
                     {stage.decided_at && ` · ${formatMoment(stage.decided_at)}`}
                   </p>
+                  {stage.requires_attachment && (
+                    <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <PenLine className="h-3.5 w-3.5 shrink-0" />
+                      согласование только с приложенным PDF
+                    </p>
+                  )}
                   {stage.matched_by !== 'always' && (
                     <p className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground">
                       <Split className="h-3.5 w-3.5 shrink-0 mt-px" />

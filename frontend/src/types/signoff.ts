@@ -23,6 +23,21 @@ export interface EnumOption {
 /** Сколько согласующих этапа должны одобрить, чтобы этап прошёл. */
 export type Quorum = 'any' | 'all';
 
+/**
+ * Откуда берётся список согласующих этапа.
+ *
+ * `named` — люди перечислены в маршруте поимённо, как во всех обычных
+ * этапах. `initiator` — согласующий известен только на запуске: это тот, кто
+ * отправил объект на согласование. Второй вариант вместе с
+ * `requires_attachment` и есть «этап подписи»: автор подтверждает
+ * согласованный остальными документ и прикладывает его PDF.
+ *
+ * Именно «инициатор», а не «автор документа»: движок не видит полей
+ * предметной модели и разрешает того, кто нажал «на согласование». В
+ * contracts это один и тот же человек по бизнес-процессу.
+ */
+export type ApproverKind = 'named' | 'initiator';
+
 export type ProcessState = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
 /** `skipped` — этап, до которого дело не дошло (процесс отклонили или
@@ -121,6 +136,11 @@ export interface RouteStage {
    *  ни одно условие. С непустым `condition` не сочетается — бэкенд такую
    *  пару не принимает. */
   is_fallback: boolean;
+  /** `initiator` — список `approvers` пустой, и это норма: человек станет
+   *  известен на запуске процесса. */
+  approver_kind: ApproverKind;
+  /** Согласовать этап можно только приложив PDF. На отказ не влияет. */
+  requires_attachment: boolean;
   approvers: Approver[];
 }
 
@@ -134,6 +154,10 @@ export interface ApprovalRoute {
   /** Только в карточке ОДНОГО маршрута (`GET /routes/:id`); в списке
    *  маршрутов поля нет — считать его на каждую строку слишком дорого. */
   coverage_gaps?: CoverageGap[];
+  /** Тоже только в карточке одного маршрута: подпись инициатора стоит не в
+   *  последней группе, и процесс завершится раньше, чем до неё дойдёт
+   *  смысл. Предупреждение, а не запрет — бэкенд такой маршрут принимает. */
+  initiator_stage_not_last?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -158,6 +182,11 @@ export interface ProcessTask {
   state: TaskState;
   comment: string;
   acted_at: string | null;
+  /** Документ, приложенный к этому решению (id в media_files). */
+  file_id: string | null;
+  /** Подписанная ссылка на него — короткоживущая, и её может не быть даже
+   *  при непустом `file_id`, если media недоступен. */
+  file_url: string | null;
 }
 
 export interface ProcessStage {
@@ -171,6 +200,11 @@ export interface ProcessStage {
   /** Как этап попал в процесс. У безусловного этапа и у сработавшего
    *  «иначе» условие одинаково пустое — различает их только это поле. */
   matched_by: 'always' | 'condition' | 'fallback';
+  /** Снимок «этапа подписи» на момент запуска. `requires_attachment` здесь
+   *  — рабочее поле: правка маршрута не избавляет от документа тех, кто ещё
+   *  не решил. */
+  approver_kind: ApproverKind;
+  requires_attachment: boolean;
   decided_at: string | null;
   tasks: ProcessTask[];
 }
@@ -205,12 +239,16 @@ export interface InboxItem {
   subject_url: string | null;
   stage_name: string;
   quorum: Quorum;
+  /** Решение потребует PDF — видно уже в очереди, а не только в диалоге. */
+  requires_attachment: boolean;
+  file_id: string | null;
   initiator_id: number | null;
   created_at: string;
 }
 
 export interface SignoffEnums {
   quorum: EnumOption[];
+  approver_kind: EnumOption[];
   process_state: EnumOption[];
   stage_state: EnumOption[];
   task_state: EnumOption[];
@@ -222,10 +260,13 @@ export interface StageInput {
   order: number;
   name: string;
   quorum: Quorum;
-  /** Минимум один — этап без согласующих движок не запустит. */
+  /** Минимум один у `named` — этап без согласующих движок не запустит. У
+   *  `initiator` наоборот: список обязан быть пустым. */
   approver_ids: number[];
   condition?: Condition;
   is_fallback?: boolean;
+  approver_kind?: ApproverKind;
+  requires_attachment?: boolean;
 }
 
 /** PATCH этапа: `approver_ids` заменяет список ЦЕЛИКОМ, а его отсутствие
@@ -240,6 +281,11 @@ export interface StageUpdateInput {
   approver_ids?: number[];
   condition?: Condition;
   is_fallback?: boolean;
+  /** Переключение на `initiator` стирает названных согласующих само —
+   *  присылать вместе с ним пустой `approver_ids` не нужно (а непустой
+   *  бэкенд отвергнет как противоречие). */
+  approver_kind?: ApproverKind;
+  requires_attachment?: boolean;
 }
 
 export interface DecisionInput {

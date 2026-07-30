@@ -47,6 +47,36 @@ class Quorum(models.TextChoices):
     ALL = "all", "Нужны все"
 
 
+class ApproverKind(models.TextChoices):
+    """Откуда берётся список согласующих этапа.
+
+    ``NAMED`` — как было и как будет в большинстве этапов: люди перечислены
+    в маршруте поимённо (``ApprovalRouteStageApprover``).
+
+    ``INITIATOR`` — согласующий известен только в момент ЗАПУСКА: это тот,
+    кто отправил объект на согласование. Нужен для «подписи автора» —
+    последнего этапа, на котором инициатор подтверждает согласованный
+    остальными документ и прикладывает его скан
+    (``requires_attachment``).
+
+    Почему это не противоречит решению «ролей и групп здесь нет»
+    (см. докстринг ``ApprovalRouteStageApprover``): роль — это правило
+    «кто угодно с таким признаком», то есть параллельный ролевой механизм.
+    Здесь же вычисляется ОДИН конкретный пользователь из данных самого
+    процесса — ``ApprovalProcess.initiator_id``, — и вычисляется один раз,
+    на запуске, ровно как разбирается ветвление.
+
+    Почему «инициатор», а не «автор документа»: у signoff нет и не может
+    быть доступа к полям предметной модели (``Agreement.created_by`` лежит
+    за границей аппки), а у процесса инициатор есть всегда. В contracts эти
+    двое совпадают по бизнес-процессу — договор отправляет на согласование
+    его автор, — но название честно говорит, что именно движок разрешает.
+    """
+
+    NAMED = "named", "Названные в маршруте"
+    INITIATOR = "initiator", "Инициатор согласования"
+
+
 class ProcessState(models.TextChoices):
     PENDING = "pending", "На согласовании"
     APPROVED = "approved", "Согласовано"
@@ -211,6 +241,12 @@ class ApprovalRouteStage(models.Model):
     сошлось на фактах предметного объекта. Отдельной модели ветки нет
     намеренно — ветка и есть группа по ``order``, а условие лишь решает,
     кто из группы участвует. Подробности — ``services/conditions.py``.
+
+    ``approver_kind``/``requires_attachment`` вместе описывают «этап
+    подписи»: решение принимает инициатор и только вместе с приложенным
+    PDF. Два независимых поля, а не один флаг «подпись», потому что каждое
+    осмысленно и по отдельности — документ можно требовать и от финконтроля,
+    а инициатор может подтверждать без файла.
     """
 
     route = models.ForeignKey(ApprovalRoute, on_delete=models.CASCADE,
@@ -241,6 +277,18 @@ class ApprovalRouteStage(models.Model):
         default=False, db_default=False, verbose_name="Иначе",
         help_text="Этап для случая, когда в группе не сошлось ни одно условие",
     )
+    approver_kind = models.CharField(
+        max_length=16, choices=ApproverKind.choices,
+        default=ApproverKind.NAMED, db_default=ApproverKind.NAMED,
+        verbose_name="Кто согласует",
+        help_text="«Инициатор» — список согласующих не заполняется, "
+                  "решение принимает отправивший объект на согласование",
+    )
+    requires_attachment = models.BooleanField(
+        default=False, db_default=False,
+        verbose_name="Требуется документ",
+        help_text="Согласовать этап можно только приложив PDF",
+    )
 
     class Meta:
         ordering = ("order", "id")
@@ -268,6 +316,17 @@ class ApprovalRouteStage(models.Model):
         if self.is_fallback and self.condition:
             raise ValidationError({
                 "condition": "Этап «иначе» не может иметь собственного условия",
+            })
+        # ``self.pk`` — потому что у несохранённого этапа инлайн согласующих
+        # ещё не записан, и спрашивать ``approvers`` не на чем. На правке
+        # существующего этапа проверка работает, а сочетание, собранное
+        # одним сохранением «этап + инлайн», отсечёт HTTP-путь
+        # (``route_service._check_approver_kind``) и следующая же правка здесь.
+        if (self.pk and self.approver_kind != ApproverKind.NAMED
+                and self.approvers.exists()):
+            raise ValidationError({
+                "approver_kind": "У этапа с этим видом согласующих не должно "
+                                 "быть названных поимённо — уберите их",
             })
         if not self.condition or not self.route_id:
             return
@@ -404,6 +463,19 @@ class ApprovalProcessStage(models.Model):
     condition = models.JSONField(default=list, blank=True)
     matched_by = models.CharField(max_length=16, default="always",
                                   db_default="always")
+    # Часть того же снимка. ``approver_kind`` здесь СПРАВОЧНЫЙ: сам список
+    # согласующих уже развёрнут в ``ApprovalTask`` на запуске, и движок его
+    # больше не пересчитывает. Хранится, чтобы в карточке было видно, почему
+    # на этапе один человек и почему именно этот, — и чтобы правка маршрута
+    # («пусть подписывает финдиректор, а не инициатор») не переписывала
+    # объяснение уже принятых решений.
+    approver_kind = models.CharField(max_length=16, choices=ApproverKind.choices,
+                                     default=ApproverKind.NAMED,
+                                     db_default=ApproverKind.NAMED)
+    # А это в снимке РАБОЧЕЕ поле: его читает ``engine.act`` на каждом
+    # решении. Снять галочку в маршруте посреди идущего согласования не
+    # должно избавлять от документа тех, кто ещё не решил.
+    requires_attachment = models.BooleanField(default=False, db_default=False)
     decided_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -434,6 +506,17 @@ class ApprovalTask(models.Model):
                              default=TaskState.PENDING,
                              db_default=TaskState.PENDING)
     comment = models.TextField(default="", blank=True, db_default="")
+    # Документ, приложенный к решению — id ``FileMetadata`` в
+    # ``apps.media_files`` (строкой, не FK: междоменный FK запрещён; тот же
+    # приём, что у ``contracts.Agreement.file_id``). Прикладывается ДО
+    # решения отдельным эндпоинтом, читается ``engine.act`` там, где этап
+    # требует документ.
+    #
+    # Живёт на задаче, а не на предметном объекте, потому что это
+    # свидетельство КОНКРЕТНОГО решения: «вот что подписал этот человек на
+    # этом этапе». Перепишет ли предметная аппка ссылку себе — её дело.
+    file_id = models.CharField(max_length=64, null=True, blank=True,
+                               verbose_name="Приложенный документ")
     acted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 

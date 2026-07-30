@@ -19,6 +19,7 @@ import type {
   ApprovalRoute,
   DecisionInput,
   InboxItem,
+  ProcessTask,
   RouteStage,
   SignoffEnums,
   StageInput,
@@ -83,4 +84,22 @@ export const signoffApi = {
    *  флаг: админский токен на чужой задаче получит 409. */
   decide: (taskId: number, data: DecisionInput) =>
     api.post<ApprovalProcess>(path(`tasks/${taskId}/decision`), data),
+  /**
+   * Приложить документ к своему запросу — ДО решения, отдельным запросом.
+   *
+   * Так устроен и бэкенд: загрузка в объектное хранилище не должна идти
+   * внутри транзакции, держащей блокировку процесса. Порядок для клиента,
+   * соответственно, всегда «сначала `attachDocument`, потом `decide`» —
+   * иначе решение отобьётся 409 «сначала загрузите PDF».
+   *
+   * Только PDF (проверяет media_files по magic-байтам, переименованный файл
+   * не пройдёт) и только тот, кому адресован запрос: администраторского
+   * исключения здесь нет.
+   */
+  attachDocument: (taskId: number, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    // Content-Type не задаём: boundary проставит браузер сам.
+    return api.post<ProcessTask>(path(`tasks/${taskId}/attachment`), form);
+  },
 };

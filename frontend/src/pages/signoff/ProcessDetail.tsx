@@ -36,7 +36,7 @@ import { SubjectLink } from '@/components/signoff/SubjectLink';
 import { isRoutableUrl } from '@/components/signoff/routable';
 import {
   DecisionDialog,
-  type DecisionKind,
+  type DecisionTarget,
 } from '@/components/signoff/DecisionDialog';
 import { ProcessTimeline } from '@/components/signoff/ProcessTimeline';
 import { formatMoment } from '@/components/signoff/format';
@@ -72,9 +72,7 @@ const ProcessDetail = () => {
   const myId = activeProfile?.id ? Number(activeProfile.id) : null;
   const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
 
-  const [target, setTarget] = useState<
-    { taskId: number; kind: DecisionKind; subjectLabel: string } | null
-  >(null);
+  const [target, setTarget] = useState<DecisionTarget | null>(null);
 
   const {
     data: process,
@@ -137,15 +135,18 @@ const ProcessDetail = () => {
     onError: (err) => reportApiError(err, 'Не удалось отозвать согласование'),
   });
 
-  /** Мой запрос на активном этапе — если он есть, решение за мной. */
-  const myPendingTask = useMemo(() => {
+  /** Мой запрос на активном этапе — если он есть, решение за мной.
+   *
+   *  Вместе с задачей нужен и её ЭТАП: требование документа объявлено на
+   *  этапе (`requires_attachment`), а спрашивать файл будет диалог решения. */
+  const myPending = useMemo(() => {
     if (!process || myId === null) return null;
     for (const stage of process.stages) {
       if (stage.state !== 'active') continue;
       const task = stage.tasks.find(
         (row) => row.user_id === myId && row.state === 'pending',
       );
-      if (task) return task;
+      if (task) return { task, stage };
     }
     return null;
   }, [process, myId]);
@@ -210,16 +211,18 @@ const ProcessDetail = () => {
                 неприжатом состоянии занимает 5rem. Меньший отступ загнал бы
                 панель под неё. */}
             <aside className="min-w-0 space-y-4 lg:order-2 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pb-2">
-              {(myPendingTask || canCancel) && (
+              {(myPending || canCancel) && (
                 <div className="flex flex-wrap gap-2">
-                  {myPendingTask && (
+                  {myPending && (
                     <>
                       <Button
                         onClick={() =>
                           setTarget({
-                            taskId: myPendingTask.id,
+                            taskId: myPending.task.id,
                             kind: 'approve',
                             subjectLabel,
+                            requiresAttachment: myPending.stage.requires_attachment,
+                            attachedFileId: myPending.task.file_id,
                           })
                         }
                       >
@@ -230,7 +233,7 @@ const ProcessDetail = () => {
                         variant="outline"
                         onClick={() =>
                           setTarget({
-                            taskId: myPendingTask.id,
+                            taskId: myPending.task.id,
                             kind: 'reject',
                             subjectLabel,
                           })

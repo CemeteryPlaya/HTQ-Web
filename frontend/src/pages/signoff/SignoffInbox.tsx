@@ -17,13 +17,14 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Inbox as InboxIcon, X } from 'lucide-react';
+import { Check, Inbox as InboxIcon, Paperclip, X } from 'lucide-react';
 
 import { SignoffShell } from '@/components/signoff/SignoffShell';
 import { SubjectLink } from '@/components/signoff/SubjectLink';
 import {
   DecisionDialog,
   type DecisionKind,
+  type DecisionTarget,
 } from '@/components/signoff/DecisionDialog';
 import { formatMoment } from '@/components/signoff/format';
 import { QUORUM_LABELS } from '@/components/signoff/labels';
@@ -43,9 +44,7 @@ import type { InboxItem } from '@/types/signoff';
 
 const SignoffInbox = () => {
   const queryClient = useQueryClient();
-  const [target, setTarget] = useState<
-    { taskId: number; kind: DecisionKind; subjectLabel: string } | null
-  >(null);
+  const [target, setTarget] = useState<DecisionTarget | null>(null);
 
   const {
     data: items = [],
@@ -62,6 +61,8 @@ const SignoffInbox = () => {
       kind,
       subjectLabel:
         item.subject_title ?? `${item.subject_type} #${item.subject_id}`,
+      requiresAttachment: item.requires_attachment,
+      attachedFileId: item.file_id,
     });
 
   return (
@@ -126,6 +127,14 @@ const SignoffInbox = () => {
                     <div className="text-xs text-muted-foreground">
                       {QUORUM_LABELS[item.quorum] ?? item.quorum}
                     </div>
+                    {/* Про документ человек должен узнать здесь, а не упереться
+                        в отказ, уже нажав «согласовать». */}
+                    {item.requires_attachment && (
+                      <div className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+                        <Paperclip className="h-3 w-3" />
+                        {item.file_id ? 'документ приложен' : 'нужен PDF'}
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                     {formatMoment(item.created_at)}

@@ -35,12 +35,13 @@ from . import schemas
 from .models import (
     ApprovalProcess,
     ApprovalRoute,
+    ApproverKind,
     ProcessState,
     Quorum,
     StageState,
     TaskState,
 )
-from .services import engine, presentation, registry
+from .services import attachments, engine, presentation, registry
 from .services import route_service as routes
 from .services.engine import SignoffError
 from .services.registry import UnknownSubject
@@ -272,6 +273,45 @@ class InboxView(SignoffView):
                 for row in presentation.list_inbox(request.token.user_id)]
 
 
+class TaskAttachmentView(SignoffView):
+    """Документ к решению (multipart, поле ``file``).
+
+    Отдельным запросом ДО решения, а не полем в ``/decision``: загрузка в
+    объектное хранилище не должна происходить внутри транзакции, держащей
+    блокировку процесса (подробности — ``services/attachments.py``).
+
+    ``body=`` неприменим — это не JSON, файл приходит из ``request.FILES``
+    (тот же случай, что ``contracts.AgreementFileView``).
+
+    ``admin=False``, и администраторского исключения тут НЕТ, в отличие от
+    скана договора: файл — часть персонального решения согласующего, и
+    загрузка его кем-то другим была бы подделкой подписи.
+    """
+
+    @write("POST", admin=False)
+    def post(self, request, task_id: int):
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+
+        try:
+            task = attachments.attach(
+                task_id, actor_id=request.token.user_id,
+                data=upload.read(), filename=upload.name,
+                mime=upload.content_type or "application/octet-stream")
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        except attachments.AttachmentRejected as exc:
+            # 413/415 из пайплайна media_files отдаём как есть: «файл больше
+            # 25 МБ» и «это не PDF» — разные причины, и сводить их к общему
+            # 400 значило бы прятать от пользователя ту единственную вещь,
+            # которую ему надо исправить.
+            return json_error(exc.detail, exc.status_code)
+
+        return schemas.TaskRead.model_validate(
+            presentation.serialize_task(task, urls=True))
+
+
 class TaskDecisionView(SignoffView):
     """Единственный путь принять решение.
 
@@ -348,6 +388,7 @@ class EnumsView(SignoffView):
 
         return {
             "quorum": pairs(Quorum.choices),
+            "approver_kind": pairs(ApproverKind.choices),
             "process_state": pairs(ProcessState.choices),
             "stage_state": pairs(StageState.choices),
             "task_state": pairs(TaskState.choices),

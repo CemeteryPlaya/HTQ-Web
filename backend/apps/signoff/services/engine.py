@@ -49,6 +49,7 @@ from apps.signoff.models import (
     ApprovalRoute,
     ApprovalState,
     ApprovalTask,
+    ApproverKind,
     ProcessState,
     Quorum,
     StageState,
@@ -93,18 +94,30 @@ class ProcessClosed(SignoffError):
 class RouteUnusable(SignoffError):
     """Маршрут нельзя исполнить на этом объекте.
 
-    Три причины, и все три обнаруживаются только на запуске:
+    Причины, и все обнаруживаются только на запуске:
 
     * пустой этап;
     * ни одного АКТИВНОГО согласующего — согласующие заданы поимённо, а люди
       увольняются, и маршрут из одних деактивированных породил бы процесс,
       который физически некому двигать;
     * в группе условных этапов не сошлось ни одно условие и нет этапа
-      «иначе» (``conditions.NoBranchMatched``).
+      «иначе» (``conditions.NoBranchMatched``);
+    * этап подписывает инициатор (``ApproverKind.INITIATOR``), а инициатора
+      у процесса нет — так бывает при операторском запуске без
+      ``initiator_id``.
 
-    Во всех трёх случаях лучше отказать на запуске с внятным текстом, чем
-    создать заявку, навсегда зависшую на первом этапе или, того хуже, тихо
-    прошедшую мимо целой группы согласующих.
+    Во всех случаях лучше отказать на запуске с внятным текстом, чем создать
+    заявку, навсегда зависшую на первом этапе или, того хуже, тихо прошедшую
+    мимо целой группы согласующих.
+    """
+
+
+class AttachmentRequired(SignoffError):
+    """Этап требует приложенный документ, а его нет.
+
+    Проверяется на СОГЛАСОВАНИИ и только на нём: требовать PDF от того, кто
+    отклоняет, незачем — отказ объясняется комментарием, а документа, который
+    отказавшему полагалось бы подписать, не существует.
     """
 
 
@@ -140,7 +153,7 @@ def start(*, subject_type: str, subject_id: int,
     # ветвления не касаются.
     facts = registry.facts_for(subject_type, subject_id)
     selected = _select_stages(stages, facts, subject=subject, route=route)
-    plan = _resolve_stages(selected)
+    plan = _resolve_stages(selected, initiator_id=initiator_id)
 
     try:
         process = ApprovalProcess.objects.create(
@@ -159,6 +172,8 @@ def start(*, subject_type: str, subject_id: int,
         process_stage = ApprovalProcessStage.objects.create(
             process=process, order=order, name=stage.name, quorum=stage.quorum,
             condition=stage.condition, matched_by=matched_by,
+            approver_kind=stage.approver_kind,
+            requires_attachment=stage.requires_attachment,
             state=StageState.ACTIVE if order == first_order else StageState.WAITING,
         )
         ApprovalTask.objects.bulk_create([
@@ -217,10 +232,17 @@ def _facts_hint(facts: dict) -> str:
         or "у объекта нет фактов для ветвления"
 
 
-def _resolve_stages(selected) -> list[tuple[int, object, str, list[int]]]:
-    """Проверить исполнимость отобранных этапов.
+def _resolve_stages(selected, *,
+                    initiator_id: int | None) -> list[tuple[int, object, str, list[int]]]:
+    """Проверить исполнимость отобранных этапов и развернуть согласующих.
 
     Возвращает ``(order, stage, matched_by, user_ids)``.
+
+    Здесь же ``ApproverKind`` превращается в конкретные id: дальше движок
+    работает со списком пользователей и про вид согласующих не знает — ровно
+    как он не знает про условия после ``_select_stages``. Поэтому
+    ``ApprovalTask`` создаётся один раз, на запуске, и «инициатор» не
+    пересчитывается на каждом решении.
 
     Проверяется на ЗАПУСКЕ, а не при сохранении маршрута: между настройкой
     и запуском проходит время, за которое согласующий успевает уволиться.
@@ -231,22 +253,51 @@ def _resolve_stages(selected) -> list[tuple[int, object, str, list[int]]]:
     all_ids: set[int] = set()
     for item in selected:
         stage = item.stage
-        user_ids = [row.user_id for row in stage.approvers.all()]
-        if not user_ids:
-            raise RouteUnusable(
-                f"На этапе «{stage.name}» не назначен ни один согласующий"
-            )
+        user_ids = _approver_ids(stage, initiator_id=initiator_id)
         all_ids.update(user_ids)
         plan.append((stage.order, stage, item.matched_by, user_ids))
 
     active = _active_user_ids(all_ids)
     for _, stage, _, user_ids in plan:
         if not any(user_id in active for user_id in user_ids):
+            if stage.approver_kind == ApproverKind.INITIATOR:
+                # Маршрут тут ни при чём — «поправьте маршрут» отправило бы
+                # человека не туда: чинить нужно учётную запись инициатора.
+                raise RouteUnusable(
+                    f"Этап «{stage.name}» подписывает инициатор, но его "
+                    f"учётная запись неактивна"
+                )
             raise RouteUnusable(
                 f"На этапе «{stage.name}» не осталось ни одного активного "
                 f"согласующего — поправьте маршрут"
             )
     return plan
+
+
+def _approver_ids(stage, *, initiator_id: int | None) -> list[int]:
+    """Кому адресовать запросы этого этапа.
+
+    Названные поимённо согласующие берутся из маршрута; этап
+    ``ApproverKind.INITIATOR`` разворачивается в одного инициатора процесса.
+    Названные согласующие у такого этапа игнорируются намеренно, а не
+    объединяются со инициатором: сочетание запрещено настройкой
+    (``route_service._check_approver_kind``), и молча исполнить то, чего
+    администратор не мог задать через интерфейс, — худший из вариантов.
+    """
+    if stage.approver_kind == ApproverKind.INITIATOR:
+        if initiator_id is None:
+            raise RouteUnusable(
+                f"Этап «{stage.name}» подписывает инициатор, но согласование "
+                f"запущено без инициатора"
+            )
+        return [initiator_id]
+
+    user_ids = [row.user_id for row in stage.approvers.all()]
+    if not user_ids:
+        raise RouteUnusable(
+            f"На этапе «{stage.name}» не назначен ни один согласующий"
+        )
+    return user_ids
 
 
 def _active_user_ids(user_ids) -> set[int]:
@@ -300,14 +351,30 @@ def act(*, task_id: int, actor_id: int, decision: str,
     if task.state != TaskState.PENDING:
         raise ProcessClosed("По этому запросу решение уже принято")
 
+    stage = task.stage
+    # ДО любых записей: отказ по нехватке документа не должен оставлять за
+    # собой закрытую задачу. Файл прикладывается заранее, отдельным
+    # эндпоинтом (``services/attachments.py``) — грузить его внутри этой
+    # транзакции значило бы держать блокировку процесса на время загрузки
+    # в S3.
+    if (decision == APPROVE and stage.requires_attachment
+            and not task.file_id):
+        raise AttachmentRequired(
+            f"На этапе «{stage.name}» согласование возможно только с "
+            f"приложенным документом — сначала загрузите PDF"
+        )
+
     task.state = TaskState.APPROVED if decision == APPROVE else TaskState.REJECTED
     task.comment = comment
     task.acted_at = _now()
     task.save(update_fields=["state", "comment", "acted_at"])
 
-    stage = task.stage
     _log(process, _EVENT_KIND[decision], actor_id=actor_id,
-         payload={"stage": stage.name, "task_id": task.pk, "comment": comment})
+         payload={"stage": stage.name, "task_id": task.pk, "comment": comment,
+                  # Какой именно документ подписан — часть ответа на «на
+                  # основании чего согласовано», и искать его в другом месте
+                  # журнала не должно быть нужно.
+                  "file_id": task.file_id or None})
 
     if decision == REJECT:
         _reject(process, stage, actor_id=actor_id, comment=comment)

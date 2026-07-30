@@ -50,4 +50,8 @@ urlpatterns = [
     path("tasks/mine/", views.InboxView.as_view()),
     path("tasks/<int:task_id>/decision", views.TaskDecisionView.as_view()),
     path("tasks/<int:task_id>/decision/", views.TaskDecisionView.as_view()),
+    # Документ прикладывается ДО решения, отдельным запросом — см. докстринг
+    # services/attachments.py.
+    path("tasks/<int:task_id>/attachment", views.TaskAttachmentView.as_view()),
+    path("tasks/<int:task_id>/attachment/", views.TaskAttachmentView.as_view()),
 ]

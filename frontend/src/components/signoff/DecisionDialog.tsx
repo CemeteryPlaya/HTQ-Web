@@ -6,15 +6,26 @@
  * дорабатывать: инициатор увидит «отклонено» и не узнает, что исправить.
  * Согласие в объяснении не нуждается.
  *
+ * Документ (`requiresAttachment`) — зеркально: нужен только при СОГЛАСИИ.
+ * Так устроен и гейт на бэкенде: требовать PDF от того, кто отклоняет,
+ * незачем — документа, который ему полагалось бы подписать, не существует.
+ * Поэтому поле файла исчезает, стоит переключиться на отказ.
+ *
+ * Отправка при этом двухшаговая — `attachDocument`, затем `decide`, — потому
+ * что таков контракт бэкенда (загрузка в хранилище не идёт внутри
+ * транзакции, держащей блокировку процесса). Оба шага живут в ОДНОЙ мутации:
+ * если файл не загрузился, решение не отправляется вовсе, и повторное
+ * нажатие начинает с загрузки заново.
+ *
  * Ответ на решение — карточка всего процесса, а не задачи: одно решение
  * может закрыть этап, открыть следующий и завершить процесс целиком.
  * Поэтому `onDecided` получает процесс, а инвалидация после него обновляет
  * и очередь, и списки.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { Check, Loader2, X } from 'lucide-react';
+import { Check, FileText, Loader2, Paperclip, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -35,46 +46,84 @@ import { reportApiError } from './apiError';
 
 export type DecisionKind = 'approve' | 'reject';
 
+export interface DecisionTarget {
+  taskId: number;
+  kind: DecisionKind;
+  subjectLabel: string;
+  /** Этап требует приложенного PDF (`ProcessStage.requires_attachment`). */
+  requiresAttachment?: boolean;
+  /** Документ, приложенный к этому запросу РАНЬШЕ: человек мог загрузить
+   *  его, закрыть диалог и вернуться. Тогда файл выбирать заново не нужно —
+   *  но заменить можно. */
+  attachedFileId?: string | null;
+}
+
 interface Props {
   /** `null` — диалог закрыт. Пара «задача + вид решения» задаёт его целиком. */
-  target: { taskId: number; kind: DecisionKind; subjectLabel: string } | null;
+  target: DecisionTarget | null;
   onOpenChange: (open: boolean) => void;
   onDecided: (process: ApprovalProcess) => void;
 }
 
 export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
   const [comment, setComment] = useState('');
+  const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
 
-  // Комментарий к предыдущему решению не должен утечь в следующее.
+  // Ни комментарий, ни файл предыдущего решения не должны утечь в следующее.
   useEffect(() => {
     if (target) {
       setComment('');
+      setFile(null);
       setError('');
     }
   }, [target]);
 
+  const isReject = target?.kind === 'reject';
+  const needsDocument = Boolean(target?.requiresAttachment) && !isReject;
+  const alreadyAttached = Boolean(target?.attachedFileId);
+
   const mutation = useMutation({
-    mutationFn: ({ taskId, kind }: { taskId: number; kind: DecisionKind }) =>
-      signoffApi.decide(taskId, { decision: kind, comment }).then((r) => r.data),
+    mutationFn: async ({ taskId, kind }: { taskId: number; kind: DecisionKind }) => {
+      // Порядок обязателен: решение без загруженного документа бэкенд
+      // отобьёт 409 «сначала загрузите PDF».
+      if (file) await signoffApi.attachDocument(taskId, file);
+      const { data } = await signoffApi.decide(taskId, { decision: kind, comment });
+      return data;
+    },
     onSuccess: (process) => {
-      toast.success(
-        target?.kind === 'approve' ? 'Согласовано' : 'Отклонено',
-      );
+      toast.success(target?.kind === 'approve' ? 'Согласовано' : 'Отклонено');
       onOpenChange(false);
       onDecided(process);
     },
     // 409 здесь — «запрос адресован другому», «решение уже принято»,
-    // «согласование завершено»: текст объясняет причину, показываем его.
+    // «согласование завершено», «нужен документ»; 413/415 — файл слишком
+    // большой или не PDF. Во всех случаях текст объясняет причину.
     onError: (err) => reportApiError(err, 'Не удалось отправить решение'),
   });
 
-  const isReject = target?.kind === 'reject';
+  const pickFile = (chosen: File | null) => {
+    // Проверяем здесь, хотя проверит и media_files (по magic-байтам):
+    // сказать «нужен PDF» до загрузки 20 МБ дешевле для всех.
+    if (chosen && chosen.type !== 'application/pdf') {
+      setError('Документ принимается только в PDF.');
+      setFile(null);
+      if (fileInput.current) fileInput.current.value = '';
+      return;
+    }
+    setError('');
+    setFile(chosen);
+  };
 
   const submit = () => {
     if (!target) return;
     if (isReject && !comment.trim()) {
       setError('Укажите причину — инициатору нужно понимать, что исправить.');
+      return;
+    }
+    if (needsDocument && !file && !alreadyAttached) {
+      setError('На этом этапе согласование возможно только с приложенным PDF.');
       return;
     }
     setError('');
@@ -98,6 +147,37 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
             )}
           </DialogDescription>
         </DialogHeader>
+
+        {needsDocument && (
+          <div className="space-y-2">
+            <Label htmlFor="signoff-document">Документ (PDF)</Label>
+            <input
+              ref={fileInput}
+              id="signoff-document"
+              type="file"
+              accept="application/pdf"
+              onChange={(event) => pickFile(event.target.files?.[0] ?? null)}
+              disabled={mutation.isPending}
+              className="block w-full text-sm text-muted-foreground
+                         file:mr-3 file:rounded-md file:border-0
+                         file:bg-secondary file:px-3 file:py-1.5
+                         file:text-sm file:font-medium file:text-secondary-foreground"
+            />
+            {file ? (
+              <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                <FileText className="h-4 w-4" />
+                {file.name}
+              </p>
+            ) : (
+              alreadyAttached && (
+                <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                  <Paperclip className="h-4 w-4" />
+                  Документ уже приложен — выберите файл, чтобы заменить его.
+                </p>
+              )
+            )}
+          </div>
+        )}
 
         <div className="space-y-2">
           <Label htmlFor="signoff-comment">

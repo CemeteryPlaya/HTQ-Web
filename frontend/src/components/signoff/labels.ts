@@ -12,6 +12,7 @@
 
 import type {
   ApprovalState,
+  ApproverKind,
   ProcessState,
   Quorum,
   StageState,
@@ -51,6 +52,13 @@ export const APPROVAL_STATE_LABELS: Record<ApprovalState, string> = {
 export const QUORUM_LABELS: Record<Quorum, string> = {
   any: 'Достаточно одного',
   all: 'Нужны все',
+};
+
+/** Откуда берётся список согласующих этапа. `initiator` вместе с
+ *  «требуется документ» и есть этап подписи автора. */
+export const APPROVER_KIND_LABELS: Record<ApproverKind, string> = {
+  named: 'Названные в маршруте',
+  initiator: 'Инициатор согласования',
 };
 
 /** `[{value, label}]` → `{value: label}`. Enums приходят списком пар, а
