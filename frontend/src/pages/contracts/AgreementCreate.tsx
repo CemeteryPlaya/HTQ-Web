@@ -294,7 +294,7 @@ const AgreementCreate = () => {
                 )}
                 {noCounterparties && (
                   <li>
-                    Реестр контрактов пуст —{' '}
+                    Реестр контрагентов пуст —{' '}
                     <Link to="/contracts/counterparties/new" className="underline">
                       добавьте контрагента
                     </Link>

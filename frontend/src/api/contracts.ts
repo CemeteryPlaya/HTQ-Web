@@ -1,6 +1,6 @@
 /**
  * api/contracts.ts
- * Клиент домена «Бюджеты / Реестр контрактов / Договоры».
+ * Клиент домена «Бюджеты / Реестр контрагентов / Договоры».
  *
  * Пути без завершающего слэша — бэкенд регистрирует оба написания
  * (APPEND_SLASH=False), но у этой аппки фронтенд первый потребитель, так
@@ -116,7 +116,7 @@ export const contractsApi = {
   submitBudget: (id: number) =>
     api.post<ApprovalProcess>(path(`budgets/${id}/submit`)),
 
-  // ─── Реестр контрактов ─────────────────────────────────────────────────
+  // ─── Реестр контрагентов ───────────────────────────────────────────────
   listCounterparties: (params?: { search?: string; status?: string }) =>
     api.get<Counterparty[]>(path('counterparties'), { params }),
   getCounterparty: (id: number) =>

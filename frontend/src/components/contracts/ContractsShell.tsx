@@ -35,7 +35,7 @@ const NAV: NavItem[] = [
   },
   {
     to: '/contracts/counterparties',
-    label: 'Реестр контрактов',
+    label: 'Реестр контрагентов',
     icon: Building2,
     matchPrefix: '/contracts/counterparties',
   },

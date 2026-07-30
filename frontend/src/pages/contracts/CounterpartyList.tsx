@@ -21,7 +21,7 @@ import { contractsApi } from '@/api/contracts';
 import type { CounterpartyStatus } from '@/types/contracts';
 
 /**
- * Реестр контрактов — карточки организаций и ИП, с которыми заключаются
+ * Реестр контрагентов — карточки организаций и ИП, с которыми заключаются
  * договоры.
  *
  * Поиск идёт на бэкенде (`?search=`) и покрывает и наименование, и БИН/ИИН
@@ -61,7 +61,7 @@ const CounterpartyList = () => {
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3">
               <Building2 className="h-7 w-7 text-muted-foreground" />
-              <h1 className="text-3xl font-bold">Реестр контрактов</h1>
+              <h1 className="text-3xl font-bold">Реестр контрагентов</h1>
             </div>
             <Button asChild>
               <Link to="/contracts/counterparties/new">
