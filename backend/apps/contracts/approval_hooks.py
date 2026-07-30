@@ -32,8 +32,14 @@ signoff мог вести своё поле ``approval_state``), колбэки 
   (казахстанский проект закупается у турецкого поставщика). Общий ключ
   ``country_id`` означал бы, что настраивающий маршрут выберет одну из них
   наугад и никогда об этом не узнает.
-* **``fact_fields`` — функция.** Справочник стран пополняется без
-  перезапуска, а редактор маршрута должен показывать сегодняшний список.
+
+  Обратная сторона того же правила: ``program_id`` у договора БЕЗ уточняющей
+  приставки — это утверждение, что программа у него ровно одна (договор
+  ссылается на одну строку бюджета, а строка — на одну программу), а не
+  недосмотр по образцу стран. Уточнять там нечего, и ``budget_program_id``
+  ради симметрии с ними завёл бы ложную развилку.
+* **``fact_fields`` — функция.** Справочники стран и программ пополняются
+  без перезапуска, а редактор маршрута должен показывать сегодняшний список.
 """
 
 from __future__ import annotations
@@ -49,6 +55,7 @@ from .models import (
     Counterparty,
     Country,
     PaymentType,
+    Program,
 )
 from .services import budget_calc
 
@@ -164,6 +171,26 @@ def _country_options() -> list[dict]:
             for country in Country.objects.all()]
 
 
+def _program_options() -> list[dict]:
+    """Справочник программ для редактора маршрута.
+
+    Подпись — ``display_name`` («код название»), та же, что в карточках и
+    django-admin: программа, названная в ветке маршрута иначе, чем в бюджете,
+    читалась бы как другая программа.
+
+    Неактивные программы (``is_active=False``) отсюда НЕ отфильтрованы, хотя
+    поле есть. Причина не в удобстве, а в том, что ``options`` — не только
+    список для выпадашки: ``conditions._validate_value`` отбивает значение
+    choice-поля, которого в нём нет. Спрятав снятую с учёта программу, мы
+    сделали бы нередактируемым КАЖДЫЙ уже настроенный этап, который её
+    называет, — 409 «неизвестные значения» при следующем сохранении, далеко
+    от причины. Уже идущие процессы и сохранённые условия при этом
+    продолжают работать: ``evaluate`` со справочником не сверяется.
+    """
+    return [{"value": program.pk, "label": program.display_name}
+            for program in Program.objects.all()]
+
+
 def _budget_facts(subject_id: int) -> dict:
     budget = (Budget.objects.select_related("administrator")
               .prefetch_related("lines").filter(pk=subject_id).first())
@@ -224,6 +251,11 @@ def _agreement_facts(subject_id: int) -> dict:
         "admin_country_id":
             agreement.budget_line.budget.administrator.country_id,
         "counterparty_country_id": agreement.counterparty.country_id,
+        # Программа берётся со СТРОКИ бюджета — на самом договоре её нет
+        # (одна версия правды о том, из какого кармана деньги). Лишнего
+        # запроса не стоит: ``budget_line`` уже в select_related выше, а
+        # ``program_id`` — колонка на ней.
+        "program_id": agreement.budget_line.program_id,
         "amount": agreement.amount,
         "currency": agreement.currency,
         "payment_type": agreement.payment_type,
@@ -237,6 +269,8 @@ def _agreement_fact_fields() -> list[dict]:
          "type": "choice", "options": countries},
         {"key": "counterparty_country_id", "label": "Страна контрагента",
          "type": "choice", "options": countries},
+        {"key": "program_id", "label": "Программа",
+         "type": "choice", "options": _program_options()},
         {"key": "amount", "label": "Сумма договора", "type": "number"},
         {"key": "currency", "label": "Валюта", "type": "string"},
         {"key": "payment_type", "label": "Тип оплаты", "type": "choice",

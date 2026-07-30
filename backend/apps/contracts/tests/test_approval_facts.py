@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from apps.contracts.models import Agreement, Budget, Counterparty
+from apps.contracts.models import Agreement, Budget, Counterparty, Program
 from apps.contracts.tests.helpers import (
     BASE,
     auth,
@@ -109,11 +109,61 @@ def test_agreement_fields_label_the_two_countries_distinguishably():
     """Ключи разные — но выбирать поле человек будет по подписи, и она тоже
     обязана различать эти две страны."""
     make_country("Казахстан", "KZ")
+    # Программа тоже нужна: ``validate_fields`` требует непустых options у
+    # КАЖДОГО choice-поля, и пустой справочник программ уронил бы чтение
+    # всего списка полей договора, а не только своего.
+    make_program()
     fields = fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)
 
     assert fields["admin_country_id"]["label"] != fields["counterparty_country_id"]["label"]
     assert fields["admin_country_id"]["type"] == "choice"
     assert fields["counterparty_country_id"]["type"] == "choice"
+
+
+def test_agreement_reports_the_program_of_its_budget_line():
+    """Программы на самом договоре нет — она на строке бюджета, из которой он
+    финансируется. Ключ без приставки (``program_id``, не
+    ``budget_program_id``) — утверждение, что она ровно одна."""
+    science = make_program("Наука", "Реактивы")
+    agreement = make_agreement(line=make_line(program=science))
+
+    facts = registry.facts_for(Agreement.SIGNOFF_SUBJECT_TYPE, agreement.pk)
+
+    assert facts["program_id"] == science.pk
+    assert fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)["program_id"]["type"] == "choice"
+
+
+def test_program_options_follow_the_reference_book():
+    """То же, что у стран: справочник пополняется без перезапуска, и новая
+    программа обязана появиться в редакторе маршрута."""
+    make_country("Казахстан", "KZ")  # см. соседний тест: нужен каждому choice
+    make_program("Образование", "Оборудование")
+    before = len(fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)["program_id"]["options"])
+
+    make_program("Наука", "Реактивы", code="Н-1")
+    after = fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)["program_id"]["options"]
+
+    assert len(after) == before + 1
+    # Подпись — display_name («код название»), та же, что в карточке бюджета:
+    # названная в ветке иначе, программа читалась бы как другая.
+    assert "Н-1 Наука" in [option["label"] for option in after]
+
+
+def test_deactivated_program_stays_in_the_options():
+    """Снятая с учёта программа НЕ исчезает из справочника веток.
+
+    ``conditions._validate_value`` отбивает значение choice-поля, которого нет
+    в ``options``. Спрятав её, мы сделали бы нередактируемым каждый уже
+    настроенный этап, который её называет, — 409 при следующем сохранении,
+    далеко от причины (деактивации в другом разделе).
+    """
+    make_country("Казахстан", "KZ")  # см. выше: нужен каждому choice-полю
+    retired = make_program("Старая программа", "Прочее")
+    Program.objects.filter(pk=retired.pk).update(is_active=False)
+
+    options = fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)["program_id"]["options"]
+
+    assert retired.pk in [option["value"] for option in options]
 
 
 def test_agreement_amount_and_payment_type_are_branchable():
