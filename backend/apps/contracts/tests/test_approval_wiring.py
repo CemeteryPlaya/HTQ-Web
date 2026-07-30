@@ -21,7 +21,7 @@ from apps.contracts.tests.helpers import (
     auth,
     make_administrator,
     make_agreement,
-    make_budget,
+    make_line,
     make_counterparty,
     make_program,
     post_json,
@@ -89,23 +89,23 @@ def test_all_three_models_are_registered_as_approvable(client):
     listed = client.get("/api/signoff/v1/subjects", **auth(token())).json()
     by_type = {row["subject_type"]: row for row in listed}
 
-    assert by_type["contracts.budget"]["label"] == "Бюджетная строка"
+    assert by_type["contracts.budget"]["label"] == "Бюджет"
     assert by_type["contracts.counterparty"]["label"] == "Контрагент"
     assert by_type["contracts.agreement"]["label"] == "Договор"
 
 
 def test_the_process_card_shows_a_human_readable_subject(client):
     approver = make_user()
-    budget = make_budget()
+    line = make_line()
     route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
 
-    submitted = post_json(client, f"{BASE}/budgets/{budget.pk}/submit", {},
+    submitted = post_json(client, f"{BASE}/budgets/{line.budget_id}/submit", {},
                           **auth(token()))
     assert submitted.status_code == 201, submitted.content
     body = submitted.json()
     # describe() из approval_hooks: signoff сам не умеет назвать чужую строку.
-    assert budget.administrator.display_name in body["subject_title"]
-    assert body["subject_url"] == f"/contracts/budgets/{budget.pk}"
+    assert line.budget.administrator.display_name in body["subject_title"]
+    assert body["subject_url"] == f"/contracts/budgets/{line.budget_id}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -118,10 +118,11 @@ def test_an_ordinary_employee_can_create_and_submit_a_budget(client):
     approver = make_user()
     route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
 
-    created = post_json(client, f"{BASE}/budgets", {
-        "administrator_id": make_administrator().pk,
-        "program_id": make_program().pk,
-        "amount": "1000000.00", "period_year": 2030,
+    created = post_json(client, f"{BASE}/budgets/full", {
+        "administrator": {"id": make_administrator().pk},
+        "programs": [{"program": {"id": make_program().pk},
+                      "amount": "1000000.00"}],
+        "period_year": 2030,
     }, **auth(token()))
     assert created.status_code == 201, created.content
     assert created.json()["approval_state"] == ApprovalState.DRAFT
@@ -137,16 +138,16 @@ def test_an_ordinary_employee_can_create_and_submit_a_budget(client):
 
 def test_editing_a_budget_still_needs_an_admin(client):
     """Ослаблено только СОЗДАНИЕ: правка остаётся административной."""
-    budget = make_budget()
-    forbidden = client.patch(f"{BASE}/budgets/{budget.pk}",
+    line = make_line()
+    forbidden = client.patch(f"{BASE}/budgets/{line.budget_id}",
                              data='{"amount": "1.00"}',
                              content_type="application/json", **auth(token()))
     assert forbidden.status_code == 403
 
 
 def test_submitting_without_a_route_is_409(client):
-    budget = make_budget()
-    bad = post_json(client, f"{BASE}/budgets/{budget.pk}/submit", {},
+    line = make_line()
+    bad = post_json(client, f"{BASE}/budgets/{line.budget_id}/submit", {},
                     **auth(token()))
     assert bad.status_code == 409
     assert "маршрут" in bad.json()["detail"].lower()
@@ -154,27 +155,28 @@ def test_submitting_without_a_route_is_409(client):
 
 def test_submitting_twice_is_409(client):
     approver = make_user()
-    budget = make_budget()
+    line = make_line()
     route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
 
-    assert post_json(client, f"{BASE}/budgets/{budget.pk}/submit", {},
+    assert post_json(client, f"{BASE}/budgets/{line.budget_id}/submit", {},
                      **auth(token())).status_code == 201
-    clash = post_json(client, f"{BASE}/budgets/{budget.pk}/submit", {},
+    clash = post_json(client, f"{BASE}/budgets/{line.budget_id}/submit", {},
                       **auth(token()))
     assert clash.status_code == 409
 
 
 def test_a_closed_budget_is_not_submitted(client):
     approver = make_user()
-    budget = make_budget()
+    line = make_line()
+    budget = line.budget
     budget.status = "closed"
     budget.save(update_fields=["status"])
     route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
 
-    bad = post_json(client, f"{BASE}/budgets/{budget.pk}/submit", {},
+    bad = post_json(client, f"{BASE}/budgets/{line.budget_id}/submit", {},
                     **auth(token()))
     assert bad.status_code == 409
-    assert "Закрытая" in bad.json()["detail"]
+    assert "Закрытый" in bad.json()["detail"]
 
 
 def test_a_blocked_counterparty_is_not_submitted(client):
@@ -193,27 +195,27 @@ def test_a_blocked_counterparty_is_not_submitted(client):
 
 def test_an_unapproved_budget_cannot_fund_an_agreement(client):
     approver = make_user()
-    budget = make_budget()
+    line = make_line()
     counterparty = make_counterparty()
     route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
 
     bad = post_json(client, f"{BASE}/agreements", {
-        "number": "Д-100", "name": "Поставка", "budget_id": budget.pk,
+        "number": "Д-100", "name": "Поставка", "budget_line_id": line.pk,
         "counterparty_id": counterparty.pk, "amount": "100000.00",
         "payment_type": "postpayment", "currency": "KZT",
     }, **auth(admin_token()))
     assert bad.status_code == 409
-    assert "не согласована" in bad.json()["detail"]
+    assert "не согласован" in bad.json()["detail"]
 
 
 def test_an_approved_budget_funds_an_agreement(client):
-    budget = make_budget()
+    line = make_line()
     counterparty = make_counterparty()
-    approve(budget)
-    assert budget.approval_state == ApprovalState.APPROVED
+    approve(line.budget)
+    assert line.budget.approval_state == ApprovalState.APPROVED
 
     created = post_json(client, f"{BASE}/agreements", {
-        "number": "Д-101", "name": "Поставка", "budget_id": budget.pk,
+        "number": "Д-101", "name": "Поставка", "budget_line_id": line.pk,
         "counterparty_id": counterparty.pk, "amount": "100000.00",
         "payment_type": "postpayment", "currency": "KZT",
     }, **auth(admin_token()))
@@ -222,12 +224,12 @@ def test_an_approved_budget_funds_an_agreement(client):
 
 def test_an_unapproved_counterparty_is_not_contractable(client):
     approver = make_user()
-    budget = make_budget()
+    line = make_line()
     counterparty = make_counterparty()
     route_for(Counterparty.SIGNOFF_SUBJECT_TYPE, approver.pk)
 
     bad = post_json(client, f"{BASE}/agreements", {
-        "number": "Д-102", "name": "Поставка", "budget_id": budget.pk,
+        "number": "Д-102", "name": "Поставка", "budget_line_id": line.pk,
         "counterparty_id": counterparty.pk, "amount": "100000.00",
         "payment_type": "postpayment", "currency": "KZT",
     }, **auth(admin_token()))
@@ -239,12 +241,12 @@ def test_without_a_route_the_gate_does_not_apply(client):
     """Установка, где согласование не настроено, продолжает работать как
     раньше: все существующие записи — draft, и безусловная проверка
     запретила бы вообще всё."""
-    budget = make_budget()
+    line = make_line()
     counterparty = make_counterparty()
-    assert budget.approval_state == ApprovalState.DRAFT
+    assert line.budget.approval_state == ApprovalState.DRAFT
 
     created = post_json(client, f"{BASE}/agreements", {
-        "number": "Д-103", "name": "Поставка", "budget_id": budget.pk,
+        "number": "Д-103", "name": "Поставка", "budget_line_id": line.pk,
         "counterparty_id": counterparty.pk, "amount": "100000.00",
         "payment_type": "postpayment", "currency": "KZT",
     }, **auth(admin_token()))
@@ -254,9 +256,9 @@ def test_without_a_route_the_gate_does_not_apply(client):
 def test_the_gate_does_not_lock_edits_of_an_existing_agreement(client):
     """Согласование бюджета, отозванное задним числом, не должно запирать
     правку названия у давно заключённого договора."""
-    budget = make_budget()
+    line = make_line()
     counterparty = make_counterparty()
-    agreement = make_agreement(budget=budget, counterparty=counterparty)
+    agreement = make_agreement(line=line, counterparty=counterparty)
     make_user()
     route_for(Budget.SIGNOFF_SUBJECT_TYPE, make_user("later").pk)
 
@@ -272,14 +274,14 @@ def test_disabling_signoff_lifts_the_gate_instead_of_breaking_contracts(client):
     роняет предметную аппку, которая его подключила. Иначе ``service --off``
     для signoff означал бы заодно остановку всего реестра договоров."""
     approver = make_user()
-    budget = make_budget()
+    line = make_line()
     counterparty = make_counterparty()
     route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
     ServiceStatus.objects.update_or_create(
         app_label="signoff", defaults={"enabled": False, "message": "off"})
 
     created = post_json(client, f"{BASE}/agreements", {
-        "number": "Д-104", "name": "Поставка", "budget_id": budget.pk,
+        "number": "Д-104", "name": "Поставка", "budget_line_id": line.pk,
         "counterparty_id": counterparty.pk, "amount": "100000.00",
         "payment_type": "postpayment", "currency": "KZT",
     }, **auth(admin_token()))
@@ -287,20 +289,20 @@ def test_disabling_signoff_lifts_the_gate_instead_of_breaking_contracts(client):
 
     # Сама отправка на согласование при этом честно отдаёт 503 — общий
     # контракт платформы для выключенного сервиса.
-    off = post_json(client, f"{BASE}/budgets/{budget.pk}/submit", {},
+    off = post_json(client, f"{BASE}/budgets/{line.budget_id}/submit", {},
                     **auth(token()))
     assert off.status_code == 503
     assert off.json()["code"] == "service_disabled"
 
 
 def test_the_budget_list_can_be_filtered_by_approval_state(client):
-    approved = make_budget(period_year=2031)
-    make_budget(program=make_program(expense_item="Услуги"), period_year=2032)
-    approve(approved)
+    approved = make_line(period_year=2031)
+    make_line(program=make_program(expense_item="Услуги"), period_year=2032)
+    approve(approved.budget)
 
     rows = client.get(f"{BASE}/budgets?approval_state=approved",
                       **auth(token())).json()
-    assert [row["id"] for row in rows] == [approved.pk]
+    assert [row["id"] for row in rows] == [approved.budget_id]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -308,9 +310,9 @@ def test_the_budget_list_can_be_filtered_by_approval_state(client):
 # ═══════════════════════════════════════════════════════════════════════
 
 def _draft_agreement() -> Agreement:
-    budget = make_budget()
+    line = make_line()
     counterparty = make_counterparty()
-    return make_agreement(budget=budget, counterparty=counterparty,
+    return make_agreement(line=line, counterparty=counterparty,
                           status=AgreementStatus.DRAFT)
 
 
@@ -373,8 +375,8 @@ def test_cancelling_returns_the_agreement_to_draft(client):
 
 def test_only_a_draft_agreement_is_submitted(client):
     approver = make_user()
-    budget = make_budget()
-    agreement = make_agreement(budget=budget, status=AgreementStatus.SIGNED)
+    line = make_line()
+    agreement = make_agreement(line=line, status=AgreementStatus.SIGNED)
     route_for(Agreement.SIGNOFF_SUBJECT_TYPE, approver.pk)
 
     bad = post_json(client, f"{BASE}/agreements/{agreement.pk}/submit", {},
@@ -388,11 +390,11 @@ def test_an_agreement_that_does_not_fit_the_budget_is_not_submitted(client):
     (``budget_calc.COMMITTING_STATUSES``), поэтому лимит проверяется ДО
     запуска процесса, а не после."""
     approver = make_user()
-    budget = make_budget(amount="500000.00")
+    line = make_line(amount="500000.00")
     counterparty = make_counterparty()
-    make_agreement(budget=budget, counterparty=counterparty, number="Д-200",
+    make_agreement(line=line, counterparty=counterparty, number="Д-200",
                    amount="400000.00", status=AgreementStatus.SIGNED)
-    overflow = make_agreement(budget=budget, counterparty=counterparty,
+    overflow = make_agreement(line=line, counterparty=counterparty,
                               number="Д-201", amount="300000.00",
                               status=AgreementStatus.DRAFT)
     route_for(Agreement.SIGNOFF_SUBJECT_TYPE, approver.pk)

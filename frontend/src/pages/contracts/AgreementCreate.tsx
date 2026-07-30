@@ -17,17 +17,22 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { contractsApi } from '@/api/contracts';
-import type { AgreementStatus, Budget, PaymentType } from '@/types/contracts';
+import type { AgreementStatus, BudgetLineFlat, PaymentType } from '@/types/contracts';
 
 /**
  * Оформление договора.
  *
  * Ключевая механика — выбор источника финансирования. В спецификации у
  * договора отдельные поля «администратор» и «программа», и форма их так и
- * показывает (два каскадных списка), но на бэкенд уходит ОДИН `budget_id`:
- * администратор × программа × год и есть бюджетная строка. Хранить на
- * договоре и то и другое значило бы завести две версии правды о том, из
- * какого кармана взяты деньги.
+ * показывает (два каскадных списка), но на бэкенд уходит ОДИН
+ * `budget_line_id`: строка бюджета и есть «программа такого-то проекта за
+ * такой-то год». Хранить на договоре и администратора, и программу значило
+ * бы завести две версии правды о том, из какого кармана взяты деньги.
+ *
+ * Списки строятся из ПЛОСКОГО списка строк (`GET /budget-lines`), а не из
+ * вложенных `lines` внутри бюджетов: каскад перебирает программы всех
+ * бюджетов сразу, и разворачивать для этого вложенную структуру на клиенте
+ * значило бы переложить сюда же и фильтр по согласованности.
  *
  * Остаток выбранной строки показывается сразу и пересчитывается при вводе
  * суммы — чтобы превышение было видно до отправки, а не прилетало 409-ым
@@ -56,9 +61,14 @@ const AgreementCreate = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const { data: budgets = [], isLoading: budgetsLoading } = useQuery({
-    queryKey: ['contracts', 'budgets'],
-    queryFn: () => contractsApi.listBudgets().then((r) => r.data),
+  // Только СОГЛАСОВАННЫЕ бюджеты: с несогласованного тратить нельзя, и
+  // бэкенд это проверяет сам (`agreement_service._validate_context`).
+  // Показывать в списке источник, который гарантированно будет отбит, —
+  // значит обещать деньги, которых форма не даст потратить.
+  const { data: lines = [], isLoading: budgetsLoading } = useQuery({
+    queryKey: ['contracts', 'budget-lines', 'approved'],
+    queryFn: () =>
+      contractsApi.listBudgetLines({ approval_state: 'approved' }).then((r) => r.data),
   });
   const { data: counterparties = [], isLoading: counterpartiesLoading } = useQuery({
     queryKey: ['contracts', 'counterparties', ''],
@@ -71,7 +81,7 @@ const AgreementCreate = () => {
 
   const [administratorId, setAdministratorId] = useState<string>('');
   const [programId, setProgramId] = useState<string>('');
-  const [budgetId, setBudgetId] = useState<string>('');
+  const [lineId, setLineId] = useState<string>('');
   const [counterpartyId, setCounterpartyId] = useState<string>('');
   const [number, setNumber] = useState('');
   const [name, setName] = useState('');
@@ -82,19 +92,20 @@ const AgreementCreate = () => {
   const [file, setFile] = useState<File | null>(null);
   const [errors, setErrors] = useState<Errors>({});
 
-  // Списки строятся из бюджетов, а не из справочников: выбирать можно только
-  // тех администраторов и те программы, под которые бюджет реально заведён.
-  // Иначе форма позволяла бы собрать пару, для которой источника денег нет.
+  // Списки строятся из строк бюджета, а не из справочников: выбирать можно
+  // только тех администраторов и те программы, под которые бюджет реально
+  // заведён и согласован. Иначе форма позволяла бы собрать пару, для которой
+  // источника денег нет.
   const administrators = useMemo(() => {
     const seen = new Map<number, string>();
-    budgets.forEach((row) => seen.set(row.administrator_id, row.administrator_name));
+    lines.forEach((row) => seen.set(row.administrator_id, row.administrator_name));
     return [...seen].map(([id, label]) => ({ id, label }));
-  }, [budgets]);
+  }, [lines]);
 
   const programs = useMemo(() => {
     if (!administratorId) return [];
-    const seen = new Map<number, Budget>();
-    budgets
+    const seen = new Map<number, BudgetLineFlat>();
+    lines
       .filter((row) => String(row.administrator_id) === administratorId)
       .forEach((row) => seen.set(row.program_id, row));
     return [...seen].map(([id, row]) => ({
@@ -102,24 +113,25 @@ const AgreementCreate = () => {
       label: row.program_name,
       hint: row.expense_item,
     }));
-  }, [budgets, administratorId]);
+  }, [lines, administratorId]);
 
-  // Один администратор + одна программа могут иметь строки за разные годы —
-  // тогда нужен третий выбор. Если год ровно один, он проставляется сам.
+  // Одна программа у одного администратора может финансироваться за разные
+  // годы — это разные бюджеты и разные строки, тогда нужен третий выбор.
+  // Если год ровно один, он проставляется сам.
   const yearOptions = useMemo(() => {
     if (!administratorId || !programId) return [];
-    return budgets
+    return lines
       .filter(
         (row) =>
           String(row.administrator_id) === administratorId &&
           String(row.program_id) === programId,
       )
       .sort((a, b) => b.period_year - a.period_year);
-  }, [budgets, administratorId, programId]);
+  }, [lines, administratorId, programId]);
 
-  const selectedBudget = budgets.find((row) => String(row.id) === budgetId);
+  const selectedLine = lines.find((row) => String(row.id) === lineId);
 
-  const remainingKopecks = selectedBudget ? toKopecks(selectedBudget.remaining) : null;
+  const remainingKopecks = selectedLine ? toKopecks(selectedLine.remaining) : null;
   const amountKopecks =
     amount.trim() && AMOUNT_RE.test(amount.trim()) ? toKopecks(amount.trim()) : null;
 
@@ -141,12 +153,12 @@ const AgreementCreate = () => {
   const chooseAdministrator = (value: string) => {
     setAdministratorId(value);
     setProgramId('');
-    setBudgetId('');
+    setLineId('');
   };
 
   const chooseProgram = (value: string) => {
     setProgramId(value);
-    const matching = budgets
+    const matching = lines
       .filter(
         (row) =>
           String(row.administrator_id) === administratorId &&
@@ -154,14 +166,14 @@ const AgreementCreate = () => {
       )
       .sort((a, b) => b.period_year - a.period_year);
     // Единственный год — выбирать нечего, проставляем сразу.
-    setBudgetId(matching.length === 1 ? String(matching[0].id) : '');
+    setLineId(matching.length === 1 ? String(matching[0].id) : '');
   };
 
   const validate = (): Errors => {
     const next: Errors = {};
     if (!administratorId) next.administrator = 'Выберите администратора бюджета';
     else if (!programId) next.program = 'Выберите программу';
-    else if (!budgetId) next.budget = 'Выберите бюджетный год';
+    else if (!lineId) next.budget = 'Выберите бюджетный год';
     if (!counterpartyId) next.counterparty = 'Выберите контрагента';
     if (!number.trim()) next.number = 'Укажите номер договора';
     if (!name.trim()) next.name = 'Укажите наименование договора';
@@ -180,11 +192,11 @@ const AgreementCreate = () => {
         .createAgreement({
           number: number.trim(),
           name: name.trim(),
-          budget_id: Number(budgetId),
+          budget_line_id: Number(lineId),
           counterparty_id: Number(counterpartyId),
           amount: amount.trim().replace(',', '.'),
           payment_type: paymentType,
-          currency: selectedBudget!.currency,
+          currency: selectedLine!.currency,
           signed_date: signedDate || null,
           status,
         })
@@ -241,7 +253,7 @@ const AgreementCreate = () => {
   const fieldError = (key: string) =>
     errors[key] ? <p className="text-sm text-destructive mt-1">{errors[key]}</p> : null;
 
-  const noBudgets = !budgetsLoading && budgets.length === 0;
+  const noBudgets = !budgetsLoading && lines.length === 0;
   const noCounterparties = !counterpartiesLoading && counterparties.length === 0;
 
   return (
@@ -363,7 +375,7 @@ const AgreementCreate = () => {
               {yearOptions.length > 1 && (
                 <div className="sm:w-48">
                   <Label htmlFor="budget-year">Бюджетный год</Label>
-                  <Select value={budgetId} onValueChange={setBudgetId}>
+                  <Select value={lineId} onValueChange={setLineId}>
                     <SelectTrigger
                       id="budget-year"
                       className={errors.budget ? 'border-destructive' : undefined}
@@ -382,24 +394,24 @@ const AgreementCreate = () => {
                 </div>
               )}
 
-              {selectedBudget && (
+              {selectedLine && (
                 <div className="rounded-md border bg-muted/40 p-4 text-sm">
                   <div className="flex flex-wrap justify-between gap-2">
                     <span className="text-muted-foreground">Выделено</span>
                     <span className="tabular-nums">
-                      {formatAmount(selectedBudget.amount)} {selectedBudget.currency}
+                      {formatAmount(selectedLine.amount)} {selectedLine.currency}
                     </span>
                   </div>
                   <div className="flex flex-wrap justify-between gap-2">
                     <span className="text-muted-foreground">Законтрактовано</span>
                     <span className="tabular-nums">
-                      {formatAmount(selectedBudget.committed)}
+                      {formatAmount(selectedLine.committed)}
                     </span>
                   </div>
                   <div className="flex flex-wrap justify-between gap-2 font-medium mt-1 pt-1 border-t">
                     <span>Остаток</span>
                     <span className="tabular-nums">
-                      {formatAmount(selectedBudget.remaining)}
+                      {formatAmount(selectedLine.remaining)}
                     </span>
                   </div>
                 </div>
@@ -476,9 +488,9 @@ const AgreementCreate = () => {
                         errors.amount || overBudget ? 'border-destructive' : undefined
                       }
                     />
-                    {selectedBudget && (
+                    {selectedLine && (
                       <span className="text-sm text-muted-foreground">
-                        {selectedBudget.currency}
+                        {selectedLine.currency}
                       </span>
                     )}
                   </div>
@@ -515,13 +527,13 @@ const AgreementCreate = () => {
                 </div>
               </div>
 
-              {overBudget && selectedBudget && (
+              {overBudget && selectedLine && (
                 <div className="flex gap-2 rounded-md border border-destructive/50 bg-destructive/5 p-3 text-sm">
                   <AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />
                   <div>
                     Сумма превышает остаток бюджета (
-                    {formatAmount(selectedBudget.remaining)}{' '}
-                    {selectedBudget.currency}). Сохранить получится только
+                    {formatAmount(selectedLine.remaining)}{' '}
+                    {selectedLine.currency}). Сохранить получится только
                     черновиком — он бюджет не занимает.
                   </div>
                 </div>

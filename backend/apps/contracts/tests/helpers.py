@@ -17,6 +17,7 @@ from apps.contracts.models import (
     Administrator,
     Agreement,
     Budget,
+    BudgetLine,
     Counterparty,
     Country,
     Program,
@@ -76,13 +77,33 @@ def make_administrator(country: Country | None = None,
 
 
 def make_budget(*, administrator: Administrator | None = None,
-                program: Program | None = None, amount="5000000.00",
-                period_year: int = 2026, currency: str = "KZT") -> Budget:
-    administrator = administrator or make_administrator()
+                period_year: int = 2026, currency: str = "KZT",
+                approval_state: str = "draft", **over) -> Budget:
+    """Пустой бюджет-контейнер. Суммы живут на строках — см. `make_line`."""
     return Budget.objects.create(
-        administrator=administrator,
-        program=program or make_program(),
-        amount=Decimal(amount), period_year=period_year, currency=currency,
+        administrator=administrator or make_administrator(),
+        period_year=period_year, currency=currency,
+        approval_state=approval_state, **over,
+    )
+
+
+def make_line(*, budget: Budget | None = None, program: Program | None = None,
+              amount="5000000.00", administrator: Administrator | None = None,
+              period_year: int = 2026, currency: str = "KZT",
+              note: str = "") -> BudgetLine:
+    """Строка бюджета — то, на что ссылается договор и по чему считается остаток.
+
+    Бюджет заводит сам, если не передан: подавляющему большинству тестов
+    контейнер нужен только чтобы строка существовала, и заводить его в две
+    строки в каждом тесте было бы шумом. Год, валюта и администратор — это
+    параметры БЮДЖЕТА, и передаются сюда только ради той же краткости.
+    """
+    if budget is None:
+        budget = make_budget(administrator=administrator,
+                             period_year=period_year, currency=currency)
+    return BudgetLine.objects.create(
+        budget=budget, program=program or make_program(),
+        amount=Decimal(amount), note=note,
     )
 
 
@@ -95,11 +116,12 @@ def make_counterparty(*, country: Country | None = None, bin_iin: str = "1234567
     )
 
 
-def make_agreement(*, budget: Budget, counterparty: Counterparty | None = None,
+def make_agreement(*, line: BudgetLine, counterparty: Counterparty | None = None,
                    number: str = "Д-001", amount="400000.00",
                    status: str = "signed", **over) -> Agreement:
+    budget = line.budget
     return Agreement.objects.create(
-        number=number, name="Поставка ноутбуков", budget=budget,
+        number=number, name="Поставка ноутбуков", budget_line=line,
         counterparty=counterparty or make_counterparty(country=budget.administrator.country),
         amount=Decimal(amount), payment_type="postpayment",
         currency=budget.currency, status=status, **over,

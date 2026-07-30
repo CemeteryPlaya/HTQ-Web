@@ -16,6 +16,7 @@ import type {
   AgreementStatus,
   Budget,
   BudgetFullCreatePayload,
+  BudgetLineFlat,
   ContractsEnums,
   Counterparty,
   CounterpartyFullCreatePayload,
@@ -27,13 +28,16 @@ const path = (suffix: string) => apiPath('contracts', suffix);
 
 export interface BudgetListParams {
   administrator_id?: number;
-  program_id?: number;
   period_year?: number;
   status?: string;
+  approval_state?: string;
 }
 
 export interface AgreementListParams {
+  /** По бюджету ЦЕЛИКОМ — все его программы. */
   budget_id?: number;
+  /** По одной программе. */
+  budget_line_id?: number;
   counterparty_id?: number;
   administrator_id?: number;
   program_id?: number;
@@ -75,12 +79,35 @@ export const contractsApi = {
   getBudget: (id: number) => api.get<Budget>(path(`budgets/${id}`)),
   /**
    * Заявка на бюджет вместе со справочниками — одним запросом, одной
-   * транзакцией на бэкенде. Именно это шлёт форма: разбивать на четыре
-   * POST'а из браузера нельзя, упавший третий оставил бы наполовину
+   * транзакцией на бэкенде. Именно это шлёт форма: разбивать на отдельные
+   * POST'ы из браузера нельзя, упавший третий оставил бы наполовину
    * заведённые справочники.
+   *
+   * Отдаёт ОДИН бюджет со вложенными строками — по одной на программу.
    */
   createBudgetFull: (payload: BudgetFullCreatePayload) =>
     api.post<Budget>(path('budgets/full'), payload),
+  /**
+   * Плоский список строк ВСЕХ бюджетов — то, из чего форма договора строит
+   * каскад «администратор → программа → год». Отдельный ресурс, а не разбор
+   * вложенных `lines` из `listBudgets`: строке здесь нужен развёрнутый
+   * контекст бюджета и остаток.
+   */
+  listBudgetLines: (params?: {
+    budget_id?: number;
+    administrator_id?: number;
+    program_id?: number;
+    period_year?: number;
+    approval_state?: string;
+  }) => api.get<BudgetLineFlat[]>(path('budget-lines'), { params }),
+  /** Дополнить уже заведённый бюджет программой. Отдаёт бюджет целиком. */
+  addBudgetLine: (budgetId: number, data: { program_id: number; amount: string; note?: string }) =>
+    api.post<Budget>(path(`budgets/${budgetId}/lines`), data),
+  getBudgetLine: (lineId: number) =>
+    api.get<BudgetLineFlat>(path(`budget-lines/${lineId}`)),
+  updateBudgetLine: (lineId: number, data: Partial<{ amount: string; note: string }>) =>
+    api.patch<BudgetLineFlat>(path(`budget-lines/${lineId}`), data),
+  deleteBudgetLine: (lineId: number) => api.delete(path(`budget-lines/${lineId}`)),
   updateBudget: (id: number, data: Partial<Budget>) =>
     api.patch<Budget>(path(`budgets/${id}`), data),
   deleteBudget: (id: number) => api.delete(path(`budgets/${id}`)),
@@ -122,7 +149,8 @@ export const contractsApi = {
   createAgreement: (data: {
     number: string;
     name: string;
-    budget_id: number;
+    /** Договор ссылается на СТРОКУ бюджета: деньги выделены программе. */
+    budget_line_id: number;
     counterparty_id: number;
     amount: string;
     payment_type: string;

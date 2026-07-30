@@ -1,15 +1,22 @@
 """Модели домена contracts — «Бюджет / Реестр контрактов / Договор».
 
-Реализован вариант B («Бюджетная строка») из обсуждения проектирования:
-деньги лежат на бюджетной СТРОКЕ (связка администратор × программа × год),
-а не на человеке-администраторе. Администратор — запись справочника без
-собственной суммы; у одного администратора может быть несколько бюджетов
-под разные программы, с раздельными лимитами.
+Развитие варианта B («Бюджетная строка») из обсуждения проектирования:
+деньги лежат на бюджетной СТРОКЕ, а не на человеке-администраторе.
+Администратор — запись справочника без собственной суммы.
+
+Строки при этом собраны в КОНТЕЙНЕР: ``Budget`` — это бюджет проекта на год
+целиком (администратор × год × валюта), а ``BudgetLine`` — сумма, выделенная
+внутри него одной программе. Изначально контейнера не было и «бюджетом»
+звалась сама строка; его завели, когда выяснилось, что заказчик заводит и
+согласует бюджет проекта списком программ целиком, а не программу за
+программой. Деньги остались на строке — договор ссылается на неё, — но
+согласование и итог принадлежат контейнеру.
 
 Три слоя:
 
-1. Справочники бюджета — ``Country``, ``Program``, ``Administrator``,
-   ``Budget``. Меняются редко, ведутся финансистами.
+1. Справочники бюджета — ``Country``, ``Program``, ``Administrator``.
+   Меняются редко, ведутся финансистами. Рядом — ``Budget``/``BudgetLine``:
+   уже не справочник, но и не транзакционная запись.
 2. Реестр контрагентов — ``Counterparty``. Карточка организации/ИП, с
    которой заключается договор. В исходной спецификации заказчика таблица
    называется «Реестр контрактов», но её поля (БИН/ИИН, НДС, адрес) — это
@@ -18,11 +25,14 @@
    справочники.
 
 Остаток бюджета НИГДЕ не хранится: он вычисляется в
-``services/budget_calc.py`` как ``amount − SUM(договоры в учитываемых
-статусах)``. Хранимый остаток, который уменьшают операцией ``-=``, ломается
-при редактировании суммы договора, его удалении, расторжении или сбое
-записи — и после этого невозможно определить, какая цифра верна. Поэтому
-поля ``committed``/``remaining`` на ``Budget`` НЕТ и появиться не должно.
+``services/budget_calc.py`` как ``line.amount − SUM(договоры строки в
+учитываемых статусах)``, а по бюджету целиком — суммированием строк.
+Хранимый остаток, который уменьшают операцией ``-=``, ломается при
+редактировании суммы договора, его удалении, расторжении или сбое записи —
+и после этого невозможно определить, какая цифра верна. Поэтому полей
+``committed``/``remaining`` нет ни на ``BudgetLine``, ни на ``Budget``, и
+появиться они не должны; по той же причине на ``Budget`` нет и хранимого
+``amount`` — «выделено» это сумма строк.
 
 Все внешние ключи — ``PROTECT``: справочник, на который ссылается живой
 бюджет или договор, удалить нельзя. Вывод из оборота — через
@@ -196,25 +206,36 @@ class Administrator(models.Model):
 
 
 class Budget(signoff.Approvable, models.Model):
-    """Бюджетная строка — выделенная сумма на связку (администратор × программа × год).
+    """Бюджет проекта на год — КОНТЕЙНЕР строк, а не сама сумма.
 
-    ``amount`` — сколько выделено. Сколько законтрактовано и сколько осталось,
-    здесь НЕ хранится (см. докстринг модуля); эти числа считает
-    ``services.budget_calc``.
+    Денег на этой записи нет ни одной колонкой: «выделено» — это сумма
+    ``BudgetLine.amount`` его строк, и считает её ``budget_calc``, как и
+    «законтрактовано» с «остатком». Хранимый итог пришлось бы поддерживать
+    при каждой правке строки, и он разъезжался бы ровно так же, как
+    разъезжается хранимый остаток (см. докстринг модуля).
 
-    Несогласованная строка не может быть источником денег для договора —
-    проверка в ``agreement_service._validate_context``.
+    Почему контейнер, а не плоская строка на программу (как было до этого):
+    заказчик заводит бюджет проекта на год ЦЕЛИКОМ — списком программ с
+    суммами и общим итогом — и согласует его тоже целиком. При плоской
+    модели «заявка» существовала только в форме ввода: после отправки она
+    распадалась на независимые записи, которые подписывающий вынужден был
+    утверждать по одной, имея возможность пропустить часть.
+
+    Отсюда и то, что согласуется ИМЕННО эта модель (``Approvable`` здесь, а
+    не на ``BudgetLine``): согласовать половину бюджета нельзя.
+
+    ``currency`` общая на все строки: разные валюты в одном контейнере
+    лишили бы его итог смысла — сложить их было бы нечем. Проекту, которому
+    нужен бюджет в другой валюте, заводится отдельный ``Budget`` за тот же
+    год, поэтому валюта входит в ключ уникальности.
     """
 
     SIGNOFF_SUBJECT_TYPE = "contracts.budget"
 
     administrator = models.ForeignKey(Administrator, on_delete=models.PROTECT,
                                       related_name="budgets")
-    program = models.ForeignKey(Program, on_delete=models.PROTECT,
-                                related_name="budgets")
-    amount = models.DecimalField(max_digits=18, decimal_places=2)
-    currency = models.CharField(max_length=3, default="KZT", db_default="KZT")
     period_year = models.IntegerField()
+    currency = models.CharField(max_length=3, default="KZT", db_default="KZT")
     status = models.CharField(max_length=16, choices=BudgetStatus.choices,
                               default=BudgetStatus.ACTIVE,
                               db_default=BudgetStatus.ACTIVE)
@@ -223,18 +244,77 @@ class Budget(signoff.Approvable, models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
-        ordering = ("-period_year", "administrator_id", "program_id")
+        ordering = ("-period_year", "administrator_id")
         constraints = [
-            # Одна бюджетная строка на связку — иначе «остаток по программе»
-            # перестаёт быть однозначным числом.
-            models.UniqueConstraint(fields=["administrator", "program", "period_year"],
-                                    name="uq_contracts_budget_admin_program_year"),
+            # Один бюджет на связку «проект × год × валюта». Иначе тот же
+            # проект за тот же год получил бы два контейнера, и вопрос
+            # «сколько выделено проекту на 2026-й» перестал бы иметь один
+            # ответ.
+            models.UniqueConstraint(fields=["administrator", "period_year", "currency"],
+                                    name="uq_contracts_budget_admin_year_currency"),
         ]
         verbose_name = "Бюджет"
         verbose_name_plural = "Бюджеты"
 
     def __str__(self) -> str:
-        return f"{self.administrator_id}/{self.program_id} {self.period_year}: {self.amount} {self.currency}"
+        return f"Бюджет {self.period_year}: {self.administrator_id} ({self.currency})"
+
+
+class BudgetLine(models.Model):
+    """Строка бюджета — сумма, выделенная одной программе.
+
+    Это то, на что ссылается договор и по чему считается остаток: деньги
+    расходуются по программам, а не по бюджету целиком. Поэтому
+    ``Agreement`` смотрит СЮДА, а не на ``Budget``.
+
+    Собственного согласования у строки нет (``Approvable`` — на ``Budget``):
+    строка согласована ровно тогда, когда согласован её бюджет. Дублировать
+    состояние на строке значило бы завести вторую версию правды о том, можно
+    ли с неё тратить.
+
+    ``on_delete=CASCADE`` к бюджету: строка без бюджета не имеет смысла.
+    Удаление бюджета со строками, к которым привязаны договоры, при этом всё
+    равно не пройдёт — договор держит строку через ``PROTECT``, и Django
+    отдаст ``ProtectedError`` на сборе каскада.
+    """
+
+    budget = models.ForeignKey(Budget, on_delete=models.CASCADE,
+                               related_name="lines")
+    program = models.ForeignKey(Program, on_delete=models.PROTECT,
+                                related_name="budget_lines")
+    amount = models.DecimalField(max_digits=18, decimal_places=2)
+    note = models.TextField(default="", blank=True, db_default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("budget_id", "program_id")
+        constraints = [
+            # Одна строка на программу внутри бюджета — иначе «остаток по
+            # программе» перестаёт быть однозначным числом. Вместе с
+            # уникальностью самого бюджета это даёт прежний инвариант
+            # «администратор × программа × год».
+            models.UniqueConstraint(fields=["budget", "program"],
+                                    name="uq_contracts_budgetline_budget_program"),
+        ]
+        verbose_name = "Строка бюджета"
+        verbose_name_plural = "Строки бюджета"
+
+    def __str__(self) -> str:
+        return f"{self.program_id}: {self.amount}"
+
+    # Год, валюта и администратор у строки СВОИХ колонок не имеют — они
+    # принадлежат бюджету. Проксирующие свойства нужны, чтобы сериализация
+    # строки («плоская» карточка для формы договора) не собирала их вручную
+    # в трёх местах. Читающие пути обязаны тянуть `budget__administrator`,
+    # иначе это N+1.
+    @property
+    def period_year(self) -> int:
+        return self.budget.period_year
+
+    @property
+    def currency(self) -> str:
+        return self.budget.currency
 
 
 class Counterparty(signoff.Approvable, models.Model):
@@ -293,11 +373,13 @@ class Counterparty(signoff.Approvable, models.Model):
 class Agreement(signoff.Approvable, models.Model):
     """Договор — единственная транзакционная сущность модуля.
 
-    Ссылается на ОДНУ бюджетную строку. В интерфейсе пользователь выбирает
-    администратора, затем программу (каскадные списки, как в спецификации),
-    но на бэкенд приходит один ``budget_id``: хранить отдельно
-    ``administrator``/``program`` рядом с ``budget`` значило бы завести две
-    версии правды о том, из какого кармана взяты деньги.
+    Ссылается на ОДНУ строку бюджета (``BudgetLine``), а не на бюджет
+    целиком: деньги выделены программе, и списываться должны с неё. В
+    интерфейсе пользователь выбирает администратора, затем программу
+    (каскадные списки, как в спецификации), но на бэкенд приходит один
+    ``budget_line_id``: хранить отдельно ``administrator``/``program`` рядом
+    со ссылкой значило бы завести две версии правды о том, из какого кармана
+    взяты деньги.
 
     ``file_id`` — идентификатор ``FileMetadata`` в ``apps.media_files``,
     полученный через ``apps.media_files.interface.store_file()``. Свой бакет
@@ -318,8 +400,8 @@ class Agreement(signoff.Approvable, models.Model):
 
     number = models.CharField(max_length=100, unique=True)
     name = models.CharField(max_length=300)
-    budget = models.ForeignKey(Budget, on_delete=models.PROTECT,
-                               related_name="agreements")
+    budget_line = models.ForeignKey(BudgetLine, on_delete=models.PROTECT,
+                                    related_name="agreements")
     counterparty = models.ForeignKey(Counterparty, on_delete=models.PROTECT,
                                      related_name="agreements")
     payment_type = models.CharField(max_length=20, choices=PaymentType.choices,
@@ -339,10 +421,11 @@ class Agreement(signoff.Approvable, models.Model):
     class Meta:
         ordering = ("-created_at",)
         indexes = [
-            # Профиль запросов модуля: «договоры этой бюджетной строки в
+            # Профиль запросов модуля: «договоры этой строки бюджета в
             # учитываемых статусах» — то, что budget_calc агрегирует на
             # каждом чтении бюджета.
-            models.Index(fields=["budget", "status"], name="ix_contracts_agr_budget_st"),
+            models.Index(fields=["budget_line", "status"],
+                         name="ix_contracts_agr_line_st"),
         ]
         verbose_name = "Договор"
         verbose_name_plural = "Договоры"

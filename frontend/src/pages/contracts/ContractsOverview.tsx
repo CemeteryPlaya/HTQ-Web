@@ -47,7 +47,7 @@ const ContractsOverview = () => {
   // число нельзя. Берём преобладающую и честно подписываем её.
   const currency = budgets?.[0]?.currency ?? 'KZT';
   const sameCurrency = (budgets ?? []).filter((row) => row.currency === currency);
-  const allocated = sumAmounts(sameCurrency.map((row) => row.amount));
+  const allocated = sumAmounts(sameCurrency.map((row) => row.allocated));
   const remaining = sumAmounts(sameCurrency.map((row) => row.remaining));
   const mixedCurrencies = (budgets ?? []).length !== sameCurrency.length;
 

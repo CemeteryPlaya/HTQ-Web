@@ -45,16 +45,40 @@ export interface Administrator {
 
 export type BudgetStatus = 'active' | 'closed';
 
+/**
+ * Строка бюджета ВНУТРИ его карточки: программа и выделенная ей сумма.
+ *
+ * Года, валюты и администратора здесь нет — они написаны на самом бюджете.
+ * Именно на строку ссылается договор: деньги выделены программе.
+ */
+export interface BudgetLine {
+  id: number;
+  budget_id: number;
+  program_id: number;
+  /** Подпись «код название» — собирает бэкенд. */
+  program_name: string;
+  expense_item: string;
+  amount: string;
+  note: string;
+  /** Вычисляется на бэкенде из договоров строки — колонки в БД нет. */
+  committed: string;
+  /** amount − committed. Тоже вычисляется, не хранится. */
+  remaining: string;
+}
+
+/**
+ * Бюджет проекта на год — КОНТЕЙНЕР строк, а не сумма.
+ *
+ * `allocated` — сумма строк, а не хранимое поле: см. докстринг
+ * `services/budget_calc.py` на бэкенде. Согласуется бюджет целиком,
+ * поэтому `approval_state` живёт здесь, а не на строке.
+ */
 export interface Budget {
   id: number;
   administrator_id: number;
   administrator_name: string;
-  program_id: number;
-  program_name: string;
-  expense_item: string;
-  amount: string;
-  currency: string;
   period_year: number;
+  currency: string;
   status: BudgetStatus;
   /**
    * Вторая, НЕЗАВИСИМАЯ ось состояния — место записи в маршруте
@@ -64,12 +88,29 @@ export interface Budget {
    */
   approval_state: ApprovalState;
   note: string;
-  /** Вычисляется на бэкенде из договоров — колонки в БД нет. */
+  /** Сумма строк. Вычисляется, не хранится. */
+  allocated: string;
   committed: string;
-  /** amount − committed. Тоже вычисляется, не хранится. */
   remaining: string;
+  lines: BudgetLine[];
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Строка ВНЕ своей карточки — с развёрнутым контекстом бюджета.
+ *
+ * Это то, что читает форма договора: там выбирают программу, из которой
+ * берутся деньги, и ей нужны администратор, год и валюта рядом со строкой.
+ */
+export interface BudgetLineFlat extends BudgetLine {
+  administrator_id: number;
+  administrator_name: string;
+  period_year: number;
+  currency: string;
+  /** Статус и согласование — РОДИТЕЛЬСКОГО бюджета: своих у строки нет. */
+  budget_status: BudgetStatus;
+  approval_state: ApprovalState;
 }
 
 export type CounterpartyStatus = 'active' | 'inactive' | 'blocked';
@@ -106,8 +147,11 @@ export interface Agreement {
   id: number;
   number: string;
   name: string;
+  /** На что договор ссылается на самом деле — на СТРОКУ бюджета. */
+  budget_line_id: number;
+  /** Родительский бюджет строки — для ссылки на его карточку. */
   budget_id: number;
-  /** Разворачивается из бюджетной строки — на договоре такой колонки нет. */
+  /** Разворачивается из строки бюджета — на договоре такой колонки нет. */
   administrator_id: number;
   administrator_name: string;
   program_id: number;
@@ -187,10 +231,17 @@ export interface CounterpartyFullCreatePayload {
   status?: CounterpartyStatus;
 }
 
-export interface BudgetFullCreatePayload {
-  administrator: AdministratorInput;
+/** Одна строка заявки: программа и её собственная сумма. */
+export interface BudgetProgramLine {
   program: ProgramInput;
   amount: string;
+  note: string;
+}
+
+export interface BudgetFullCreatePayload {
+  administrator: AdministratorInput;
+  /** По строке на программу — бюджет создаётся со всеми или ни с одной. */
+  programs: BudgetProgramLine[];
   period_year: number;
   currency: string;
   note: string;

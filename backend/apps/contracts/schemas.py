@@ -114,22 +114,27 @@ class AdministratorRead(BaseModel):
 
 # ── Budget ──────────────────────────────────────────────────────────────
 
-class BudgetCreate(BaseModel):
-    administrator_id: int
-    program_id: int
-    amount: Decimal = Field(..., ge=0)
-    period_year: int = Field(..., ge=2000, le=2100)
-    currency: str = Field("KZT", min_length=3, max_length=3)
-    note: str = ""
-
-
 class BudgetUpdate(BaseModel):
+    """Правка ШАПКИ бюджета. Сумм здесь нет — они на строках."""
+
     administrator_id: Optional[int] = None
-    program_id: Optional[int] = None
-    amount: Optional[Decimal] = Field(None, ge=0)
     period_year: Optional[int] = Field(None, ge=2000, le=2100)
     currency: Optional[str] = Field(None, min_length=3, max_length=3)
     status: Optional[BudgetStatus] = None
+    note: Optional[str] = None
+
+
+class BudgetLineCreate(BaseModel):
+    """Добавление программы в уже существующий бюджет."""
+
+    program_id: int
+    amount: Decimal = Field(..., ge=0, max_digits=18, decimal_places=2)
+    note: str = ""
+
+
+class BudgetLineUpdate(BaseModel):
+    program_id: Optional[int] = None
+    amount: Optional[Decimal] = Field(None, ge=0, max_digits=18, decimal_places=2)
     note: Optional[str] = None
 
 
@@ -180,47 +185,147 @@ class ProgramInput(BaseModel):
         return self
 
 
+class BudgetProgramLine(BaseModel):
+    """Одна бюджетная строка внутри заявки: программа и её собственная сумма.
+
+    Сумма и примечание живут ЗДЕСЬ, а не на заявке целиком: программы в
+    одной заявке финансируются по-разному, и общая сумма на всех не имела
+    бы смысла — её всё равно пришлось бы делить.
+
+    ``max_digits``/``decimal_places`` дублируют ограничения колонки
+    (``Budget.amount`` — ``DecimalField(18, 2)``). Без них 19-значная сумма
+    проходит валидацию и падает уже в Postgres ``numeric field overflow`` —
+    это ``DataError``, а не ``IntegrityError``, и ``conflict_as`` его не
+    ловит, так что заполняющий получал бы 500 вместо 422.
+    """
+
+    program: ProgramInput
+    amount: Decimal = Field(..., ge=0, max_digits=18, decimal_places=2)
+    note: str = ""
+
+
 class BudgetFullCreate(BaseModel):
     """Заявка на бюджет одним запросом — вместе со справочниками.
 
     Форма на фронтенде заполняется целиком: администратор (проект +
-    страна), программа (название, статья расходов) и сама сумма. Собирать
-    это четырьмя отдельными POST'ами из браузера нельзя — упавший третий
-    запрос оставил бы в справочниках наполовину заведённую заявку, которую
-    никто не убирает. Здесь всё создаётся в одной транзакции.
+    страна), НЕСКОЛЬКО программ, у каждой своя сумма, и общие для всей
+    заявки год с валютой. Собирать это отдельными POST'ами из браузера
+    нельзя — упавший третий запрос оставил бы в справочниках наполовину
+    заведённую заявку, которую никто не убирает. Здесь всё создаётся в
+    одной транзакции: либо все бюджетные строки, либо ни одной.
+
+    Год и валюта — общие намеренно. Год общий, потому что заявка и есть
+    «бюджет проекта на такой-то год»; валюта — потому что иначе у заявки
+    не было бы итоговой суммы, а именно её сверяет подписывающий.
     """
 
     administrator: AdministratorInput
-    program: ProgramInput
-    amount: Decimal = Field(..., ge=0)
+    programs: list[BudgetProgramLine] = Field(..., min_length=1)
     period_year: int = Field(..., ge=2000, le=2100)
     currency: str = Field("KZT", min_length=3, max_length=3)
     note: str = ""
 
+    @model_validator(mode="after")
+    def _no_duplicate_programs(self):
+        """Одна программа — не больше одной строки в заявке.
 
-class BudgetRead(BaseModel):
-    """Собирается из ``budget_service.serialize_budget``, а не напрямую из
-    ORM-объекта: ``committed``/``remaining`` — вычисляемые величины
-    (``budget_calc``), колонок под них в таблице нет и быть не должно."""
+        Иначе связка «администратор × программа × год» нарушила бы
+        уникальный индекс на второй такой строке, и вся заявка отбилась бы
+        409-м про «уже существует» — сообщением про якобы существующий
+        бюджет, хотя проблема в самой форме, здесь и сейчас. Ловим до БД и
+        отвечаем 422 по адресу.
+
+        Новые программы сверяются по паре «название + статья» (как в
+        ``_resolve_program``), без учёта регистра и краевых пробелов: два
+        варианта написания одного и того же схлопнутся в одну запись
+        справочника и дадут ровно тот же конфликт.
+        """
+        seen = set()
+        for line in self.programs:
+            program = line.program
+            if program.id is not None:
+                key = ("id", program.id)
+            else:
+                key = ("new", program.name.strip().casefold(),
+                       program.expense_item.strip().casefold())
+            if key in seen:
+                raise ValueError(
+                    "одна и та же программа указана в заявке дважды")
+            seen.add(key)
+        return self
+
+
+class BudgetLineRead(BaseModel):
+    """Строка ВНУТРИ карточки бюджета.
+
+    Года, валюты и администратора здесь нет намеренно: они написаны на самом
+    бюджете, и повторять их в каждой строке значило бы раздувать ответ
+    данными, которые читающий уже держит в руках.
+    """
 
     id: int
-    administrator_id: int
-    administrator_name: str
+    budget_id: int
     program_id: int
     program_name: str
     expense_item: str
     amount: Decimal
-    currency: str
-    period_year: int
-    status: str
-    # Состояние согласования (примесь signoff.Approvable). Отдельная ось от
-    # ``status``: строка может быть активной и при этом несогласованной.
-    approval_state: str
     note: str
     committed: Decimal
     remaining: Decimal
+
+
+class BudgetRead(BaseModel):
+    """Бюджет целиком — шапка, строки и итог.
+
+    Собирается из ``budget_service.serialize_budget``, а не напрямую из
+    ORM-объекта: ``allocated``/``committed``/``remaining`` — вычисляемые
+    величины (``budget_calc``), колонок под них в таблице нет и быть не
+    должно. ``allocated`` — сумма строк, а не хранимое поле.
+    """
+
+    id: int
+    administrator_id: int
+    administrator_name: str
+    period_year: int
+    currency: str
+    status: str
+    # Состояние согласования (примесь signoff.Approvable). Отдельная ось от
+    # ``status``: бюджет может быть активным и при этом несогласованным.
+    # Живёт на бюджете, а не на строке — согласуется он целиком.
+    approval_state: str
+    note: str
+    allocated: Decimal
+    committed: Decimal
+    remaining: Decimal
+    lines: list[BudgetLineRead]
     created_at: datetime
     updated_at: datetime
+
+
+class BudgetLineFlatRead(BaseModel):
+    """Строка ВНЕ своей карточки — с развёрнутым контекстом бюджета.
+
+    Это то, что читает форма договора: там выбирают программу, из которой
+    берутся деньги, и ей нужны администратор, год и валюта рядом со строкой,
+    а не отдельным запросом за бюджетом.
+    """
+
+    id: int
+    budget_id: int
+    program_id: int
+    program_name: str
+    expense_item: str
+    amount: Decimal
+    note: str
+    committed: Decimal
+    remaining: Decimal
+    administrator_id: int
+    administrator_name: str
+    period_year: int
+    currency: str
+    # Статус и согласование — родительского бюджета: своих у строки нет.
+    budget_status: str
+    approval_state: str
 
 
 # ── Counterparty ────────────────────────────────────────────────────────
@@ -292,9 +397,10 @@ class CounterpartyRead(BaseModel):
 # ── Agreement ───────────────────────────────────────────────────────────
 
 class AgreementCreate(BaseModel):
+    # Ссылка на СТРОКУ бюджета, а не на бюджет: деньги выделены программе.
     number: str = Field(..., min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=300)
-    budget_id: int
+    budget_line_id: int
     counterparty_id: int
     amount: Decimal = Field(..., gt=0)
     payment_type: PaymentType
@@ -311,7 +417,7 @@ class AgreementUpdate(BaseModel):
 
     number: Optional[str] = Field(None, min_length=1, max_length=100)
     name: Optional[str] = Field(None, min_length=1, max_length=300)
-    budget_id: Optional[int] = None
+    budget_line_id: Optional[int] = None
     counterparty_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
     payment_type: Optional[PaymentType] = None
@@ -326,11 +432,15 @@ class AgreementStatusChange(BaseModel):
 class AgreementRead(BaseModel):
     """Собирается из ``agreement_service.serialize_agreement``: администратор
     и программа отдаются развёрнуто, хотя на договоре их колонок нет —
-    читаются через бюджетную строку."""
+    читаются через строку бюджета.
+
+    ``budget_line_id`` — то, на что договор ссылается на самом деле;
+    ``budget_id`` рядом отдаётся для ссылки на карточку бюджета."""
 
     id: int
     number: str
     name: str
+    budget_line_id: int
     budget_id: int
     administrator_id: int
     administrator_name: str

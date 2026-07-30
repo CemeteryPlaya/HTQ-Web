@@ -22,47 +22,68 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from apps.contracts.models import Agreement, Budget
+from apps.contracts.models import Agreement, Budget, BudgetLine
 from apps.contracts.services import budget_calc
 from apps.core.services import require_service
 
 
 def get_budget_summary(budget_id: int) -> dict | None:
-    """``{id, administrator_name, program_name, expense_item, period_year,
-    allocated, committed, remaining, currency, status}`` или ``None``, если
-    бюджетной строки нет."""
+    """Бюджет ЦЕЛИКОМ: ``{id, administrator_name, period_year, currency,
+    status, allocated, committed, remaining, lines: [...]}`` или ``None``,
+    если бюджета нет.
+
+    ``allocated`` — сумма строк: хранимого поля под неё нет
+    (``budget_calc``). Строки отдаются простыми словарями — сосед не должен
+    получить ORM-объект, который можно сохранить.
+    """
     require_service("contracts")
 
     budget = (Budget.objects
-              .select_related("administrator", "administrator__country", "program")
+              .select_related("administrator", "administrator__country")
+              .prefetch_related("lines__program")
               .filter(pk=budget_id).first())
     if budget is None:
         return None
 
-    totals = budget_calc.totals_for(budget)
+    lines = list(budget.lines.all())
+    committed = budget_calc.committed_map([line.pk for line in lines])
+    totals = budget_calc.totals_for_budget(lines, committed=committed)
     return {
         "id": budget.pk,
         "administrator_name": budget.administrator.display_name,
-        "program_name": budget.program.display_name,
-        "expense_item": budget.program.expense_item,
         "period_year": budget.period_year,
+        "currency": budget.currency,
+        "status": budget.status,
         "allocated": totals["allocated"],
         "committed": totals["committed"],
         "remaining": totals["remaining"],
-        "currency": budget.currency,
-        "status": budget.status,
+        "lines": [
+            {
+                "id": line.pk,
+                "program_name": line.program.display_name,
+                "expense_item": line.program.expense_item,
+                "amount": line.amount,
+                "committed": committed.get(line.pk, budget_calc.ZERO),
+                "remaining": line.amount - committed.get(line.pk, budget_calc.ZERO),
+            }
+            for line in lines
+        ],
     }
 
 
-def get_budget_remaining(budget_id: int) -> Decimal | None:
-    """Только остаток — для проверок вида «хватит ли денег», без сборки всей
-    карточки."""
+def get_budget_line_remaining(budget_line_id: int) -> Decimal | None:
+    """Остаток одной СТРОКИ — для проверок вида «хватит ли денег».
+
+    Спрашивать остаток бюджета целиком для такой проверки нельзя: лимит
+    расходуется по программам, и свободные деньги у соседней программы не
+    делают договор допустимым (см. ``budget_calc.check_capacity``).
+    """
     require_service("contracts")
 
-    budget = Budget.objects.filter(pk=budget_id).first()
-    if budget is None:
+    line = BudgetLine.objects.filter(pk=budget_line_id).first()
+    if line is None:
         return None
-    return budget_calc.remaining_for(budget)
+    return budget_calc.remaining_for(line)
 
 
 def get_agreement_brief(agreement_id: int) -> dict | None:
@@ -70,7 +91,8 @@ def get_agreement_brief(agreement_id: int) -> dict | None:
     карточка заявки): без файла, без служебных меток."""
     require_service("contracts")
 
-    agreement = (Agreement.objects.select_related("counterparty", "budget")
+    agreement = (Agreement.objects
+                 .select_related("counterparty", "budget_line")
                  .filter(pk=agreement_id).first())
     if agreement is None:
         return None
@@ -85,6 +107,7 @@ def get_agreement_brief(agreement_id: int) -> dict | None:
         "currency": agreement.currency,
         "payment_type": agreement.payment_type,
         "status": agreement.status,
-        "budget_id": agreement.budget_id,
+        "budget_line_id": agreement.budget_line_id,
+        "budget_id": agreement.budget_line.budget_id,
         "signed_date": agreement.signed_date,
     }

@@ -107,11 +107,15 @@ const AgreementDetail = () => {
     queryFn: () => contractsApi.getEnums().then((r) => r.data),
   });
 
-  // Бюджетная строка — ради остатка: он показывает, сколько ещё можно
-  // потратить с того же источника, и считается бэкендом.
-  const { data: budget } = useQuery({
-    queryKey: ['contracts', 'budget', agreement?.budget_id],
-    queryFn: () => contractsApi.getBudget(agreement!.budget_id).then((r) => r.data),
+  // Строка бюджета — ради остатка: он показывает, сколько ещё можно
+  // потратить с того же источника, и считается бэкендом. Спрашивается
+  // именно СТРОКА, а не бюджет целиком: лимит договора — это лимит его
+  // программы, и свободные деньги соседней программы к нему отношения не
+  // имеют (`budget_calc.check_capacity`).
+  const { data: line } = useQuery({
+    queryKey: ['contracts', 'budget-line', agreement?.budget_line_id],
+    queryFn: () =>
+      contractsApi.getBudgetLine(agreement!.budget_line_id).then((r) => r.data),
     enabled: agreement !== undefined,
   });
 
@@ -205,6 +209,7 @@ const AgreementDetail = () => {
                 ['contracts', 'agreement', agreementId],
                 ['contracts', 'budgets'],
                 ['contracts', 'budget', agreement.budget_id],
+                ['contracts', 'budget-line', agreement.budget_line_id],
               ]}
               size="default"
             />
@@ -248,7 +253,10 @@ const AgreementDetail = () => {
               </CardHeader>
               <CardContent className="space-y-4">
                 <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-                  <Field label="Бюджетная строка">
+                  {/* Ссылка ведёт на БЮДЖЕТ, а не на строку: своей страницы
+                      у строки нет, да и смотреть её в отрыве от соседних
+                      программ незачем. */}
+                  <Field label="Бюджет">
                     <Link
                       to={`/contracts/budgets/${agreement.budget_id}`}
                       className="hover:underline underline-offset-2"
@@ -260,29 +268,29 @@ const AgreementDetail = () => {
                   <Field label="Программа">{agreement.program_name}</Field>
                   <Field label="Статья расходов">{agreement.expense_item}</Field>
                 </dl>
-                {budget && (
+                {line && (
                   <div className="rounded-md border bg-muted/40 p-4 text-sm">
                     <div className="flex flex-wrap justify-between gap-2">
                       <span className="text-muted-foreground">Выделено</span>
                       <span className="tabular-nums">
-                        {formatMoney(budget.amount, budget.currency)}
+                        {formatMoney(line.amount, line.currency)}
                       </span>
                     </div>
                     <div className="flex flex-wrap justify-between gap-2">
                       <span className="text-muted-foreground">Законтрактовано</span>
                       <span className="tabular-nums">
-                        {formatAmount(budget.committed)}
+                        {formatAmount(line.committed)}
                       </span>
                     </div>
                     <div className="mt-1 flex flex-wrap justify-between gap-2 border-t pt-1 font-medium">
                       <span>Остаток строки</span>
                       <span
                         className={`tabular-nums ${remainingTone(
-                          budget.remaining,
-                          budget.amount,
+                          line.remaining,
+                          line.amount,
                         )}`}
                       >
-                        {formatAmount(budget.remaining)}
+                        {formatAmount(line.remaining)}
                       </span>
                     </div>
                   </div>

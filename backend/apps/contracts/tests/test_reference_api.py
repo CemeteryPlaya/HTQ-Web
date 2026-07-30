@@ -10,7 +10,13 @@ from decimal import Decimal
 import pytest
 from django.test import Client
 
-from apps.contracts.models import AgreementStatus, Budget, Counterparty, Program
+from apps.contracts.models import (
+    AgreementStatus,
+    Budget,
+    BudgetLine,
+    Counterparty,
+    Program,
+)
 
 from .helpers import (
     BASE,
@@ -19,6 +25,7 @@ from .helpers import (
     make_administrator,
     make_agreement,
     make_budget,
+    make_line,
     make_counterparty,
     make_country,
     make_program,
@@ -55,16 +62,16 @@ def test_program_crud():
 
 @pytest.mark.django_db
 def test_budget_card_labels_the_program_with_its_code():
-    """`program_name` в карточке бюджета — подпись «код название», а не
-    голое имя: код заказчик ведёт как основной идентификатор программы."""
-    budget = make_budget(program=make_program(name="Образование", code="EDU-01"))
+    """`program_name` в строке бюджета — подпись «код название», а не голое
+    имя: код заказчик ведёт как основной идентификатор программы."""
+    line = make_line(program=make_program(name="Образование", code="EDU-01"))
 
-    resp = Client().get(f"{BASE}/budgets/{budget.pk}", **auth(token()))
+    resp = Client().get(f"{BASE}/budgets/{line.budget_id}", **auth(token()))
     assert resp.status_code == 200, resp.content
-    body = resp.json()
-    assert body["program_name"] == "EDU-01 Образование"
+    row = resp.json()["lines"][0]
+    assert row["program_name"] == "EDU-01 Образование"
     # Статья расходов в подпись не входит — она отдельным полем.
-    assert body["expense_item"] == budget.program.expense_item
+    assert row["expense_item"] == line.program.expense_item
 
 
 @pytest.mark.django_db
@@ -78,8 +85,8 @@ def test_duplicate_program_is_409():
 
 @pytest.mark.django_db
 def test_program_in_use_cannot_be_deleted():
-    budget = make_budget()
-    resp = Client().delete(f"{BASE}/programs/{budget.program_id}", **auth(admin_token()))
+    line = make_line()
+    resp = Client().delete(f"{BASE}/programs/{line.program_id}", **auth(admin_token()))
     assert resp.status_code == 409
     assert "is_active" in resp.json()["detail"]
 
@@ -97,51 +104,70 @@ def test_administrator_create_rejects_unknown_country_with_404():
 # ── Бюджеты ──────────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_budget_create_and_read_exposes_computed_fields():
-    administrator = make_administrator()
-    program = make_program()
-    resp = post_json(Client(), f"{BASE}/budgets",
-                     {"administrator_id": administrator.pk, "program_id": program.pk,
-                      "amount": "5000000.00", "period_year": 2026},
+def test_budget_card_totals_its_lines():
+    """«Выделено» у бюджета — сумма строк, а не хранимая колонка."""
+    line = make_line(amount="5000000.00")
+    make_line(budget=line.budget, program=make_program(name="Медицина"),
+              amount="2000000.00")
+
+    resp = Client().get(f"{BASE}/budgets/{line.budget_id}", **auth(token()))
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    assert Decimal(body["allocated"]) == Decimal("7000000.00")
+    assert Decimal(body["committed"]) == Decimal("0.00")
+    assert Decimal(body["remaining"]) == Decimal("7000000.00")
+    assert len(body["lines"]) == 2
+
+
+@pytest.mark.django_db
+def test_adding_a_program_twice_to_one_budget_is_409():
+    line = make_line()
+    resp = post_json(Client(), f"{BASE}/budgets/{line.budget_id}/lines",
+                     {"program_id": line.program_id, "amount": "1.00"},
+                     **auth(admin_token()))
+    assert resp.status_code == 409, resp.content
+
+
+@pytest.mark.django_db
+def test_adding_a_program_to_an_existing_budget_updates_the_total():
+    """Дополнить уже заведённый бюджет новой программой — отдельная
+    операция: переотправлять ради этого всю форму значило бы рисковать
+    затереть чужие правки соседних строк."""
+    line = make_line(amount="1000000.00")
+    program = make_program(name="Медицина", expense_item="Расходники")
+
+    resp = post_json(Client(), f"{BASE}/budgets/{line.budget_id}/lines",
+                     {"program_id": program.pk, "amount": "500000.00"},
                      **auth(admin_token()))
     assert resp.status_code == 201, resp.content
     body = resp.json()
-    assert Decimal(body["committed"]) == Decimal("0.00")
-    assert Decimal(body["remaining"]) == Decimal("5000000.00")
-    assert body["expense_item"] == program.expense_item
+    assert Decimal(body["allocated"]) == Decimal("1500000.00")
+    assert len(body["lines"]) == 2
 
 
 @pytest.mark.django_db
-def test_duplicate_budget_line_is_409():
-    budget = make_budget()
-    resp = post_json(Client(), f"{BASE}/budgets",
-                     {"administrator_id": budget.administrator_id,
-                      "program_id": budget.program_id,
-                      "amount": "1.00", "period_year": budget.period_year},
-                     **auth(admin_token()))
-    assert resp.status_code == 409, resp.content
+def test_budget_line_cannot_shrink_below_committed():
+    line = make_line(amount="1000000.00")
+    make_agreement(line=line, amount="700000.00", status=AgreementStatus.SIGNED)
 
-
-@pytest.mark.django_db
-def test_budget_cannot_shrink_below_committed():
-    budget = make_budget(amount="1000000.00")
-    make_agreement(budget=budget, amount="700000.00", status=AgreementStatus.SIGNED)
-
-    resp = patch_json(Client(), f"{BASE}/budgets/{budget.pk}",
+    resp = patch_json(Client(), f"{BASE}/budget-lines/{line.pk}",
                       {"amount": "500000.00"}, **auth(admin_token()))
     assert resp.status_code == 409, resp.content
-    budget.refresh_from_db()
-    assert budget.amount == Decimal("1000000.00")
+    line.refresh_from_db()
+    assert line.amount == Decimal("1000000.00")
 
 
 @pytest.mark.django_db
 def test_budget_with_agreements_cannot_be_deleted():
-    budget = make_budget()
-    make_agreement(budget=budget, amount="1000.00", status=AgreementStatus.SIGNED)
+    """Строки уходят каскадом, но строка с договором держится PROTECT'ом —
+    бюджет остаётся цел."""
+    line = make_line()
+    make_agreement(line=line, amount="1000.00", status=AgreementStatus.SIGNED)
 
-    resp = Client().delete(f"{BASE}/budgets/{budget.pk}", **auth(admin_token()))
+    resp = Client().delete(f"{BASE}/budgets/{line.budget_id}", **auth(admin_token()))
     assert resp.status_code == 409
-    assert Budget.objects.filter(pk=budget.pk).exists()
+    assert Budget.objects.filter(pk=line.budget_id).exists()
+    assert BudgetLine.objects.filter(pk=line.pk).exists()
 
 
 @pytest.mark.django_db
@@ -153,12 +179,14 @@ def test_budget_agreements_subresource_404s_for_unknown_budget():
 @pytest.mark.django_db
 def test_budget_list_filters_by_administrator():
     country = make_country(name="Казахстан")
-    first = make_budget(administrator=make_administrator(country=country,
-                                                        project_name="Проект А"))
-    make_budget(administrator=make_administrator(country=country, project_name="Проект Б"),
-                program=first.program)
+    first = make_line(administrator=make_administrator(country=country,
+                                                       project_name="Проект А"))
+    make_line(administrator=make_administrator(country=country,
+                                               project_name="Проект Б"),
+              program=first.program)
 
-    resp = Client().get(f"{BASE}/budgets?administrator_id={first.administrator_id}",
+    resp = Client().get(
+        f"{BASE}/budgets?administrator_id={first.budget.administrator_id}",
                         **auth(token()))
     assert resp.status_code == 200
     body = resp.json()
@@ -226,8 +254,8 @@ def test_duplicate_bin_iin_is_409():
 
 @pytest.mark.django_db
 def test_counterparty_with_agreements_cannot_be_deleted():
-    budget = make_budget()
-    agreement = make_agreement(budget=budget, amount="1000.00",
+    line = make_line()
+    agreement = make_agreement(line=line, amount="1000.00",
                                status=AgreementStatus.SIGNED)
 
     resp = Client().delete(f"{BASE}/counterparties/{agreement.counterparty_id}",

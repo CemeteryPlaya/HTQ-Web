@@ -1,9 +1,13 @@
 """Договоры — единственная транзакционная сущность модуля.
 
 Здесь живут все проверки, из-за которых договор нельзя просто записать в
-таблицу: валюта должна совпадать с бюджетной строкой, бюджет и контрагент
-должны быть живыми, сумма должна помещаться в остаток, а статус — меняться
-только по разрешённым переходам.
+таблицу: валюта должна совпадать с бюджетом, бюджет и контрагент должны быть
+живыми, сумма должна помещаться в остаток СТРОКИ, а статус — меняться только
+по разрешённым переходам.
+
+Договор ссылается на ``BudgetLine``, а не на ``Budget``: деньги выделены
+программе. Статус, валюта и состояние согласования при этом читаются с
+родительского бюджета — у строки своих нет.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from apps.contracts.models import (
     Agreement,
     AgreementStatus,
     Budget,
+    BudgetLine,
     BudgetStatus,
     Counterparty,
     CounterpartyStatus,
@@ -61,8 +66,8 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 
-def _lock_budget(budget_id: int) -> Budget:
-    """Взять бюджетную строку с ``SELECT … FOR UPDATE``.
+def _lock_line(line_id: int) -> BudgetLine:
+    """Взять строку бюджета с ``SELECT … FOR UPDATE``.
 
     Обязательно для любой операции, которая проверяет остаток и потом на
     него опирается: без блокировки два одновременных договора на 600 000 ₸
@@ -70,15 +75,26 @@ def _lock_budget(budget_id: int) -> Budget:
     лимит. Читающие пути (список, карточка) блокировку не берут — им
     достаточно снимка.
 
+    Блокируется именно СТРОКА: лимит проверяется по ней, и блокировать весь
+    бюджет значило бы сериализовать оформление договоров по не связанным
+    между собой программам.
+
+    ``select_related`` по родителю обязателен — из бюджета читаются валюта,
+    статус и состояние согласования, и без него каждая проверка стоила бы
+    лишнего запроса. На саму блокировку он не влияет: ``of=("self",)``
+    держит замок на строке, не пытаясь заблокировать ещё и присоединённые
+    таблицы (в Postgres ``FOR UPDATE`` иначе распространился бы на них).
+
     Вызывается только внутри ``transaction.atomic()`` — вне транзакции
     ``select_for_update()`` в Django поднимает ``TransactionManagementError``.
     """
-    budget = (Budget.objects.select_for_update()
-              .select_related("administrator", "administrator__country", "program")
-              .filter(pk=budget_id).first())
-    if budget is None:
-        raise Http404("Бюджет не найден")
-    return budget
+    line = (BudgetLine.objects.select_for_update(of=("self",))
+            .select_related("program", "budget", "budget__administrator",
+                            "budget__administrator__country")
+            .filter(pk=line_id).first())
+    if line is None:
+        raise Http404("Строка бюджета не найдена")
+    return line
 
 
 def approval_required_for(subject_type: str) -> bool:
@@ -97,7 +113,7 @@ def approval_required_for(subject_type: str) -> bool:
     return signoff.has_active_route(subject_type)
 
 
-def _validate_context(budget: Budget, counterparty, currency: str, *,
+def _validate_context(line: BudgetLine, counterparty, currency: str, *,
                       check_budget_status: bool = True,
                       check_counterparty_status: bool = True) -> None:
     """Проверки контекста договора.
@@ -105,27 +121,28 @@ def _validate_context(budget: Budget, counterparty, currency: str, *,
     Статусы бюджета и контрагента проверяются при СОЗДАНИИ договора и при
     смене соответствующей ссылки — но не при правке уже существующего
     договора, у которого эта ссылка не менялась. Иначе заблокированный
-    задним числом контрагент (или закрытая бюджетная строка) запирал бы
-    договор целиком: нельзя было бы исправить даже опечатку в названии, а
+    задним числом контрагент (или закрытый бюджет) запирал бы договор
+    целиком: нельзя было бы исправить даже опечатку в названии, а
     ровно в такой ситуации правки и требуются чаще всего.
 
     Согласование бюджета и контрагента проверяется ТАМ ЖЕ и по той же
-    причине: несогласованная строка не должна становиться источником денег,
+    причине: несогласованный бюджет не должен становиться источником денег,
     но и отозванное задним числом согласование не должно запирать правку
     названия у давно заключённого договора.
 
-    Валюта проверяется всегда: она обязана совпадать с бюджетной строкой в
-    любой момент, иначе «остаток» станет суммой разных валют.
+    Валюта проверяется всегда: она обязана совпадать с бюджетом в любой
+    момент, иначе «остаток» станет суммой разных валют.
     """
+    budget = line.budget
     if check_budget_status:
         if budget.status != BudgetStatus.ACTIVE:
             raise AgreementRuleViolation(
-                "Бюджетная строка закрыта — новые договоры к ней не привязываются")
+                "Бюджет закрыт — новые договоры к его строкам не привязываются")
         if (not budget.is_approved
                 and approval_required_for(Budget.SIGNOFF_SUBJECT_TYPE)):
             raise AgreementRuleViolation(
-                "Бюджетная строка не согласована — деньги с неё расходовать "
-                "нельзя, отправьте её на согласование"
+                "Бюджет не согласован — деньги с него расходовать нельзя, "
+                "отправьте его на согласование"
             )
     if check_counterparty_status:
         if counterparty.status != CounterpartyStatus.ACTIVE:
@@ -144,37 +161,46 @@ def _validate_context(budget: Budget, counterparty, currency: str, *,
         # в KZT, сделал бы «остаток» суммой разных валют — числом, которое
         # ничего не значит.
         raise AgreementRuleViolation(
-            f"Валюта договора ({currency}) не совпадает с валютой бюджета ({budget.currency})"
+            f"Валюта договора ({currency}) не совпадает с валютой бюджета "
+            f"({budget.currency})"
         )
 
 
-def list_agreements(*, budget_id: int | None = None, counterparty_id: int | None = None,
+def list_agreements(*, budget_id: int | None = None, budget_line_id: int | None = None,
+                    counterparty_id: int | None = None,
                     administrator_id: int | None = None, program_id: int | None = None,
                     status: str | None = None, period_year: int | None = None):
+    """``budget_id`` фильтрует по бюджету ЦЕЛИКОМ (все его программы),
+    ``budget_line_id`` — по одной программе. Нужны оба: карточка бюджета
+    показывает договоры всех своих строк, карточка строки — только свои."""
     query = Agreement.objects.select_related(
-        "budget", "budget__administrator", "budget__administrator__country",
-        "budget__program", "counterparty",
+        "budget_line", "budget_line__program", "budget_line__budget",
+        "budget_line__budget__administrator",
+        "budget_line__budget__administrator__country", "counterparty",
     )
     if budget_id is not None:
-        query = query.filter(budget_id=budget_id)
+        query = query.filter(budget_line__budget_id=budget_id)
+    if budget_line_id is not None:
+        query = query.filter(budget_line_id=budget_line_id)
     if counterparty_id is not None:
         query = query.filter(counterparty_id=counterparty_id)
     if administrator_id is not None:
-        query = query.filter(budget__administrator_id=administrator_id)
+        query = query.filter(budget_line__budget__administrator_id=administrator_id)
     if program_id is not None:
-        query = query.filter(budget__program_id=program_id)
+        query = query.filter(budget_line__program_id=program_id)
     if status is not None:
         query = query.filter(status=status)
     if period_year is not None:
-        query = query.filter(budget__period_year=period_year)
+        query = query.filter(budget_line__budget__period_year=period_year)
     return list(query)
 
 
 def get_agreement_or_404(agreement_id: int) -> Agreement:
     row = (Agreement.objects
-           .select_related("budget", "budget__administrator",
-                           "budget__administrator__country",
-                           "budget__program", "counterparty")
+           .select_related("budget_line", "budget_line__program", "budget_line__budget",
+        "budget_line__budget__administrator",
+        "budget_line__budget__administrator__country", "counterparty",
+                           )
            .filter(pk=agreement_id).first())
     if row is None:
         raise Http404("Договор не найден")
@@ -182,21 +208,26 @@ def get_agreement_or_404(agreement_id: int) -> Agreement:
 
 
 def serialize_agreement(agreement: Agreement) -> dict:
-    budget = agreement.budget
+    line = agreement.budget_line
+    budget = line.budget
     return {
         "id": agreement.pk,
         "number": agreement.number,
         "name": agreement.name,
-        "budget_id": agreement.budget_id,
+        "budget_line_id": agreement.budget_line_id,
+        # Родительский бюджет отдаётся рядом со строкой: карточка договора
+        # ссылается именно на него («Бюджет 2026 проекта А»), а не на
+        # безымянную строку.
+        "budget_id": budget.pk,
         # Администратор и программа отдаются РАЗВЁРНУТО, хотя в БД их нет на
         # договоре: спецификация показывает их как поля договора, и фронтенд
-        # рисует их в списке. Читаются они всегда через бюджетную строку, так
+        # рисует их в списке. Читаются они всегда через строку бюджета, так
         # что разойтись с ней не могут.
         "administrator_id": budget.administrator_id,
         "administrator_name": budget.administrator.display_name,
-        "program_id": budget.program_id,
-        "program_name": budget.program.display_name,
-        "expense_item": budget.program.expense_item,
+        "program_id": line.program_id,
+        "program_name": line.program.display_name,
+        "expense_item": line.program.expense_item,
         "period_year": budget.period_year,
         "counterparty_id": agreement.counterparty_id,
         "counterparty_name": agreement.counterparty.name,
@@ -215,13 +246,14 @@ def serialize_agreement(agreement: Agreement) -> dict:
 
 
 @transaction.atomic
-def create_agreement(*, number: str, name: str, budget_id: int, counterparty_id: int,
+def create_agreement(*, number: str, name: str, budget_line_id: int,
+                     counterparty_id: int,
                      amount, payment_type: str, currency: str = "KZT",
                      signed_date=None, status: str | None = None,
                      created_by: int | None = None) -> Agreement:
-    budget = _lock_budget(budget_id)
+    line = _lock_line(budget_line_id)
     counterparty = get_counterparty_or_404(counterparty_id)
-    _validate_context(budget, counterparty, currency)
+    _validate_context(line, counterparty, currency)
 
     status = status or AgreementStatus.DRAFT
     if status not in AgreementStatus.values:
@@ -230,14 +262,14 @@ def create_agreement(*, number: str, name: str, budget_id: int, counterparty_id:
     # Черновик лимит не проверяет — он его и не занимает
     # (budget_calc.COMMITTING_STATUSES).
     if status in budget_calc.COMMITTING_STATUSES:
-        budget_calc.check_capacity(budget, amount)
+        budget_calc.check_capacity(line, amount)
 
     with conflict_as(f"Договор с номером {number} уже зарегистрирован"):
         return Agreement.objects.create(
             # Объектами, а не id: обе записи уже загружены проверками выше
-            # (`_lock_budget` тянет и администратора со страной), и ответ
-            # соберётся из закэшированных связей, а не новыми запросами.
-            number=number, name=name, budget=budget,
+            # (`_lock_line` тянет и бюджет с администратором и страной), и
+            # ответ соберётся из закэшированных связей, а не новыми запросами.
+            number=number, name=name, budget_line=line,
             counterparty=counterparty, amount=amount,
             payment_type=payment_type, currency=currency,
             signed_date=signed_date, status=status, created_by=created_by,
@@ -255,9 +287,9 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
             f"Договор в статусе «{agreement.get_status_display()}» не редактируется"
         )
 
-    budget_id = fields.get("budget_id") or agreement.budget_id
-    budget_changed = budget_id != agreement.budget_id
-    budget = _lock_budget(budget_id)
+    line_id = fields.get("budget_line_id") or agreement.budget_line_id
+    budget_changed = line_id != agreement.budget_line_id
+    line = _lock_line(line_id)
 
     counterparty_id = fields.get("counterparty_id") or agreement.counterparty_id
     counterparty_changed = counterparty_id != agreement.counterparty_id
@@ -265,7 +297,7 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
 
     amount = fields.get("amount") if fields.get("amount") is not None else agreement.amount
     currency = fields.get("currency") or agreement.currency
-    _validate_context(budget, counterparty, currency,
+    _validate_context(line, counterparty, currency,
                       check_budget_status=budget_changed,
                       check_counterparty_status=counterparty_changed)
 
@@ -274,7 +306,7 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
         # считалась чужой занятостью: без этого увеличение суммы на 1 ₸
         # сравнивалось бы с остатком, из которого уже вычтена вся старая
         # сумма, и почти всегда падало бы.
-        budget_calc.check_capacity(budget, amount, exclude_agreement_id=agreement.pk)
+        budget_calc.check_capacity(line, amount, exclude_agreement_id=agreement.pk)
 
     changed = [key for key, value in fields.items() if value is not None]
     for key in changed:
@@ -307,8 +339,8 @@ def change_status(agreement_id: int, new_status: str, *, actor_id: int | None = 
         # единственное место, где проверка лимита срабатывает при смене
         # статуса. Обратный переход (в черновик, в расторгнут) бюджет
         # освобождает и проверять нечего.
-        budget = _lock_budget(agreement.budget_id)
-        budget_calc.check_capacity(budget, agreement.amount,
+        line = _lock_line(agreement.budget_line_id)
+        budget_calc.check_capacity(line, agreement.amount,
                                    exclude_agreement_id=agreement.pk)
 
     agreement.status = new_status
@@ -329,7 +361,7 @@ def submit_for_approval(agreement_id: int, *, actor_id: int | None = None) -> di
     (``budget_calc.COMMITTING_STATUSES``), а именно в этот статус его
     переведёт ``approval_hooks._agreement_on_started``.
 
-    Всё в одной транзакции с ``SELECT … FOR UPDATE`` на бюджетной строке:
+    Всё в одной транзакции с ``SELECT … FOR UPDATE`` на строке бюджета:
     иначе два договора, одновременно отправленные на согласование, оба
     увидели бы один и тот же остаток и вместе вышли бы за лимит.
     """
@@ -340,9 +372,9 @@ def submit_for_approval(agreement_id: int, *, actor_id: int | None = None) -> di
             f"«{agreement.get_status_display()}»"
         )
 
-    budget = _lock_budget(agreement.budget_id)
-    _validate_context(budget, agreement.counterparty, agreement.currency)
-    budget_calc.check_capacity(budget, agreement.amount,
+    line = _lock_line(agreement.budget_line_id)
+    _validate_context(line, agreement.counterparty, agreement.currency)
+    budget_calc.check_capacity(line, agreement.amount,
                                exclude_agreement_id=agreement.pk)
 
     # enrich=True: карточка уходит прямо в HTTP-ответ, и фронтенду после

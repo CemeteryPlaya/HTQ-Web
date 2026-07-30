@@ -43,12 +43,11 @@ from htqweb.http import ApiView, api_view, json_error
 from . import schemas
 from .models import AgreementStatus, BudgetStatus, CounterpartyStatus, PaymentType
 from .services import agreement_service as agr_svc
-from .services import budget_calc
 from .services import budget_service as budget_svc
 from .services import counterparty_service as cp_svc
 from .services import reference_service as ref_svc
 from .services.agreement_service import AgreementRuleViolation
-from .services.budget_calc import BudgetExceeded
+from .services.budget_calc import COMMITTING_STATUSES, BudgetExceeded
 from .services.reference_service import ReferenceConflict
 
 # Конфликты доменного уровня, которые вьюха переводит в 409. Собраны в один
@@ -248,49 +247,55 @@ class AdministratorDetailView(ContractsView):
 # ═══════════════════════════════════════════════════════════════════════
 
 class BudgetCollectionView(ContractsView):
+    """Бюджеты со вложенными строками.
+
+    Создания «пустого» бюджета здесь нет: бюджет заводится сразу с
+    программами через ``POST /budgets/full``. Контейнер без единой строки —
+    состояние, из которого нельзя ни потратить, ни согласовать, и заводить
+    отдельный маршрут ради него значило бы разрешить его создавать.
+    """
+
     @read
     def get(self, request):
         rows = budget_svc.list_budgets(
             administrator_id=self.int_param("administrator_id"),
-            program_id=self.int_param("program_id"),
             period_year=self.int_param("period_year"),
             status=self.str_param("status"),
             approval_state=self.str_param("approval_state"),
         )
         return [schemas.BudgetRead.model_validate(row) for row in rows]
 
-    @write("POST", body=schemas.BudgetCreate, status=201, admin=False)
-    def post(self, request, data: schemas.BudgetCreate):
-        try:
-            budget = budget_svc.create_budget(**data.model_dump())
-        except CONFLICTS as exc:
-            return self.conflict(exc)
-        return schemas.BudgetRead.model_validate(budget_svc.serialize_budget(budget))
-
 
 class BudgetFullCreateView(ContractsView):
     """Заявка на бюджет вместе со справочниками — то, что шлёт форма.
 
     Отдельный маршрут, а не флаг на ``POST /budgets``: у обычного создания
-    плоское тело со ссылками (``administrator_id``/``program_id``), у этого
-    — вложенное, и склеивать их в одну схему значило бы получить объект,
-    половина полей которого всегда пустая.
+    плоское тело со ссылками (``administrator_id``/``program_id``) и ровно
+    одна строка, у этого — вложенное тело со списком программ, и склеивать
+    их в одну схему значило бы получить объект, половина полей которого
+    всегда пустая.
+
+    Отвечает ОДНИМ бюджетом со вложенными строками — по одной на программу.
     """
 
     @write("POST", body=schemas.BudgetFullCreate, status=201, admin=False)
     def post(self, request, data: schemas.BudgetFullCreate):
         try:
             # Схемы передаются объектами, а не через model_dump(): сервис
-            # читает вложенные administrator/program как модели (.id, .name),
-            # и dump превратил бы их в словари.
+            # читает вложенные administrator/programs как модели (.id,
+            # .name, .amount), и dump превратил бы их в словари.
             budget = budget_svc.create_budget_full(
-                administrator=data.administrator, program=data.program,
-                amount=data.amount, period_year=data.period_year,
-                currency=data.currency, note=data.note,
+                administrator=data.administrator, programs=data.programs,
+                period_year=data.period_year, currency=data.currency,
+                note=data.note,
             )
         except CONFLICTS as exc:
             return self.conflict(exc)
-        return schemas.BudgetRead.model_validate(budget_svc.serialize_budget(budget))
+        # `committed={}` проставляется, а не считается: у бюджета, созданного
+        # мгновение назад, договоров нет по построению, и запрос за
+        # занятостью его строк был бы запросом за нулём.
+        return schemas.BudgetRead.model_validate(
+            budget_svc.serialize_budget(budget, committed={}))
 
 
 class BudgetDetailView(ContractsView):
@@ -356,7 +361,7 @@ class AgreementSubmitView(SubmitView):
 
 
 class BudgetAgreementsView(ContractsView):
-    """Договоры одной бюджетной строки — то, из чего сложился её остаток."""
+    """Договоры бюджета — по ВСЕМ его строкам, то, из чего сложился остаток."""
 
     @read
     def get(self, request, budget_id: int):
@@ -364,6 +369,66 @@ class BudgetAgreementsView(ContractsView):
         rows = agr_svc.list_agreements(budget_id=budget_id)
         return [schemas.AgreementRead.model_validate(agr_svc.serialize_agreement(row))
                 for row in rows]
+
+
+class BudgetLineCollectionView(ContractsView):
+    """Плоский список строк ВСЕХ бюджетов — источник данных формы договора.
+
+    Отдельный маршрут, а не разбор вложенных ``lines`` из ``GET /budgets``:
+    форме договора нужны строки с развёрнутыми администратором, годом и
+    остатком, и собирать их, разворачивая вложенную структуру на клиенте,
+    значило бы переложить туда же и фильтр по согласованности.
+    """
+
+    @read
+    def get(self, request):
+        rows = budget_svc.list_lines(
+            budget_id=self.int_param("budget_id"),
+            administrator_id=self.int_param("administrator_id"),
+            program_id=self.int_param("program_id"),
+            period_year=self.int_param("period_year"),
+            approval_state=self.str_param("approval_state"),
+        )
+        return [schemas.BudgetLineFlatRead.model_validate(row) for row in rows]
+
+
+class BudgetLinesView(ContractsView):
+    """Строки одного бюджета: добавление программы в уже заведённый бюджет."""
+
+    @write("POST", body=schemas.BudgetLineCreate, status=201, admin=False)
+    def post(self, request, budget_id: int, data: schemas.BudgetLineCreate):
+        try:
+            budget_svc.add_line(budget_id, **data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        # Отдаётся весь бюджет: добавление строки меняет и его итог, и
+        # фронтенду всё равно нужна пересчитанная карточка целиком.
+        return schemas.BudgetRead.model_validate(
+            budget_svc.serialize_budget(budget_svc.get_budget_or_404(budget_id)))
+
+
+class BudgetLineDetailView(ContractsView):
+    @read
+    def get(self, request, line_id: int):
+        return schemas.BudgetLineFlatRead.model_validate(
+            budget_svc.serialize_line(budget_svc.get_line_or_404(line_id)))
+
+    @write("PATCH", body=schemas.BudgetLineUpdate)
+    def patch(self, request, line_id: int, data: schemas.BudgetLineUpdate):
+        try:
+            line = budget_svc.update_line(line_id, **data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.BudgetLineFlatRead.model_validate(
+            budget_svc.serialize_line(line))
+
+    @write("DELETE")
+    def delete(self, request, line_id: int):
+        try:
+            budget_svc.delete_line(line_id)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return HttpResponse(status=204)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -439,6 +504,7 @@ class AgreementCollectionView(ContractsView):
     def get(self, request):
         rows = agr_svc.list_agreements(
             budget_id=self.int_param("budget_id"),
+            budget_line_id=self.int_param("budget_line_id"),
             counterparty_id=self.int_param("counterparty_id"),
             administrator_id=self.int_param("administrator_id"),
             program_id=self.int_param("program_id"),
@@ -580,7 +646,7 @@ class EnumsView(ContractsView):
             # Из каких статусов договор занимает бюджет — фронтенду нужно,
             # чтобы объяснить пользователю, почему остаток не изменился после
             # сохранения черновика.
-            "committing_statuses": sorted(budget_calc.COMMITTING_STATUSES),
+            "committing_statuses": sorted(COMMITTING_STATUSES),
             "transitions": {
                 current: sorted(targets)
                 for current, targets in agr_svc.ALLOWED_TRANSITIONS.items()

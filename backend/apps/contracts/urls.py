@@ -41,7 +41,7 @@ urlpatterns = [
     path("administrators/<int:administrator_id>", views.AdministratorDetailView.as_view()),
     path("administrators/<int:administrator_id>/", views.AdministratorDetailView.as_view()),
 
-    # ── Бюджетные строки ──
+    # ── Бюджеты и их строки ──
     # Вложенный `agreements` регистрируется РАНЬШЕ `<int:budget_id>`: Django
     # перебирает шаблоны сверху вниз, и хотя эти два не пересекаются (разное
     # число сегментов), более специфичный путь выше — порядок, который не
@@ -50,6 +50,8 @@ urlpatterns = [
     path("budgets/<int:budget_id>/agreements/", views.BudgetAgreementsView.as_view()),
     path("budgets/<int:budget_id>/submit", views.BudgetSubmitView.as_view()),
     path("budgets/<int:budget_id>/submit/", views.BudgetSubmitView.as_view()),
+    path("budgets/<int:budget_id>/lines", views.BudgetLinesView.as_view()),
+    path("budgets/<int:budget_id>/lines/", views.BudgetLinesView.as_view()),
     # Составное создание (форма-заявка). Регистрируется ДО `<int:budget_id>`,
     # иначе "full" попал бы в конвертер int и дал бы 404 вместо маршрута.
     path("budgets/full", views.BudgetFullCreateView.as_view()),
@@ -58,6 +60,15 @@ urlpatterns = [
     path("budgets/", views.BudgetCollectionView.as_view()),
     path("budgets/<int:budget_id>", views.BudgetDetailView.as_view()),
     path("budgets/<int:budget_id>/", views.BudgetDetailView.as_view()),
+
+    # Строки бюджета. Плоский список `budget-lines` — отдельный ресурс, а не
+    # вложенный в бюджет: форма договора выбирает программу среди ВСЕХ
+    # бюджетов сразу, и собирать её из вложенных списков значило бы звать
+    # эндпоинт по разу на бюджет.
+    path("budget-lines", views.BudgetLineCollectionView.as_view()),
+    path("budget-lines/", views.BudgetLineCollectionView.as_view()),
+    path("budget-lines/<int:line_id>", views.BudgetLineDetailView.as_view()),
+    path("budget-lines/<int:line_id>/", views.BudgetLineDetailView.as_view()),
 
     # ── Реестр контрактов (контрагенты) ──
     # Составное создание (форма). До `<int:counterparty_id>` — иначе "full"

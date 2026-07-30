@@ -38,6 +38,13 @@ webtransport/certs/
 # Per-machine binaries (ngrok, bore, etc.) — install via PATH instead
 tools/
 
+# ─── Django collectstatic output ─────────────────────────────────────────────
+# STATIC_ROOT (settings/base.py) — rebuilt by docker-entrypoint.sh on every
+# start, so the contents are a build artifact. .gitkeep stays tracked to keep
+# the directory itself in the repo.
+backend/staticfiles/*
+!backend/staticfiles/.gitkeep
+
 # ─── Frontend ────────────────────────────────────────────────────────────────
 node_modules/
 frontend/dist/

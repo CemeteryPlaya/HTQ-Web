@@ -13,7 +13,7 @@ from apps.contracts import interface
 from apps.core.models import ServiceStatus
 from apps.core.services import ServiceDisabled
 
-from .helpers import BASE, auth, make_budget, token
+from .helpers import BASE, auth, make_line, token
 
 
 @pytest.mark.django_db
@@ -31,9 +31,9 @@ def test_http_edge_returns_503_when_disabled():
 
 @pytest.mark.django_db
 def test_interface_raises_service_disabled():
-    budget = make_budget()
+    line = make_line()
     # Пока аппка включена — обычный ответ.
-    assert interface.get_budget_summary(budget.pk)["remaining"] is not None
+    assert interface.get_budget_summary(line.budget_id)["remaining"] is not None
 
     ServiceStatus.objects.update_or_create(
         app_label="contracts", defaults={"enabled": False},
@@ -45,4 +45,4 @@ def test_interface_raises_service_disabled():
     cache.clear()
 
     with pytest.raises(ServiceDisabled):
-        interface.get_budget_summary(budget.pk)
+        interface.get_budget_summary(line.budget_id)

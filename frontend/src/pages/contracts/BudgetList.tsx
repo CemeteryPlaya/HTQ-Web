@@ -73,7 +73,7 @@ const BudgetList = () => {
               <TableHeader>
                 <TableRow>
                   <TableHead>Администратор</TableHead>
-                  <TableHead>Программа / статья</TableHead>
+                  <TableHead>Программы</TableHead>
                   <TableHead className="text-right">Год</TableHead>
                   <TableHead className="text-right">Выделено</TableHead>
                   <TableHead className="text-right">Законтрактовано</TableHead>
@@ -96,17 +96,27 @@ const BudgetList = () => {
                         {budget.administrator_name}
                       </Link>
                     </TableCell>
+                    {/* Бюджет — контейнер: программ в нём несколько, и в
+                        списке показывается их число с перечислением, а не
+                        одна строка. Полная таблица — на карточке. */}
                     <TableCell>
-                      <div>{budget.program_name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {budget.expense_item}
+                      <div>
+                        {budget.lines.length}{' '}
+                        {budget.lines.length === 1
+                          ? 'программа'
+                          : budget.lines.length < 5
+                            ? 'программы'
+                            : 'программ'}
+                      </div>
+                      <div className="text-xs text-muted-foreground truncate max-w-xs">
+                        {budget.lines.map((row) => row.program_name).join(', ') || '—'}
                       </div>
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {budget.period_year}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {formatAmount(budget.amount)} {budget.currency}
+                      {formatAmount(budget.allocated)} {budget.currency}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatAmount(budget.committed)}
@@ -114,7 +124,7 @@ const BudgetList = () => {
                     <TableCell
                       className={`text-right tabular-nums ${remainingTone(
                         budget.remaining,
-                        budget.amount,
+                        budget.allocated,
                       )}`}
                     >
                       {formatAmount(budget.remaining)}

@@ -30,6 +30,7 @@ import logging
 from apps.signoff import interface as signoff
 
 from .models import Agreement, AgreementStatus, Budget, Counterparty
+from .services import budget_calc
 
 logger = logging.getLogger(__name__)
 
@@ -86,14 +87,20 @@ def _agreement_on_cancelled(subject_id: int) -> None:
 # куда ведёт каждый, может только его владелец.
 
 def _describe_budget(subject_id: int) -> dict | None:
+    """Согласуется бюджет ЦЕЛИКОМ, поэтому в заголовке — итог и число
+    программ, а не одна строка: согласующий утверждает весь список."""
     budget = (Budget.objects
-              .select_related("administrator", "administrator__country", "program")
+              .select_related("administrator", "administrator__country")
+              .prefetch_related("lines")
               .filter(pk=subject_id).first())
     if budget is None:
         return None
+    lines = list(budget.lines.all())
+    totals = budget_calc.totals_for_budget(lines)
     return {
-        "title": (f"Бюджет {budget.period_year}: {budget.administrator.display_name} / "
-                  f"{budget.program.display_name} — {budget.amount} {budget.currency}"),
+        "title": (f"Бюджет {budget.period_year}: {budget.administrator.display_name} "
+                  f"— {totals['allocated']} {budget.currency} "
+                  f"по {len(lines)} программам"),
         "url": f"/contracts/budgets/{budget.pk}",
     }
 
@@ -127,7 +134,7 @@ def _describe_agreement(subject_id: int) -> dict | None:
 def register() -> None:
     signoff.register_subject(
         Budget.SIGNOFF_SUBJECT_TYPE,
-        label="Бюджетная строка",
+        label="Бюджет",
         model=Budget,
         describe=_describe_budget,
     )
