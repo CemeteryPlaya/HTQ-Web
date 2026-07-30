@@ -21,6 +21,19 @@ signoff мог вести своё поле ``approval_state``), колбэки 
 ``active``/``blocked``) — другая ось: это жизненный цикл записи, а не
 результат согласования, и связывать их значило бы, что отклонённый бюджет
 «закрывается», хотя его как раз собираются переделать и отправить снова.
+
+**Про факты (``facts``/``fact_fields``).** По ним signoff выбирает ветку
+маршрута («после проверки согласует тот, кто отвечает за эту страну»), сам
+не зная, что такое страна: он лишь сравнивает скаляры, которые получил
+отсюда. Два правила, из-за которых этот файл выглядит именно так:
+
+* **Ключи названы по смыслу, а не по типу.** У договора стран ДВЕ —
+  администратора бюджета и контрагента, — и они регулярно разные
+  (казахстанский проект закупается у турецкого поставщика). Общий ключ
+  ``country_id`` означал бы, что настраивающий маршрут выберет одну из них
+  наугад и никогда об этом не узнает.
+* **``fact_fields`` — функция.** Справочник стран пополняется без
+  перезапуска, а редактор маршрута должен показывать сегодняшний список.
 """
 
 from __future__ import annotations
@@ -29,7 +42,14 @@ import logging
 
 from apps.signoff import interface as signoff
 
-from .models import Agreement, AgreementStatus, Budget, Counterparty
+from .models import (
+    Agreement,
+    AgreementStatus,
+    Budget,
+    Counterparty,
+    Country,
+    PaymentType,
+)
 from .services import budget_calc
 
 logger = logging.getLogger(__name__)
@@ -131,18 +151,116 @@ def _describe_agreement(subject_id: int) -> dict | None:
     }
 
 
+# ── facts: по чему signoff разрешено ветвить маршрут ────────────────────
+
+def _country_options() -> list[dict]:
+    """Справочник стран для редактора маршрута.
+
+    Читается на каждый показ, а не кэшируется: страну заводят раз в год, а
+    вот отсутствие только что заведённой страны в списке веток выглядит как
+    поломка редактора.
+    """
+    return [{"value": country.pk, "label": country.name}
+            for country in Country.objects.all()]
+
+
+def _budget_facts(subject_id: int) -> dict:
+    budget = (Budget.objects.select_related("administrator")
+              .prefetch_related("lines").filter(pk=subject_id).first())
+    if budget is None:
+        # Пустые факты, а не исключение: объект удалили между отправкой и
+        # запуском. Условный маршрут на этом откажет внятным «не сошлось ни
+        # одно условие», безусловный отработает как прежде — решать, что
+        # делать с висячей ссылкой, не задача этой функции.
+        return {}
+    return {
+        "admin_country_id": budget.administrator.country_id,
+        "period_year": budget.period_year,
+        "currency": budget.currency,
+        # Сумма бюджета — это сумма его строк (денег на самом Budget нет,
+        # см. докстринг модели), поэтому она считается, а не читается полем.
+        "amount": budget_calc.totals_for_budget(list(budget.lines.all()))["allocated"],
+    }
+
+
+def _budget_fact_fields() -> list[dict]:
+    return [
+        {"key": "admin_country_id", "label": "Страна администратора бюджета",
+         "type": "choice", "options": _country_options()},
+        {"key": "period_year", "label": "Год", "type": "number"},
+        {"key": "currency", "label": "Валюта", "type": "string"},
+        {"key": "amount", "label": "Сумма бюджета", "type": "number"},
+    ]
+
+
+def _counterparty_facts(subject_id: int) -> dict:
+    counterparty = Counterparty.objects.filter(pk=subject_id).first()
+    if counterparty is None:
+        return {}
+    return {
+        "counterparty_country_id": counterparty.country_id,
+        "vat": counterparty.vat,
+    }
+
+
+def _counterparty_fact_fields() -> list[dict]:
+    return [
+        {"key": "counterparty_country_id", "label": "Страна контрагента",
+         "type": "choice", "options": _country_options()},
+        {"key": "vat", "label": "Плательщик НДС", "type": "bool"},
+    ]
+
+
+def _agreement_facts(subject_id: int) -> dict:
+    agreement = (Agreement.objects
+                 .select_related("budget_line__budget__administrator",
+                                 "counterparty")
+                 .filter(pk=subject_id).first())
+    if agreement is None:
+        return {}
+    return {
+        # Обе страны, названные по-разному: см. докстринг модуля о том,
+        # почему общий «country_id» здесь был бы ловушкой.
+        "admin_country_id":
+            agreement.budget_line.budget.administrator.country_id,
+        "counterparty_country_id": agreement.counterparty.country_id,
+        "amount": agreement.amount,
+        "currency": agreement.currency,
+        "payment_type": agreement.payment_type,
+    }
+
+
+def _agreement_fact_fields() -> list[dict]:
+    countries = _country_options()  # один запрос на оба поля
+    return [
+        {"key": "admin_country_id", "label": "Страна администратора бюджета",
+         "type": "choice", "options": countries},
+        {"key": "counterparty_country_id", "label": "Страна контрагента",
+         "type": "choice", "options": countries},
+        {"key": "amount", "label": "Сумма договора", "type": "number"},
+        {"key": "currency", "label": "Валюта", "type": "string"},
+        {"key": "payment_type", "label": "Тип оплаты", "type": "choice",
+         "options": [{"value": value, "label": label}
+                     for value, label in PaymentType.choices]},
+    ]
+
+
 def register() -> None:
     signoff.register_subject(
         Budget.SIGNOFF_SUBJECT_TYPE,
         label="Бюджет",
         model=Budget,
         describe=_describe_budget,
+        facts=_budget_facts,
+        fact_fields=_budget_fact_fields,
     )
     signoff.register_subject(
         Counterparty.SIGNOFF_SUBJECT_TYPE,
         label="Контрагент",
         model=Counterparty,
         describe=_describe_counterparty,
+        facts=_counterparty_facts,
+        fact_fields=_counterparty_fact_fields,
     )
     signoff.register_subject(
         Agreement.SIGNOFF_SUBJECT_TYPE,
@@ -153,4 +271,6 @@ def register() -> None:
         on_rejected=_agreement_on_rejected,
         on_cancelled=_agreement_on_cancelled,
         describe=_describe_agreement,
+        facts=_agreement_facts,
+        fact_fields=_agreement_fact_fields,
     )

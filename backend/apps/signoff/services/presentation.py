@@ -48,6 +48,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
         "current_order": process.current_order,
         "created_at": process.created_at,
         "finished_at": process.finished_at,
+        "subject_facts": process.subject_facts or {},
         "stages": [
             {
                 "id": stage.pk,
@@ -55,6 +56,8 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "name": stage.name,
                 "quorum": stage.quorum,
                 "state": stage.state,
+                "condition": stage.condition or [],
+                "matched_by": stage.matched_by,
                 "decided_at": stage.decided_at,
                 "tasks": [
                     {

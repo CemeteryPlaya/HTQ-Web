@@ -77,20 +77,33 @@ def make_user(username: str, *, active: bool = True) -> User:
     )
 
 
-def make_doc(title: str = "Пробный документ") -> ProbeDoc:
-    return ProbeDoc.objects.create(title=title)
+def make_doc(title: str = "Пробный документ", **fields) -> ProbeDoc:
+    return ProbeDoc.objects.create(title=title, **fields)
 
 
 def make_route(stages, *, subject_type: str = SUBJECT,
                name: str = "Тестовый маршрут") -> ApprovalRoute:
-    """Маршрут из описания ``[(order, name, quorum, [user_ids]), ...]``."""
+    """Маршрут из описания ``[(order, name, quorum, [user_ids]), ...]``.
+
+    Пятым элементом кортежа можно передать словарь остальных полей этапа
+    (``condition``, ``is_fallback``) — необязательным, чтобы безусловные
+    маршруты в тестах остались однострочными.
+    """
     route = ApprovalRoute.objects.create(subject_type=subject_type, name=name)
-    for order, stage_name, quorum, user_ids in stages:
+    for spec in stages:
+        order, stage_name, quorum, user_ids = spec[:4]
+        extra = spec[4] if len(spec) > 4 else {}
         stage = ApprovalRouteStage.objects.create(
-            route=route, order=order, name=stage_name, quorum=quorum)
+            route=route, order=order, name=stage_name, quorum=quorum, **extra)
         for user_id in user_ids:
             ApprovalRouteStageApprover.objects.create(stage=stage, user_id=user_id)
     return route
+
+
+def stage_names(process) -> list[str]:
+    """Названия этапов процесса по порядку — чем проверяется, КАКАЯ ветка
+    попала в снимок."""
+    return list(process.stages.order_by("order", "id").values_list("name", flat=True))
 
 
 def simple_route(*user_ids: int, quorum: str = Quorum.ALL) -> ApprovalRoute:

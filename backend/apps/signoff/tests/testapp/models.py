@@ -31,5 +31,16 @@ class ProbeDoc(signoff.Approvable, models.Model):
     # ведёт сам signoff.
     published = models.BooleanField(default=False)
 
+    # Поля под условные ветки. Названы нейтрально намеренно: движок не знает
+    # ни про страны, ни про бюджеты, и тест, проверяющий ветвление на
+    # «стране», проверял бы заодно и то, чего в signoff нет.
+    #
+    # ``zone`` играет роль справочника (``choice``) — то же место, которое у
+    # contracts занимает страна администратора; ``amount`` и ``urgent``
+    # покрывают порядковые операторы и bool.
+    zone = models.IntegerField(null=True, blank=True)
+    amount = models.IntegerField(default=0)
+    urgent = models.BooleanField(default=False)
+
     def __str__(self) -> str:
         return self.title

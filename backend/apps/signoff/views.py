@@ -24,6 +24,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from django.http import Http404, HttpResponse
 from django.utils.decorators import method_decorator
 
@@ -43,6 +45,8 @@ from .services import route_service as routes
 from .services.engine import SignoffError
 from .services.registry import UnknownSubject
 from .services.route_service import RouteConflict
+
+logger = logging.getLogger(__name__)
 
 # Конфликты доменного уровня, которые вьюха переводит в 409. Собраны в один
 # кортеж, чтобы каждый `except` не перечислял их заново.
@@ -113,8 +117,10 @@ class RouteCollectionView(SignoffView):
 class RouteDetailView(SignoffView):
     @read
     def get(self, request, route_id: int):
+        # ``gaps=True`` только здесь: карточка одного маршрута — это экран
+        # редактора, ради которого подсказка и считается.
         return schemas.RouteRead.model_validate(
-            routes.serialize_route(routes.get_route_or_404(route_id)))
+            routes.serialize_route(routes.get_route_or_404(route_id), gaps=True))
 
     @write("PATCH", body=schemas.RouteUpdate)
     def patch(self, request, route_id: int, data: schemas.RouteUpdate):
@@ -295,6 +301,11 @@ class SubjectsView(SignoffView):
     Наполняется реестром, то есть тем, что предметные аппки зарегистрировали
     на старте. Захардкоженного списка здесь нет и быть не может: новая
     согласуемая модель появляется без правок signoff.
+
+    Вместе с типом отдаются и его ``fields`` — факты, по которым разрешено
+    ветвить маршрут, со справочниками значений. Отсюда редактор и узнаёт, что
+    у бюджета бывает «страна администратора» и какие страны существуют:
+    signoff этого не знает, он лишь передаёт то, что сказала предметная аппка.
     """
 
     @read
@@ -306,9 +317,24 @@ class SubjectsView(SignoffView):
                 "subject_type": subject.subject_type,
                 "label": subject.label,
                 "has_active_route": subject.subject_type in configured,
+                "fields": self._fields(subject.subject_type),
             })
             for subject in registry.registered_subjects()
         ]
+
+    def _fields(self, subject_type: str) -> list[dict]:
+        """Схема фактов одного типа, не роняющая список остальных.
+
+        ``fact_fields()`` — чужой код, ходящий в чужую БД: сломанный
+        справочник в одной аппке не должен лишать администратора возможности
+        настроить маршруты всех прочих типов.
+        """
+        try:
+            return registry.fields_for(subject_type)
+        except Exception:
+            logger.warning("signoff: fact_fields() для %s упал",
+                           subject_type, exc_info=True)
+            return []
 
 
 class EnumsView(SignoffView):

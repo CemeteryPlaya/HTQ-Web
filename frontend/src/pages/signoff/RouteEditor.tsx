@@ -8,24 +8,43 @@
  * группирует этапы по `order` и подписывает группы «шаг N», а не
  * притворяется схемой процесса.
  *
+ * **Группа по `order` — она же и ветвление.** У этапа может быть условие, и
+ * тогда в процесс он попадёт только если условие сошлось на фактах объекта
+ * («страна администратора бюджета — Казахстан»). Отдельной модели ветки нет:
+ * ветка — это и есть этап группы со своим условием. Поля, по которым можно
+ * ветвить, приходят из `GET /subjects` — их объявляет предметная аппка,
+ * захардкодить их здесь невозможно.
+ *
  * **Правка маршрута не трогает идущие согласования** — этапы копируются на
  * процесс снимком при запуске. Менять маршрут можно в любой момент, но
  * применится он только к следующим отправкам; об этом сказано на странице,
  * иначе легко ждать, что правка догонит уже начатое.
  *
- * Два ограничения бэкенда воспроизведены в интерфейсе, чтобы не ловить их
- * ошибкой: у этапа должен быть хотя бы один согласующий, а последний этап
- * маршрута удалить нельзя (маршрут без этапов неисполним).
+ * Ограничения бэкенда воспроизведены в интерфейсе, чтобы не ловить их
+ * ошибкой: у этапа должен быть хотя бы один согласующий, последний этап
+ * маршрута удалить нельзя (маршрут без этапов неисполним), а этап «иначе» не
+ * может иметь собственного условия.
  */
 
 import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, GitBranch, Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  GitBranch,
+  Loader2,
+  Pencil,
+  Plus,
+  Split,
+  Trash2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { SignoffShell } from '@/components/signoff/SignoffShell';
 import { ApproverPicker } from '@/components/signoff/ApproverPicker';
+import { ConditionEditor } from '@/components/signoff/ConditionEditor';
+import { conditionText } from '@/components/signoff/format';
 import { QUORUM_LABELS } from '@/components/signoff/labels';
 import { reportApiError } from '@/components/signoff/apiError';
 import {
@@ -61,7 +80,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { signoffApi } from '@/api/signoff';
-import type { Quorum, RouteStage } from '@/types/signoff';
+import type { Condition, Quorum, RouteStage } from '@/types/signoff';
 
 /** Черновик этапа в диалоге. `id === null` — этап ещё не создан. */
 interface StageDraft {
@@ -70,6 +89,8 @@ interface StageDraft {
   name: string;
   quorum: Quorum;
   approverIds: number[];
+  condition: Condition;
+  isFallback: boolean;
 }
 
 const emptyDraft = (order: number): StageDraft => ({
@@ -78,6 +99,8 @@ const emptyDraft = (order: number): StageDraft => ({
   name: '',
   quorum: 'all',
   approverIds: [],
+  condition: [],
+  isFallback: false,
 });
 
 /** Этапы по группам `order`, группы — по возрастанию. */
@@ -114,13 +137,13 @@ const RouteEditor = () => {
     queryFn: () => signoffApi.listSubjects().then((r) => r.data),
   });
 
-  const subjectLabel = useMemo(
-    () =>
-      subjects.find((s) => s.subject_type === route?.subject_type)?.label
-      ?? route?.subject_type
-      ?? '',
+  const subject = useMemo(
+    () => subjects.find((s) => s.subject_type === route?.subject_type),
     [subjects, route],
   );
+  const subjectLabel = subject?.label ?? route?.subject_type ?? '';
+  /** Поля для условий объявляет предметная аппка; пусто — тип не ветвится. */
+  const fields = subject?.fields ?? [];
 
   const groups = useMemo(() => groupByOrder(route?.stages ?? []), [route]);
   const nextOrder = groups.length === 0 ? 1 : groups[groups.length - 1][0] + 1;
@@ -155,6 +178,10 @@ const RouteEditor = () => {
         name: stage.name.trim(),
         quorum: stage.quorum,
         approver_ids: stage.approverIds,
+        // Условие шлём всегда, в том числе пустым: для PATCH пустой массив —
+        // это «снять ветку», и не прислать его значило бы не уметь её снять.
+        condition: stage.isFallback ? [] : stage.condition,
+        is_fallback: stage.isFallback,
       };
       return stage.id === null
         ? signoffApi.addStage(routeId, payload).then((r) => r.data)
@@ -184,6 +211,8 @@ const RouteEditor = () => {
       name: stage.name,
       quorum: stage.quorum,
       approverIds: stage.approvers.map((approver) => approver.user_id),
+      condition: stage.condition ?? [],
+      isFallback: stage.is_fallback,
     });
 
   const knownNames = useMemo(() => {
@@ -206,6 +235,19 @@ const RouteEditor = () => {
     if (draft.approverIds.length === 0) {
       setDraftError('Нужен хотя бы один согласующий: этап без них движок не '
         + 'запустит.');
+      return;
+    }
+    // Предикат без выбранного значения бэкенд отвергнет 409-м; поймать это
+    // здесь дешевле, чем объяснять потом, какой из них пустой.
+    const empty = draft.condition.some(
+      (predicate) =>
+        predicate.value === '' ||
+        predicate.value === null ||
+        (Array.isArray(predicate.value) && predicate.value.length === 0),
+    );
+    if (!draft.isFallback && empty) {
+      setDraftError('В условии есть предикат без значения — выберите значение '
+        + 'или уберите строку.');
       return;
     }
     setDraftError('');
@@ -276,13 +318,37 @@ const RouteEditor = () => {
             )}
           </div>
 
+          {(route.coverage_gaps?.length ?? 0) > 0 && (
+            <div className="mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3">
+              <div className="flex gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+                <div className="text-sm space-y-1">
+                  <p className="font-medium">В ветвлении есть пробел</p>
+                  {route.coverage_gaps?.map((gap) => (
+                    <p key={`${gap.order}-${gap.field}`} className="text-muted-foreground">
+                      Шаг {gap.order}, «{gap.label}»: нет ветки для{' '}
+                      {gap.missing.map((option) => option.label).join(', ')}.
+                    </p>
+                  ))}
+                  <p className="text-muted-foreground">
+                    Объект с таким значением отправить на согласование не
+                    получится — добавьте ветку или этап «иначе». Отказ увидит
+                    тот, кто нажмёт «отправить», поэтому лучше закрыть пробел
+                    здесь.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-lg font-semibold">Этапы</h2>
               <p className="text-sm text-muted-foreground">
                 Шаги идут сверху вниз; этапы внутри одного шага согласуются
                 одновременно. Отказ на любом этапе отклоняет весь процесс
-                сразу.
+                сразу. Этап с условием попадёт в согласование только если
+                условие сошлось.
               </p>
             </div>
             <Button onClick={() => setDraft(emptyDraft(nextOrder))}>
@@ -314,7 +380,10 @@ const RouteEditor = () => {
                     </span>
                     {stages.length > 1 && (
                       <Badge variant="outline" className="text-muted-foreground">
-                        параллельно · {stages.length}
+                        {stages.some((stage) => stage.condition.length > 0
+                          || stage.is_fallback)
+                          ? `ветвление · ${stages.length}`
+                          : `параллельно · ${stages.length}`}
                       </Badge>
                     )}
                     <Button
@@ -344,6 +413,16 @@ const RouteEditor = () => {
                             <p className="text-xs text-muted-foreground">
                               {QUORUM_LABELS[stage.quorum] ?? stage.quorum}
                             </p>
+                            {(stage.condition.length > 0 || stage.is_fallback) && (
+                              <p className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground">
+                                <Split className="h-3.5 w-3.5 shrink-0 mt-px" />
+                                <span className="break-words">
+                                  {stage.is_fallback
+                                    ? 'иначе — когда в шаге не сошлось ни одно условие'
+                                    : conditionText(stage.condition, fields)}
+                                </span>
+                              </p>
+                            )}
                           </div>
                           <div className="flex gap-1">
                             <Button
@@ -511,6 +590,51 @@ const RouteEditor = () => {
                       </p>
                     )}
                   </div>
+
+                  {fields.length > 0 && (
+                    <div className="space-y-2 border-t pt-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <Label>Когда нужен этот этап</Label>
+                        <div className="flex items-center gap-2">
+                          <Label
+                            htmlFor="stage-fallback"
+                            className="text-xs font-normal text-muted-foreground"
+                          >
+                            иначе
+                          </Label>
+                          <Switch
+                            id="stage-fallback"
+                            checked={draft.isFallback}
+                            onCheckedChange={(checked) =>
+                              // Условие сбрасываем сразу: «иначе» с
+                              // собственным условием бэкенд не принимает, и
+                              // хранить невидимый черновик условия значило бы
+                              // вернуть его при обратном переключении уже
+                              // как неожиданность.
+                              setDraft({
+                                ...draft,
+                                isFallback: checked,
+                                condition: checked ? [] : draft.condition,
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      {draft.isFallback ? (
+                        <p className="text-xs text-muted-foreground">
+                          Этап пойдёт, только если в его шаге не сошлось ни одно
+                          условие. Собственного условия у «иначе» быть не может.
+                        </p>
+                      ) : (
+                        <ConditionEditor
+                          fields={fields}
+                          value={draft.condition}
+                          onChange={(condition) => setDraft({ ...draft, condition })}
+                        />
+                      )}
+                    </div>
+                  )}
 
                   {draftError && (
                     <p className="text-sm text-destructive">{draftError}</p>

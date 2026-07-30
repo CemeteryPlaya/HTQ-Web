@@ -40,6 +40,63 @@ export type TaskState = 'pending' | 'approved' | 'rejected' | 'skipped';
  */
 export type ApprovalState = 'draft' | 'pending' | 'approved' | 'rejected';
 
+// ─── Условные ветки ──────────────────────────────────────────────────────
+
+/**
+ * Оператор предиката. Список закрытый и совпадает с `conditions.OPS` на
+ * бэкенде — вложенности, ИЛИ между полями и выражений тут нет намеренно:
+ * ИЛИ по одному полю — это `in`, по разным — два этапа в одной группе.
+ */
+export type ConditionOp = 'eq' | 'in' | 'not_in' | 'gt' | 'gte' | 'lt' | 'lte';
+
+/** `value` — скаляр для всех операторов, кроме `in`/`not_in` (там массив). */
+export interface Predicate {
+  field: string;
+  op: ConditionOp;
+  value: unknown;
+}
+
+/** Предикаты соединены И. Пустой список — «этап нужен всегда». */
+export type Condition = Predicate[];
+
+export interface FieldOption {
+  value: unknown;
+  label: string;
+}
+
+/**
+ * Факт объекта, по которому разрешено ветвить маршрут.
+ *
+ * Список приходит из `GET /subjects` и целиком задаётся ПРЕДМЕТНОЙ аппкой
+ * (`fact_fields()` в её `approval_hooks`): движок не знает, что такое
+ * «страна администратора бюджета», он лишь передаёт сказанное. Поэтому
+ * захардкодить эти поля во фронтенде нельзя — новый согласуемый тип
+ * появляется без правок здесь.
+ *
+ * `options` заполнены только у `choice` — это справочник, и редактор рисует
+ * по нему выпадающий список вместо поля ввода.
+ */
+export interface SubjectField {
+  key: string;
+  label: string;
+  type: 'choice' | 'number' | 'string' | 'bool';
+  options: FieldOption[];
+}
+
+/**
+ * Значения справочника, под которые в группе не заведено ни одной ветки.
+ *
+ * Попади в эту дыру объект — запуск согласования откажет. Показывается
+ * администратору в редакторе, чтобы дыру закрыл он, а не обнаружил через
+ * месяц пользователь при отправке заявки.
+ */
+export interface CoverageGap {
+  order: number;
+  field: string;
+  label: string;
+  missing: FieldOption[];
+}
+
 // ─── Маршруты ────────────────────────────────────────────────────────────
 
 export interface Approver {
@@ -52,10 +109,18 @@ export interface Approver {
 export interface RouteStage {
   id: number;
   /** Этапы с ОДИНАКОВЫМ order идут параллельно, с разным — последовательно.
-   *  Вся параллельность выражена этим числом, отдельной модели графа нет. */
+   *  Вся параллельность выражена этим числом, отдельной модели графа нет.
+   *  Группа по order — она же и ветвление: см. `condition`. */
   order: number;
   name: string;
   quorum: Quorum;
+  /** Пусто — этап нужен всегда. Иначе он попадёт в процесс только если
+   *  условие сошлось на фактах объекта. */
+  condition: Condition;
+  /** «Иначе» для своей группы: этап идёт, только когда в группе не сошлось
+   *  ни одно условие. С непустым `condition` не сочетается — бэкенд такую
+   *  пару не принимает. */
+  is_fallback: boolean;
   approvers: Approver[];
 }
 
@@ -66,6 +131,9 @@ export interface ApprovalRoute {
   /** Активный маршрут на тип ровно один — частичный уникальный индекс. */
   is_active: boolean;
   stages: RouteStage[];
+  /** Только в карточке ОДНОГО маршрута (`GET /routes/:id`); в списке
+   *  маршрутов поля нет — считать его на каждую строку слишком дорого. */
+  coverage_gaps?: CoverageGap[];
   created_at: string;
   updated_at: string;
 }
@@ -77,6 +145,8 @@ export interface Subject {
   subject_type: string;
   label: string;
   has_active_route: boolean;
+  /** Пусто — тип не поддерживает ветвление, условия ему не показываем. */
+  fields: SubjectField[];
 }
 
 // ─── Процессы ────────────────────────────────────────────────────────────
@@ -96,6 +166,11 @@ export interface ProcessStage {
   name: string;
   quorum: Quorum;
   state: StageState;
+  /** Снимок условия, по которому этап попал в процесс. */
+  condition: Condition;
+  /** Как этап попал в процесс. У безусловного этапа и у сработавшего
+   *  «иначе» условие одинаково пустое — различает их только это поле. */
+  matched_by: 'always' | 'condition' | 'fallback';
   decided_at: string | null;
   tasks: ProcessTask[];
 }
@@ -113,6 +188,9 @@ export interface ApprovalProcess {
   /** Снимок маршрута на момент запуска: правка маршрута не трогает
    *  уже идущие согласования. */
   stages: ProcessStage[];
+  /** Факты объекта на момент запуска — по ним выбирались ветки. Ответ на
+   *  «почему согласуют именно эти люди» через год после запуска. */
+  subject_facts: Record<string, unknown>;
   subject_title: string | null;
   subject_url: string | null;
 }
@@ -146,15 +224,22 @@ export interface StageInput {
   quorum: Quorum;
   /** Минимум один — этап без согласующих движок не запустит. */
   approver_ids: number[];
+  condition?: Condition;
+  is_fallback?: boolean;
 }
 
 /** PATCH этапа: `approver_ids` заменяет список ЦЕЛИКОМ, а его отсутствие
- *  оставляет согласующих в покое. Не путать одно с другим. */
+ *  оставляет согласующих в покое. Не путать одно с другим.
+ *
+ *  То же и с `condition`: не прислать поле — «не трогать ветку», прислать
+ *  пустой массив — «снять условие». */
 export interface StageUpdateInput {
   order?: number;
   name?: string;
   quorum?: Quorum;
   approver_ids?: number[];
+  condition?: Condition;
+  is_fallback?: boolean;
 }
 
 export interface DecisionInput {

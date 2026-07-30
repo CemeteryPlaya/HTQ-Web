@@ -205,6 +205,12 @@ class ApprovalRouteStage(models.Model):
     ``name`` обязателен: согласующие заданы поимённо, и без названия этапа
     в карточке было бы видно только список фамилий, из которого непонятно,
     что именно эти люди проверяют.
+
+    ``condition``/``is_fallback`` делают группу этапов ВЕТВЛЕНИЕМ: из группы
+    с одинаковым ``order`` в процесс попадают только те этапы, чьё условие
+    сошлось на фактах предметного объекта. Отдельной модели ветки нет
+    намеренно — ветка и есть группа по ``order``, а условие лишь решает,
+    кто из группы участвует. Подробности — ``services/conditions.py``.
     """
 
     route = models.ForeignKey(ApprovalRoute, on_delete=models.CASCADE,
@@ -218,6 +224,23 @@ class ApprovalRouteStage(models.Model):
     quorum = models.CharField(max_length=8, choices=Quorum.choices,
                               default=Quorum.ALL, db_default=Quorum.ALL,
                               verbose_name="Кворум")
+    # Список предикатов, соединённых И. Пустой список — «этап нужен всегда».
+    # Формат и разбор — ``services/conditions.py``; здесь JSON, потому что
+    # набор полей задаёт предметная аппка, а не signoff, и колонки под них
+    # завести невозможно.
+    condition = models.JSONField(
+        default=list, blank=True, verbose_name="Условие",
+        help_text="Пусто — этап нужен всегда",
+    )
+    # «Иначе» для своей группы: этап участвует, только если в группе не
+    # сошлось ни одно условие. Отдельным флагом, а не условием `not_in`,
+    # потому что список «всех прочих» пришлось бы дописывать вручную при
+    # каждом новом значении справочника — а забытая дописка тихо выкинула
+    # бы из согласования целый этап.
+    is_fallback = models.BooleanField(
+        default=False, db_default=False, verbose_name="Иначе",
+        help_text="Этап для случая, когда в группе не сошлось ни одно условие",
+    )
 
     class Meta:
         ordering = ("order", "id")
@@ -226,6 +249,33 @@ class ApprovalRouteStage(models.Model):
 
     def __str__(self) -> str:
         return f"{self.order}. {self.name}"
+
+    def clean(self) -> None:
+        """Проверка условия для django-admin.
+
+        HTTP-путь проверяет условие в ``route_service._check_condition``, но
+        админка сохраняет модель напрямую, мимо сервиса, — а поле у неё
+        редактируется сырым JSON. Без этого в маршрут попадала бы опечатка,
+        которая всплыла бы только на отправке заявки, у постороннего человека.
+
+        Сервисы зовут ``save()``, а не ``full_clean()``, поэтому двойной
+        проверки на HTTP-пути не возникает.
+        """
+        from django.core.exceptions import ValidationError
+
+        from apps.signoff.services import conditions, registry
+
+        if self.is_fallback and self.condition:
+            raise ValidationError({
+                "condition": "Этап «иначе» не может иметь собственного условия",
+            })
+        if not self.condition or not self.route_id:
+            return
+        try:
+            conditions.validate(self.condition,
+                                registry.fields_for(self.route.subject_type))
+        except (conditions.ConditionError, registry.UnknownSubject) as exc:
+            raise ValidationError({"condition": str(exc)}) from exc
 
 
 class ApprovalRouteStageApprover(models.Model):
@@ -288,6 +338,13 @@ class ApprovalProcess(models.Model):
                                        verbose_name="Инициатор")
     # Какая группа этапов сейчас на рассмотрении. NULL — процесс завершён.
     current_order = models.PositiveSmallIntegerField(null=True, blank=True)
+    # Факты предметного объекта на момент запуска — те, по которым выбирались
+    # ветки (``services/conditions.py``). Хранятся, потому что через год
+    # вопрос «почему этот бюджет ушёл именно этим людям» задаётся к процессу,
+    # а предметный объект к тому времени уже отредактируют: без снимка
+    # ответить на него нечем.
+    subject_facts = models.JSONField(default=dict, blank=True,
+                                     verbose_name="Факты объекта")
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
     finished_at = models.DateTimeField(null=True, blank=True)
@@ -340,6 +397,13 @@ class ApprovalProcessStage(models.Model):
     state = models.CharField(max_length=16, choices=StageState.choices,
                              default=StageState.WAITING,
                              db_default=StageState.WAITING)
+    # Условие, по которому этап попал в процесс — часть того же снимка.
+    # Пустое и у безусловных этапов, и у сработавшего «иначе» (у него
+    # условия нет по определению), поэтому вместе с ним снимается
+    # ``matched_by``: без него эти два случая в карточке неразличимы.
+    condition = models.JSONField(default=list, blank=True)
+    matched_by = models.CharField(max_length=16, default="always",
+                                  db_default="always")
     decided_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

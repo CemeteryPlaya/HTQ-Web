@@ -19,6 +19,12 @@
    стать согласованными атомарно (иначе «процесс согласован, бюджет нет»);
    уведомление же — внешний эффект, и рассылать его по откатившейся
    транзакции нельзя.
+4. **Ветвление разбирается один раз, на запуске.** Условные этапы отсеиваются
+   в ``start`` до снимка (``services/conditions.py``), поэтому всё остальное в
+   этом модуле работает с обычным линейным списком групп и про условия не
+   знает. Пересчёта веток по ходу согласования нет: сменившийся у бюджета
+   администратор не переигрывает уже идущий процесс — ровно так же, как его
+   не переигрывает правка маршрута.
 
 Гонки. Все переходы берут ``SELECT … FOR UPDATE`` на строку процесса. Без
 этого два согласующих, закрывающих последний этап одновременно, оба увидят
@@ -48,7 +54,7 @@ from apps.signoff.models import (
     StageState,
     TaskState,
 )
-from apps.signoff.services import registry
+from apps.signoff.services import conditions, registry
 # Соседи — только через interface (apps/core/tests/test_app_isolation.py).
 from apps.messenger import interface as messenger
 from apps.users import interface as users
@@ -85,12 +91,20 @@ class ProcessClosed(SignoffError):
 
 
 class RouteUnusable(SignoffError):
-    """Маршрут нельзя исполнить: пустой этап или ни одного активного согласующего.
+    """Маршрут нельзя исполнить на этом объекте.
 
-    Согласующие в маршруте заданы поимённо, а люди увольняются: маршрут,
-    все согласующие которого деактивированы, породил бы процесс, который
-    физически некому двигать. Лучше отказать на запуске с внятным текстом,
-    чем создать заявку, навсегда зависшую на первом этапе.
+    Три причины, и все три обнаруживаются только на запуске:
+
+    * пустой этап;
+    * ни одного АКТИВНОГО согласующего — согласующие заданы поимённо, а люди
+      увольняются, и маршрут из одних деактивированных породил бы процесс,
+      который физически некому двигать;
+    * в группе условных этапов не сошлось ни одно условие и нет этапа
+      «иначе» (``conditions.NoBranchMatched``).
+
+    Во всех трёх случаях лучше отказать на запуске с внятным текстом, чем
+    создать заявку, навсегда зависшую на первом этапе или, того хуже, тихо
+    прошедшую мимо целой группы согласующих.
     """
 
 
@@ -120,13 +134,19 @@ def start(*, subject_type: str, subject_id: int,
     if not stages:
         raise RouteUnusable(f"В маршруте «{route.name}» нет ни одного этапа")
 
-    plan = _resolve_stages(stages)
+    # Ветвление разбирается ЗДЕСЬ, до снимка: дальше движок видит обычный
+    # линейный список групп и про условия не знает вовсе (см. докстринг
+    # services/conditions.py). Поэтому act/_advance/кворум/блокировки
+    # ветвления не касаются.
+    facts = registry.facts_for(subject_type, subject_id)
+    selected = _select_stages(stages, facts, subject=subject, route=route)
+    plan = _resolve_stages(selected)
 
     try:
         process = ApprovalProcess.objects.create(
             subject_type=subject_type, subject_id=subject_id,
             route_id=route.pk, initiator_id=initiator_id,
-            state=ProcessState.PENDING,
+            state=ProcessState.PENDING, subject_facts=facts,
         )
     except IntegrityError as exc:
         # Частичный уникальный индекс uq_signoff_one_pending_process_per_subject.
@@ -134,10 +154,11 @@ def start(*, subject_type: str, subject_id: int,
             f"«{subject.label}» уже находится на согласовании"
         ) from exc
 
-    first_order = min(order for order, _, _ in plan)
-    for order, stage, approver_ids in plan:
+    first_order = min(order for order, _, _, _ in plan)
+    for order, stage, matched_by, approver_ids in plan:
         process_stage = ApprovalProcessStage.objects.create(
             process=process, order=order, name=stage.name, quorum=stage.quorum,
+            condition=stage.condition, matched_by=matched_by,
             state=StageState.ACTIVE if order == first_order else StageState.WAITING,
         )
         ApprovalTask.objects.bulk_create([
@@ -148,8 +169,17 @@ def start(*, subject_type: str, subject_id: int,
     process.current_order = first_order
     process.save(update_fields=["current_order", "updated_at"])
 
-    _log(process, "started", actor_id=initiator_id,
-         payload={"route_id": route.pk, "route_name": route.name})
+    # Отсеянные ветки — в журнал: карточка процесса показывает только то, что
+    # в него вошло, и вопрос «а почему тут нет финконтроля по Узбекистану»
+    # иначе остался бы без ответа.
+    taken = {item.stage.pk for item in selected}
+    _log(process, "started", actor_id=initiator_id, payload={
+        "route_id": route.pk, "route_name": route.name,
+        "facts": facts,
+        "skipped_stages": [{"order": stage.order, "name": stage.name,
+                            "condition": stage.condition}
+                           for stage in stages if stage.pk not in taken],
+    })
 
     if subject.on_started is not None:
         subject.on_started(subject_id)
@@ -159,25 +189,58 @@ def start(*, subject_type: str, subject_id: int,
     return process
 
 
-def _resolve_stages(stages) -> list[tuple[int, object, list[int]]]:
-    """Проверить исполнимость маршрута и вернуть ``(order, stage, user_ids)``.
+def _select_stages(stages, facts: dict, *, subject, route):
+    """Отобрать ветки маршрута под факты объекта, переведя отказы в 409.
+
+    Обе ошибки ``conditions`` — про настройку маршрута, но прочтёт их
+    пользователь, нажавший «отправить на согласование». Поэтому текст
+    называет и объект, и то, ЧТО не сошлось: иначе по сообщению «не сошлось
+    ни одно условие» невозможно понять, к кому идти.
+    """
+    try:
+        return conditions.select_stages(stages, facts)
+    except conditions.NoBranchMatched as exc:
+        raise RouteUnusable(
+            f"«{subject.label}»: в маршруте «{route.name}» на шаге "
+            f"{exc.order} нет ветки под этот объект ({_facts_hint(exc.facts)}) "
+            f"— добавьте ветку или этап «иначе»"
+        ) from exc
+    except conditions.ConditionError as exc:
+        raise RouteUnusable(
+            f"Маршрут «{route.name}» настроен неверно: {exc}") from exc
+
+
+def _facts_hint(facts: dict) -> str:
+    """Факты объекта одной строкой — чтобы в тексте ошибки было видно, ПОЧЕМУ
+    ветка не нашлась. Без этого сообщение про несошедшееся условие бесполезно."""
+    return ", ".join(f"{key}={value!r}" for key, value in sorted(facts.items())) \
+        or "у объекта нет фактов для ветвления"
+
+
+def _resolve_stages(selected) -> list[tuple[int, object, str, list[int]]]:
+    """Проверить исполнимость отобранных этапов.
+
+    Возвращает ``(order, stage, matched_by, user_ids)``.
 
     Проверяется на ЗАПУСКЕ, а не при сохранении маршрута: между настройкой
     и запуском проходит время, за которое согласующий успевает уволиться.
+    Проверяются только ОТОБРАННЫЕ этапы — уволившийся согласующий в ветке,
+    которая к этому объекту не относится, запуску не мешает.
     """
-    plan: list[tuple[int, object, list[int]]] = []
+    plan: list[tuple[int, object, str, list[int]]] = []
     all_ids: set[int] = set()
-    for stage in stages:
+    for item in selected:
+        stage = item.stage
         user_ids = [row.user_id for row in stage.approvers.all()]
         if not user_ids:
             raise RouteUnusable(
                 f"На этапе «{stage.name}» не назначен ни один согласующий"
             )
         all_ids.update(user_ids)
-        plan.append((stage.order, stage, user_ids))
+        plan.append((stage.order, stage, item.matched_by, user_ids))
 
     active = _active_user_ids(all_ids)
-    for _, stage, user_ids in plan:
+    for _, stage, _, user_ids in plan:
         if not any(user_id in active for user_id in user_ids):
             raise RouteUnusable(
                 f"На этапе «{stage.name}» не осталось ни одного активного "

@@ -664,21 +664,41 @@ stage names its approvers explicitly (user ids — the platform has no groups;
 outstanding requests are marked `skipped`, not left hanging. Exactly one
 active route per subject type (partial unique index).
 
-Stages are **snapshotted onto the process at start**, so editing a route
-never disturbs approvals already in flight.
+**Conditional branches.** A stage may carry a `condition` — a flat list of
+predicates, ANDed, over *facts* the domain app supplies. Within an `order`
+group, only stages whose condition matched enter the process; a stage flagged
+`is_fallback` stands in when nothing in its group matched. There is no branch
+model: the branch *is* the `order` group. Signoff never learns what a fact
+means — the domain app registers `facts(subject_id)` and `fact_fields()`
+alongside its other callbacks, and `GET /subjects` republishes the schema so
+the route editor can render a dropdown of, say, countries.
+
+```jsonc
+// stage condition — [] means "always"
+[{"field": "admin_country_id", "op": "in", "value": [1, 4]}]
+// ops: eq | in | not_in | gt | gte | lt | lte
+```
+
+Branches are resolved **once, at start**, before the snapshot. An `order`
+group that ends up empty **refuses the start with 409** rather than silently
+skipping a whole tier of approvers — the single most dangerous outcome here
+is a budget quietly reaching final sign-off without financial control.
+
+Stages are **snapshotted onto the process at start**, so editing a route —
+or the subject — never disturbs approvals already in flight.
 
 | Endpoint                                    | Method | Auth | Notes |
 |---------------------------------------------|--------|------|-------|
 | `/api/signoff/v1/enums`                     | GET    | jwt   | Choice labels for quorum + all four state enums |
-| `/api/signoff/v1/subjects`                  | GET    | jwt   | Registered subject types, their labels, and `has_active_route` — this is what the route builder picks from |
+| `/api/signoff/v1/subjects`                  | GET    | jwt   | Registered subject types, their labels, `has_active_route`, and `fields[]` — the facts that type allows branching on, with `options` for `choice` fields. This is what the route builder picks from |
 | `/api/signoff/v1/routes`                    | GET    | jwt   | `?subject_type=&is_active=` |
 | `/api/signoff/v1/routes`                    | POST   | admin | 409 if the subject type isn't registered, or a second active route |
-| `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | jwt / admin | |
-| `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, approver_ids[]}`; ≥1 approver enforced by the schema, unknown ids → 409 |
-| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `approver_ids` **wholesale**; omitting the key leaves them alone. The last stage of a route can't be deleted |
+| `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | jwt / admin | GET also returns `coverage_gaps[]` — `choice` values with no branch in their group. A warning for the editor, not a block; the list endpoint omits it (too costly per row) |
+| `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, approver_ids[], condition?, is_fallback?}`; ≥1 approver enforced by the schema, unknown ids → 409, and a condition naming an unknown field or an out-of-book value → 409 |
+| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `approver_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. The last stage of a route can't be deleted |
 | `/api/signoff/v1/processes`                 | GET    | jwt   | `?subject_type=&subject_id=&state=&initiator_id=` |
 | `/api/signoff/v1/processes`                 | POST   | admin | Deliberately narrow — it accepts *any* `subject_id` of any type and so would bypass domain permissions. **The real submit path is the domain endpoint** (`/api/contracts/v1/budgets/{id}/submit`, …) |
-| `/api/signoff/v1/processes/{id}`            | GET    | jwt   | Full card: stages, tasks, approver names, subject title/url |
+| `/api/signoff/v1/processes/{id}`            | GET    | jwt   | Full card: stages, tasks, approver names, subject title/url, plus `subject_facts` and each stage's `condition`/`matched_by` (`always`\|`condition`\|`fallback`) — the record of *why* these approvers |
 | `/api/signoff/v1/processes/{id}/cancel`     | POST   | jwt   | Initiator **or** admin — checked on the row. Cancel ≠ reject: the object returns to `draft` |
 | `/api/signoff/v1/tasks/mine`                | GET    | jwt   | The inbox. Only `pending` tasks on **active** stages — a request on a stage the process may never reach is not "waiting on you" |
 | `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject", comment?}`. The **named approver** decides; an admin token on someone else's task gets 409 |
@@ -690,9 +710,11 @@ to import. For contracts those URLs are `/contracts/budgets/{id}`,
 routes do not exist yet.**
 
 **409 Conflict** covers: no route configured, the object is already under
-approval, every approver on a stage is deactivated, the process is closed,
-the task is addressed to someone else, or it was already decided. `403` is
-only ever a permissions answer; `422` only ever a schema one.
+approval, every approver on a stage is deactivated, no branch matched in a
+group (and no fallback), a condition naming a fact the subject doesn't
+supply, the process is closed, the task is addressed to someone else, or it
+was already decided. `403` is only ever a permissions answer; `422` only ever
+a schema one (an unknown condition operator lands here, not in 409).
 
 ---
 

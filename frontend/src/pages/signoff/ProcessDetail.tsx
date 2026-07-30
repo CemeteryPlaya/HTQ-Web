@@ -77,6 +77,40 @@ const ProcessDetail = () => {
     queryFn: () => signoffApi.getEnums().then((r) => r.data),
   });
 
+  // Нужны только ради подписей в условиях веток и в снимке фактов: сами
+  // факты — это `{admin_country_id: 3}`, а человеку надо «Страна
+  // администратора бюджета — Казахстан».
+  const { data: subjects = [] } = useQuery({
+    queryKey: ['signoff', 'subjects'],
+    queryFn: () => signoffApi.listSubjects().then((r) => r.data),
+  });
+
+  const fields = useMemo(
+    () =>
+      subjects.find((item) => item.subject_type === process?.subject_type)?.fields
+      ?? [],
+    [subjects, process],
+  );
+
+  /** Факты объекта человеческими словами. Показываются только те, что тип
+   *  объявил ветвимыми: остальные ключи в снимке — служебные, и толковать их
+   *  в интерфейсе нечем. */
+  const readableFacts = useMemo(
+    () =>
+      fields
+        .filter((field) => field.key in (process?.subject_facts ?? {}))
+        .map((field) => {
+          const raw = process?.subject_facts[field.key];
+          const option = field.options.find((item) => item.value === raw);
+          return {
+            key: field.key,
+            label: field.label || field.key,
+            value: option ? option.label : String(raw ?? '—'),
+          };
+        }),
+    [fields, process],
+  );
+
   const cancel = useMutation({
     mutationFn: () => signoffApi.cancelProcess(processId).then((r) => r.data),
     onSuccess: () => {
@@ -234,6 +268,26 @@ const ProcessDetail = () => {
                   построить (тип не зарегистрирован или строка удалена).
                 </p>
               )}
+
+              {readableFacts.length > 0 && (
+                <div className="pt-2">
+                  <p className="text-xs text-muted-foreground mb-1.5">
+                    Каким объект был на момент отправки — по этим значениям
+                    выбирались этапы. Позднейшие правки объекта состав
+                    согласующих уже не меняют.
+                  </p>
+                  <dl className="flex flex-wrap gap-x-4 gap-y-1">
+                    {readableFacts.map((fact) => (
+                      <div key={fact.key} className="flex items-baseline gap-1.5">
+                        <dt className="text-xs text-muted-foreground">
+                          {fact.label}:
+                        </dt>
+                        <dd className="text-xs font-medium">{fact.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -242,6 +296,7 @@ const ProcessDetail = () => {
             process={process}
             stageStateLabels={labelMap(enums?.stage_state)}
             taskStateLabels={labelMap(enums?.task_state)}
+            fields={fields}
           />
 
           <DecisionDialog

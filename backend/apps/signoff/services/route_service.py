@@ -18,7 +18,7 @@ from apps.signoff.models import (
     ApprovalRouteStage,
     ApprovalRouteStageApprover,
 )
-from apps.signoff.services import registry
+from apps.signoff.services import conditions, registry
 from apps.users import interface as users
 
 
@@ -113,12 +113,15 @@ def get_stage_or_404(stage_id: int) -> ApprovalRouteStage:
 
 @transaction.atomic
 def add_stage(route_id: int, *, order: int, name: str, quorum: str,
-              approver_ids: list[int]) -> ApprovalRouteStage:
+              approver_ids: list[int], condition=None,
+              is_fallback: bool = False) -> ApprovalRouteStage:
     route = get_route_or_404(route_id)
     _check_approvers_exist(approver_ids)
+    condition = _check_condition(route.subject_type, condition, is_fallback)
 
     stage = ApprovalRouteStage.objects.create(
-        route=route, order=order, name=name, quorum=quorum)
+        route=route, order=order, name=name, quorum=quorum,
+        condition=condition, is_fallback=is_fallback)
     _set_approvers(stage, approver_ids)
     return stage
 
@@ -136,6 +139,18 @@ def update_stage(stage_id: int, **fields) -> ApprovalRouteStage:
                 f"В этапе «{stage.name}» должен остаться хотя бы один согласующий")
         _check_approvers_exist(approver_ids)
         _set_approvers(stage, approver_ids)
+
+    # Условие и «иначе» проверяются вместе, даже когда меняется только одно
+    # из них: их несочетаемость — свойство ПАРЫ, и проверить пришедшее поле
+    # против сохранённого второго иначе невозможно.
+    if "condition" in fields or "is_fallback" in fields:
+        condition = fields.get("condition", stage.condition)
+        is_fallback = fields.get("is_fallback", stage.is_fallback)
+        if is_fallback is None:
+            is_fallback = stage.is_fallback
+        fields["condition"] = _check_condition(
+            stage.route.subject_type, condition, is_fallback)
+        fields["is_fallback"] = is_fallback
 
     changed = [key for key, value in fields.items() if value is not None]
     for key in changed:
@@ -178,6 +193,51 @@ def _set_approvers(stage: ApprovalRouteStage, user_ids: list[int]) -> None:
     ])
 
 
+def _check_condition(subject_type: str, condition, is_fallback: bool) -> list:
+    """Проверить условие этапа против схемы фактов его типа.
+
+    Та же роль, что у ``_check_approvers_exist``: опечатку в настройке ловим
+    у того, кто настраивает. Иначе условие про несуществующее поле дожило бы
+    до отправки заявки и превратилось в отказ на ровном месте у пользователя,
+    который к маршруту отношения не имеет.
+    """
+    if is_fallback and condition:
+        # Сочетание нечитаемо: «иначе» означает «когда не сошлось ничто
+        # другое», и собственное условие ему противоречит. Молча предпочесть
+        # одно другому значило бы исполнить не то, что видит администратор.
+        raise RouteConflict(
+            "Этап «иначе» не может иметь собственного условия — уберите одно из двух")
+
+    # Выходим ДО обращения к схеме: у безусловного этапа проверять нечего, а
+    # ``fields_for`` — это вызов чужого кода, ходящего в чужую БД. Иначе тип
+    # со сломанным ``fact_fields()`` перестал бы принимать и обычные этапы,
+    # которым ветвление вообще не нужно.
+    if not condition:
+        return []
+
+    try:
+        return conditions.validate(condition, registry.fields_for(subject_type))
+    except conditions.ConditionError as exc:
+        raise RouteConflict(str(exc)) from exc
+
+
+def coverage_gaps(route: ApprovalRoute) -> list[dict]:
+    """Значения справочников, под которые в маршруте не заведено ветки.
+
+    Предупреждение редактору, а не запрет: маршрут с дырой валиден до тех
+    пор, пока в неё не попадёт объект, — и упадёт он тогда уже у
+    пользователя (``engine._select_stages``). Показать дыру администратору
+    заранее дешевле, чем ловить её отправкой заявки.
+    """
+    try:
+        fields = registry.fields_for(route.subject_type)
+    except (registry.UnknownSubject, conditions.ConditionError):
+        # Тип снят с регистрации или его схема сломана — это забота другого
+        # места; подсказка на этом падать не должна.
+        return []
+    return conditions.coverage_gaps(route.stages.all(), fields)
+
+
 def _check_approvers_exist(user_ids: list[int]) -> None:
     """Все ли перечисленные id — существующие пользователи.
 
@@ -195,13 +255,20 @@ def _check_approvers_exist(user_ids: list[int]) -> None:
 # ── Представление ───────────────────────────────────────────────────────
 
 def serialize_route(route: ApprovalRoute, *,
-                    names: dict[int, dict] | None = None) -> dict:
+                    names: dict[int, dict] | None = None,
+                    gaps: bool = False) -> dict:
+    """``gaps=True`` добавляет подсказку о непокрытых значениях справочника.
+
+    Не по умолчанию: считать её — значит сходить за схемой фактов в
+    предметную аппку, а в списке маршрутов это лишний поход на каждую строку.
+    Нужна она ровно в редакторе одного маршрута.
+    """
     stages = list(route.stages.all())
     if names is None:
         names = _name_map([approver.user_id
                            for stage in stages
                            for approver in stage.approvers.all()])
-    return {
+    card = {
         "id": route.pk,
         "subject_type": route.subject_type,
         "name": route.name,
@@ -210,6 +277,9 @@ def serialize_route(route: ApprovalRoute, *,
         "updated_at": route.updated_at,
         "stages": [serialize_stage(stage, names=names) for stage in stages],
     }
+    if gaps:
+        card["coverage_gaps"] = coverage_gaps(route)
+    return card
 
 
 def serialize_stage(stage: ApprovalRouteStage, *,
@@ -222,6 +292,8 @@ def serialize_stage(stage: ApprovalRouteStage, *,
         "order": stage.order,
         "name": stage.name,
         "quorum": stage.quorum,
+        "condition": stage.condition or [],
+        "is_fallback": stage.is_fallback,
         "approvers": [
             {
                 "user_id": user_id,

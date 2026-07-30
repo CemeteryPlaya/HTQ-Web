@@ -52,8 +52,9 @@ class ApprovalRouteStageAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     завести этапы в маршруте, затем открыть каждый и назначить людей.
     """
 
-    list_display = ("id", "route", "order", "name", "quorum", "approver_count")
-    list_filter = ("route", "quorum")
+    list_display = ("id", "route", "order", "name", "quorum", "branch",
+                    "approver_count")
+    list_filter = ("route", "quorum", "is_fallback")
     search_fields = ("name",)
     inlines = [ApproverInline]
 
@@ -61,11 +62,23 @@ class ApprovalRouteStageAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     def approver_count(self, obj) -> int:
         return obj.approvers.count()
 
+    @admin.display(description="Ветка")
+    def branch(self, obj) -> str:
+        """Условие одной строкой — в списке этапов сырой JSON нечитаем."""
+        if obj.is_fallback:
+            return "иначе"
+        if not obj.condition:
+            return "всегда"
+        return "; ".join(
+            f"{item.get('field')} {item.get('op')} {item.get('value')}"
+            for item in obj.condition
+        )
+
 
 class StageInline(admin.TabularInline):
     model = ApprovalRouteStage
     extra = 1
-    fields = ("order", "name", "quorum")
+    fields = ("order", "name", "quorum", "condition", "is_fallback")
     show_change_link = True  # отсюда — в карточку этапа за согласующими
     verbose_name = "Этап"
     verbose_name_plural = "Этапы (одинаковая очередь = параллельно)"
@@ -109,7 +122,7 @@ class ReadOnlyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 class ProcessStageInline(admin.TabularInline):
     model = ApprovalProcessStage
     extra = 0
-    fields = ("order", "name", "quorum", "state", "decided_at")
+    fields = ("order", "name", "quorum", "state", "matched_by", "decided_at")
     readonly_fields = fields
     can_delete = False
     show_change_link = True
@@ -152,8 +165,8 @@ class TaskInline(admin.TabularInline):
 @admin.register(ApprovalProcessStage)
 class ApprovalProcessStageAdmin(ReadOnlyAdmin):
     list_display = ("id", "process", "order", "name", "quorum", "state",
-                    "decided_at")
-    list_filter = ("state", "quorum")
+                    "matched_by", "decided_at")
+    list_filter = ("state", "quorum", "matched_by")
     inlines = [TaskInline]
 
 

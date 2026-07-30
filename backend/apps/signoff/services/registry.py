@@ -41,6 +41,16 @@ class Describe(Protocol):
         """``{"title": str, "url": str}`` или ``None``, если объекта нет."""
 
 
+class Facts(Protocol):
+    def __call__(self, subject_id: int) -> dict:
+        """Плоский словарь скаляров, по которым выбираются ветки маршрута."""
+
+
+class FactFields(Protocol):
+    def __call__(self) -> list[dict]:
+        """Схема доступных фактов: ``{"key", "label", "type", "options"}``."""
+
+
 @dataclass(frozen=True)
 class Subject:
     """Что предметная аппка рассказала signoff о своём типе объектов.
@@ -64,6 +74,19 @@ class Subject:
 
     ``describe`` — единственный способ показать чужой объект в интерфейсе
     signoff, не зная его модели.
+
+    ``facts``/``fact_fields`` — то же самое для УСЛОВНЫХ ВЕТОК: движок не
+    может спросить у бюджета страну его администратора, поэтому аппка сама
+    снимает с объекта плоский словарь скаляров (``facts``) и отдельно
+    объявляет, что из него разрешено спрашивать в условии и как показать это
+    в редакторе маршрута (``fact_fields``). Обе необязательны: тип без них
+    просто не поддерживает ветвление, и редактор не покажет ему условий.
+    Подробнее — ``services/conditions.py``.
+
+    ``fact_fields`` — функция, а не константа, потому что варианты выбора
+    берутся из справочника в БД: список стран меняется без перезапуска, и
+    зафиксировать его на импорте модуля значило бы показывать в редакторе
+    вчерашний справочник.
     """
 
     subject_type: str
@@ -74,6 +97,8 @@ class Subject:
     on_started: Callable[[int], None] | None = None
     on_cancelled: Callable[[int], None] | None = None
     describe: Describe | None = None
+    facts: Facts | None = None
+    fact_fields: FactFields | None = None
 
 
 _SUBJECTS: dict[str, Subject] = {}
@@ -84,7 +109,9 @@ def register_subject(subject_type: str, *, label: str, model: type,
                      on_rejected: Callable[[int], None] | None = None,
                      on_started: Callable[[int], None] | None = None,
                      on_cancelled: Callable[[int], None] | None = None,
-                     describe: Describe | None = None) -> Subject:
+                     describe: Describe | None = None,
+                     facts: Facts | None = None,
+                     fact_fields: FactFields | None = None) -> Subject:
     """Объявить тип объектов согласуемым.
 
     Повторная регистрация того же типа ПЕРЕЗАПИСЫВАЕТ запись, а не падает:
@@ -114,10 +141,25 @@ def register_subject(subject_type: str, *, label: str, model: type,
             f"а регистрируется как {subject_type!r}"
         )
 
+    if fact_fields is not None and facts is None:
+        # Иначе редактор маршрута предложит поля, которых на запуске не
+        # окажется, и каждое такое условие упадёт ConditionError'ом уже в
+        # руках пользователя. Обратное сочетание законно: ``facts`` без
+        # ``fact_fields`` — это снимок для журнала без права ветвиться по нему.
+        raise ValueError(
+            f"«{subject_type}»: fact_fields объявлены без facts — условия "
+            f"будет не на чем проверять"
+        )
+    # Сами ``fact_fields()`` здесь НЕ вызываются: регистрация идёт из
+    # AppConfig.ready(), где обращаться в БД нельзя (см. докстринг
+    # interface.py), а варианты выбора приходят как раз из справочника.
+    # Их проверяет conditions.validate_fields() в момент чтения.
+
     subject = Subject(
         subject_type=subject_type, label=label, model=model,
         on_approved=on_approved, on_rejected=on_rejected,
         on_started=on_started, on_cancelled=on_cancelled, describe=describe,
+        facts=facts, fact_fields=fact_fields,
     )
     if subject_type in _SUBJECTS:
         logger.debug("signoff: тип %s зарегистрирован повторно", subject_type)
@@ -138,6 +180,35 @@ def get_subject(subject_type: str) -> Subject:
 
 def registered_subjects() -> list[Subject]:
     return [_SUBJECTS[key] for key in sorted(_SUBJECTS)]
+
+
+def fields_for(subject_type: str) -> list[dict]:
+    """Схема фактов типа — для редактора маршрута и проверки условий.
+
+    Пустой список у типа, который ветвление не поддерживает: это не ошибка,
+    а «условия здесь настраивать нельзя», и редактор просто не покажет их.
+    """
+    from apps.signoff.services import conditions
+
+    subject = get_subject(subject_type)
+    if subject.fact_fields is None:
+        return []
+    return conditions.validate_fields(subject.fact_fields())
+
+
+def facts_for(subject_type: str, subject_id: int) -> dict:
+    """Факты объекта — то, по чему выбираются ветки и что ложится в журнал.
+
+    Ошибку ``facts()`` НЕ глушим, в отличие от ``describe()``: заголовок
+    карточки — оформление, а факты решают, кто будет согласовывать. Молча
+    подставить пустой словарь значило бы отправить объект не по той ветке.
+    """
+    from apps.signoff.services import conditions
+
+    subject = get_subject(subject_type)
+    if subject.facts is None:
+        return {}
+    return conditions.normalize_facts(subject.facts(subject_id))
 
 
 def is_registered(subject_type: str) -> bool:

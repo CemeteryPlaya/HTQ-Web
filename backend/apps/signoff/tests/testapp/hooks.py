@@ -45,6 +45,28 @@ def _describe(subject_id: int) -> dict | None:
     return {"title": doc.title, "url": f"/probe/{doc.pk}"}
 
 
+# ``ZONES`` играет роль справочника из БД (у contracts это таблица стран):
+# ``fact_fields`` обязана быть функцией именно потому, что такой справочник
+# меняется без перезапуска.
+ZONES = [(1, "Первая зона"), (2, "Вторая зона"), (3, "Третья зона")]
+
+
+def _facts(subject_id: int) -> dict:
+    doc = ProbeDoc.objects.filter(pk=subject_id).first()
+    if doc is None:
+        return {}
+    return {"zone": doc.zone, "amount": doc.amount, "urgent": doc.urgent}
+
+
+def _fact_fields() -> list[dict]:
+    return [
+        {"key": "zone", "label": "Зона", "type": "choice",
+         "options": [{"value": value, "label": label} for value, label in ZONES]},
+        {"key": "amount", "label": "Сумма", "type": "number"},
+        {"key": "urgent", "label": "Срочно", "type": "bool"},
+    ]
+
+
 def register() -> None:
     signoff.register_subject(
         ProbeDoc.SIGNOFF_SUBJECT_TYPE,
@@ -55,4 +77,6 @@ def register() -> None:
         on_rejected=_on_rejected,
         on_cancelled=_on_cancelled,
         describe=_describe,
+        facts=_facts,
+        fact_fields=_fact_fields,
     )

@@ -12,15 +12,20 @@
  * Этапы приходят снимком маршрута на момент запуска — правка маршрута уже
  * идущее согласование не трогает, так что здесь показывается то, что было
  * на старте, а не то, что в маршруте сейчас.
+ *
+ * По той же причине здесь показывается и УСЛОВИЕ этапа: в снимке остались
+ * только сошедшиеся ветки, и без подписи «этап здесь, потому что страна —
+ * Казахстан» непонятно, почему согласуют именно эти люди, а соседняя ветка
+ * маршрута в карточке вообще отсутствует.
  */
 
-import { CheckCircle2, Circle, CircleDot, MinusCircle, XCircle } from 'lucide-react';
+import { CheckCircle2, Circle, CircleDot, MinusCircle, Split, XCircle } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { ApprovalProcess, TaskState } from '@/types/signoff';
+import type { ApprovalProcess, SubjectField, TaskState } from '@/types/signoff';
 
-import { formatMoment, groupStages } from './format';
+import { conditionText, formatMoment, groupStages } from './format';
 import { QUORUM_LABELS, TASK_STATE_LABELS } from './labels';
 import { StageStateBadge } from './states';
 
@@ -67,12 +72,17 @@ interface Props {
   /** Подписи с `GET /enums`; при их отсутствии берутся запасные. */
   stageStateLabels?: Record<string, string>;
   taskStateLabels?: Record<string, string>;
+  /** Поля типа из `GET /subjects` — чтобы условие читалось словами
+   *  («Страна — Казахстан»), а не ключами. Без них условие покажется по
+   *  сырым ключам: хуже, но всё же читаемо. */
+  fields?: SubjectField[];
 }
 
 export function ProcessTimeline({
   process,
   stageStateLabels = {},
   taskStateLabels = {},
+  fields = [],
 }: Props) {
   const groups = groupStages(process.stages);
 
@@ -136,6 +146,16 @@ export function ProcessTimeline({
                     {QUORUM_LABELS[stage.quorum] ?? stage.quorum}
                     {stage.decided_at && ` · ${formatMoment(stage.decided_at)}`}
                   </p>
+                  {stage.matched_by !== 'always' && (
+                    <p className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground">
+                      <Split className="h-3.5 w-3.5 shrink-0 mt-px" />
+                      <span className="break-words">
+                        {stage.matched_by === 'fallback'
+                          ? 'ветка «иначе» — ни одно условие шага не сошлось'
+                          : conditionText(stage.condition, fields)}
+                      </span>
+                    </p>
+                  )}
                   <ul className="mt-2 divide-y">
                     {stage.tasks.map((task) => (
                       <TaskRow

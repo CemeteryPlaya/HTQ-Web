@@ -9,13 +9,42 @@
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apps.signoff.models import ProcessState, Quorum, StageState, TaskState
+from apps.signoff.services.conditions import OPS
 
 _ORM = ConfigDict(from_attributes=True)
+
+
+# ── Условия ветвления ───────────────────────────────────────────────────
+
+class Predicate(BaseModel):
+    """Один предикат условия этапа.
+
+    Форму проверяет схема, СМЫСЛ — ``conditions.validate`` в сервисе: знать,
+    что «страна» бывает только из справочника стран, может лишь предметная
+    аппка, а pydantic-схема статична и до её ``fact_fields`` не дотянется.
+
+    ``value`` намеренно ``Any``: тип зависит от поля (id страны — число,
+    ``in`` — список), и сузить его здесь, не зная поля, нечем.
+    """
+
+    field: str = Field(..., min_length=1, max_length=64)
+    op: Literal["eq", "in", "not_in", "gt", "gte", "lt", "lte"] = "eq"
+    value: Any = None
+
+
+# Список операторов выписан в ``Literal`` буквально — pydantic должен видеть
+# его статически, чтобы отдать 422 с перечислением допустимых значений и
+# попасть в OpenAPI. Сверка с единственным источником правды — здесь же, на
+# импорте: разойтись эти два списка не должны.
+assert set(Predicate.model_fields["op"].annotation.__args__) == set(OPS), \
+    "schemas.Predicate.op разошёлся с conditions.OPS"
+
+Condition = list[Predicate]
 
 
 # ── Маршруты ────────────────────────────────────────────────────────────
@@ -44,6 +73,10 @@ class StageCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     quorum: Quorum = Quorum.ALL
     approver_ids: list[int] = Field(..., min_length=1)
+    # Пустое условие — «этап нужен всегда»; это и есть поведение всех этапов
+    # до появления ветвления, поэтому значение по умолчанию именно такое.
+    condition: Condition = Field(default_factory=list)
+    is_fallback: bool = False
 
     @model_validator(mode="after")
     def _unique_approvers(self):
@@ -59,6 +92,10 @@ class StageUpdate(BaseModel):
     # None — «не трогать список»; пустой список запрещён отдельной проверкой
     # в сервисе, чтобы не молча получить неисполнимый этап.
     approver_ids: Optional[list[int]] = None
+    # А здесь пустой список — законное «снять условие»: отличить его от «не
+    # трогать» позволяет exclude_unset во вьюхе (см. StageDetailView.patch).
+    condition: Optional[Condition] = None
+    is_fallback: Optional[bool] = None
 
 
 class ApproverRead(BaseModel):
@@ -74,7 +111,23 @@ class StageRead(BaseModel):
     order: int
     name: str
     quorum: str
+    condition: Condition = Field(default_factory=list)
+    is_fallback: bool = False
     approvers: list[ApproverRead]
+
+
+class CoverageGap(BaseModel):
+    """Значения справочника, под которые в группе нет ветки.
+
+    Подсказка редактору маршрута: попади в эту дыру объект — запуск
+    согласования откажет (``engine._select_stages``). Показывается заранее,
+    чтобы дыру закрыл администратор, а не обнаружил пользователь.
+    """
+
+    order: int
+    field: str
+    label: str
+    missing: list[dict]
 
 
 class RouteRead(BaseModel):
@@ -83,6 +136,9 @@ class RouteRead(BaseModel):
     name: str
     is_active: bool
     stages: list[StageRead]
+    # Считается только для карточки одного маршрута — в списке этого поля
+    # нет (см. route_service.serialize_route).
+    coverage_gaps: Optional[list[CoverageGap]] = None
     created_at: datetime
     updated_at: datetime
 
@@ -110,6 +166,11 @@ class ProcessStageRead(BaseModel):
     name: str
     quorum: str
     state: StageState
+    # Снимок условия, по которому этап попал в процесс. ``matched_by``
+    # различает «этап был безусловным» и «сработало иначе» — у обоих условие
+    # пустое, и без этого поля они в карточке неразличимы.
+    condition: Condition = Field(default_factory=list)
+    matched_by: str = "always"
     decided_at: Optional[datetime]
     tasks: list[TaskRead]
 
@@ -124,6 +185,9 @@ class ProcessRead(BaseModel):
     created_at: datetime
     finished_at: Optional[datetime]
     stages: list[ProcessStageRead]
+    # Факты, по которым выбирались ветки, на момент запуска — ответ на
+    # вопрос «почему согласуют именно эти люди» через год после запуска.
+    subject_facts: dict = Field(default_factory=dict)
     # Карточка предметного объекта — из describe() его аппки. signoff не
     # умеет её построить сам и не должен.
     subject_title: Optional[str] = None
@@ -152,9 +216,31 @@ class InboxItem(BaseModel):
     created_at: datetime
 
 
+class FieldOption(BaseModel):
+    value: Any
+    label: str = ""
+
+
+class SubjectField(BaseModel):
+    """Факт объекта, по которому разрешено ветвить маршрут.
+
+    Приходит из ``fact_fields()`` предметной аппки — signoff этот список не
+    придумывает и не хранит. ``options`` заполнены только у ``choice``: это
+    справочник, и редактор рисует по нему выпадающий список вместо поля ввода.
+    """
+
+    key: str
+    label: str = ""
+    type: str = "string"
+    options: list[FieldOption] = Field(default_factory=list)
+
+
 class SubjectRead(BaseModel):
     """Согласуемый тип — для настройки маршрута."""
 
     subject_type: str
     label: str
     has_active_route: bool
+    # Пустой список — тип не поддерживает ветвление (аппка не объявила
+    # fact_fields); редактор в этом случае условий не показывает.
+    fields: list[SubjectField] = Field(default_factory=list)
