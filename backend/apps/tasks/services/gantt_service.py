@@ -26,7 +26,7 @@ from datetime import date
 from django.db.models import F, Q
 from django.db.models.functions import Coalesce
 
-from ..models import Status, Task, TaskAssignment
+from ..models import Status, Task, ResourceAllocation
 from . import hydration
 
 # Terminal statuses stamp ``completed_at`` — the bar ends there.
@@ -62,12 +62,24 @@ def _start_date(task: Task) -> date | None:
 
 
 def reports_gantt(ids: list[int] | None,
-                  statuses: list[str] | None) -> dict:
+                  statuses: list[str] | None,
+                  project_id: int | None = None,
+                  site_id: int | None = None,
+                  roadmap_id: int | None = None,
+                  site_block_id: int | None = None) -> dict:
     qs = Task.objects.filter(is_deleted=False)
     if ids:
         qs = qs.filter(id__in=ids)
     if statuses:
         qs = qs.filter(status__in=statuses)
+    if project_id is not None:
+        qs = qs.filter(project_id=project_id)
+    if site_id is not None:
+        qs = qs.filter(site_id=site_id)
+    if roadmap_id is not None:
+        qs = qs.filter(roadmap_id=roadmap_id)
+    if site_block_id is not None:
+        qs = qs.filter(site_block_id=site_block_id)
     tasks = list(qs.order_by(F("start_date").asc(nulls_last=True), "id"))
     return {
         "tasks": [
@@ -110,7 +122,9 @@ class _DepartmentResolver:
 
 def resource_gantt(dt_from: date, dt_to: date, kinds: set[str],
                    department_id: int | None = None,
-                   search: str | None = None) -> dict:
+                   search: str | None = None,
+                   project_id: int | None = None,
+                   site_id: int | None = None) -> dict:
     # The original's overlap test, expressed in SQL exactly as it was:
     # a one-dated task is treated as a zero-length bar on that date, and a
     # task with no dates at all has no bar and never appears.
@@ -121,6 +135,14 @@ def resource_gantt(dt_from: date, dt_to: date, kinds: set[str],
                   eff_end=Coalesce("due_date", "start_date"))
         .filter(eff_start__lte=dt_to, eff_end__gte=dt_from)
     )
+    # Project/site narrowing happens BEFORE the assignment join, so the
+    # resource rows themselves disappear when they have no work on the
+    # selected object — filtering the bars afterwards would leave empty
+    # rows behind and make the schedule look busier than it is.
+    if project_id is not None:
+        tasks_in_window = tasks_in_window.filter(project_id=project_id)
+    if site_id is not None:
+        tasks_in_window = tasks_in_window.filter(site_id=site_id)
 
     rows: dict[str, dict] = {}
     seen: set[tuple[str, str]] = set()
@@ -151,9 +173,10 @@ def resource_gantt(dt_from: date, dt_to: date, kinds: set[str],
         })
 
     # 1) Explicit resource assignments (employees + equipment).
-    assignments = list(TaskAssignment.objects
+    assignments = list(ResourceAllocation.objects
                        .filter(task__in=tasks_in_window)
-                       .select_related("task", "equipment"))
+                       .select_related("task", "equipment",
+                                       "equipment__category"))
     # 2) Primary-assignee fallback: a task whose assignee has no explicit
     #    assignment row still shows in the employee load, so newly created
     #    tasks are not invisible on the resource view.
@@ -191,8 +214,11 @@ def resource_gantt(dt_from: date, dt_to: date, kinds: set[str],
         elif assignment.equipment_id and "equipment" in kinds:
             equipment = assignment.equipment
             add(f"eq_{assignment.equipment_id}", "equipment", equipment.name,
+                # Именем, а не FK: ``meta`` уходит в JSON как есть, а форма
+                # поля в контракте — строка (см. EquipmentResponse.category).
                 {"inventory_no": equipment.inventory_no,
-                 "category": equipment.category},
+                 "category": (equipment.category.name
+                              if equipment.category else None)},
                 task, assignment.allocation)
 
     for task in fallback:

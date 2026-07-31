@@ -21,6 +21,11 @@ const CreateTaskModal = React.lazy(() =>
 const GlobalSearch = React.lazy(() =>
   import('./GlobalSearch').then(m => ({ default: m.GlobalSearch }))
 );
+// Unread badge + desktop notifications. Lazy like its neighbours: it opens a
+// socket connection, which only logged-in users need.
+const MessengerBadge = React.lazy(() =>
+  import('@/features/messenger/MessengerBadge').then(m => ({ default: m.MessengerBadge }))
+);
 
 export const Header = () => {
   const { t } = useTranslation();
@@ -175,6 +180,7 @@ export const Header = () => {
               <Search className="w-5 h-5" />
             </button>
           )}
+          {isLoggedIn && showDeferredControls && <Suspense fallback={null}><MessengerBadge /></Suspense>}
           {isLoggedIn && showDeferredControls && <Suspense fallback={null}><NotificationsViewer /></Suspense>}
           {showDeferredControls && <Suspense fallback={null}><LanguageSwitcher /></Suspense>}
         </nav>

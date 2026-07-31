@@ -16,48 +16,58 @@ export const publicRoutes: RouteConfig[] = [
   { path: '/public/employee/:token', component: lazyPages.PublicEmployeeView },
 ];
 
+// NOTE: paths in this array must be UNIQUE. `<Routes>` scores identical
+// path strings equally and renders whichever was declared first, so a
+// duplicate silently shadows the later entry — which is exactly how every
+// `/admin/*` and `/hr/*` route lost its `requiresRole` for as long as an
+// ungated copy sat above the gated one. `routeDefinitions.test.ts` fails
+// the build if a duplicate comes back.
 export const protectedRoutes: RouteConfig[] = [
   // ─── CMS / marketing manage pages ─────────────────────────────────────
   // Editorial role (or higher) — protect against random users hitting
   // ``/manage/news`` directly and altering published content.
   { path: '/manage/news', component: lazyPages.AdminNews, requiresAuth: true, requiresRole: 'editor' },
   { path: '/manage/contacts', component: lazyPages.AdminContacts, requiresAuth: true, requiresRole: 'editor' },
-  { path: '/manage/projects', component: lazyPages.AdminProjects, requiresAuth: true, requiresRole: 'editor' },
+  // ``/manage/projects`` keeps its historical path but is NOT a CMS page: it
+  // manages tasks-domain projects (apps.tasks.Project), which are an
+  // operational entity, not marketing content. Hence the ``hr`` bucket
+  // (admins + staff) rather than ``editor`` — with ``editor`` an admin
+  // without the editors role could not reach it at all, while a content
+  // editor who can reach it would get 403 from every write.
+  { path: '/manage/projects', component: lazyPages.HRProjects, requiresAuth: true, requiresRole: 'hr' },
 
   // ─── Personal / messenger / tasks (any logged-in user) ────────────────
   { path: '/myprofile', component: lazyPages.MyProfile, requiresAuth: true },
   { path: '/settings', component: lazyPages.Settings, requiresAuth: true },
   { path: '/messenger', component: lazyPages.Messenger, requiresAuth: true },
   { path: '/notifications', component: lazyPages.NotificationsHistory, requiresAuth: true },
-  { path: '/admin/users', component: lazyPages.AdminUsers, requiresAuth: true },
-  { path: '/admin/chats', component: lazyPages.AdminChats, requiresAuth: true },
-  { path: '/admin/mailboxes', component: lazyPages.AdminMailboxes, requiresAuth: true },
-  { path: '/admin/levels', component: lazyPages.HRAccessLevels, requiresAuth: true },
-  { path: '/admin/registrations', component: lazyPages.AdminRegistrations, requiresAuth: true },
-  { path: '/hr/employees', component: lazyPages.HREmployees, requiresAuth: true },
-  { path: '/hr/employees/:id', component: lazyPages.HREmployeeCard, requiresAuth: true },
-  { path: '/hr/departments', component: lazyPages.HRDepartments, requiresAuth: true },
-  { path: '/hr/time-tracking', component: lazyPages.HRTimeTracking, requiresAuth: true },
-  { path: '/hr/recruitment', component: lazyPages.HRRecruitment, requiresAuth: true },
-  { path: '/hr/documents', component: lazyPages.HRDocuments, requiresAuth: true },
-  { path: '/hr/logs', component: lazyPages.HRLogs, requiresAuth: true },
-  { path: '/hr/history', component: lazyPages.HRHistory, requiresAuth: true },
-  { path: '/hr/archive', component: lazyPages.HRArchive, requiresAuth: true },
-  { path: '/hr/accounts', component: lazyPages.HRAccounts, requiresAuth: true },
-  { path: '/hr/org-chart', component: lazyPages.HROrgChart, requiresAuth: true },
-  { path: '/hr/pmo', component: lazyPages.HRPMO, requiresAuth: true },
-  { path: '/hr/share-links', component: lazyPages.HRShareLinks, requiresAuth: true },
-  { path: '/hr/positions', component: lazyPages.HRPositions, requiresAuth: true },
-  { path: '/hr/vacancies', component: lazyPages.HRVacancies, requiresAuth: true },
-  { path: '/hr/applications', component: lazyPages.HRApplications, requiresAuth: true },
-  { path: '/hr/offers', component: lazyPages.HROffers, requiresAuth: true },
-  { path: '/hr/production-calendar', component: lazyPages.HRProductionCalendar, requiresAuth: true },
-  { path: '/hr/staffing', component: lazyPages.HRStaffing, requiresAuth: true },
   { path: '/calendar', component: lazyPages.HRCalendar, requiresAuth: true },
   { path: '/files', component: lazyPages.DepartmentFiles, requiresAuth: true },
   { path: '/conference', component: lazyPages.ConferencePage, requiresAuth: true },
   { path: '/room/:roomId', component: lazyPages.ConferencePage, requiresAuth: true },
+
+  // ─── Tasks ────────────────────────────────────────────────────────────
+  // `/tasks` and `/tasks/:id` are for everyone — TaskRouter serves regular
+  // employees a scoped board of their own work. The four management
+  // surfaces below are not: the roadmap, reports and resource schedule show
+  // the whole company's load, and the equipment page edits a shared
+  // register (its writes are admin-only on the backend, so leaving it open
+  // here would only mean a page full of 403s).
   { path: '/tasks', component: lazyPages.TaskRouter, requiresAuth: true },
+  { path: '/tasks/roadmap', component: lazyPages.HRRoadmap, requiresAuth: true, requiresRole: 'hr' },
+  // Перед `/tasks/:id` (см. ниже) и перед ним же по смыслу: карточка пакета
+  // работ, а не задачи.
+  { path: '/tasks/roadmaps/:id', component: lazyPages.HRRoadmapDetail, requiresAuth: true, requiresRole: 'hr' },
+  // Дашборд план/факта проекта. Под /tasks/, а не /manage/: это
+  // рабочий экран раздела задач, а не управление справочником.
+  { path: '/tasks/projects/:id/plan-fact', component: lazyPages.HRProjectPlanFact, requiresAuth: true, requiresRole: 'hr' },
+  { path: '/tasks/daily', component: lazyPages.HRDailyReports, requiresAuth: true },
+  { path: '/tasks/reports', component: lazyPages.HRReports, requiresAuth: true, requiresRole: 'hr' },
+  { path: '/tasks/resources', component: lazyPages.HRResourceSchedule, requiresAuth: true, requiresRole: 'hr' },
+  { path: '/tasks/equipment', component: lazyPages.HREquipment, requiresAuth: true, requiresRole: 'admin' },
+  { path: '/tasks/sites', component: lazyPages.HRSites, requiresAuth: true, requiresRole: 'admin' },
+  { path: '/tasks/contractors', component: lazyPages.HRContractors, requiresAuth: true, requiresRole: 'admin' },
+  // Declared last: `/tasks/:id` would otherwise swallow the static paths above.
   { path: '/tasks/:id', component: lazyPages.TaskDetailRouter, requiresAuth: true },
   { path: '/tasks/roadmap', component: lazyPages.HRRoadmap, requiresAuth: true },
   { path: '/tasks/reports', component: lazyPages.HRReports, requiresAuth: true },
@@ -117,7 +127,11 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/admin/users', component: lazyPages.AdminUsers, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/chats', component: lazyPages.AdminChats, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/mailboxes', component: lazyPages.AdminMailboxes, requiresAuth: true, requiresRole: 'admin' },
+  // Two distinct screens, one address until now: the ungated duplicate above
+  // pointed at HRAccessLevels and shadowed this one, so HRLevelsAdmin was
+  // unreachable. Both are wanted, so they get an address each.
   { path: '/admin/levels', component: lazyPages.HRLevelsAdmin, requiresAuth: true, requiresRole: 'admin' },
+  { path: '/admin/access-levels', component: lazyPages.HRAccessLevels, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/registrations', component: lazyPages.AdminRegistrations, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/infrastructure', component: lazyPages.AdminInfrastructure, requiresAuth: true, requiresRole: 'admin' },
 

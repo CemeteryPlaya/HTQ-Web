@@ -1,127 +1,53 @@
 /**
- * HRRoadmap — projects + nested tasks.
+ * HRRoadmap — вся иерархия работ одним деревом.
  *
- * Replaces the old release-roadmap (ProjectVersion → Project). Each
- * project expands to show its tasks; tasks render hierarchically when
- * they have parent/child relationships (parent_id chain). Standalone
- * tasks (project_id = NULL) do NOT appear here — they live in the main
- * task board.
+ * Проект → площадка → блок → роудмап (пакет работ) → задачи → подзадачи.
+ *
+ * Раньше страница показывала два уровня, проект → задачи, и называлась
+ * «дорожной картой» при том, что роудмапа как сущности не существовало.
+ * Теперь он есть и живёт на блоке, так что уровней пять; роут
+ * `/tasks/roadmap` при этом тот же.
+ *
+ * Две корзины, которые НЕ являются ошибкой и потому показываются наравне
+ * с остальным:
+ *
+ * * «без роудмапа» — задачи проекта вне пакетов; так живут все задачи,
+ *   заведённые до появления этого уровня;
+ * * «без блока» — задача не привязана к участку;
+ * * «без объекта» — у исторических задач объекта нет и не будет.
+ *
+ * Standalone-задачи (project = null) сюда по-прежнему не попадают — они
+ * живут на основной доске.
  */
 import React, { useState, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TasksLayout } from '@/components/tasks/TasksLayout';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from '@/components/ui/dialog';
 import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
 } from '@/components/ui/collapsible';
-import { toast } from 'sonner';
 import {
-  Plus, ChevronDown, ChevronRight, Calendar, Target,
-  AlertCircle, CheckSquare, Bug, BookOpen, Layers, ListTodo,
+  Plus, ChevronDown, ChevronRight, Calendar, Target, MapPin, AlertCircle,
 } from 'lucide-react';
-import {
-  fetchProjects, createProject, fetchProjectTasks,
-} from '@/api/tasks';
-import { fetchDepartments } from '@/api/hr';
+import { SiteWorkTree } from '@/components/tasks/SiteWorkTree';
+import { buildWorkTree } from '@/lib/tasks/workTree';
+import { fetchProjects, fetchProjectTasks, fetchRoadmaps } from '@/api/tasks';
 import api from '@/api/client';
 import { usesEmployeeTaskExperience } from '@/lib/auth/roles';
 import type { UserProfile } from '@/types/userProfile';
-import type { Project, ProjectStatus, Task, TaskStatus } from '@/types/tasks';
+import type { Project } from '@/types/tasks';
+import { projectStatusBadgeClass, projectStatusLabel } from '@/lib/tasks/project';
 
 /* ---- Config ---- */
 
-const PROJECT_STATUS: Record<ProjectStatus, { labelKey: string; color: string }> = {
-  active: { labelKey: 'tasks.projects.status.active', color: 'bg-blue-600 text-white' },
-  completed: { labelKey: 'tasks.projects.status.completed', color: 'bg-green-500 text-white' },
-  archived: { labelKey: 'tasks.projects.status.archived', color: 'bg-gray-400 text-white' },
-};
-
-const STATUS_CONFIG: Record<TaskStatus, { color: string }> = {
-  backlog: { color: 'bg-slate-400 text-white' },
-  todo: { color: 'bg-slate-600 text-white' },
-  in_progress: { color: 'bg-blue-600 text-white' },
-  in_review: { color: 'bg-purple-500 text-white' },
-  blocked: { color: 'bg-red-500 text-white' },
-  done: { color: 'bg-green-500 text-white' },
-  cancelled: { color: 'bg-gray-600 text-white' },
-};
-
-const TYPE_ICONS: Record<string, React.ReactNode> = {
-  task: <CheckSquare className="h-4 w-4 text-blue-500" />,
-  bug: <Bug className="h-4 w-4 text-red-500" />,
-  story: <BookOpen className="h-4 w-4 text-green-500" />,
-  epic: <Layers className="h-4 w-4 text-purple-500" />,
-  subtask: <ListTodo className="h-4 w-4 text-gray-500" />,
-};
-
-/* ---- Hierarchical task tree builder ---- */
-
-interface TaskNode {
-  task: Task;
-  children: TaskNode[];
-}
-
-function buildTaskTree(tasks: Task[]): TaskNode[] {
-  // Group tasks by parent_id so a top-level task ("direction") has its
-  // subtasks nested. Tasks whose parent is outside this project list
-  // are treated as roots in the project — they still display.
-  const byId = new Map<number, TaskNode>();
-  tasks.forEach(t => byId.set(t.id, { task: t, children: [] }));
-
-  const roots: TaskNode[] = [];
-  byId.forEach((node) => {
-    const pid = node.task.parent;
-    if (pid && byId.has(pid)) {
-      byId.get(pid)!.children.push(node);
-    } else {
-      roots.push(node);
-    }
-  });
-  return roots;
-}
-
-const TaskRow: React.FC<{ node: TaskNode; depth: number; t: (k: string, d?: string) => string }> = ({ node, depth, t }) => {
-  const { task } = node;
-  return (
-    <>
-      <Link
-        to={`/tasks/${task.id}`}
-        className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted transition-colors"
-        style={{ paddingLeft: `${depth * 16 + 8}px` }}
-      >
-        {depth > 0 && (
-          <span className="text-muted-foreground text-xs">↳</span>
-        )}
-        {TYPE_ICONS[task.task_type] ?? <CheckSquare className="h-4 w-4 text-muted-foreground" />}
-        <span className="font-mono text-sm text-primary">{task.key}</span>
-        <span className="text-sm flex-1 truncate">{task.summary}</span>
-        <Badge className={STATUS_CONFIG[task.status]?.color} variant="secondary">
-          {t(`tasks.pages.list.status.${task.status}`, task.status)}
-        </Badge>
-        {task.assignee_name && (
-          <span className="text-xs text-muted-foreground">{task.assignee_name}</span>
-        )}
-      </Link>
-      {node.children.map(child => (
-        <TaskRow key={child.task.id} node={child} depth={depth + 1} t={t} />
-      ))}
-    </>
-  );
-};
+// Project status palette moved to `lib/tasks/project.ts` — it is shared with
+// the projects page now, and a second copy is how the task-status table
+// ended up with three divergent versions.
 
 /* ---- Project card with expandable nested tasks ---- */
 
@@ -133,9 +59,18 @@ function ProjectCard({ project }: { project: Project }) {
     queryFn: () => fetchProjectTasks(project.id),
     enabled: open,
   });
+  const { data: roadmaps = [], isLoading: roadmapsLoading } = useQuery({
+    queryKey: ['hr-project-roadmaps', project.id],
+    queryFn: () => fetchRoadmaps({ project_id: project.id }),
+    enabled: open,
+  });
 
-  const tree = useMemo(() => (tasks ? buildTaskTree(tasks) : []), [tasks]);
-  const statusCfg = PROJECT_STATUS[project.status];
+  // Раскладка по площадкам, блокам и пакетам — общая с вкладкой
+  // «Объекты» карточки проекта.
+  const tree = useMemo(
+    () => buildWorkTree(project, tasks ?? [], roadmaps, t),
+    [project, tasks, roadmaps, t],
+  );
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -150,8 +85,8 @@ function ProjectCard({ project }: { project: Project }) {
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
                   <CardTitle className="text-lg">{project.name}</CardTitle>
-                  <Badge className={statusCfg.color}>
-                    {t(statusCfg.labelKey, project.status)}
+                  <Badge className={projectStatusBadgeClass(project.status)}>
+                    {projectStatusLabel(project.status, t)}
                   </Badge>
                 </div>
 
@@ -171,6 +106,24 @@ function ProjectCard({ project }: { project: Project }) {
                     </span>
                   )}
                   <span>{t('tasks.projects.taskCount', 'Задач')}: {project.task_count}</span>
+                  {project.sites?.length > 0 && (
+                    <span className="flex items-center gap-1.5 flex-wrap">
+                      <MapPin className="h-3 w-3" />
+                      {project.sites.map((site) => (
+                        <Badge
+                          key={site.id}
+                          variant="outline"
+                          className="text-[10px] px-1.5 py-0 font-normal"
+                          style={{ borderColor: site.color, color: site.color }}
+                          title={site.is_primary
+                            ? t('tasks.pages.sites.primary', 'Основной объект')
+                            : undefined}
+                        >
+                          {site.is_primary && '★ '}{site.name}
+                        </Badge>
+                      ))}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -184,18 +137,19 @@ function ProjectCard({ project }: { project: Project }) {
 
         <CollapsibleContent>
           <CardContent className="pt-0">
-            {isLoading ? (
+            {isLoading || roadmapsLoading ? (
               <p className="text-muted-foreground text-sm py-4">{t('common.loading', 'Загрузка...')}</p>
-            ) : !tasks || tasks.length === 0 ? (
+            ) : tree.siteRows.length === 0 ? (
               <p className="text-muted-foreground text-sm py-4">
                 {t('tasks.projects.empty', 'В проекте нет задач')}
               </p>
             ) : (
-              <div className="space-y-1">
-                {tree.map(node => (
-                  <TaskRow key={node.task.id} node={node} depth={0} t={t} />
-                ))}
-              </div>
+              <SiteWorkTree
+                project={project}
+                tasks={tasks ?? []}
+                roadmaps={roadmaps}
+                t={t}
+              />
             )}
           </CardContent>
         </CollapsibleContent>
@@ -208,17 +162,6 @@ function ProjectCard({ project }: { project: Project }) {
 
 const HRRoadmap: React.FC = () => {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const [createOpen, setCreateOpen] = useState(false);
-  const [form, setForm] = useState({
-    name: '',
-    description: '',
-    status: 'active' as ProjectStatus,
-    color: '#3b82f6',
-    start_date: '',
-    end_date: '',
-    department: '',
-  });
 
   const { data: projects = [], isLoading, error } = useQuery({
     queryKey: ['hr-projects'],
@@ -235,40 +178,6 @@ const HRRoadmap: React.FC = () => {
 
   const isRegularEmployee = usesEmployeeTaskExperience(profile);
 
-  const { data: departments = [] } = useQuery({
-    queryKey: ['hr-departments'],
-    queryFn: fetchDepartments,
-    enabled: Boolean(profile && !isRegularEmployee),
-  });
-
-  const createMutation = useMutation({
-    mutationFn: (data: Partial<Project>) => createProject(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['hr-projects'] });
-      setCreateOpen(false);
-      setForm({ name: '', description: '', status: 'active', color: '#3b82f6', start_date: '', end_date: '', department: '' });
-      toast.success(t('tasks.projects.created', 'Проект создан'));
-    },
-    onError: () => toast.error(t('tasks.projects.createError', 'Ошибка создания проекта')),
-  });
-
-  function handleCreate() {
-    if (!form.name.trim()) {
-      toast.error(t('tasks.projects.nameRequired', 'Название обязательно'));
-      return;
-    }
-    const payload: any = {
-      name: form.name,
-      description: form.description,
-      status: form.status,
-      color: form.color,
-    };
-    if (form.start_date) payload.start_date = form.start_date;
-    if (form.end_date) payload.end_date = form.end_date;
-    if (form.department) payload.department = Number(form.department);
-    createMutation.mutate(payload);
-  }
-
   return (
     <TasksLayout
       title={t('tasks.projects.pageTitle', 'Дорожная карта')}
@@ -280,9 +189,17 @@ const HRRoadmap: React.FC = () => {
           <div className="flex-1 text-sm text-muted-foreground">
             {t('tasks.projects.intro', 'Группировка задач по проектам и направлениям. Раскройте проект, чтобы увидеть его задачи.')}
           </div>
+          {/* Creation lives on /manage/projects, not here. The dialog that
+              used to sit on this page could not assign objects, so every
+              project born on the roadmap was permanently object-less — and
+              a project without objects opts out of the whole
+              project→object→task axis. One form, one place. */}
           {!isRegularEmployee && (
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="h-4 w-4 mr-1" /> {t('tasks.projects.newProject', 'Новый проект')}
+            <Button asChild>
+              <Link to="/manage/projects">
+                <Plus className="h-4 w-4 mr-1" />
+                {t('tasks.projects.manageLink', 'Управление проектами')}
+              </Link>
             </Button>
           )}
         </CardContent>
@@ -308,76 +225,6 @@ const HRRoadmap: React.FC = () => {
         </CardContent>
       </Card>
 
-      {/* Create dialog */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{t('tasks.projects.newProject', 'Новый проект')}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <Label>{t('tasks.projects.name', 'Название')}</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            </div>
-            <div>
-              <Label>{t('tasks.projects.description', 'Описание')}</Label>
-              <Textarea
-                value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-                rows={3}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>{t('tasks.projects.status.title', 'Статус')}</Label>
-                <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as ProjectStatus })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {(Object.keys(PROJECT_STATUS) as ProjectStatus[]).map(s => (
-                      <SelectItem key={s} value={s}>{t(PROJECT_STATUS[s].labelKey, s)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>{t('tasks.projects.color', 'Цвет')}</Label>
-                <Input type="color" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>{t('tasks.projects.start', 'Начало')}</Label>
-                <Input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />
-              </div>
-              <div>
-                <Label>{t('tasks.projects.end', 'Завершение')}</Label>
-                <Input type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} />
-              </div>
-            </div>
-            {!isRegularEmployee && (
-              <div>
-                <Label>{t('tasks.projects.department', 'Отдел')}</Label>
-                <Select value={form.department} onValueChange={(v) => setForm({ ...form, department: v })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={t('tasks.projects.selectDepartment', 'Все отделы')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {departments.map((d: any) => (
-                      <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>{t('common.cancel', 'Отмена')}</Button>
-            <Button onClick={handleCreate} disabled={createMutation.isPending}>
-              {createMutation.isPending ? t('common.saving', 'Сохранение...') : t('common.create', 'Создать')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </TasksLayout>
   );
 };

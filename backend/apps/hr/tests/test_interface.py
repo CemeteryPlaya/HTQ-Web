@@ -94,12 +94,83 @@ def test_org_ancestors_missing_department_returns_empty(org):
     assert interface.org_ancestors(999_999) == []
 
 
+def test_list_departments_brief_returns_all(org):
+    """Пакетный ``get_departments_brief`` требует список id, которого у
+    соседа может не быть: команде наполнения apps.tasks нужно разложить
+    проекты по реальным отделам, а какие они — она узнаёт только здесь."""
+    Department.objects.create(name="Строительство", path="stroy")
+    rows = interface.list_departments_brief()
+    assert {r["path"] for r in rows} == {"it", "stroy"}
+    assert set(rows[0]) == {"id", "name", "path", "is_active"}
+
+
+def test_list_departments_brief_respects_limit(org):
+    for i in range(5):
+        Department.objects.create(name=f"Отдел {i}", path=f"d{i}")
+    assert len(interface.list_departments_brief(limit=3)) == 3
+
+
+def test_list_employees_brief_exposes_user_id(org):
+    """``user_id`` — то, ради чего функция существует.
+
+    Исполнитель задачи и владелец проекта в apps.tasks это user_id, а не PK
+    строки Employee. Без этого поля сосед связать сотрудника с задачей не
+    может и полез бы в модели hr напрямую.
+    """
+    rows = interface.list_employees_brief()
+    assert len(rows) == 1
+    row = rows[0]
+    assert set(row) == {"id", "full_name", "email", "user_id",
+                        "department_id", "position_title", "status"}
+    assert row["full_name"] == "Иванов Иван"
+    assert row["position_title"] == "Инженер"
+
+
+def test_list_employees_brief_skips_soft_deleted(org):
+    Employee.objects.update(is_deleted=True)
+    assert interface.list_employees_brief() == []
+
+
+@pytest.mark.django_db
+def test_link_employee_user_sets_and_is_idempotent(org):
+    employee = Employee.objects.get()
+    assert interface.link_employee_user(employee.id, 777) is True
+    employee.refresh_from_db()
+    assert employee.user_id == 777
+    # Повтор тем же id — не ошибка и не лишняя запись.
+    assert interface.link_employee_user(employee.id, 777) is True
+
+
+@pytest.mark.django_db
+def test_link_employee_user_refuses_to_steal_account(org):
+    """``user_id`` уникален: молча переклеить учётку с одного человека на
+    другого нельзя — второй потерял бы доступ к своим задачам."""
+    first = Employee.objects.get()
+    interface.link_employee_user(first.id, 777)
+    second = Employee.objects.create(
+        first_name="Пётр", last_name="Петров", email="p@htq.test",
+        department=first.department, position=first.position,
+        hire_date=datetime.date(2024, 2, 1),
+    )
+    assert interface.link_employee_user(second.id, 777) is False
+    second.refresh_from_db()
+    assert second.user_id is None
+
+
+@pytest.mark.django_db
+def test_link_employee_user_on_missing_employee(org):
+    assert interface.link_employee_user(999_999, 5) is False
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize("call", [
     lambda: interface.get_department_brief(1),
     lambda: interface.get_departments_brief([1]),
     lambda: interface.get_employee_brief(42),
     lambda: interface.org_ancestors(1),
+    lambda: interface.list_departments_brief(),
+    lambda: interface.list_employees_brief(),
+    lambda: interface.link_employee_user(1, 1),
 ])
 def test_every_interface_function_guards_disabled_hr_first(org, call):
     ServiceStatus.objects.update_or_create(app_label="hr", defaults={"enabled": False})

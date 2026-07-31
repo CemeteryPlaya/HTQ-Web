@@ -22,5 +22,16 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"], headless: true },
     },
+    {
+      // Бинарника chromium на машинах разработки нет (`npx playwright
+      // install` его не тянут), а Edge на Windows стоит всегда — поэтому
+      // браузерные спеки гоняются через channel: 'msedge'. Движок тот же
+      // Chromium, отдельный проект нужен только чтобы не ставить второй
+      // браузер ради того же самого.
+      //
+      //   npx playwright test 16_ --project=msedge
+      name: "msedge",
+      use: { ...devices["Desktop Edge"], channel: "msedge", headless: true },
+    },
   ],
 });

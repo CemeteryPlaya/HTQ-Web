@@ -225,7 +225,10 @@ def test_user_option_matches_fastapi_schema_shape():
     contract = _load("user_option.json")
     caller = _make_user(username="optioncaller", email="optioncaller@htq.test",
                         first_name="Opt", last_name="Ion")
-    resp = Client().get(f"{BASE}/users/options/", **_auth(caller))
+    # ``query`` is required now (min 2 chars); the response SHAPE is what
+    # this test pins, and that is unchanged — see test_user_options_api.py.
+    resp = Client().get(f"{BASE}/users/options/?query=optioncaller",
+                        **_auth(caller))
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body, list) and body

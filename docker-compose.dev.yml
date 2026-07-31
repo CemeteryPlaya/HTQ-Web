@@ -102,6 +102,18 @@ services:
         max-file: "3"
 
   # Одноразовое создание бакетов (идемпотентно, mb --ignore-existing).
+  #
+  # ВНИМАНИЕ: это подстраховка, а не единственный механизм. От этого job'а
+  # никто не зависит через depends_on, поэтому точечный запуск
+  # (`up -d backend-web`, `--no-deps`) его не поднимает — основную гарантию
+  # даёт `manage.py ensure_buckets` в backend/docker-entrypoint.sh.
+  #
+  # Бакетов два — ровно по потребителям htqweb.storage.get_storage():
+  # S3_BUCKET (снапшоты новостей cms + архив истории чатов) и MEDIA_S3_BUCKET
+  # (ВСЕ бинарные файлы — после схлопывания в монолит каждая аппка пишет
+  # через apps.media_files.interface.store_file()). Бакеты на сервис
+  # (htqweb-messenger / htqweb-conferences / htqweb-mail-attachments) умерли
+  # вместе с микросервисами — в backend/ они не упоминаются ни разу.
   minio-bootstrap:
     image: minio/mc:RELEASE.2025-01-17T23-25-50Z
     depends_on:
@@ -112,13 +124,10 @@ services:
     entrypoint: >
       /bin/sh -c "
         set -e;
-        for b in ${MEDIA_S3_BUCKET:-htqweb-media} ${MESSENGER_S3_BUCKET:-htqweb-messenger} ${CMS_S3_BUCKET:-htqweb-cms} ${CONFERENCES_S3_BUCKET:-htqweb-conferences} ${MAIL_ATTACHMENTS_S3_BUCKET:-htqweb-mail-attachments}; do
+        for b in ${S3_BUCKET:-htqweb-cms} ${MEDIA_S3_BUCKET:-htqweb-media}; do
           mc mb --ignore-existing local/$$b;
         done;
-        echo placeholder | mc pipe local/${MESSENGER_S3_BUCKET:-htqweb-messenger}/chats/.keep;
-        echo placeholder | mc pipe local/${CMS_S3_BUCKET:-htqweb-cms}/news/.keep;
-        echo placeholder | mc pipe local/${CONFERENCES_S3_BUCKET:-htqweb-conferences}/recordings/.keep;
-        echo placeholder | mc pipe local/${MAIL_ATTACHMENTS_S3_BUCKET:-htqweb-mail-attachments}/inbound/.keep;
+        echo placeholder | mc pipe local/${S3_BUCKET:-htqweb-cms}/news/.keep;
         echo bootstrap-done;
       "
     restart: "no"

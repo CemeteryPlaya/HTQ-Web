@@ -338,8 +338,31 @@ business logic).
 | `/api/tasks/v1/projects/`                         | GET, POST |                            |
 | `/api/tasks/v1/projects/{id}/`                    | GET, PATCH, DELETE |                  |
 | `/api/tasks/v1/projects/{id}/tasks/`              | GET    |                              |
+| `/api/tasks/v1/roadmaps/`                         | GET, POST | Пакеты работ **на блоке**: проект → площадка → блок → **роудмап** → задача. Тело принимает `site_block_id`; площадки колонкой нет, `?site_id=` фильтрует джойном |
+| `/api/tasks/v1/roadmaps/{id}/`                    | GET, PATCH, DELETE | Правка — владелец или админ. DELETE непустого пакета → 409 |
+| `/api/tasks/v1/roadmaps/{id}/tasks/`              | GET    |                              |
+| `/api/tasks/v1/roadmaps/{id}/metrics/`            | GET    | План (руками) против факта (свёрнут из задач): срок, люди, техника |
+| `/api/tasks/v1/sites/{id}/blocks/`                | GET, POST | Блоки объекта: «Сазаган → блок 1, блок 2» |
+| `/api/tasks/v1/blocks/{id}/`                      | GET, PATCH, DELETE | 409, если на блок ссылаются задачи |
+| `/api/tasks/v1/blocks/{id}/volumes/`              | GET, PUT | Плановые объёмы; PUT заменяет набор целиком |
+| `/api/tasks/v1/blocks/{id}/progress/`             | GET    | Выполнение **в штуках**, не в статусах задач |
+| `/api/tasks/v1/tasks/{id}/volumes/`               | GET, PUT | ПЛАНОВЫЕ объёмы задачи. Факт в ответе есть, но это свёртка отчётов, а не поле |
+| `/api/tasks/v1/tasks/{id}/daily-reports/`         | GET, POST | Ежедневный отчёт: сколько сделано и **когда** (`work_date` — дата ВЫПОЛНЕНИЯ, не заполнения). Единственный источник факта |
+| `/api/tasks/v1/daily-reports/{id}/`               | GET, PATCH, DELETE | PATCH поднимает `current_revision` и пишет снимок; DELETE мягкий |
+| `/api/tasks/v1/daily-reports/{id}/revisions/`     | GET    | Лента версий отчёта — «аналог Git» |
+| `/api/tasks/v1/roadmaps/{id}/daily-reports/`      | GET    | Отчёты всего пакета; `?date_from=&date_to=` |
+| `/api/tasks/v1/plan-fact/project/{id}/`           | GET    | Дерево проект → площадки → блоки → роудмапы: SPI, прогноз, отставание, S-кривая. `?date=` — отчётная дата |
+| `/api/tasks/v1/plan-fact/roadmap/{id}/`           | GET    | То же + задачи пакета и его серии по дням |
+| `/api/tasks/v1/equipment-usage/`                  | GET    | Что задействовано на дату D + история интервалов. Узел задаётся ровно одним из `project_id`/`site_id`/`block_id`/`roadmap_id`/`task_id` |
+| `/api/tasks/v1/resource-requirements/`            | GET, POST | План количеством: «2 человека», «2 кары». `task_id` XOR `roadmap_id` |
+| `/api/tasks/v1/resource-requirements/{id}/`       | PATCH, DELETE |                       |
+| `/api/tasks/v1/assignments/`                      | GET, POST | Факт именами. `task_id` XOR `roadmap_id` |
+| `/api/tasks/v1/assignments/{id}`                  | DELETE |                              |
 | `/api/tasks/v1/task-types/`                       | GET, POST | User-extensible registry  |
 | `/api/tasks/v1/task-types/{id}/`                  | GET, PATCH, DELETE |                  |
+| `/api/tasks/v1/equipment-categories/`             | GET, POST | Типы техники: «кара (вилопогрузчик)». Запись — админ |
+| `/api/tasks/v1/work-roles/`                       | GET, POST | Роли в потребности: «монтажник» |
+| `/api/tasks/v1/volume-types/`                     | GET, POST | Виды объёмов: «валы» + единица измерения |
 | `/api/tasks/v1/calendar/`                         | GET, POST | Calendar events           |
 | `/api/tasks/v1/calendar/{id}/`                    | PATCH, DELETE | Calendar event         |
 | `/api/tasks/v1/calendar/{id}/exceptions/`         | POST   | Calendar event exception      |

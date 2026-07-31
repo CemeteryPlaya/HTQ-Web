@@ -16,18 +16,13 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
 
 import {
-    createTask, fetchProjects, fetchTaskTypes, createTaskType,
+    createTask, fetchProjects, fetchSites, fetchTaskTypes, createTaskType,
+    fetchContractors, fetchContractorWorkers, fetchRoadmaps, fetchSiteBlocks,
 } from '@/api/tasks';
 import { fetchDepartments, fetchEmployees } from '@/api/hr';
+import { TASK_PRIORITY, TASK_PRIORITY_ORDER } from '@/lib/tasks/priority';
 import type { Task, TaskPriority, TaskStatus, AssigneeRole, TaskTypeRef } from '@/types/tasks';
 
-const PRIORITY_CONFIG: Record<TaskPriority, { color: string; icon: string }> = {
-    critical: { color: 'bg-red-500 text-white', icon: '🔴' },
-    high: { color: 'bg-orange-500 text-white', icon: '🟠' },
-    medium: { color: 'bg-yellow-500 text-black', icon: '🟡' },
-    low: { color: 'bg-blue-500 text-white', icon: '🔵' },
-    trivial: { color: 'bg-gray-400 text-white', icon: '⚪' },
-};
 
 const STATUS_KEYS: TaskStatus[] = [
     'backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled',
@@ -67,6 +62,11 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
         // surfaces the project picker.
         projectMode: (defaultProject ? 'attached' : 'standalone') as 'standalone' | 'attached',
         project: defaultProject ? String(defaultProject) : '',
+        site: '',
+        roadmap: '',
+        site_block: '',
+        contractor: '',
+        contractor_worker: '',
         parent: defaultParent || undefined,
         due_date: '',
         start_date: '',
@@ -109,6 +109,44 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
     const { data: departments = [] } = useQuery({ queryKey: ['hr-departments'], queryFn: fetchDepartments, enabled: open });
     const { data: projects = [] } = useQuery({ queryKey: ['hr-projects'], queryFn: () => fetchProjects(), enabled: open });
     const { data: taskTypes = [] } = useQuery({ queryKey: ['hr-task-types'], queryFn: fetchTaskTypes, enabled: open });
+    const { data: sites = [] } = useQuery({ queryKey: ['sites'], queryFn: () => fetchSites(), enabled: open });
+    // Роудмапы сужены до выбранного проекта, блоки — до выбранного объекта:
+    // то же правило, что на сервере, иначе форма предлагала бы вариант,
+    // который потом вернёт 400.
+    const { data: roadmaps = [] } = useQuery({
+        queryKey: ['roadmaps', form.project],
+        queryFn: () => fetchRoadmaps({ project_id: Number(form.project) }),
+        enabled: open && !!form.project,
+    });
+    const { data: siteBlocks = [] } = useQuery({
+        queryKey: ['site-blocks', form.site],
+        queryFn: () => fetchSiteBlocks(Number(form.site)),
+        enabled: open && !!form.site,
+    });
+    const { data: contractors = [] } = useQuery({
+        queryKey: ['contractors'],
+        queryFn: () => fetchContractors({ status: 'active' }),
+        enabled: open,
+    });
+    // Люди грузятся только для выбранной организации: справочник всех
+    // представителей сразу никому не нужен, а выбор из чужой компании —
+    // ошибка, которую проще не дать совершить.
+    const { data: contractorWorkers = [] } = useQuery({
+        queryKey: ['contractor-workers', form.contractor],
+        queryFn: () => fetchContractorWorkers(Number(form.contractor)),
+        enabled: open && Boolean(form.contractor),
+    });
+
+    // Список объектов сужается до объектов выбранного проекта — зеркало
+    // серверного правила. Проект без объектов (все существующие на момент
+    // выката) разрешает любой, поэтому там показываем полный справочник.
+    const selectedProject = form.projectMode === 'attached' && form.project
+        ? projects.find((p: any) => String(p.id) === form.project)
+        : undefined;
+    const projectSiteIds: number[] = selectedProject?.site_ids ?? [];
+    const availableSites = projectSiteIds.length
+        ? sites.filter((s) => projectSiteIds.includes(s.id))
+        : sites;
 
     // Candidate users for supervisor / assignees come from the selected
     // departments only — fetch employees per department and merge, keeping
@@ -175,7 +213,9 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
             setForm({
                 summary: '', description: '', task_type: 'task', priority: 'medium',
                 status: 'todo', supervisor: '',
-                projectMode: 'standalone', project: '',
+                projectMode: 'standalone', project: '', roadmap: '', site: '',
+                site_block: '',
+                contractor: '', contractor_worker: '',
                 due_date: '', start_date: '',
                 parent: undefined, progress_percent: 0,
             });
@@ -225,6 +265,14 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
         if (departmentIds.length) payload.department_ids = departmentIds;
         if (form.projectMode === 'attached' && form.project) {
             payload.project = Number(form.project);
+        }
+        if (form.site) payload.site = Number(form.site);
+        // Роудмап задаёт проект и объект на сервере — шлём как есть.
+        if (form.roadmap) payload.roadmap = Number(form.roadmap);
+        if (form.site_block) payload.site_block = Number(form.site_block);
+        if (form.contractor) payload.contractor = Number(form.contractor);
+        if (form.contractor_worker) {
+            payload.contractor_worker = Number(form.contractor_worker);
         }
         if (form.parent) payload.parent = form.parent;
         if (form.due_date) payload.due_date = form.due_date;
@@ -340,8 +388,8 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                             >
                                 <SelectTrigger><SelectValue /></SelectTrigger>
                                 <SelectContent>
-                                    {Object.entries(PRIORITY_CONFIG).map(([k, v]) => (
-                                        <SelectItem key={k} value={k}>{v.icon} {t(`tasks.pages.list.priority.${k}`, k)}</SelectItem>
+                                    {TASK_PRIORITY_ORDER.map((k) => (
+                                        <SelectItem key={k} value={k}>{TASK_PRIORITY[k].icon} {t(`tasks.pages.list.priority.${k}`, k)}</SelectItem>
                                     ))}
                                 </SelectContent>
                             </Select>
@@ -379,7 +427,7 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                                 <SelectContent>
                                     {projects.length === 0 && (
                                         <div className="text-xs text-muted-foreground p-2">
-                                            {t('tasks.pages.list.createDialog.noProjects', 'Нет проектов. Создайте на странице «Роудмап».')}
+                                            {t('tasks.pages.list.createDialog.noProjects', 'Нет проектов. Создайте на странице «Проекты».')}
                                         </div>
                                     )}
                                     {projects.map((p: any) => (
@@ -392,6 +440,175 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                                     ))}
                                 </SelectContent>
                             </Select>
+                        )}
+
+                        {/* Объект работ. Когда выбран проект, список сужен до
+                            его объектов — то же правило, что и на сервере
+                            (site_service.resolve_task_site), иначе форма
+                            предлагала бы вариант, который потом даст 400. */}
+                        <div className="mt-3">
+                            <Label className="text-xs text-muted-foreground">
+                                {t('tasks.pages.sites.siteField', 'Объект')}
+                            </Label>
+                            <Select
+                                value={form.site}
+                                onValueChange={(v) => setForm({ ...form, site: v === '__none__' ? '' : v })}
+                            >
+                                <SelectTrigger className="mt-1">
+                                    <SelectValue placeholder={t('tasks.pages.sites.selectSite', 'Выбрать объект')} />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="__none__">
+                                        {t('tasks.pages.sites.withoutSite', 'Без объекта')}
+                                    </SelectItem>
+                                    {availableSites.length === 0 && (
+                                        <div className="text-xs text-muted-foreground p-2">
+                                            {t('tasks.pages.sites.noneForProject', 'У проекта нет объектов')}
+                                        </div>
+                                    )}
+                                    {availableSites.map((s: any) => (
+                                        <SelectItem key={s.id} value={String(s.id)}>
+                                            <span className="inline-flex items-center gap-2">
+                                                <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: s.color }} />
+                                                {s.name}
+                                            </span>
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {/* Роудмап — пакет работ внутри проекта. Виден только
+                            когда проект выбран: без проекта список пуст, и
+                            пустой селект только мешает. Смена роудмапа
+                            сбрасывает блок: он принадлежит объекту, а объект
+                            приедет с сервера уже от нового пакета. */}
+                        {form.projectMode === 'attached' && form.project && (
+                            <div className="mt-3">
+                                <Label className="text-xs text-muted-foreground">
+                                    {t('tasks.pages.roadmaps.editTitle', 'Роудмап')}
+                                </Label>
+                                <Select
+                                    value={form.roadmap || '__none__'}
+                                    onValueChange={(v) => setForm({
+                                        ...form,
+                                        roadmap: v === '__none__' ? '' : v,
+                                        site_block: '',
+                                    })}
+                                >
+                                    <SelectTrigger className="mt-1">
+                                        <SelectValue placeholder={t('tasks.pages.roadmaps.selectRoadmap', 'Выберите роудмап')} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="__none__">
+                                            {t('tasks.pages.roadmaps.noRoadmap', 'Без роудмапа')}
+                                        </SelectItem>
+                                        {roadmaps.length === 0 && (
+                                            <div className="text-xs text-muted-foreground p-2">
+                                                {t('tasks.pages.roadmaps.empty', 'Роудмапов пока нет')}
+                                            </div>
+                                        )}
+                                        {roadmaps.map((r) => (
+                                            <SelectItem key={r.id} value={String(r.id)}>
+                                                <span className="inline-flex items-center gap-2">
+                                                    <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: r.color }} />
+                                                    {r.name}
+                                                    <span className="text-xs text-muted-foreground">
+                                                        · {r.site_name} / {r.site_block_name}
+                                                    </span>
+                                                </span>
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+
+                        {/* Блок объекта — «развезти 250 валов на блок I».
+                            Только на задаче: у роудмапа блока нет, он идёт по
+                            объекту целиком. */}
+                        {form.site && (
+                            <div className="mt-3">
+                                <Label className="text-xs text-muted-foreground">
+                                    {t('tasks.pages.blocks.block', 'Блок')}
+                                </Label>
+                                <Select
+                                    value={form.site_block || '__none__'}
+                                    onValueChange={(v) => setForm({
+                                        ...form, site_block: v === '__none__' ? '' : v,
+                                    })}
+                                >
+                                    <SelectTrigger className="mt-1">
+                                        <SelectValue placeholder={t('tasks.pages.blocks.selectBlock', 'Выберите блок')} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="__none__">
+                                            {t('tasks.pages.blocks.noBlock', 'Без блока')}
+                                        </SelectItem>
+                                        {siteBlocks.length === 0 && (
+                                            <div className="text-xs text-muted-foreground p-2">
+                                                {t('tasks.pages.blocks.empty', 'Блоков пока нет')}
+                                            </div>
+                                        )}
+                                        {siteBlocks.map((b) => (
+                                            <SelectItem key={b.id} value={String(b.id)}>
+                                                {b.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Исполнитель: своя команда или субподрядчик. */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <Label>{t('tasks.pages.contractors.one', 'Подрядчик')}</Label>
+                            <Select
+                                value={form.contractor || '__none__'}
+                                onValueChange={(v) => setForm({
+                                    ...form,
+                                    contractor: v === '__none__' ? '' : v,
+                                    // Человек принадлежит организации — смена
+                                    // организации обнуляет выбор.
+                                    contractor_worker: '',
+                                })}
+                            >
+                                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="__none__">
+                                        {t('tasks.pages.contractors.ownCrew', 'Своя команда')}
+                                    </SelectItem>
+                                    {contractors.map((c: any) => (
+                                        <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        {form.contractor && (
+                            <div>
+                                <Label>{t('tasks.pages.contractors.worker', 'Представитель')}</Label>
+                                <Select
+                                    value={form.contractor_worker || '__none__'}
+                                    onValueChange={(v) => setForm({
+                                        ...form,
+                                        contractor_worker: v === '__none__' ? '' : v,
+                                    })}
+                                >
+                                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="__none__">
+                                            {t('tasks.pages.contractors.noWorker', 'Не указан')}
+                                        </SelectItem>
+                                        {contractorWorkers.map((w: any) => (
+                                            <SelectItem key={w.id} value={String(w.id)}>
+                                                {w.full_name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
                         )}
                     </div>
 

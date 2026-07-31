@@ -6,7 +6,12 @@ import { API_ENDPOINTS } from '@/api/endpoints';
 import type {
   Label, Project, Task, TaskComment, TaskAttachment, TaskStats, TaskStatus,
   TaskLink, Notification, TaskAssigneeRef, AssigneeRole, TaskTypeRef,
-  Equipment, ResourceGanttResponse, Assignment,
+  Equipment, ResourceGanttResponse, Assignment, Site, ProjectSiteRef,
+  Contractor, ContractorWorker, ContractorEngagement,
+  Roadmap, RoadmapStatus, RoadmapMetrics, SiteBlock, BlockStatus, BlockVolume,
+  BlockProgress, TaskVolume, ResourceRequirement, ReferenceRow,
+  WorkVolumeType, WorkVolumeUnit, EquipmentUsage,
+  DailyReport, DailyReportBoardRow, DailyReportRevision, PlanFactNode,
 } from '@/types/tasks';
 
 const BASE = `${API_ENDPOINTS.tasks}/`;
@@ -24,7 +29,20 @@ const TASK_FIELD_ALIASES: Record<string, string> = {
   supervisor: 'supervisor_id',
   department: 'department_id',
   project: 'project_id',
+  roadmap: 'roadmap_id',
+  site: 'site_id',
+  site_block: 'site_block_id',
+  contractor: 'contractor_id',
+  contractor_worker: 'contractor_worker_id',
   parent: 'parent_id',
+};
+
+const ROADMAP_FIELD_ALIASES: Record<string, string> = {
+  project: 'project_id',
+  // Площадки в теле нет — роудмап живёт на блоке, см. types/tasks.ts.
+  site_block: 'site_block_id',
+  owner: 'owner_id',
+  department: 'department_id',
 };
 
 const PROJECT_FIELD_ALIASES: Record<string, string> = {
@@ -58,12 +76,37 @@ function normalizeTask(raw: any): Task {
     project: raw.project ?? raw.project_id ?? null,
     project_name: raw.project_name,
     project_color: raw.project_color,
+    roadmap: raw.roadmap ?? raw.roadmap_id ?? null,
+    roadmap_name: raw.roadmap_name,
+    roadmap_color: raw.roadmap_color,
+    site: raw.site ?? raw.site_id ?? null,
+    site_name: raw.site_name,
+    site_color: raw.site_color,
+    site_block: raw.site_block ?? raw.site_block_id ?? null,
+    site_block_name: raw.site_block_name,
+    contractor: raw.contractor ?? raw.contractor_id ?? null,
+    contractor_name: raw.contractor_name,
+    contractor_worker: raw.contractor_worker ?? raw.contractor_worker_id ?? null,
+    contractor_worker_name: raw.contractor_worker_name,
     parent: raw.parent ?? raw.parent_id ?? null,
     parent_key: raw.parent_key,
     assignees: Array.isArray(raw.assignees) ? raw.assignees : [],
     delegates: Array.isArray(raw.delegates) ? raw.delegates : [],
     watchers: Array.isArray(raw.watchers) ? raw.watchers : [],
     subtasks: Array.isArray(raw.subtasks) ? raw.subtasks.map(normalizeTask) : raw.subtasks,
+    volumes: Array.isArray(raw.volumes) ? raw.volumes : undefined,
+  };
+}
+
+function normalizeRoadmap(raw: any): Roadmap {
+  return {
+    ...raw,
+    planned_working_days: raw.planned_working_days ?? null,
+    owner_id: raw.owner_id ?? null,
+    department_id: raw.department_id ?? null,
+    task_count: raw.task_count ?? 0,
+    done_count: raw.done_count ?? 0,
+    progress: raw.progress ?? 0,
   };
 }
 
@@ -74,6 +117,8 @@ function normalizeProject(raw: any): Project {
     owner_name: raw.owner_name,
     department_id: raw.department_id ?? null,
     department_name: raw.department_name,
+    sites: Array.isArray(raw.sites) ? raw.sites : [],
+    site_ids: Array.isArray(raw.site_ids) ? raw.site_ids : [],
   };
 }
 
@@ -132,6 +177,409 @@ export const deleteProject = async (id: number): Promise<void> => {
 export const fetchProjectTasks = async (id: number): Promise<Task[]> => {
   const res = await api.get(`${BASE}projects/${id}/tasks/`);
   return unwrap<Task>(res.data).map(normalizeTask);
+};
+
+/* ---------- Роудмапы (пакеты работ на объекте) ---------- */
+export const fetchRoadmaps = async (params?: {
+  project_id?: number;
+  /** Фильтр по площадке работает джойном через блок — на бэкенде. */
+  site_id?: number;
+  block_id?: number;
+  status?: RoadmapStatus;
+}): Promise<Roadmap[]> => {
+  const res = await api.get(`${BASE}roadmaps/`, { params });
+  return unwrap<Roadmap>(res.data).map(normalizeRoadmap);
+};
+
+export const fetchRoadmap = async (id: number): Promise<Roadmap> => {
+  const res = await api.get(`${BASE}roadmaps/${id}/`);
+  return normalizeRoadmap(res.data);
+};
+
+export const createRoadmap = async (data: Partial<Roadmap>): Promise<Roadmap> => {
+  const res = await api.post(
+    `${BASE}roadmaps/`,
+    toBackendRecord(data as Record<string, any>, ROADMAP_FIELD_ALIASES),
+  );
+  return normalizeRoadmap(res.data);
+};
+
+export const updateRoadmap = async (
+  id: number, data: Partial<Roadmap>,
+): Promise<Roadmap> => {
+  const res = await api.patch(
+    `${BASE}roadmaps/${id}/`,
+    toBackendRecord(data as Record<string, any>, ROADMAP_FIELD_ALIASES),
+  );
+  return normalizeRoadmap(res.data);
+};
+
+export const deleteRoadmap = async (id: number): Promise<void> => {
+  await api.delete(`${BASE}roadmaps/${id}/`);
+};
+
+export const fetchRoadmapTasks = async (id: number): Promise<Task[]> => {
+  const res = await api.get(`${BASE}roadmaps/${id}/tasks/`);
+  return unwrap<Task>(res.data).map(normalizeTask);
+};
+
+/** План против факта по трём осям: срок, люди, техника. */
+export const fetchRoadmapMetrics = async (id: number): Promise<RoadmapMetrics> => {
+  const res = await api.get(`${BASE}roadmaps/${id}/metrics/`);
+  return res.data;
+};
+
+/* ---------- Блоки объекта и объёмы работ ---------- */
+export const fetchSiteBlocks = async (
+  siteId: number, params?: { status?: BlockStatus },
+): Promise<SiteBlock[]> => {
+  const res = await api.get(`${BASE}sites/${siteId}/blocks/`, { params });
+  return unwrap<SiteBlock>(res.data);
+};
+
+export const fetchSiteBlock = async (id: number): Promise<SiteBlock> => {
+  const res = await api.get(`${BASE}blocks/${id}/`);
+  return res.data;
+};
+
+export const createSiteBlock = async (
+  siteId: number, data: Partial<SiteBlock>,
+): Promise<SiteBlock> => {
+  const res = await api.post(`${BASE}sites/${siteId}/blocks/`, data);
+  return res.data;
+};
+
+export const updateSiteBlock = async (
+  id: number, data: Partial<SiteBlock>,
+): Promise<SiteBlock> => {
+  const res = await api.patch(`${BASE}blocks/${id}/`, data);
+  return res.data;
+};
+
+export const deleteSiteBlock = async (id: number): Promise<void> => {
+  await api.delete(`${BASE}blocks/${id}/`);
+};
+
+/** Замена набора объёмов целиком — сервер разницу не вычисляет. */
+export const setBlockVolumes = async (
+  blockId: number,
+  volumes: Array<{ volume_type_id: number; planned_quantity: number }>,
+): Promise<BlockVolume[]> => {
+  const res = await api.put(`${BASE}blocks/${blockId}/volumes/`, { volumes });
+  return unwrap<BlockVolume>(res.data);
+};
+
+/** Выполнение блока в штуках, а не в статусах задач. */
+export const fetchBlockProgress = async (id: number): Promise<BlockProgress> => {
+  const res = await api.get(`${BASE}blocks/${id}/progress/`);
+  return res.data;
+};
+
+export const fetchTaskVolumes = async (taskId: number): Promise<TaskVolume[]> => {
+  const res = await api.get(`${BASE}tasks/${taskId}/volumes/`);
+  return unwrap<TaskVolume>(res.data);
+};
+
+export const setTaskVolumes = async (
+  taskId: number,
+  // Только план. Факт правится ежедневными отчётами и в это тело не
+  // приходит — сервер его отсюда и не читает (`set_task_volumes`).
+  volumes: Array<{
+    volume_type_id: number;
+    planned_quantity: number;
+  }>,
+): Promise<TaskVolume[]> => {
+  const res = await api.put(`${BASE}tasks/${taskId}/volumes/`, { volumes });
+  return unwrap<TaskVolume>(res.data);
+};
+
+/* ---------- Ежедневные отчёты ---------- */
+export const fetchTaskDailyReports = async (
+  taskId: number,
+): Promise<DailyReport[]> => {
+  const res = await api.get(`${BASE}tasks/${taskId}/daily-reports/`);
+  return unwrap<DailyReport>(res.data);
+};
+
+export const fetchRoadmapDailyReports = async (
+  roadmapId: number, params?: { date_from?: string; date_to?: string },
+): Promise<DailyReport[]> => {
+  const res = await api.get(`${BASE}roadmaps/${roadmapId}/daily-reports/`,
+                            { params });
+  return unwrap<DailyReport>(res.data);
+};
+
+/**
+ * Сводка «что отчитать за день» — основа страницы «Ежедневка».
+ *
+ * Один запрос вместо «список задач + карточка каждой»: плановые объёмы
+ * приходят только в детальном ответе задачи, и страница на 15 строк стоила
+ * бы 16 обращений.
+ */
+export const fetchDailyReportBoard = async (
+  date?: string,
+): Promise<DailyReportBoardRow[]> => {
+  const res = await api.get(`${BASE}daily-reports/board/`,
+                            { params: date ? { date } : undefined });
+  return unwrap<DailyReportBoardRow>(res.data);
+};
+
+export const createDailyReport = async (
+  taskId: number,
+  data: {
+    work_date: string; quantity: number; volume_type_id?: number;
+    headcount?: number | null; comment?: string;
+  },
+): Promise<DailyReport> => {
+  const res = await api.post(`${BASE}tasks/${taskId}/daily-reports/`, data);
+  return res.data;
+};
+
+export const updateDailyReport = async (
+  id: number, data: Partial<Pick<DailyReport,
+    'work_date' | 'quantity' | 'headcount' | 'comment'>>,
+): Promise<DailyReport> => {
+  const res = await api.patch(`${BASE}daily-reports/${id}/`, data);
+  return res.data;
+};
+
+export const deleteDailyReport = async (id: number): Promise<void> => {
+  await api.delete(`${BASE}daily-reports/${id}/`);
+};
+
+export const fetchDailyReportRevisions = async (
+  id: number,
+): Promise<DailyReportRevision[]> => {
+  const res = await api.get(`${BASE}daily-reports/${id}/revisions/`);
+  return unwrap<DailyReportRevision>(res.data);
+};
+
+/* ---------- План/факт ---------- */
+
+/** `date` — отчётная дата; по умолчанию сервер берёт сегодня. */
+export const fetchProjectPlanFact = async (
+  projectId: number, params?: { date?: string },
+): Promise<PlanFactNode> => {
+  const res = await api.get(`${BASE}plan-fact/project/${projectId}/`, { params });
+  return res.data;
+};
+
+export const fetchRoadmapPlanFact = async (
+  roadmapId: number, params?: { date?: string },
+): Promise<PlanFactNode> => {
+  const res = await api.get(`${BASE}plan-fact/roadmap/${roadmapId}/`, { params });
+  return res.data;
+};
+
+/* ---------- Учёт задействования техники ---------- */
+
+/**
+ * Что занято на дату D + история интервалов. Узел иерархии задаётся ровно
+ * одним параметром — бэкенд отказывает (422), если их ноль или больше одного.
+ */
+export const fetchEquipmentUsage = async (
+  scope: { project_id: number } | { site_id: number } | { block_id: number }
+    | { roadmap_id: number } | { task_id: number },
+  params?: { date?: string; date_from?: string; date_to?: string;
+             category_id?: number },
+): Promise<EquipmentUsage> => {
+  const res = await api.get(`${BASE}equipment-usage/`,
+                            { params: { ...scope, ...params } });
+  return res.data;
+};
+
+/* ---------- Потребность в ресурсах (план количеством) ---------- */
+export const fetchResourceRequirements = async (
+  target: { task_id: number } | { roadmap_id: number },
+): Promise<ResourceRequirement[]> => {
+  const res = await api.get(`${BASE}resource-requirements/`, { params: target });
+  return unwrap<ResourceRequirement>(res.data);
+};
+
+export const createResourceRequirement = async (
+  data: Partial<ResourceRequirement>,
+): Promise<ResourceRequirement> => {
+  const res = await api.post(`${BASE}resource-requirements/`, data);
+  return res.data;
+};
+
+export const updateResourceRequirement = async (
+  id: number, data: Partial<ResourceRequirement>,
+): Promise<ResourceRequirement> => {
+  const res = await api.patch(`${BASE}resource-requirements/${id}/`, data);
+  return res.data;
+};
+
+export const deleteResourceRequirement = async (id: number): Promise<void> => {
+  await api.delete(`${BASE}resource-requirements/${id}/`);
+};
+
+/* ---------- Плоские справочники планирования ---------- */
+export const fetchEquipmentCategories = async (
+  params?: { active_only?: boolean },
+): Promise<ReferenceRow[]> => {
+  const res = await api.get(`${BASE}equipment-categories/`, { params });
+  return unwrap<ReferenceRow>(res.data);
+};
+
+export const fetchWorkRoles = async (
+  params?: { active_only?: boolean },
+): Promise<ReferenceRow[]> => {
+  const res = await api.get(`${BASE}work-roles/`, { params });
+  return unwrap<ReferenceRow>(res.data);
+};
+
+export const fetchVolumeTypes = async (
+  params?: { active_only?: boolean },
+): Promise<WorkVolumeType[]> => {
+  const res = await api.get(`${BASE}volume-types/`, { params });
+  return unwrap<WorkVolumeType>(res.data);
+};
+
+export const createEquipmentCategory = async (
+  data: { name: string },
+): Promise<ReferenceRow> => {
+  const res = await api.post(`${BASE}equipment-categories/`, data);
+  return res.data;
+};
+
+export const createWorkRole = async (
+  data: { name: string },
+): Promise<ReferenceRow> => {
+  const res = await api.post(`${BASE}work-roles/`, data);
+  return res.data;
+};
+
+export const createVolumeType = async (
+  data: { name: string; unit?: WorkVolumeUnit },
+): Promise<WorkVolumeType> => {
+  const res = await api.post(`${BASE}volume-types/`, data);
+  return res.data;
+};
+
+/* ---------- Contractors (субподрядчики) ---------- */
+export const fetchContractors = async (params?: {
+  status?: string;
+  search?: string;
+}): Promise<Contractor[]> => {
+  const res = await api.get(`${BASE}contractors/`, { params });
+  return unwrap<Contractor>(res.data);
+};
+
+export const createContractor = async (data: Partial<Contractor>): Promise<Contractor> => {
+  const res = await api.post(`${BASE}contractors/`, data);
+  return res.data;
+};
+
+export const updateContractor = async (
+  id: number, data: Partial<Contractor>,
+): Promise<Contractor> => {
+  const res = await api.patch(`${BASE}contractors/${id}/`, data);
+  return res.data;
+};
+
+export const deleteContractor = async (id: number): Promise<void> => {
+  await api.delete(`${BASE}contractors/${id}/`);
+};
+
+export const fetchContractorWorkers = async (
+  contractorId: number, activeOnly = true,
+): Promise<ContractorWorker[]> => {
+  const res = await api.get(`${BASE}contractors/${contractorId}/workers/`, {
+    params: { active_only: activeOnly },
+  });
+  return unwrap<ContractorWorker>(res.data);
+};
+
+export const createContractorWorker = async (
+  contractorId: number, data: Partial<ContractorWorker>,
+): Promise<ContractorWorker> => {
+  const res = await api.post(`${BASE}contractors/${contractorId}/workers/`, data);
+  return res.data;
+};
+
+export const updateContractorWorker = async (
+  id: number, data: Partial<ContractorWorker>,
+): Promise<ContractorWorker> => {
+  const res = await api.patch(`${BASE}contractor-workers/${id}/`, data);
+  return res.data;
+};
+
+/** Мягкое отключение: исторические задачи ссылаются на человека. */
+export const deactivateContractorWorker = async (id: number): Promise<void> => {
+  await api.delete(`${BASE}contractor-workers/${id}/`);
+};
+
+export const fetchEngagements = async (params?: {
+  contractor_id?: number;
+  project_id?: number;
+  site_id?: number;
+  active_only?: boolean;
+}): Promise<ContractorEngagement[]> => {
+  const res = await api.get(`${BASE}contractor-engagements/`, { params });
+  return unwrap<ContractorEngagement>(res.data);
+};
+
+export const createEngagement = async (
+  data: Partial<ContractorEngagement>,
+): Promise<ContractorEngagement> => {
+  const res = await api.post(`${BASE}contractor-engagements/`, data);
+  return res.data;
+};
+
+export const deleteEngagement = async (id: number): Promise<void> => {
+  await api.delete(`${BASE}contractor-engagements/${id}/`);
+};
+
+/* ---------- Sites (объекты/площадки) ---------- */
+export const fetchSites = async (params?: {
+  status?: string;
+  search?: string;
+}): Promise<Site[]> => {
+  const res = await api.get(`${BASE}sites/`, { params });
+  return unwrap<Site>(res.data);
+};
+
+export const fetchSite = async (id: number): Promise<Site> => {
+  const res = await api.get<Site>(`${BASE}sites/${id}/`);
+  return res.data;
+};
+
+export const createSite = async (data: Partial<Site>): Promise<Site> => {
+  const res = await api.post(`${BASE}sites/`, data);
+  return res.data;
+};
+
+export const updateSite = async (id: number, data: Partial<Site>): Promise<Site> => {
+  const res = await api.patch(`${BASE}sites/${id}/`, data);
+  return res.data;
+};
+
+export const deleteSite = async (id: number): Promise<void> => {
+  await api.delete(`${BASE}sites/${id}/`);
+};
+
+export const fetchSiteTasks = async (id: number): Promise<Task[]> => {
+  const res = await api.get(`${BASE}sites/${id}/tasks/`);
+  return unwrap<Task>(res.data).map(normalizeTask);
+};
+
+export const fetchProjectSites = async (projectId: number): Promise<ProjectSiteRef[]> => {
+  const res = await api.get(`${BASE}projects/${projectId}/sites/`);
+  return unwrap<ProjectSiteRef>(res.data);
+};
+
+/** Замена набора целиком — сервер ждёт полный список, а не разницу. */
+export const setProjectSites = async (
+  projectId: number,
+  siteIds: number[],
+  primarySiteId?: number | null,
+): Promise<ProjectSiteRef[]> => {
+  const res = await api.put(`${BASE}projects/${projectId}/sites/`, {
+    site_ids: siteIds,
+    primary_site_id: primarySiteId ?? null,
+  });
+  return unwrap<ProjectSiteRef>(res.data);
 };
 
 /* ---------- Task types (registry) ---------- */
@@ -254,8 +702,13 @@ export const fetchResourceGantt = async (params: {
   return res.data;
 };
 
-export const fetchEquipment = async (activeOnly = true): Promise<Equipment[]> => {
-  const res = await api.get(`${BASE}equipment/`, { params: { active_only: activeOnly } });
+export const fetchEquipment = async (
+  activeOnly = true,
+  params?: { ownership?: string; contractor_id?: number },
+): Promise<Equipment[]> => {
+  const res = await api.get(`${BASE}equipment/`, {
+    params: { active_only: activeOnly, ...params },
+  });
   return unwrap<Equipment>(res.data);
 };
 

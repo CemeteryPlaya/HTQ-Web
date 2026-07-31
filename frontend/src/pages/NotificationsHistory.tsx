@@ -37,6 +37,7 @@ import {
 } from '@/api/tasks';
 import { Footer } from '@/components/Footer';
 import { Header } from '@/components/Header';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -142,6 +143,7 @@ const NotificationsHistory: React.FC = () => {
     <div className="min-h-screen bg-background flex flex-col">
       <Header />
       <main className="flex-1 container mx-auto py-8 px-4 max-w-5xl animate-in fade-in duration-500">
+        <BackToProfile className="mb-4" />
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">

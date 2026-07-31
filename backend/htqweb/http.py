@@ -5,7 +5,6 @@
 Путь на django-ninja (см. план §7): schemas/services не меняются, заменяется
 только этот модуль и объявления в views/urls.
 """
-import json
 import logging
 from functools import wraps
 
@@ -23,6 +22,39 @@ from htqweb.authn.rbac import require_admin
 
 def json_error(detail, status: int) -> JsonResponse:
     return JsonResponse({"detail": detail}, status=status)
+
+
+def validation_detail(exc: ValidationError) -> list[dict]:
+    """Ошибки валидации тела в JSON-безопасном виде.
+
+    Раньше здесь стоял ``json.loads(exc.json())``, и он ронял ответ. В
+    записи об ошибке pydantic держит поле ``input`` — исходное значение так,
+    как он его увидел. Для тела, разобранного из ``bytes``, это срез
+    исходных байтов, и на любом не-ASCII символе срез рвётся посередине
+    UTF-8 последовательности. ``exc.json()`` на таком падает с
+    ``ValueError``, причём падает ПРЯМО В обработчике ошибки — внешний
+    ``except`` его не ловит, и клиент вместо 422 получает голый 500.
+
+    На практике это означало: любая форма с русским текстом, где хоть одно
+    поле не прошло валидацию, отвечала 500 без единого слова о том, что не
+    так. Воспроизводилось на ``applications/``, ``departments/``,
+    ``vacancies/`` — то есть на всех аппах разом, потому что живёт здесь.
+
+    ``exc.errors()`` возвращает те же записи обычными объектами Python и
+    ничего не сериализует. ``input`` из них выбрасывается намеренно: клиент
+    и так знает, что отправил, ``loc`` называет место, а возвращать телу
+    запроса эхо — лишний способ утащить в лог то, чему там не место.
+    Форма ``{"type", "loc", "msg"}`` совпадает с той, что вьюхи собирают
+    руками для своих 422 (см. ``_param_error`` в apps/tasks/views.py).
+    """
+    return [
+        {
+            "type": err.get("type", "value_error"),
+            "loc": list(err.get("loc", ())),
+            "msg": err.get("msg", "Invalid value"),
+        }
+        for err in exc.errors(include_url=False)
+    ]
 
 
 def _authenticate_jwt(request):
@@ -71,7 +103,7 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                 try:
                     kwargs["data"] = body.model_validate_json(request.body or b"{}")
                 except ValidationError as exc:
-                    return JsonResponse({"detail": json.loads(exc.json())},
+                    return JsonResponse({"detail": validation_detail(exc)},
                                         status=422)
             try:
                 result = fn(request, *args, **kwargs)

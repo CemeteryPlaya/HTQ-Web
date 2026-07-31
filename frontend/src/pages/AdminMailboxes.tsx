@@ -1,20 +1,18 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import {
-    ArrowLeft,
     Archive,
     KeyRound,
     Plus,
     Trash2,
     Undo2,
     AlertTriangle,
-    AtSign,
-} from 'lucide-react';
+    AtSign } from 'lucide-react';
 
 import api from '@/api/client';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { Button } from '@/components/ui/button';
@@ -222,9 +220,7 @@ const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div className="min-h-screen bg-background flex flex-col">
         <Header />
         <main className="flex-1 container mx-auto px-4 py-8">
-            <Link to="/myprofile" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-4">
-                <ArrowLeft className="h-4 w-4" /> Назад в профиль
-            </Link>
+            <BackToProfile className="mb-4" />
             {children}
         </main>
         <Footer />

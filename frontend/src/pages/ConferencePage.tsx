@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { WebRTCManager, RemoteStream, QualityMetrics, WebRTCError } from '@/lib/webrtc';
 import { Button } from '@/components/ui/button';
@@ -8,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { 
   Video, VideoOff, Mic, MicOff, PhoneOff, 
-  MonitorPlay, Settings, Activity, ArrowLeft, Copy, Plus, LogIn,
+  MonitorPlay, Settings, Activity, Copy, Plus, LogIn,
   Volume2, VolumeX
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
@@ -1117,13 +1118,7 @@ export const ConferencePage = () => {
       <main className="flex-1 container mx-auto px-4 sm:px-6 lg:px-8 py-10 flex flex-col items-center justify-center relative z-10">
         
         <div className="w-full max-w-2xl mb-8 self-start md:self-auto">
-          <Link
-            to="/myprofile"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6 group"
-          >
-            <ArrowLeft className="h-4 w-4 group-hover:-translate-x-1 transition-transform" />
-            Назад в профиль
-          </Link>
+          <BackToProfile className="mb-6" />
           <div className="flex flex-col md:flex-row items-start md:items-center gap-5">
             <div className="p-4 bg-gradient-to-br from-primary/20 to-primary/5 rounded-2xl ring-1 ring-primary/20 shadow-[0_0_30px_hsl(var(--primary)/0.15)] flex-shrink-0">
               <Video className="w-10 h-10 text-primary animate-pulse-glow" />

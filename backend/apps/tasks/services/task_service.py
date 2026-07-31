@@ -45,6 +45,8 @@ from ..models import (
     TaskWatcher,
 )
 from . import hydration
+from . import roadmap_service
+from . import site_service
 from .reference_service import resolve_task_type_id
 from .sequence_service import due_date_from_working_days, next_task_key
 
@@ -55,7 +57,9 @@ logger = logging.getLogger(__name__)
 # the task history shows), not an implementation detail.
 TRACKED_FIELDS = [
     "summary", "description", "task_type_id", "priority", "status",
-    "assignee_id", "supervisor_id", "project_id", "progress_percent",
+    "assignee_id", "supervisor_id", "project_id", "roadmap_id", "site_id",
+    "site_block_id",
+    "contractor_id", "contractor_worker_id", "progress_percent",
     "due_date", "start_date", "estimated_working_days",
 ]
 
@@ -83,6 +87,26 @@ def _participant_q(user_id: int) -> Q:
         | Q(assignees__user_id=user_id)
         | Q(delegates__user_id=user_id)
         | Q(watchers__user_id=user_id)
+    )
+
+
+def soft_edit_q(user_id: int) -> Q:
+    """Задачи, о ходе которых пользователь вправе отчитаться.
+
+    Условие-двойник ``can_progress``: то же самое правило, но выраженное
+    запросом, чтобы список можно было получить одной выборкой, а не
+    проверять права построчно в Python.
+
+    Наблюдателей здесь НЕТ, в отличие от ``_participant_q``: следить за
+    задачей и заявлять о выполненном объёме — разные вещи. Разъедется с
+    ``can_progress`` — и экран покажет строки, сохранение которых даст 403.
+    """
+    return (
+        Q(assignee_id=user_id)
+        | Q(reporter_id=user_id)
+        | Q(supervisor_id=user_id)
+        | Q(assignees__user_id=user_id)
+        | Q(delegates__user_id=user_id)
     )
 
 
@@ -137,7 +161,10 @@ def _base_queryset():
 def filtered_tasks(*, status=None, priority=None, task_type=None,
                    task_type_id=None, assignee_id=None, reporter_id=None,
                    supervisor_id=None, department_id=None, project_id=None,
-                   project_unset=False, parent_id=None, label_id=None,
+                   project_unset=False, roadmap_id=None, roadmap_unset=False,
+                   site_id=None, site_unset=False, site_block_id=None,
+                   contractor_id=None, contractor_unset=False,
+                   parent_id=None, label_id=None,
                    search=None, visibility="all", visibility_user_id=None,
                    visibility_department_id=None):
     qs = _base_queryset()
@@ -169,6 +196,27 @@ def filtered_tasks(*, status=None, priority=None, task_type=None,
         qs = qs.filter(project_id=project_id)
     if project_unset:
         qs = qs.filter(project_id__isnull=True)
+    if roadmap_id is not None:
+        qs = qs.filter(roadmap_id=roadmap_id)
+    if roadmap_unset:
+        # Задачи проекта вне пакетов работ — отдельная корзина, а не ошибка:
+        # так живут все задачи, заведённые до появления роудмапов.
+        qs = qs.filter(roadmap_id__isnull=True)
+    if site_id is not None:
+        qs = qs.filter(site_id=site_id)
+    if site_unset:
+        # Historical tasks carry no object and never will (there is nothing
+        # to derive one from), so "no object" is a first-class bucket the
+        # reports need to be able to isolate — not an error state.
+        qs = qs.filter(site_id__isnull=True)
+    if site_block_id is not None:
+        qs = qs.filter(site_block_id=site_block_id)
+    if contractor_id is not None:
+        qs = qs.filter(contractor_id=contractor_id)
+    if contractor_unset:
+        # «Своя команда» — задачи без подрядчика. Отдельный флаг, а не
+        # contractor_id=0: NULL нельзя выразить через параметр-число.
+        qs = qs.filter(contractor_id__isnull=True)
     if parent_id is not None:
         qs = qs.filter(parent_id=parent_id)
     if label_id is not None:
@@ -187,7 +235,9 @@ def filtered_tasks(*, status=None, priority=None, task_type=None,
 
 def list_tasks(*, offset: int = 0, limit: int = 50, **filters) -> list[Task]:
     qs = (filtered_tasks(**filters)
-          .select_related("task_type", "project", "parent")
+          .select_related("task_type", "project", "roadmap", "site",
+                          "site_block", "parent", "contractor",
+                          "contractor_worker")
           .prefetch_related("labels", "assignees", "department_links",
                             "subtasks")
           .order_by("-created_at"))
@@ -202,12 +252,18 @@ def get_task(task_id: int, *, visibility="all", visibility_user_id=None,
     qs = filtered_tasks(visibility=visibility,
                         visibility_user_id=visibility_user_id,
                         visibility_department_id=visibility_department_id)
-    task = (qs.select_related("task_type", "project", "parent")
+    task = (qs.select_related("task_type", "project", "roadmap", "site",
+                              "site_block", "parent", "contractor",
+                              "contractor_worker")
             # Both ends of both link directions: the response reports
             # source/target absolutely, so an outgoing link still needs its
             # source (this task) resolved as an object.
             .prefetch_related("labels", "assignees", "delegates", "watchers",
                               "comments", "attachments", "activities",
+                              # ``__volume_type``: карточка печатает название
+                              # вида работ и единицу, без джойна это запрос
+                              # на каждую строку объёма.
+                              "volumes__volume_type",
                               "outgoing_links__source", "outgoing_links__target",
                               "incoming_links__source", "incoming_links__target",
                               "department_links", "subtasks")
@@ -335,6 +391,19 @@ def create_task(data, user_id: int | None = None) -> Task:
     ))
     primary_dept = data.department_id or (dept_ids[0] if dept_ids else None)
 
+    # Роудмап первым: он знает проект, площадку и блок, поэтому задаёт их, а
+    # не проверяется против них (см. roadmap_service.resolve_task_roadmap).
+    project_id, site_id, site_block_id, roadmap_id = (
+        roadmap_service.resolve_task_roadmap(
+            data.project_id, data.site_id, data.site_block_id, data.roadmap_id))
+    # Раскрывается в ValueError -> 400, если объект не относится к проекту;
+    # заодно наследует единственный объект проекта, когда он не прислан.
+    site_id = site_service.resolve_task_site(project_id, site_id)
+    # Блок — после объекта и по уже вычисленному значению (см. update_task).
+    site_block_id = site_service.resolve_task_block(site_id, site_block_id)
+    if site_block_id and site_id is None:
+        site_id = site_service.block_site_id(site_block_id)
+
     task = Task.objects.create(
         key=next_task_key(),
         summary=data.summary,
@@ -346,7 +415,12 @@ def create_task(data, user_id: int | None = None) -> Task:
         assignee_id=primary_id,
         supervisor_id=data.supervisor_id,
         department_id=primary_dept,
-        project_id=data.project_id,
+        project_id=project_id,
+        roadmap_id=roadmap_id,
+        site_id=site_id,
+        site_block_id=site_block_id,
+        contractor_id=data.contractor_id,
+        contractor_worker_id=data.contractor_worker_id,
         parent_id=data.parent_id,
         progress_percent=data.progress_percent,
         due_date=due_date,
@@ -397,6 +471,46 @@ def update_task(task_id: int, data, user_id: int | None = None) -> Task:
     # caller set it explicitly in the same request.
     if department_ids is not None and "department_id" not in changes:
         changes["department_id"] = department_ids[0] if department_ids else None
+
+    # Объект и проект могут прийти в одном PATCH, поэтому решение принимаем
+    # по итоговой паре, а не по присланным полям по отдельности. Если
+    # меняется только проект, текущий объект всё равно перепроверяется: смена
+    # проекта на такой, где объект не числится, это ошибка (400), а не
+    # молчаливое обнуление — потерять привязку задним числом хуже, чем
+    # получить отказ.
+    # Роудмап первым: выбранный пакет работ ЗАДАЁТ проект, площадку И БЛОК,
+    # поэтому его результат уходит в changes до проверок ниже.
+    if "roadmap_id" in changes:
+        project_id, site_id, block_id, roadmap_id = (
+            roadmap_service.resolve_task_roadmap(
+                changes.get("project_id", task.project_id),
+                changes.get("site_id", task.site_id),
+                changes.get("site_block_id", task.site_block_id),
+                changes["roadmap_id"]))
+        changes["roadmap_id"] = roadmap_id
+        if roadmap_id is not None:
+            changes["project_id"] = project_id
+            changes["site_id"] = site_id
+            changes["site_block_id"] = block_id
+
+    if "project_id" in changes or "site_id" in changes:
+        effective_project = changes.get("project_id", task.project_id)
+        effective_site = changes.get("site_id", task.site_id)
+        changes["site_id"] = site_service.resolve_task_site(
+            effective_project, effective_site)
+
+    # Блок проверяем ПОСЛЕ объекта и по уже вычисленному значению: в одном
+    # PATCH могут приехать и объект, и блок, а правило связывает именно
+    # итоговую пару. Блок без объекта задачи задаёт его сам — «блок 1»
+    # однозначно называет площадку, которой принадлежит.
+    if "site_block_id" in changes or "site_id" in changes:
+        effective_site = changes.get("site_id", task.site_id)
+        effective_block = changes.get("site_block_id", task.site_block_id)
+        changes["site_block_id"] = site_service.resolve_task_block(
+            effective_site, effective_block)
+        if changes["site_block_id"] and effective_site is None:
+            changes["site_id"] = site_service.block_site_id(
+                changes["site_block_id"])
 
     if "status" in changes:
         target = changes.pop("status")
@@ -464,10 +578,14 @@ def delete_task(task_id: int) -> None:
         raise Http404("Task not found")
 
 
-def available_transitions(task_id: int) -> list[str]:
-    task = Task.objects.filter(pk=task_id, is_deleted=False).first()
-    if task is None:
-        raise Http404("Task not found")
+def available_transitions(task: Task) -> list[str]:
+    """Statuses reachable from ``task``'s current one.
+
+    Takes an already-loaded task: every caller reaches this through
+    ``load_for_action``, which has already resolved the row AND checked
+    visibility. Re-fetching here would mean a second query and a second,
+    visibility-blind 404 branch.
+    """
     return list(TRANSITIONS.get(task.status, frozenset()))
 
 
@@ -583,9 +701,11 @@ def set_progress(task_id: int, percent: int, actor_id: int | None) -> Task:
 # Statistics
 # ─────────────────────────────────────────────────────────────────────────
 
-def task_stats(*, department_id=None, project_id=None, visibility="all",
-               visibility_user_id=None, visibility_department_id=None) -> dict:
+def task_stats(*, department_id=None, project_id=None, site_id=None,
+               visibility="all", visibility_user_id=None,
+               visibility_department_id=None) -> dict:
     qs = filtered_tasks(department_id=department_id, project_id=project_id,
+                        site_id=site_id,
                         visibility=visibility,
                         visibility_user_id=visibility_user_id,
                         visibility_department_id=visibility_department_id)
@@ -638,6 +758,34 @@ def task_stats(*, department_id=None, project_id=None, visibility="all",
         for row in dept_rows
     ]
 
+    # Проект и объект — свои модели этого же аппа, так что имена берутся
+    # джойном, а не батчем через hydration (в отличие от отделов выше, где
+    # строки принадлежат hr). NULL — полноценная корзина, а не пропуск:
+    # задачи без проекта/объекта существуют законно и должны быть видны в
+    # отчёте, иначе сумма разрезов не сойдётся с total.
+    project_rows = list(qs.values("project_id", "project__name")
+                        .annotate(n=n).order_by("-n"))
+    by_project = [
+        {
+            "project__id": row["project_id"],
+            "project__name": row["project__name"] or "Без проекта",
+            "count": row["n"],
+        }
+        for row in project_rows
+    ]
+
+    site_rows = list(qs.values("site_id", "site__name", "site__color")
+                     .annotate(n=n).order_by("-n"))
+    by_site = [
+        {
+            "site__id": row["site_id"],
+            "site__name": row["site__name"] or "Без объекта",
+            "site__color": row["site__color"],
+            "count": row["n"],
+        }
+        for row in site_rows
+    ]
+
     assignee_rows = list(qs.filter(assignee_id__isnull=False)
                          .values("assignee_id").annotate(n=n).order_by("-n"))
     user_briefs = hydration.user_briefs(
@@ -666,6 +814,8 @@ def task_stats(*, department_id=None, project_id=None, visibility="all",
         "by_priority": by_priority,
         "by_type": by_type,
         "by_department": by_department,
+        "by_project": by_project,
+        "by_site": by_site,
         "by_assignee": by_assignee,
         "created_per_day": created_per_day,
         "resolved_per_day": resolved_per_day,

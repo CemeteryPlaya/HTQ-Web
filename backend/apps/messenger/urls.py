@@ -34,6 +34,14 @@ urlpatterns = [
     path("rooms/", views.rooms_collection),
     path("rooms", views.rooms_collection),
 
+    # Управление составом группы (membership_service, 2026-07-28) — ДО
+    # общего rooms/<id> по конвенции «специфичное прежде общего».
+    path("rooms/<int:room_id>/participants/", views.add_participants),
+    path("rooms/<int:room_id>/participants", views.add_participants),
+
+    path("rooms/<int:room_id>/participants/<int:user_id>/", views.participant_detail),
+    path("rooms/<int:room_id>/participants/<int:user_id>", views.participant_detail),
+
     path("rooms/<int:room_id>/", views.room_detail),
     path("rooms/<int:room_id>", views.room_detail),
 
@@ -41,6 +49,15 @@ urlpatterns = [
     # поглощает read.py::mark_read, см. apps/messenger/views.py) ────────────
     path("messages/", views.send_message),
     path("messages", views.send_message),
+
+    # Бейдж непрочитанного для шапки SPA (литерал — до <uuid>-роута, хотя
+    # uuid-конвертер 'unread-count' и так не матчит).
+    path("messages/unread-count/", views.unread_count),
+    path("messages/unread-count", views.unread_count),
+
+    # Редактирование/удаление сообщения (2026-07-28).
+    path("messages/<uuid:message_id>/", views.message_detail),
+    path("messages/<uuid:message_id>", views.message_detail),
 
     path("messages/room/<int:room_id>/read/<uuid:message_id>/", views.mark_message_read),
     path("messages/room/<int:room_id>/read/<uuid:message_id>", views.mark_message_read),
@@ -87,4 +104,8 @@ urlpatterns = [
 
     path("users/search/", views.search_users),
     path("users/search", views.search_users),
+
+    # Онлайн-статусы пачкой (services/presence.py, 2026-07-28).
+    path("users/presence/", views.users_presence),
+    path("users/presence", views.users_presence),
 ]
