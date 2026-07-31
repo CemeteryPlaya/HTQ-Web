@@ -25,6 +25,7 @@ from .models import (
     BudgetLine,
     Counterparty,
     Country,
+    Invoice,
     Program,
 )
 from .services import budget_calc
@@ -139,3 +140,20 @@ class AgreementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     # исправления данных, и запретить здесь ручную починку статуса значило бы
     # оставить систему без выхода из состояния, куда её загнал баг. Проверка
     # лимита при этом НЕ выполняется — учитывайте, правя статус отсюда.
+
+
+@admin.register(Invoice)
+class InvoiceAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "name", "counterparty", "budget_line", "amount",
+                    "currency", "status", "approval_state", "created_at")
+    list_filter = ("status", "approval_state", "currency",
+                   "budget_line__budget__period_year")
+    search_fields = ("name", "note", "counterparty__name",
+                     "counterparty__bin_iin")
+    readonly_fields = ("created_at", "updated_at", "file_id", "currency",
+                       "approval_state")
+    raw_id_fields = ("budget_line", "counterparty")
+    list_select_related = ("budget_line", "budget_line__program", "counterparty")
+    # `currency` read-only: она снимается со строки бюджета при создании, а не
+    # задаётся руками (см. докстринг модели Invoice). `approval_state` тоже —
+    # его единственный писатель — движок signoff.

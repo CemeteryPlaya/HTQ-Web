@@ -31,6 +31,7 @@ from apps.contracts.models import (
     AgreementStatus,
     BudgetStatus,
     CounterpartyStatus,
+    InvoiceStatus,
     PaymentType,
 )
 
@@ -497,6 +498,65 @@ class AgreementRead(BaseModel):
     currency: str
     file_id: Optional[str]
     signed_date: Optional[date]
+    status: str
+    approval_state: str
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── Invoice (счёт на оплату без договора) ───────────────────────────────
+
+class InvoiceCreate(BaseModel):
+    # Ссылка на СТРОКУ бюджета, не на бюджет: деньги выделены программе (как
+    # у договора). ``number`` у счёта нет, ``currency`` не принимается — она
+    # снимается со строки бюджета на сервере (см. докстринг модели Invoice).
+    name: str = Field(..., min_length=1, max_length=300)
+    note: str = ""
+    budget_line_id: int
+    counterparty_id: int
+    amount: Decimal = Field(..., gt=0)
+    status: Optional[InvoiceStatus] = None
+
+
+class InvoiceUpdate(BaseModel):
+    """Ни статуса (только через ``POST /invoices/{id}/status``), ни валюты
+    (она привязана к бюджету строки) здесь нет — по тем же причинам, что и у
+    ``AgreementUpdate``."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=300)
+    note: Optional[str] = None
+    budget_line_id: Optional[int] = None
+    counterparty_id: Optional[int] = None
+    amount: Optional[Decimal] = Field(None, gt=0)
+
+
+class InvoiceStatusChange(BaseModel):
+    status: InvoiceStatus
+
+
+class InvoiceRead(BaseModel):
+    """Собирается из ``invoice_service.serialize_invoice``: администратор и
+    программа развёрнуты, хотя на счёте их колонок нет — читаются через строку
+    бюджета. ``budget_id`` рядом — для ссылки на карточку бюджета."""
+
+    id: int
+    name: str
+    note: str
+    budget_line_id: int
+    budget_id: int
+    administrator_id: int
+    administrator_name: str
+    program_id: int
+    program_name: str
+    expense_item: str
+    period_year: int
+    counterparty_id: int
+    counterparty_name: str
+    counterparty_bin_iin: str
+    amount: Decimal
+    currency: str
+    file_id: Optional[str]
     status: str
     approval_state: str
     created_by: Optional[int]

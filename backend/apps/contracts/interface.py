@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from apps.contracts.models import Agreement, Budget, BudgetLine
+from apps.contracts.models import Agreement, Budget, BudgetLine, Invoice
 from apps.contracts.services import budget_calc
 from apps.core.services import require_service
 
@@ -110,4 +110,29 @@ def get_agreement_brief(agreement_id: int) -> dict | None:
         "budget_line_id": agreement.budget_line_id,
         "budget_id": agreement.budget_line.budget_id,
         "signed_date": agreement.signed_date,
+    }
+
+
+def get_invoice_brief(invoice_id: int) -> dict | None:
+    """Минимальная карточка счёта на оплату для чужого UI (список
+    согласований, когда согласование счёта подключат): без файла, без
+    служебных меток. Парная к ``get_agreement_brief``."""
+    require_service("contracts")
+
+    invoice = (Invoice.objects
+               .select_related("counterparty", "budget_line")
+               .filter(pk=invoice_id).first())
+    if invoice is None:
+        return None
+
+    return {
+        "id": invoice.pk,
+        "name": invoice.name,
+        "counterparty_name": invoice.counterparty.name,
+        "counterparty_bin_iin": invoice.counterparty.bin_iin,
+        "amount": invoice.amount,
+        "currency": invoice.currency,
+        "status": invoice.status,
+        "budget_line_id": invoice.budget_line_id,
+        "budget_id": invoice.budget_line.budget_id,
     }

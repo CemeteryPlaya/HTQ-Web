@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Building2, FileText, LayoutDashboard, Wallet } from 'lucide-react';
+import { Building2, FileText, LayoutDashboard, Receipt, Wallet } from 'lucide-react';
 
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
@@ -44,6 +44,12 @@ const NAV: NavItem[] = [
     label: 'Договоры',
     icon: FileText,
     matchPrefix: '/contracts/agreements',
+  },
+  {
+    to: '/contracts/invoices',
+    label: 'Счета на оплату',
+    icon: Receipt,
+    matchPrefix: '/contracts/invoices',
   },
 ];
 

@@ -96,6 +96,18 @@ class AgreementStatus(models.TextChoices):
     TERMINATED = "terminated", "Расторгнут"
 
 
+class InvoiceStatus(models.TextChoices):
+    # У счёта нет «подписан»: договор подписывают две стороны, счёт же просто
+    # оплачивают. Поэтому вместо ``signed → executed`` здесь один терминальный
+    # ``paid``. ``cancelled`` — второй терминал, аналог ``terminated`` у
+    # договора: счёт отозвали, не оплатив.
+    DRAFT = "draft", "Черновик"
+    ON_REVIEW = "on_review", "На согласовании"
+    APPROVED = "approved", "Согласован"
+    PAID = "paid", "Оплачен"
+    CANCELLED = "cancelled", "Отменён"
+
+
 class Country(models.Model):
     """Страна. Используется и администратором бюджета, и контрагентом."""
 
@@ -456,3 +468,88 @@ class Agreement(signoff.Approvable, models.Model):
 
     def __str__(self) -> str:
         return f"{self.number} — {self.name}"
+
+
+class Invoice(signoff.Approvable, models.Model):
+    """Счёт на оплату БЕЗ договора — прямая закупка, за которой не стоит
+    ``Agreement``.
+
+    Это второй, помимо договора, канал расхода бюджета: покупку оформляют
+    одним счётом, без заключения договора. Поэтому по устройству счёт —
+    брат ``Agreement``: та же ссылка на ОДНУ строку бюджета (деньги выделены
+    программе), тот же контрагент-поставщик, та же приложенная к записи
+    сумма и скан.
+
+    Отличий от договора три, и все намеренные:
+
+    1. **Номера нет.** У договора ``number`` — уникальный ключ, по которому
+       на него ссылаются. Счёт без договора так не адресуют: он опознаётся
+       наименованием закупки и поставщиком. Номер поставщика, если понадобится
+       его хранить, — отдельное необязательное поле рядом, а не возврат к
+       уникальному ключу, которого у этой записи по смыслу нет.
+
+    2. **Валюта не приходит из формы — она снимается со строки бюджета**
+       (``budget_line.budget.currency``) при создании. У договора валюта в
+       теле запроса и сверяется с бюджетом; здесь сверять нечего — счёт
+       выписывается в валюте того бюджета, из которого его оплачивают, и
+       принимать её отдельным полем значило бы завести возможность
+       рассогласования на ровном месте. Колонка всё же есть (снимок на момент
+       создания), чтобы карточка и списки не лезли за валютой в бюджет.
+
+    3. **Счёт НЕ занимает бюджет** — пока. ``budget_calc`` считает
+       «законтрактовано» только по договорам; счета в остаток НЕ входят.
+       Это осознанная отсрочка первой фазы, а не инвариант: экономически
+       счёт без договора — такой же расход строки, как договор, и когда его
+       решат учитывать в остатке, менять придётся РОВНО ``COMMITTING_STATUSES``
+       и ``committed_map`` в ``budget_calc`` (добавить в агрегат сумму счетов
+       в занимающих статусах) — ни модель, ни вьюхи, ни схемы. До тех пор
+       никакой проверки лимита при создании счёта нет: строка — это только
+       указание, из какой программы платить.
+
+    ``file_id`` — «Скан счёта на оплату» в ``apps.media_files``, тем же
+    путём ``interface.store_file()``, что и скан договора (свой бакет модуль
+    не заводит — инвариант №10, backend/README.md).
+
+    ``Approvable`` подмешан сразу, хотя маршрут согласования счёта в первой
+    фазе не подключён: колонка ``approval_state`` появляется в таблице сейчас
+    (иначе её ввод потребовал бы отдельной миграции), а её ведёт signoff,
+    когда счёт зарегистрируют согласуемым типом. До тех пор она инертна
+    (``draft``), маршрута нет, гейт молчит. ``status`` и ``approval_state`` —
+    те же две разные оси, что и у договора (см. докстринг модуля).
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.invoice"
+
+    name = models.CharField(max_length=300, verbose_name="Наименование")
+    note = models.TextField(default="", blank=True, db_default="",
+                            verbose_name="Пояснение")
+    budget_line = models.ForeignKey(BudgetLine, on_delete=models.PROTECT,
+                                    related_name="invoices")
+    counterparty = models.ForeignKey(Counterparty, on_delete=models.PROTECT,
+                                     related_name="invoices")
+    amount = models.DecimalField(max_digits=18, decimal_places=2,
+                                 verbose_name="Сумма счёта")
+    currency = models.CharField(max_length=3, default="KZT", db_default="KZT")
+    file_id = models.CharField(max_length=64, null=True, blank=True,
+                               verbose_name="Скан счёта на оплату")
+    status = models.CharField(max_length=20, choices=InvoiceStatus.choices,
+                              default=InvoiceStatus.DRAFT,
+                              db_default=InvoiceStatus.DRAFT)
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            # Тот же профиль, что у договора: «счета этой строки бюджета в
+            # таком-то статусе» — то, что понадобится, когда счета начнут
+            # учитываться в остатке (см. докстринг, пункт 3).
+            models.Index(fields=["budget_line", "status"],
+                         name="ix_contracts_inv_line_st"),
+        ]
+        verbose_name = "Счёт на оплату"
+        verbose_name_plural = "Счета на оплату"
+
+    def __str__(self) -> str:
+        return f"Счёт: {self.name} ({self.amount} {self.currency})"

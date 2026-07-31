@@ -41,13 +41,21 @@ from apps.signoff import interface as signoff
 from htqweb.http import ApiView, api_view, json_error
 
 from . import schemas
-from .models import AgreementStatus, BudgetStatus, CounterpartyStatus, PaymentType
+from .models import (
+    AgreementStatus,
+    BudgetStatus,
+    CounterpartyStatus,
+    InvoiceStatus,
+    PaymentType,
+)
 from .services import agreement_service as agr_svc
 from .services import budget_service as budget_svc
 from .services import counterparty_service as cp_svc
+from .services import invoice_service as inv_svc
 from .services import reference_service as ref_svc
 from .services.agreement_service import AgreementRuleViolation
 from .services.budget_calc import COMMITTING_STATUSES, BudgetExceeded
+from .services.invoice_service import InvoiceRuleViolation
 from .services.reference_service import ReferenceConflict
 
 # Конфликты доменного уровня, которые вьюха переводит в 409. Собраны в один
@@ -58,8 +66,8 @@ from .services.reference_service import ReferenceConflict
 # согласовании», «в этапе не осталось активных согласующих» — это ровно
 # такие же конфликты состояния, и различать их для фронтенда незачем, ему
 # нужен текст. Импортируется из signoff.interface (правило границ).
-CONFLICTS = (ReferenceConflict, AgreementRuleViolation, BudgetExceeded,
-             signoff.SignoffError, signoff.UnknownSubject)
+CONFLICTS = (ReferenceConflict, AgreementRuleViolation, InvoiceRuleViolation,
+             BudgetExceeded, signoff.SignoffError, signoff.UnknownSubject)
 
 
 class ContractsView(ApiView):
@@ -634,6 +642,132 @@ class AgreementFileUrlView(ContractsView):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Счета на оплату (без договора)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Форма счёта, как и форма договора, выбирает источник денег из плоского
+# списка ``GET /budget-lines`` (администратор → программа), поэтому своего
+# справочного эндпоинта модуль счетов не заводит. Отдельного маршрута
+# «отправить на согласование» здесь ещё нет — согласование счёта первой
+# фазой не подключено (см. докстринг модели Invoice).
+
+class InvoiceCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = inv_svc.list_invoices(
+            budget_id=self.int_param("budget_id"),
+            budget_line_id=self.int_param("budget_line_id"),
+            counterparty_id=self.int_param("counterparty_id"),
+            administrator_id=self.int_param("administrator_id"),
+            program_id=self.int_param("program_id"),
+            period_year=self.int_param("period_year"),
+            status=self.str_param("status"),
+        )
+        return [schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(row))
+                for row in rows]
+
+    @write("POST", body=schemas.InvoiceCreate, status=201, admin=False)
+    def post(self, request, data: schemas.InvoiceCreate):
+        try:
+            invoice = inv_svc.create_invoice(created_by=request.token.user_id,
+                                             **data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(invoice))
+
+
+class InvoiceDetailView(ContractsView):
+    @read
+    def get(self, request, invoice_id: int):
+        return schemas.InvoiceRead.model_validate(
+            inv_svc.serialize_invoice(inv_svc.get_invoice_or_404(invoice_id)))
+
+    @write("PATCH", body=schemas.InvoiceUpdate)
+    def patch(self, request, invoice_id: int, data: schemas.InvoiceUpdate):
+        try:
+            invoice = inv_svc.update_invoice(invoice_id, **data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(invoice))
+
+    @write("DELETE")
+    def delete(self, request, invoice_id: int):
+        try:
+            inv_svc.delete_invoice(invoice_id)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return HttpResponse(status=204)
+
+
+class InvoiceStatusView(ContractsView):
+    """Единственный путь смены статуса счёта — здесь проверяется допустимость
+    перехода (``invoice_service.ALLOWED_TRANSITIONS``). PATCH счёта статус не
+    принимает, иначе таблица переходов обходилась бы одним полем.
+
+    ``enforce_approval_lock=True`` — как у договора: под идущим согласованием
+    ручной перевод запрещён. В первой фазе согласование счёта не подключено,
+    поэтому проверка инертна (счёт не выходит из ``approval_state=draft``)."""
+
+    @write("POST", body=schemas.InvoiceStatusChange)
+    def post(self, request, invoice_id: int, data: schemas.InvoiceStatusChange):
+        try:
+            invoice = inv_svc.change_status(invoice_id, data.status,
+                                            actor_id=request.token.user_id,
+                                            enforce_approval_lock=True)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(invoice))
+
+
+class InvoiceFileView(ContractsView):
+    """Загрузка скана счёта (multipart, поле ``file``).
+
+    Права те же, что у скана договора (``AgreementFileView``): автор
+    прикладывает файл, пока счёт ЧЕРНОВИК, администратор — всегда. Счёт без
+    приложенного скана отправлять на согласование нечего, поэтому право
+    завести счёт без права приложить к нему файл — половина права
+    (``admin=False``), но проверка тоньше и по данным, а не декоратором.
+    """
+
+    @write("POST", admin=False)
+    def post(self, request, invoice_id: int):
+        invoice = inv_svc.get_invoice_or_404(invoice_id)
+        if not request.token.is_elevated:
+            if invoice.created_by != request.token.user_id:
+                return json_error(
+                    "Приложить файл может автор счёта или администратор", 403)
+            if invoice.status != InvoiceStatus.DRAFT:
+                return json_error(
+                    f"Счёт в статусе «{invoice.get_status_display()}» — "
+                    f"заменить скан может только администратор", 403)
+
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+
+        invoice = inv_svc.attach_file(
+            invoice_id,
+            data=upload.read(),
+            filename=upload.name,
+            mime=upload.content_type or "application/octet-stream",
+            owner_id=request.token.user_id,
+        )
+        return schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(invoice))
+
+
+class InvoiceFileUrlView(ContractsView):
+    """Подписанная ссылка на скан счёта."""
+
+    @read
+    def get(self, request, invoice_id: int):
+        invoice = inv_svc.get_invoice_or_404(invoice_id)
+        url = inv_svc.file_url(invoice)
+        if url is None:
+            raise Http404("К счёту не приложен файл")
+        return {"url": url}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Служебное
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -651,13 +785,22 @@ class EnumsView(ContractsView):
             "agreement_status": pairs(AgreementStatus.choices),
             "budget_status": pairs(BudgetStatus.choices),
             "counterparty_status": pairs(CounterpartyStatus.choices),
+            "invoice_status": pairs(InvoiceStatus.choices),
             "payment_type": pairs(PaymentType.choices),
             # Из каких статусов договор занимает бюджет — фронтенду нужно,
             # чтобы объяснить пользователю, почему остаток не изменился после
-            # сохранения черновика.
+            # сохранения черновика. Счёт бюджет пока не занимает
+            # (см. докстринг модели Invoice), поэтому своего множества у него
+            # здесь нет.
             "committing_statuses": sorted(COMMITTING_STATUSES),
             "transitions": {
                 current: sorted(targets)
                 for current, targets in agr_svc.ALLOWED_TRANSITIONS.items()
+            },
+            # Таблица переходов счёта — отдельная от договорной: у счёта свой
+            # жизненный цикл (paid/cancelled вместо signed/executed/terminated).
+            "invoice_transitions": {
+                current: sorted(targets)
+                for current, targets in inv_svc.ALLOWED_TRANSITIONS.items()
             },
         }

@@ -187,6 +187,60 @@ export interface Agreement {
   updated_at: string;
 }
 
+export type InvoiceStatus =
+  | 'draft'
+  | 'on_review'
+  | 'approved'
+  | 'paid'
+  | 'cancelled';
+
+/**
+ * Счёт на оплату БЕЗ договора — прямая закупка, за которой не стоит договор
+ * (backend: `apps.contracts.models.Invoice`).
+ *
+ * Устроен как договор, но с тремя отличиями: номера нет (опознаётся
+ * наименованием и поставщиком), `currency` снимается со строки бюджета на
+ * сервере (в форме её не вводят), и счёт бюджет НЕ занимает — остаток строки
+ * от него не меняется (первая фаза; см. докстринг модели). Поэтому здесь нет
+ * ни `payment_type`, ни `signed_date`, ни `committed`-логики.
+ *
+ * `approval_state` есть (примесь `signoff.Approvable`), но пока инертен:
+ * согласование счёта не подключено, и UI отправки на согласование у него —
+ * в отличие от договора — нет.
+ */
+export interface Invoice {
+  id: number;
+  /** «Наименование» — что купить. */
+  name: string;
+  /** «Пояснение». */
+  note: string;
+  /** На что счёт ссылается — на СТРОКУ бюджета (деньги выделены программе). */
+  budget_line_id: number;
+  /** Родительский бюджет строки — для ссылки на его карточку. */
+  budget_id: number;
+  /** Разворачивается из строки бюджета — на счёте такой колонки нет. */
+  administrator_id: number;
+  administrator_name: string;
+  program_id: number;
+  program_name: string;
+  expense_item: string;
+  period_year: number;
+  counterparty_id: number;
+  counterparty_name: string;
+  counterparty_bin_iin: string;
+  amount: string;
+  /** Снята со строки бюджета на сервере; в форме не задаётся. */
+  currency: string;
+  /** «Скан счёта на оплату» — id файла в media_files. */
+  file_id: string | null;
+  status: InvoiceStatus;
+  /** Ось согласования — пока инертна (см. описание типа). */
+  approval_state: ApprovalState;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** Пара value/label из `GET /enums` — источник подписей для селектов. */
 export interface EnumOption {
   value: string;
@@ -197,10 +251,13 @@ export interface ContractsEnums {
   agreement_status: EnumOption[];
   budget_status: EnumOption[];
   counterparty_status: EnumOption[];
+  invoice_status: EnumOption[];
   payment_type: EnumOption[];
-  /** Из каких статусов договор занимает бюджет. */
+  /** Из каких статусов договор занимает бюджет. Счёт бюджет пока не занимает. */
   committing_statuses: AgreementStatus[];
   transitions: Record<AgreementStatus, AgreementStatus[]>;
+  /** Таблица переходов счёта — отдельная от договорной (свой жизненный цикл). */
+  invoice_transitions: Record<InvoiceStatus, InvoiceStatus[]>;
 }
 
 // ─── Составная заявка на бюджет ──────────────────────────────────────────

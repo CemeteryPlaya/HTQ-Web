@@ -21,6 +21,8 @@ import type {
   Counterparty,
   CounterpartyFullCreatePayload,
   Country,
+  Invoice,
+  InvoiceStatus,
   Program,
 } from '@/types/contracts';
 
@@ -44,6 +46,9 @@ export interface AgreementListParams {
   period_year?: number;
   status?: string;
 }
+
+/** Те же фильтры, что у договоров (у бэкенда это тот же набор параметров). */
+export type InvoiceListParams = AgreementListParams;
 
 /**
  * Отправка на согласование живёт ЗДЕСЬ, а не в api/signoff.ts, и это не
@@ -179,4 +184,35 @@ export const contractsApi = {
   },
   getAgreementFileUrl: (id: number) =>
     api.get<{ url: string }>(path(`agreements/${id}/file-url`)),
+
+  // ─── Счета на оплату (без договора) ────────────────────────────────────
+  //
+  // Устроены как договоры, но проще: без `number`, `payment_type`,
+  // `signed_date`, `currency` (её снимает бэкенд со строки бюджета) и БЕЗ
+  // отправки на согласование — маршрут `submit` первой фазой не подключён,
+  // поэтому и метода под него здесь нет.
+  listInvoices: (params?: InvoiceListParams) =>
+    api.get<Invoice[]>(path('invoices'), { params }),
+  getInvoice: (id: number) => api.get<Invoice>(path(`invoices/${id}`)),
+  createInvoice: (data: {
+    name: string;
+    /** Счёт ссылается на СТРОКУ бюджета: деньги выделены программе. */
+    budget_line_id: number;
+    counterparty_id: number;
+    amount: string;
+    note?: string;
+    status?: InvoiceStatus;
+  }) => api.post<Invoice>(path('invoices'), data),
+  updateInvoice: (id: number, data: Record<string, unknown>) =>
+    api.patch<Invoice>(path(`invoices/${id}`), data),
+  /** Единственный путь смены статуса — переход проверяется на бэкенде. */
+  changeInvoiceStatus: (id: number, status: InvoiceStatus) =>
+    api.post<Invoice>(path(`invoices/${id}/status`), { status }),
+  uploadInvoiceFile: (id: number, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post<Invoice>(path(`invoices/${id}/file`), form);
+  },
+  getInvoiceFileUrl: (id: number) =>
+    api.get<{ url: string }>(path(`invoices/${id}/file-url`)),
 };
