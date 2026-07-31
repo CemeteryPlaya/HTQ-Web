@@ -595,6 +595,74 @@ def test_reopening_an_approved_agreement_unlocks_it(client):
     assert reworked.status_code == 200, reworked.content
 
 
+def test_a_manual_status_change_is_blocked_while_on_approval(client):
+    """Статус — такая же правка, как всякая другая: пока идёт согласование,
+    его ведёт решение согласующих, а не ручной ``POST /status``.
+
+    Без этого сдвиг ``on_review → terminated`` из-под висящего процесса
+    заклинил бы движок — перехода ``terminated → approved`` нет, и колбэк
+    одобрения ронял бы транзакцию на каждом решении согласующего, а из
+    ``terminated`` договор уже не вытащить."""
+    approver = make_user("mid-approval")
+    agreement = _draft_agreement()
+    route_for(Agreement.SIGNOFF_SUBJECT_TYPE, approver.pk)
+    process = agreement.submit_for_approval()
+
+    agreement.refresh_from_db()
+    assert agreement.status == AgreementStatus.ON_REVIEW
+
+    blocked = post_json(client, f"{BASE}/agreements/{agreement.pk}/status",
+                        {"status": AgreementStatus.TERMINATED.value},
+                        **auth(admin_token()))
+    assert blocked.status_code == 409, blocked.content
+    assert "на согласовании" in blocked.json()["detail"]
+
+    agreement.refresh_from_db()
+    assert agreement.status == AgreementStatus.ON_REVIEW
+
+    # Процесс цел: согласующий по-прежнему доводит договор до approved.
+    decide(process, approver, engine.APPROVE)
+    agreement.refresh_from_db()
+    assert agreement.status == AgreementStatus.APPROVED
+    assert agreement.approval_state == ApprovalState.APPROVED
+
+
+def test_the_lifecycle_advances_by_hand_after_approval(client):
+    """Замок держит РОВНО ``pending``, а не всё, что держит ``assert_editable``.
+
+    Согласованный договор ведут дальше руками — ``approved → signed →
+    executed``, — и это законный ручной ``POST /status`` уже ПОСЛЕ
+    согласования. Запри гейт и ``approved`` (как ``assert_editable``), этот
+    путь оборвался бы на первом же шаге."""
+    agreement = _draft_agreement()
+    approve(agreement)
+    assert agreement.status == AgreementStatus.APPROVED
+
+    signed = post_json(client, f"{BASE}/agreements/{agreement.pk}/status",
+                       {"status": AgreementStatus.SIGNED.value},
+                       **auth(admin_token()))
+    assert signed.status_code == 200, signed.content
+    assert signed.json()["status"] == AgreementStatus.SIGNED.value
+
+
+def test_disabling_signoff_unlocks_a_manual_status_change(client):
+    """Тот же escape-hatch, что у правки (``test_disabling_signoff_unlocks_
+    pending_objects``): выключенный модуль согласования перестаёт запирать —
+    иначе застигнутый в ``pending`` договор нельзя было бы расторгнуть после
+    ``service signoff --off``."""
+    agreement = _draft_agreement()
+    route_for(Agreement.SIGNOFF_SUBJECT_TYPE, make_user("agr-off").pk)
+    agreement.submit_for_approval()
+    ServiceStatus.objects.update_or_create(
+        app_label="signoff", defaults={"enabled": False, "message": "off"})
+
+    freed = post_json(client, f"{BASE}/agreements/{agreement.pk}/status",
+                      {"status": AgreementStatus.TERMINATED.value},
+                      **auth(admin_token()))
+    assert freed.status_code == 200, freed.content
+    assert freed.json()["status"] == AgreementStatus.TERMINATED.value
+
+
 def test_a_decided_object_is_not_submitted_again(client):
     """Отправлять решённое нечего: оно заперто, и на новый круг ушло бы ровно
     тем же, каким его уже видели."""
@@ -642,8 +710,10 @@ def test_disabling_signoff_unlocks_pending_objects(client):
 def test_the_engine_can_still_move_the_agreement_it_locked(client):
     """Договор доходит до ``approved``, хотя в момент колбэка формально
     заперт: ``engine._finish`` зовёт ``on_approved`` ДО того, как снимет
-    ``pending``. Guard стоит на ``update_agreement``, а не на
-    ``change_status``, — иначе движок заблокировал бы сам себя."""
+    ``pending``. Guard ручного перевода включается флагом
+    ``enforce_approval_lock`` только на HTTP-пути (``AgreementStatusView``);
+    колбэк зовёт ``change_status`` без него — иначе движок заблокировал бы
+    сам себя."""
     approver = make_user("finisher")
     agreement = _draft_agreement()
     route_for(Agreement.SIGNOFF_SUBJECT_TYPE, approver.pk)

@@ -325,9 +325,58 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
     return agreement
 
 
+def _assert_not_pending_approval(agreement: Agreement) -> None:
+    """Пока по договору идёт согласование, статус ведёт решение согласующих,
+    а не ручной перевод.
+
+    Заперт РОВНО ``pending``: активный процесс есть только в нём, и ручной
+    сдвиг статуса под ним рассинхронил бы договор с его согласованием —
+    вплоть до неотзываемого «расторгнут» под висящим процессом, из которого
+    ``approval_hooks._agreement_on_approved`` уже не выберется (перехода
+    ``terminated → approved`` нет, движок будет откатываться на каждом
+    решении согласующего).
+
+    Полный ``assert_editable`` (примесь signoff) тут не годится: он держит и
+    ``approved``, а именно из него договор ведут дальше руками —
+    ``approved → signed → executed`` уже ПОСЛЕ согласования. Из
+    ``rejected``/``rework`` статус к этому моменту уже сброшен в ``draft``,
+    запирать нечего.
+
+    Escape-hatch тот же, что у ``assert_editable``: выключенный signoff
+    перестаёт запирать — иначе застигнутый в ``pending`` договор нельзя было
+    бы расторгнуть после отключения модуля согласования.
+    """
+    if agreement.approval_state != signoff.ApprovalState.PENDING:
+        return
+    # Локальный импорт — как в Approvable.assert_editable: тянуть apps.core в
+    # сервис ради одной ветки незачем.
+    from apps.core.services import service_enabled
+
+    if not service_enabled("signoff"):
+        return
+    raise AgreementRuleViolation(
+        f"Договор «{agreement.number}» на согласовании — дождитесь решения "
+        "или отзовите согласование; статус сейчас ведёт оно, а не ручной "
+        "перевод"
+    )
+
+
 @transaction.atomic
-def change_status(agreement_id: int, new_status: str, *, actor_id: int | None = None) -> Agreement:
+def change_status(agreement_id: int, new_status: str, *, actor_id: int | None = None,
+                  enforce_approval_lock: bool = False) -> Agreement:
+    """Сдвинуть договор по ``ALLOWED_TRANSITIONS``.
+
+    ``enforce_approval_lock`` ставит HTTP-путь (``AgreementStatusView``), где
+    статус меняет человек: под идущим согласованием ручной перевод запрещён
+    (``_assert_not_pending_approval``). Колбэки ``approval_hooks`` зовут эту
+    же функцию из транзакции движка, чтобы ПЕРЕВОДИТЬ on_review/approved, —
+    им флаг не ставится, иначе движок заперся бы сам об себя. Дефолт поэтому
+    False: это чистый переход машины статусов, а запрет ручного сдвига —
+    политика человеко-пути, а не инвариант самой машины.
+    """
     agreement = get_agreement_or_404(agreement_id)
+    if enforce_approval_lock:
+        _assert_not_pending_approval(agreement)
     current = agreement.status
 
     if new_status not in AgreementStatus.values:

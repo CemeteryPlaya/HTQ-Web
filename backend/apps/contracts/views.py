@@ -552,13 +552,22 @@ class AgreementDetailView(ContractsView):
 class AgreementStatusView(ContractsView):
     """Единственный путь смены статуса — здесь проверяется допустимость
     перехода (``agreement_service.ALLOWED_TRANSITIONS``). PATCH договора
-    статус не принимает, иначе таблица переходов обходилась бы одним полем."""
+    статус не принимает, иначе таблица переходов обходилась бы одним полем.
+
+    ``enforce_approval_lock=True``: под идущим согласованием (``approval_state
+    == pending``) ручной перевод статуса запрещён — как и всякая другая
+    правка договора (ср. ``update_agreement`` → ``assert_editable``). Иначе
+    сдвиг ``on_review → terminated``/``draft`` из-под висящего процесса
+    рассинхронил бы договор с согласованием и заклинил бы движок на решении
+    согласующего. Колбэки ``approval_hooks`` ходят в ``change_status`` без
+    этого флага — они и есть штатный перевод on_review/approved."""
 
     @write("POST", body=schemas.AgreementStatusChange)
     def post(self, request, agreement_id: int, data: schemas.AgreementStatusChange):
         try:
             agreement = agr_svc.change_status(agreement_id, data.status,
-                                              actor_id=request.token.user_id)
+                                              actor_id=request.token.user_id,
+                                              enforce_approval_lock=True)
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.AgreementRead.model_validate(
