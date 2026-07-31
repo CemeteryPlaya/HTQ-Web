@@ -1,0 +1,246 @@
+"""Факты, по которым signoff ветвит маршруты объектов contracts.
+
+Механику ветвления проверяет ``apps/signoff/tests`` на своей нейтральной
+модели; здесь — то, что добавляет именно эта аппка: КАКИЕ факты она снимает
+со своих трёх моделей и что они доезжают до движка в пригодном виде.
+
+Читаются факты через ``registry`` — то есть ровно тем путём, которым их
+возьмёт ``engine.start``, а не прямым вызовом функции из ``approval_hooks``:
+проверять надо стык, а не тело функции.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from apps.contracts.models import Agreement, Budget, Counterparty, Program
+from apps.contracts.tests.helpers import (
+    BASE,
+    auth,
+    make_administrator,
+    make_agreement,
+    make_budget,
+    make_counterparty,
+    make_country,
+    make_line,
+    make_program,
+    post_json,
+    token,
+)
+# Сборка маршрута и пользователя — те же, что в test_approval_wiring: этот
+# файл про факты, и дублировать их фабрики значило бы завести им вторую
+# версию правды.
+from apps.contracts.tests.test_approval_wiring import make_user, route_for
+from apps.signoff.services import registry
+
+pytestmark = pytest.mark.django_db
+
+
+def fields_by_key(subject_type: str) -> dict:
+    return {field["key"]: field for field in registry.fields_for(subject_type)}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Бюджет
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_budget_reports_the_country_of_its_administrator():
+    """Тот самый факт, ради которого ветвление и делалось."""
+    kazakhstan = make_country("Казахстан", "KZ")
+    budget = make_budget(administrator=make_administrator(country=kazakhstan))
+
+    facts = registry.facts_for(Budget.SIGNOFF_SUBJECT_TYPE, budget.pk)
+
+    assert facts["admin_country_id"] == kazakhstan.pk
+
+
+def test_budget_amount_is_the_sum_of_its_lines_as_a_plain_number():
+    """Денег на самом Budget нет — сумма считается по строкам. И приходит
+    ``float``, а не ``Decimal``: факты сохраняются в JSONField."""
+    budget = make_budget()
+    # Разные программы: у пары (name, expense_item) уникальный индекс, и две
+    # строки с программой по умолчанию уронили бы тест на нём.
+    make_line(budget=budget, amount="1000000.00")
+    make_line(budget=budget, program=make_program("Наука", "Реактивы"),
+              amount="500000.00")
+
+    facts = registry.facts_for(Budget.SIGNOFF_SUBJECT_TYPE, budget.pk)
+
+    assert facts["amount"] == 1500000.0
+    assert isinstance(facts["amount"], float)
+
+
+def test_budget_country_options_follow_the_reference_book():
+    """`fact_fields` — функция, а не константа, ровно ради этого: страну
+    завели после старта процесса, и она обязана появиться в редакторе."""
+    make_country("Казахстан", "KZ")
+    before = len(fields_by_key(Budget.SIGNOFF_SUBJECT_TYPE)["admin_country_id"]["options"])
+
+    make_country("Узбекистан", "UZ")
+    after = fields_by_key(Budget.SIGNOFF_SUBJECT_TYPE)["admin_country_id"]["options"]
+
+    assert len(after) == before + 1
+    assert "Узбекистан" in [option["label"] for option in after]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Договор — две разные страны
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_agreement_separates_the_two_countries_it_has():
+    """Главная ловушка домена: у договора страна администратора бюджета и
+    страна контрагента — РАЗНЫЕ (казахстанский проект закупается у турецкого
+    поставщика). Общий ключ `country_id` означал бы, что настраивающий
+    маршрут выберет одну из них наугад и никогда об этом не узнает.
+    """
+    kazakhstan = make_country("Казахстан", "KZ")
+    turkey = make_country("Турция", "TR")
+    line = make_line(administrator=make_administrator(country=kazakhstan))
+    agreement = make_agreement(
+        line=line, counterparty=make_counterparty(country=turkey, bin_iin="999"))
+
+    facts = registry.facts_for(Agreement.SIGNOFF_SUBJECT_TYPE, agreement.pk)
+
+    assert facts["admin_country_id"] == kazakhstan.pk
+    assert facts["counterparty_country_id"] == turkey.pk
+
+
+def test_agreement_fields_label_the_two_countries_distinguishably():
+    """Ключи разные — но выбирать поле человек будет по подписи, и она тоже
+    обязана различать эти две страны."""
+    make_country("Казахстан", "KZ")
+    # Программа тоже нужна: ``validate_fields`` требует непустых options у
+    # КАЖДОГО choice-поля, и пустой справочник программ уронил бы чтение
+    # всего списка полей договора, а не только своего.
+    make_program()
+    fields = fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)
+
+    assert fields["admin_country_id"]["label"] != fields["counterparty_country_id"]["label"]
+    assert fields["admin_country_id"]["type"] == "choice"
+    assert fields["counterparty_country_id"]["type"] == "choice"
+
+
+def test_agreement_reports_the_program_of_its_budget_line():
+    """Программы на самом договоре нет — она на строке бюджета, из которой он
+    финансируется. Ключ без приставки (``program_id``, не
+    ``budget_program_id``) — утверждение, что она ровно одна."""
+    science = make_program("Наука", "Реактивы")
+    agreement = make_agreement(line=make_line(program=science))
+
+    facts = registry.facts_for(Agreement.SIGNOFF_SUBJECT_TYPE, agreement.pk)
+
+    assert facts["program_id"] == science.pk
+    assert fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)["program_id"]["type"] == "choice"
+
+
+def test_program_options_follow_the_reference_book():
+    """То же, что у стран: справочник пополняется без перезапуска, и новая
+    программа обязана появиться в редакторе маршрута."""
+    make_country("Казахстан", "KZ")  # см. соседний тест: нужен каждому choice
+    make_program("Образование", "Оборудование")
+    before = len(fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)["program_id"]["options"])
+
+    make_program("Наука", "Реактивы", code="Н-1")
+    after = fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)["program_id"]["options"]
+
+    assert len(after) == before + 1
+    # Подпись — display_name («код название»), та же, что в карточке бюджета:
+    # названная в ветке иначе, программа читалась бы как другая.
+    assert "Н-1 Наука" in [option["label"] for option in after]
+
+
+def test_deactivated_program_stays_in_the_options():
+    """Снятая с учёта программа НЕ исчезает из справочника веток.
+
+    ``conditions._validate_value`` отбивает значение choice-поля, которого нет
+    в ``options``. Спрятав её, мы сделали бы нередактируемым каждый уже
+    настроенный этап, который её называет, — 409 при следующем сохранении,
+    далеко от причины (деактивации в другом разделе).
+    """
+    make_country("Казахстан", "KZ")  # см. выше: нужен каждому choice-полю
+    retired = make_program("Старая программа", "Прочее")
+    Program.objects.filter(pk=retired.pk).update(is_active=False)
+
+    options = fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)["program_id"]["options"]
+
+    assert retired.pk in [option["value"] for option in options]
+
+
+def test_agreement_amount_and_payment_type_are_branchable():
+    line = make_line()
+    agreement = make_agreement(line=line, amount="400000.00")
+
+    facts = registry.facts_for(Agreement.SIGNOFF_SUBJECT_TYPE, agreement.pk)
+
+    assert facts["amount"] == 400000.0
+    assert facts["payment_type"] == "postpayment"
+    assert "payment_type" in fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Контрагент
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_counterparty_reports_its_own_country_and_vat():
+    turkey = make_country("Турция", "TR")
+    counterparty = make_counterparty(country=turkey, vat=True)
+
+    facts = registry.facts_for(Counterparty.SIGNOFF_SUBJECT_TYPE, counterparty.pk)
+
+    assert facts == {"counterparty_country_id": turkey.pk, "vat": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Общее
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize("model", [Budget, Counterparty, Agreement])
+def test_facts_of_a_deleted_object_are_empty_not_an_exception(model):
+    """Объект удалили между отправкой и запуском. Условный маршрут откажет
+    внятным «не сошлось ни одно условие», безусловный отработает как прежде —
+    решать судьбу висячей ссылки не задача снятия фактов."""
+    assert registry.facts_for(model.SIGNOFF_SUBJECT_TYPE, 10_000_000) == {}
+
+
+def test_submit_response_carries_the_branch_data_the_frontend_types_promise(client):
+    """Карточка процесса из СВОЕГО эндпоинта отправки — та же, что у signoff.
+
+    Она уходит прямо в HTTP-ответ (``enrich=True``), и фронтенд типизирует её
+    как `ApprovalProcess`, где `subject_facts` и `matched_by` обязательные.
+    Пропади они здесь — на карточке договора после отправки был бы не
+    отсутствующий блок, а падение рендера. Тест пришит именно к этому пути:
+    у signoff свои эндпоинты и своё покрытие, а этот проходит через
+    ``interface.serialize_process`` и мог бы разойтись с ним незаметно.
+    """
+    approver = make_user("submit-facts-approver")
+    line = make_line()
+    route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
+
+    submitted = post_json(client, f"{BASE}/budgets/{line.budget_id}/submit", {},
+                          **auth(token()))
+
+    assert submitted.status_code == 201, submitted.content
+    body = submitted.json()
+    assert body["subject_facts"]["admin_country_id"] == \
+        line.budget.administrator.country_id
+    assert all(stage["matched_by"] == "always" for stage in body["stages"])
+    assert all(stage["condition"] == [] for stage in body["stages"])
+
+
+@pytest.mark.parametrize("model", [Budget, Counterparty, Agreement])
+def test_every_declared_field_is_actually_reported(model):
+    """Схема и факты обязаны совпадать по ключам: поле, объявленное в
+    редакторе, но не приходящее в фактах, даёт условие, которое роняет запуск
+    ConditionError'ом — причём у пользователя, а не у настройщика."""
+    make_country("Казахстан", "KZ")
+    line = make_line()
+    row = {
+        Budget: lambda: line.budget,
+        Counterparty: lambda: make_counterparty(bin_iin="777"),
+        Agreement: lambda: make_agreement(line=line),
+    }[model]()
+
+    facts = registry.facts_for(model.SIGNOFF_SUBJECT_TYPE, row.pk)
+    declared = set(fields_by_key(model.SIGNOFF_SUBJECT_TYPE))
+
+    assert declared <= set(facts), f"объявлено, но не сообщается: {declared - set(facts)}"

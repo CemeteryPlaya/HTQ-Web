@@ -10,6 +10,8 @@ from functools import wraps
 
 from django.core.exceptions import PermissionDenied, SuspiciousOperation
 from django.http import Http404, JsonResponse
+from django.utils.decorators import method_decorator
+from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import BaseModel, ValidationError
 
@@ -131,3 +133,42 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                 return json_error("Internal Server Error", 500)
         return view
     return deco
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class ApiView(View):
+    """Class-based база для API-вьюх. Тот же контракт, что у ``api_view``.
+
+    Функциональный стиль (``@api_view`` на функции + ручной диспетчер по
+    ``request.method``) остаётся основным в репозитории — так написаны все
+    домены, пришедшие из FastAPI-поколения. Этот класс не замена ему, а
+    альтернатива для аппок, которые предпочитают CBV: ``apps.contracts``
+    первая такая.
+
+    Что даёт по сравнению с ручным диспетчером:
+
+    - ``View.dispatch`` сам разводит запрос по ``get``/``post``/``patch``/
+      ``delete`` — те самые «маленькие диспетчеры с 405 в конце», которые в
+      функциональных аппках приходится писать под каждый URL, исчезают;
+    - ``api_view`` по-прежнему навешивается ПОМЕТОДНО через
+      ``method_decorator`` — это важно, потому что режим авторизации у
+      разных методов одного URL разный (GET — ``auth="jwt"``, POST —
+      ``admin=True``), а ``api_view`` связывает ровно один режим с одной
+      функцией.
+
+    Два переопределения ниже нужны, чтобы CBV отдавала ТЕ ЖЕ ответы, что и
+    функциональный диспетчер, а не Django-дефолты.
+    """
+
+    # Django по умолчанию обслуживает OPTIONS собственным обработчиком
+    # (пустой 200 + заголовок Allow), причём в обход авторизации. У
+    # функциональных диспетчеров такого нет — они отдают 405 на всё, кроме
+    # явно перечисленных методов. Убираем "options" из списка, чтобы
+    # поведение совпадало; CORS в проекте не используется (один origin),
+    # так что preflight-ответ никому не нужен.
+    http_method_names = ["get", "post", "patch", "put", "delete"]
+
+    def http_method_not_allowed(self, request, *args, **kwargs):
+        # Дефолт Django — HttpResponseNotAllowed с HTML-телом. Контракт
+        # платформы: любая ошибка это {"detail": ...}.
+        return json_error("Method Not Allowed", 405)

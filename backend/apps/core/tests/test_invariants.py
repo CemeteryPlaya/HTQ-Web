@@ -74,9 +74,17 @@ from htqweb.middleware.service_gate import PREFIX_TO_SERVICE, service_name_for_a
 
 
 def _domain_app_configs():
+    # ".tests." отсекает аппки-фикстуры, живущие ВНУТРИ тестов доменной
+    # аппки и подключаемые только в htqweb.settings.test (сейчас такая одна —
+    # apps.signoff.tests.testapp, минимальная согласуемая модель, на которой
+    # проверяется универсальность движка signoff). Это не ослабление
+    # инварианта: у тестовой модели нет ни продовой админки, которую надо
+    # гейтить, ни задач Celery, ни соседей, которым нужен её interface —
+    # требовать от неё доменную обвязку значит требовать мёртвый код.
     return [
         c for c in django_apps.get_app_configs()
         if c.name.startswith("apps.") and c.label != "core"
+        and ".tests." not in c.name
     ]
 
 

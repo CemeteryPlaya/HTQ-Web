@@ -69,6 +69,40 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/tasks/contractors', component: lazyPages.HRContractors, requiresAuth: true, requiresRole: 'admin' },
   // Declared last: `/tasks/:id` would otherwise swallow the static paths above.
   { path: '/tasks/:id', component: lazyPages.TaskDetailRouter, requiresAuth: true },
+  { path: '/tasks/roadmap', component: lazyPages.HRRoadmap, requiresAuth: true },
+  { path: '/tasks/reports', component: lazyPages.HRReports, requiresAuth: true },
+  { path: '/tasks/resources', component: lazyPages.HRResourceSchedule, requiresAuth: true },
+  { path: '/tasks/equipment', component: lazyPages.HREquipment, requiresAuth: true },
+  // ─── Contracts (бюджеты / реестр контрактов / договоры) ───────────────
+  // Статический `/new` объявлен ПЕРЕД `/:id` — react-router сопоставляет в
+  // порядке объявления, и иначе "new" ушёл бы в параметр.
+  //
+  // Карточки открыты любому сотруднику, как и списки: читать домен разрешено
+  // всем (`api_view(auth="jwt")`), а операции внутри карточки бэкенд
+  // проверяет сам — смена статуса админская, загрузка скана разрешена автору
+  // черновика. Роутером это не закрывается: право здесь зависит от строки, а
+  // не от раздела.
+  { path: '/contracts', component: lazyPages.ContractsOverview, requiresAuth: true },
+  { path: '/contracts/budgets', component: lazyPages.ContractsBudgetList, requiresAuth: true },
+  { path: '/contracts/budgets/new', component: lazyPages.ContractsBudgetCreate, requiresAuth: true },
+  { path: '/contracts/budgets/:id', component: lazyPages.ContractsBudgetDetail, requiresAuth: true },
+  { path: '/contracts/counterparties', component: lazyPages.ContractsCounterpartyList, requiresAuth: true },
+  { path: '/contracts/counterparties/new', component: lazyPages.ContractsCounterpartyCreate, requiresAuth: true },
+  { path: '/contracts/counterparties/:id', component: lazyPages.ContractsCounterpartyDetail, requiresAuth: true },
+  { path: '/contracts/agreements', component: lazyPages.ContractsAgreementList, requiresAuth: true },
+  { path: '/contracts/agreements/new', component: lazyPages.ContractsAgreementCreate, requiresAuth: true },
+  { path: '/contracts/agreements/:id', component: lazyPages.ContractsAgreementDetail, requiresAuth: true },
+
+  // ─── Signoff (универсальное согласование, apps.signoff) ───────────────
+  // Очередь и карточки открыты любому сотруднику: решает НАЗВАННЫЙ в
+  // маршруте человек, а не обладатель админского флага, и право проверяет
+  // бэкенд по самой задаче. Админской является только настройка маршрутов —
+  // писать их разрешено лишь администратору (`api_view(admin=True)`).
+  { path: '/signoff', component: lazyPages.SignoffInbox, requiresAuth: true },
+  { path: '/signoff/processes', component: lazyPages.SignoffProcessList, requiresAuth: true },
+  { path: '/signoff/processes/:id', component: lazyPages.SignoffProcessDetail, requiresAuth: true },
+  { path: '/signoff/routes', component: lazyPages.SignoffRouteList, requiresAuth: true, requiresRole: 'admin' },
+  { path: '/signoff/routes/:id', component: lazyPages.SignoffRouteEditor, requiresAuth: true, requiresRole: 'admin' },
 
   { path: '/email', component: lazyPages.EmailInbox, requiresAuth: true },
   { path: '/email/oauth/callback', component: lazyPages.OAuthCallbackPage, requiresAuth: true },

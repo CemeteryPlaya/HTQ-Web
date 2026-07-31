@@ -77,6 +77,21 @@ _POLICIES: dict[str, ScopePolicy] = {
         mimes=(),
         variants=("thumb_256",),
     ),
+    # Документ, приложенный к решению согласующего (apps.signoff). PDF-only
+    # by policy rather than by a mime check inside signoff: restricting
+    # ``mimes`` here also turns on ``upload_service._validate_signature``,
+    # so a caller can't POST arbitrary bytes under ``Content-Type:
+    # application/pdf`` — the same deal ``hr_doc`` gets. Not in
+    # RESTRICTED_SCOPES: signoff authorizes the write by task ownership
+    # (only the assigned approver can attach), which is an ownership rule,
+    # not the elevated-role gate that flag is for.
+    "signoff_doc": ScopePolicy(
+        name="signoff_doc",
+        public=False,
+        max_mb=25,
+        mimes=("application/pdf",),
+        variants=(),
+    ),
     "generic": ScopePolicy(
         name="generic",
         public=False,
