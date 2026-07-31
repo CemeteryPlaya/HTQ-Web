@@ -87,6 +87,8 @@ export default defineConfig(({ mode }) => {
   const cmsServiceTarget = backendTarget;
   const adminServiceTarget = backendTarget;
   const requestsServiceTarget = backendTarget;
+  const contractsServiceTarget = backendTarget;
+  const signoffServiceTarget = backendTarget;
   const adminJsTarget = backendTarget;
   // SSE-стрим одобрений (/api/requests/v1/stream) — async-вью, требует ASGI:
   // WSGI (runserver/gunicorn) его не стримит. В dev шлём на отдельный ASGI-процесс
@@ -279,6 +281,22 @@ export default defineConfig(({ mode }) => {
     },
     "^/api/email/": {
       target: emailServiceTarget,
+      changeOrigin: true,
+    },
+    // Бюджеты / реестр контрагентов / договоры (apps.contracts). Легаси-путей
+    // без /v1/ у этого домена нет — он появился уже после обратной миграции,
+    // поэтому rewrite-правила выше ему не нужны, только эта строка. Без неё
+    // запрос дошёл бы до catch-all `^/api/` ниже и получил 404 от прокси.
+    "^/api/contracts/": {
+      target: contractsServiceTarget,
+      changeOrigin: true,
+    },
+    // Согласование (apps.signoff) — универсальный движок маршрутов
+    // согласования. НЕ путать с /api/requests/ (apps.approvals): тот домен
+    // про конструктор динамических форм. Как и у contracts, легаси-путей без
+    // /v1/ здесь нет, поэтому одной строки достаточно.
+    "^/api/signoff/": {
+      target: signoffServiceTarget,
       changeOrigin: true,
     },
     "^/api/requests/v1/stream": {

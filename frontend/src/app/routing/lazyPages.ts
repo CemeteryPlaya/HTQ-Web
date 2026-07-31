@@ -20,6 +20,25 @@ export const lazyPages = {
   Messenger: React.lazy(() => import('@/features/messenger/MessengerPage')),
   NotificationsHistory: React.lazy(() => import('@/pages/NotificationsHistory')),
 
+  ContractsOverview: React.lazy(() => import('@/pages/contracts/ContractsOverview')),
+  ContractsBudgetList: React.lazy(() => import('@/pages/contracts/BudgetList')),
+  ContractsBudgetCreate: React.lazy(() => import('@/pages/contracts/BudgetCreate')),
+  ContractsBudgetDetail: React.lazy(() => import('@/pages/contracts/BudgetDetail')),
+  ContractsCounterpartyList: React.lazy(() => import('@/pages/contracts/CounterpartyList')),
+  ContractsCounterpartyCreate: React.lazy(() => import('@/pages/contracts/CounterpartyCreate')),
+  ContractsCounterpartyDetail: React.lazy(() => import('@/pages/contracts/CounterpartyDetail')),
+  ContractsAgreementList: React.lazy(() => import('@/pages/contracts/AgreementList')),
+  ContractsAgreementCreate: React.lazy(() => import('@/pages/contracts/AgreementCreate')),
+  ContractsAgreementDetail: React.lazy(() => import('@/pages/contracts/AgreementDetail')),
+
+  // Универсальное согласование (apps.signoff). Не путать с Requests* —
+  // те страницы обслуживают apps.approvals, другой домен.
+  SignoffInbox: React.lazy(() => import('@/pages/signoff/SignoffInbox')),
+  SignoffProcessList: React.lazy(() => import('@/pages/signoff/ProcessList')),
+  SignoffProcessDetail: React.lazy(() => import('@/pages/signoff/ProcessDetail')),
+  SignoffRouteList: React.lazy(() => import('@/pages/signoff/RouteList')),
+  SignoffRouteEditor: React.lazy(() => import('@/pages/signoff/RouteEditor')),
+
   AdminNews: React.lazy(() => import('@/pages/AdminNews')),
   AdminContacts: React.lazy(() => import('@/pages/AdminContacts')),
   AdminProjects: React.lazy(() => import('@/pages/AdminProjects')),

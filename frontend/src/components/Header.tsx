@@ -91,6 +91,14 @@ export const Header = () => {
   const employeeLinks = [
     { label: t('header.news'), href: '/news', reqRole: null },
     { label: t('hr.nav.calendar', 'Календарь'), href: '/calendar', reqRole: null },
+    // Раздел договоров/бюджетов. Пока без ролевого условия: тонкой роли
+    // «финансист» в платформе нет, а сами страницы всё равно закрыты
+    // requiresAuth, и запись на бэкенде требует админа (api_view(admin=True)).
+    { label: t('contracts.nav.title', 'Договоры'), href: '/contracts', reqRole: null },
+    // Согласования — без ролевого условия: очередь «ждёт меня» персональна,
+    // и решает названный в маршруте человек, а не администратор. Настройка
+    // маршрутов внутри раздела закрыта отдельно.
+    { label: t('signoff.nav.title', 'Согласования'), href: '/signoff', reqRole: null },
   ];
 
   if (activeProfile) {
