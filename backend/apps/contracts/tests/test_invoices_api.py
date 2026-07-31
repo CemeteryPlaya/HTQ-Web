@@ -149,7 +149,9 @@ def test_blocked_counterparty_rejects_new_invoices():
 @pytest.mark.django_db
 def test_status_transition_follows_the_allowed_table():
     line = make_line()
-    invoice = make_invoice(line=line, amount="1000.00", status=InvoiceStatus.DRAFT)
+    # Со сканом — иначе выход из черновика отобьёт проверка «нет скана».
+    invoice = make_invoice(line=line, amount="1000.00",
+                           status=InvoiceStatus.DRAFT, file_id="stored-1")
     client = Client()
 
     ok = post_json(client, f"{BASE}/invoices/{invoice.pk}/status",
@@ -161,6 +163,34 @@ def test_status_transition_follows_the_allowed_table():
     bad = post_json(client, f"{BASE}/invoices/{invoice.pk}/status",
                     {"status": InvoiceStatus.PAID.value}, **auth(admin_token()))
     assert bad.status_code == 409, bad.content
+
+
+@pytest.mark.django_db
+def test_leaving_draft_requires_a_scan():
+    """Счёт без договора — документ, по которому платят: провести его дальше
+    черновика без скана нельзя. Отмена черновика — исключение."""
+    line = make_line()
+    invoice = make_invoice(line=line, amount="1000.00", status=InvoiceStatus.DRAFT)
+    client = Client()
+
+    blocked = post_json(client, f"{BASE}/invoices/{invoice.pk}/status",
+                        {"status": InvoiceStatus.ON_REVIEW.value}, **auth(admin_token()))
+    assert blocked.status_code == 409, blocked.content
+    assert "скан" in blocked.json()["detail"].lower()
+
+    # Отмена черновика скана не требует.
+    draft2 = make_invoice(line=line, counterparty=invoice.counterparty,
+                          amount="1000.00", status=InvoiceStatus.DRAFT)
+    cancelled = post_json(client, f"{BASE}/invoices/{draft2.pk}/status",
+                          {"status": InvoiceStatus.CANCELLED.value}, **auth(admin_token()))
+    assert cancelled.status_code == 200, cancelled.content
+
+    # Со сканом переход проходит.
+    invoice.file_id = "stored-1"
+    invoice.save(update_fields=["file_id"])
+    ok = post_json(client, f"{BASE}/invoices/{invoice.pk}/status",
+                   {"status": InvoiceStatus.ON_REVIEW.value}, **auth(admin_token()))
+    assert ok.status_code == 200, ok.content
 
 
 @pytest.mark.django_db

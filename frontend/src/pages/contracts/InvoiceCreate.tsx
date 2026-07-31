@@ -141,6 +141,9 @@ const InvoiceCreate = () => {
     } else if (amount.trim().replace(/[.,]/g, '').replace(/^0+/, '') === '') {
       next.amount = 'Сумма должна быть больше нуля';
     }
+    // Скан обязателен: счёт без договора и есть тот документ, по которому
+    // платят — заводить его без приложенного скана незачем.
+    if (!file) next.file = 'Приложите скан счёта на оплату';
     return next;
   };
 
@@ -483,17 +486,25 @@ const InvoiceCreate = () => {
               </div>
 
               <div>
-                <Label htmlFor="file">Скан счёта на оплату</Label>
+                <Label htmlFor="file">
+                  Скан счёта на оплату <span className="text-destructive">*</span>
+                </Label>
                 <Input
                   id="file"
                   type="file"
-                  onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                  onChange={(event) => {
+                    setFile(event.target.files?.[0] ?? null);
+                    setErrors((prev) => ({ ...prev, file: '' }));
+                  }}
+                  className={errors.file ? 'border-destructive' : undefined}
                 />
-                {file && (
+                {file ? (
                   <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
                     <Paperclip className="h-3 w-3" />
                     {file.name}
                   </p>
+                ) : (
+                  fieldError('file')
                 )}
               </div>
             </CardContent>
