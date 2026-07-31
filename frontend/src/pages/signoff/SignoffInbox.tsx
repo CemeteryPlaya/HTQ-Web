@@ -17,7 +17,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Inbox as InboxIcon, Paperclip, X } from 'lucide-react';
+import { Check, Inbox as InboxIcon, Paperclip, Undo2, X } from 'lucide-react';
 
 import { SignoffShell } from '@/components/signoff/SignoffShell';
 import { SubjectLink } from '@/components/signoff/SubjectLink';
@@ -145,9 +145,23 @@ const SignoffInbox = () => {
                         <Check className="mr-1.5 h-4 w-4" />
                         Согласовать
                       </Button>
+                      {/* «На доработку» — не мягкий отказ, а другое
+                          последствие: объект открывается автору для правки,
+                          тогда как отклонённый остаётся запертым. Поэтому
+                          кнопки две, и порядок такой: вернуть просят чаще,
+                          чем отказывают насовсем. */}
                       <Button
                         size="sm"
                         variant="outline"
+                        onClick={() => openDecision(item, 'rework')}
+                      >
+                        <Undo2 className="mr-1.5 h-4 w-4" />
+                        На доработку
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-destructive hover:text-destructive"
                         onClick={() => openDecision(item, 'reject')}
                       >
                         <X className="mr-1.5 h-4 w-4" />

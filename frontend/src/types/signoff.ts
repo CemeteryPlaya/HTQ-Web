@@ -38,22 +38,54 @@ export type Quorum = 'any' | 'all';
  */
 export type ApproverKind = 'named' | 'initiator';
 
-export type ProcessState = 'pending' | 'approved' | 'rejected' | 'cancelled';
+/**
+ * Чем кончился круг согласования.
+ *
+ * `rework` — «возвращено на доработку». Круг закрывается так же, как на
+ * отказе, но объект остаётся (точнее, СНОВА становится) правимым: см.
+ * `ApprovalState`. Отказ значит «документ не годится», возврат — «поправьте
+ * и пришлите снова».
+ */
+export type ProcessState = 'pending' | 'approved' | 'rejected' | 'rework' | 'cancelled';
 
-/** `skipped` — этап, до которого дело не дошло (процесс отклонили или
- *  отозвали раньше). Отдельно от `rejected`, чтобы в карточке было видно,
- *  кто отказал, а кто просто не успел получить запрос. */
-export type StageState = 'waiting' | 'active' | 'approved' | 'rejected' | 'skipped';
+/** `skipped` — этап, до которого дело не дошло (процесс отклонили, вернули
+ *  на доработку или отозвали раньше). Отдельно от `rejected`, чтобы в
+ *  карточке было видно, кто отказал, а кто просто не успел получить запрос. */
+export type StageState =
+  | 'waiting'
+  | 'active'
+  | 'approved'
+  | 'rejected'
+  | 'rework'
+  | 'skipped';
 
-export type TaskState = 'pending' | 'approved' | 'rejected' | 'skipped';
+export type TaskState = 'pending' | 'approved' | 'rejected' | 'rework' | 'skipped';
 
 /**
  * Состояние согласования ПРЕДМЕТНОГО объекта (колонка `approval_state`,
  * примесь `signoff.Approvable`). Совпадает с `ProcessState` не полностью:
  * у объекта есть «черновик», которого у процесса быть не может, а
  * отозванный процесс возвращает объект в `draft` — отправить снова можно.
+ *
+ * Главное, что задаёт этот список, — ПРАВО ПРАВКИ (`isEditableState` ниже).
+ * Заперты не только `pending`, но и `approved` с `rejected`: документ, под
+ * которым принято решение, обязан остаться тем, каким его видели. Ключ
+ * один — «вернуть на доработку».
  */
-export type ApprovalState = 'draft' | 'pending' | 'approved' | 'rejected';
+export type ApprovalState = 'draft' | 'pending' | 'approved' | 'rejected' | 'rework';
+
+/**
+ * Правится ли объект в этом состоянии — то же правило, что и на бэкенде
+ * (`ApprovalState.editable()`), и то же обоснование белого списка: забытое
+ * в нём состояние всего лишь запирает лишнее, а забытое в чёрном — молча
+ * открывает документ, под которым уже стоят подписи.
+ *
+ * Фронтенду нужно, чтобы гасить кнопки правки ДО запроса; запрет всё равно
+ * ставит бэкенд (409 `SubjectLocked`).
+ */
+export function isEditableState(state: ApprovalState): boolean {
+  return state === 'draft' || state === 'rework';
+}
 
 // ─── Условные ветки ──────────────────────────────────────────────────────
 
@@ -252,6 +284,9 @@ export interface SignoffEnums {
   process_state: EnumOption[];
   stage_state: EnumOption[];
   task_state: EnumOption[];
+  /** Состояние предметного объекта — плашку с ним рисуют карточки чужих
+   *  аппок (`SubmitForApproval`). */
+  approval_state: EnumOption[];
 }
 
 // ─── Запросы ─────────────────────────────────────────────────────────────
@@ -289,6 +324,14 @@ export interface StageUpdateInput {
 }
 
 export interface DecisionInput {
-  decision: 'approve' | 'reject';
+  /** `rework` — вернуть на доработку: круг закрывается, объект открывается
+   *  для правки. Не то же, что `reject` (см. `ProcessState`). */
+  decision: 'approve' | 'reject' | 'rework';
+  comment?: string;
+}
+
+/** Возврат на доработку по УЖЕ ЗАКРЫТОМУ кругу (`POST /processes/:id/rework`).
+ *  Пока согласование идёт, для этого есть решение `rework` по своему запросу. */
+export interface ReworkInput {
   comment?: string;
 }

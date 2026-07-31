@@ -243,7 +243,20 @@ class ProcessRead(BaseModel):
 # ── Решения ─────────────────────────────────────────────────────────────
 
 class Decision(BaseModel):
-    decision: str = Field(..., pattern="^(approve|reject)$")
+    # ``rework`` — «вернуть на доработку»: круг закрывается так же, как на
+    # отказе, но объект остаётся правимым (``models.ApprovalState``).
+    decision: str = Field(..., pattern="^(approve|reject|rework)$")
+    comment: str = Field("", max_length=2000)
+
+
+class Rework(BaseModel):
+    """Возврат на доработку по уже закрытому кругу (``POST /processes/:id/rework``).
+
+    Комментарий необязателен схемой — как и у решения. Требовать его
+    формой значило бы отказывать 422 «проверьте поля» там, где на самом деле
+    нечего проверять; настаивает на объяснении интерфейс, где его и видно.
+    """
+
     comment: str = Field("", max_length=2000)
 
 

@@ -56,8 +56,13 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     AgreementStatus.ON_REVIEW: frozenset({AgreementStatus.APPROVED,
                                           AgreementStatus.DRAFT,
                                           AgreementStatus.TERMINATED}),
+    # ``approved → draft`` — это возврат на доработку СОГЛАСОВАННОГО договора
+    # (``approval_hooks._agreement_on_rework``, ``signoff.engine.reopen``).
+    # Без него единственным способом исправить опечатку в согласованном
+    # договоре было бы завести рядом второй.
     AgreementStatus.APPROVED: frozenset({AgreementStatus.SIGNED,
                                          AgreementStatus.ON_REVIEW,
+                                         AgreementStatus.DRAFT,
                                          AgreementStatus.TERMINATED}),
     AgreementStatus.SIGNED: frozenset({AgreementStatus.EXECUTED,
                                        AgreementStatus.TERMINATED}),

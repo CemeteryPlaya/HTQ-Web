@@ -38,6 +38,8 @@ urlpatterns = [
     # ── Процессы ──
     path("processes/<int:process_id>/cancel", views.ProcessCancelView.as_view()),
     path("processes/<int:process_id>/cancel/", views.ProcessCancelView.as_view()),
+    path("processes/<int:process_id>/rework", views.ProcessReworkView.as_view()),
+    path("processes/<int:process_id>/rework/", views.ProcessReworkView.as_view()),
     path("processes", views.ProcessCollectionView.as_view()),
     path("processes/", views.ProcessCollectionView.as_view()),
     path("processes/<int:process_id>", views.ProcessDetailView.as_view()),

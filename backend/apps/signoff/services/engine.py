@@ -5,12 +5,14 @@
 
 Три правила, из которых следует всё остальное:
 
-1. **Отказ решает сразу.** Любой отказ на любом этапе отклоняет весь
-   процесс немедленно — остальные этапы не получают запросов, уже выданные
-   запросы гасятся как «не потребовалось». Это требование заказчика и
-   одновременно безопасное поведение: «отклонено» — состояние, из которого
-   ничего плохого не произойдёт, в отличие от молча продолжающегося
-   согласования.
+1. **Отрицательное решение закрывает круг сразу.** И отказ, и возврат на
+   доработку на любом этапе завершают весь процесс немедленно — остальные
+   этапы не получают запросов, уже выданные гасятся как «не потребовалось».
+   Это требование заказчика и одновременно безопасное поведение: закрытый
+   процесс — состояние, из которого ничего плохого не произойдёт, в отличие
+   от молча продолжающегося согласования. Разница между двумя решениями не
+   в механике, а в судьбе ОБЪЕКТА: возврат на доработку отпирает его для
+   правки, отказ — нет (``models.ApprovalState``).
 2. **Группа этапов проходится целиком.** Этапы с одинаковым ``order`` идут
    параллельно; следующая группа активируется, только когда ВСЕ этапы
    текущей согласованы.
@@ -64,11 +66,26 @@ logger = logging.getLogger(__name__)
 
 APPROVE = "approve"
 REJECT = "reject"
-DECISIONS = (APPROVE, REJECT)
+# «Вернуть на доработку» — решение, а не отдельный механизм: его принимает
+# тот же согласующий, тем же запросом и на том же этапе, что и два других.
+# От отказа отличается последствием для ОБЪЕКТА: только оно отпирает его для
+# правки (``Approvable.assert_editable``). Отказ — «документ не годится»,
+# возврат — «поправьте и пришлите снова».
+REWORK = "rework"
+DECISIONS = (APPROVE, REJECT, REWORK)
 
 # Вид события журнала под каждое решение. Таблицей, а не склейкой строки
 # из самого решения: "reject" + "d" даёт "task_rejectd".
-_EVENT_KIND = {APPROVE: "task_approved", REJECT: "task_rejected"}
+_EVENT_KIND = {APPROVE: "task_approved", REJECT: "task_rejected",
+               REWORK: "task_rework"}
+
+# Чем заканчивается процесс и в каком состоянии остаётся закрывший его этап.
+# Отказ и возврат на доработку идут одним кодом (``_close_by_decision``) —
+# различаются они только этой парой состояний и последствиями в ``_finish``.
+_DECISION_OUTCOME = {
+    REJECT: (TaskState.REJECTED, StageState.REJECTED, ProcessState.REJECTED),
+    REWORK: (TaskState.REWORK, StageState.REWORK, ProcessState.REWORK),
+}
 
 
 class SignoffError(Exception):
@@ -89,6 +106,16 @@ class NotAnApprover(SignoffError):
 
 class ProcessClosed(SignoffError):
     """Процесс уже завершён — решения больше не принимаются."""
+
+
+class ProcessStillRunning(SignoffError):
+    """``reopen`` на процессе, который ещё идёт.
+
+    Отдельно от ``ProcessClosed`` — это ровно обратная ошибка, и путать их
+    в тексте нельзя: пока круг идёт, вернуть объект на доработку может
+    согласующий своим решением, а инициатор — отозвать заявку. Отпирать его
+    задним числом в это время не нужно и некому.
+    """
 
 
 class RouteUnusable(SignoffError):
@@ -113,17 +140,26 @@ class RouteUnusable(SignoffError):
 
 
 class SubjectLocked(SignoffError):
-    """Объект на согласовании — правка и удаление запрещены.
+    """Объект заперт согласованием — правка, удаление и повторная отправка.
 
-    Поднимает ``Approvable.assert_editable`` (``apps/signoff/models.py``),
-    зовут его предметные аппки первой строкой своих операций правки.
+    Поднимают двое: ``Approvable.assert_editable``
+    (``apps/signoff/models.py``), которого предметные аппки зовут первой
+    строкой своих операций правки, и ``start`` — на попытке отправить
+    заново то, по чему решение уже принято.
 
     Почему запрет вообще существует: ветвление маршрута разбирается ОДИН
     раз, на запуске, из снимка ``ApprovalProcess.subject_facts``, и
     согласующие принимают решение по тому, что видели тогда. Правка
     посреди процесса означает, что подписи собраны под одним документом, а
     в карточке лежит другой — причём этап, который сумму в 50 млн ₸ не
-    пропустил бы, уже пройден по сумме в 5 млн.
+    пропустил бы, уже пройден по сумме в 5 млн. После решения справедливо то
+    же самое, только задним числом: документ, который согласовали, обязан
+    остаться тем, который согласовали.
+
+    Ключ от замка ровно один — возврат на доработку (решение ``REWORK`` или
+    ``reopen`` для уже закрытого круга). Он и переводит объект в
+    ``ApprovalState.REWORK`` — единственное, кроме черновика, состояние, в
+    котором объект правится.
 
     Наследуется от ``SignoffError`` не для красоты: предметные вьюхи уже
     ловят его как конфликт состояния и переводят в 409 с текстом
@@ -165,6 +201,8 @@ def start(*, subject_type: str, subject_id: int,
     stages = list(route.stages.all())
     if not stages:
         raise RouteUnusable(f"В маршруте «{route.name}» нет ни одного этапа")
+
+    _assert_submittable(subject, subject_id)
 
     # Ветвление разбирается ЗДЕСЬ, до снимка: дальше движок видит обычный
     # линейный список групп и про условия не знает вовсе (см. докстринг
@@ -221,6 +259,42 @@ def start(*, subject_type: str, subject_id: int,
 
     _notify_active_stages(process)
     return process
+
+
+def _assert_submittable(subject, subject_id: int) -> None:
+    """Отсечь повторную отправку того, по чему решение уже принято.
+
+    Согласованный и отклонённый объекты заперты для правки
+    (``Approvable.assert_editable``), и отправлять их заново нечего: круг
+    прошёл бы по тому же самому содержимому. Штатный путь — вернуть на
+    доработку, и текст ошибки говорит именно это.
+
+    ``pending`` СЮДА НЕ ПОПАДАЕТ намеренно, хотя тоже неправим: «уже на
+    согласовании» — другой разговор, и отвечает на него ``AlreadyInApproval``
+    ниже, по частичному уникальному индексу. Индекс, а не проверка здесь,
+    потому что он же закрывает гонку двух одновременных отправок; дублировать
+    его условием значило бы завести второй источник правды с худшими
+    гарантиями.
+    """
+    state = (subject.model.objects.filter(pk=subject_id)
+             .values_list("approval_state", flat=True).first())
+    # ``None`` — объекта нет. Ронять здесь нечем помочь: процесс всё равно
+    # не на что заводить, и об этом внятнее скажет ``facts``/``describe``
+    # дальше по коду, каждый про своё.
+    if state is None or state in ApprovalState.editable():
+        return
+    if state == ApprovalState.PENDING:
+        return
+
+    # Безличное «принято решение», а не «уже согласован»: род подставляемой
+    # подписи заранее неизвестен («Бюджет» согласован, «Заявка» согласована),
+    # и склеить её с прилагательным нельзя, не заведя грамматику на каждый
+    # согласуемый тип.
+    raise SubjectLocked(
+        f"По «{subject.label}» уже принято решение "
+        f"({ApprovalState(state).label.lower()}) — чтобы отправить заново, "
+        f"верните объект на доработку"
+    )
 
 
 def _select_stages(stages, facts: dict, *, subject, route):
@@ -383,7 +457,8 @@ def act(*, task_id: int, actor_id: int, decision: str,
             f"приложенным документом — сначала загрузите PDF"
         )
 
-    task.state = TaskState.APPROVED if decision == APPROVE else TaskState.REJECTED
+    task.state = (TaskState.APPROVED if decision == APPROVE
+                  else _DECISION_OUTCOME[decision][0])
     task.comment = comment
     task.acted_at = _now()
     task.save(update_fields=["state", "comment", "acted_at"])
@@ -395,8 +470,9 @@ def act(*, task_id: int, actor_id: int, decision: str,
                   # журнала не должно быть нужно.
                   "file_id": task.file_id or None})
 
-    if decision == REJECT:
-        _reject(process, stage, actor_id=actor_id, comment=comment)
+    if decision != APPROVE:
+        _close_by_decision(process, stage, decision=decision,
+                           actor_id=actor_id, comment=comment)
         return process
 
     if _settle_stage(stage):
@@ -454,15 +530,27 @@ def _advance(process: ApprovalProcess, *, actor_id: int | None) -> None:
     _notify_active_stages(process)
 
 
-def _reject(process: ApprovalProcess, stage: ApprovalProcessStage, *,
-            actor_id: int | None, comment: str = "") -> None:
-    """Отказ на этапе отклоняет весь процесс."""
-    stage.state = StageState.REJECTED
+def _close_by_decision(process: ApprovalProcess, stage: ApprovalProcessStage, *,
+                       decision: str, actor_id: int | None,
+                       comment: str = "") -> None:
+    """Отказ или возврат на доработку закрывают ВЕСЬ процесс с этого этапа.
+
+    Оба решают судьбу процесса целиком, а не одного этапа: продолжать
+    собирать подписи под документом, который уже отправили переделывать,
+    незачем. Поэтому и код один — расходятся они только тройкой состояний
+    (``_DECISION_OUTCOME``) и тем, что из неё выведет ``_finish`` для
+    предметного объекта.
+    """
+    # Состояние задачи из этой же тройки уже проставил ``act`` — здесь
+    # закрываются только этап и процесс.
+    _, stage_state, process_state = _DECISION_OUTCOME[decision]
+
+    stage.state = stage_state
     stage.decided_at = _now()
     stage.save(update_fields=["state", "decided_at"])
 
     # Всё, до чего дело не дошло, — «не потребовалось», а не «отклонено»:
-    # в карточке должно быть видно, кто именно отказал.
+    # в карточке должно быть видно, кто именно принял решение.
     ApprovalTask.objects.filter(
         stage__process=process, state=TaskState.PENDING,
     ).update(state=TaskState.SKIPPED)
@@ -470,7 +558,7 @@ def _reject(process: ApprovalProcess, stage: ApprovalProcessStage, *,
         state__in=(StageState.WAITING, StageState.ACTIVE),
     ).update(state=StageState.SKIPPED)
 
-    _finish(process, ProcessState.REJECTED, actor_id=actor_id, comment=comment)
+    _finish(process, process_state, actor_id=actor_id, comment=comment)
 
 
 @transaction.atomic
@@ -497,6 +585,58 @@ def cancel(*, process_id: int, actor_id: int | None = None) -> ApprovalProcess:
     return process
 
 
+@transaction.atomic
+def reopen(*, process_id: int, actor_id: int | None = None,
+           comment: str = "") -> ApprovalProcess:
+    """Вернуть на доработку объект, по которому круг уже ЗАКРЫТ.
+
+    Второй вход в доработку — первый это решение ``REWORK`` по своему
+    запросу, пока согласование идёт. Здесь решение уже принято, и объект
+    заперт им: согласованный документ не правят, отклонённый тоже
+    (``Approvable.assert_editable``). Эта функция — единственный способ его
+    отпереть, поэтому она есть вообще: без неё «согласовано» стало бы
+    состоянием, из которого нет выхода, а любая опечатка в согласованном
+    договоре требовала бы завести рядом второй.
+
+    Кто вправе — решает ВЬЮХА (``views.ProcessReworkView``): движок не знает
+    про роли, а «свой ли это процесс» — вопрос HTTP-слоя, ровно как у
+    ``cancel``.
+
+    Круг при этом не воскресает: процесс переходит в ``REWORK``, его этапы
+    остаются такими, какими были на момент решения, и доработанный объект
+    отправляют ЗАНОВО — новым процессом. Продолжать старый нельзя: маршрут
+    и факты объекта на новом запуске уже другие, а согласующие прошлого
+    круга видели прошлый документ.
+
+    ``finished_at`` НЕ переписывается: круг закончился тогда, когда его
+    закончило решение, а не когда кто-то попросил переделать. Момент
+    возврата хранит событие журнала (``reopened``) — вместе с тем, из какого
+    состояния вернули, и комментарием, ради которого всё и затевалось.
+    """
+    process = _lock(process_id)
+
+    if process.state == ProcessState.PENDING:
+        raise ProcessStillRunning(
+            "Согласование ещё идёт: вернуть объект на доработку может "
+            "согласующий своим решением, а инициатор — отозвать заявку"
+        )
+    if process.state not in (ProcessState.APPROVED, ProcessState.REJECTED):
+        # ``rework`` и ``cancelled`` — объект и так открыт для правки.
+        raise ProcessClosed(
+            f"Объект уже открыт для правки ({process.get_state_display()})"
+        )
+
+    previous = process.state
+    process.state = ProcessState.REWORK
+    process.save(update_fields=["state", "updated_at"])
+
+    _log(process, "reopened", actor_id=actor_id,
+         payload={"from": previous, "comment": comment})
+    _apply_outcome(process, ProcessState.REWORK)
+    _notify_initiator(process)
+    return process
+
+
 def _finish(process: ApprovalProcess, state: str, *, actor_id: int | None,
             comment: str = "") -> None:
     """Закрыть процесс и сообщить результат предметной аппке.
@@ -513,23 +653,44 @@ def _finish(process: ApprovalProcess, state: str, *, actor_id: int | None,
     process.save(update_fields=["state", "current_order", "finished_at",
                                 "updated_at"])
     _log(process, state, actor_id=actor_id, payload={"comment": comment})
+    _apply_outcome(process, state)
+    _notify_initiator(process)
 
+
+# Во что итог процесса переводит ПРЕДМЕТНЫЙ объект. «На доработке», а не
+# «черновик»: правятся оба одинаково, но в списке это разные вещи — черновик
+# никто не смотрел, а этот объект вернули с замечаниями. Отозванный, наоборот,
+# неотличим от черновика: отзыв — не решение, и показывать его как «вернули»
+# значило бы приписать согласующим то, чего они не говорили.
+_SUBJECT_STATE_BY_OUTCOME = {
+    ProcessState.APPROVED: ApprovalState.APPROVED,
+    ProcessState.REJECTED: ApprovalState.REJECTED,
+    ProcessState.REWORK: ApprovalState.REWORK,
+    ProcessState.CANCELLED: ApprovalState.DRAFT,
+}
+
+
+def _apply_outcome(process: ApprovalProcess, state: str) -> None:
+    """Сообщить итог предметной аппке и проставить объекту ``approval_state``.
+
+    Отдельно от ``_finish`` потому, что итог процесса применяется дважды:
+    при завершении круга и при ``reopen`` — возврате на доработку УЖЕ
+    закрытого. Держать эту пару (колбэк + состояние объекта) в одном месте
+    обязательно: разъехавшись, они дают согласованный договор, который
+    числится черновиком, или наоборот.
+    """
     subject = registry.get_subject(process.subject_type)
     callback = {
         ProcessState.APPROVED: subject.on_approved,
         ProcessState.REJECTED: subject.on_rejected,
+        ProcessState.REWORK: subject.on_rework,
         ProcessState.CANCELLED: subject.on_cancelled,
     }.get(state)
     if callback is not None:
         callback(process.subject_id)
 
-    _set_subject_state(process.subject_type, process.subject_id, {
-        ProcessState.APPROVED: ApprovalState.APPROVED,
-        ProcessState.REJECTED: ApprovalState.REJECTED,
-        ProcessState.CANCELLED: ApprovalState.DRAFT,
-    }[state])
-
-    _notify_initiator(process)
+    _set_subject_state(process.subject_type, process.subject_id,
+                       _SUBJECT_STATE_BY_OUTCOME[state])
 
 
 # ═══════════════════════════════════════════════════════════════════════

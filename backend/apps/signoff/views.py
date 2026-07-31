@@ -35,6 +35,8 @@ from . import schemas
 from .models import (
     ApprovalProcess,
     ApprovalRoute,
+    ApprovalState,
+    ApprovalTask,
     ApproverKind,
     ProcessState,
     Quorum,
@@ -255,6 +257,53 @@ class ProcessCancelView(SignoffView):
             presentation.serialize_process(process, enrich=True))
 
 
+class ProcessReworkView(SignoffView):
+    """«Вернуть на доработку» по УЖЕ ЗАКРЫТОМУ кругу — администратором или
+    согласующим этого процесса.
+
+    Зачем эндпоинт существует. Согласованный и отклонённый объекты заперты
+    для правки (``signoff.Approvable.assert_editable``), и это единственный
+    ключ: без него опечатка в согласованном договоре чинилась бы только
+    заведением рядом второго договора. Пока круг ИДЁТ, эндпоинт не нужен и
+    отвечает 409 — там для этого есть решение ``rework`` по своему запросу
+    (согласующему) и отзыв (инициатору).
+
+    ``admin=False``, и права проверяются по ДАННЫМ, как в
+    ``ProcessCancelView``: администратор — всегда, а из обычных
+    пользователей — тот, кто в этом процессе согласующий. Он и есть тот, кто
+    вправе передумать: заметил ошибку в подписанном им же документе —
+    отправил переделывать. Инициатора здесь намеренно НЕТ, в отличие от
+    отзыва: отзывают СВОЮ заявку, пока её никто не рассмотрел, а отпереть
+    согласованный документ по собственному желанию значило бы обойти
+    решение, которое приняли другие.
+    """
+
+    @write("POST", body=schemas.Rework, admin=False)
+    def post(self, request, process_id: int, data: schemas.Rework):
+        process = ApprovalProcess.objects.filter(pk=process_id).first()
+        if process is None:
+            raise Http404("Процесс согласования не найден")
+
+        # Любая задача процесса, в любом состоянии: согласующий, чей этап
+        # погас как «не потребовалось» (кворум «достаточно одного»), — такой
+        # же участник круга, как и решивший.
+        is_approver = ApprovalTask.objects.filter(
+            stage__process_id=process_id, user_id=request.token.user_id,
+        ).exists()
+        if not (is_approver or request.token.is_elevated):
+            return json_error("Вернуть на доработку может согласующий этого "
+                              "процесса или администратор", 403)
+
+        try:
+            process = engine.reopen(process_id=process_id,
+                                    actor_id=request.token.user_id,
+                                    comment=data.comment)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.ProcessRead.model_validate(
+            presentation.serialize_process(process, enrich=True))
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Решения
 # ═══════════════════════════════════════════════════════════════════════
@@ -392,4 +441,8 @@ class EnumsView(SignoffView):
             "process_state": pairs(ProcessState.choices),
             "stage_state": pairs(StageState.choices),
             "task_state": pairs(TaskState.choices),
+            # Состояние ПРЕДМЕТНОГО объекта: его плашку рисуют карточки
+            # чужих аппок (``SubmitForApproval``), и подпись им нужна ровно
+            # так же, как своим спискам.
+            "approval_state": pairs(ApprovalState.choices),
         }

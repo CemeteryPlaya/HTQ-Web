@@ -1,10 +1,15 @@
 /**
  * Диалог решения по запросу согласования.
  *
- * Комментарий обязателен ТОЛЬКО при отказе. Схема бэкенда его не требует ни
- * там, ни там (`comment: str = ""`), но отказ без объяснения нечего
- * дорабатывать: инициатор увидит «отклонено» и не узнает, что исправить.
- * Согласие в объяснении не нуждается.
+ * Решений три, и разница между двумя отрицательными — в судьбе ОБЪЕКТА, а
+ * не в механике: «отклонить» значит «документ не годится» и оставляет его
+ * запертым, «вернуть на доработку» — открывает его автору для правки. Круг
+ * закрывают оба одинаково.
+ *
+ * Комментарий обязателен у обоих отрицательных. Схема бэкенда его не
+ * требует нигде (`comment: str = ""`), но отказ и возврат без объяснения
+ * нечего дорабатывать: инициатор увидит состояние и не узнает, что
+ * исправить. Согласие в объяснении не нуждается.
  *
  * Документ (`requiresAttachment`) — зеркально: нужен только при СОГЛАСИИ.
  * Так устроен и гейт на бэкенде: требовать PDF от того, кто отклоняет,
@@ -25,7 +30,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { Check, FileText, Loader2, Paperclip, X } from 'lucide-react';
+import { Check, FileText, Loader2, Paperclip, Undo2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -44,7 +49,56 @@ import type { ApprovalProcess } from '@/types/signoff';
 
 import { reportApiError } from './apiError';
 
-export type DecisionKind = 'approve' | 'reject';
+export type DecisionKind = 'approve' | 'reject' | 'rework';
+
+/** Всё, чем решения отличаются друг от друга в этом диалоге. Таблицей, а не
+ *  цепочкой тернарников по `kind`: их набралось бы семь на каждое новое
+ *  решение, и половину неизбежно забыли бы дописать. */
+const KINDS: Record<
+  DecisionKind,
+  {
+    title: string;
+    action: string;
+    toast: string;
+    variant: 'default' | 'destructive' | 'outline';
+    /** Пусто — комментарий необязателен. */
+    commentRequired?: string;
+    warning?: string;
+    placeholder: string;
+  }
+> = {
+  approve: {
+    title: 'Согласовать',
+    action: 'Согласовать',
+    toast: 'Согласовано',
+    variant: 'default',
+    placeholder: 'Замечания, если есть',
+  },
+  reject: {
+    title: 'Отклонить согласование',
+    action: 'Отклонить',
+    toast: 'Отклонено',
+    variant: 'destructive',
+    commentRequired: 'Укажите причину — инициатору нужно понимать, почему отказ.',
+    warning:
+      'Отказ на любом этапе закрывает весь процесс сразу — оставшиеся запросы '
+      + 'гаснут. Объект при этом остаётся закрытым для правки: если его нужно '
+      + 'переделать, выберите «На доработку».',
+    placeholder: 'Почему документ не годится',
+  },
+  rework: {
+    title: 'Вернуть на доработку',
+    action: 'На доработку',
+    toast: 'Возвращено на доработку',
+    variant: 'outline',
+    commentRequired: 'Укажите, что исправить — за этим автора и возвращают.',
+    warning:
+      'Процесс закроется сразу, оставшиеся запросы погаснут, а объект '
+      + 'откроется автору для правки. Доработанный он отправляется заново — '
+      + 'новым кругом согласования.',
+    placeholder: 'Что нужно исправить',
+  },
+};
 
 export interface DecisionTarget {
   taskId: number;
@@ -80,20 +134,29 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
     }
   }, [target]);
 
-  const isReject = target?.kind === 'reject';
-  const needsDocument = Boolean(target?.requiresAttachment) && !isReject;
+  const kind = target ? KINDS[target.kind] : null;
+  const isApprove = target?.kind === 'approve';
+  // Документ нужен только при СОГЛАСИИ — так же устроен гейт на бэкенде:
+  // подписывать нечего ни отказом, ни возвратом на доработку.
+  const needsDocument = Boolean(target?.requiresAttachment) && isApprove;
   const alreadyAttached = Boolean(target?.attachedFileId);
 
   const mutation = useMutation({
-    mutationFn: async ({ taskId, kind }: { taskId: number; kind: DecisionKind }) => {
+    mutationFn: async ({
+      taskId,
+      decision,
+    }: {
+      taskId: number;
+      decision: DecisionKind;
+    }) => {
       // Порядок обязателен: решение без загруженного документа бэкенд
       // отобьёт 409 «сначала загрузите PDF».
       if (file) await signoffApi.attachDocument(taskId, file);
-      const { data } = await signoffApi.decide(taskId, { decision: kind, comment });
+      const { data } = await signoffApi.decide(taskId, { decision, comment });
       return data;
     },
     onSuccess: (process) => {
-      toast.success(target?.kind === 'approve' ? 'Согласовано' : 'Отклонено');
+      toast.success(kind?.toast ?? 'Решение отправлено');
       onOpenChange(false);
       onDecided(process);
     },
@@ -117,9 +180,9 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
   };
 
   const submit = () => {
-    if (!target) return;
-    if (isReject && !comment.trim()) {
-      setError('Укажите причину — инициатору нужно понимать, что исправить.');
+    if (!target || !kind) return;
+    if (kind.commentRequired && !comment.trim()) {
+      setError(kind.commentRequired);
       return;
     }
     if (needsDocument && !file && !alreadyAttached) {
@@ -127,22 +190,23 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
       return;
     }
     setError('');
-    mutation.mutate({ taskId: target.taskId, kind: target.kind });
+    mutation.mutate({ taskId: target.taskId, decision: target.kind });
   };
 
   return (
     <Dialog open={target !== null} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>
-            {isReject ? 'Отклонить согласование' : 'Согласовать'}
-          </DialogTitle>
+          <DialogTitle>{kind?.title}</DialogTitle>
           <DialogDescription>
             {target?.subjectLabel}
-            {isReject && (
-              <span className="block mt-2 text-destructive">
-                Отказ на любом этапе отклоняет весь процесс сразу —
-                оставшиеся запросы гаснут, а объект возвращается на доработку.
+            {kind?.warning && (
+              <span
+                className={`block mt-2 ${
+                  target?.kind === 'reject' ? 'text-destructive' : ''
+                }`}
+              >
+                {kind.warning}
               </span>
             )}
           </DialogDescription>
@@ -181,7 +245,7 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
 
         <div className="space-y-2">
           <Label htmlFor="signoff-comment">
-            Комментарий{isReject ? '' : ' (необязательно)'}
+            Комментарий{kind?.commentRequired ? '' : ' (необязательно)'}
           </Label>
           <Textarea
             id="signoff-comment"
@@ -189,9 +253,7 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
             onChange={(event) => setComment(event.target.value)}
             maxLength={2000}
             rows={4}
-            placeholder={
-              isReject ? 'Что нужно исправить' : 'Замечания, если есть'
-            }
+            placeholder={kind?.placeholder}
           />
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
@@ -205,18 +267,20 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
             Отмена
           </Button>
           <Button
-            variant={isReject ? 'destructive' : 'default'}
+            variant={kind?.variant ?? 'default'}
             onClick={submit}
             disabled={mutation.isPending}
           >
             {mutation.isPending ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : isReject ? (
-              <X className="mr-2 h-4 w-4" />
-            ) : (
+            ) : target?.kind === 'approve' ? (
               <Check className="mr-2 h-4 w-4" />
+            ) : target?.kind === 'rework' ? (
+              <Undo2 className="mr-2 h-4 w-4" />
+            ) : (
+              <X className="mr-2 h-4 w-4" />
             )}
-            {isReject ? 'Отклонить' : 'Согласовать'}
+            {kind?.action}
           </Button>
         </DialogFooter>
       </DialogContent>

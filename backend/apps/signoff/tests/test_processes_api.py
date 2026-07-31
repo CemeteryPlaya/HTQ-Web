@@ -303,3 +303,89 @@ def test_cancelling_a_finished_process_is_409(client):
     bad = post_json(client, f"{BASE}/processes/{process.pk}/cancel", {},
                     **auth(user_token(a)))
     assert bad.status_code == 409
+
+
+# ── Возврат на доработку ────────────────────────────────────────────────
+#
+# Решение ``rework`` принимается по СВОЕЙ задаче (``/tasks/:id/decision``),
+# а этот эндпоинт — про уже закрытый круг: единственный способ отпереть
+# согласованный или отклонённый объект.
+
+def test_rework_as_a_decision_unlocks_the_object(client):
+    a = make_user("a")
+    doc = make_doc()
+    simple_route(a.pk)
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
+
+    reworked = post_json(client, f"{BASE}/tasks/{task_for(process, a.pk).pk}/decision",
+                         {"decision": "rework", "comment": "исправьте сумму"},
+                         **auth(user_token(a)))
+    assert reworked.status_code == 200, reworked.content
+    assert reworked.json()["state"] == ProcessState.REWORK
+
+    doc.refresh_from_db()
+    assert doc.approval_state == ApprovalState.REWORK
+
+
+def test_an_approver_can_return_a_finished_process_for_rework(client):
+    a = make_user("a")
+    doc = make_doc()
+    simple_route(a.pk)
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk,
+                           initiator_id=make_user("initiator").pk)
+    engine.act(task_id=task_for(process, a.pk).pk, actor_id=a.pk,
+               decision=engine.APPROVE)
+
+    returned = post_json(client, f"{BASE}/processes/{process.pk}/rework",
+                         {"comment": "не та программа"}, **auth(user_token(a)))
+    assert returned.status_code == 200, returned.content
+    assert returned.json()["state"] == ProcessState.REWORK
+
+    doc.refresh_from_db()
+    assert doc.approval_state == ApprovalState.REWORK
+
+
+def test_an_admin_can_return_anyones_process_for_rework(client):
+    a = make_user("a")
+    doc = make_doc()
+    simple_route(a.pk)
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
+    engine.act(task_id=task_for(process, a.pk).pk, actor_id=a.pk,
+               decision=engine.APPROVE)
+
+    returned = post_json(client, f"{BASE}/processes/{process.pk}/rework", {},
+                         **auth(admin_token()))
+    assert returned.status_code == 200, returned.content
+
+
+def test_the_initiator_alone_cannot_return_for_rework(client):
+    """Отзыв и возврат — разные права: свою заявку забирают, пока её не
+    рассмотрели, а отпереть решённое по собственному желанию значило бы
+    обойти чужое решение."""
+    a = make_user("a")
+    initiator = make_user("initiator")
+    doc = make_doc()
+    simple_route(a.pk)
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk,
+                           initiator_id=initiator.pk)
+    engine.act(task_id=task_for(process, a.pk).pk, actor_id=a.pk,
+               decision=engine.APPROVE)
+
+    forbidden = post_json(client, f"{BASE}/processes/{process.pk}/rework", {},
+                          **auth(user_token(initiator)))
+    assert forbidden.status_code == 403
+
+    doc.refresh_from_db()
+    assert doc.approval_state == ApprovalState.APPROVED
+
+
+def test_returning_a_running_process_for_rework_is_409(client):
+    a = make_user("a")
+    doc = make_doc()
+    simple_route(a.pk)
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
+
+    bad = post_json(client, f"{BASE}/processes/{process.pk}/rework", {},
+                    **auth(user_token(a)))
+    assert bad.status_code == 409
+    assert "ещё идёт" in bad.json()["detail"]

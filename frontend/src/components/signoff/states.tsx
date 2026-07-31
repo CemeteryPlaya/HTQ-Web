@@ -41,12 +41,20 @@ const PENDING_TONE: Tone = {
   className: 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-500',
 };
 const REJECTED_TONE: Tone = { variant: 'destructive' };
+/** Возврат на доработку — не отказ: это работа, которая вернулась к автору,
+ *  и красный здесь читался бы как «всё пропало». Синий отличает его и от
+ *  «ждём решения» (янтарный), с которым его иначе путали бы в списке. */
+const REWORK_TONE: Tone = {
+  variant: 'outline',
+  className: 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-400',
+};
 const MUTED_TONE: Tone = { variant: 'outline', className: 'text-muted-foreground' };
 
 const PROCESS_STATE_TONES: Record<ProcessState, Tone> = {
   pending: PENDING_TONE,
   approved: APPROVED_TONE,
   rejected: REJECTED_TONE,
+  rework: REWORK_TONE,
   cancelled: MUTED_TONE,
 };
 
@@ -55,6 +63,7 @@ const STAGE_STATE_TONES: Record<StageState, Tone> = {
   active: PENDING_TONE,
   approved: APPROVED_TONE,
   rejected: REJECTED_TONE,
+  rework: REWORK_TONE,
   skipped: MUTED_TONE,
 };
 
@@ -62,6 +71,7 @@ const TASK_STATE_TONES: Record<TaskState, Tone> = {
   pending: PENDING_TONE,
   approved: APPROVED_TONE,
   rejected: REJECTED_TONE,
+  rework: REWORK_TONE,
   skipped: MUTED_TONE,
 };
 
@@ -70,6 +80,7 @@ const APPROVAL_STATE_TONES: Record<ApprovalState, Tone> = {
   pending: PENDING_TONE,
   approved: APPROVED_TONE,
   rejected: REJECTED_TONE,
+  rework: REWORK_TONE,
 };
 
 function StateBadge({

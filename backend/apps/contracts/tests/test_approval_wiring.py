@@ -447,7 +447,7 @@ def test_a_budget_on_approval_is_not_editable(client):
 
 
 def test_cancelling_the_approval_unlocks_the_budget(client):
-    """Единственный выход из блокировки на сегодня — отозвать согласование."""
+    """Отзыв — выход из блокировки для того, кто ЕЩЁ не получил решения."""
     budget = _pending_budget()
     engine.cancel(process_id=budget.approval_process().pk)
 
@@ -517,9 +517,10 @@ def test_deleting_is_blocked_while_on_approval(client):
                          **auth(admin_token())).status_code == 409
 
 
-def test_a_rejected_object_is_editable_again(client):
-    """Отказ — приглашение доработать. Запирать объект ровно тогда, когда
-    правка и требуется, было бы обратным нужному."""
+def test_a_rejected_object_stays_locked(client):
+    """Отказ — не приглашение доработать, а «документ не годится». Правка
+    после него открывается только возвратом на доработку: иначе отклонённый
+    документ переписывался бы молча, и отказ бы ничего не значил."""
     approver = make_user("rejector")
     line = make_line()
     route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
@@ -529,9 +530,99 @@ def test_a_rejected_object_is_editable_again(client):
     line.budget.refresh_from_db()
     assert line.budget.approval_state == ApprovalState.REJECTED
 
-    reworked = patch_json(client, f"{BASE}/budgets/{line.budget_id}",
-                          {"period_year": 2035}, **auth(admin_token()))
+    locked = patch_json(client, f"{BASE}/budgets/{line.budget_id}",
+                        {"period_year": 2035}, **auth(admin_token()))
+    assert locked.status_code == 409, locked.content
+    assert "отклонён" in locked.json()["detail"]
+
+
+def test_an_approved_object_is_not_editable(client):
+    """Главное, ради чего замок вообще существует: документ, под которым
+    собраны подписи, обязан остаться тем, который согласовывали."""
+    line = make_line()
+    approve(line.budget)
+
+    locked = patch_json(client, f"{BASE}/budgets/{line.budget_id}",
+                        {"period_year": 2035}, **auth(admin_token()))
+    assert locked.status_code == 409, locked.content
+    assert "согласован" in locked.json()["detail"]
+
+    line.budget.refresh_from_db()
+    assert line.budget.period_year != 2035
+
+
+def test_returning_for_rework_unlocks_the_object(client):
+    """Единственный ключ от замка — и он же возвращает договор в черновик по
+    его собственной оси статусов."""
+    approver = make_user("reworker")
+    agreement = _draft_agreement()
+    route_for(Agreement.SIGNOFF_SUBJECT_TYPE, approver.pk)
+    process = agreement.submit_for_approval()
+    decide(process, approver, engine.REWORK)
+
+    agreement.refresh_from_db()
+    assert agreement.approval_state == ApprovalState.REWORK
+    assert agreement.status == AgreementStatus.DRAFT
+
+    reworked = patch_json(client, f"{BASE}/agreements/{agreement.pk}",
+                          {"amount": "150000.00"}, **auth(admin_token()))
     assert reworked.status_code == 200, reworked.content
+
+
+def test_reopening_an_approved_agreement_unlocks_it(client):
+    """Возврат УЖЕ СОГЛАСОВАННОГО (``engine.reopen``). Проверяется вместе со
+    статусом договора: переход ``approved → draft`` заведён в
+    ``ALLOWED_TRANSITIONS`` ровно ради этого случая, и без него колбэк
+    ронял бы транзакцию движка."""
+    approver = make_user("reopener")
+    agreement = _draft_agreement()
+    route_for(Agreement.SIGNOFF_SUBJECT_TYPE, approver.pk)
+    process = agreement.submit_for_approval()
+    decide(process, approver, engine.APPROVE)
+
+    agreement.refresh_from_db()
+    assert agreement.status == AgreementStatus.APPROVED
+
+    engine.reopen(process_id=process.pk, actor_id=approver.pk,
+                  comment="не та программа")
+
+    agreement.refresh_from_db()
+    assert agreement.approval_state == ApprovalState.REWORK
+    assert agreement.status == AgreementStatus.DRAFT
+
+    reworked = patch_json(client, f"{BASE}/agreements/{agreement.pk}",
+                          {"amount": "150000.00"}, **auth(admin_token()))
+    assert reworked.status_code == 200, reworked.content
+
+
+def test_a_decided_object_is_not_submitted_again(client):
+    """Отправлять решённое нечего: оно заперто, и на новый круг ушло бы ровно
+    тем же, каким его уже видели."""
+    line = make_line()
+    approve(line.budget)
+
+    again = post_json(client, f"{BASE}/budgets/{line.budget_id}/submit", {},
+                      **auth(token()))
+    assert again.status_code == 409, again.content
+    assert "верните объект на доработку" in again.json()["detail"]
+
+
+def test_a_reworked_object_is_submitted_again(client):
+    """Обратная сторона того же правила: доработанный уходит на новый круг —
+    именно новым процессом, а не продолжением старого."""
+    approver = make_user("second-round")
+    line = make_line()
+    route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
+    first = line.budget.submit_for_approval()
+    decide(first, approver, engine.REWORK)
+
+    again = post_json(client, f"{BASE}/budgets/{line.budget_id}/submit", {},
+                      **auth(token()))
+    assert again.status_code == 201, again.content
+    assert again.json()["id"] != first.pk
+
+    line.budget.refresh_from_db()
+    assert line.budget.approval_state == ApprovalState.PENDING
 
 
 def test_disabling_signoff_unlocks_pending_objects(client):

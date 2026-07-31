@@ -23,6 +23,7 @@ export const PROCESS_STATE_LABELS: Record<ProcessState, string> = {
   pending: 'На согласовании',
   approved: 'Согласовано',
   rejected: 'Отклонено',
+  rework: 'Возвращено на доработку',
   cancelled: 'Отозвано',
 };
 
@@ -31,6 +32,7 @@ export const STAGE_STATE_LABELS: Record<StageState, string> = {
   active: 'На рассмотрении',
   approved: 'Согласован',
   rejected: 'Отклонён',
+  rework: 'Возвращён на доработку',
   skipped: 'Не потребовался',
 };
 
@@ -38,6 +40,7 @@ export const TASK_STATE_LABELS: Record<TaskState, string> = {
   pending: 'Ожидает решения',
   approved: 'Согласовано',
   rejected: 'Отклонено',
+  rework: 'Возвращено на доработку',
   skipped: 'Не потребовалось',
 };
 
@@ -47,6 +50,7 @@ export const APPROVAL_STATE_LABELS: Record<ApprovalState, string> = {
   pending: 'На согласовании',
   approved: 'Согласовано',
   rejected: 'Отклонено',
+  rework: 'На доработке',
 };
 
 export const QUORUM_LABELS: Record<Quorum, string> = {

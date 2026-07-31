@@ -13,15 +13,25 @@
  * документ, а маршрут подсматривает. На узком экране панель встаёт первой —
  * кнопка решения важнее реквизитов.
  *
- * Две кнопки решения появляются здесь только тогда, когда у текущего
+ * Три кнопки решения появляются здесь только тогда, когда у текущего
  * пользователя на АКТИВНОМ этапе есть свой запрос в состоянии «ожидает».
  * Право решать проверяет бэкенд по самой задаче — админский токен на чужой
  * получит 409, — но показывать кнопку, которая заведомо вернёт ошибку,
  * незачем, поэтому те же условия воспроизведены и здесь.
  *
- * **Отзыв ≠ отказ.** Отозвать может инициатор или администратор, и объект
- * при этом возвращается в «черновик»: его можно доработать и отправить
- * снова. Отказ — решение согласующего, и он отклоняет весь процесс сразу.
+ * **Четыре действия, и все разные.** Их легко перепутать, поэтому:
+ *
+ * - «Согласовать» — этап пройден, процесс идёт дальше.
+ * - «На доработку» — решение согласующего: круг закрывается, объект
+ *   ОТКРЫВАЕТСЯ автору для правки, доработанный отправляется заново.
+ * - «Отклонить» — тоже решение согласующего, круг закрывается так же, но
+ *   объект остаётся ЗАПЕРТЫМ: это «документ не годится», а не «поправьте».
+ * - «Отозвать» — не решение: инициатор (или администратор) забирает СВОЮ
+ *   заявку, пока её не рассмотрели, объект возвращается в черновик.
+ *
+ * Отдельно — «Вернуть на доработку» на УЖЕ ЗАКРЫТОМ круге: единственный
+ * способ отпереть согласованный или отклонённый объект, доступен
+ * администратору и согласующим этого процесса.
  */
 
 import { Suspense, useMemo, useState } from 'react';
@@ -56,7 +66,9 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 import { signoffApi } from '@/api/signoff';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasAnyRole } from '@/lib/auth/roles';
@@ -155,6 +167,44 @@ const ProcessDetail = () => {
     process?.state === 'pending'
     && (isAdmin || (myId !== null && process.initiator_id === myId));
 
+  /** Кто вправе отпереть уже решённый объект — те же условия, что на
+   *  бэкенде (`views.ProcessReworkView`): администратор или согласующий
+   *  ЭТОГО процесса. Любая его задача, в любом состоянии: тот, чей запрос
+   *  погас как «не потребовалось» при кворуме «достаточно одного», — такой
+   *  же участник круга.
+   *
+   *  Инициатора здесь намеренно нет, в отличие от отзыва: отзывают свою
+   *  заявку, пока её не рассмотрели, а отпереть решённое по собственному
+   *  желанию значило бы обойти чужое решение. */
+  const iAmApprover =
+    myId !== null
+    && (process?.stages ?? []).some((stage) =>
+      stage.tasks.some((task) => task.user_id === myId));
+
+  const canRework =
+    (process?.state === 'approved' || process?.state === 'rejected')
+    && (isAdmin || iAmApprover);
+
+  const [reworkOpen, setReworkOpen] = useState(false);
+  const [reworkComment, setReworkComment] = useState('');
+
+  const rework = useMutation({
+    mutationFn: () =>
+      signoffApi
+        .reworkProcess(processId, { comment: reworkComment })
+        .then((r) => r.data),
+    onSuccess: () => {
+      toast.success('Возвращено на доработку — объект открыт для правки');
+      setReworkOpen(false);
+      setReworkComment('');
+      queryClient.invalidateQueries({ queryKey: ['signoff'] });
+      queryClient.invalidateQueries({ queryKey: ['contracts'] });
+    },
+    // 403 — «может согласующий этого процесса или администратор»;
+    // 409 — согласование ещё идёт либо объект и так открыт.
+    onError: (err) => reportApiError(err, 'Не удалось вернуть на доработку'),
+  });
+
   const subjectLabel = process
     ? process.subject_title ?? `${process.subject_type} #${process.subject_id}`
     : '';
@@ -211,7 +261,7 @@ const ProcessDetail = () => {
                 неприжатом состоянии занимает 5rem. Меньший отступ загнал бы
                 панель под неё. */}
             <aside className="min-w-0 space-y-4 lg:order-2 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pb-2">
-              {(myPending || canCancel) && (
+              {(myPending || canCancel || canRework) && (
                 <div className="flex flex-wrap gap-2">
                   {myPending && (
                     <>
@@ -229,8 +279,25 @@ const ProcessDetail = () => {
                         <Check className="mr-1.5 h-4 w-4" />
                         Согласовать
                       </Button>
+                      {/* Отклонить и вернуть на доработку — РАЗНЫЕ решения:
+                          отклонённый объект остаётся запертым, возвращённый
+                          открывается автору для правки. */}
                       <Button
                         variant="outline"
+                        onClick={() =>
+                          setTarget({
+                            taskId: myPending.task.id,
+                            kind: 'rework',
+                            subjectLabel,
+                          })
+                        }
+                      >
+                        <Undo2 className="mr-1.5 h-4 w-4" />
+                        На доработку
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="text-destructive hover:text-destructive"
                         onClick={() =>
                           setTarget({
                             taskId: myPending.task.id,
@@ -243,6 +310,66 @@ const ProcessDetail = () => {
                         Отклонить
                       </Button>
                     </>
+                  )}
+
+                  {canRework && (
+                    <AlertDialog
+                      open={reworkOpen}
+                      onOpenChange={(open) => {
+                        setReworkOpen(open);
+                        if (!open) setReworkComment('');
+                      }}
+                    >
+                      <AlertDialogTrigger asChild>
+                        <Button variant="outline" disabled={rework.isPending}>
+                          {rework.isPending ? (
+                            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Undo2 className="mr-1.5 h-4 w-4" />
+                          )}
+                          Вернуть на доработку
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Вернуть на доработку?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {process.state === 'approved'
+                              ? 'Объект согласован и сейчас не редактируется. '
+                                + 'Возврат откроет его автору для правки — '
+                                + 'согласование придётся пройти заново, новым кругом.'
+                              : 'Объект отклонён и сейчас не редактируется. '
+                                + 'Возврат откроет его автору для правки — '
+                                + 'доработанный, он отправляется заново.'}
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <div className="space-y-2">
+                          <Label htmlFor="signoff-rework-comment">
+                            Что исправить
+                          </Label>
+                          <Textarea
+                            id="signoff-rework-comment"
+                            value={reworkComment}
+                            onChange={(event) => setReworkComment(event.target.value)}
+                            maxLength={2000}
+                            rows={4}
+                            placeholder="Автор увидит это в уведомлении"
+                          />
+                        </div>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Не возвращать</AlertDialogCancel>
+                          {/* Не `AlertDialogAction`: тот закрывает диалог сам,
+                              и пустой комментарий закрыл бы его вместе с
+                              подсказкой, ради которой всё и затевалось. */}
+                          <Button
+                            disabled={!reworkComment.trim() || rework.isPending}
+                            onClick={() => rework.mutate()}
+                          >
+                            Вернуть
+                          </Button>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   )}
 
                   {canCancel && (

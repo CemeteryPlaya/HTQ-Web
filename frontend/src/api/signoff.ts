@@ -20,6 +20,7 @@ import type {
   DecisionInput,
   InboxItem,
   ProcessTask,
+  ReworkInput,
   RouteStage,
   SignoffEnums,
   StageInput,
@@ -75,6 +76,17 @@ export const signoffApi = {
    *  снова. */
   cancelProcess: (id: number) =>
     api.post<ApprovalProcess>(path(`processes/${id}/cancel`)),
+  /**
+   * Вернуть на доработку объект по УЖЕ ЗАКРЫТОМУ кругу — согласующим этого
+   * процесса или администратором.
+   *
+   * Единственный способ отпереть согласованный или отклонённый объект: оба
+   * заперты для правки (`isEditableState`). Пока согласование ИДЁТ, вызов
+   * ответит 409 — там та же операция делается решением
+   * `decide(taskId, { decision: 'rework' })`, а инициатору доступен отзыв.
+   */
+  reworkProcess: (id: number, data: ReworkInput = {}) =>
+    api.post<ApprovalProcess>(path(`processes/${id}/rework`), data),
 
   // ─── Решения ───────────────────────────────────────────────────────────
   /** Персональная очередь спрашивающего. Чужую бэкенд не отдаёт ни по

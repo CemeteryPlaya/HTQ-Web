@@ -32,6 +32,7 @@ import {
   MinusCircle,
   PenLine,
   Split,
+  Undo2,
   XCircle,
 } from 'lucide-react';
 
@@ -47,6 +48,9 @@ const TASK_ICONS: Record<TaskState, { icon: typeof Circle; className: string }> 
   pending: { icon: CircleDot, className: 'text-amber-600 dark:text-amber-500' },
   approved: { icon: CheckCircle2, className: 'text-emerald-600 dark:text-emerald-500' },
   rejected: { icon: XCircle, className: 'text-destructive' },
+  // Возврат на доработку — не отказ: работа вернулась к автору, а не
+  // пропала, поэтому стрелка назад и синий, а не красный крест.
+  rework: { icon: Undo2, className: 'text-sky-600 dark:text-sky-400' },
   skipped: { icon: MinusCircle, className: 'text-muted-foreground' },
 };
 
@@ -178,6 +182,7 @@ export function ProcessTimeline({
                     'rounded-lg border p-3',
                     stage.state === 'active' && 'border-amber-500/40 bg-amber-500/5',
                     stage.state === 'rejected' && 'border-destructive/40',
+                    stage.state === 'rework' && 'border-sky-500/40 bg-sky-500/5',
                     stage.state === 'skipped' && 'opacity-60',
                   )}
                 >

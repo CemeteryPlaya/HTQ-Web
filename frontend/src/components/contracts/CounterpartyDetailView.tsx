@@ -128,6 +128,10 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
               ['contracts', 'counterparty', counterpartyId],
             ]}
             size="default"
+            // Карточка объекта — единственное место, где ссылка на
+            // согласование нужна и у решённого объекта: там кнопка
+            // «Вернуть на доработку», без которой он заперт навсегда.
+            showProcessLink
           />
         )}
       </div>

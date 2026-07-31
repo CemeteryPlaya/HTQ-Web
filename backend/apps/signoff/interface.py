@@ -38,6 +38,7 @@ from apps.signoff.models import (
 from apps.signoff.services import engine, presentation, registry
 from apps.signoff.services.engine import (
     AlreadyInApproval,
+    ProcessStillRunning,
     RouteNotConfigured,
     RouteUnusable,
     SignoffError,
@@ -59,10 +60,12 @@ __all__ = [
     # (``Approvable.assert_editable``) — но ловит его вьюха предметной
     # аппки, и брать его ей больше неоткуда.
     "SubjectLocked",
+    "ProcessStillRunning",
     "UnknownSubject",
     "register_subject",
     "start_process",
     "cancel_process",
+    "rework_process",
     "get_process",
     "get_process_for",
     "approval_state_of",
@@ -120,6 +123,26 @@ def cancel_process(*, process_id: int, actor_id: int | None = None,
                                            actor_id=actor_id), enrich=enrich)
 
 
+def rework_process(*, process_id: int, actor_id: int | None = None,
+                   comment: str = "", enrich: bool = False) -> dict:
+    """Вернуть на доработку объект по УЖЕ ЗАКРЫТОМУ кругу согласования.
+
+    Единственный способ отпереть согласованный или отклонённый объект для
+    правки (``Approvable.assert_editable``). Пока круг идёт, это делает
+    согласующий своим решением ``rework``, а не эта функция — она поднимет
+    ``engine.ProcessStillRunning``.
+
+    Права не проверяет: кому это позволено, знает вызывающий
+    (``views.ProcessReworkView`` — администратор или согласующий этого
+    процесса), ровно как у ``cancel_process``.
+    """
+    require_service("signoff")
+
+    return serialize_process(
+        engine.reopen(process_id=process_id, actor_id=actor_id,
+                      comment=comment), enrich=enrich)
+
+
 def get_process(process_id: int, *, enrich: bool = False) -> dict | None:
     require_service("signoff")
 
@@ -156,6 +179,7 @@ def approval_state_of(subject_type: str, subject_id: int) -> str:
         ProcessState.PENDING: ApprovalState.PENDING,
         ProcessState.APPROVED: ApprovalState.APPROVED,
         ProcessState.REJECTED: ApprovalState.REJECTED,
+        ProcessState.REWORK: ApprovalState.REWORK,
         ProcessState.CANCELLED: ApprovalState.DRAFT,
     }[process.state]
 

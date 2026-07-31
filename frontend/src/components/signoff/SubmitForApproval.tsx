@@ -9,11 +9,15 @@
  * Что показывается, определяет `approval_state` объекта:
  *
  * - `draft` — кнопка отправки;
- * - `rejected` — кнопка отправки повторно (отказ не терминален: объект
- *   дорабатывают и шлют снова);
+ * - `rework` — кнопка отправки повторно: объект вернули с замечаниями, его
+ *   правят и шлют снова;
  * - `pending` — ссылка на карточку идущего согласования вместо кнопки;
- * - `approved` — только плашка. Отправить согласованное заново бэкенд не
- *   запретит, но предлагать это незачем.
+ * - `approved` и `rejected` — плашка, а с `showProcessLink` ещё и ссылка на
+ *   карточку. Кнопки отправки здесь нет намеренно, и это не косметика: по
+ *   решённому объекту бэкенд отвечает 409 (`engine._assert_submittable`),
+ *   потому что отправлять нечего — он заперт для правки и уйдёт на новый
+ *   круг ровно тем же, каким его уже видели. Открывает его «Вернуть на
+ *   доработку» в карточке согласования, туда ссылка и ведёт.
  *
  * **Отсутствие маршрута — не поломка.** Пока для типа не заведён активный
  * маршрут, `/submit` отвечает 409 «маршрут не настроен», и это ровно тот
@@ -43,6 +47,19 @@ interface Props {
   /** Ключи TanStack Query, которые надо сбросить после отправки. */
   invalidate?: unknown[][];
   size?: 'sm' | 'default';
+  /**
+   * Вести ли на карточку согласования у РЕШЁННОГО объекта
+   * (`approved`/`rejected`) — там единственная кнопка «Вернуть на
+   * доработку».
+   *
+   * Прополем, а не всегда, потому что ссылка стоит запроса за процессом, а
+   * компонент рисуется и в строке списка: на странице из полусотни
+   * согласованных бюджетов это полсотни запросов ради ссылки, по которой
+   * никто не пойдёт. Карточка объекта — другое дело, там он один.
+   * (У `pending` ссылка есть всегда: там за неё платит только тот, у кого
+   * согласование действительно идёт.)
+   */
+  showProcessLink?: boolean;
 }
 
 export function SubmitForApproval({
@@ -52,26 +69,38 @@ export function SubmitForApproval({
   submit,
   invalidate = [],
   size = 'sm',
+  showProcessLink = false,
 }: Props) {
   const queryClient = useQueryClient();
   const [startedId, setStartedId] = useState<number | null>(null);
 
-  /** Идущий процесс — чтобы из строки можно было провалиться в карточку.
-   *  Спрашиваем только когда объект действительно на согласовании. */
+  const decided = state === 'approved' || state === 'rejected';
+
+  /** Процесс объекта — чтобы из карточки можно было провалиться в
+   *  согласование: пока оно идёт (посмотреть, на ком оно) и когда решение
+   *  принято (там кнопка «Вернуть на доработку», единственный способ снова
+   *  начать правку). У черновика и у возвращённого на доработку процесс
+   *  тоже бывает, но идти в него незачем — им нужна кнопка отправки. */
   const { data: processes = [] } = useQuery({
     queryKey: ['signoff', 'processes', { subjectType, subjectId }],
     queryFn: () =>
       signoffApi
         .listProcesses({ subject_type: subjectType, subject_id: subjectId })
         .then((r) => r.data),
-    enabled: state === 'pending',
+    enabled: state === 'pending' || (decided && showProcessLink),
   });
 
   const activeProcessId =
     startedId
     ?? processes.find((process) => process.state === 'pending')?.id
-    ?? processes[0]?.id
-    ?? null;
+    // Кругов у объекта бывает несколько (вернули — доработали — отправили
+    // снова), и вести надо в ПОСЛЕДНИЙ: именно его решение сейчас держит
+    // объект. Порядок в ответе не гарантирован, поэтому по максимальному id,
+    // а не по первому элементу.
+    ?? processes.reduce<number | null>(
+      (latest, process) => (latest === null || process.id > latest ? process.id : latest),
+      null,
+    );
 
   const mutation = useMutation({
     mutationFn: () => submit(subjectId).then((r) => r.data),
@@ -89,7 +118,10 @@ export function SubmitForApproval({
       reportApiError(err, 'Не удалось отправить на согласование'),
   });
 
-  if (state === 'pending') {
+  // Решение принято или ещё принимается — отправлять нечего. Ссылка на
+  // карточку появляется, только если её есть за что показать (см.
+  // `showProcessLink`); без неё остаётся одна плашка.
+  if (state === 'pending' || decided) {
     return (
       <div className="flex items-center justify-end gap-2">
         <ApprovalStateBadge state={state} />
@@ -106,20 +138,12 @@ export function SubmitForApproval({
     );
   }
 
-  if (state === 'approved') {
-    return (
-      <div className="flex justify-end">
-        <ApprovalStateBadge state={state} />
-      </div>
-    );
-  }
-
   return (
     <div className="flex items-center justify-end gap-2">
-      {state === 'rejected' && <ApprovalStateBadge state={state} />}
+      {state === 'rework' && <ApprovalStateBadge state={state} />}
       <Button
         size={size}
-        variant={state === 'rejected' ? 'outline' : 'default'}
+        variant={state === 'rework' ? 'outline' : 'default'}
         disabled={mutation.isPending}
         onClick={() => mutation.mutate()}
       >
@@ -128,7 +152,7 @@ export function SubmitForApproval({
         ) : (
           <Send className="mr-1.5 h-4 w-4" />
         )}
-        {state === 'rejected' ? 'Отправить снова' : 'На согласование'}
+        {state === 'rework' ? 'Отправить снова' : 'На согласование'}
       </Button>
     </div>
   );

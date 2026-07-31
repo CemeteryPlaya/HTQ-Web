@@ -34,6 +34,15 @@ def _on_rejected(subject_id: int) -> None:
     CALLS.append(("rejected", subject_id))
 
 
+def _on_rework(subject_id: int) -> None:
+    # Снятие с публикации — доменное последствие возврата на доработку: тот
+    # же смысл, что у ``_on_approved`` наоборот. Приходит сюда документ и с
+    # решения согласующего, и с ``engine.reopen`` уже согласованного, где
+    # ``published`` как раз и стоит.
+    CALLS.append(("rework", subject_id))
+    ProbeDoc.objects.filter(pk=subject_id).update(published=False)
+
+
 def _on_cancelled(subject_id: int) -> None:
     CALLS.append(("cancelled", subject_id))
 
@@ -75,6 +84,7 @@ def register() -> None:
         on_started=_on_started,
         on_approved=_on_approved,
         on_rejected=_on_rejected,
+        on_rework=_on_rework,
         on_cancelled=_on_cancelled,
         describe=_describe,
         facts=_facts,

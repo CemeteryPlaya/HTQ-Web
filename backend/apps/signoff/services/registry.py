@@ -65,12 +65,18 @@ class Subject:
     Именно поэтому ``model`` обязан быть наследником ``Approvable``: signoff
     трогает у него ровно одну колонку — ту, которую сам же и объявил.
 
-    ``on_approved``/``on_rejected`` — про ДОМЕННЫЕ последствия, а не про
-    ``approval_state``: у договора, например, своя машина статусов с
-    таблицей переходов, и согласовать её с результатом согласования вправе
-    только сама аппка. Вызываются ВНУТРИ транзакции движка
-    (см. ``engine._finish``), чтобы состояние процесса и состояние объекта
-    коммитились вместе.
+    ``on_approved``/``on_rejected``/``on_rework`` — про ДОМЕННЫЕ
+    последствия, а не про ``approval_state``: у договора, например, своя
+    машина статусов с таблицей переходов, и согласовать её с результатом
+    согласования вправе только сама аппка. Вызываются ВНУТРИ транзакции
+    движка (см. ``engine._finish``), чтобы состояние процесса и состояние
+    объекта коммитились вместе.
+
+    ``on_rework`` вызывается ДВАЖДЫ по разным поводам — когда согласующий
+    вернул объект решением и когда уже закрытый круг открыли заново
+    (``engine.reopen``). Для предметной аппки это одно и то же событие
+    («объект снова правится»), поэтому колбэк один; отличать поводы ей
+    незачем, а движку — есть где (журнал).
 
     ``describe`` — единственный способ показать чужой объект в интерфейсе
     signoff, не зная его модели.
@@ -94,6 +100,7 @@ class Subject:
     model: type
     on_approved: Callable[[int], None] | None = None
     on_rejected: Callable[[int], None] | None = None
+    on_rework: Callable[[int], None] | None = None
     on_started: Callable[[int], None] | None = None
     on_cancelled: Callable[[int], None] | None = None
     describe: Describe | None = None
@@ -107,6 +114,7 @@ _SUBJECTS: dict[str, Subject] = {}
 def register_subject(subject_type: str, *, label: str, model: type,
                      on_approved: Callable[[int], None] | None = None,
                      on_rejected: Callable[[int], None] | None = None,
+                     on_rework: Callable[[int], None] | None = None,
                      on_started: Callable[[int], None] | None = None,
                      on_cancelled: Callable[[int], None] | None = None,
                      describe: Describe | None = None,
@@ -157,7 +165,7 @@ def register_subject(subject_type: str, *, label: str, model: type,
 
     subject = Subject(
         subject_type=subject_type, label=label, model=model,
-        on_approved=on_approved, on_rejected=on_rejected,
+        on_approved=on_approved, on_rejected=on_rejected, on_rework=on_rework,
         on_started=on_started, on_cancelled=on_cancelled, describe=describe,
         facts=facts, fact_fields=fact_fields,
     )

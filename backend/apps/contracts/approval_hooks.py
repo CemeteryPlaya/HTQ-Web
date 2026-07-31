@@ -98,8 +98,28 @@ def _agreement_on_approved(subject_id: int) -> None:
 
 def _agreement_on_rejected(subject_id: int) -> None:
     # Отказ возвращает договор в черновик, а не в терминальный статус:
-    # отклонённый договор дорабатывают и отправляют снова, а «расторгнут»
-    # — состояние, из которого выхода нет.
+    # отклонённый договор переделывают и отправляют снова, а «расторгнут»
+    # — состояние, из которого выхода нет. Править его при этом нельзя,
+    # пока согласующий не вернёт его на доработку: за это отвечает
+    # ``approval_state``, а не ``status`` (см. докстринг модуля).
+    _agreement_to(subject_id, AgreementStatus.DRAFT)
+
+
+def _agreement_on_rework(subject_id: int) -> None:
+    """Возврат на доработку — тот же черновик, что и отказ.
+
+    Своя машина статусов договора о доработке не знает и знать не должна:
+    «на доработке» — состояние СОГЛАСОВАНИЯ (``approval_state``), а
+    ``status`` отвечает на другой вопрос — какой стадии жизни достиг сам
+    договор. Заводить под доработку шестой статус значило бы держать две
+    колонки об одном и том же и однажды получить договор, который «на
+    доработке» по одной и «согласован» по другой.
+
+    Приходит сюда договор из двух разных мест: ``on_review`` (согласующий
+    вернул на ходу) и ``approved`` (вернули уже согласованный —
+    ``engine.reopen``). Второй переход и добавлен в ``ALLOWED_TRANSITIONS``
+    ради этого случая.
+    """
     _agreement_to(subject_id, AgreementStatus.DRAFT)
 
 
@@ -303,6 +323,7 @@ def register() -> None:
         on_started=_agreement_on_started,
         on_approved=_agreement_on_approved,
         on_rejected=_agreement_on_rejected,
+        on_rework=_agreement_on_rework,
         on_cancelled=_agreement_on_cancelled,
         describe=_describe_agreement,
         facts=_agreement_facts,

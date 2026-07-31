@@ -599,11 +599,21 @@ Every path is registered in **both** the slashed and bare spelling
 ### Approval fields and the two axes
 
 All three approvable models now return **`approval_state`** (`draft` /
-`pending` / `approved` / `rejected`) alongside their existing `status`.
-These are **different axes and both stay**: `status` is the record's own
-lifecycle (budget closed, counterparty blocked, agreement terminated),
-`approval_state` is where it sits in a signoff route. An agreement can be
-`approved` by route and `terminated` in substance.
+`pending` / `approved` / `rejected` / `rework`) alongside their existing
+`status`. These are **different axes and both stay**: `status` is the
+record's own lifecycle (budget closed, counterparty blocked, agreement
+terminated), `approval_state` is where it sits in a signoff route. An
+agreement can be `approved` by route and `terminated` in substance.
+
+**`approval_state` also decides whether the row can be edited at all.**
+Editable: `draft` and `rework`. Locked (409 on any PATCH/DELETE, and on the
+child `budget-lines` of a locked budget): `pending`, `approved`, `rejected`
+— a document under approval must not change under the approvers, and one
+that has been decided must stay the document that was decided. The only key
+is **«вернуть на доработку»** — the `rework` decision while the round runs,
+or `POST /api/signoff/v1/processes/{id}/rework` once it has closed. A
+decided object also cannot be re-submitted (`/submit` → 409); return it for
+rework first. If `signoff` is switched off, the lock lifts entirely.
 
 `Agreement` is the only one where approval has a domain consequence — it
 drives the existing `status` machine through `ALLOWED_TRANSITIONS`:
@@ -611,7 +621,9 @@ drives the existing `status` machine through `ALLOWED_TRANSITIONS`:
 ```
 submit   → draft      → on_review     (and on_review already commits budget)
 approve  → on_review  → approved
-reject   → on_review  → draft         (rework and resubmit; not a terminal state)
+reject   → on_review  → draft         (status only; the row stays locked)
+rework   → on_review  → draft         (locked → editable, resubmit as a new round)
+reopen   → approved   → draft         (same, from an already-approved agreement)
 cancel   → on_review  → draft
 ```
 
@@ -660,9 +672,30 @@ so the dependency only ever points *domain → signoff*.
 **same `order` run in parallel**; different `order` runs sequentially. Each
 stage names its approvers explicitly (user ids — the platform has no groups;
 `User` deliberately omits `PermissionsMixin`) and a `quorum` of `any` or
-`all`. **Any rejection at any stage rejects the whole process immediately**;
-outstanding requests are marked `skipped`, not left hanging. Exactly one
-active route per subject type (partial unique index).
+`all`. **Any negative decision at any stage closes the whole process
+immediately**; outstanding requests are marked `skipped`, not left hanging.
+Exactly one active route per subject type (partial unique index).
+
+**Three decisions, and the difference is the subject, not the mechanics.**
+`approve` moves the round on; `reject` and `rework` both end it on the spot.
+What they do to the approved *object* differs, and that is the whole point:
+
+| decision | process | `approval_state` | object editable? |
+|---|---|---|---|
+| `approve` (last stage) | `approved` | `approved` | **no** |
+| `reject`               | `rejected` | `rejected` | **no** — "this document won't do" |
+| `rework`               | `rework`   | `rework`   | **yes** — "fix it and send it back" |
+| `cancel` (initiator)   | `cancelled`| `draft`    | yes — not a decision at all |
+
+Editability is enforced by the domain app calling
+`Approvable.assert_editable()` first thing in every edit/delete service
+(signoff cannot intercept writes to another app's tables — it owns the
+column, the table's owner has to guard it), and it raises `SubjectLocked`,
+a `SignoffError`, which the domain views already translate to 409. A decided
+object is unlocked only by `POST /processes/{id}/rework`; it cannot be
+re-submitted while locked either. With `signoff` disabled the lock lifts —
+a disabled approval module stops *requiring* approval rather than freezing
+everything mid-flight, which matters because unlocking runs through signoff.
 
 **Signature stages.** Two independent stage flags cover "the author signs
 last, with the signed PDF attached":
@@ -713,7 +746,7 @@ or the subject — never disturbs approvals already in flight.
 
 | Endpoint                                    | Method | Auth | Notes |
 |---------------------------------------------|--------|------|-------|
-| `/api/signoff/v1/enums`                     | GET    | jwt   | Choice labels for quorum, `approver_kind`, and all four state enums |
+| `/api/signoff/v1/enums`                     | GET    | jwt   | Choice labels for quorum, `approver_kind`, and every state enum — process, stage, task, and the subject's own `approval_state` |
 | `/api/signoff/v1/subjects`                  | GET    | jwt   | Registered subject types, their labels, `has_active_route`, and `fields[]` — the facts that type allows branching on, with `options` for `choice` fields. This is what the route builder picks from |
 | `/api/signoff/v1/routes`                    | GET    | jwt   | `?subject_type=&is_active=` |
 | `/api/signoff/v1/routes`                    | POST   | admin | 409 if the subject type isn't registered, or a second active route |
@@ -724,8 +757,9 @@ or the subject — never disturbs approvals already in flight.
 | `/api/signoff/v1/processes`                 | POST   | admin | Deliberately narrow — it accepts *any* `subject_id` of any type and so would bypass domain permissions. **The real submit path is the domain endpoint** (`/api/contracts/v1/budgets/{id}/submit`, …) |
 | `/api/signoff/v1/processes/{id}`            | GET    | jwt   | Full card: stages, tasks, approver names, subject title/url, plus `subject_facts` and each stage's `condition`/`matched_by` (`always`\|`condition`\|`fallback`) — the record of *why* these approvers |
 | `/api/signoff/v1/processes/{id}/cancel`     | POST   | jwt   | Initiator **or** admin — checked on the row. Cancel ≠ reject: the object returns to `draft` |
+| `/api/signoff/v1/processes/{id}/rework`     | POST   | jwt   | `{comment?}` — return an **already decided** object for rework, the only way to unlock an `approved`/`rejected` row for editing. **Approver of that process or admin** (initiator deliberately excluded — that would override someone else's decision); 409 while the round is still running (use the `rework` decision or cancel instead), 409 if the object is already open. The process moves to state `rework`, keeps its original `finished_at`, and the rework is journalled as a `reopened` event |
 | `/api/signoff/v1/tasks/mine`                | GET    | jwt   | The inbox. Only `pending` tasks on **active** stages — a request on a stage the process may never reach is not "waiting on you" |
-| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject", comment?}`. The **named approver** decides; an admin token on someone else's task gets 409. On a `requires_attachment` stage, approving before the document is uploaded is a 409 |
+| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject"\|"rework", comment?}`. The **named approver** decides; an admin token on someone else's task gets 409. On a `requires_attachment` stage, approving before the document is uploaded is a 409 (neither negative decision needs the PDF). `reject` and `rework` both close the whole round from that stage; they differ only in the subject: rejected stays locked, reworked becomes editable again |
 | `/api/signoff/v1/tasks/{id}/attachment`     | POST   | jwt   | **multipart**, field `file` — the PDF for a `requires_attachment` stage, uploaded *before* the decision (the upload must not sit inside the transaction holding the process lock). Only the task's own addressee: **no admin override**, since uploading for someone else would forge their signature. PDF-only and ≤25 MB by media_files scope policy (`signoff_doc`, magic-byte checked) → 415/413 pass through verbatim. Re-uploading replaces the previous file while the task is still pending |
 
 `subject_title` / `subject_url` on process cards and inbox rows come from the
