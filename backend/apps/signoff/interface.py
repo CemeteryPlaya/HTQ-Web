@@ -41,6 +41,7 @@ from apps.signoff.services.engine import (
     RouteNotConfigured,
     RouteUnusable,
     SignoffError,
+    SubjectLocked,
 )
 from apps.signoff.services.registry import UnknownSubject, register_subject
 
@@ -54,6 +55,10 @@ __all__ = [
     "RouteNotConfigured",
     "AlreadyInApproval",
     "RouteUnusable",
+    # Поднимает не функция этого модуля, а метод примеси
+    # (``Approvable.assert_editable``) — но ловит его вьюха предметной
+    # аппки, и брать его ей больше неоткуда.
+    "SubjectLocked",
     "UnknownSubject",
     "register_subject",
     "start_process",

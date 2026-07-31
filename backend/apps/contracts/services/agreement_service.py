@@ -282,6 +282,9 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
     ``change_status`` с проверкой перехода; иначе PATCH стал бы обходным
     путём мимо ``ALLOWED_TRANSITIONS``."""
     agreement = get_agreement_or_404(agreement_id)
+    # Своя машина статусов запирает только терминальные состояния, а на
+    # согласовании договор живёт в ``on_review`` — под неё он не попадает.
+    agreement.assert_editable()
     if agreement.status in (AgreementStatus.EXECUTED, AgreementStatus.TERMINATED):
         raise AgreementRuleViolation(
             f"Договор в статусе «{agreement.get_status_display()}» не редактируется"
@@ -422,6 +425,7 @@ def delete_agreement(agreement_id: int) -> None:
     (``status=terminated``), а не стирать.
     """
     agreement = get_agreement_or_404(agreement_id)
+    agreement.assert_editable()
     if agreement.status != AgreementStatus.DRAFT:
         raise ReferenceConflict(
             "Удалить можно только черновик — остальные договоры расторгаются "

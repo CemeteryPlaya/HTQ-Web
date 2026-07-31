@@ -24,6 +24,7 @@ from apps.contracts.tests.helpers import (
     make_line,
     make_counterparty,
     make_program,
+    patch_json,
     post_json,
     token,
 )
@@ -408,3 +409,156 @@ def test_an_agreement_that_does_not_fit_the_budget_is_not_submitted(client):
     # Процесс не запущен — и статус договора не сдвинулся.
     assert overflow.status == AgreementStatus.DRAFT
     assert overflow.approval_state == ApprovalState.DRAFT
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Объект на согласовании не редактируется
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Почему это вообще правило: ветвление маршрута разбирается ОДИН раз, на
+# запуске, из снимка ``subject_facts``, и согласующие решают по тому, что
+# видели тогда. Правка посреди процесса означает подписи под одним
+# документом при другом содержимом карточки — причём этап, который новую
+# сумму не пропустил бы, к тому моменту уже пройден по старой.
+#
+# Проверяется через HTTP, а не вызовом сервиса: половина смысла в том, что
+# ``SubjectLocked`` доезжает до 409 сам, не будучи дописанным в
+# ``views.CONFLICTS`` (он наследник ``SignoffError``, который там уже есть).
+
+
+def _pending_budget() -> Budget:
+    """Бюджет, отправленный на согласование и ждущий решения."""
+    line = make_line()
+    route_for(Budget.SIGNOFF_SUBJECT_TYPE, make_user("budget-approver").pk)
+    line.budget.submit_for_approval()
+    return line.budget
+
+
+def test_a_budget_on_approval_is_not_editable(client):
+    budget = _pending_budget()
+
+    locked = patch_json(client, f"{BASE}/budgets/{budget.pk}",
+                        {"period_year": 2035}, **auth(admin_token()))
+    assert locked.status_code == 409, locked.content
+    assert "на согласовании" in locked.json()["detail"]
+
+    budget.refresh_from_db()
+    assert budget.period_year != 2035
+
+
+def test_cancelling_the_approval_unlocks_the_budget(client):
+    """Единственный выход из блокировки на сегодня — отозвать согласование."""
+    budget = _pending_budget()
+    engine.cancel(process_id=budget.approval_process().pk)
+
+    freed = patch_json(client, f"{BASE}/budgets/{budget.pk}",
+                       {"period_year": 2035}, **auth(admin_token()))
+    assert freed.status_code == 200, freed.content
+
+
+def test_a_counterparty_on_approval_is_not_editable(client):
+    counterparty = make_counterparty()
+    route_for(Counterparty.SIGNOFF_SUBJECT_TYPE, make_user("cp").pk)
+    counterparty.submit_for_approval()
+
+    locked = patch_json(client, f"{BASE}/counterparties/{counterparty.pk}",
+                        {"name": "ТОО «Другое»"}, **auth(admin_token()))
+    assert locked.status_code == 409, locked.content
+    assert "на согласовании" in locked.json()["detail"]
+
+
+def test_an_agreement_on_approval_is_not_editable(client):
+    """Своя машина статусов запирает только терминальные состояния, а на
+    согласовании договор живёт в ``on_review`` — под неё он не попадал."""
+    agreement = _draft_agreement()
+    before = agreement.amount
+    route_for(Agreement.SIGNOFF_SUBJECT_TYPE, make_user("agr").pk)
+    agreement.submit_for_approval()
+
+    locked = patch_json(client, f"{BASE}/agreements/{agreement.pk}",
+                        {"amount": "50000000.00"}, **auth(admin_token()))
+    assert locked.status_code == 409, locked.content
+    assert "на согласовании" in locked.json()["detail"]
+
+    agreement.refresh_from_db()
+    assert agreement.status == AgreementStatus.ON_REVIEW
+    assert agreement.amount == before
+
+
+def test_budget_lines_are_locked_by_the_parent_budget(client):
+    """Строка не ``Approvable`` и своего состояния не имеет — её запирает
+    бюджет, содержимым которого она является."""
+    budget = _pending_budget()
+    line = budget.lines.get()
+
+    added = post_json(client, f"{BASE}/budgets/{budget.pk}/lines",
+                      {"program_id": make_program(name="Вторая").pk,
+                       "amount": "100000.00"}, **auth(admin_token()))
+    assert added.status_code == 409, added.content
+
+    edited = patch_json(client, f"{BASE}/budget-lines/{line.pk}",
+                        {"amount": "999.00"}, **auth(admin_token()))
+    assert edited.status_code == 409, edited.content
+
+    removed = client.delete(f"{BASE}/budget-lines/{line.pk}",
+                            **auth(admin_token()))
+    assert removed.status_code == 409, removed.content
+
+
+def test_deleting_is_blocked_while_on_approval(client):
+    budget = _pending_budget()
+    counterparty = make_counterparty(bin_iin="987654321098")
+    route_for(Counterparty.SIGNOFF_SUBJECT_TYPE, make_user("cp-del").pk)
+    counterparty.submit_for_approval()
+
+    assert client.delete(f"{BASE}/budgets/{budget.pk}",
+                         **auth(admin_token())).status_code == 409
+    assert client.delete(f"{BASE}/counterparties/{counterparty.pk}",
+                         **auth(admin_token())).status_code == 409
+
+
+def test_a_rejected_object_is_editable_again(client):
+    """Отказ — приглашение доработать. Запирать объект ровно тогда, когда
+    правка и требуется, было бы обратным нужному."""
+    approver = make_user("rejector")
+    line = make_line()
+    route_for(Budget.SIGNOFF_SUBJECT_TYPE, approver.pk)
+    process = line.budget.submit_for_approval()
+    decide(process, approver, engine.REJECT)
+
+    line.budget.refresh_from_db()
+    assert line.budget.approval_state == ApprovalState.REJECTED
+
+    reworked = patch_json(client, f"{BASE}/budgets/{line.budget_id}",
+                          {"period_year": 2035}, **auth(admin_token()))
+    assert reworked.status_code == 200, reworked.content
+
+
+def test_disabling_signoff_unlocks_pending_objects(client):
+    """Выключенный модуль согласования перестаёт ТРЕБОВАТЬ согласования — и
+    перестаёт запирать. Иначе ``service signoff --off`` навсегда заморозил
+    бы всё, что застигнуто в ``pending``: отзыв процесса сам стоит за
+    ``require_service("signoff")``, то есть разблокировать было бы нечем."""
+    budget = _pending_budget()
+    ServiceStatus.objects.update_or_create(
+        app_label="signoff", defaults={"enabled": False, "message": "off"})
+
+    freed = patch_json(client, f"{BASE}/budgets/{budget.pk}",
+                       {"period_year": 2035}, **auth(admin_token()))
+    assert freed.status_code == 200, freed.content
+
+
+def test_the_engine_can_still_move_the_agreement_it_locked(client):
+    """Договор доходит до ``approved``, хотя в момент колбэка формально
+    заперт: ``engine._finish`` зовёт ``on_approved`` ДО того, как снимет
+    ``pending``. Guard стоит на ``update_agreement``, а не на
+    ``change_status``, — иначе движок заблокировал бы сам себя."""
+    approver = make_user("finisher")
+    agreement = _draft_agreement()
+    route_for(Agreement.SIGNOFF_SUBJECT_TYPE, approver.pk)
+    process = agreement.submit_for_approval()
+    decide(process, approver, engine.APPROVE)
+
+    agreement.refresh_from_db()
+    assert agreement.status == AgreementStatus.APPROVED
+    assert agreement.approval_state == ApprovalState.APPROVED

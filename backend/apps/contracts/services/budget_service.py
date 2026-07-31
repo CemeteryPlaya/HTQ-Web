@@ -283,6 +283,7 @@ def _resolve_program(data) -> Program:
 def update_budget(budget_id: int, **fields) -> Budget:
     """Правка шапки бюджета. Строки правятся своими операциями."""
     budget = get_budget_or_404(budget_id)
+    budget.assert_editable()
 
     if fields.get("administrator_id") is not None:
         get_administrator_or_404(fields["administrator_id"])
@@ -319,14 +320,27 @@ def add_line(budget_id: int, *, program_id: int, amount, note: str = "") -> Budg
     затереть чужие правки.
     """
     budget = get_budget_or_404(budget_id)
+    budget.assert_editable()
     program = get_program_or_404(program_id)
     with conflict_as(f"Программа «{program.display_name}» уже есть в этом бюджете"):
         return BudgetLine.objects.create(budget=budget, program=program,
                                          amount=amount, note=note)
 
 
+def _assert_line_editable(line: BudgetLine) -> None:
+    """Строку запирает согласование РОДИТЕЛЬСКОГО бюджета.
+
+    Сама ``BudgetLine`` не ``Approvable`` и своего ``approval_state`` не
+    имеет: согласуют бюджет целиком, а строки — его содержимое. Поправить
+    строку бюджета, который сейчас лежит у согласующих, — ровно та же
+    подмена документа, что и правка его шапки.
+    """
+    line.budget.assert_editable()
+
+
 def update_line(line_id: int, **fields) -> BudgetLine:
     line = get_line_or_404(line_id)
+    _assert_line_editable(line)
 
     if fields.get("program_id") is not None:
         get_program_or_404(fields["program_id"])
@@ -354,7 +368,9 @@ def update_line(line_id: int, **fields) -> BudgetLine:
 
 
 def delete_line(line_id: int) -> None:
-    delete_protected(get_line_or_404(line_id),
+    line = get_line_or_404(line_id)
+    _assert_line_editable(line)
+    delete_protected(line,
                      "К строке привязаны договоры — расторгните их или "
                      "уменьшите сумму вместо удаления")
 
@@ -396,6 +412,8 @@ def delete_budget(budget_id: int) -> None:
     — Django поднимет ``ProtectedError`` на сборе каскада, и бюджет
     останется цел.
     """
-    delete_protected(get_budget_or_404(budget_id),
+    budget = get_budget_or_404(budget_id)
+    budget.assert_editable()
+    delete_protected(budget,
                      "К строкам бюджета привязаны договоры — закройте бюджет "
                      "(status=closed) вместо удаления")

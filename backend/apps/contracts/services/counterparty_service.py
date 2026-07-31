@@ -94,6 +94,7 @@ def create_counterparty_full(*, bin_iin: str, name: str, country, vat: bool = Fa
 
 def update_counterparty(counterparty_id: int, **fields) -> Counterparty:
     row = get_counterparty_or_404(counterparty_id)
+    row.assert_editable()
     if fields.get("country_id") is not None:
         get_country_or_404(fields["country_id"])
 
@@ -125,6 +126,8 @@ def submit_for_approval(counterparty_id: int, *, actor_id: int | None = None) ->
 
 
 def delete_counterparty(counterparty_id: int) -> None:
-    delete_protected(get_counterparty_or_404(counterparty_id),
+    row = get_counterparty_or_404(counterparty_id)
+    row.assert_editable()
+    delete_protected(row,
                      "У контрагента есть договоры — переведите его в статус "
                      "inactive/blocked вместо удаления")
