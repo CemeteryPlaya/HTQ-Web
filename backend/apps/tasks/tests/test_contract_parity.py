@@ -27,7 +27,7 @@ from django.utils import timezone
 
 from apps.tasks.models import (
     AssigneeRole, CalendarEvent, Equipment, Label, Notification, Project,
-    Task, TaskActivity, TaskAssignee, TaskAssignment, TaskAttachment,
+    Task, TaskActivity, TaskAssignee, ResourceAllocation, TaskAttachment,
     TaskComment, TaskDelegate, TaskType, TaskWatcher,
 )
 
@@ -155,9 +155,11 @@ def test_task_stats_matches_the_fastapi_schema(rich_task):
 def test_link_response_matches_the_fastapi_schema():
     a = Task.objects.create(key="TASK-1", summary="A")
     b = Task.objects.create(key="TASK-2", summary="B")
+    # admin_token: linking now requires full-edit rights on the source task,
+    # and these fixtures have no reporter/assignee for a regular caller to be.
     resp = post_json(Client(), f"{BASE}/task-links/",
                      {"source_id": a.id, "target_id": b.id,
-                      "link_type": "blocks"}, **auth())
+                      "link_type": "blocks"}, **auth(admin_token()))
     assert_shape(resp.json(), "LinkResponse")
 
 
@@ -179,9 +181,12 @@ def test_reference_responses_match_the_fastapi_schemas():
 @pytest.mark.django_db
 def test_assignment_response_matches_the_fastapi_schema():
     task = Task.objects.create(key="TASK-1", summary="A")
-    TaskAssignment.objects.create(task=task, employee_id=11, role="сварщик")
+    ResourceAllocation.objects.create(task=task, employee_id=11, role="сварщик")
+    # admin_token: listing a task's resources now requires visibility of the
+    # task itself, and this fixture has no participants.
     assert_each(Client().get(f"{BASE}/assignments/?task_id={task.id}",
-                             **auth()).json(), "AssignmentResponse")
+                             **auth(admin_token())).json(),
+                "AssignmentResponse")
 
 
 # ── projects ────────────────────────────────────────────────────────────
@@ -253,7 +258,7 @@ def test_gantt_responses_match_the_fastapi_schemas():
     task = Task.objects.create(key="TASK-1", summary="A",
                                start_date=dt.date(2026, 3, 2),
                                due_date=dt.date(2026, 3, 6), assignee_id=11)
-    TaskAssignment.objects.create(
+    ResourceAllocation.objects.create(
         task=task, equipment=Equipment.objects.create(name="Кран"))
 
     flat = Client().get(f"{BASE}/reports/gantt", **auth()).json()

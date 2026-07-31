@@ -142,7 +142,10 @@ class AdminUserCreateRequest(BaseModel):
     patronymic: str = ""
     display_name: str = ""
     bio: str = ""
-    phone: str = ""
+    # varchar(30) в БД — без ограничения здесь Postgres отвечает DataError
+    # (500) на то, что является обычным 422. Маска на фронте
+    # (``PhoneInput``) шлёт максимум "+7 (700) 483-55-81" — 18 символов.
+    phone: str = Field(default="", max_length=30)
     status: str = "active"
     is_staff: bool = False
     is_superuser: bool = False
@@ -192,7 +195,7 @@ class AdminUserUpdateRequest(BaseModel):
     last_name: str | None = None
     patronymic: str | None = None
     bio: str | None = None
-    phone: str | None = None
+    phone: str | None = Field(default=None, max_length=30)  # varchar(30), см. Create
     avatar_url: str | None = None
     settings: dict | str | None = None  # JSON object or stringified JSON
 
@@ -245,9 +248,21 @@ class UserOption(BaseModel):
 
 
 class UserOptionsQuery(BaseModel):
-    """Validates ``GET users/options/`` query params — mirrors the FastAPI
-    original's ``Query(default=200, ge=1, le=500)`` so an out-of-range
-    ``limit`` 422s instead of being silently clamped."""
+    """Validates ``GET users/options/`` query params.
 
-    query: str | None = None
-    limit: int = Field(200, ge=1, le=500)
+    Tightened from the FastAPI original's ``query: str | None`` +
+    ``Query(default=200, ge=1, le=500)``. As ported, this endpoint answered
+    an empty query with the first 200 active accounts — i.e. any
+    authenticated user could page out the company directory, names and
+    emails included, from a route whose purpose is "let me pick the
+    colleague I am already typing".
+
+    So: ``query`` is required and must be at least 2 characters, and
+    ``limit`` tops out at a picker-sized 20. A caller who knows a name
+    still finds them; a caller who knows nothing gets 422 instead of the
+    staff list. (Email is additionally withheld from non-elevated callers
+    — that part lives in the view, which has the token.)
+    """
+
+    query: str = Field(..., min_length=2, max_length=100)
+    limit: int = Field(20, ge=1, le=20)

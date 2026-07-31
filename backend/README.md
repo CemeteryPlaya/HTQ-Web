@@ -14,8 +14,8 @@ See also: [../CLAUDE.md](../CLAUDE.md) (session-level orientation), [../STRUCTUR
 ## What this is
 
 Domains live as Django apps under `apps/`: `users`, `cms`, `media_files`, `hr`, `mail`,
-`messenger`, `tasks`, `approvals`, plus `core` (shared foundation — the service registry, ETL
-helpers, health checks; not a domain itself). Everything else — auth primitives, the API
+`messenger`, `tasks`, `approvals`, `contracts`, `signoff`, plus `core` (shared foundation — the
+service registry, ETL helpers, health checks; not a domain itself). Everything else — auth primitives, the API
 decorator, object storage, middleware — lives once in the `htqweb/` project package, not
 duplicated per app the way the FastAPI generation duplicated `s3_storage.py`/`request_id.py`
 per service. There is exactly one codebase, one process family, one settings module tree; the
@@ -237,6 +237,56 @@ predates `media_files` as an app). Every other domain that needs to store a file
 `messenger` (attachments) — goes through `apps.media_files.interface.store_file()`/
 `.get_file_url()`/`.delete_file()` instead of holding its own bucket/copy of the storage code.
 Don't add a new per-app storage client; extend `media_files` or call its interface.
+
+### 11. Approval is `apps.signoff` — inherit its mixin, don't build a second engine
+
+Two apps have "approval" in the name and they are not interchangeable:
+
+- **`apps.approvals`** (`/api/requests/v1`) is a Lark-style **form designer**. Its unit of
+  approval is a `RequestInstance` holding JSON field values it owns. It cannot point at a row
+  that already exists somewhere else.
+- **`apps.signoff`** (`/api/signoff/v1`) approves **another app's existing rows**, addressed by
+  a `(subject_type, subject_id)` pair. This is the one you want for "this budget line / this
+  agreement needs three people to sign off".
+
+Wiring a model into `signoff` is three steps, **none of them inside `signoff`**:
+
+```python
+# apps/<domain>/models.py — interface is the only importable name (rule 1)
+from apps.signoff import interface as signoff
+
+class Budget(signoff.Approvable, models.Model):
+    SIGNOFF_SUBJECT_TYPE = "contracts.budget"   # must match the registry key
+```
+```python
+# apps/<domain>/approval_hooks.py, called from AppConfig.ready()
+signoff.register_subject(
+    Budget.SIGNOFF_SUBJECT_TYPE, label="Бюджетная строка", model=Budget,
+    on_approved=..., on_rejected=..., describe=_describe_budget,
+)
+```
+Then `makemigrations <domain>` for the `approval_state` column the mixin contributes — it lands
+in **your** table, so no cross-domain FK is created.
+
+Three things that trip people up:
+
+- **You hand over the model class; signoff never imports it.** That's what lets signoff maintain
+  its own `approval_state` column on your table without violating rule 1. `register_subject`
+  rejects a `model` that doesn't inherit `Approvable`, or whose `SIGNOFF_SUBJECT_TYPE` disagrees
+  with the key you registered under.
+- **Callbacks run inside the engine's transaction** (`engine._finish`), so raising from one rolls
+  the approval back — deliberately: a process marked "approved" over an object that failed to
+  update is a state nothing can recover from. Messenger notifications, being an external effect,
+  go through `transaction.on_commit` instead.
+- **`register_subject` and `Approvable` are deliberately NOT behind `require_service`.** They run
+  in `ready()`, before a DB connection exists (e.g. during `migrate` on an empty database). A
+  gate there would take the whole process down over a disabled service. Everything at request
+  time *is* gated. Correspondingly, `signoff.has_active_route()` answers `False` rather than
+  raising when signoff is off — a disabled approval module should stop *requiring* approval, not
+  break the apps that adopted it.
+
+Reference implementations: `apps/contracts/approval_hooks.py` (real), `apps/signoff/tests/testapp/`
+(minimal, ~40 lines).
 
 ## Adding a new domain app
 

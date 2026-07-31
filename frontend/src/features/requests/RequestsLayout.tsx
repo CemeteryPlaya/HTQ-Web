@@ -7,8 +7,9 @@ import { Link, useLocation } from 'react-router-dom';
 
 import { Footer } from '@/components/Footer';
 import { Header } from '@/components/Header';
+import { BackToProfile } from '@/components/BackToProfile';
 import {
-  ArrowLeft, BarChart3, ClipboardList, Database, FolderKanban, Layers, LineChart, Table2, Inbox as InboxIcon,
+  BarChart3, ClipboardList, Database, FolderKanban, Layers, LineChart, Table2, Inbox as InboxIcon,
 } from 'lucide-react';
 
 import { useActiveProfile } from '@/hooks/useActiveProfile';
@@ -46,13 +47,7 @@ export const RequestsLayout: React.FC<Props> = ({ title, subtitle, actions, chil
       <main className="flex-1">
         <div className="container mx-auto px-4 py-8">
           <div className="mb-6 flex flex-col gap-4">
-            <Link
-              to="/myprofile"
-              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              {t('tasks.backToMain', 'К моему профилю')}
-            </Link>
+            <BackToProfile className="mb-0" />
 
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>

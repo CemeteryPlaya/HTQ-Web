@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PhoneInput } from '@/components/ui/phone-input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
@@ -353,7 +354,7 @@ export const UserEditDialog: React.FC<Props> = ({ open, onOpenChange, mode, user
                                 <Input value={form.display_name} onChange={(e) => set('display_name', e.target.value)} />
                             </Field>
                             <Field label={t('settingsPage.phone', 'Номер телефона')}>
-                                <Input value={form.phone} onChange={(e) => set('phone', e.target.value)} />
+                                <PhoneInput value={form.phone} onChange={(v) => set('phone', v)} />
                             </Field>
                         </div>
                         <Field label={t('profile.bio', 'О себе')}>

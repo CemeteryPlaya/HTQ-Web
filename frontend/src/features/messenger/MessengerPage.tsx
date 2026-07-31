@@ -8,69 +8,24 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
 import {
     MessageCircle, Send, Search, Plus, ArrowLeft,
     Users, Lock, User, Loader2, Check, CheckCheck, Trash2, Paperclip, FileText, Download, Music, X,
-    Mic, Square, Play, Pause, Image as ImageIcon, Film
+    Mic, Square, Play, Pause, Image as ImageIcon, Film,
+    Reply as ReplyIcon, Pencil, UserPlus, UserMinus, ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { isAxiosError } from 'axios';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { messengerApi } from './api/messengerApi';
-import { useMessengerSocket } from './hooks/useMessengerSocket';
+import { useMessengerSocket, type PresenceMap } from './hooks/useMessengerSocket';
+import { decodeMessageText } from './messageContent';
+import type { DecodedMessage } from './messageContent';
 import type { ChatRoom, ChatMessage, ChatUser } from './types';
-
-// ---------------------------------------------------------------------------
-//  Helper: decode message text from base64 (non-E2EE rooms store plaintext JSON)
-// ---------------------------------------------------------------------------
-type DecodedMessage = {
-    text: string;
-    file_url?: string;
-    file_name?: string;
-    mime_type?: string;
-    /** Set for image attachments after migration 006 — falls back to
-     *  ``file_url`` in the renderer when missing. */
-    thumb_url?: string | null;
-    width?: number | null;
-    height?: number | null;
-    data_type?: string | null;
-};
-
-function decodeMessageText(msg: ChatMessage): DecodedMessage | string {
-    const attachment = msg.attachments?.[0];
-    if (!msg.content && !attachment) return '';
-    if (!msg.is_encrypted) {
-        let parsed: any = null;
-        let text = msg.content || '';
-        try {
-            parsed = msg.content ? JSON.parse(msg.content) : null;
-            text = parsed?.text || parsed?.body || '';
-        } catch {
-            text = msg.content || '';
-        }
-
-        if (attachment) {
-            return {
-                text,
-                file_url: attachment.url,
-                file_name: attachment.filename,
-                mime_type: attachment.content_type,
-                thumb_url: attachment.thumbnail_url ?? null,
-                width: attachment.width ?? null,
-                height: attachment.height ?? null,
-                data_type: attachment.data_type ?? null,
-            };
-        }
-        if (parsed?.file_url || msg.msg_type === 'file') {
-            return parsed;
-        }
-        return text || msg.content || '';
-    }
-    return '🔒 Зашифрованное сообщение';
-}
 
 // ---------------------------------------------------------------------------
 //  Helper: encode plaintext to base64 for sending (non-E2EE rooms)
@@ -93,6 +48,21 @@ function uidOf(u: { user_id?: number; id?: number } | null | undefined): number 
     return u?.user_id ?? u?.id;
 }
 
+/** A participant row as the API actually returns it: `{user_id, role,
+ *  last_read_message_id, user, unread_count}`. The declared `ChatMembership`
+ *  still describes the pre-microservice shape (`id`, no `user_id`), so code
+ *  that needs the real fields narrows through this instead of `any`. */
+type ParticipantRow = {
+    user_id?: number;
+    role?: string;
+    user?: ChatUser | null;
+    unread_count?: number;
+};
+
+function participantRows(room: ChatRoom | null | undefined): ParticipantRow[] {
+    return (room?.participants ?? []) as unknown as ParticipantRow[];
+}
+
 function getOtherMember(room: ChatRoom, myUserId: number | undefined) {
     if (myUserId == null) return null;
     const other = room.participants.find((m) => uidOf(m) !== myUserId && uidOf(m.user) !== myUserId);
@@ -110,6 +80,19 @@ function formatTime(dateStr: string): string {
         hour: '2-digit',
         minute: '2-digit',
     });
+}
+
+/** «был(а) в сети …» из ISO-времени последнего оффлайна (presence-сервис). */
+function formatLastSeen(iso: string | null | undefined): string {
+    if (!iso) return 'не в сети';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return 'не в сети';
+    const mins = Math.max(0, Math.floor((Date.now() - d.getTime()) / 60000));
+    if (mins < 1) return 'был(а) только что';
+    if (mins < 60) return `был(а) ${mins} мин назад`;
+    const sameDay = d.toDateString() === new Date().toDateString();
+    if (sameDay) return `был(а) в ${formatTime(iso)}`;
+    return `был(а) ${d.toLocaleDateString()} ${formatTime(iso)}`;
 }
 
 //  Room-list preview — today shows HH:mm, older days collapse to "dd MMM"
@@ -865,6 +848,8 @@ interface ChatInfoDialogProps {
     onGroupAvatarChange?: (file: File) => void | Promise<void>;
     /** True while the avatar upload/patch is in-flight. Disables the button. */
     isUploadingGroupAvatar?: boolean;
+    /** Live presence map (socket-patched) — green dots / "был в сети". */
+    presence?: PresenceMap;
 }
 
 const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
@@ -875,7 +860,42 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
     displayName,
     onGroupAvatarChange,
     isUploadingGroupAvatar = false,
+    presence = {},
 }) => {
+    const queryClient = useQueryClient();
+    // «Добавить участников» — поиск по реестру пользователей, как в форме
+    // создания группы. Доступно только админу группы (canManage ниже).
+    const [addQuery, setAddQuery] = useState('');
+    const [addOpen, setAddOpen] = useState(false);
+    const { data: addCandidates = [] } = useQuery({
+        queryKey: ['messenger-add-search', room.id, addQuery],
+        queryFn: () => messengerApi.searchUsers(addQuery),
+        enabled: addOpen,
+    });
+
+    const invalidateRooms = () =>
+        queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
+    const membershipError = (err: unknown) => {
+        const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
+        toast.error(typeof detail === 'string' ? detail : 'Не удалось изменить состав группы');
+    };
+
+    const addMutation = useMutation({
+        mutationFn: (userId: number) => messengerApi.addParticipants(room.id, [userId]),
+        onSuccess: () => { invalidateRooms(); toast.success('Участник добавлен'); },
+        onError: membershipError,
+    });
+    const removeMutation = useMutation({
+        mutationFn: (userId: number) => messengerApi.removeParticipant(room.id, userId),
+        onSuccess: () => { invalidateRooms(); toast.success('Участник исключён'); },
+        onError: membershipError,
+    });
+    const roleMutation = useMutation({
+        mutationFn: ({ userId, role }: { userId: number; role: 'admin' | 'member' }) =>
+            messengerApi.setParticipantRole(room.id, userId, role),
+        onSuccess: invalidateRooms,
+        onError: membershipError,
+    });
     const isDirect = room.room_type === 'direct' || room.room_type === 'secret';
     const isGroup = room.room_type === 'group';
     // Only admins can edit the photo. Read role off the caller's own
@@ -884,6 +904,9 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
         (p: any) => (p.user_id ?? p.user?.id) === myUid,
     ) as any;
     const canEditGroup = isGroup && myParticipant?.role === 'admin' && !!onGroupAvatarChange;
+    // Управление составом — тот же гейт, что и на бэке (только admin группы).
+    const canManage = isGroup && myParticipant?.role === 'admin';
+    const memberIds = new Set(room.participants.map((p: any) => p.user_id ?? p.user?.id));
 
     const otherUser: any = isDirect
         ? (() => {
@@ -939,9 +962,18 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                             {otherUser.department_name && (
                                 <p className="text-xs text-muted-foreground">{otherUser.department_name}</p>
                             )}
-                            <p className={`text-xs mt-1 ${otherUser.is_online ? 'text-green-600' : 'text-muted-foreground'}`}>
-                                {otherUser.is_online ? '🟢 Онлайн' : (otherUser.last_seen ? `Был в сети ${new Date(otherUser.last_seen).toLocaleString()}` : '')}
-                            </p>
+                            {(() => {
+                                // Live presence из Redis (см. useMessengerSocket) — поле
+                                // otherUser.is_online осталось от старой реплики и
+                                // всегда пустое.
+                                const uid = otherUser.id ?? otherUser.user_id;
+                                const st = uid != null ? presence[uid] : undefined;
+                                return (
+                                    <p className={`text-xs mt-1 ${st?.online ? 'text-green-600' : 'text-muted-foreground'}`}>
+                                        {st?.online ? '🟢 В сети' : formatLastSeen(st?.last_seen)}
+                                    </p>
+                                );
+                            })()}
                         </div>
                         <dl className="w-full grid grid-cols-[80px_1fr] gap-x-3 gap-y-1.5 text-sm mt-2">
                             {otherUser.username && (
@@ -1017,29 +1049,90 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                             </div>
                         </div>
                         <div>
-                            <p className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Участники</p>
+                            <div className="flex items-center justify-between mb-2">
+                                <p className="text-xs uppercase tracking-wide text-muted-foreground">Участники</p>
+                                {canManage && (
+                                    <button
+                                        type="button"
+                                        onClick={() => { setAddOpen(!addOpen); setAddQuery(''); }}
+                                        className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                                    >
+                                        <UserPlus className="h-3.5 w-3.5" />
+                                        {addOpen ? 'Скрыть' : 'Добавить'}
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Приглашение в существующую группу — до membership_service
+                                (2026-07-28) состав фиксировался при создании навсегда. */}
+                            {canManage && addOpen && (
+                                <div className="mb-3 border rounded-lg p-2 bg-accent/20">
+                                    <input
+                                        type="text"
+                                        value={addQuery}
+                                        onChange={(e) => setAddQuery(e.target.value)}
+                                        placeholder="Поиск сотрудников..."
+                                        className="w-full mb-2 px-3 py-1.5 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                    />
+                                    <ul className="max-h-40 overflow-y-auto divide-y">
+                                        {addCandidates
+                                            .filter((u) => !memberIds.has(uidOf(u)))
+                                            .map((u) => (
+                                                <li key={u.id} className="flex items-center gap-2 py-1.5">
+                                                    <span className="flex-1 text-sm truncate">{u.full_name || u.username}</span>
+                                                    <button
+                                                        type="button"
+                                                        disabled={addMutation.isPending}
+                                                        onClick={() => {
+                                                            const uid = uidOf(u);
+                                                            if (uid != null) addMutation.mutate(uid);
+                                                        }}
+                                                        className="p-1.5 rounded-full hover:bg-primary/10 text-primary disabled:opacity-50"
+                                                        title="Добавить в группу"
+                                                    >
+                                                        <UserPlus className="h-4 w-4" />
+                                                    </button>
+                                                </li>
+                                            ))}
+                                        {addCandidates.filter((u) => !memberIds.has(uidOf(u))).length === 0 && (
+                                            <li className="py-2 text-xs text-muted-foreground text-center">
+                                                Все найденные уже в группе
+                                            </li>
+                                        )}
+                                    </ul>
+                                </div>
+                            )}
+
                             <ul className="max-h-72 overflow-y-auto divide-y border rounded-lg">
                                 {room.participants.map((p: any) => {
                                     const u = p.user || p;
+                                    const uid = p.user_id ?? u.id;
                                     const name = fmtName(u);
+                                    const isSelf = uid === myUid;
+                                    const online = uid != null && presence[uid]?.online;
                                     return (
                                         <li
-                                            key={p.user_id ?? u.id}
+                                            key={uid}
                                             className="flex items-center gap-3 p-2"
                                         >
-                                            {u.avatar_url ? (
-                                                <img src={u.avatar_url} alt="" className="w-9 h-9 rounded-full object-cover" />
-                                            ) : (
-                                                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
-                                                    <span className="font-bold text-primary/60 text-sm">
-                                                        {name.charAt(0)}
-                                                    </span>
-                                                </div>
-                                            )}
+                                            <div className="relative flex-shrink-0">
+                                                {u.avatar_url ? (
+                                                    <img src={u.avatar_url} alt="" className="w-9 h-9 rounded-full object-cover" />
+                                                ) : (
+                                                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+                                                        <span className="font-bold text-primary/60 text-sm">
+                                                            {name.charAt(0)}
+                                                        </span>
+                                                    </div>
+                                                )}
+                                                {online && (
+                                                    <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-green-500 ring-2 ring-card" title="В сети" />
+                                                )}
+                                            </div>
                                             <div className="flex-1 min-w-0">
                                                 <p className="text-sm font-medium truncate">
                                                     {name}
-                                                    {(p.user_id ?? u.id) === myUid && (
+                                                    {isSelf && (
                                                         <span className="ml-1 text-xs text-muted-foreground">(вы)</span>
                                                     )}
                                                 </p>
@@ -1047,13 +1140,39 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                                     <p className="text-xs text-muted-foreground truncate">{u.position_title}</p>
                                                 )}
                                             </div>
-                                            {p.role && p.role !== 'member' && (
+                                            {p.role === 'admin' && (
                                                 <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded bg-accent text-muted-foreground">
-                                                    {p.role}
+                                                    админ
                                                 </span>
                                             )}
-                                            {u.is_online && (
-                                                <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title="Онлайн" />
+                                            {canManage && !isSelf && (
+                                                <div className="flex items-center gap-0.5">
+                                                    <button
+                                                        type="button"
+                                                        disabled={roleMutation.isPending}
+                                                        onClick={() => roleMutation.mutate({
+                                                            userId: uid,
+                                                            role: p.role === 'admin' ? 'member' : 'admin',
+                                                        })}
+                                                        className={`p-1.5 rounded-full transition-colors disabled:opacity-50 ${p.role === 'admin' ? 'text-primary hover:bg-primary/10' : 'text-muted-foreground hover:bg-accent'}`}
+                                                        title={p.role === 'admin' ? 'Снять права админа' : 'Назначить админом'}
+                                                    >
+                                                        <ShieldCheck className="h-4 w-4" />
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        disabled={removeMutation.isPending}
+                                                        onClick={() => {
+                                                            if (confirm(`Исключить ${name} из группы?`)) {
+                                                                removeMutation.mutate(uid);
+                                                            }
+                                                        }}
+                                                        className="p-1.5 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
+                                                        title="Исключить из группы"
+                                                    >
+                                                        <UserMinus className="h-4 w-4" />
+                                                    </button>
+                                                </div>
                                             )}
                                         </li>
                                     );
@@ -1099,6 +1218,9 @@ const MessengerPage: React.FC = () => {
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [searchOpen, setSearchOpen] = useState(false);
     const [infoOpen, setInfoOpen] = useState(false);
+    // Ответ и редактирование — взаимоисключающие режимы композера.
+    const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+    const [editingMsg, setEditingMsg] = useState<ChatMessage | null>(null);
     // Voice recording state. The MediaRecorder ref is kept across renders so
     // the stop handler can flush its remaining chunks before we build the
     // final blob.
@@ -1135,6 +1257,29 @@ const MessengerPage: React.FC = () => {
         queryKey: ['messenger-rooms'],
         queryFn: messengerApi.getRooms,
         refetchInterval: 30000,
+    });
+
+    // Присутствие всех собеседников пачкой. Ключ ['messenger-presence'] общий
+    // с сокет-хуком: user_online/user_offline патчат его точечно, а этот
+    // запрос раз в минуту сверяет картину целиком (само-чинится после
+    // пропущенных событий). Поле is_online из старой реплики мертво — байдж
+    // берётся ТОЛЬКО отсюда.
+    const { data: presence = {} } = useQuery<PresenceMap>({
+        queryKey: ['messenger-presence'],
+        queryFn: async () => {
+            const ids = new Set<number>();
+            rooms.forEach((r) => participantRows(r).forEach((p) => {
+                const uid = p.user_id ?? p.user?.id;
+                if (uid != null) ids.add(uid);
+            }));
+            if (ids.size === 0) return {};
+            const raw = await messengerApi.getPresence([...ids]);
+            const map: PresenceMap = {};
+            for (const [k, v] of Object.entries(raw)) map[Number(k)] = v;
+            return map;
+        },
+        enabled: rooms.length > 0,
+        refetchInterval: 60000,
     });
 
     const { data: messages = [], isLoading: msgsLoading } = useQuery({
@@ -1241,20 +1386,58 @@ const MessengerPage: React.FC = () => {
                 content: JSON.stringify({ text: payload.text || '' }),
                 is_encrypted: false,
                 attachment_ids: payload.attachment_ids || [],
+                reply_to: replyTo ? String(replyTo.id) : undefined,
             });
         },
         onSuccess: () => {
+            setReplyTo(null);
             queryClient.invalidateQueries({ queryKey: ['messenger-messages', activeRoomId] });
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
         },
         onError: () => toast.error('Ошибка отправки'),
     });
 
+    const editMutation = useMutation({
+        mutationFn: ({ id, text }: { id: string; text: string }) =>
+            messengerApi.editMessage(id, JSON.stringify({ text })),
+        onSuccess: (updated) => {
+            setEditingMsg(null);
+            setMessageText('');
+            queryClient.invalidateQueries({ queryKey: ['messenger-messages', updated.room_id] });
+            queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
+        },
+        onError: (err: unknown) => {
+            const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
+            toast.error(typeof detail === 'string' ? detail : 'Не удалось изменить сообщение');
+        },
+    });
+
+    const deleteMsgMutation = useMutation({
+        mutationFn: (id: string) => messengerApi.deleteMessage(id),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['messenger-messages', activeRoomId] });
+            queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
+        },
+        onError: (err: unknown) => {
+            const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
+            toast.error(typeof detail === 'string' ? detail : 'Не удалось удалить сообщение');
+        },
+    });
+
     const createRoomMutation = useMutation({
         mutationFn: async (data: { room_type: 'direct' | 'group', member_user_ids: number[], title?: string }) => {
+            // The API rejects the whole payload (422) if a single id is not a
+            // number, so drop anything unusable here rather than letting the
+            // request fail as a whole.
+            const participantIds = data.member_user_ids.filter(
+                (id): id is number => typeof id === 'number' && Number.isFinite(id),
+            );
+            if (participantIds.length === 0) {
+                throw new Error('Не выбран ни один участник');
+            }
             const room = await messengerApi.createRoom({
                 room_type: data.room_type,
-                participant_ids: data.member_user_ids,
+                participant_ids: participantIds,
                 name: data.title,
             } as any);
             // For groups: upload the optional avatar file picked in the form,
@@ -1291,6 +1474,17 @@ const MessengerPage: React.FC = () => {
             }
             setMobileShowChat(true);
         },
+        onError: (err: unknown) => {
+            // Without this the mutation failed silently and the "new chat"
+            // panel just sat there, looking like a dead button.
+            const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
+            const message = err instanceof Error ? err.message : '';
+            toast.error(
+                typeof detail === 'string'
+                    ? detail
+                    : message || 'Не удалось создать чат',
+            );
+        },
     });
 
     const updateRoomMutation = useMutation({
@@ -1302,12 +1496,21 @@ const MessengerPage: React.FC = () => {
         onError: () => toast.error('Не удалось обновить чат'),
     });
 
+    // DELETE /rooms/{id} does one of two things depending on who asks and
+    // what kind of room it is (see backend room_lifecycle): the owner of a
+    // group deletes it for everyone; anyone else — and either side of a
+    // direct chat — just drops it from their own list. The response says
+    // which happened, so the toast can be honest about it.
     const deleteRoomMutation = useMutation({
         mutationFn: (roomId: number) => messengerApi.deleteRoom(roomId),
-        onSuccess: () => {
+        onSuccess: (res) => {
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
             setActiveRoomId(null);
-            toast.success('Чат удален');
+            toast.success(
+                res?.result === 'deleted'
+                    ? 'Чат удалён для всех участников'
+                    : 'Чат убран из вашего списка',
+            );
         },
         onError: () => toast.error('Ошибка удаления чата'),
     });
@@ -1350,6 +1553,14 @@ const MessengerPage: React.FC = () => {
     const handleSend = useCallback(async () => {
         const text = messageText.trim();
         if ((!text && !selectedFile) || sendMutation.isPending || uploadingFile) return;
+
+        // Режим редактирования: тот же композер, но PATCH вместо POST.
+        if (editingMsg) {
+            if (!text || editMutation.isPending) return;
+            editMutation.mutate({ id: String(editingMsg.id), text });
+            return;
+        }
+
         // Sending our own message always re-anchors the view to the
         // bottom, even if the user had scrolled up just before tapping
         // Send. Mirrors the universal messenger convention.
@@ -1376,7 +1587,7 @@ const MessengerPage: React.FC = () => {
             sendMutation.mutate({ text });
             setMessageText('');
         }
-    }, [activeRoomId, messageText, selectedFile, sendMutation, uploadingFile]);
+    }, [activeRoomId, messageText, selectedFile, sendMutation, uploadingFile, editingMsg, editMutation]);
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -1528,6 +1739,10 @@ const MessengerPage: React.FC = () => {
     const activeRoom = rooms.find(r => r.id === activeRoomId) || null;
 
     const myUid = uidOf(me as any);
+    // Своя роль в открытой комнате — гейт для админских действий (удаление
+    // чужих сообщений в группе). Совпадает с проверкой на бэке.
+    const myRoleInActiveRoom = participantRows(activeRoom)
+        .find((p) => (p.user_id ?? p.user?.id) === myUid)?.role;
 
     const getRoomDisplayName = (room: ChatRoom) => {
         if (room.name) return room.name;
@@ -1623,13 +1838,7 @@ const MessengerPage: React.FC = () => {
             <Header />
             <main className="flex-1 container mx-auto px-0 sm:px-4 py-4 sm:py-6 max-w-6xl flex flex-col">
                 <div className="mb-4 px-4 sm:px-0">
-                    <Link
-                        to="/myprofile"
-                        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
-                    >
-                        <ArrowLeft className="h-4 w-4" />
-                        {t('hr.backToMain', 'Назад в профиль')}
-                    </Link>
+                    <BackToProfile />
                 </div>
                 <div className="bg-card rounded-xl border shadow-sm overflow-hidden flex" style={{ height: 'calc(100vh - 200px)', minHeight: '500px' }}>
 
@@ -1798,19 +2007,25 @@ const MessengerPage: React.FC = () => {
                                                 Сотрудники · {searchResults.filter(u => uidOf(u) !== myUid).length}
                                             </p>
                                             {searchResults.filter(u => uidOf(u) !== myUid).map(user => {
-                                                const isSelected = selectedUserIds.includes(user.user_id);
+                                                // `/users/search` returns the platform user brief
+                                                // (`id`, no `user_id` alias) — read the id through
+                                                // uidOf, never off `.user_id` directly, or every
+                                                // click below builds `participant_ids: [null]`.
+                                                const targetUid = uidOf(user);
+                                                const isSelected = targetUid != null && selectedUserIds.includes(targetUid);
                                                 return (
                                                     <button
-                                                        key={user.id}
+                                                        key={targetUid ?? user.username}
                                                         onClick={() => {
+                                                            if (targetUid == null) return;
                                                             if (isGroupMode) {
                                                                 setSelectedUserIds(prev =>
-                                                                    prev.includes(user.user_id)
-                                                                        ? prev.filter(id => id !== user.user_id)
-                                                                        : [...prev, user.user_id]
+                                                                    prev.includes(targetUid)
+                                                                        ? prev.filter(id => id !== targetUid)
+                                                                        : [...prev, targetUid]
                                                                 );
                                                             } else {
-                                                                createRoomMutation.mutate({ room_type: 'direct', member_user_ids: [user.user_id] });
+                                                                createRoomMutation.mutate({ room_type: 'direct', member_user_ids: [targetUid] });
                                                             }
                                                         }}
                                                         className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left group ${isSelected ? 'bg-primary/10 hover:bg-primary/20' : 'hover:bg-background/60'}`}
@@ -1837,8 +2052,8 @@ const MessengerPage: React.FC = () => {
                                                                 {isSelected && <Check className="h-3 w-3" />}
                                                             </div>
                                                         )}
-                                                        {!isGroupMode && user.is_online && (
-                                                            <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title="Онлайн" />
+                                                        {!isGroupMode && targetUid != null && presence[targetUid]?.online && (
+                                                            <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title="В сети" />
                                                         )}
                                                     </button>
                                                 )
@@ -1895,10 +2110,13 @@ const MessengerPage: React.FC = () => {
                                                         )}
                                                     </div>
                                                 )}
-                                                {/* Online indicator */}
+                                                {/* Онлайн-индикатор — из presence-карты (Redis + сокет),
+                                                    поле other.is_online осталось от снесённой реплики
+                                                    и всегда undefined. */}
                                                 {room.room_type === 'direct' && me && (() => {
                                                     const other = getOtherMember(room, myUid);
-                                                    return other?.is_online ? (
+                                                    const uid = uidOf(other);
+                                                    return uid != null && presence[uid]?.online ? (
                                                         <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-card" />
                                                     ) : null;
                                                 })()}
@@ -1989,8 +2207,8 @@ const MessengerPage: React.FC = () => {
                                                         </p>
                                                     )}
                                                 </div>
-                                                {u.is_online && (
-                                                    <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title="Онлайн" />
+                                                {uid != null && presence[uid]?.online && (
+                                                    <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title="В сети" />
                                                 )}
                                             </button>
                                         );
@@ -2063,7 +2281,10 @@ const MessengerPage: React.FC = () => {
                                                     ? `${activeRoom.participants.length} участников`
                                                     : (() => {
                                                         const other = me ? getOtherMember(activeRoom, myUid) : null;
-                                                        return other?.is_online ? '🟢 Онлайн' : (other?.position_title || '');
+                                                        const uid = uidOf(other);
+                                                        const st = uid != null ? presence[uid] : undefined;
+                                                        if (st?.online) return '🟢 В сети';
+                                                        return st?.last_seen ? formatLastSeen(st.last_seen) : (other?.position_title || '');
                                                     })()
                                             }
                                         </p>
@@ -2079,12 +2300,26 @@ const MessengerPage: React.FC = () => {
                                         </button>
                                         <button
                                             onClick={() => {
-                                                if (confirm(activeRoom.room_type === 'group' ? 'Вы уверены, что хотите выйти из группы?' : 'Вы уверены, что хотите удалить этот чат?')) {
+                                                // Owner of a group = the participant whose room role
+                                                // is 'admin'. Only they get the destructive wording,
+                                                // because only for them does the backend delete the
+                                                // room for everyone.
+                                                const myRole = activeRoom.participants.find(
+                                                    (p) => uidOf(p) === myUid,
+                                                )?.role;
+                                                const isOwner =
+                                                    activeRoom.room_type === 'group' && myRole === 'admin';
+                                                const prompt = isOwner
+                                                    ? `Удалить группу${activeRoom.name ? ` «${activeRoom.name}»` : ''} для всех участников? Отменить это будет нельзя.`
+                                                    : activeRoom.room_type === 'group'
+                                                        ? 'Выйти из группы? Она пропадёт из вашего списка.'
+                                                        : 'Убрать чат из вашего списка? Он вернётся, если собеседник напишет.';
+                                                if (confirm(prompt)) {
                                                     deleteRoomMutation.mutate(activeRoom.id);
                                                 }
                                             }}
                                             className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
-                                            title="Удалить чат (или выйти из группы)"
+                                            title="Удалить чат / выйти из группы"
                                         >
                                             <Trash2 className="h-4 w-4" />
                                         </button>
@@ -2112,6 +2347,7 @@ const MessengerPage: React.FC = () => {
                                     room={activeRoom}
                                     myUid={myUid}
                                     displayName={getRoomDisplayName(activeRoom)}
+                                    presence={presence}
                                     isUploadingGroupAvatar={updateRoomMutation.isPending}
                                     onGroupAvatarChange={async (file) => {
                                         try {
@@ -2182,6 +2418,15 @@ const MessengerPage: React.FC = () => {
                                             //  • read by every other participant     → 2 green checks
                                             const isPending = !msg.id || String(msg.id).startsWith('tmp-');
                                             const isReadByOthers = !isPending && idx <= minOtherReadIdx;
+                                            // Тумбстоун: сервер обнулил content/attachments, но строку
+                                            // сохранил — админ-выдача по-прежнему видит оригинал.
+                                            const isDeletedMsg = Boolean(msg.is_deleted);
+                                            // Автор правит своё; удалять может автор ИЛИ админ группы
+                                            // (тот же гейт, что в messenger_service.delete_message).
+                                            const canEditMsg = isMe && !isPending && !isDeletedMsg && !msg.is_encrypted;
+                                            const canDeleteMsg =
+                                                !isPending && !isDeletedMsg &&
+                                                (isMe || (activeRoom.room_type === 'group' && myRoleInActiveRoom === 'admin'));
 
                                             // Insert a date chip whenever the calendar day rolls over.
                                             const prev = idx > 0 ? orderedMessages[idx - 1] : null;
@@ -2203,27 +2448,100 @@ const MessengerPage: React.FC = () => {
                                                     {daySeparator}
                                                 <div
                                                     data-msg-id={msg.id}
-                                                    className={`flex min-w-0 scroll-mt-20 ${isMe ? 'justify-end' : 'justify-start'}`}
+                                                    className={`group/msg flex min-w-0 scroll-mt-20 items-center gap-1 ${isMe ? 'justify-end' : 'justify-start'}`}
                                                 >
+                                                    {/* Действия над сообщением — появляются при наведении,
+                                                        слева от своего пузыря и справа от чужого, чтобы не
+                                                        перекрывать текст. */}
+                                                    {(canEditMsg || canDeleteMsg || !isDeletedMsg) && (
+                                                        <div className={`flex items-center gap-0.5 opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100 transition-opacity ${isMe ? 'order-0' : 'order-1'}`}>
+                                                            {!isDeletedMsg && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => { setEditingMsg(null); setReplyTo(msg); }}
+                                                                    className="p-1.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                                                                    title="Ответить"
+                                                                >
+                                                                    <ReplyIcon className="h-3.5 w-3.5" />
+                                                                </button>
+                                                            )}
+                                                            {canEditMsg && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        setReplyTo(null);
+                                                                        setEditingMsg(msg);
+                                                                        const decoded = decodeMessageText(msg);
+                                                                        setMessageText(
+                                                                            typeof decoded === 'string' ? decoded : decoded.text || '',
+                                                                        );
+                                                                    }}
+                                                                    className="p-1.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                                                                    title="Редактировать"
+                                                                >
+                                                                    <Pencil className="h-3.5 w-3.5" />
+                                                                </button>
+                                                            )}
+                                                            {canDeleteMsg && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        if (confirm('Удалить сообщение?')) {
+                                                                            deleteMsgMutation.mutate(String(msg.id));
+                                                                        }
+                                                                    }}
+                                                                    className="p-1.5 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                                                                    title="Удалить"
+                                                                >
+                                                                    <Trash2 className="h-3.5 w-3.5" />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                     {/* ``max-w-[75%]`` caps the bubble width; ``min-w-0`` lets
                                                         the flex parent shrink instead of pushing siblings. */}
-                                                    <div className={`min-w-0 max-w-[75%] ${isMe ? 'order-1' : ''}`}>
+                                                    <div className={`min-w-0 max-w-[75%] ${isMe ? 'order-1' : 'order-0'}`}>
                                                         {showSenderLabel && (
                                                             <p className="text-xs text-muted-foreground mb-1 ml-1">
                                                                 {(msg.sender as any)?.full_name || msg.sender?.username}
                                                             </p>
                                                         )}
                                                         <div
-                                                            className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed ${isMe
+                                                            className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed ${isDeletedMsg
+                                                                ? 'bg-muted/50 border border-dashed text-muted-foreground italic rounded-bl-md'
+                                                                : isMe
                                                                 ? 'bg-primary text-primary-foreground rounded-br-md'
                                                                 : 'bg-card border rounded-bl-md shadow-sm'
                                                                 }`}
                                                         >
+                                                            {/* Цитата: снапшот, сделанный сервером при отправке —
+                                                                остаётся читаемой, даже если оригинал потом
+                                                                отредактировали или удалили. */}
+                                                            {msg.reply_to && !isDeletedMsg && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        const el = document.querySelector(`[data-msg-id="${msg.reply_to!.id}"]`);
+                                                                        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                                                    }}
+                                                                    className={`mb-1.5 w-full text-left border-l-2 pl-2 py-0.5 rounded-sm transition-colors ${isMe
+                                                                        ? 'border-primary-foreground/50 bg-primary-foreground/10 hover:bg-primary-foreground/20'
+                                                                        : 'border-primary/50 bg-primary/5 hover:bg-primary/10'
+                                                                        }`}
+                                                                >
+                                                                    <span className={`block text-[11px] font-semibold ${isMe ? 'text-primary-foreground/80' : 'text-primary'}`}>
+                                                                        {msg.reply_to.sender_name || 'Сообщение'}
+                                                                    </span>
+                                                                    <span className={`block text-xs truncate ${isMe ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+                                                                        {msg.reply_to.preview || 'вложение'}
+                                                                    </span>
+                                                                </button>
+                                                            )}
                                                             {/* ``overflow-wrap: anywhere`` forces breaking even
                                                                 inside a single long token (URL, ``aaaaa…``) so
                                                                 the bubble can't push the layout off-screen. */}
                                                             <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                                                                {(() => {
+                                                                {isDeletedMsg ? 'Сообщение удалено' : (() => {
                                                                     const decoded = decodeMessageText(msg);
                                                                     if (typeof decoded === 'object') {
                                                                         const isAudio = decoded.mime_type?.startsWith('audio/');
@@ -2267,10 +2585,13 @@ const MessengerPage: React.FC = () => {
                                                                     return decoded;
                                                                 })()}
                                                             </div>
-                                                            <p className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isMe ? 'text-primary-foreground/60' : 'text-muted-foreground'
+                                                            <p className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isDeletedMsg ? 'text-muted-foreground' : isMe ? 'text-primary-foreground/60' : 'text-muted-foreground'
                                                                 }`}>
+                                                                {msg.is_edited && !isDeletedMsg && (
+                                                                    <span title="Отредактировано">изменено</span>
+                                                                )}
                                                                 {formatTime(msg.created_at)}
-                                                                {isMe && (
+                                                                {isMe && !isDeletedMsg && (
                                                                     isPending ? (
                                                                         <Check className="h-3 w-3 opacity-60" aria-label="Отправляется" />
                                                                     ) : isReadByOthers ? (
@@ -2292,6 +2613,44 @@ const MessengerPage: React.FC = () => {
 
                                 {/* Message Input */}
                                 <div className="p-3 border-t bg-card">
+                                    {/* Режим ответа или редактирования — взаимоисключающие,
+                                        оба сбрасываются крестиком или после отправки. */}
+                                    {(replyTo || editingMsg) && (
+                                        <div className="mb-2 flex items-center gap-2 border-l-2 border-primary bg-primary/5 pl-2 pr-1 py-1.5 rounded-r-lg">
+                                            {editingMsg ? (
+                                                <Pencil className="h-4 w-4 text-primary flex-shrink-0" />
+                                            ) : (
+                                                <ReplyIcon className="h-4 w-4 text-primary flex-shrink-0" />
+                                            )}
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-xs font-semibold text-primary">
+                                                    {editingMsg
+                                                        ? 'Редактирование'
+                                                        : `Ответ · ${(replyTo!.sender as any)?.full_name || replyTo!.sender?.username || 'сообщение'}`}
+                                                </p>
+                                                <p className="text-xs text-muted-foreground truncate">
+                                                    {(() => {
+                                                        const src = editingMsg || replyTo!;
+                                                        const decoded = decodeMessageText(src);
+                                                        const text = typeof decoded === 'string' ? decoded : decoded.text;
+                                                        return text || src.attachments?.[0]?.filename || 'вложение';
+                                                    })()}
+                                                </p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    if (editingMsg) setMessageText('');
+                                                    setReplyTo(null);
+                                                    setEditingMsg(null);
+                                                }}
+                                                className="p-1.5 rounded-full hover:bg-accent transition-colors flex-shrink-0"
+                                                title="Отменить"
+                                            >
+                                                <X className="h-4 w-4 text-muted-foreground" />
+                                            </button>
+                                        </div>
+                                    )}
                                     {isRecording && (
                                         <div className="mb-2 flex items-center justify-between gap-2 bg-destructive/10 border border-destructive/30 p-2 rounded-lg max-w-sm">
                                             <div className="flex items-center gap-2 min-w-0">

@@ -10,7 +10,9 @@ from unittest.mock import patch
 import pytest
 from django.test import Client
 
-from apps.tasks.models import Equipment, Status, Task, TaskAssignment
+from apps.tasks.models import (
+    Equipment, EquipmentCategory, Project, Site, Status, Task, ResourceAllocation,
+)
 
 from .helpers import BASE, auth
 
@@ -93,10 +95,14 @@ def test_resource_gantt_requires_the_window():
 @pytest.mark.django_db
 def test_resource_gantt_groups_by_employee_and_equipment():
     task = _mk_task(start_date=D(2026, 3, 5), due_date=D(2026, 3, 7))
-    equipment = Equipment.objects.create(name="Кран", inventory_no="K-1",
-                                         category="Спецтехника")
-    TaskAssignment.objects.create(task=task, employee_id=11)
-    TaskAssignment.objects.create(task=task, equipment=equipment)
+    # Категория — справочник, а не текст; в ``meta`` она по-прежнему уезжает
+    # строкой, что эта же проверка ниже и стережёт.
+    equipment = Equipment.objects.create(
+        name="Кран", inventory_no="K-1",
+        category=EquipmentCategory.objects.create(slug="spectehnika",
+                                                  name="Спецтехника"))
+    ResourceAllocation.objects.create(task=task, employee_id=11)
+    ResourceAllocation.objects.create(task=task, equipment=equipment)
 
     with patch("apps.tasks.services.hydration.users_interface.get_users_brief",
                return_value=[{"id": 11, "username": "i", "email": "i@x",
@@ -139,7 +145,7 @@ def test_resource_gantt_deduplicates_a_task_counted_twice():
     """An employee who is both explicitly assigned and the primary assignee
     must get one bar, not two."""
     task = _mk_task(start_date=D(2026, 3, 5), assignee_id=11)
-    TaskAssignment.objects.create(task=task, employee_id=11, allocation=50)
+    ResourceAllocation.objects.create(task=task, employee_id=11, allocation=50)
     with patch("apps.tasks.services.hydration.users_interface.get_users_brief",
                return_value=[]):
         body = Client().get(f"{BASE}/reports/resource-gantt?{WINDOW}",
@@ -164,8 +170,8 @@ def test_resource_gantt_window_excludes_outside_tasks():
 def test_resource_gantt_kinds_filter():
     task = _mk_task(start_date=D(2026, 3, 5))
     equipment = Equipment.objects.create(name="Кран")
-    TaskAssignment.objects.create(task=task, employee_id=11)
-    TaskAssignment.objects.create(task=task, equipment=equipment)
+    ResourceAllocation.objects.create(task=task, employee_id=11)
+    ResourceAllocation.objects.create(task=task, equipment=equipment)
     body = Client().get(
         f"{BASE}/reports/resource-gantt?{WINDOW}&kinds=equipment",
         **auth()).json()
@@ -175,9 +181,9 @@ def test_resource_gantt_kinds_filter():
 @pytest.mark.django_db
 def test_resource_gantt_search_filters_by_resource_name():
     task = _mk_task(start_date=D(2026, 3, 5))
-    TaskAssignment.objects.create(
+    ResourceAllocation.objects.create(
         task=task, equipment=Equipment.objects.create(name="Кран"))
-    TaskAssignment.objects.create(
+    ResourceAllocation.objects.create(
         task=task, equipment=Equipment.objects.create(name="Погрузчик"))
     body = Client().get(f"{BASE}/reports/resource-gantt?{WINDOW}&search=кран",
                         **auth()).json()
@@ -187,8 +193,8 @@ def test_resource_gantt_search_filters_by_resource_name():
 @pytest.mark.django_db
 def test_resource_gantt_department_filter_uses_the_hr_interface():
     task = _mk_task(start_date=D(2026, 3, 5))
-    TaskAssignment.objects.create(task=task, employee_id=11)
-    TaskAssignment.objects.create(task=task, employee_id=12)
+    ResourceAllocation.objects.create(task=task, employee_id=11)
+    ResourceAllocation.objects.create(task=task, employee_id=12)
 
     def brief(user_id):
         return {"id": user_id, "department_id": 3 if user_id == 11 else 9}
@@ -208,8 +214,97 @@ def test_department_filter_narrows_rather_than_ignores_when_hr_is_down():
     """hr is a stub, so no employee resolves to a department — the filter
     must exclude everyone rather than silently pass everyone through."""
     task = _mk_task(start_date=D(2026, 3, 5))
-    TaskAssignment.objects.create(task=task, employee_id=11)
+    ResourceAllocation.objects.create(task=task, employee_id=11)
     body = Client().get(
         f"{BASE}/reports/resource-gantt?{WINDOW}&department_id=3",
         **auth()).json()
     assert body["resources"] == []
+
+
+# ── ось «проект/объект» в отчётах ───────────────────────────────────────
+#
+# Оба Ганта научились сужаться по проекту и объекту. В ресурсном это
+# особенно важно: фильтр применяется ДО джойна назначений, поэтому строка
+# ресурса, у которого нет работы на выбранном объекте, исчезает целиком, а
+# не остаётся пустой — иначе график выглядел бы загруженнее, чем он есть.
+
+@pytest.mark.django_db
+def test_reports_gantt_filters_by_project():
+    project = Project.objects.create(name="Стройка")
+    inside = _mk_task(project=project, start_date=D(2026, 1, 1),
+                      due_date=D(2026, 1, 10))
+    _mk_task(start_date=D(2026, 1, 1), due_date=D(2026, 1, 10))
+
+    body = Client().get(f"{BASE}/reports/gantt?project_id={project.id}",
+                        **auth()).json()
+    assert [row["id"] for row in body["tasks"]] == [str(inside.id)]
+
+
+@pytest.mark.django_db
+def test_reports_gantt_filters_by_site():
+    site = Site.objects.create(name="Алга")
+    inside = _mk_task(site=site, start_date=D(2026, 1, 1),
+                      due_date=D(2026, 1, 10))
+    _mk_task(start_date=D(2026, 1, 1), due_date=D(2026, 1, 10))
+
+    body = Client().get(f"{BASE}/reports/gantt?site_id={site.id}",
+                        **auth()).json()
+    assert [row["id"] for row in body["tasks"]] == [str(inside.id)]
+
+
+@pytest.mark.django_db
+def test_reports_gantt_combines_project_and_site():
+    project = Project.objects.create(name="Стройка")
+    alga = Site.objects.create(name="Алга")
+    sazagan = Site.objects.create(name="Сазаган")
+    wanted = _mk_task(project=project, site=alga,
+                      start_date=D(2026, 1, 1), due_date=D(2026, 1, 10))
+    _mk_task(project=project, site=sazagan,
+             start_date=D(2026, 1, 1), due_date=D(2026, 1, 10))
+
+    body = Client().get(
+        f"{BASE}/reports/gantt?project_id={project.id}&site_id={alga.id}",
+        **auth()).json()
+    assert [row["id"] for row in body["tasks"]] == [str(wanted.id)]
+
+
+@pytest.mark.django_db
+def test_resource_gantt_project_filter_drops_the_whole_row():
+    """Именно строку, а не только полосу: пустая строка ресурса читалась бы
+    как «человек занят», хотя на этом проекте у него работы нет."""
+    project = Project.objects.create(name="Стройка")
+    _mk_task(project=project, assignee_id=USER,
+             start_date=D(2026, 1, 5), due_date=D(2026, 1, 8))
+    _mk_task(assignee_id=99, start_date=D(2026, 1, 5), due_date=D(2026, 1, 8))
+
+    body = Client().get(
+        f"{BASE}/reports/resource-gantt?from=2026-01-01&to=2026-01-31"
+        f"&project_id={project.id}", **auth()).json()
+    assert [r["resource_id"] for r in body["resources"]] == [f"emp_{USER}"]
+
+
+@pytest.mark.django_db
+def test_resource_gantt_site_filter_narrows_equipment_rows_too():
+    site = Site.objects.create(name="Алга")
+    crane = Equipment.objects.create(name="Кран")
+    digger = Equipment.objects.create(name="Экскаватор")
+    on_site = _mk_task(site=site, start_date=D(2026, 1, 5),
+                       due_date=D(2026, 1, 8))
+    elsewhere = _mk_task(start_date=D(2026, 1, 5), due_date=D(2026, 1, 8))
+    ResourceAllocation.objects.create(task=on_site, equipment=crane)
+    ResourceAllocation.objects.create(task=elsewhere, equipment=digger)
+
+    body = Client().get(
+        f"{BASE}/reports/resource-gantt?from=2026-01-01&to=2026-01-31"
+        f"&site_id={site.id}", **auth()).json()
+    assert [r["resource_name"] for r in body["resources"]] == ["Кран"]
+
+
+@pytest.mark.django_db
+def test_gantt_filters_reject_a_non_numeric_id():
+    """422-конверт, а не 500 из int()."""
+    assert Client().get(f"{BASE}/reports/gantt?site_id=abc",
+                        **auth()).status_code == 422
+    assert Client().get(
+        f"{BASE}/reports/resource-gantt?from=2026-01-01&to=2026-01-31"
+        f"&project_id=abc", **auth()).status_code == 422

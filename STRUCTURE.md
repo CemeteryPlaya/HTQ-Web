@@ -75,6 +75,8 @@ HTQWeb1/
 | **media_files** | `api/media/v1/` | `media` | ⭐ Общее файловое хранилище — единая точка входа для аватарок, HR-документов, вложений мессенджера и почты (см. §7.1). `AppConfig.label = "media_files"`, но реестр знает его как `media` |
 | **mail** | `api/email/v1/` | `mail` | Дуальная почта: Mailcow + OAuth Gmail/Outlook (см. §4.1) |
 | **messenger** | `api/messenger/v1/` | `messenger` | Чат, Socket.IO (ASGI), presence, E2EE-ключи |
+| **contracts** | `api/contracts/v1/` | `contracts` | Бюджеты (программа × статья расходов × администратор), реестр контрагентов, договоры с контролем остатка бюджета (см. §3.5). Единственная аппка, появившаяся уже после обратной миграции — FastAPI-предка у неё нет |
+| **signoff** | `api/signoff/v1/` | `signoff` | ⭐ Универсальное многоэтапное согласование ЧУЖИХ объектов (см. §3.6). **Не путать с `approvals`**: та согласует собственные `RequestInstance` из своего конструктора форм, эта — строки в таблицах предметных аппок |
 
 Полный список канонических имён сервисов — `apps.core.models.KNOWN_SERVICES` (включает ещё `conference`, зарезервированное под SFU-стек, у которого нет своей Django-аппки).
 
@@ -130,6 +132,68 @@ cd backend
 - **Роуты:** `instances/` (+ `batch-approve`, `<id>/submit|resubmit|approve|reject|request-changes|cancel|recall`), `templates/` (+ `versions`, `preview`, `activate`/`deactivate`), `projects/` (+ `members`), `stats/{overview,by-project,by-template,by-actor,heatmap}`, `reference-sources/` (Lark-Base-style справочники, + `rows/`, `access`, `my-data-tables`, `by-slug/<slug>/options`), `stream` (SSE).
 - **SSE:** `/api/requests/v1/stream` обслуживается **ASGI-процессом** (`backend-asgi`) через обычную async-вьюху (`StreamingHttpResponse`), не через `asgi.py`-обёртку — см. `apps/approvals/urls.py`.
 - **Frontend:** [frontend/src/features/requests/](frontend/src/features/requests/) + [frontend/src/api/requests.ts](frontend/src/api/requests.ts) — без изменений.
+
+### 3.5 Contracts — бюджеты, контрагенты, договоры
+
+`apps.contracts` (URL-префикс `api/contracts/v1/`) — учёт договоров с контролем бюджета. Отвечает на один вопрос: **сколько из выделенного бюджета уже законтрактовано и сколько осталось.** Frontend'а пока нет — только API и django-admin.
+
+Три слоя моделей (`apps/contracts/models.py`):
+
+- **Справочники бюджета** — `Country`, `Program` (название + статья расходов в одной строке; подпись — `display_name`, «код название», код необязателен), `Administrator` (держатель бюджетных строк — **проект + страна**, без ФИО и **без денег на самой записи**; подпись «проект страна» собирает `Administrator.display_name`), `Budget` (выделенная сумма на связку администратор × программа × год, уникальную).
+- **Реестр контрагентов** — `Counterparty` (БИН/ИИН, НДС — **булев признак** «с НДС / без НДС», контакты, адрес, страна, статус). В спецификации заказчика таблица называется «Реестр контрактов», но её поля — атрибуты контрагента, а не договора.
+- **`Agreement`** — единственная транзакционная сущность. Ссылается на ОДНУ бюджетную строку; администратор и программа читаются через неё, отдельных колонок на договоре нет (иначе было бы две версии правды о том, из какого кармана деньги).
+
+**Ключевой инвариант: остаток бюджета не хранится.** `committed`/`remaining` считаются в `services/budget_calc.py` как `amount − SUM(договоры в COMMITTING_STATUSES)`. Хранимый баланс, который декрементируют при создании договора, расходится с реальностью при первом же редактировании суммы, удалении или расторжении — и потом нет способа узнать, какая цифра верна. Колонок под эти поля в таблице нет и заводить их не нужно.
+
+`COMMITTING_STATUSES` (там же) — единственное место, где зафиксировано, **с какого статуса договор занимает бюджет**: сейчас всё, кроме `draft` и `terminated`. Это открытый вопрос к заказчику; меняется правкой одного множества, ни модели, ни схемы, ни вьюхи трогать не придётся.
+
+**Согласование подключено — через `apps.signoff`, не через `apps.approvals`.** `Budget`, `Counterparty` и `Agreement` наследуют примесь `signoff.Approvable` (колонка `approval_state` в их собственных таблицах), а `apps/contracts/approval_hooks.py` из `ContractsConfig.ready()` регистрирует три типа с колбэками. Подробности механики — §3.6; здесь важны три следствия:
+
+- **Права изменились.** Создание бюджета/контрагента/договора и отправка их на согласование — `auth="jwt"` (любой сотрудник); правка, удаление, смена статуса и весь справочный слой остались `admin=True`. Контролем служит согласование, а не админский флаг: если завести бюджет может только администратор, маршрут из трёх этапов над бюджетами нечего согласовывать. Скан договора прикладывает автор, пока договор черновик, либо администратор всегда.
+- **Несогласованное не расходуется.** `agreement_service._validate_context` отбивает несогласованный бюджет как источник денег и несогласованного контрагента как сторону — **но только если для этого типа заведён активный маршрут** (`signoff.has_active_route`). Без маршрутов ничего не блокируется: все существующие строки — `draft`, и безусловная проверка сломала бы модуль в день выката. Выключенный signoff гейт снимает, а не роняет contracts.
+- **У договора две оси состояния.** `status` — жизненный цикл записи, `approval_state` — место в маршруте. Связаны они в одном месте: `approval_hooks` двигает `status` по `ALLOWED_TRANSITIONS` (`draft → on_review` на отправку, `→ approved` на согласование, отказ, возврат на доработку и отзыв возвращают в `draft`). Обратите внимание: `on_review` уже занимает бюджет (`COMMITTING_STATUSES`), поэтому лимит проверяется ДО запуска процесса.
+- **Отправленное на согласование не редактируется.** `assert_editable()` стоит первой строкой каждой операции правки и удаления в `services/*.py` (включая строки бюджета — их запирает родительский бюджет) и запрещает её в состояниях `pending`, `approved` и `rejected`; правятся только `draft` и `rework`. Отпирает объект единственная вещь — возврат на доработку (§3.6). Заперто и повторное `/submit`: по решённому объекту он отвечает 409. Механику держит signoff — это семантика ЕГО колонки, — но звать её обязана сама contracts: движок не имеет доступа к чужим таблицам и перехватить запись не может.
+
+Отложены по-прежнему: учёт фактических платежей/актов, несколько файлов на договор, финансирование из нескольких бюджетных строк, мультивалютность.
+
+### 3.6 Signoff — универсальное согласование
+
+`apps.signoff` (URL-префикс `api/signoff/v1/`) — движок согласования, который ничего не знает о предметных аппках. Frontend — [frontend/src/pages/signoff/](frontend/src/pages/signoff/) (инбокс, список и карточка процесса, редактор маршрутов) + [frontend/src/api/signoff.ts](frontend/src/api/signoff.ts).
+
+**Чем отличается от `apps.approvals`.** У `approvals` единица согласования — `RequestInstance`, строка с JSON-значениями формы, которую она же и спроектировала; указать ею на существующий `Budget` невозможно. `signoff` согласует строку в ЧУЖОЙ таблице, адресуя её парой `(subject_type, subject_id)` — `"contracts.budget"` + pk. Ни `ContentType`, ни междоменного FK: `ContentType` дал бы обходной путь к чужим моделям через `content_type.model_class()`.
+
+**Как перевёрнута зависимость.** Движок не имеет права импортировать `apps.contracts.models`, но обязан уметь две вещи с чужим объектом: сообщить ему результат и показать его человеку. Поэтому предметная аппка сама приходит из `AppConfig.ready()` и отдаёт `signoff.register_subject(...)` три вещи: **класс модели** (signoff ведёт на нём свою колонку `approval_state`), **колбэки** доменных последствий и **`describe`** — способ построить заголовок и ссылку. Импорт идёт только в сторону `contracts → signoff.interface`.
+
+**Модель маршрута.** `ApprovalRoute` → `ApprovalRouteStage` → `ApprovalRouteStageApprover`. Параллельность выражена одним числом: этапы с ОДИНАКОВЫМ `order` идут параллельно, с разным — последовательно. Отдельной модели графа нет намеренно — заказчику нужны «2, 3 или 5 этапов, параллельно или друг за другом», а это ровно то, что выражает целочисленный порядок (ср. `apps.approvals` с его условными переходами — на порядок дороже). Согласующие перечисляются явными user id: платформенных групп нет, `User` сознательно без `PermissionsMixin` (решение Р1 заказчика), поэтому смысл несёт **имя этапа**, а не роль. Активный маршрут на тип — ровно один (частичный уникальный индекс).
+
+**Условные ветки** (`services/conditions.py`). Группа этапов по `order` — она же и ветвление: у этапа есть `condition`, и в процесс он попадает, только если условие сошлось на ФАКТАХ объекта. Отдельной модели ветки нет по той же причине, по которой нет модели графа. Типовой маршрут заказчика — «двое проверяют → согласует ответственный за страну администратора бюджета → один утверждает» — это три группы `order`, во второй по этапу на страну.
+
+- **Факты даёт предметная аппка**, как и всё остальное про чужой объект: `register_subject(..., facts=…, fact_fields=…)`. `facts(subject_id)` снимает плоский словарь скаляров (`{"admin_country_id": 3}`), `fact_fields()` объявляет, что из него можно спрашивать и как показать это в редакторе (тип + справочник значений). Движок сравнивает скаляры и не знает, что такое страна, — поэтому ветвление работает для ЛЮБОГО типа, и включение его для новой модели не требует правок в signoff.
+- **Формат условия** — плоский список предикатов, соединённых И: `[{"field", "op", "value"}]`, операторы `eq/in/not_in/gt/gte/lt/lte`. Вложенности и ИЛИ между полями нет намеренно: ИЛИ по одному полю — это `in`, по разным — два этапа в одной группе.
+- **Пустая группа — ОТКАЗ на запуске, а не пропуск.** Завели страну, забыли ветку — и бюджет тихо прошёл бы мимо финконтроля, чего никто бы не заметил. Поэтому группа без единого прошедшего этапа роняет запуск (409 с перечислением фактов), а «для прочих — вот этот» выражается явным этапом `is_fallback`. Ту же дыру редактор маршрута показывает заранее (`coverage_gaps` в `GET /routes/{id}`).
+- **Ветки считаются один раз, на запуске**, до снимка — как и всё в снимке. Ни правка маршрута, ни правка самого объекта уже идущий процесс не переигрывают. Что именно было решено, видно в `ApprovalProcess.subject_facts` и в `ApprovalProcessStage.condition`/`matched_by`.
+
+**Этап подписи** (`approver_kind` + `requires_attachment` на этапе). Два независимых флага, вместе дающие «последним подписывает автор, приложив PDF»:
+
+- **`approver_kind = initiator`** — согласующего в маршруте нет, он вычисляется на запуске из `ApprovalProcess.initiator_id`. Именно инициатор, а не «автор документа»: `Agreement.created_by` лежит за границей аппки, а в contracts эти двое совпадают по бизнес-процессу. Названных поимённо согласующих у такого этапа быть не может (409/422), кворум для него бессмыслен — задача ровно одна. Это НЕ роль и не группа: вычисляется один конкретный пользователь из данных самого процесса, ровно как разбирается ветвление.
+- **`requires_attachment`** — этап можно СОГЛАСОВАТЬ только с уже приложенным к задаче PDF (`ApprovalTask.file_id`). Для отказа документ не нужен: того, что отказавшему полагалось бы подписать, не существует. Файл прикладывается отдельным запросом ДО решения (`services/attachments.py`, `POST /tasks/{id}/attachment`) — загрузка в S3 не должна идти внутри транзакции, держащей блокировку процесса. PDF-only задаёт политика scope `signoff_doc` в media_files (она же включает проверку magic-байтов), а не проверка в signoff. Приложить может ТОЛЬКО адресат запроса: администраторского исключения нет — загрузка за согласующего была бы подделкой подписи.
+- **«Последний этап» — не сущность.** Процесс завершается, когда пройдена группа с наибольшим `order`, поэтому подпись, оказавшаяся не последней, тихо превращается в промежуточное подтверждение. Запрета на это нет (иначе после подписи нельзя было бы добавить ни одного этапа), есть предупреждение редактору — `initiator_stage_not_last` в `GET /routes/{id}`, рядом с `coverage_gaps`.
+
+**Процесс.** `ApprovalProcess` → `ApprovalProcessStage` → `ApprovalTask` + `ApprovalEvent` (журнал). Этапы процесса — **снимок маршрута на момент запуска**: правка маршрута не трогает уже идущие согласования. Инварианты движка (`services/engine.py`):
+
+- **Отрицательное решение закрывает круг сразу** — и отказ, и возврат на доработку на любом этапе завершают весь процесс, оставшиеся запросы гасятся как `skipped`, а не висят.
+- **Решений три, и различает их судьба ОБЪЕКТА, а не механика.** `approve` ведёт круг дальше; `reject` и `rework` закрывают его одинаково, но `rejected` («документ не годится») оставляет объект ЗАПЕРТЫМ для правки, а `rework` («поправьте и пришлите снова») — открывает. Заперты и `pending`, и `approved`, и `rejected`; правятся только `draft` и `rework` (`ApprovalState.editable()`). Ключ от замка ровно один — возврат на доработку: решением согласующего, пока круг идёт, и `POST /processes/{id}/rework` (`engine.reopen`), когда решение уже принято. Второй нужен затем, что иначе «согласовано» было бы состоянием без выхода, а опечатка в согласованном договоре чинилась бы заведением рядом второго договора. Возвращать решённое вправе согласующий этого процесса или администратор — но НЕ инициатор: свою заявку он отзывает, пока её не рассмотрели, а отпирать чужое решение — не его право. Доработанный объект уходит НОВЫМ кругом: старый процесс остаётся в состоянии `rework`, а не воскресает.
+- **Группа этапов проходится целиком** — следующий `order` активируется, только когда все этапы текущего согласованы.
+- **Колбэк предметной аппки — внутри транзакции, уведомление — после коммита.** Состояние процесса и состояние объекта обязаны стать согласованными атомарно; рассылка в мессенджер — внешний эффект, идёт через `transaction.on_commit`.
+- **Все переходы берут `SELECT … FOR UPDATE` на строку процесса.** Без этого два согласующих, одновременно закрывающих последнюю параллельную пару этапов, оба увидели бы «все согласовали» и оба дёрнули бы `on_approved`.
+
+**Как подключить новый тип** — три шага, ни одного в самом signoff: модель наследует `signoff.Approvable` и объявляет `SIGNOFF_SUBJECT_TYPE`; миграция добавляет `approval_state`; `AppConfig.ready()` зовёт свой `approval_hooks.register()`. Четвёртый шаг — уже в самой аппке: `assert_editable()` первой строкой каждой операции правки и удаления, иначе замок для её объектов просто не сработает. Ветвление — четвёртый, необязательный: добавить в тот же вызов `facts`/`fact_fields`. Образец — `apps/contracts/approval_hooks.py`, минимальный — `apps/signoff/tests/testapp/`.
+
+Одна ловушка при переносе на новый тип: **ключи фактов называются по смыслу, а не по типу**. У договора стран две — администратора бюджета и контрагента, — и они регулярно разные; общий ключ `country_id` означал бы, что настраивающий маршрут выберет одну из них наугад и не узнает об этом. Отсюда `admin_country_id` / `counterparty_country_id`. Обратная сторона того же правила — `program_id` у договора идёт БЕЗ приставки: программа у него ровно одна (договор → строка бюджета → программа), и уточнять там нечего.
+
+Что сейчас объявлено в `apps/contracts/approval_hooks.py`: бюджет — `admin_country_id`, `period_year`, `currency`, `amount`; контрагент — `counterparty_country_id`, `vat`; договор — `admin_country_id`, `counterparty_country_id`, `program_id`, `amount`, `currency`, `payment_type`. Ветвить бюджет по программе нельзя и не будет: бюджет — контейнер из N строк, то есть N программ, а `conditions.normalize_facts` принимает только скаляры. Это упёрлось бы в новый тип факта-списка и операторы вида `contains` в самом signoff, а не в правку contracts.
+
+⚠️ **Справочник под choice-полем обязан быть непустым.** `conditions.validate_fields` роняет ВЕСЬ список полей типа, если у любого `choice` пустые `options`, а `SubjectsView._fields` глушит это в `[]`. Практический эффект: на свежей установке без заведённых стран И программ редактор маршрута для «Договора» не покажет ни одного условия — включая те, чьи справочники заполнены. Данные это чинят сами (ни бюджет, ни договор не завести без страны и программы), но при настройке маршрутов ДО ввода данных выглядит как сломанный редактор.
 
 ---
 
@@ -242,20 +306,65 @@ POST   /api/tasks/v1/tasks/{id}/watch/  •  DELETE …/watch/
 PATCH  /api/tasks/v1/tasks/{id}/progress/      body: {percent}
 ```
 
-**Projects + TaskType registry:**
+**Иерархия работ — пять уровней:**
 ```
-Project(id, name, status=active|completed|archived, color, start_date, end_date, owner_id, department_id)
-TaskType(id, slug UNIQUE, name, color, icon, is_system)   # user-extensible, 5 системных строк
-Task.project_id   → Project(id)   ON DELETE SET NULL   # NULL = standalone
-Task.task_type_id → TaskType(id) ON DELETE SET NULL
+Проект (Project)
+└── Площадка (Site, через ProjectSite M2M)
+    └── Блок (SiteBlock) ── плановые объёмы (SiteBlockVolume): «250 валов на блок 1»
+        └── Роудмап (Roadmap) ── план: сроки + ResourceRequirement
+            └── Задача (Task) ── план: TaskVolume; факт: DailyReport
+                └── Подзадача (Task.parent)
+
+Субподряд (Contractor) навешивается на проект / площадку / роудмап / задачу
+и НАСЛЕДУЕТСЯ вниз (contractor_service.effective_contractors)
 ```
-Роудмап ([HRRoadmap.tsx](frontend/src/pages/hr/HRRoadmap.tsx)) рендерит проекты → дерево задач по `parent_id`.
 ```
-GET/POST/PATCH/DELETE /api/tasks/v1/projects/[{id}/]   •   GET …/projects/{id}/tasks/
-GET/POST/PATCH/DELETE /api/tasks/v1/task-types/[{id}/]
+Project(id, name, status, color, start_date, end_date, owner_id, department_id,
+        use_production_calendar)          # False = календарные дни, стройка идёт 7/7
+Roadmap(id, project_id, site_block_id, name, status, planned_start_date,
+        planned_end_date, planned_working_days)   # площадки колонкой НЕТ — джойн site_block__site
+SiteBlock(id, site_id, name, code, order, status=planned|active|suspended|done, start_date, end_date)
+DailyReport(id, task_id, volume_type_id, author_id, work_date, quantity,
+            headcount, comment, current_revision, is_deleted)
+DailyReportRevision(id, report_id, revision_no, <снимок полей>, edited_by_id, edited_at)
+Task.project_id    → Project(id)   ON DELETE SET NULL   # NULL = standalone
+Task.roadmap_id    → Roadmap(id)   ON DELETE SET NULL   # ЗАДАЁТ проект, площадку и блок задачи
+Task.site_block_id → SiteBlock(id) ON DELETE SET NULL
 ```
 
-**Сервисы** ([apps/tasks/services/](backend/apps/tasks/services/)): `task_service.py`, `task_content_service.py`, `task_response.py`, `project_service.py`, `sequence_service.py` (Jira-style ключи), `calendar_service.py`, `production_calendar.py` (казахстанские праздники), `gantt_service.py`, `link_service.py`, `notification_service.py`, `reference_service.py`, `hydration.py`.
+Три вещи, которые определяют всё остальное:
+
+1. **Выполнение считается по объёмам в штуках**, а не по статусам задач; на статусы код
+   падает обратно только когда объёмов нет (согласование, приёмка).
+2. **Факт живёт только в `DailyReport`** — с датой ВЫПОЛНЕНИЯ работ (`work_date`, не
+   `created_at`), автором и историей правок. Колонки `completed_quantity` больше нет:
+   она была числом без даты, и по ней нельзя было ни построить S-кривую, ни спросить
+   «сколько было сделано на 5 июня». Каждая правка отчёта пишет новую
+   `DailyReportRevision` — полный снимок, по образцу `approvals.RequestFormTemplateVersion`.
+3. **План хранится, факт всегда пересчитывается.** Копия факта разошлась бы с отчётами
+   при первом же их изменении.
+
+Роудмап-дерево ([HRRoadmap.tsx](frontend/src/pages/hr/HRRoadmap.tsx)) рендерит все пять
+уровней; карточка пакета с «по дням» и лентой отчётов —
+[HRRoadmapDetail.tsx](frontend/src/pages/hr/HRRoadmapDetail.tsx); дашборд план/факта с
+S-кривой — [HRProjectPlanFact.tsx](frontend/src/pages/hr/HRProjectPlanFact.tsx).
+```
+GET/POST/PATCH/DELETE /api/tasks/v1/projects/[{id}/]   •   GET …/projects/{id}/tasks/
+GET/POST/PATCH/DELETE /api/tasks/v1/roadmaps/[{id}/]   •   GET …/roadmaps/{id}/{tasks,metrics}
+GET/POST …/sites/{id}/blocks   •   GET/PATCH/DELETE …/blocks/{id}   •   PUT …/blocks/{id}/volumes
+GET …/blocks/{id}/progress     •   GET/PUT …/tasks/{id}/volumes          # объёмы = ПЛАН
+GET/POST …/tasks/{id}/daily-reports  •  GET/PATCH/DELETE …/daily-reports/{id}   # факт
+GET …/daily-reports/{id}/revisions   •  GET …/roadmaps/{id}/daily-reports
+GET /api/tasks/v1/plan-fact/{project,roadmap}/{id}[?date=]   # SPI, прогноз, отставание, S-кривая
+GET /api/tasks/v1/equipment-usage?…                          # что занято на дату D + история
+GET/POST/PATCH/DELETE /api/tasks/v1/resource-requirements/[{id}/]   # план количеством
+GET/POST/DELETE       /api/tasks/v1/assignments/[{id}]              # факт именами
+GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,volume-types}/[{id}/]
+```
+
+**Сервисы** ([apps/tasks/services/](backend/apps/tasks/services/)): `task_service.py`, `task_content_service.py`, `task_response.py`, `project_service.py`, `roadmap_service.py` (план/факт пакета), `block_service.py` (блоки + прогресс по штукам), `daily_report_service.py` (факт + ревизии), `plan_fact_service.py` (SPI, прогноз, каскад, S-кривая), `resource_service.py` (потребности и назначения), `equipment_usage_service.py` (техника на дату D), `contractor_service.py` (в т.ч. наследование подрядчика), `site_service.py`, `sequence_service.py` (Jira-style ключи), `calendar_service.py` (в т.ч. рабочие/календарные дни), `production_calendar.py` (казахстанские праздники), `gantt_service.py`, `link_service.py`, `notification_service.py`, `reference_service.py`, `hydration.py`.
+
+Вторая очередь сверялась со спецификацией модуля (`docs/SPEC-projects-module.md`, в репозитории её больше нет). Расхождения с ней были намеренными и сохраняются в коде: `Subcontractor`, `ProjectObject` и `EquipmentEngagement` из её §3.1 НЕ заводились — их роль играют уже существующие `Contractor`, `Site`+`SiteBlock` и `ResourceRequirement(kind=equipment)`. Ссылки вида «SPEC §N» в докстрингах указывают на тот же документ и остаются как объяснение, откуда взято решение.
 
 **Kanban** ([KanbanBoard.tsx](frontend/src/components/tasks/KanbanBoard.tsx)) — без изменений на фронте.
 

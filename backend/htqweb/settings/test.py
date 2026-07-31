@@ -2,6 +2,17 @@ import os
 
 from .base import *  # noqa: F403
 
+# Тестовая предметная аппка для движка signoff: минимальная модель с
+# примесью Approvable, подключённая ровно так же, как подключится любая
+# настоящая (примесь + регистрация из AppConfig.ready()). Живёт только в
+# тестах — движок универсален, и проверять его на конкретном домене
+# значило бы ловить в его тестах чужие регрессии.
+#
+# Пакета migrations у неё нет намеренно: `migrate --run-syncdb`, который
+# pytest-django выполняет при создании тестовой БД, заводит таблицы именно
+# для аппок без миграций.
+INSTALLED_APPS = [*INSTALLED_APPS, "apps.signoff.tests.testapp"]  # noqa: F405
+
 # Тесты бьют напрямую в Postgres контейнера htqweb1-db-1, не через PgBouncer:
 # pytest-django создаёт/дропает test_htqweb через CREATE/DROP DATABASE, а
 # PgBouncer в transaction-режиме такого не пропускает. Нативный Windows

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { useTranslation } from 'react-i18next';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { PhoneInput } from "@/components/ui/phone-input";
+import { PhoneInput, isKzPhoneValid } from "@/components/ui/phone-input";
 import { Textarea } from "@/components/ui/textarea";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { UserProfile, ProfileFormData } from '../../types/userProfile';
@@ -25,7 +25,11 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({ profile, onSubmit, isL
         firstName: z.string().max(100).optional(),
         lastName: z.string().max(100).optional(),
         patronymic: z.string().max(100).optional(),
-        phone: z.string().max(30).optional(),
+        phone: z
+            .string()
+            .max(30)
+            .refine(isKzPhoneValid, { message: t('profile.errors.phoneIncomplete') })
+            .optional(),
         display_name: z.string().min(2, t('profile.errors.nameMin')).max(100),
         bio: z.string().max(1000).optional(),
         settings: z.object({

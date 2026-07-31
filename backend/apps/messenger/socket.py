@@ -8,9 +8,14 @@ Event-протокол — БЕЗ изменений (фронтовый socket.
 features/messenger/hooks/useMessengerSocket.ts``, не трогаем):
 
   Server → Client:
-    - message_new   {room_id, message}
-    - message_read  {room_id, message_id, reader_user_id}
-    - user_typing   {room_id, user_id, is_typing}
+    - message_new     {room_id, message}
+    - message_read    {room_id, message_id, reader_user_id}
+    - user_typing     {room_id, user_id, is_typing}
+    - message_edited  {room_id, message}          (REST-триггер, realtime.py)
+    - message_deleted {room_id, message_id}       (REST-триггер, realtime.py)
+    - room_updated    {room_id}                   (REST-триггер, realtime.py)
+    - user_online     {user_id}                   (presence, connect)
+    - user_offline    {user_id, last_seen}        (presence, disconnect)
 
   Client → Server:
     - join_room   {room_id}
@@ -30,14 +35,14 @@ features/messenger/hooks/useMessengerSocket.ts``, не трогаем):
 Socket.IO продолжает рассылать сам через ``sio.emit``/``AsyncRedisManager`` —
 этот механизм ортогонален notify_publish и переносится целиком.
 
-REST-эндпойнты ``apps/messenger/views.py::publish_typing``/
-``mark_message_read`` (и ``services/messenger_service.py::send_message``) в
-исходнике САМИ вызывают ``sio.emit(...)`` (REST-триггернутая рассылка — см.
-``services/messenger/app/services/messenger_service.py::send_message/
-mark_read/publish_typing``). Эта под-задача переносит ТОЛЬКО сам Socket.IO-
-слой (сервер + WS-инициированные хендлеры, РЕШЕНИЯ брифа пп.1-4) — проводка
-REST-view -> ``sio.emit`` не входит в её РЕШЕНИЯ/DoD и здесь НЕ сделана
-(открытый вопрос, см. отчёт задачи).
+REST-триггернутая рассылка (в исходнике REST-хендлеры сами звали
+``sio.emit``) при порте осталась несделанной («открытый вопрос» той
+под-задачи) — ЗАКРЫТО 2026-07-28: WSGI-процесс публикует события через
+``services/realtime.py`` (``socketio.RedisManager(write_only=True)`` в тот же
+Redis-канал, что и ``AsyncRedisManager`` ниже), см. вызовы в
+``messenger_service.send_message/mark_read/edit_message/delete_message`` и
+``membership_service``. До этого фронт слушал ``message_new``, которого
+сервер не слал никогда, и жил на 30-секундном поллинге.
 """
 from __future__ import annotations
 
@@ -52,6 +57,7 @@ from pydantic import ValidationError
 
 from apps.core.services import ServiceDisabled, require_service
 from apps.messenger.models import RoomParticipant
+from apps.messenger.services import presence
 from htqweb.authn.jwt import AuthError, decode_token
 
 logger = logging.getLogger(__name__)
@@ -184,6 +190,7 @@ async def connect(sid: str, environ: dict[str, Any], auth: dict[str, Any] | None
     # Auto-subscribe the socket to every room the user belongs to (порт
     # комментария исходника: без этого message_new доходит только до
     # активно открытого чата — sidebar/unread остаются протухшими).
+    room_ids: list[int] = []
     try:
         room_ids = await sync_to_async(_user_room_ids_sync)(int(user_id))
         for rid in room_ids:
@@ -195,17 +202,48 @@ async def connect(sid: str, environ: dict[str, Any], auth: dict[str, Any] | None
     except Exception:  # noqa: BLE001 — никогда не блокируем connect на сбое join
         logger.exception("socket_auto_join_failed sid=%s user_id=%s", sid, user_id)
 
+    # Присутствие: sid регистрируется в Redis (services/presence.py); при
+    # переходе оффлайн->онлайн (первая вкладка) — user_online в комнаты
+    # пользователя, чтобы зелёные точки у собеседников зажглись сразу.
+    try:
+        became_online = await sync_to_async(presence.connection_opened)(int(user_id), sid)
+        if became_online:
+            for rid in room_ids:
+                await sio.emit(
+                    "user_online", {"user_id": int(user_id)},
+                    room=f"room:{rid}", skip_sid=sid,
+                )
+    except Exception:  # noqa: BLE001 — присутствие не имеет права ломать connect
+        logger.exception("presence_track_failed sid=%s user_id=%s", sid, user_id)
+
     logger.info("socket_connected sid=%s user_id=%s", sid, user_id)
 
 
 @sio.event
 async def disconnect(sid: str):
-    """Порт ``disconnect``."""
+    """Порт ``disconnect`` + учёт присутствия: когда закрылась ПОСЛЕДНЯЯ
+    вкладка пользователя — user_offline (с ``last_seen``) в его комнаты."""
     try:
         session = await sio.get_session(sid)
     except KeyError:
         session = {}
-    logger.info("socket_disconnected sid=%s user_id=%s", sid, session.get("user_id"))
+    user_id = session.get("user_id")
+    if user_id is not None:
+        try:
+            went_offline = await sync_to_async(presence.connection_closed)(int(user_id), sid)
+            if went_offline:
+                import datetime as _dt
+
+                last_seen = _dt.datetime.now(_dt.timezone.utc).isoformat()
+                for rid in await sync_to_async(_user_room_ids_sync)(int(user_id)):
+                    await sio.emit(
+                        "user_offline",
+                        {"user_id": int(user_id), "last_seen": last_seen},
+                        room=f"room:{rid}",
+                    )
+        except Exception:  # noqa: BLE001
+            logger.exception("presence_untrack_failed sid=%s user_id=%s", sid, user_id)
+    logger.info("socket_disconnected sid=%s user_id=%s", sid, user_id)
 
 
 @sio.event

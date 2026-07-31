@@ -36,8 +36,15 @@ export const messengerApi = {
     getRoom: (roomId: number) =>
         api.get<ChatRoom>(`${BASE}rooms/${roomId}`).then(r => r.data),
 
+    /** Drops a room. The backend decides between the two outcomes and reports
+     *  which one happened: `deleted` — a group's owner removed it for every
+     *  participant; `hidden` — it only left the caller's own list (direct
+     *  chats can't be deleted at all, and a non-owner leaving a group takes
+     *  this branch too). Nothing is ever removed from the database, so the
+     *  admin audit keeps every message and file. */
     deleteRoom: (roomId: number) =>
-        api.delete(`${BASE}rooms/${roomId}`).then(r => r.data),
+        api.delete<{ result: 'deleted' | 'hidden' }>(`${BASE}rooms/${roomId}`)
+            .then(r => r.data),
 
     updateRoom: (roomId: number, payload: UpdateRoomPayload) =>
         api.patch<ChatRoom>(`${BASE}rooms/${roomId}`, payload).then(r => r.data),
@@ -80,8 +87,41 @@ export const messengerApi = {
         api.post<ChatMessage>(`${BASE}messages/`, payload)
             .then(r => r.data),
 
+    /** Edit own message. Sets `is_edited`; the previous text is kept in the
+     *  admin audit trail server-side. */
+    editMessage: (messageId: string, content: string) =>
+        api.patch<ChatMessage>(`${BASE}messages/${messageId}`, { content })
+            .then(r => r.data),
+
+    /** Delete a message (author — own; group admins — any in their group).
+     *  Server keeps the row as a tombstone so moderation retains history. */
+    deleteMessage: (messageId: string) =>
+        api.delete(`${BASE}messages/${messageId}`),
+
     markRead: (roomId: number, messageId: string) =>
         api.post(`${BASE}messages/room/${roomId}/read/${messageId}`),
+
+    /** Total unread across all visible rooms — the header badge. */
+    getUnreadCount: () =>
+        api.get<{ total: number }>(`${BASE}messages/unread-count`).then(r => r.data),
+
+    // --- Group membership (admins of the room only) ---
+    addParticipants: (roomId: number, userIds: number[]) =>
+        api.post<{ added: number[] }>(
+            `${BASE}rooms/${roomId}/participants`, { user_ids: userIds },
+        ).then(r => r.data),
+
+    removeParticipant: (roomId: number, userId: number) =>
+        api.delete(`${BASE}rooms/${roomId}/participants/${userId}`),
+
+    setParticipantRole: (roomId: number, userId: number, role: 'admin' | 'member') =>
+        api.patch(`${BASE}rooms/${roomId}/participants/${userId}`, { role }),
+
+    // --- Presence ---
+    getPresence: (userIds: number[]) =>
+        api.get<Record<string, PresenceEntry>>(
+            `${BASE}users/presence`, { params: { ids: userIds.join(',') } },
+        ).then(r => r.data),
 
     // --- Attachments ---
     uploadAttachment: (roomId: number, file: File) => {

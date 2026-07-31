@@ -134,7 +134,7 @@ def _update_profile(request):
             phone=post_data.get("phone"),
             settings_json=post_data.get("settings"),
         )
-    except profile_service.InvalidSettingsJSON as exc:
+    except (profile_service.InvalidSettingsJSON, profile_service.FieldTooLong) as exc:
         return json_error(str(exc), 400)
 
     # update_fields = only the columns THIS request actually changed (review
@@ -543,9 +543,15 @@ def list_user_options(request):
     except ValidationError as exc:
         return JsonResponse({"detail": json.loads(exc.json())}, status=422)
     users = options_service.list_user_options(query=q.query, limit=q.limit)
+    # Email is contact data, not an identity hint: a picker needs a name to
+    # show, not a mailbox to harvest. Elevated callers keep it — admin
+    # screens do use it to disambiguate namesakes.
+    expose_email = request.token.is_elevated
     return [
         schemas.UserOption(
-            id=u.id, full_name=options_service.full_name_for(u), email=u.email or "",
+            id=u.id,
+            full_name=options_service.full_name_for(u),
+            email=(u.email or "") if expose_email else "",
         )
         for u in users
     ]

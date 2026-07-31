@@ -60,7 +60,7 @@ from apps.users import interface as users_interface
 
 from . import schemas
 from .models import Message, Room, RoomParticipant
-from .services import attachment_service, key_service
+from .services import attachment_service, key_service, membership_service, presence, room_lifecycle
 from .services import messenger_service as msg_svc
 
 _VALID_DATA_TYPES = ("images", "audio", "documents", "video")
@@ -145,12 +145,123 @@ def _update_room(request, room_id: int, data: schemas.RoomUpdateRequest):
         return json_error(str(exc), 400)
 
 
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_room(request, room_id: int):
+    """``DELETE /rooms/{id}`` — роут, которого не было ни у FastAPI-источника,
+    ни в первом порте, хотя фронт звал его с самого начала
+    (``messengerApi.deleteRoom``, кнопки «Удалить чат»/«Выйти из группы») и
+    получал 405.
+
+    Семантика — по продуктовому решению, а не по источнику (источника нет):
+
+    * групповой чат + вызывающий ``role="admin"`` в этой комнате -> чат
+      удаляется ДЛЯ ВСЕХ;
+    * личный чат -> удалить нельзя, чат просто убирается из списка
+      вызывающего (вернётся сам, если собеседник напишет);
+    * участник группы без прав владельца -> тем же механизмом выходит из неё.
+
+    Строки в БД не удаляются НИКОГДА: у администратора остаётся полная
+    история любого чата с сообщениями и файлами. Как это устроено без
+    изменения схемы — докстринг ``apps/messenger/services/room_lifecycle.py``.
+
+    Ответ 200 с ``{"result": "deleted"|"hidden"}``, а не 204: вызывающему
+    важно знать, чат исчез у всех или только у него (фронт показывает разный
+    тост)."""
+    try:
+        result = room_lifecycle.delete_or_hide_room(request, request.token.user_id, room_id)
+    except room_lifecycle.NotAParticipant as exc:
+        return json_error(str(exc), 403)
+    except (room_lifecycle.RoomNotFound, room_lifecycle.AlreadyDeleted) as exc:
+        return json_error(str(exc), 404)
+    return {"result": result}
+
+
 def room_detail(request, room_id: int):
     if request.method == "GET":
         return _get_room(request, room_id=room_id)
     if request.method == "PATCH":
         return _update_room(request, room_id=room_id)
+    if request.method == "DELETE":
+        return _delete_room(request, room_id=room_id)
     return json_error("Method Not Allowed", 405)
+
+
+# ── /rooms/{id}/participants — управление составом группы ──────────────────
+# (membership_service; эндпойнтов не было ни в порте, ни в исходнике —
+# состав группы был неизменяем после создания)
+
+_MEMBERSHIP_ERROR_STATUS = (
+    (membership_service.NotAParticipant, 403),
+    (membership_service.NotRoomAdmin, 403),
+    (membership_service.RoomNotFound, 404),
+    (membership_service.NotGroupRoom, 400),
+    (membership_service.InvalidParticipants, 400),
+    (membership_service.LastAdmin, 400),
+)
+
+
+def _membership_error(exc: Exception):
+    for cls, status_code in _MEMBERSHIP_ERROR_STATUS:
+        if isinstance(exc, cls):
+            return json_error(str(exc), status_code)
+    raise exc
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.ParticipantsAddRequest, status=201)
+def add_participants(request, room_id: int, data: schemas.ParticipantsAddRequest):
+    try:
+        added = membership_service.add_participants(
+            request, request.token.user_id, room_id, data.user_ids,
+        )
+    except Exception as exc:  # noqa: BLE001 — разворачивается в _membership_error
+        return _membership_error(exc)
+    return {"added": added}
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _remove_participant(request, room_id: int, user_id: int):
+    try:
+        membership_service.remove_participant(request, request.token.user_id, room_id, user_id)
+    except Exception as exc:  # noqa: BLE001
+        return _membership_error(exc)
+    return HttpResponse(status=204)
+
+
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.ParticipantRoleRequest)
+def _set_participant_role(request, room_id: int, user_id: int, data: schemas.ParticipantRoleRequest):
+    try:
+        membership_service.set_role(request, request.token.user_id, room_id, user_id, data.role)
+    except Exception as exc:  # noqa: BLE001
+        return _membership_error(exc)
+    return HttpResponse(status=204)
+
+
+def participant_detail(request, room_id: int, user_id: int):
+    if request.method == "DELETE":
+        return _remove_participant(request, room_id=room_id, user_id=user_id)
+    if request.method == "PATCH":
+        return _set_participant_role(request, room_id=room_id, user_id=user_id)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def users_presence(request):
+    """GET /users/presence?ids=1,2,3 — онлайн-статусы пачкой (Redis, см.
+    services/presence.py). Отдаётся любому залогиненному: присутствие в
+    корпоративном мессенджере — не приватная информация (как в Slack)."""
+    raw = (request.GET.get("ids") or "").strip()
+    ids: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.append(int(part))
+        except ValueError:
+            return json_error("Invalid query parameter: ids", 422)
+    if len(ids) > 200:
+        return json_error("Invalid query parameter: ids (max 200)", 422)
+    return {str(uid): st for uid, st in presence.get_presence(ids).items()}
 
 
 # ── /messages/* (messages.py, 4 эндпойнта — 4-й, mark_message_read,
@@ -169,6 +280,53 @@ def send_message(request, data: schemas.MessageCreateRequest):
         # get_room/update_room) — включая обе attachment_ids-ошибки
         # (attachments-под-задача, см. ``MessengerService.send_message``).
         return json_error(str(exc), 403)
+    except msg_svc.InvalidReplyTarget as exc:
+        return json_error(str(exc), 400)
+
+
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.MessageUpdateRequest)
+def _edit_message(request, message_id: uuid.UUID, data: schemas.MessageUpdateRequest):
+    """PATCH /messages/{id} — редактирование своего сообщения (see
+    ``messenger_service.edit_message``: is_edited + прежний текст в аудит +
+    ``message_edited`` в комнату)."""
+    try:
+        return msg_svc.edit_message(request.token.user_id, message_id, data.content)
+    except (msg_svc.MessageNotFound, msg_svc.RoomNotFound) as exc:
+        return json_error(str(exc), 404)
+    except msg_svc.NotAParticipant as exc:
+        return json_error(str(exc), 403)
+    except msg_svc.NotMessageAuthor as exc:
+        return json_error(str(exc), 403)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _delete_message(request, message_id: uuid.UUID):
+    """DELETE /messages/{id} — тумбстоун для участников, полная видимость у
+    админ-выдачи (``messenger_service.delete_message``)."""
+    try:
+        msg_svc.delete_message(request.token.user_id, message_id)
+    except (msg_svc.MessageNotFound, msg_svc.RoomNotFound) as exc:
+        return json_error(str(exc), 404)
+    except msg_svc.NotAParticipant as exc:
+        return json_error(str(exc), 403)
+    except msg_svc.NotMessageAuthor as exc:
+        return json_error(str(exc), 403)
+    return HttpResponse(status=204)
+
+
+def message_detail(request, message_id: uuid.UUID):
+    if request.method == "PATCH":
+        return _edit_message(request, message_id=message_id)
+    if request.method == "DELETE":
+        return _delete_message(request, message_id=message_id)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def unread_count(request):
+    """GET /messages/unread-count — суммарный бейдж для шапки SPA (вне
+    страницы мессенджера)."""
+    return {"total": msg_svc.unread_total(request.token.user_id)}
 
 
 @api_view(methods=("GET",), auth="jwt")
@@ -341,7 +499,48 @@ def get_user_keys(request, user_id: int):
 # ``_serialize_message_admin``) — тот же наблюдаемый набор полей, без
 # гадания по незафиксированной форме источника.
 
-def _serialize_room_admin(room: Room) -> dict:
+def _participants_by_room(room_ids: list[int]) -> dict[int, list[dict]]:
+    """``{room_id: [{user_id, role, user}]}`` для админ-выдачи — состав
+    участников каждой комнаты с профилями.
+
+    Нужно, потому что колонка «Участники» на ``/admin/chats`` была ПУСТОЙ:
+    исходные admin-эндпойнты не объявляли ``response_model`` и отдавали
+    голые ORM-строки ``Room``, где связи не сериализуются вовсе, а порт
+    повторил этот набор полей буквально. Для модерации состав чата —
+    первое, что нужно видеть, поэтому здесь он отдаётся явно.
+
+    Два запроса на ВСЮ страницу, а не на комнату: сначала участники пачкой,
+    затем один ``get_users_brief`` на все уникальные user_id (тот же
+    приём, что ``messenger_service._briefs_by_id``) — без N+1.
+
+    Участники удалённой комнаты остаются на месте: ``room_lifecycle`` не
+    трогает ``RoomParticipant`` именно затем, чтобы админ видел, кто был в
+    чате, даже после его удаления."""
+    if not room_ids:
+        return {}
+    rows = list(
+        RoomParticipant.objects
+        .filter(room_id__in=room_ids)
+        .order_by("room_id", "user_id")
+        .values("room_id", "user_id", "role")
+    )
+    briefs = {
+        b["id"]: b
+        for b in users_interface.get_users_brief({r["user_id"] for r in rows})
+    }
+    out: dict[int, list[dict]] = {}
+    for row in rows:
+        out.setdefault(row["room_id"], []).append({
+            "user_id": row["user_id"],
+            "role": row["role"],
+            # None, если пользователя уже нет в реестре — фронт покажет id.
+            "user": briefs.get(row["user_id"]),
+        })
+    return out
+
+
+def _serialize_room_admin(room: Room, deletion: dict | None = None,
+                          participants: list[dict] | None = None) -> dict:
     return {
         "id": room.id,
         "name": room.name,
@@ -352,14 +551,29 @@ def _serialize_room_admin(room: Room) -> dict:
         "avatar_url": room.avatar_url,
         "created_at": room.created_at.isoformat(),
         "updated_at": room.updated_at.isoformat() if room.updated_at else None,
+        "participants": participants or [],
+        "participant_count": len(participants or []),
+        # Удалённая владельцем комната ОСТАЁТСЯ в этой выдаче — вместе со
+        # всеми сообщениями и вложениями (см. room_lifecycle). Эти три поля
+        # нужны, чтобы админ отличал её от живой, а не чтобы её спрятать.
+        "is_deleted": deletion is not None,
+        "deleted_at": (deletion or {}).get("deleted_at"),
+        "deleted_by": (deletion or {}).get("deleted_by"),
     }
 
 
-def _serialize_message_admin(message: Message) -> dict:
+def _serialize_message_admin(message: Message, sender: dict | None = None) -> dict:
     return {
         "id": str(message.id),
         "room_id": message.room_id,
         "sender_id": message.sender_id,
+        # Профиль автора. Без него страница модерации подписывала КАЖДОЕ
+        # сообщение «Система» — она берёт имя из ``sender``, а выдача отдавала
+        # только числовой ``sender_id`` (исходные admin-эндпойнты не
+        # объявляли response_model и сериализовали голые ORM-строки).
+        # ``None`` штатно означает системное сообщение (``sender_id`` NULL)
+        # либо пользователя, которого больше нет в реестре.
+        "sender": sender,
         "content": message.content,
         "is_encrypted": message.is_encrypted,
         "is_edited": message.is_edited,
@@ -381,8 +595,14 @@ def admin_list_rooms(request):
     except _QueryValidationError as exc:
         return json_error(f"Invalid query parameter: {exc}", 422)
 
-    rooms = Room.objects.order_by("id")[offset:offset + limit]
-    return [_serialize_room_admin(r) for r in rooms]
+    rooms = list(Room.objects.order_by("id")[offset:offset + limit])
+    room_ids = [r.id for r in rooms]
+    deletions = room_lifecycle.deletion_records(room_ids)
+    participants = _participants_by_room(room_ids)
+    return [
+        _serialize_room_admin(r, deletions.get(r.id), participants.get(r.id, []))
+        for r in rooms
+    ]
 
 
 @api_view(methods=("GET",), auth="jwt", admin=True)
@@ -393,12 +613,25 @@ def admin_list_room_messages(request, room_id: int):
     случайный порядок вставки БД) — порт добавляет детерминированную
     сортировку по ``created_at`` (хронологический порядок чтения для
     модерации), без изменения набора возвращаемых строк."""
-    messages = (
+    messages = list(
         Message.objects.filter(room_id=room_id)
         .prefetch_related("attachments")
         .order_by("created_at")
     )
-    return [_serialize_message_admin(m) for m in messages]
+    # Один запрос профилей на всю переписку (тот же батч-приём, что
+    # ``messenger_service._briefs_by_id``), а не по запросу на сообщение.
+    briefs = {
+        b["id"]: b
+        for b in users_interface.get_users_brief(
+            {m.sender_id for m in messages if m.sender_id is not None}
+        )
+    }
+    return [
+        _serialize_message_admin(
+            m, briefs.get(m.sender_id) if m.sender_id is not None else None,
+        )
+        for m in messages
+    ]
 
 
 @api_view(methods=("POST",), auth="jwt", admin=True)

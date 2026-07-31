@@ -1,0 +1,223 @@
+"""Реестр согласуемых типов — то, чем signoff заменяет межаппный импорт.
+
+Движок обязан уметь две вещи с чужим объектом: сообщить ему результат
+(«согласовано» / «отклонено») и показать его человеку в списке «ждёт моего
+решения». Ни того, ни другого он не может сделать сам — ``apps.signoff``
+не имеет права импортировать ``apps.contracts.models``
+(``apps/core/tests/test_app_isolation.py``).
+
+Поэтому зависимость перевёрнута: предметная аппка сама приходит и
+регистрирует свой тип, отдавая колбэки. Направление импорта — contracts →
+signoff.interface, разрешённое; обратного импорта не существует.
+
+Регистрация — из ``AppConfig.ready()`` предметной аппки:
+
+    class ContractsConfig(AppConfig):
+        def ready(self):
+            from . import approval_hooks
+            approval_hooks.register()
+
+Почему ``ready()``, а не автопоиск модулей по ``importlib``: автопоиск —
+это тот же межаппный импорт, только спрятанный от проверки границ
+(``test_app_isolation`` честно признаёт ``importlib`` своей слепой зоной).
+Явный вызов из ``ready()`` видно и человеку, и грепу.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Callable, Protocol
+
+logger = logging.getLogger(__name__)
+
+
+class UnknownSubject(Exception):
+    """Запрошен тип объекта, который никто не регистрировал."""
+
+
+class Describe(Protocol):
+    def __call__(self, subject_id: int) -> dict | None:
+        """``{"title": str, "url": str}`` или ``None``, если объекта нет."""
+
+
+class Facts(Protocol):
+    def __call__(self, subject_id: int) -> dict:
+        """Плоский словарь скаляров, по которым выбираются ветки маршрута."""
+
+
+class FactFields(Protocol):
+    def __call__(self) -> list[dict]:
+        """Схема доступных фактов: ``{"key", "label", "type", "options"}``."""
+
+
+@dataclass(frozen=True)
+class Subject:
+    """Что предметная аппка рассказала signoff о своём типе объектов.
+
+    ``model`` — класс модели, ПЕРЕДАННЫЙ предметной аппкой, а не
+    импортированный отсюда. Разница принципиальная: правило границ
+    запрещает signoff писать ``from apps.contracts.models import Budget``,
+    но не запрещает contracts самой отдать ссылку на свой класс. Так signoff
+    получает возможность вести СВОЁ поле (``Approvable.approval_state``) на
+    чужой таблице, не зная ни имени аппки, ни устройства её моделей.
+
+    Именно поэтому ``model`` обязан быть наследником ``Approvable``: signoff
+    трогает у него ровно одну колонку — ту, которую сам же и объявил.
+
+    ``on_approved``/``on_rejected``/``on_rework`` — про ДОМЕННЫЕ
+    последствия, а не про ``approval_state``: у договора, например, своя
+    машина статусов с таблицей переходов, и согласовать её с результатом
+    согласования вправе только сама аппка. Вызываются ВНУТРИ транзакции
+    движка (см. ``engine._finish``), чтобы состояние процесса и состояние
+    объекта коммитились вместе.
+
+    ``on_rework`` вызывается ДВАЖДЫ по разным поводам — когда согласующий
+    вернул объект решением и когда уже закрытый круг открыли заново
+    (``engine.reopen``). Для предметной аппки это одно и то же событие
+    («объект снова правится»), поэтому колбэк один; отличать поводы ей
+    незачем, а движку — есть где (журнал).
+
+    ``describe`` — единственный способ показать чужой объект в интерфейсе
+    signoff, не зная его модели.
+
+    ``facts``/``fact_fields`` — то же самое для УСЛОВНЫХ ВЕТОК: движок не
+    может спросить у бюджета страну его администратора, поэтому аппка сама
+    снимает с объекта плоский словарь скаляров (``facts``) и отдельно
+    объявляет, что из него разрешено спрашивать в условии и как показать это
+    в редакторе маршрута (``fact_fields``). Обе необязательны: тип без них
+    просто не поддерживает ветвление, и редактор не покажет ему условий.
+    Подробнее — ``services/conditions.py``.
+
+    ``fact_fields`` — функция, а не константа, потому что варианты выбора
+    берутся из справочника в БД: список стран меняется без перезапуска, и
+    зафиксировать его на импорте модуля значило бы показывать в редакторе
+    вчерашний справочник.
+    """
+
+    subject_type: str
+    label: str
+    model: type
+    on_approved: Callable[[int], None] | None = None
+    on_rejected: Callable[[int], None] | None = None
+    on_rework: Callable[[int], None] | None = None
+    on_started: Callable[[int], None] | None = None
+    on_cancelled: Callable[[int], None] | None = None
+    describe: Describe | None = None
+    facts: Facts | None = None
+    fact_fields: FactFields | None = None
+
+
+_SUBJECTS: dict[str, Subject] = {}
+
+
+def register_subject(subject_type: str, *, label: str, model: type,
+                     on_approved: Callable[[int], None] | None = None,
+                     on_rejected: Callable[[int], None] | None = None,
+                     on_rework: Callable[[int], None] | None = None,
+                     on_started: Callable[[int], None] | None = None,
+                     on_cancelled: Callable[[int], None] | None = None,
+                     describe: Describe | None = None,
+                     facts: Facts | None = None,
+                     fact_fields: FactFields | None = None) -> Subject:
+    """Объявить тип объектов согласуемым.
+
+    Повторная регистрация того же типа ПЕРЕЗАПИСЫВАЕТ запись, а не падает:
+    ``AppConfig.ready()`` при некоторых способах запуска (autoreload
+    runserver, повторный ``django.setup()`` в тестах) выполняется больше
+    одного раза, и падение на этом означало бы, что аппка не поднимается по
+    причине, не имеющей отношения к делу.
+    """
+    from apps.signoff.models import Approvable
+
+    if not subject_type or "." not in subject_type:
+        raise ValueError(
+            f"subject_type должен быть вида '<аппка>.<модель>', получено: "
+            f"{subject_type!r}"
+        )
+    if not (isinstance(model, type) and issubclass(model, Approvable)):
+        raise TypeError(
+            f"model для «{subject_type}» должен наследовать "
+            f"signoff.interface.Approvable, получено: {model!r}"
+        )
+    declared = getattr(model, "SIGNOFF_SUBJECT_TYPE", "")
+    if declared != subject_type:
+        # Рассинхрон молча приводит к тому, что submit_for_approval() на
+        # модели уходит в один тип, а маршрут настроен на другой.
+        raise ValueError(
+            f"{model.__name__}.SIGNOFF_SUBJECT_TYPE = {declared!r}, "
+            f"а регистрируется как {subject_type!r}"
+        )
+
+    if fact_fields is not None and facts is None:
+        # Иначе редактор маршрута предложит поля, которых на запуске не
+        # окажется, и каждое такое условие упадёт ConditionError'ом уже в
+        # руках пользователя. Обратное сочетание законно: ``facts`` без
+        # ``fact_fields`` — это снимок для журнала без права ветвиться по нему.
+        raise ValueError(
+            f"«{subject_type}»: fact_fields объявлены без facts — условия "
+            f"будет не на чем проверять"
+        )
+    # Сами ``fact_fields()`` здесь НЕ вызываются: регистрация идёт из
+    # AppConfig.ready(), где обращаться в БД нельзя (см. докстринг
+    # interface.py), а варианты выбора приходят как раз из справочника.
+    # Их проверяет conditions.validate_fields() в момент чтения.
+
+    subject = Subject(
+        subject_type=subject_type, label=label, model=model,
+        on_approved=on_approved, on_rejected=on_rejected, on_rework=on_rework,
+        on_started=on_started, on_cancelled=on_cancelled, describe=describe,
+        facts=facts, fact_fields=fact_fields,
+    )
+    if subject_type in _SUBJECTS:
+        logger.debug("signoff: тип %s зарегистрирован повторно", subject_type)
+    _SUBJECTS[subject_type] = subject
+    return subject
+
+
+def get_subject(subject_type: str) -> Subject:
+    subject = _SUBJECTS.get(subject_type)
+    if subject is None:
+        known = ", ".join(sorted(_SUBJECTS)) or "(ни одного)"
+        raise UnknownSubject(
+            f"Тип «{subject_type}» не зарегистрирован в signoff. "
+            f"Известные типы: {known}"
+        )
+    return subject
+
+
+def registered_subjects() -> list[Subject]:
+    return [_SUBJECTS[key] for key in sorted(_SUBJECTS)]
+
+
+def fields_for(subject_type: str) -> list[dict]:
+    """Схема фактов типа — для редактора маршрута и проверки условий.
+
+    Пустой список у типа, который ветвление не поддерживает: это не ошибка,
+    а «условия здесь настраивать нельзя», и редактор просто не покажет их.
+    """
+    from apps.signoff.services import conditions
+
+    subject = get_subject(subject_type)
+    if subject.fact_fields is None:
+        return []
+    return conditions.validate_fields(subject.fact_fields())
+
+
+def facts_for(subject_type: str, subject_id: int) -> dict:
+    """Факты объекта — то, по чему выбираются ветки и что ложится в журнал.
+
+    Ошибку ``facts()`` НЕ глушим, в отличие от ``describe()``: заголовок
+    карточки — оформление, а факты решают, кто будет согласовывать. Молча
+    подставить пустой словарь значило бы отправить объект не по той ветке.
+    """
+    from apps.signoff.services import conditions
+
+    subject = get_subject(subject_type)
+    if subject.facts is None:
+        return {}
+    return conditions.normalize_facts(subject.facts(subject_id))
+
+
+def is_registered(subject_type: str) -> bool:
+    return subject_type in _SUBJECTS

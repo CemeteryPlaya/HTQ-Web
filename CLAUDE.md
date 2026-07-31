@@ -27,7 +27,7 @@ Ignore/discount at the repo root: empty `nginx/`, root `node_modules/`+`package.
 
 ## Commands
 
-Containers are named `htqweb1-<service>-1` (e.g. `htqweb1-backend-web-1`, `htqweb1-db-1`, `htqweb1-pgbouncer-1`).
+Containers are named `htq-web-<service>-1` (e.g. `htq-web-backend-web-1`, `htq-web-db-1`, `htq-web-pgbouncer-1`) — the compose project takes its name from the repo directory.
 
 **БД — боевая в Docker на VPS** (`DB_HOST=45.10.110.212`, `DB_PORT=5432` в `.env` +
 `x-django-env`). Локальные `db`/`pgbouncer` в `docker-compose.yml` — только под
@@ -57,22 +57,33 @@ Playwright: the chromium binary isn't installed; launch with `{ channel: 'msedge
 ```bash
 docker compose -f docker-compose.test.yml up -d   # самодостаточный тест-Postgres на :55432 (НЕ docker restart!)
 cd backend
-.venv/Scripts/python.exe -m pytest -q                                   # whole suite
-.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
+../.venv/Scripts/python.exe -m pytest -q                                   # whole suite
+../.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
 ```
 `DJANGO_SETTINGS_MODULE=htqweb.settings.test` and `JWT_SECRET` are both fixed by `pytest.ini`/`settings/test.py` — nothing to export by hand. Full detail (including the `max_connections=300` bump): [backend/README-tests.md](backend/README-tests.md).
 
 **Django management** (`cd backend`, same venv):
 ```bash
-.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
-.venv/Scripts/python.exe manage.py migrate
-.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
-.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
+../.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
+../.venv/Scripts/python.exe manage.py migrate
+../.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
+../.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
+../.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
 ```
+`seed_tasks_demo` fills the whole five-level hierarchy (project → site → block → roadmap → task) plus volumes, resource requirements and dated daily reports; it needs `seed_hr_demo` to have run first (it reads departments/employees through `apps.hr.interface`). `--purge` removes only what it seeded, `--wipe` TRUNCATEs every table of the `tasks` app and re-seeds — including restoring the five system `TaskType` rows that migration `0002` had put there.
+
+**Reaching the dev database from the host**: `manage.py` defaults to `localhost:6432` (PgBouncer), whose credentials fail SASL from the host. Use the unpooled port instead — same server, dev database:
+```bash
+cd backend
+DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
+  DB_NAME=htqweb DB_USER=htqweb DB_PASSWORD=change-me JWT_SECRET=dev PYTHONIOENCODING=utf-8 \
+  ../.venv/Scripts/python.exe manage.py <command>
+```
+(`:55432` comes up with `docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db`. `PYTHONIOENCODING=utf-8` is needed or Russian output comes out mojibake on the Windows console.)
 
 ## Architecture invariants (the load-bearing ones)
 
-- **One Django backend, domains are apps.** `backend/apps/{users,cms,media_files,hr,mail,messenger,tasks,approvals,core}`. `apps.core` is the only shared foundation (JWT/service-registry primitives live in `htqweb/`, not in an app); every other app talks to a neighbour ONLY through that neighbour's `apps.<x>.interface` module — never its `models`/`services` directly (enforced by the isolation test above).
+- **One Django backend, domains are apps.** `backend/apps/{users,cms,media_files,hr,mail,messenger,tasks,approvals,contracts,signoff,core}`. Two of those post-date the migration and have no FastAPI ancestor: **`contracts`** (`/api/contracts/v1`, budgets/counterparties/agreements) and **`signoff`** (`/api/signoff/v1`, generic multi-stage approval over *other apps'* rows — **not** `apps.approvals`, which is a form designer approving its own `RequestInstance`s; see STRUCTURE.md §3.6). `apps.core` is the only shared foundation (JWT/service-registry primitives live in `htqweb/`, not in an app); every other app talks to a neighbour ONLY through that neighbour's `apps.<x>.interface` module — never its `models`/`services` directly (enforced by the isolation test above).
 - **API layer is hand-rolled Django, not DRF.** `htqweb.http.api_view` (`methods=`, `auth="jwt"|"admin_session"|None`, optional Pydantic `body=`, `admin=True` gate) decorates views; the error envelope is always `{"detail": ...}` (401/403/404/422/500/503), matching the old FastAPI contract. Pydantic schemas (`apps/<domain>/schemas.py`) carried over from the FastAPI services essentially as-is and still do request/response validation.
 - **URLs auto-mount by convention.** An app declares `API_PREFIX = "api/<domain>/v1/"` on its `AppConfig` (`apps/<domain>/apps.py`) and defines `apps/<domain>/urls.py`; `htqweb/urls.py` discovers every installed app with that attribute and mounts it — adding a domain never touches `htqweb/urls.py`. `APPEND_SLASH = False`, so `urls.py` registers both the slashed and bare spelling of a path wherever the frontend might send either.
 - **Business logic lives in `apps/<domain>/services/<file>.py`.** `views.py` are thin dispatchers (parse → call service → shape response). Look in `services/`, not in views, for behavior.

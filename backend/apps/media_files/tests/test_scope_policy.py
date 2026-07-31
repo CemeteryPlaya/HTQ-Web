@@ -12,11 +12,29 @@ from apps.media_files.services.scope_policy import (
 )
 
 
-def test_known_scopes_are_exactly_the_seven_source_scopes():
-    assert KNOWN_SCOPES == {
-        "avatar", "news", "chat", "hr_doc", "hr_department",
-        "task_attachment", "generic",
-    }
+def test_known_scopes_are_the_seven_source_scopes_plus_post_migration_ones():
+    """The seven ported scopes, plus every scope added after the cutover.
+
+    ``signoff_doc`` has no FastAPI ancestor — ``apps.signoff`` post-dates the
+    migration entirely — so it is listed separately from the parity set
+    rather than folded into it.
+    """
+    ported = {"avatar", "news", "chat", "hr_doc", "hr_department",
+              "task_attachment", "generic"}
+    added_after_cutover = {"signoff_doc"}
+
+    assert KNOWN_SCOPES == ported | added_after_cutover
+
+
+def test_signoff_doc_policy():
+    """PDF-only and private: it holds the document a named approver signed
+    (``apps.signoff``, ``ApprovalTask.file_id``). Restricting ``mimes`` is
+    also what turns on the magic-byte check in ``upload_service``."""
+    p = get_policy("signoff_doc")
+    assert p.public is False
+    assert p.max_mb == 25
+    assert p.mimes == ("application/pdf",)
+    assert p.variants == ()
 
 
 def test_avatar_policy():

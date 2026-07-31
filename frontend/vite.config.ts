@@ -87,6 +87,8 @@ export default defineConfig(({ mode }) => {
   const cmsServiceTarget = backendTarget;
   const adminServiceTarget = backendTarget;
   const requestsServiceTarget = backendTarget;
+  const contractsServiceTarget = backendTarget;
+  const signoffServiceTarget = backendTarget;
   const adminJsTarget = backendTarget;
   // SSE-стрим одобрений (/api/requests/v1/stream) — async-вью, требует ASGI:
   // WSGI (runserver/gunicorn) его не стримит. В dev шлём на отдельный ASGI-процесс
@@ -100,7 +102,11 @@ export default defineConfig(({ mode }) => {
   // is terminated at reverse proxy edge). If your SFU listens with TLS locally,
   // override via VITE_SFU_WS_TARGET=wss://127.0.0.1:4443.
   const sfuWsTarget = env.VITE_SFU_WS_TARGET || "ws://127.0.0.1:4443";
-  const messengerWsTarget = env.VITE_MESSENGER_WS_TARGET || "ws://127.0.0.1:8000";
+  // Socket.IO мессенджера смонтирован на ASGI-процессе (htqweb/asgi.py,
+  // socketio_path="ws/messenger/socket.io") — :8000 это gunicorn/WSGI, там
+  // этого маршрута нет и handshake отдаёт 404. Шлём на тот же ASGI-порт, что
+  // и SSE выше (так же, как прод-nginx: upstream backend_asgi для /ws/).
+  const messengerWsTarget = env.VITE_MESSENGER_WS_TARGET || "ws://127.0.0.1:8001";
   const disableHmr = env.VITE_DISABLE_HMR === "true";
   const tunnelPublicHost = String(env.VITE_TUNNEL_PUBLIC_HOST || "").trim();
   const hmrConfig = disableHmr
@@ -281,6 +287,22 @@ export default defineConfig(({ mode }) => {
       target: emailServiceTarget,
       changeOrigin: true,
     },
+    // Бюджеты / реестр контрагентов / договоры (apps.contracts). Легаси-путей
+    // без /v1/ у этого домена нет — он появился уже после обратной миграции,
+    // поэтому rewrite-правила выше ему не нужны, только эта строка. Без неё
+    // запрос дошёл бы до catch-all `^/api/` ниже и получил 404 от прокси.
+    "^/api/contracts/": {
+      target: contractsServiceTarget,
+      changeOrigin: true,
+    },
+    // Согласование (apps.signoff) — универсальный движок маршрутов
+    // согласования. НЕ путать с /api/requests/ (apps.approvals): тот домен
+    // про конструктор динамических форм. Как и у contracts, легаси-путей без
+    // /v1/ здесь нет, поэтому одной строки достаточно.
+    "^/api/signoff/": {
+      target: signoffServiceTarget,
+      changeOrigin: true,
+    },
     "^/api/requests/v1/stream": {
       target: asgiTarget,
       changeOrigin: true,
@@ -291,6 +313,17 @@ export default defineConfig(({ mode }) => {
     },
     "^/api/admin/": {
       target: adminServiceTarget,
+      changeOrigin: true,
+    },
+    // apps.core: реестр вкл/выкл сервисов (/api/core/v1/services/), который
+    // читает hooks/useServiceStatus.ts. Правила для него тут не было ВООБЩЕ —
+    // домен появился уже в Django-монолите, а таблица ниже осталась от эпохи
+    // микросервисов, где такого сервиса не существовало. В итоге запрос падал
+    // в catch-all `^/api/` и получал синтетический 404 от самого Vite, не
+    // доходя до бэкенда (в проде nginx отдаёт его через общий `location
+    // /api/`, поэтому там всё работало и расхождение не замечали).
+    "^/api/core/": {
+      target: backendTarget,
       changeOrigin: true,
     },
     "^/api/": {
@@ -304,15 +337,16 @@ export default defineConfig(({ mode }) => {
         return false;
       },
     },
-    // ─── Database admin (sqladmin aggregator) ───────────────────────────────
-    // Explicitly NOT at /admin/ — that namespace is owned by the SPA
-    // (/admin/users, /admin/chats, /admin/registrations are React pages).
-    "/sqladmin": {
+    // ─── Панель БД ──────────────────────────────────────────────────────────
+    // Сознательно НЕ на /admin/ — этот неймспейс принадлежит SPA
+    // (/admin/users, /admin/chats, /admin/registrations — React-страницы).
+    //
+    // Было /sqladmin (панель снесённого admin-сервиса) и /mongo-admin
+    // (AdminJS на :3300 поверх MongoDB) — оба сервиса удалены при переходе на
+    // монолит, оба правила проксировали в никуда. В монолите роль панели БД
+    // играет родная админка Django.
+    "/django-admin": {
       target: adminServiceTarget,
-      changeOrigin: true,
-    },
-    "/mongo-admin": {
-      target: adminJsTarget,
       changeOrigin: true,
     },
     // ─── Monitoring (Grafana + Prometheus) ─────────────────────────────────

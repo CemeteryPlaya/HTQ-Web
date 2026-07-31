@@ -21,18 +21,29 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from django.core.exceptions import PermissionDenied
+from django.db import IntegrityError
 from django.http import HttpResponse
+from django.utils import timezone
 
 from htqweb.http import api_view, json_error
 
 from . import schemas
+from .services import block_service
 from .services import calendar_service
+from .services import contractor_service
+from .services import daily_report_service
+from .services import equipment_usage_service
 from .services import gantt_service
 from .services import link_service
 from .services import notification_service
+from .services import plan_fact_service
 from .services import project_service
 from .services import reference_service as ref_svc
+from .services import resource_service
+from .services import roadmap_service
 from .services import sequence_service
+from .services import site_service
 from .services import task_content_service
 from .services import task_response
 from .services import task_service
@@ -118,6 +129,13 @@ def _method_not_allowed(request):
 
 # ─────────────────────────────────────────────────────────────────────────
 # Labels — /labels/ , /labels/{id}/
+#
+# Reads stay open (every task form needs the list); writes are admin-only.
+# These are shared, company-wide dictionaries: one careless rename or
+# delete reaches every task at once, and a label deleted here silently
+# disappears from tasks that were filed under it.
+#
+# Task types are deliberately NOT gated the same way — see that section.
 # ─────────────────────────────────────────────────────────────────────────
 
 @api_view(methods=("GET",))
@@ -126,7 +144,7 @@ def _list_labels(request):
             for row in ref_svc.list_labels()]
 
 
-@api_view(methods=("POST",), body=schemas.LabelCreate, status=201)
+@api_view(methods=("POST",), body=schemas.LabelCreate, status=201, admin=True)
 def _create_label(request, data: schemas.LabelCreate):
     return schemas.LabelResponse.model_validate(
         ref_svc.create_label(name=data.name, color=data.color)
@@ -141,14 +159,14 @@ def labels_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("PATCH",), body=schemas.LabelUpdate)
+@api_view(methods=("PATCH",), body=schemas.LabelUpdate, admin=True)
 def _update_label(request, label_id: int, data: schemas.LabelUpdate):
     return schemas.LabelResponse.model_validate(
         ref_svc.update_label(label_id, data.model_dump(exclude_unset=True))
     )
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, admin=True)
 def _delete_label(request, label_id: int):
     ref_svc.delete_label(label_id)
     return _no_content()
@@ -164,6 +182,12 @@ def label_detail(request, label_id: int):
 
 # ─────────────────────────────────────────────────────────────────────────
 # Task types — /task-types/ , /task-types/{id}/
+#
+# Deliberately NOT admin-gated, unlike labels and equipment: the task form
+# creates a type inline (CreateTaskModal's "new type" popover), and the
+# business wants that available to everyone who can file a task. Deleting a
+# system type is still refused — reference_service raises PermissionDenied
+# for ``is_system`` rows.
 # ─────────────────────────────────────────────────────────────────────────
 
 @api_view(methods=("GET",))
@@ -216,22 +240,32 @@ def task_type_detail(request, type_id: int):
 
 # ─────────────────────────────────────────────────────────────────────────
 # Equipment — /equipment/ , /equipment/{id}
+#
+# Same split as labels: the list is open (task forms and the resource
+# schedule need it), writes are admin-only. This is the company's machinery
+# register — renaming or disabling a machine here changes what every
+# resource plan shows.
 # ─────────────────────────────────────────────────────────────────────────
 
 @api_view(methods=("GET",))
 def _list_equipment(request):
     try:
         active_only = _bool_param(request, "active_only", True)
+        contractor_id = _int_param(request, "contractor_id")
+        category_id = _int_param(request, "category_id")
     except _ParamError as exc:
         return exc.response
-    return [schemas.EquipmentResponse.model_validate(row)
-            for row in ref_svc.list_equipment(active_only)]
+    return [schemas.EquipmentResponse.model_validate(
+        ref_svc.build_equipment(row))
+        for row in ref_svc.list_equipment(
+            active_only, ownership=_str_param(request, "ownership"),
+            contractor_id=contractor_id, category_id=category_id)]
 
 
-@api_view(methods=("POST",), body=schemas.EquipmentCreate, status=201)
+@api_view(methods=("POST",), body=schemas.EquipmentCreate, status=201, admin=True)
 def _create_equipment(request, data: schemas.EquipmentCreate):
     return schemas.EquipmentResponse.model_validate(
-        ref_svc.create_equipment(**data.model_dump())
+        ref_svc.build_equipment(ref_svc.create_equipment(**data.model_dump()))
     )
 
 
@@ -243,15 +277,15 @@ def equipment_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("PATCH",), body=schemas.EquipmentUpdate)
+@api_view(methods=("PATCH",), body=schemas.EquipmentUpdate, admin=True)
 def _update_equipment(request, equipment_id: int, data: schemas.EquipmentUpdate):
     return schemas.EquipmentResponse.model_validate(
-        ref_svc.update_equipment(equipment_id,
-                                 data.model_dump(exclude_unset=True))
+        ref_svc.build_equipment(ref_svc.update_equipment(
+            equipment_id, data.model_dump(exclude_unset=True)))
     )
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, admin=True)
 def _delete_equipment(request, equipment_id: int):
     ref_svc.delete_equipment(equipment_id)
     return _no_content()
@@ -263,6 +297,83 @@ def equipment_detail(request, equipment_id: int):
     if request.method == "DELETE":
         return _delete_equipment(request, equipment_id=equipment_id)
     return _method_not_allowed(request)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Плоские справочники — /equipment-categories/, /work-roles/, /volume-types/
+#
+# Три ручки одинаковой формы, поэтому пара «коллекция + деталь» собирается
+# фабрикой, а не копируется трижды. Права те же, что у техники: читать может
+# любой (без этих списков не заполнить ни форму задачи, ни план роудмапа),
+# писать — админ: это корпоративные словари, и переименование строки меняет
+# то, что видят все планы разом.
+# ─────────────────────────────────────────────────────────────────────────
+
+def _reference_endpoints(kind: str, create_schema, update_schema,
+                         response_schema):
+    """Собрать вьюхи коллекции и детали для одного плоского справочника.
+
+    ``kind`` — тот же литерал, что стоит в URL; ``reference_service`` по нему
+    и находит таблицу, так что вьюха модель по-прежнему не знает.
+    """
+
+    @api_view(methods=("GET",))
+    def _list(request):
+        try:
+            active_only = _bool_param(request, "active_only", True)
+        except _ParamError as exc:
+            return exc.response
+        return [response_schema.model_validate(ref_svc.build_reference_row(row))
+                for row in ref_svc.list_reference_rows(kind, active_only)]
+
+    @api_view(methods=("POST",), body=create_schema, status=201, admin=True)
+    def _create(request, data):
+        try:
+            row = ref_svc.create_reference_row(kind, **data.model_dump())
+        except ValueError as exc:
+            # Занятые слаг или имя — 409, как у типов задач.
+            return json_error(str(exc), 409)
+        return response_schema.model_validate(ref_svc.build_reference_row(row))
+
+    @api_view(methods=("PATCH",), body=update_schema, admin=True)
+    def _update(request, row_id: int, data):
+        return response_schema.model_validate(ref_svc.build_reference_row(
+            ref_svc.update_reference_row(
+                kind, row_id, data.model_dump(exclude_unset=True))))
+
+    @api_view(methods=("DELETE",), status=204, admin=True)
+    def _delete(request, row_id: int):
+        ref_svc.delete_reference_row(kind, row_id)
+        return _no_content()
+
+    def collection(request):
+        if request.method == "GET":
+            return _list(request)
+        if request.method == "POST":
+            return _create(request)
+        return _method_not_allowed(request)
+
+    def detail(request, row_id: int):
+        if request.method == "PATCH":
+            return _update(request, row_id=row_id)
+        if request.method == "DELETE":
+            return _delete(request, row_id=row_id)
+        return _method_not_allowed(request)
+
+    return collection, detail
+
+
+equipment_categories_collection, equipment_category_detail = _reference_endpoints(
+    "equipment-categories", schemas.ReferenceRowCreate,
+    schemas.ReferenceRowUpdate, schemas.ReferenceRowResponse)
+
+work_roles_collection, work_role_detail = _reference_endpoints(
+    "work-roles", schemas.ReferenceRowCreate,
+    schemas.ReferenceRowUpdate, schemas.ReferenceRowResponse)
+
+volume_types_collection, volume_type_detail = _reference_endpoints(
+    "volume-types", schemas.VolumeTypeCreate,
+    schemas.VolumeTypeUpdate, schemas.VolumeTypeResponse)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -308,6 +419,13 @@ def _list_tasks(request):
             "department_id": _int_param(request, "department_id"),
             "project_id": _int_param(request, "project_id"),
             "project_unset": _bool_param(request, "standalone", False),
+            "roadmap_id": _int_param(request, "roadmap_id"),
+            "roadmap_unset": _bool_param(request, "no_roadmap", False),
+            "site_id": _int_param(request, "site_id"),
+            "site_unset": _bool_param(request, "no_site", False),
+            "site_block_id": _int_param(request, "site_block_id"),
+            "contractor_id": _int_param(request, "contractor_id"),
+            "contractor_unset": _bool_param(request, "own_crew", False),
             "parent_id": _int_param(request, "parent_id"),
             "label_id": _int_param(request, "label_id"),
             "search": _str_param(request, "search"),
@@ -326,7 +444,13 @@ def _list_tasks(request):
 
 @api_view(methods=("POST",), body=schemas.TaskCreate, status=201)
 def _create_task(request, data: schemas.TaskCreate):
-    task = task_service.create_task(data, user_id=request.token.user_id)
+    # ``create_task`` raises ValueError for a site that does not belong to
+    # the task's project. Unlike _update_task this view had no except arm at
+    # all, so any ValueError from the service reached the client as a 500.
+    try:
+        task = task_service.create_task(data, user_id=request.token.user_id)
+    except ValueError as exc:
+        return json_error(str(exc), 400)
     # Re-read through the visibility-aware loader so the response is built
     # from the same fully-prefetched shape every other endpoint returns.
     return task_response.build_detail(task_service.get_task(task.id))
@@ -345,13 +469,14 @@ def task_stats(request):
     try:
         department_id = _int_param(request, "department_id")
         project_id = _int_param(request, "project_id")
+        site_id = _int_param(request, "site_id")
     except _ParamError as exc:
         return exc.response
     visibility, visibility_department_id = task_service.scope_for(
         request.token, reports=True
     )
     return schemas.TaskStats.model_validate(task_service.task_stats(
-        department_id=department_id, project_id=project_id,
+        department_id=department_id, project_id=project_id, site_id=site_id,
         visibility=visibility, visibility_user_id=request.token.user_id,
         visibility_department_id=visibility_department_id,
     ))
@@ -403,8 +528,9 @@ def task_detail(request, task_id: int):
 
 @api_view(methods=("GET",))
 def task_transitions(request, task_id: int):
+    task = task_service.load_for_action(task_id, request.token)
     return [{"status": status}
-            for status in task_service.available_transitions(task_id)]
+            for status in task_service.available_transitions(task)]
 
 
 @api_view(methods=("PATCH",), body=schemas.AssigneesUpdate)
@@ -491,15 +617,29 @@ def update_progress(request, task_id: int, data: schemas.ProgressUpdate):
 
 # ─────────────────────────────────────────────────────────────────────────
 # Comments / attachments / activity on a task
+#
+# Every read here goes through ``load_for_action`` first. Without it the
+# whole visibility model is decorative: a task the caller cannot list or
+# open would still hand over its discussion, its files and its audit trail
+# to anyone who guesses the id. ``load_for_action`` answers with 404 (not
+# 403) for an out-of-scope task, so these routes cannot be used to probe
+# which task ids exist either.
 # ─────────────────────────────────────────────────────────────────────────
 
 @api_view(methods=("GET",))
 def _list_comments(request, task_id: int):
+    task_service.load_for_action(task_id, request.token)
     return task_content_service.list_comments(task_id)
 
 
 @api_view(methods=("POST",), body=schemas.CommentCreate, status=201)
 def _create_comment(request, task_id: int, data: schemas.CommentCreate):
+    # Visibility only, deliberately NOT require_soft_edit: commenting is
+    # participation, not editing. Anyone who can see the task — including a
+    # watcher or a colleague looking at free work in their department — may
+    # say something about it. What must not happen is commenting on a task
+    # the caller cannot see at all.
+    task_service.load_for_action(task_id, request.token)
     return task_content_service.create_comment(task_id, data.body,
                                                request.token.user_id)
 
@@ -514,6 +654,7 @@ def task_comments(request, task_id: int):
 
 @api_view(methods=("GET",))
 def _list_attachments(request, task_id: int):
+    task_service.load_for_action(task_id, request.token)
     return task_content_service.list_attachments(task_id)
 
 
@@ -584,7 +725,186 @@ def task_attachments(request, task_id: int):
 
 @api_view(methods=("GET",))
 def task_activity(request, task_id: int):
+    task_service.load_for_action(task_id, request.token)
     return task_content_service.list_activity(task_id)
+
+
+@api_view(methods=("GET",))
+def _list_task_volumes(request, task_id: int):
+    task_service.load_for_action(task_id, request.token)
+    return [schemas.TaskVolumeResponse.model_validate(row)
+            for row in task_content_service.list_task_volumes(task_id)]
+
+
+@api_view(methods=("PUT",), body=schemas.VolumesUpdate)
+def _set_task_volumes(request, task_id: int, data: schemas.VolumesUpdate):
+    task = task_service.load_for_action(task_id, request.token)
+    # Мягкое право, а не полное: «развезли 180 из 250» — это отчёт о ходе
+    # работ, ровно то же, что progress_percent, а он под require_soft_edit.
+    # Требовать здесь full_edit значило бы запретить исполнителю отчитаться
+    # о собственной задаче.
+    task_service.require_soft_edit(task, request.token)
+    try:
+        rows = task_content_service.set_task_volumes(
+            task_id, [v.model_dump() for v in data.volumes])
+    except ValueError as exc:
+        return json_error(str(exc), 422)
+    return [schemas.TaskVolumeResponse.model_validate(row) for row in rows]
+
+
+def task_volumes(request, task_id: int):
+    if request.method == "GET":
+        return _list_task_volumes(request, task_id=task_id)
+    if request.method == "PUT":
+        return _set_task_volumes(request, task_id=task_id)
+    return _method_not_allowed(request)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Ежедневные отчёты — /tasks/{id}/daily-reports , /daily-reports/{id}
+#
+# Права: заводить отчёт может участник задачи (это отчёт о СВОЕЙ работе,
+# то же мягкое право, что у progress). Править и удалять — автор, супервайзер
+# задачи или админ: чужую отчётность правит только тот, кто за неё отвечает.
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",))
+def _list_task_reports(request, task_id: int):
+    task_service.load_for_action(task_id, request.token)
+    return [schemas.DailyReportResponse.model_validate(row)
+            for row in daily_report_service.build_reports(
+                daily_report_service.list_reports(task_id=task_id))]
+
+
+@api_view(methods=("POST",), body=schemas.DailyReportCreate, status=201)
+def _create_task_report(request, task_id: int, data: schemas.DailyReportCreate):
+    task = task_service.load_for_action(task_id, request.token)
+    # Мягкое право: отчёт о выполненном — то же, что progress, а не
+    # планирование. Требовать full_edit значило бы запретить исполнителю
+    # отчитаться о собственной смене.
+    task_service.require_soft_edit(task, request.token)
+    try:
+        report = daily_report_service.create_report(
+            task_id, data.model_dump(), author_id=request.token.user_id)
+    except ValueError as exc:
+        return json_error(str(exc), 422)
+    return schemas.DailyReportResponse.model_validate(
+        daily_report_service.build_report(report))
+
+
+def task_daily_reports(request, task_id: int):
+    if request.method == "GET":
+        return _list_task_reports(request, task_id=task_id)
+    if request.method == "POST":
+        return _create_task_report(request, task_id=task_id)
+    return _method_not_allowed(request)
+
+
+def _report_for_write(request, report_id: int):
+    """Отчёт, который вызывающий вправе править, иначе исключение.
+
+    Автор правит свой отчёт сам; чужой — только супервайзер задачи или
+    админ. Обычного участника задачи сюда НЕ пускаем: цифра выполнения это
+    основание для расчётов, и править её за коллегу — не то же самое, что
+    завести свою.
+    """
+    report = daily_report_service.get_report(report_id)
+    task_service.load_for_action(report.task_id, request.token)
+    token = request.token
+    if not (token.is_elevated
+            or report.author_id == token.user_id
+            or report.task.supervisor_id == token.user_id):
+        raise PermissionDenied(
+            "Only the report author, the task supervisor or an admin "
+            "can change it")
+    return report
+
+
+@api_view(methods=("GET",))
+def _get_report(request, report_id: int):
+    report = daily_report_service.get_report(report_id)
+    task_service.load_for_action(report.task_id, request.token)
+    return schemas.DailyReportResponse.model_validate(
+        daily_report_service.build_report(report))
+
+
+@api_view(methods=("PATCH",), body=schemas.DailyReportUpdate)
+def _update_report(request, report_id: int, data: schemas.DailyReportUpdate):
+    _report_for_write(request, report_id)
+    try:
+        report = daily_report_service.update_report(
+            report_id, data.model_dump(exclude_unset=True),
+            editor_id=request.token.user_id)
+    except ValueError as exc:
+        return json_error(str(exc), 422)
+    return schemas.DailyReportResponse.model_validate(
+        daily_report_service.build_report(report))
+
+
+@api_view(methods=("DELETE",), status=204)
+def _delete_report(request, report_id: int):
+    _report_for_write(request, report_id)
+    daily_report_service.delete_report(report_id)
+    return _no_content()
+
+
+def daily_report_detail(request, report_id: int):
+    if request.method == "GET":
+        return _get_report(request, report_id=report_id)
+    if request.method == "PATCH":
+        return _update_report(request, report_id=report_id)
+    if request.method == "DELETE":
+        return _delete_report(request, report_id=report_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def daily_report_revisions(request, report_id: int):
+    """Лента версий отчёта. Читают все, кто видит задачу."""
+    report = daily_report_service.get_report(report_id)
+    task_service.load_for_action(report.task_id, request.token)
+    return [schemas.DailyReportRevisionResponse.model_validate(row)
+            for row in daily_report_service.build_revisions(
+                daily_report_service.list_revisions(report_id))]
+
+
+@api_view(methods=("GET",))
+def daily_report_board(request):
+    """Сводка ежедневки: что вызывающий может отчитать за дату ``?date=``.
+
+    Отдельный эндпоинт, а не «список задач + карточка каждой»: объёмы
+    приходят только в детальном ответе задачи, и страница ежедневки на 15
+    задач стоила бы 16 запросов. Здесь одна выборка на сущность.
+
+    Отбор — по праву ЗАПИСИ (``soft_edit_q``), а не по видимости: строка,
+    которую нельзя сохранить, на этой странице не нужна.
+    """
+    try:
+        on = _date_param(request, "date") or timezone.localdate()
+    except _ParamError as exc:
+        return exc.response
+    rows = daily_report_service.reporting_board(
+        on=on, user_id=request.token.user_id,
+        elevated=request.token.is_elevated)
+    return [schemas.DailyReportBoardRow.model_validate(row) for row in rows]
+
+
+@api_view(methods=("GET",))
+def roadmap_daily_reports(request, roadmap_id: int):
+    """Отчёты всего пакета работ — лента для карточки роудмапа."""
+    try:
+        date_from = _date_param(request, "date_from")
+        date_to = _date_param(request, "date_to")
+    except _ParamError as exc:
+        return exc.response
+    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    roadmap_service.get_roadmap(roadmap_id, employee_scope=employee_scope,
+                                department_id=department_id)
+    return [schemas.DailyReportResponse.model_validate(row)
+            for row in daily_report_service.build_reports(
+                daily_report_service.list_reports(
+                    roadmap_id=roadmap_id, date_from=date_from,
+                    date_to=date_to))]
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -593,6 +913,15 @@ def task_activity(request, task_id: int):
 
 @api_view(methods=("POST",), body=schemas.LinkCreate, status=201)
 def _create_link(request, data: schemas.LinkCreate):
+    # BOTH endpoints are checked for visibility: a link is a two-way fact
+    # (create_link writes the mirror row), so linking a visible task to an
+    # invisible one would surface the invisible one's key and summary in
+    # the response and on the other task's card. Write permission is
+    # required on the source only — that is the side the link is created
+    # from, and the side link_detail authorises deletion against.
+    source = task_service.load_for_action(data.source_id, request.token)
+    task_service.load_for_action(data.target_id, request.token)
+    task_service.require_full_edit(source, request.token)
     try:
         link = link_service.create_link(source_id=data.source_id,
                                         target_id=data.target_id,
@@ -618,8 +947,421 @@ def links_collection(request):
 
 @api_view(methods=("DELETE",), status=204)
 def link_detail(request, link_id: int):
+    source = task_service.load_for_action(
+        link_service.link_source_task_id(link_id), request.token)
+    task_service.require_full_edit(source, request.token)
     link_service.delete_link(link_id)
     return _no_content()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Contractors — /contractors/ , /contractor-workers/, /contractor-engagements/
+#
+# Same read-open / write-admin split as the other dictionaries: the task
+# form and the equipment register both need the lists, but who counts as a
+# subcontractor is an administrative fact.
+#
+# NOTE: no authorisation depends on these rows yet. ``ContractorWorker.
+# user_id`` exists but nothing writes it, and no visibility branch reads a
+# contractor — subcontractors have no way into the system on this step.
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",))
+def _list_contractors(request):
+    return [schemas.ContractorResponse.model_validate(
+        contractor_service.build_contractor(row))
+        for row in contractor_service.list_contractors(
+            status=_str_param(request, "status"),
+            search=_str_param(request, "search"))]
+
+
+@api_view(methods=("POST",), body=schemas.ContractorCreate, status=201,
+          admin=True)
+def _create_contractor(request, data: schemas.ContractorCreate):
+    return schemas.ContractorResponse.model_validate(
+        contractor_service.build_contractor(
+            contractor_service.create_contractor(data.model_dump())))
+
+
+def contractors_collection(request):
+    if request.method == "GET":
+        return _list_contractors(request)
+    if request.method == "POST":
+        return _create_contractor(request)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def _get_contractor(request, contractor_id: int):
+    return schemas.ContractorResponse.model_validate(
+        contractor_service.build_contractor(
+            contractor_service.get_contractor(contractor_id)))
+
+
+@api_view(methods=("PATCH",), body=schemas.ContractorUpdate, admin=True)
+def _update_contractor(request, contractor_id: int,
+                       data: schemas.ContractorUpdate):
+    return schemas.ContractorResponse.model_validate(
+        contractor_service.build_contractor(
+            contractor_service.update_contractor(
+                contractor_id, data.model_dump(exclude_unset=True))))
+
+
+@api_view(methods=("DELETE",), status=204, admin=True)
+def _delete_contractor(request, contractor_id: int):
+    try:
+        contractor_service.delete_contractor(contractor_id)
+    except contractor_service.ContractorInUse as exc:
+        return json_error(str(exc), 409)
+    return _no_content()
+
+
+def contractor_detail(request, contractor_id: int):
+    if request.method == "GET":
+        return _get_contractor(request, contractor_id=contractor_id)
+    if request.method == "PATCH":
+        return _update_contractor(request, contractor_id=contractor_id)
+    if request.method == "DELETE":
+        return _delete_contractor(request, contractor_id=contractor_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def _list_contractor_workers(request, contractor_id: int):
+    contractor_service.get_contractor(contractor_id)
+    return [schemas.ContractorWorkerResponse.model_validate(
+        contractor_service.build_worker(row))
+        for row in contractor_service.list_workers(
+            contractor_id=contractor_id,
+            active_only=_bool_param(request, "active_only", True))]
+
+
+@api_view(methods=("POST",), body=schemas.ContractorWorkerCreate, status=201,
+          admin=True)
+def _create_contractor_worker(request, contractor_id: int,
+                              data: schemas.ContractorWorkerCreate):
+    return schemas.ContractorWorkerResponse.model_validate(
+        contractor_service.build_worker(
+            contractor_service.create_worker(contractor_id,
+                                             data.model_dump())))
+
+
+def contractor_workers(request, contractor_id: int):
+    if request.method == "GET":
+        return _list_contractor_workers(request, contractor_id=contractor_id)
+    if request.method == "POST":
+        return _create_contractor_worker(request, contractor_id=contractor_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("PATCH",), body=schemas.ContractorWorkerUpdate, admin=True)
+def _update_contractor_worker(request, worker_id: int,
+                              data: schemas.ContractorWorkerUpdate):
+    return schemas.ContractorWorkerResponse.model_validate(
+        contractor_service.build_worker(
+            contractor_service.update_worker(
+                worker_id, data.model_dump(exclude_unset=True))))
+
+
+@api_view(methods=("DELETE",), status=204, admin=True)
+def _delete_contractor_worker(request, worker_id: int):
+    contractor_service.delete_worker(worker_id)
+    return _no_content()
+
+
+def contractor_worker_detail(request, worker_id: int):
+    if request.method == "PATCH":
+        return _update_contractor_worker(request, worker_id=worker_id)
+    if request.method == "DELETE":
+        return _delete_contractor_worker(request, worker_id=worker_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def _list_engagements(request):
+    try:
+        contractor_id = _int_param(request, "contractor_id")
+        project_id = _int_param(request, "project_id")
+        site_id = _int_param(request, "site_id")
+        roadmap_id = _int_param(request, "roadmap_id")
+    except _ParamError as exc:
+        return exc.response
+    return [schemas.ContractorEngagementResponse.model_validate(
+        contractor_service.build_engagement(row))
+        for row in contractor_service.list_engagements(
+            contractor_id=contractor_id, project_id=project_id,
+            site_id=site_id, roadmap_id=roadmap_id,
+            active_only=_bool_param(request, "active_only", False))]
+
+
+@api_view(methods=("POST",), body=schemas.ContractorEngagementCreate,
+          status=201, admin=True)
+def _create_engagement(request, data: schemas.ContractorEngagementCreate):
+    try:
+        row = contractor_service.create_engagement(data.model_dump())
+    except ValueError as exc:
+        return json_error(str(exc), 400)
+    return schemas.ContractorEngagementResponse.model_validate(
+        contractor_service.build_engagement(row))
+
+
+def engagements_collection(request):
+    if request.method == "GET":
+        return _list_engagements(request)
+    if request.method == "POST":
+        return _create_engagement(request)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("PATCH",), body=schemas.ContractorEngagementUpdate,
+          admin=True)
+def _update_engagement(request, engagement_id: int,
+                       data: schemas.ContractorEngagementUpdate):
+    try:
+        row = contractor_service.update_engagement(
+            engagement_id, data.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        return json_error(str(exc), 400)
+    return schemas.ContractorEngagementResponse.model_validate(
+        contractor_service.build_engagement(row))
+
+
+@api_view(methods=("DELETE",), status=204, admin=True)
+def _delete_engagement(request, engagement_id: int):
+    contractor_service.delete_engagement(engagement_id)
+    return _no_content()
+
+
+def engagement_detail(request, engagement_id: int):
+    if request.method == "PATCH":
+        return _update_engagement(request, engagement_id=engagement_id)
+    if request.method == "DELETE":
+        return _delete_engagement(request, engagement_id=engagement_id)
+    return _method_not_allowed(request)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Sites — /sites/ , /sites/{id}
+#
+# Same split as the other dictionaries: the list is open (every task form
+# and every filter needs it), writes are admin-only. An object is an axis
+# of planning and reporting — renaming or closing one changes what every
+# schedule and report shows.
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",))
+def _list_sites(request):
+    return [schemas.SiteResponse.model_validate(row)
+            for row in site_service.build_responses(site_service.list_sites(
+                status=_str_param(request, "status"),
+                search=_str_param(request, "search")))]
+
+
+@api_view(methods=("POST",), body=schemas.SiteCreate, status=201, admin=True)
+def _create_site(request, data: schemas.SiteCreate):
+    return schemas.SiteResponse.model_validate(
+        site_service.build_response(site_service.create_site(data.model_dump()))
+    )
+
+
+def sites_collection(request):
+    if request.method == "GET":
+        return _list_sites(request)
+    if request.method == "POST":
+        return _create_site(request)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def _get_site(request, site_id: int):
+    return schemas.SiteResponse.model_validate(
+        site_service.build_response(site_service.get_site(site_id)))
+
+
+@api_view(methods=("PATCH",), body=schemas.SiteUpdate, admin=True)
+def _update_site(request, site_id: int, data: schemas.SiteUpdate):
+    return schemas.SiteResponse.model_validate(
+        site_service.build_response(site_service.update_site(
+            site_id, data.model_dump(exclude_unset=True)))
+    )
+
+
+@api_view(methods=("DELETE",), status=204, admin=True)
+def _delete_site(request, site_id: int):
+    try:
+        site_service.delete_site(site_id)
+    except site_service.SiteInUse as exc:
+        # 409, not 400: the request is well-formed, the object's state is
+        # what forbids it. The message names the counts so the UI can tell
+        # the user what to detach first.
+        return json_error(str(exc), 409)
+    return _no_content()
+
+
+def site_detail(request, site_id: int):
+    if request.method == "GET":
+        return _get_site(request, site_id=site_id)
+    if request.method == "PATCH":
+        return _update_site(request, site_id=site_id)
+    if request.method == "DELETE":
+        return _delete_site(request, site_id=site_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def site_tasks(request, site_id: int):
+    """Tasks on one object — visibility-scoped like every other task list."""
+    site_service.get_site(site_id)          # 404 first for an unknown object
+    visibility, department_id = task_service.scope_for(request.token)
+    tasks = task_service.list_tasks(
+        limit=1000, site_id=site_id,
+        visibility=visibility,
+        visibility_user_id=request.token.user_id,
+        visibility_department_id=department_id,
+    )
+    return task_response.build_list(tasks)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Блоки объекта — /sites/{id}/blocks , /blocks/{id} , /blocks/{id}/volumes
+#
+# Права как у объектов: читать может любой (без списка блоков не заполнить
+# форму задачи), писать — админ. Блок это деление площадки, а не рабочая
+# запись: его заводят один раз при разбивке объекта.
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",))
+def _list_site_blocks(request, site_id: int):
+    site_service.get_site(site_id)          # 404 раньше пустого списка
+    return [schemas.SiteBlockResponse.model_validate(row)
+            for row in block_service.build_blocks(
+                block_service.list_blocks(
+                    site_id, status=_str_param(request, "status")))]
+
+
+@api_view(methods=("POST",), body=schemas.SiteBlockCreate, status=201,
+          admin=True)
+def _create_site_block(request, site_id: int, data: schemas.SiteBlockCreate):
+    site_service.get_site(site_id)
+    try:
+        block = block_service.create_block(site_id, data.model_dump())
+    except IntegrityError:
+        # uq_site_block_name / uq_site_block_code: «блок 1» на этой площадке
+        # уже есть. 409, а не 500 — запрос корректен, конфликтует состояние.
+        return json_error("Блок с таким названием или кодом уже есть "
+                          "на этом объекте", 409)
+    return schemas.SiteBlockResponse.model_validate(
+        block_service.build_block(block))
+
+
+def site_blocks_collection(request, site_id: int):
+    if request.method == "GET":
+        return _list_site_blocks(request, site_id=site_id)
+    if request.method == "POST":
+        return _create_site_block(request, site_id=site_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def _get_block(request, block_id: int):
+    block = block_service.get_block(block_id)
+    return schemas.SiteBlockResponse.model_validate(block_service.build_block(
+        block, volumes=block_service.list_block_volumes(block_id)))
+
+
+@api_view(methods=("PATCH",), body=schemas.SiteBlockUpdate, admin=True)
+def _update_block(request, block_id: int, data: schemas.SiteBlockUpdate):
+    try:
+        block = block_service.update_block(
+            block_id, data.model_dump(exclude_unset=True))
+    except IntegrityError:
+        return json_error("Блок с таким названием или кодом уже есть "
+                          "на этом объекте", 409)
+    return schemas.SiteBlockResponse.model_validate(block_service.build_block(
+        block, volumes=block_service.list_block_volumes(block_id)))
+
+
+@api_view(methods=("DELETE",), status=204, admin=True)
+def _delete_block(request, block_id: int):
+    try:
+        block_service.delete_block(block_id)
+    except block_service.BlockInUse as exc:
+        return json_error(str(exc), 409)
+    return _no_content()
+
+
+def block_detail(request, block_id: int):
+    if request.method == "GET":
+        return _get_block(request, block_id=block_id)
+    if request.method == "PATCH":
+        return _update_block(request, block_id=block_id)
+    if request.method == "DELETE":
+        return _delete_block(request, block_id=block_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def _list_block_volumes(request, block_id: int):
+    block_service.get_block(block_id)
+    return [schemas.VolumeResponse.model_validate(block_service.build_volume(row))
+            for row in block_service.list_block_volumes(block_id)]
+
+
+@api_view(methods=("PUT",), body=schemas.VolumesUpdate, admin=True)
+def _set_block_volumes(request, block_id: int, data: schemas.VolumesUpdate):
+    try:
+        rows = block_service.set_block_volumes(
+            block_id, [v.model_dump() for v in data.volumes])
+    except ValueError as exc:
+        # Несуществующий вид объёма. Проверяется в сервисе явно, а не через
+        # FK: тот поднимает IntegrityError на коммите, когда вьюха уже
+        # ответила 200 (см. block_service.require_volume_types).
+        return json_error(str(exc), 422)
+    return [schemas.VolumeResponse.model_validate(block_service.build_volume(row))
+            for row in rows]
+
+
+def block_volumes(request, block_id: int):
+    if request.method == "GET":
+        return _list_block_volumes(request, block_id=block_id)
+    if request.method == "PUT":
+        return _set_block_volumes(request, block_id=block_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def block_progress(request, block_id: int):
+    """Выполнение блока в штуках, а не в статусах задач."""
+    block_service.get_block(block_id)
+    return schemas.BlockProgressResponse.model_validate(
+        block_service.block_progress(block_id))
+
+
+@api_view(methods=("GET",))
+def _list_project_sites(request, project_id: int):
+    return [schemas.ProjectSiteRef.model_validate(
+        site_service.build_project_site_ref(link))
+        for link in site_service.list_project_sites(project_id)]
+
+
+@api_view(methods=("PUT",), body=schemas.ProjectSitesUpdate, admin=True)
+def _set_project_sites(request, project_id: int,
+                       data: schemas.ProjectSitesUpdate):
+    try:
+        links = site_service.set_project_sites(
+            project_id, data.site_ids, data.primary_site_id)
+    except ValueError as exc:
+        return json_error(str(exc), 400)
+    return [schemas.ProjectSiteRef.model_validate(
+        site_service.build_project_site_ref(link)) for link in links]
+
+
+def project_sites(request, project_id: int):
+    if request.method == "GET":
+        return _list_project_sites(request, project_id=project_id)
+    if request.method == "PUT":
+        return _set_project_sites(request, project_id=project_id)
+    return _method_not_allowed(request)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -633,7 +1375,7 @@ def _list_projects(request):
         employee_scope=employee_scope, department_id=department_id))
 
 
-@api_view(methods=("POST",), body=schemas.ProjectCreate, status=201)
+@api_view(methods=("POST",), body=schemas.ProjectCreate, status=201, admin=True)
 def _create_project(request, data: schemas.ProjectCreate):
     return project_service.build_response(project_service.create_project(
         data.model_dump(), creator_id=request.token.user_id))
@@ -655,14 +1397,37 @@ def _get_project(request, project_id: int):
         department_id=department_id))
 
 
+def _project_for_write(request, project_id: int):
+    """Load a project the caller may edit, or raise.
+
+    Two gates, in this order and for different reasons:
+
+    * ``get_project`` with the caller's scope answers ``Http404`` for a
+      project outside it — same "404, not 403" contract the task routes use,
+      so this cannot enumerate projects of other departments.
+    * ownership: inside their own scope a regular employee may still only
+      touch a project they own. Editing someone else's roadmap is an
+      elevated act.
+    """
+    employee_scope, department_id = project_service.scope_for(request.token)
+    project = project_service.get_project(
+        project_id, employee_scope=employee_scope, department_id=department_id)
+    if not (request.token.is_elevated
+            or project.owner_id == request.token.user_id):
+        raise PermissionDenied("Only the project owner (or admin) can change it")
+    return project
+
+
 @api_view(methods=("PATCH",), body=schemas.ProjectUpdate)
 def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
+    _project_for_write(request, project_id)
     return project_service.build_response(project_service.update_project(
         project_id, data.model_dump(exclude_unset=True)))
 
 
 @api_view(methods=("DELETE",), status=204)
 def _delete_project(request, project_id: int):
+    _project_for_write(request, project_id)
     project_service.delete_project(project_id)
     return _no_content()
 
@@ -677,6 +1442,144 @@ def project_detail(request, project_id: int):
     return _method_not_allowed(request)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Роудмапы — /roadmaps/ , /roadmaps/{id}[/tasks|/metrics]
+#
+# Права зеркалят проекты: смотреть — по своей области видимости, править —
+# владелец или админ. Роудмап это план работ, а не рабочая запись, и
+# переписать чужой пакет — действие того же веса, что переписать проект.
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",))
+def _list_roadmaps(request):
+    try:
+        project_id = _int_param(request, "project_id")
+        site_id = _int_param(request, "site_id")
+        block_id = _int_param(request, "block_id")
+    except _ParamError as exc:
+        return exc.response
+    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    return [schemas.RoadmapResponse.model_validate(row)
+            for row in roadmap_service.build_responses(
+                roadmap_service.list_roadmaps(
+                    employee_scope=employee_scope, department_id=department_id,
+                    project_id=project_id, site_id=site_id, block_id=block_id,
+                    status=_str_param(request, "status")))]
+
+
+@api_view(methods=("POST",), body=schemas.RoadmapCreate, status=201, admin=True)
+def _create_roadmap(request, data: schemas.RoadmapCreate):
+    try:
+        roadmap = roadmap_service.create_roadmap(
+            data.model_dump(), creator_id=request.token.user_id)
+    except ValueError as exc:
+        # Блок не из проекта / несуществующая ссылка — 400, как у задач.
+        return json_error(str(exc), 400)
+    except IntegrityError:
+        return json_error("Роудмап с таким названием уже есть "
+                          "на этом блоке проекта", 409)
+    return schemas.RoadmapResponse.model_validate(
+        roadmap_service.build_response(roadmap))
+
+
+def roadmaps_collection(request):
+    if request.method == "GET":
+        return _list_roadmaps(request)
+    if request.method == "POST":
+        return _create_roadmap(request)
+    return _method_not_allowed(request)
+
+
+def _roadmap_for_write(request, roadmap_id: int):
+    """Роудмап, который вызывающий вправе править, иначе исключение.
+
+    Те же две калитки и в том же порядке, что у ``_project_for_write``:
+    сначала 404 для чужой области видимости (чтобы ручка не работала
+    перечислителем), затем владение.
+    """
+    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    roadmap = roadmap_service.get_roadmap(
+        roadmap_id, employee_scope=employee_scope, department_id=department_id)
+    if not (request.token.is_elevated
+            or roadmap.owner_id == request.token.user_id):
+        raise PermissionDenied(
+            "Only the roadmap owner (or admin) can change it")
+    return roadmap
+
+
+@api_view(methods=("GET",))
+def _get_roadmap(request, roadmap_id: int):
+    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    return schemas.RoadmapResponse.model_validate(
+        roadmap_service.build_response(roadmap_service.get_roadmap(
+            roadmap_id, employee_scope=employee_scope,
+            department_id=department_id)))
+
+
+@api_view(methods=("PATCH",), body=schemas.RoadmapUpdate)
+def _update_roadmap(request, roadmap_id: int, data: schemas.RoadmapUpdate):
+    _roadmap_for_write(request, roadmap_id)
+    try:
+        roadmap = roadmap_service.update_roadmap(
+            roadmap_id, data.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        return json_error(str(exc), 400)
+    except IntegrityError:
+        return json_error("Роудмап с таким названием уже есть "
+                          "на этом блоке проекта", 409)
+    return schemas.RoadmapResponse.model_validate(
+        roadmap_service.build_response(roadmap))
+
+
+@api_view(methods=("DELETE",), status=204)
+def _delete_roadmap(request, roadmap_id: int):
+    _roadmap_for_write(request, roadmap_id)
+    try:
+        roadmap_service.delete_roadmap(roadmap_id)
+    except roadmap_service.RoadmapInUse as exc:
+        # 409, как у объекта и блока: запрос корректен, мешает состояние.
+        return json_error(str(exc), 409)
+    return _no_content()
+
+
+def roadmap_detail(request, roadmap_id: int):
+    if request.method == "GET":
+        return _get_roadmap(request, roadmap_id=roadmap_id)
+    if request.method == "PATCH":
+        return _update_roadmap(request, roadmap_id=roadmap_id)
+    if request.method == "DELETE":
+        return _delete_roadmap(request, roadmap_id=roadmap_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def roadmap_tasks(request, roadmap_id: int):
+    """Плоский список задач пакета — дерево строит UI, как и у проектов."""
+    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    roadmap_service.get_roadmap(roadmap_id, employee_scope=employee_scope,
+                                department_id=department_id)
+    # Видеть роудмап — не значит видеть каждую его задачу: та же тройка
+    # видимости, что у плоского списка (см. project_tasks).
+    visibility, visibility_department_id = task_service.scope_for(request.token)
+    tasks = task_service.list_tasks(
+        limit=1000, roadmap_id=roadmap_id,
+        visibility=visibility,
+        visibility_user_id=request.token.user_id,
+        visibility_department_id=visibility_department_id,
+    )
+    return task_response.build_list(tasks)
+
+
+@api_view(methods=("GET",))
+def roadmap_metrics(request, roadmap_id: int):
+    """План против факта по трём осям доски: срок, люди, техника."""
+    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    roadmap = roadmap_service.get_roadmap(
+        roadmap_id, employee_scope=employee_scope, department_id=department_id)
+    return schemas.RoadmapMetricsResponse.model_validate(
+        roadmap_service.roadmap_metrics(roadmap))
+
+
 @api_view(methods=("GET",))
 def project_tasks(request, project_id: int):
     """Flat task list for a project — the UI builds the tree itself."""
@@ -685,34 +1588,74 @@ def project_tasks(request, project_id: int):
     # enumerate tasks of a project the caller may not see.
     project_service.get_project(project_id, employee_scope=employee_scope,
                                 department_id=department_id)
+    # Seeing the project is NOT seeing every task in it: narrowing by
+    # department alone still handed over tasks the caller has no part in.
+    # Same visibility triple as the flat list endpoint.
+    visibility, visibility_department_id = task_service.scope_for(request.token)
     tasks = task_service.list_tasks(
         limit=1000, project_id=project_id,
-        department_id=department_id if employee_scope else None,
+        visibility=visibility,
+        visibility_user_id=request.token.user_id,
+        visibility_department_id=visibility_department_id,
     )
     return task_response.build_list(tasks)
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Resource assignments — /assignments/
+# Ресурсы — /assignments/ (факт именами) и /resource-requirements/ (план)
+#
+# Обе ручки принимают ЛИБО task_id, ЛИБО roadmap_id. Права берутся от цели:
+# у задачи — full_edit (бронирование человека или машины это планирование,
+# а не отчёт о ходе работ, иначе любой исполнитель переназначал бы технику
+# бригады), у роудмапа — та же калитка владельца, что у его карточки.
 # ─────────────────────────────────────────────────────────────────────────
+
+def _authorise_resource_target(request, task_id: int | None,
+                               roadmap_id: int | None):
+    """Проверить право писать ресурсы указанной цели."""
+    if task_id is not None:
+        task = task_service.load_for_action(task_id, request.token)
+        task_service.require_full_edit(task, request.token)
+    else:
+        _roadmap_for_write(request, roadmap_id)
+
+
+def _read_resource_target(request, task_id: int | None,
+                          roadmap_id: int | None):
+    """Проверить право ЧИТАТЬ ресурсы цели — только видимость, без правки."""
+    if task_id is not None:
+        task_service.load_for_action(task_id, request.token)
+    else:
+        employee_scope, department_id = roadmap_service.scope_for(request.token)
+        roadmap_service.get_roadmap(roadmap_id, employee_scope=employee_scope,
+                                    department_id=department_id)
+
 
 @api_view(methods=("GET",))
 def _list_assignments(request):
     try:
         task_id = _int_param(request, "task_id")
+        roadmap_id = _int_param(request, "roadmap_id")
     except _ParamError as exc:
         return exc.response
-    if task_id is None:
-        # ``task_id`` is a required query param in the original.
+    if (task_id is None) == (roadmap_id is None):
+        # ``task_id`` was required in the original; ``roadmap_id`` is the
+        # new alternative. Exactly one, never both.
         return json_error([{"type": "missing", "loc": ["query", "task_id"],
-                            "msg": "Field required"}], 422)
-    return task_content_service.list_assignments(task_id)
+                            "msg": "Provide exactly one of task_id, roadmap_id"}],
+                          422)
+    _read_resource_target(request, task_id, roadmap_id)
+    return [resource_service.build_allocation(row)
+            for row in resource_service.list_allocations(
+                task_id=task_id, roadmap_id=roadmap_id)]
 
 
 @api_view(methods=("POST",), body=schemas.AssignmentCreate, status=201)
 def _create_assignment(request, data: schemas.AssignmentCreate):
+    _authorise_resource_target(request, data.task_id, data.roadmap_id)
     try:
-        return task_content_service.create_assignment(data)
+        return resource_service.build_allocation(
+            resource_service.create_allocation(data))
     except ValueError as exc:
         return json_error(str(exc), 422)
 
@@ -727,8 +1670,75 @@ def assignments_collection(request):
 
 @api_view(methods=("DELETE",), status=204)
 def assignment_detail(request, assignment_id: int):
-    task_content_service.delete_assignment(assignment_id)
+    task_id, roadmap_id = resource_service.allocation_target(assignment_id)
+    _authorise_resource_target(request, task_id, roadmap_id)
+    resource_service.delete_allocation(assignment_id)
     return _no_content()
+
+
+@api_view(methods=("GET",))
+def _list_requirements(request):
+    try:
+        task_id = _int_param(request, "task_id")
+        roadmap_id = _int_param(request, "roadmap_id")
+    except _ParamError as exc:
+        return exc.response
+    if (task_id is None) == (roadmap_id is None):
+        return json_error([{"type": "missing", "loc": ["query", "roadmap_id"],
+                            "msg": "Provide exactly one of task_id, roadmap_id"}],
+                          422)
+    _read_resource_target(request, task_id, roadmap_id)
+    return [schemas.ResourceRequirementResponse.model_validate(row)
+            for row in resource_service.build_requirements(
+                resource_service.list_requirements(
+                    task_id=task_id, roadmap_id=roadmap_id))]
+
+
+@api_view(methods=("POST",), body=schemas.ResourceRequirementCreate,
+          status=201)
+def _create_requirement(request, data: schemas.ResourceRequirementCreate):
+    _authorise_resource_target(request, data.task_id, data.roadmap_id)
+    try:
+        row = resource_service.create_requirement(data.model_dump())
+    except ValueError as exc:
+        return json_error(str(exc), 422)
+    return schemas.ResourceRequirementResponse.model_validate(
+        resource_service.build_requirement(row))
+
+
+def requirements_collection(request):
+    if request.method == "GET":
+        return _list_requirements(request)
+    if request.method == "POST":
+        return _create_requirement(request)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("PATCH",), body=schemas.ResourceRequirementUpdate)
+def _update_requirement(request, requirement_id: int,
+                        data: schemas.ResourceRequirementUpdate):
+    row = resource_service.get_requirement(requirement_id)
+    _authorise_resource_target(request, row.task_id, row.roadmap_id)
+    return schemas.ResourceRequirementResponse.model_validate(
+        resource_service.build_requirement(
+            resource_service.update_requirement(
+                requirement_id, data.model_dump(exclude_unset=True))))
+
+
+@api_view(methods=("DELETE",), status=204)
+def _delete_requirement(request, requirement_id: int):
+    row = resource_service.get_requirement(requirement_id)
+    _authorise_resource_target(request, row.task_id, row.roadmap_id)
+    resource_service.delete_requirement(requirement_id)
+    return _no_content()
+
+
+def requirement_detail(request, requirement_id: int):
+    if request.method == "PATCH":
+        return _update_requirement(request, requirement_id=requirement_id)
+    if request.method == "DELETE":
+        return _delete_requirement(request, requirement_id=requirement_id)
+    return _method_not_allowed(request)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -806,9 +1816,18 @@ def _csv(value: str | None) -> list[str] | None:
 
 @api_view(methods=("GET",))
 def reports_gantt(request):
+    try:
+        project_id = _int_param(request, "project_id")
+        site_id = _int_param(request, "site_id")
+        roadmap_id = _int_param(request, "roadmap_id")
+        site_block_id = _int_param(request, "site_block_id")
+    except _ParamError as exc:
+        return exc.response
     return schemas.ReportsGanttResponse.model_validate(
         gantt_service.reports_gantt(_csv_ints(_str_param(request, "ids")),
-                                    _csv(_str_param(request, "status")))
+                                    _csv(_str_param(request, "status")),
+                                    project_id, site_id, roadmap_id,
+                                    site_block_id)
     )
 
 
@@ -820,6 +1839,8 @@ def resource_gantt(request):
         dt_from = _date_param(request, "from", required=True)
         dt_to = _date_param(request, "to", required=True)
         department_id = _int_param(request, "department_id")
+        project_id = _int_param(request, "project_id")
+        site_id = _int_param(request, "site_id")
     except _ParamError as exc:
         return exc.response
 
@@ -828,8 +1849,86 @@ def resource_gantt(request):
              if k.strip()}
     return schemas.ResourceGanttResponse.model_validate(
         gantt_service.resource_gantt(dt_from, dt_to, kinds, department_id,
-                                     _str_param(request, "search"))
+                                     _str_param(request, "search"),
+                                     project_id, site_id)
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# План/факт — /plan-fact/project/{id} , /plan-fact/roadmap/{id}
+#
+# Отчётная дата задаётся ``?date=`` и по умолчанию сегодня. Она не
+# косметика: прогноз и проценты на 5 июня и на 20 июня — разные ответы, и
+# оба должны быть доступны.
+# ─────────────────────────────────────────────────────────────────────────
+
+@api_view(methods=("GET",))
+def project_plan_fact(request, project_id: int):
+    """Дерево проект → площадки → блоки → роудмапы на отчётную дату."""
+    try:
+        on = _date_param(request, "date") or date.today()
+    except _ParamError as exc:
+        return exc.response
+    employee_scope, department_id = project_service.scope_for(request.token)
+    project = project_service.get_project(
+        project_id, employee_scope=employee_scope, department_id=department_id)
+    return schemas.PlanFactNode.model_validate(
+        plan_fact_service.project_plan_fact(project, on))
+
+
+@api_view(methods=("GET",))
+def roadmap_plan_fact(request, roadmap_id: int):
+    """То же для пакета работ + его задачи и серии по дням."""
+    try:
+        on = _date_param(request, "date") or date.today()
+    except _ParamError as exc:
+        return exc.response
+    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    roadmap = roadmap_service.get_roadmap(
+        roadmap_id, employee_scope=employee_scope, department_id=department_id)
+    return schemas.PlanFactNode.model_validate(
+        plan_fact_service.roadmap_plan_fact(roadmap, on))
+
+
+@api_view(methods=("GET",))
+def equipment_usage(request):
+    """Учёт задействования техники: что занято на дату D и история интервалов.
+
+    Узел иерархии задаётся ровно одним из ``project_id`` / ``site_id`` /
+    ``block_id`` / ``roadmap_id`` / ``task_id``; без него ответ был бы «по
+    всей компании» — вопрос, которого никто не задаёт, но который стоил бы
+    полного скана.
+    """
+    try:
+        target_date = _date_param(request, "date") or date.today()
+        date_from = _date_param(request, "date_from") or target_date
+        date_to = _date_param(request, "date_to") or target_date
+        category_id = _int_param(request, "category_id")
+        scope = {
+            "project_id": _int_param(request, "project_id"),
+            "site_id": _int_param(request, "site_id"),
+            "block_id": _int_param(request, "block_id"),
+            "roadmap_id": _int_param(request, "roadmap_id"),
+            "task_id": _int_param(request, "task_id"),
+        }
+    except _ParamError as exc:
+        return exc.response
+
+    given = {key: value for key, value in scope.items() if value is not None}
+    if len(given) != 1:
+        return json_error([{"type": "missing", "loc": ["query", "project_id"],
+                            "msg": "Provide exactly one of project_id, "
+                                   "site_id, block_id, roadmap_id, task_id"}],
+                          422)
+    if date_to < date_from:
+        return json_error("date_to раньше date_from", 422)
+
+    return schemas.EquipmentUsageResponse.model_validate({
+        "engaged_on": target_date,
+        "engaged": equipment_usage_service.engaged_on(target_date, **given),
+        "history": equipment_usage_service.usage_history(
+            date_from, date_to, category_id=category_id, **given),
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────

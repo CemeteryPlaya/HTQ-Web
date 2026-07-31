@@ -19,26 +19,12 @@ import {
 import { fetchTasks, updateTask } from '@/api/tasks';
 import type { Task, TaskPriority, TaskStatus } from '@/types/tasks';
 import type { UserProfile } from '@/types/userProfile';
+import { statusBadgeClass, statusLabel } from '@/lib/tasks/status';
+import { TASK_PRIORITY, priorityLabel } from '@/lib/tasks/priority';
 
 /* ---- Constants ---- */
 
-const PRIORITY_CONFIG: Record<TaskPriority, { color: string; icon: string }> = {
-    critical: { color: 'bg-red-500 text-white', icon: '🔴' },
-    high: { color: 'bg-orange-500 text-white', icon: '🟠' },
-    medium: { color: 'bg-yellow-500 text-black', icon: '🟡' },
-    low: { color: 'bg-blue-500 text-white', icon: '🔵' },
-    trivial: { color: 'bg-gray-400 text-white', icon: '⚪' },
-};
 
-const STATUS_CONFIG: Record<TaskStatus, { color: string }> = {
-    backlog: { color: 'bg-slate-400 text-white' },
-    todo: { color: 'bg-slate-600 text-white' },
-    in_progress: { color: 'bg-blue-600 text-white' },
-    in_review: { color: 'bg-purple-500 text-white' },
-    blocked: { color: 'bg-red-500 text-white' },
-    done: { color: 'bg-green-500 text-white' },
-    cancelled: { color: 'bg-gray-600 text-white' },
-};
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
     task: <CheckSquare className="h-4 w-4 text-blue-500" />,
@@ -179,14 +165,14 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                                 </div>
                             </TableCell>
                             <TableCell>
-                                <Badge className={STATUS_CONFIG[task.status]?.color || ''}>
-                                    {t(`tasks.pages.list.status.${task.status}`) || task.status}
+                                <Badge className={statusBadgeClass(task.status)}>
+                                    {statusLabel(task.status, t) || task.status}
                                 </Badge>
                             </TableCell>
                             <TableCell>
                                 <span className="text-sm">
-                                    {PRIORITY_CONFIG[task.priority]?.icon}{' '}
-                                    {t(`tasks.pages.list.priority.${task.priority}`) || task.priority}
+                                    {TASK_PRIORITY[task.priority]?.icon}{' '}
+                                    {priorityLabel(task.priority, t) || task.priority}
                                 </span>
                             </TableCell>
                             <TableCell className="text-sm">

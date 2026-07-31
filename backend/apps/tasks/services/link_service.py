@@ -83,6 +83,20 @@ def create_link(*, source_id: int, target_id: int, link_type: str,
 
 
 @transaction.atomic
+def link_source_task_id(link_id: int) -> int:
+    """Which task owns this link, for the caller's permission check.
+
+    Deleting a link is an edit of the *source* task (that is the side the
+    link was created from, and the side ``create_link`` authorises), so the
+    view authorises against it. ``Http404`` for an unknown id.
+    """
+    source_id = TaskLink.objects.filter(pk=link_id).values_list(
+        "source_id", flat=True).first()
+    if source_id is None:
+        raise Http404(f"Link {link_id} not found")
+    return source_id
+
+
 def delete_link(link_id: int) -> None:
     link = TaskLink.objects.filter(pk=link_id).first()
     if link is None:

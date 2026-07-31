@@ -19,6 +19,11 @@ ENV/
 # SQLite (legacy Django dev DB — retained as a guard against re-introducing it)
 *.sqlite3
 
+# collectstatic output. Появляется в рабочей копии, потому что dev-стек
+# бинд-маунтит ./backend в контейнер (docker-compose.dev.yml), а entrypoint
+# гоняет collectstatic при старте backend-web. Это сборочный артефакт.
+backend/staticfiles/
+
 # ─── Environment / Secrets ───────────────────────────────────────────────────
 # Keep .env.example (template), ignore actual .env files with real secrets
 .env
@@ -37,6 +42,13 @@ webtransport/certs/
 # ─── Local tools cache ───────────────────────────────────────────────────────
 # Per-machine binaries (ngrok, bore, etc.) — install via PATH instead
 tools/
+
+# ─── Django collectstatic output ─────────────────────────────────────────────
+# STATIC_ROOT (settings/base.py) — rebuilt by docker-entrypoint.sh on every
+# start, so the contents are a build artifact. .gitkeep stays tracked to keep
+# the directory itself in the repo.
+backend/staticfiles/*
+!backend/staticfiles/.gitkeep
 
 # ─── Frontend ────────────────────────────────────────────────────────────────
 node_modules/
@@ -83,3 +95,5 @@ for tasks
 docs/lark-reference/
 docs/audit-2026-04-28
 requirementsNDPP.txt
+# Локальные скрипты с боевыми доступами (тот же случай, что .env выше).
+db-vps.ps1

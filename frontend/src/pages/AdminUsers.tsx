@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, ExternalLink, Pencil, UserPlus } from 'lucide-react';
+import { ExternalLink, Pencil, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 
 import api from '../api/client';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '../components/Header';
 import { Footer } from '../components/Footer';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -89,13 +90,7 @@ const AdminUsers = () => {
             <Header />
             <main className="flex-1 container mx-auto px-4 py-8">
                 <div className="mb-6 flex flex-col gap-4">
-                    <Link
-                        to="/myprofile"
-                        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
-                    >
-                        <ArrowLeft className="h-4 w-4" />
-                        {t('hr.backToMain', 'Назад в профиль')}
-                    </Link>
+                    <BackToProfile />
                     <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                             <h1 className="text-3xl font-bold">{t('admin.users.title', 'Управление пользователями')}</h1>

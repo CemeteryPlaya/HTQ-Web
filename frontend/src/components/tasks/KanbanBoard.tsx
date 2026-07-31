@@ -42,32 +42,14 @@ import {
     updateTaskProgress, fetchLabels,
 } from '@/api/tasks';
 import { fetchEmployeeUsers } from '@/api/hr';
+import {
+    TASK_STATUS, TASK_STATUS_ORDER, normalizeTaskStatus,
+} from '@/lib/tasks/status';
+import { TASK_PRIORITY, TASK_PRIORITY_ORDER } from '@/lib/tasks/priority';
 
 /* ---- Visual config ---- */
 
-const STATUS_ORDER: TaskStatus[] = [
-    'backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled',
-];
-
-const STATUS_TINT: Record<TaskStatus, string> = {
-    backlog: 'bg-slate-100 dark:bg-slate-900/40 border-slate-300/40',
-    todo: 'bg-slate-100 dark:bg-slate-900/40 border-slate-300/40',
-    in_progress: 'bg-blue-50 dark:bg-blue-950/30 border-blue-300/40',
-    in_review: 'bg-purple-50 dark:bg-purple-950/30 border-purple-300/40',
-    blocked: 'bg-red-50 dark:bg-red-950/30 border-red-300/40',
-    done: 'bg-green-50 dark:bg-green-950/30 border-green-300/40',
-    cancelled: 'bg-gray-100 dark:bg-gray-900/40 border-gray-300/40',
-};
-
-const PRIORITY_COLORS: Record<TaskPriority, string> = {
-    critical: 'bg-red-500 text-white',
-    high: 'bg-orange-500 text-white',
-    medium: 'bg-yellow-500 text-black',
-    low: 'bg-blue-500 text-white',
-    trivial: 'bg-gray-400 text-white',
-};
-
-const PRIORITIES: TaskPriority[] = ['critical', 'high', 'medium', 'low', 'trivial'];
+const PRIORITIES = TASK_PRIORITY_ORDER;
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
     task: <CheckSquare className="h-4 w-4 text-blue-500 shrink-0" />,
@@ -108,7 +90,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onStatusChange 
 
     // Per-column pagination — index of the visible page within each column.
     const [pages, setPages] = useState<Record<TaskStatus, number>>(() =>
-        STATUS_ORDER.reduce((acc, s) => ({ ...acc, [s]: 0 }), {} as Record<TaskStatus, number>),
+        TASK_STATUS_ORDER.reduce((acc, s) => ({ ...acc, [s]: 0 }), {} as Record<TaskStatus, number>),
     );
 
     useEffect(() => {
@@ -211,7 +193,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onStatusChange 
                 no squishing — the number of columns per row follows the
                 viewport width. Cards within a column paginate (6/page). */}
             <div className="flex flex-wrap gap-4 pb-4 w-full items-start content-start">
-                {STATUS_ORDER.map(status => {
+                {TASK_STATUS_ORDER.map(status => {
                     const colTasks = columns[status] ?? [];
                     const totalPages = Math.max(1, Math.ceil(colTasks.length / CARDS_PER_PAGE));
                     const page = Math.min(pages[status] ?? 0, totalPages - 1);
@@ -221,7 +203,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onStatusChange 
                     return (
                     <div
                         key={status}
-                        className={`rounded-xl p-3 flex flex-col w-[320px] shrink-0 border ${STATUS_TINT[status]}`}
+                        className={`rounded-xl p-3 flex flex-col w-[320px] shrink-0 border ${TASK_STATUS[status].columnClass}`}
                     >
                         <div className="flex items-center justify-between mb-3 px-1">
                             <span className="font-semibold text-sm uppercase tracking-wider text-muted-foreground">
@@ -284,7 +266,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onStatusChange 
                                                                     <PopoverTrigger asChild>
                                                                         <button
                                                                             type="button"
-                                                                            className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${PRIORITY_COLORS[task.priority]}`}
+                                                                            className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${TASK_PRIORITY[task.priority].badgeClass}`}
                                                                             onClick={(e) => e.stopPropagation()}
                                                                         >
                                                                             {task.priority}
@@ -298,7 +280,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onStatusChange 
                                                                                 className="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded hover:bg-muted text-left"
                                                                                 onClick={() => priorityMutation.mutate({ id: task.id, priority: p })}
                                                                             >
-                                                                                <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold ${PRIORITY_COLORS[p]}`}>{p}</span>
+                                                                                <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold ${TASK_PRIORITY[p].badgeClass}`}>{p}</span>
                                                                                 {task.priority === p && <span className="text-primary">●</span>}
                                                                             </button>
                                                                         ))}
@@ -498,15 +480,12 @@ function buildColumns(tasks: Task[]): Record<TaskStatus, Task[]> {
         backlog: [], todo: [], in_progress: [], in_review: [], blocked: [], done: [], cancelled: [],
     };
     tasks.forEach(task => {
-        // Defensive: legacy 'open' / 'closed' rows from before migration 012
-        // are coerced to the new vocabulary so the board still renders
-        // them while a deployment is mid-rollout.
-        const status = (
-            task.status === ('open' as any) ? 'todo'
-                : task.status === ('closed' as any) ? 'cancelled'
-                    : task.status
-        ) as TaskStatus;
-        if (cols[status]) cols[status].push(task);
+        // Legacy 'open' / 'closed' rows from before migration 012 are
+        // coerced to the current vocabulary so the board still renders
+        // them. The mapping now lives in lib/tasks/status.ts, where the
+        // charts read it from too — it used to exist only here, which is
+        // why those charts believed 'open'/'closed' were current.
+        cols[normalizeTaskStatus(task.status)].push(task);
     });
     return cols;
 }

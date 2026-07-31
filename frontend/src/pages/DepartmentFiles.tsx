@@ -1,6 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import {
   createDepartmentFileFolder,
   fetchMyFolders,
@@ -11,6 +10,7 @@ import {
   downloadFileUrl,
 } from '@/api/fileManager';
 import type { DepartmentFolder, DepartmentFile, DepartmentFileFolder } from '@/types/fileManager';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
@@ -320,12 +320,7 @@ const DepartmentFiles: React.FC = () => {
             <p className="text-sm text-muted-foreground text-center max-w-xs">
               Вы не привязаны ни к одному отделу. Обратитесь к HR-менеджеру для назначения в отдел.
             </p>
-            <Button asChild variant="outline" className="gap-2 mt-2">
-              <Link to="/myprofile">
-                <ArrowLeft className="h-4 w-4" />
-                Назад в профиль
-              </Link>
-            </Button>
+            <BackToProfile className="mb-0 mt-2" />
           </CardContent>
         </Card>
       </div>
@@ -347,17 +342,7 @@ const DepartmentFiles: React.FC = () => {
       <div className="max-w-7xl mx-auto px-4 py-6 pb-24 md:pb-6">
         {/* ── Header ── */}
         <div className="mb-6 flex flex-col gap-4">
-          <Button
-            asChild
-            variant="ghost"
-            size="sm"
-            className="w-fit gap-1.5 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
-          >
-            <Link to="/myprofile">
-              <ArrowLeft className="h-4 w-4" />
-              Назад в профиль
-            </Link>
-          </Button>
+          <BackToProfile className="mb-0" />
 
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">

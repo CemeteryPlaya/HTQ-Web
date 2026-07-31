@@ -12,6 +12,8 @@ PREFIX_TO_SERVICE = {
     "/api/media/": "media",
     "/api/email/": "mail",
     "/api/messenger/": "messenger",
+    "/api/contracts/": "contracts",
+    "/api/signoff/": "signoff",
     "/ws/messenger/": "messenger",
     "/ws/sfu/": "conference",
 }

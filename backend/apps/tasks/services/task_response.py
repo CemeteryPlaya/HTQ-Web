@@ -17,7 +17,9 @@ from __future__ import annotations
 
 from .. import schemas
 from ..models import Task
+from . import contractor_service
 from . import hydration
+from . import task_content_service
 
 
 def _iter_user_ids(tasks: list[Task]):
@@ -52,13 +54,18 @@ def _iter_department_ids(tasks: list[Task]):
 class _Ctx:
     """Hydration maps for one batch of tasks."""
 
-    __slots__ = ("users", "departments")
+    __slots__ = ("users", "departments", "contractors")
 
     def __init__(self, tasks: list[Task], *, deep: bool):
         self.users = hydration.user_briefs(
             _iter_user_ids(tasks) if deep else _iter_list_user_ids(tasks)
         )
         self.departments = hydration.department_briefs(_iter_department_ids(tasks))
+        # Эффективный подрядчик — тоже батч и тоже здесь, по тому же
+        # инварианту модуля: одна волна на весь список, а не запрос на
+        # задачу. Подъём по дереву (задача → роудмап → площадка → проект)
+        # живёт в contractor_service, ему тут не место.
+        self.contractors = contractor_service.effective_contractors(tasks)
 
     def name(self, user_id):
         return hydration.user_name(self.users, user_id)
@@ -68,6 +75,9 @@ class _Ctx:
 
     def dept(self, department_id):
         return hydration.department_name(self.departments, department_id)
+
+    def effective_contractor(self, task_id):
+        return self.contractors.get(task_id)
 
 
 def _iter_list_user_ids(tasks: list[Task]):
@@ -117,6 +127,30 @@ def _common_fields(task: Task, ctx: _Ctx) -> dict:
         "project_id": task.project_id,
         "project_name": task.project.name if task.project else None,
         "project_color": task.project.color if task.project else None,
+        # Роудмап — джойн, как проект: модель этого же аппа.
+        "roadmap_id": task.roadmap_id,
+        "roadmap_name": task.roadmap.name if task.roadmap else None,
+        "roadmap_color": task.roadmap.color if task.roadmap else None,
+        # Объект резолвится джойном (``select_related("site")`` в
+        # task_service), а не через hydration: Site — модель этого же аппа.
+        "site_id": task.site_id,
+        "site_name": task.site.name if task.site else None,
+        "site_color": task.site.color if task.site else None,
+        # Блок — тоже джойн (``select_related("site_block")``). Цвета у него
+        # нет: чип блока рисуется цветом своего объекта, иначе на одной
+        # карточке оказались бы два несвязанных цветовых кода.
+        "site_block_id": task.site_block_id,
+        "site_block_name": (task.site_block.name if task.site_block else None),
+        # Подрядчик — модель этого же аппа, поэтому джойн, а не hydration.
+        "contractor_id": task.contractor_id,
+        "contractor_name": task.contractor.name if task.contractor else None,
+        # Кто РЕАЛЬНО выполняет: своё значение или унаследованное с
+        # роудмапа/площадки/проекта. Оба поля рядом намеренно — «унаследован»
+        # и «назначен лично» это разные факты, и UI их различает.
+        "effective_contractor": ctx.effective_contractor(task.id),
+        "contractor_worker_id": task.contractor_worker_id,
+        "contractor_worker_name": (task.contractor_worker.full_name
+                                   if task.contractor_worker else None),
         "parent_id": task.parent_id,
         "parent_key": task.parent.key if task.parent else None,
         "assignees": [
@@ -220,10 +254,17 @@ def build_detail(task: Task) -> schemas.TaskDetailResponse:
                            for link in task.outgoing_links.all()],
         "incoming_links": [_link_payload(link)
                            for link in task.incoming_links.all()],
+        # Факт по каждому виду работ — свёртка отчётов задачи; в самой
+        # строке объёма его нет (см. докстринг TaskVolume).
+        "volumes": task_content_service.list_task_volumes(task.id),
         "subtasks": [],
     })
     subtasks = list(task.subtasks.filter(is_deleted=False)
-                    .select_related("task_type", "project", "parent")
+                    # ``site``/``site_block`` тоже: ``_common_fields`` печатает
+                    # их имена, и без джойна каждая подзадача стоила бы двух
+                    # лишних запросов.
+                    .select_related("task_type", "project", "roadmap", "site",
+                                    "site_block", "parent")
                     .prefetch_related("labels", "assignees", "department_links",
                                       "subtasks"))
     payload["subtasks"] = [s.model_dump() for s in build_list(subtasks)]

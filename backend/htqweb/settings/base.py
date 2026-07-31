@@ -38,6 +38,18 @@ INSTALLED_APPS = [
     "apps.messenger",   # Поток A · фаза 8 · /api/messenger/v1/
     "apps.tasks",       # Поток B · фаза 4 · /api/tasks/v1/
     "apps.approvals",   # Поток B · фаза 5 · /api/requests/v1/
+    # Домен, появившийся уже после обратной миграции (не из FastAPI-поколения):
+    # бюджеты, реестр контрагентов, договоры. /api/contracts/v1/
+    "apps.contracts",
+    # Универсальный движок согласования. /api/signoff/v1/
+    # НЕ путать с apps.approvals (/api/requests/v1/): та аппка — конструктор
+    # динамических форм, её единица согласования — собственная заявка с JSON
+    # значениями полей, и навести её на существующую строку чужой таблицы
+    # нельзя. signoff согласует ЛЮБУЮ модель, унаследовавшую Approvable.
+    # Позиция в списке роли не играет: Django загружает модели ВСЕХ аппок
+    # до первого ready(), поэтому предметная аппка вправе регистрировать
+    # свой тип независимо от того, стоит она здесь выше или ниже.
+    "apps.signoff",
 ]
 
 MIDDLEWARE = [
@@ -191,6 +203,16 @@ CMS_LOCAL_STORAGE_DIR = env("CMS_LOCAL_STORAGE_DIR", str(BASE_DIR / "data" / "cm
 
 NEWS_SIGNED_URL_SECRET = env("NEWS_SIGNED_URL_SECRET", "change-me-news-signed-secret")
 NEWS_SIGNED_URL_TTL = int(env("NEWS_SIGNED_URL_TTL", "3600"))
+
+# ── Админ-панель инфраструктуры — GET /api/admin/v1/infrastructure/ ─────────
+# Порт services/admin/app/core/settings.py (admin-сервис снесён при cutover'е,
+# см. apps/core/infrastructure.py). Читает уже существующие DATABASES/CACHES/
+# S3_* — свои тут только «человеческие» ссылки и имя окружения.
+SERVICE_ENV = env("SERVICE_ENV", "development")
+# Ссылка «панель БД». У источника это был sqladmin снесённого admin-сервиса;
+# в монолите ту же роль играет родная админка Django.
+DB_ADMIN_URL = env("DB_ADMIN_URL", "/django-admin/")
+MINIO_CONSOLE_URL = env("MINIO_CONSOLE_URL", "http://localhost:9001")
 
 # ── Conference (SFU) runtime config — GET /api/cms/v1/conference/config ─────
 # Ported defaults from services/cms/app/data/conference.yaml (FastAPI

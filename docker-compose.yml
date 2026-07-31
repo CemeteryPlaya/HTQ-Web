@@ -218,7 +218,11 @@ services:
     restart: unless-stopped
     environment:
       <<: *django-env
-      RUN_MIGRATIONS: "1"
+      # Только `manage.py migrate`. На боевой БД держим 0 (см. корневой .env).
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
+      # collectstatic + бакеты хранилища + сид админа — к схеме БД отношения
+      # не имеют и нужны при каждом старте, поэтому НЕ зависят от флага выше.
+      RUN_BOOTSTRAP: ${RUN_BOOTSTRAP:-1}
     command: ["gunicorn", "htqweb.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "60"]
     ports:
       - "8000:8000"

@@ -77,6 +77,17 @@ class CurrentPasswordRequired(Exception):
     """``current_password`` missing/wrong, and ``must_change_password`` is False."""
 
 
+class FieldTooLong(Exception):
+    """A form field exceeded its column width.
+
+    Without this the value goes straight into a ``varchar(N)`` column and
+    Postgres answers with a ``DataError`` — i.e. a 500 for what is plainly a
+    bad request. The frontend's masked inputs never send anything this long
+    (``PhoneInput`` caps a number at ``+7 (700) 483-55-81``); this is the
+    guard for everything that does not go through them.
+    """
+
+
 # UUID-shaped file id embedded in a media-service URL — ported verbatim from
 # the FastAPI original's ``_FILE_ID_RE``. Since the final-review fix
 # (Findings 1/2), every avatar this module writes IS a FileMetadata row and
@@ -214,7 +225,8 @@ def apply_profile_fields(
 
     Raises ``InvalidSettingsJSON`` if ``settings_json`` is present but not
     valid-JSON-object text — callers map that to a 400, same as the source's
-    ``HTTPException(400, ...)``.
+    ``HTTPException(400, ...)``. Raises ``FieldTooLong`` when a value would
+    overflow its column (also a 400 — see that exception's docstring).
     """
     changes: dict = {}
 
@@ -226,6 +238,10 @@ def apply_profile_fields(
         ("bio", bio),
         ("phone", phone),
     ]:
+        if value is not None:
+            limit = User._meta.get_field(field).max_length
+            if limit is not None and len(value) > limit:
+                raise FieldTooLong(f"{field} must be at most {limit} characters")
         if value is not None and getattr(user, field, None) != value:
             changes[field] = value
             setattr(user, field, value)
