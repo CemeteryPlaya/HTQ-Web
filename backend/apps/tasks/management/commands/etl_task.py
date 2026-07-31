@@ -52,7 +52,7 @@ SPECS: list[_Spec] = [
     _Spec("tasks", m.Task),                    # родитель assignees/assignments/activities
     _Spec("task_sequence", m.TaskSequence),
     _Spec("task_assignees", m.TaskAssignee),
-    _Spec("task_assignments", m.TaskAssignment),
+    _Spec("task_assignments", m.ResourceAllocation),
     _Spec("task_activities", m.TaskActivity),
     _Spec("calendar_events", m.CalendarEvent),
     _Spec("calendar_event_participants", m.CalendarEventParticipant, key=("event_id", "user_id")),

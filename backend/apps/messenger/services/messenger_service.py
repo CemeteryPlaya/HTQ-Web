@@ -25,6 +25,8 @@ messenger-core). Батчится (``get_users_brief``) там, где сери�
 """
 from __future__ import annotations
 
+import datetime
+import json
 import uuid
 from typing import Iterable
 
@@ -32,8 +34,8 @@ from django.db import transaction
 from django.db.models import Q
 
 from apps.messenger import schemas
-from apps.messenger.models import Message, Room, RoomParticipant, RoomParticipantRole, RoomType
-from apps.messenger.services import attachment_service
+from apps.messenger.models import AuditLog, Message, Room, RoomParticipant, RoomParticipantRole, RoomType
+from apps.messenger.services import attachment_service, realtime, room_lifecycle
 from apps.users import interface as users_interface
 
 
@@ -63,6 +65,19 @@ class InvalidRoomParticipants(Exception):
     """400 — direct-чат обязан иметь ровно двух (различных) участников."""
 
 
+class MessageNotFound(Exception):
+    """404 — сообщения нет в этой комнате (или оно уже удалено)."""
+
+
+class NotMessageAuthor(Exception):
+    """403 — редактировать/удалять можно только своё сообщение (удалять —
+    ещё и админу группы, см. delete_message)."""
+
+
+class InvalidReplyTarget(Exception):
+    """400 — reply_to указывает на сообщение не из этой комнаты."""
+
+
 # ── сериализация ─────────────────────────────────────────────────────────
 
 def _briefs_by_id(user_ids: Iterable[int]) -> dict[int, dict]:
@@ -82,14 +97,29 @@ def _serialize_participant(rp: RoomParticipant, briefs: dict[int, dict], *, unre
     }
 
 
+def _is_deleted(msg: Message) -> bool:
+    """Сообщение «удалено» = флаг в ``metadata_json`` (см. delete_message:
+    строка НЕ удаляется — контент остаётся в БД ради админ-аудита)."""
+    return bool(isinstance(msg.metadata_json, dict) and msg.metadata_json.get("deleted"))
+
+
 def _serialize_message(msg: Message, briefs: dict[int, dict], *, attachments: list[dict] | None = None) -> dict:
+    deleted = _is_deleted(msg)
+    meta = msg.metadata_json if isinstance(msg.metadata_json, dict) else {}
     return {
         "id": str(msg.id),
         "room_id": msg.room_id,
         "sender_id": msg.sender_id,
-        "content": msg.content,
+        # Удалённое сообщение для ОБЫЧНЫХ участников — тумбстоун: контент и
+        # вложения скрываются сериализатором, но живут в БД — админ-выдача
+        # (views._serialize_message_admin) показывает их как есть.
+        "content": "" if deleted else msg.content,
         "is_encrypted": msg.is_encrypted,
         "is_edited": msg.is_edited,
+        "is_deleted": deleted,
+        # Цитата (reply-to) хранится снапшотом в metadata_json при отправке —
+        # без FK и без JOIN, переживает удаление оригинала.
+        "reply_to": meta.get("reply_to"),
         "created_at": msg.created_at.isoformat(),
         "sender": briefs.get(msg.sender_id) if msg.sender_id is not None else None,
         # attachments-под-задача: реальный список ChatAttachment этого
@@ -97,7 +127,7 @@ def _serialize_message(msg: Message, briefs: dict[int, dict], *, attachments: li
         # батч (``attachments=``, см. list_messages/_last_messages_for
         # ниже) — без него делаем разовый запрос на само сообщение (лишний
         # только для одиночных путей вроде send_message, где батчить нечего).
-        "attachments": (
+        "attachments": [] if deleted else (
             attachments if attachments is not None
             else attachment_service.attachments_for_messages([msg.id]).get(msg.id, [])
         ),
@@ -164,6 +194,11 @@ def create_room(creator_id: int, data: schemas.RoomCreateRequest) -> dict:
             raise InvalidRoomParticipants("Direct chats must have exactly two participants")
         existing = _find_direct_room(participants)
         if existing is not None:
+            # Пользователь явно кликнул по собеседнику — если он раньше убрал
+            # этот чат из своего списка, возвращаем его туда. Иначе чат
+            # открылся бы, но в списке оставался бы невидимым до первого
+            # сообщения (см. room_lifecycle).
+            room_lifecycle.unhide_room(creator_id, existing.id)
             return _serialize_room(existing)
 
     room = Room.objects.create(
@@ -179,8 +214,16 @@ def create_room(creator_id: int, data: schemas.RoomCreateRequest) -> dict:
 
 def list_rooms(user_id: int) -> list[dict]:
     """Порт ``list_user_rooms``: комнаты, где вызывающий — участник, с
-    последним сообщением на комнату и unread_count вызывающего."""
+    последним сообщением на комнату и unread_count вызывающего.
+
+    Сверх источника: скрываются комнаты, удалённые владельцем группы, и те,
+    что пользователь убрал у себя (``room_lifecycle.visible_room_ids`` —
+    состояние живёт событиями в ``messenger_auditlog``, без изменения схемы;
+    полное объяснение — докстринг ``room_lifecycle``). Строки при этом
+    остаются в БД: админ-эндпойнты продолжают видеть и комнату, и все её
+    сообщения с вложениями."""
     room_ids = list(RoomParticipant.objects.filter(user_id=user_id).values_list("room_id", flat=True))
+    room_ids = room_lifecycle.visible_room_ids(user_id, room_ids)
     rooms = list(Room.objects.filter(id__in=room_ids))
     ids = [r.id for r in rooms]
     last_messages = _last_messages_for(ids)
@@ -198,7 +241,9 @@ def get_room(user_id: int, room_id: int) -> dict:
     if not RoomParticipant.objects.filter(room_id=room_id, user_id=user_id).exists():
         raise NotAParticipant("Not a participant")
     room = Room.objects.filter(id=room_id).first()
-    if room is None:
+    if room is None or room_lifecycle.is_deleted(room_id):
+        # Удалённая владельцем комната для участника больше не существует;
+        # администратор по-прежнему видит её через /admin/rooms.
         raise RoomNotFound("Room not found")
     return _serialize_room(room)
 
@@ -298,15 +343,139 @@ def send_message(sender_id: int, data: schemas.MessageCreateRequest) -> dict:
     room = Room.objects.filter(id=data.room_id).first()
     if room is None:
         raise RoomNotFound("Room not found")
+    # Комната, удалённая владельцем группы, мертва для записи: у участника с
+    # открытой вкладкой она ещё видна до ближайшего refetch, и без этой
+    # проверки он дописывал бы в удалённый чат.
+    if room_lifecycle.is_deleted(data.room_id):
+        raise RoomNotFound("Room not found")
+
+    metadata = dict(data.metadata_json or {})
+    if data.reply_to is not None:
+        metadata["reply_to"] = _reply_snapshot(data.room_id, data.reply_to)
 
     msg = Message.objects.create(
         room=room, sender_id=sender_id, content=data.content,
-        is_encrypted=data.is_encrypted, metadata_json=data.metadata_json,
+        is_encrypted=data.is_encrypted, metadata_json=metadata or None,
     )
     attachment_service.attach_to_message(
         msg, attachment_ids=data.attachment_ids, room_id=data.room_id, sender_id=sender_id,
     )
-    return _serialize_message(msg, _briefs_by_id([sender_id]))
+    serialized = _serialize_message(msg, _briefs_by_id([sender_id]))
+    # Рассылка — ПОСЛЕ коммита: подписчик, получивший событие раньше коммита,
+    # перезапросил бы историю и не увидел бы ещё-не-видимую запись.
+    participant_ids = list(
+        RoomParticipant.objects.filter(room_id=data.room_id).values_list("user_id", flat=True)
+    )
+    transaction.on_commit(
+        lambda: realtime.message_new(data.room_id, serialized, participant_ids)
+    )
+    return serialized
+
+
+def _reply_snapshot(room_id: int, target_id: uuid.UUID) -> dict:
+    """Снапшот цитируемого сообщения для ``metadata_json['reply_to']``.
+
+    Снапшот, а не живая ссылка — сознательно: цитата остаётся читаемой, даже
+    если оригинал потом удалят/отредактируют (поведение Telegram), и рендер
+    списка не тянет JOIN на каждое сообщение."""
+    target = Message.objects.filter(id=target_id, room_id=room_id).first()
+    if target is None or _is_deleted(target):
+        raise InvalidReplyTarget("Reply target is not in this room")
+    try:
+        preview = (json.loads(target.content or "{}").get("text") or "").strip()
+    except (ValueError, AttributeError):
+        preview = (target.content or "").strip()
+    if not preview and not target.is_encrypted:
+        # Сообщение без текста — вложение: подставляем имя первого файла.
+        atts = attachment_service.attachments_for_messages([target.id]).get(target.id, [])
+        if atts:
+            preview = atts[0].get("filename") or ""
+    sender_brief = (
+        users_interface.get_user_brief(target.sender_id)
+        if target.sender_id is not None else None
+    )
+    return {
+        "id": str(target.id),
+        "sender_id": target.sender_id,
+        "sender_name": (sender_brief or {}).get("full_name"),
+        "preview": preview[:140],
+    }
+
+
+@transaction.atomic
+def edit_message(user_id: int, message_id: uuid.UUID, content: str) -> dict:
+    """Редактирование СВОЕГО сообщения. ``is_edited`` уже была в модели с
+    порта — этот сервис первый, кто её выставляет. Прежний текст уходит в
+    ``messenger_auditlog`` (админ-требование: история правок не исчезает)."""
+    msg = Message.objects.select_for_update().filter(id=message_id).first()
+    if msg is None or _is_deleted(msg):
+        raise MessageNotFound("Message not found")
+    if not RoomParticipant.objects.filter(room_id=msg.room_id, user_id=user_id).exists():
+        raise NotAParticipant("Not a participant")
+    if msg.sender_id != user_id:
+        raise NotMessageAuthor("Only the author can edit a message")
+    if room_lifecycle.is_deleted(msg.room_id):
+        raise RoomNotFound("Room not found")
+
+    old_content = msg.content
+    msg.content = content
+    msg.is_edited = True
+    msg.save(update_fields=["content", "is_edited", "updated_at"])
+    AuditLog.objects.create(
+        user_id=user_id, action="message_edited", resource_type="Message",
+        resource_id=str(msg.id), changes={"room_id": msg.room_id, "before": old_content},
+    )
+    serialized = _serialize_message(msg, _briefs_by_id([msg.sender_id]))
+    room_id = msg.room_id
+    transaction.on_commit(lambda: realtime.message_edited(room_id, serialized))
+    return serialized
+
+
+@transaction.atomic
+def delete_message(user_id: int, message_id: uuid.UUID) -> None:
+    """Удаление сообщения: автор — своё, админ ГРУППЫ — любое (модерация
+    внутри группы). Строка НЕ удаляется: ставится флаг в ``metadata_json``,
+    сериализатор для участников отдаёт тумбстоун, а админ-выдача продолжает
+    показывать контент и вложения (то же требование «админ видит всё», что
+    и в room_lifecycle). Событие — в ``messenger_auditlog``."""
+    msg = Message.objects.select_for_update().filter(id=message_id).first()
+    if msg is None or _is_deleted(msg):
+        raise MessageNotFound("Message not found")
+    rp = RoomParticipant.objects.filter(room_id=msg.room_id, user_id=user_id).first()
+    if rp is None:
+        raise NotAParticipant("Not a participant")
+    if room_lifecycle.is_deleted(msg.room_id):
+        raise RoomNotFound("Room not found")
+
+    is_group_admin = (
+        rp.role == RoomParticipantRole.ADMIN
+        and Room.objects.filter(id=msg.room_id, room_type=RoomType.GROUP).exists()
+    )
+    if msg.sender_id != user_id and not is_group_admin:
+        raise NotMessageAuthor("Only the author or a group admin can delete a message")
+
+    meta = dict(msg.metadata_json or {})
+    meta["deleted"] = {
+        "by": user_id,
+        "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    msg.metadata_json = meta
+    msg.save(update_fields=["metadata_json", "updated_at"])
+    AuditLog.objects.create(
+        user_id=user_id, action="message_deleted", resource_type="Message",
+        resource_id=str(msg.id), changes={"room_id": msg.room_id, "author": msg.sender_id},
+    )
+    room_id = msg.room_id
+    transaction.on_commit(lambda: realtime.message_deleted(room_id, message_id))
+
+
+def unread_total(user_id: int) -> int:
+    """Суммарный счётчик непрочитанного по ВИДИМЫМ чатам пользователя — для
+    бейджа в шапке (вне страницы мессенджера). Переиспользует ровно ту же
+    математику, что список чатов."""
+    room_ids = list(RoomParticipant.objects.filter(user_id=user_id).values_list("room_id", flat=True))
+    room_ids = room_lifecycle.visible_room_ids(user_id, room_ids)
+    return sum(_unread_counts_for(user_id, room_ids).values())
 
 
 def list_messages(room_id: int, *, q: str | None = None, since=None, until=None,
@@ -347,3 +516,6 @@ def mark_read(user_id: int, room_id: int, message_id: uuid.UUID) -> None:
         raise NotAParticipant("User not in room")
     rp.last_read_message_id = message_id
     rp.save(update_fields=["last_read_message_id", "updated_at"])
+    # Раньше message_read рассылал только WS-хендлер (socket.py::mark_read),
+    # а фронт зовёт именно REST — галочки «прочитано» не доезжали никогда.
+    realtime.message_read(room_id, message_id, user_id)

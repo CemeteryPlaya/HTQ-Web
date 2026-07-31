@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/api/client';
 import { Header } from '@/components/Header';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Footer } from '@/components/Footer';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
@@ -63,6 +64,7 @@ const HRLogs = () => {
     <div className="min-h-screen bg-background flex flex-col">
       <Header />
       <main className="flex-1 container mx-auto px-4 py-8">
+        <BackToProfile className="mb-4" />
         <h1 className="text-3xl font-bold mb-2">{t('hr.pages.logs.title')}</h1>
         <p className="text-muted-foreground mb-6">{t('hr.pages.logs.subtitle')}</p>
 

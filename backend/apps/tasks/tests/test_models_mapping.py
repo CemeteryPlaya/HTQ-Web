@@ -17,7 +17,7 @@ ALL_MODELS = (
     models.Equipment, models.TaskDepartmentLink, models.TaskAssignee,
     models.TaskDelegate, models.TaskWatcher, models.TaskComment,
     models.TaskAttachment, models.TaskActivity, models.TaskLink,
-    models.TaskAssignment, models.Notification, models.TaskSequence,
+    models.ResourceAllocation, models.Notification, models.TaskSequence,
     models.ProductionDay, models.CalendarEvent, models.EventException,
     models.CalendarEventParticipant,
 )

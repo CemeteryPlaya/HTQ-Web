@@ -9,7 +9,422 @@ export interface Label {
   color: string;
 }
 
-/* ---------- Projects (Roadmap) ---------- */
+/* ---------- Contractors (субподрядчики) ---------- */
+export type ContractorStatus = 'active' | 'suspended' | 'blacklisted' | 'archived';
+
+/**
+ * Уровень допуска представителя подрядчика. Пока только хранится и
+ * показывается: правами он начнёт управлять вместе с учётными записями,
+ * которых у подрядчиков на этом этапе нет.
+ */
+export type ContractorLevel = 'junior' | 'middle' | 'senior';
+
+export interface Contractor {
+  id: number;
+  name: string;
+  short_name: string | null;
+  bin_iin: string | null;
+  contact_person: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  notes: string;
+  status: ContractorStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractorWorker {
+  id: number;
+  contractor_id: number;
+  contractor_name: string;
+  last_name: string;
+  first_name: string;
+  middle_name: string | null;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  position_title: string | null;
+  level: ContractorLevel;
+  /** Заготовка под будущий вход — API его не выставляет. */
+  user_id: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractorEngagement {
+  id: number;
+  contractor_id: number;
+  contractor_name: string;
+  project_id: number | null;
+  project_name: string | null;
+  site_id: number | null;
+  site_name: string | null;
+  /** Привлечение на один пакет работ: «развозку отдали субподряду». */
+  roadmap_id: number | null;
+  roadmap_name: string | null;
+  contract_no: string | null;
+  scope: string;
+  start_date: string | null;
+  end_date: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/* ---------- Sites (объекты/площадки) ---------- */
+export type SiteStatus = 'active' | 'suspended' | 'closed';
+
+/** Объект работ — «Алга», «Сазаган». */
+export interface Site {
+  id: number;
+  name: string;
+  code: string | null;
+  description: string;
+  address: string | null;
+  region: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  status: SiteStatus;
+  color: string;
+  department_id: number | null;
+  manager_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Объект в карточке проекта — только то, что нужно для чипа. */
+export interface ProjectSiteRef {
+  id: number;
+  name: string;
+  color: string;
+  status: SiteStatus;
+  is_primary: boolean;
+  start_date: string | null;
+  end_date: string | null;
+}
+
+/* ---------- Блоки объекта и объёмы работ ---------- */
+
+/** Единица измерения объёма — принадлежит ВИДУ работ, не строке объёма. */
+export type WorkVolumeUnit = 'piece' | 'meter' | 'sq_meter' | 'ton';
+
+/** Строка плоского справочника: типы техники, роли, виды объёмов. */
+export interface ReferenceRow {
+  id: number;
+  slug: string;
+  name: string;
+  is_active: boolean;
+}
+
+export interface WorkVolumeType extends ReferenceRow {
+  unit: WorkVolumeUnit;
+}
+
+export type BlockStatus = 'planned' | 'active' | 'suspended' | 'done';
+
+/** Плановый объём: 250 валов на блок. Факт живёт на задачах. */
+export interface BlockVolume {
+  id: number;
+  volume_type_id: number;
+  volume_type_name: string;
+  unit: WorkVolumeUnit;
+  planned_quantity: number;
+}
+
+/** Блок (участок) объекта: у Сазагана это блок 1, блок 2, … */
+export interface SiteBlock {
+  id: number;
+  site_id: number;
+  name: string;
+  code: string | null;
+  order: number;
+  status: BlockStatus;
+  start_date: string | null;
+  end_date: string | null;
+  volumes: BlockVolume[];
+  created_at: string;
+  updated_at: string;
+}
+
+/** Объём задачи: сколько запланировано и сколько уже сделано. */
+export interface TaskVolume extends BlockVolume {
+  task_id: number;
+  completed_quantity: number;
+}
+
+export interface BlockProgressItem {
+  volume_type_id: number;
+  volume_type_name: string;
+  unit: WorkVolumeUnit;
+  planned_quantity: number;
+  completed_quantity: number;
+  /** null — план нулевой: делить не на что, и 0% читалось бы как «не начинали». */
+  percent: number | null;
+}
+
+export interface BlockProgress {
+  block_id: number;
+  items: BlockProgressItem[];
+  percent: number | null;
+}
+
+/* ---------- Роудмап: пакет работ на объекте ---------- */
+export type RoadmapStatus = 'active' | 'completed' | 'archived';
+
+/**
+ * Уровень между блоком и задачей: «развозка валов трекерных конструкций».
+ * ``planned_*`` — план, введённый руками; факт считает `/roadmaps/:id/metrics`
+ * свёрткой задач и нигде не хранится.
+ */
+export interface Roadmap {
+  id: number;
+  project_id: number;
+  project_name: string;
+  /** Блок, на котором идёт пакет работ. Уровень между площадкой и задачей. */
+  site_block_id: number;
+  site_block_name: string;
+  /** Площадка — производная от блока; своей колонки у роудмапа нет. */
+  site_id: number;
+  site_name: string;
+  site_color: string;
+  name: string;
+  description: string;
+  status: RoadmapStatus;
+  color: string;
+  order: number;
+  planned_start_date: string | null;
+  planned_end_date: string | null;
+  planned_working_days: number | null;
+  owner_id: number | null;
+  owner_name?: string | null;
+  department_id: number | null;
+  department_name?: string | null;
+  task_count: number;
+  done_count: number;
+  /** Дешёвый прогресс по статусам — для карточки в списке. */
+  progress: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduleComparison {
+  planned_start_date: string | null;
+  planned_end_date: string | null;
+  planned_working_days: number | null;
+  actual_start_date: string | null;
+  actual_end_date: string | null;
+  actual_working_days: number | null;
+  /** > 0 — не уложились. null — сравнивать не с чем. */
+  delta_working_days: number | null;
+}
+
+export interface ResourceComparison {
+  /** null — потребность не заводили. Это не «запланировали ноль». */
+  planned: number | null;
+  actual: number;
+  delta: number | null;
+}
+
+export interface RoadmapMetrics {
+  roadmap_id: number;
+  task_count: number;
+  done_count: number;
+  /** Считается по объёмам, если они есть; иначе по статусам. */
+  progress: number | null;
+  schedule: ScheduleComparison;
+  human: ResourceComparison;
+  equipment: ResourceComparison;
+}
+
+/* ---------- Ежедневные отчёты ---------- */
+
+/**
+ * Отчёт о выполненном за смену.
+ *
+ * `work_date` — дата ВЫПОЛНЕНИЯ работ, её ставит человек. `created_at` —
+ * дата заполнения, её ставит система. Отчёт за пятницу заполняют в
+ * понедельник, и всё, что строится по дням, обязано класть его на пятницу.
+ */
+export interface DailyReport {
+  id: number;
+  task_id: number;
+  task_key: string;
+  volume_type_id: number;
+  volume_type_name: string;
+  unit: WorkVolumeUnit;
+  author_id: number | null;
+  author_name: string | null;
+  work_date: string;
+  quantity: number;
+  headcount: number | null;
+  comment: string;
+  current_revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Плановый объём строки сводки вместе с фактом НА выбранную дату. */
+export interface DailyReportBoardVolume {
+  volume_type_id: number;
+  volume_type_name: string;
+  unit: WorkVolumeUnit;
+  planned_quantity: number;
+  /** Нарастающим итогом к выбранной дате, а не «всего». */
+  completed_quantity: number;
+}
+
+/** Строка страницы «Ежедневка»: задача, куда вписывать сегодняшнюю выработку. */
+export interface DailyReportBoardRow {
+  task_id: number;
+  key: string;
+  summary: string;
+  status: TaskStatus;
+  project_name: string | null;
+  site_name: string | null;
+  site_block_name: string | null;
+  roadmap_id: number | null;
+  roadmap_name: string | null;
+  due_date: string | null;
+  volumes: DailyReportBoardVolume[];
+  /** Отчёты за выбранный день — их может быть несколько (смены). */
+  reports: DailyReport[];
+}
+
+/** Снимок отчёта на момент версии — «аналог Git». */
+export interface DailyReportRevision {
+  id: number;
+  report_id: number;
+  revision_no: number;
+  work_date: string;
+  quantity: number;
+  headcount: number | null;
+  comment: string;
+  edited_by_id: number | null;
+  edited_by_name: string | null;
+  edited_at: string;
+}
+
+/* ---------- План/факт с прогнозом ---------- */
+
+/**
+ * Точка S-кривой. Оба поля nullable и значат разное: `plan_cum === null` —
+ * плана или объёмов нет; `fact_cum === null` — точка после отчётной даты,
+ * где факта физически нет.
+ */
+export interface SCurvePoint {
+  date: string;
+  plan_cum: number | null;
+  fact_cum: number | null;
+}
+
+export type PlanFactKind = 'project' | 'site' | 'block' | 'roadmap' | 'task';
+
+/**
+ * Узел дерева план/факт — одна форма на все уровни иерархии.
+ *
+ * `null` в числах означает «сравнивать не с чем», а не ноль: плана нет,
+ * темпа нет, задач нет. Рисовать это нулём значило бы объявить работу
+ * просроченной там, где её просто не планировали.
+ */
+export interface PlanFactNode {
+  kind: PlanFactKind;
+  id: number;
+  name: string;
+
+  plan_start_date: string | null;
+  plan_end_date: string | null;
+  plan_pct: number | null;
+  fact_pct: number | null;
+  /** Факт / план. < 0.95 — warning, < 0.90 — critical. */
+  spi: number | null;
+  /** Прогноз по фактическому темпу и по плановому; разница — цена бездействия. */
+  forecast_end: string | null;
+  forecast_end_plan_rate: string | null;
+  lag_days: number | null;
+  lag_pct: number | null;
+  flags: string[];
+
+  weighting: string | null;
+  children: PlanFactNode[];
+  series: SCurvePoint[];
+
+  /** Уровень задачи. */
+  key?: string | null;
+  status?: TaskStatus | null;
+  planned_quantity?: number | null;
+  fact_quantity?: number | null;
+  rate_per_day?: number | null;
+  rate_window_days?: number | null;
+  required_rate_ratio?: number | null;
+  /** Уровень роудмапа/проекта. */
+  task_count?: number | null;
+  use_production_calendar?: boolean | null;
+}
+
+/* ---------- Учёт задействования техники ---------- */
+
+/** Категория техники на дату D: сколько нужно и сколько выделено. */
+export interface EquipmentEngagedRow {
+  category_id: number | null;
+  category_name: string | null;
+  planned: number;
+  assigned: number;
+}
+
+/** Интервал занятости конкретной машины — строка истории. */
+export interface EquipmentUsageRow {
+  allocation_id: number;
+  equipment_id: number;
+  equipment_name: string;
+  inventory_no: string | null;
+  category_id: number | null;
+  category_name: string | null;
+  task_id: number | null;
+  task_key: string | null;
+  task_summary: string | null;
+  roadmap_id: number | null;
+  date_from: string;
+  date_to: string;
+  days: number;
+}
+
+export interface EquipmentUsage {
+  engaged_on: string;
+  engaged: EquipmentEngagedRow[];
+  history: EquipmentUsageRow[];
+}
+
+/* ---------- Ресурсы: план количеством + факт именами ---------- */
+
+/**
+ * Вид ресурса в ПОТРЕБНОСТИ. Не `ResourceKind` ниже: у строки ресурсного
+ * Ганта это `'employee' | 'equipment'` (там речь о конкретном человеке), а
+ * здесь `'human'` — про количество людей, безымянное. Значения разные,
+ * поэтому и типы разные, а не один на двоих.
+ */
+export type RequirementKind = 'human' | 'equipment';
+
+/** Потребность количеством: «2 человека», «2 кары». */
+export interface ResourceRequirement {
+  id: number;
+  task_id: number | null;
+  roadmap_id: number | null;
+  kind: RequirementKind;
+  work_role_id: number | null;
+  work_role_name: string | null;
+  equipment_category_id: number | null;
+  equipment_category_name: string | null;
+  quantity: number;
+  /** Сколько мест закрыто именными назначениями: «2 кары, назначена 1». */
+  filled: number;
+  start_date: string | null;
+  end_date: string | null;
+  note: string | null;
+}
+
+/* ---------- Projects ---------- */
 export type ProjectStatus = 'active' | 'completed' | 'archived';
 
 export interface Project {
@@ -24,6 +439,14 @@ export interface Project {
   owner_name?: string | null;
   department_id: number | null;
   department_name?: string | null;
+  sites: ProjectSiteRef[];
+  site_ids: number[];
+  /**
+   * Чем меряются длительности плана и факта. `false` (по умолчанию) —
+   * календарные дни: стройка идёт 7/7. `true` — рабочие по
+   * производственному календарю, режим для офисных проектов.
+   */
+  use_production_calendar: boolean;
   task_count: number;
   done_count: number;
   progress: number;
@@ -204,10 +627,36 @@ export interface Task {
   /** Full department set (multi-department tasks). `department` is the primary. */
   department_ids?: number[];
   departments?: Array<{ id: number; name: string }>;
-  /** Optional roadmap project. null = "standalone" — first-class state. */
+  /** Проект — верхний уровень. null = "standalone", first-class state. */
   project: number | null;
   project_name?: string | null;
   project_color?: string | null;
+  /**
+   * Пакет работ. Задаёт проект и объект задачи: выбрал роудмап — они
+   * следуют из него, а не проверяются против него. null законен для
+   * исторических и офисных задач.
+   */
+  roadmap: number | null;
+  roadmap_name?: string | null;
+  roadmap_color?: string | null;
+  /** Объект работ. null законен: у исторических задач его нет и не будет. */
+  site: number | null;
+  site_name?: string | null;
+  site_color?: string | null;
+  /** Блок объекта — «на блок I». Только у задачи; у роудмапа блока нет. */
+  site_block: number | null;
+  site_block_name?: string | null;
+  /** Кто выполняет. Оба null = своя команда. */
+  contractor: number | null;
+  contractor_name?: string | null;
+  /**
+   * Кто РЕАЛЬНО выполняет: своё значение или унаследованное с роудмапа /
+   * площадки / проекта. null = своя команда. Рядом с `contractor`
+   * намеренно — «назначен лично» и «унаследован» это разные факты.
+   */
+  effective_contractor?: { id: number; name: string } | null;
+  contractor_worker: number | null;
+  contractor_worker_name?: string | null;
   parent: number | null;
   parent_key?: string;
   labels: Label[];
@@ -231,6 +680,8 @@ export interface Task {
   activities?: TaskActivity[];
   outgoing_links?: TaskLink[];
   incoming_links?: TaskLink[];
+  /** Объёмы работ: «развезти 250 валов», из них сделано 180. */
+  volumes?: TaskVolume[];
 
   created_at: string;
   updated_at: string;
@@ -239,12 +690,22 @@ export interface Task {
 /* ---------- Resource planning (Gantt) ---------- */
 export type ResourceKind = 'employee' | 'equipment';
 
+export type EquipmentOwnership = 'own' | 'contractor' | 'rented';
+
 export interface Equipment {
   id: number;
   name: string;
   inventory_no: string | null;
+  /**
+   * Название категории строкой — форма контракта не менялась, но за ней
+   * теперь справочник. Для выпадающего списка бери `category_id`.
+   */
   category: string | null;
+  category_id: number | null;
   is_active: boolean;
+  ownership: EquipmentOwnership;
+  contractor_id: number | null;
+  contractor_name: string | null;
 }
 
 export interface AllocatedTask {
@@ -271,9 +732,14 @@ export interface ResourceGanttResponse {
   resources: ResourceRow[];
 }
 
+/** Именное назначение: конкретный человек или машина на задачу ИЛИ пакет. */
 export interface Assignment {
   id: number;
-  task_id: number;
+  /** null у назначения на роудмап — у него задачи нет. */
+  task_id: number | null;
+  roadmap_id: number | null;
+  /** Плановая потребность, которую закрывает это назначение. */
+  requirement_id: number | null;
   employee_id: number | null;
   equipment_id: number | null;
   role: string | null;
@@ -287,6 +753,13 @@ export interface TaskStats {
   by_priority: Record<string, number>;
   by_type: Record<string, number>;
   by_department: Array<{ department__id: number; department__name: string; count: number }>;
+  by_project: Array<{ project__id: number | null; project__name: string; count: number }>;
+  by_site: Array<{
+    site__id: number | null;
+    site__name: string;
+    site__color: string | null;
+    count: number;
+  }>;
   by_assignee: Array<{
     assignee__id: number;
     assignee__first_name: string;

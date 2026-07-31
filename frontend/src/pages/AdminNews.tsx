@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, ImagePlus, Trash2, Eye, Plus } from 'lucide-react';
+import { Calendar, ImagePlus, Trash2, Eye, Plus } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -8,6 +7,7 @@ import { toast } from 'sonner';
 import api from '@/api/client';
 import { cmsApi } from '@/api/cms';
 import { API_ENDPOINTS } from '@/api/endpoints';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -263,13 +263,7 @@ const AdminNews = () => {
 
       <Header />
       <main className="container-custom flex-1 py-10 pb-24 relative z-10">
-        <Link
-          to="/myprofile"
-          className="group mb-8 inline-flex items-center gap-2 rounded-full bg-muted/50 px-4 py-2 text-sm font-medium text-muted-foreground backdrop-blur-sm transition-all hover:bg-primary/10 hover:text-primary animate-fade-in-up"
-        >
-          <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-1" />
-          {t('hr.backToMain', 'Назад в профиль')}
-        </Link>
+        <BackToProfile />
 
         {/* Title row */}
         <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between animate-fade-in-up" style={{ animationDelay: '50ms' }}>

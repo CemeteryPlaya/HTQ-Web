@@ -6,6 +6,13 @@ Drives any "pick a colleague" UI: any authenticated user may call this
 accounts — only ``UserStatus.ACTIVE``. ``query`` filters case-insensitively
 across first/last name, email, username, and display_name — the same five
 columns the source ORs together.
+
+**A search, not a listing.** ``query`` is required and validated to at
+least 2 characters by ``schemas.UserOptionsQuery``; there is no "return
+everyone" mode, because an open gate plus an empty query is a directory
+dump. This function keeps the ``if query`` guard only so a caller that
+somehow reaches it with an empty string still cannot get the unfiltered
+set — it returns nothing instead.
 """
 
 from __future__ import annotations
@@ -16,15 +23,15 @@ from apps.users.models import User, UserStatus
 
 
 def list_user_options(*, query: str | None, limit: int) -> list[User]:
-    qs = User.objects.filter(status=UserStatus.ACTIVE)
-    if query:
-        qs = qs.filter(
-            Q(first_name__icontains=query)
-            | Q(last_name__icontains=query)
-            | Q(email__icontains=query)
-            | Q(username__icontains=query)
-            | Q(display_name__icontains=query)
-        )
+    if not query:
+        return []
+    qs = User.objects.filter(status=UserStatus.ACTIVE).filter(
+        Q(first_name__icontains=query)
+        | Q(last_name__icontains=query)
+        | Q(email__icontains=query)
+        | Q(username__icontains=query)
+        | Q(display_name__icontains=query)
+    )
     return list(qs.order_by("last_name", "first_name")[:limit])
 
 

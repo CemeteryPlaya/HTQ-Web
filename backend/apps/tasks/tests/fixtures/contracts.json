@@ -24,19 +24,27 @@
     },
     "EquipmentResponse": {
       "source": "services/task/app/schemas/gantt.py::EquipmentResponse",
+      "added_after_fastapi": "category_id — «category» осталась строкой ровно той же формы, что в оригинале, но за ней теперь справочник EquipmentCategory (а не свободный текст), и выпадающему списку на фронте нужен его id. Поле ДОБАВЛЕНО к контракту, ничего не переименовано и не выброшено: старый потребитель, читающий только category, не замечает разницы.",
       "fields": {
         "id": "int",
         "name": "str",
         "inventory_no": "str|null",
         "category": "str|null",
-        "is_active": "bool"
+        "category_id": "int|null",
+        "is_active": "bool",
+        "ownership": "str",
+        "contractor_id": "int|null",
+        "contractor_name": "str|null"
       }
     },
     "AssignmentResponse": {
       "source": "services/task/app/schemas/gantt.py::AssignmentResponse",
+      "added_after_fastapi": "roadmap_id/requirement_id — назначение теперь висит на задаче ИЛИ на роудмапе (пакете работ) и может ссылаться на плановую потребность, которую закрывает. Поэтому же task_id стал nullable: у роудмап-назначения задачи нет. Старый клиент, читающий только задачные назначения, разницы не видит — там task_id по-прежнему заполнен.",
       "fields": {
         "id": "int",
-        "task_id": "int",
+        "task_id": "int|null",
+        "roadmap_id": "int|null",
+        "requirement_id": "int|null",
         "employee_id": "int|null",
         "equipment_id": "int|null",
         "role": "str|null",
@@ -45,6 +53,7 @@
     },
     "TaskListResponse": {
       "source": "services/task/app/schemas/task.py::TaskListResponse",
+      "added_after_fastapi": "effective_contractor — кто РЕАЛЬНО выполняет задачу: своё значение или унаследованное с роудмапа/площадки/проекта (null = своя команда). roadmap_id/roadmap_name/roadmap_color — пакет работ, уровень между блоком и задачей. site_block_id/site_block_name — блок объекта («на блок I»), уровень ниже объекта работ. Ни того, ни другого в FastAPI-схеме не было. Поля ДОБАВЛЕНЫ, ничего не переименовано и не выброшено.",
       "fields": {
         "id": "int",
         "key": "str",
@@ -69,6 +78,19 @@
         "project_id": "int|null",
         "project_name": "str|null",
         "project_color": "str|null",
+        "roadmap_id": "int|null",
+        "roadmap_name": "str|null",
+        "roadmap_color": "str|null",
+        "site_id": "int|null",
+        "site_name": "str|null",
+        "site_color": "str|null",
+        "site_block_id": "int|null",
+        "site_block_name": "str|null",
+        "contractor_id": "int|null",
+        "contractor_name": "str|null",
+        "effective_contractor": "dict|null",
+        "contractor_worker_id": "int|null",
+        "contractor_worker_name": "str|null",
         "parent_id": "int|null",
         "parent_key": "str|null",
         "assignees": "list",
@@ -86,6 +108,7 @@
     },
     "TaskDetailResponse": {
       "source": "services/task/app/schemas/task.py::TaskDetailResponse",
+      "added_after_fastapi": "effective_contractor — кто РЕАЛЬНО выполняет задачу: своё значение или унаследованное с роудмапа/площадки/проекта (null = своя команда). roadmap_id/roadmap_name/roadmap_color — пакет работ, уровень между блоком и задачей. site_block_id/site_block_name — блок объекта («на блок I»), уровень ниже объекта работ. Ни того, ни другого в FastAPI-схеме не было. volumes — объёмы работ задачи («развезти 250 валов»), из которых считается выполнение по штукам вместо статусов. Поля ДОБАВЛЕНЫ, ничего не переименовано и не выброшено.",
       "fields": {
         "id": "int",
         "key": "str",
@@ -111,6 +134,19 @@
         "project_id": "int|null",
         "project_name": "str|null",
         "project_color": "str|null",
+        "roadmap_id": "int|null",
+        "roadmap_name": "str|null",
+        "roadmap_color": "str|null",
+        "site_id": "int|null",
+        "site_name": "str|null",
+        "site_color": "str|null",
+        "site_block_id": "int|null",
+        "site_block_name": "str|null",
+        "contractor_id": "int|null",
+        "contractor_name": "str|null",
+        "effective_contractor": "dict|null",
+        "contractor_worker_id": "int|null",
+        "contractor_worker_name": "str|null",
         "parent_id": "int|null",
         "parent_key": "str|null",
         "assignees": "list",
@@ -130,6 +166,7 @@
         "activities": "list",
         "outgoing_links": "list",
         "incoming_links": "list",
+        "volumes": "list",
         "created_at": "str",
         "updated_at": "str"
       }
@@ -142,6 +179,8 @@
         "by_priority": "dict",
         "by_type": "dict",
         "by_department": "list",
+        "by_project": "list",
+        "by_site": "list",
         "by_assignee": "list",
         "created_per_day": "list",
         "resolved_per_day": "list"
@@ -149,6 +188,7 @@
     },
     "ProjectResponse": {
       "source": "services/task/app/schemas/project.py::ProjectResponse",
+      "added_after_fastapi": "use_production_calendar — чем меряются длительности плана и факта: календарными днями (по умолчанию, стройка идёт 7/7) или рабочими по производственному календарю. Поле ДОБАВЛЕНО, ничего не переименовано и не выброшено.",
       "fields": {
         "id": "int",
         "name": "str",
@@ -161,6 +201,9 @@
         "owner_name": "str|null",
         "department_id": "int|null",
         "department_name": "str|null",
+        "sites": "list",
+        "site_ids": "list",
+        "use_production_calendar": "bool",
         "task_count": "int",
         "done_count": "int",
         "progress": "float",
@@ -374,6 +417,93 @@
         "email": "str|null",
         "avatar_url": "str|null",
         "rsvp_status": "str"
+      }
+    },
+    "SiteResponse": {
+      "source": "apps/tasks/schemas.py::SiteResponse (new — no FastAPI original)",
+      "fields": {
+        "id": "int",
+        "name": "str",
+        "code": "str|null",
+        "description": "str",
+        "address": "str|null",
+        "region": "str|null",
+        "latitude": "float|null",
+        "longitude": "float|null",
+        "status": "str",
+        "color": "str",
+        "department_id": "int|null",
+        "manager_id": "int|null",
+        "created_at": "str",
+        "updated_at": "str"
+      }
+    },
+    "ProjectSiteRef": {
+      "source": "apps/tasks/schemas.py::ProjectSiteRef (new — no FastAPI original)",
+      "fields": {
+        "id": "int",
+        "name": "str",
+        "color": "str",
+        "status": "str",
+        "is_primary": "bool",
+        "start_date": "str|null",
+        "end_date": "str|null"
+      }
+    },
+    "ContractorResponse": {
+      "source": "apps/tasks/schemas.py::ContractorResponse (new — no FastAPI original)",
+      "fields": {
+        "id": "int",
+        "name": "str",
+        "short_name": "str|null",
+        "bin_iin": "str|null",
+        "contact_person": "str|null",
+        "phone": "str|null",
+        "email": "str|null",
+        "address": "str|null",
+        "notes": "str",
+        "status": "str",
+        "created_at": "str",
+        "updated_at": "str"
+      }
+    },
+    "ContractorWorkerResponse": {
+      "source": "apps/tasks/schemas.py::ContractorWorkerResponse (new — no FastAPI original)",
+      "fields": {
+        "id": "int",
+        "contractor_id": "int",
+        "contractor_name": "str",
+        "last_name": "str",
+        "first_name": "str",
+        "middle_name": "str|null",
+        "full_name": "str",
+        "phone": "str|null",
+        "email": "str|null",
+        "position_title": "str|null",
+        "level": "str",
+        "user_id": "int|null",
+        "is_active": "bool",
+        "created_at": "str",
+        "updated_at": "str"
+      }
+    },
+    "ContractorEngagementResponse": {
+      "source": "apps/tasks/schemas.py::ContractorEngagementResponse (new — no FastAPI original)",
+      "fields": {
+        "id": "int",
+        "contractor_id": "int",
+        "contractor_name": "str",
+        "project_id": "int|null",
+        "project_name": "str|null",
+        "site_id": "int|null",
+        "site_name": "str|null",
+        "contract_no": "str|null",
+        "scope": "str",
+        "start_date": "str|null",
+        "end_date": "str|null",
+        "is_active": "bool",
+        "created_at": "str",
+        "updated_at": "str"
       }
     }
   }

@@ -27,7 +27,7 @@ Ignore/discount at the repo root: empty `nginx/`, root `node_modules/`+`package.
 
 ## Commands
 
-Containers are named `htqweb1-<service>-1` (e.g. `htqweb1-backend-web-1`, `htqweb1-db-1`, `htqweb1-pgbouncer-1`).
+Containers are named `htq-web-<service>-1` (e.g. `htq-web-backend-web-1`, `htq-web-db-1`, `htq-web-pgbouncer-1`) — the compose project takes its name from the repo directory.
 
 **Run the stack (dev — Vite HMR on :3000, MinIO, DEBUG settings):**
 ```bash
@@ -53,18 +53,29 @@ Playwright: the chromium binary isn't installed; launch with `{ channel: 'msedge
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db   # publishes db on :55432
 cd backend
-.venv/Scripts/python.exe -m pytest -q                                   # whole suite
-.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
+../.venv/Scripts/python.exe -m pytest -q                                   # whole suite
+../.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
 ```
 `DJANGO_SETTINGS_MODULE=htqweb.settings.test` and `JWT_SECRET` are both fixed by `pytest.ini`/`settings/test.py` — nothing to export by hand. Full detail (including the `max_connections=300` bump): [backend/README-tests.md](backend/README-tests.md).
 
 **Django management** (`cd backend`, same venv):
 ```bash
-.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
-.venv/Scripts/python.exe manage.py migrate
-.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
-.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
+../.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
+../.venv/Scripts/python.exe manage.py migrate
+../.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
+../.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
+../.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
 ```
+`seed_tasks_demo` fills the whole five-level hierarchy (project → site → block → roadmap → task) plus volumes, resource requirements and dated daily reports; it needs `seed_hr_demo` to have run first (it reads departments/employees through `apps.hr.interface`). `--purge` removes only what it seeded, `--wipe` TRUNCATEs every table of the `tasks` app and re-seeds — including restoring the five system `TaskType` rows that migration `0002` had put there.
+
+**Reaching the dev database from the host**: `manage.py` defaults to `localhost:6432` (PgBouncer), whose credentials fail SASL from the host. Use the unpooled port instead — same server, dev database:
+```bash
+cd backend
+DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
+  DB_NAME=htqweb DB_USER=htqweb DB_PASSWORD=change-me JWT_SECRET=dev PYTHONIOENCODING=utf-8 \
+  ../.venv/Scripts/python.exe manage.py <command>
+```
+(`:55432` comes up with `docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db`. `PYTHONIOENCODING=utf-8` is needed or Russian output comes out mojibake on the Windows console.)
 
 ## Architecture invariants (the load-bearing ones)
 

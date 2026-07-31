@@ -1,4 +1,9 @@
-"""Projects — the Roadmap-level grouping of tasks.
+"""Projects — the top level of the work hierarchy.
+
+Ниже проекта: объекты (``site_service``), на объектах пакеты работ
+(``roadmap_service``), в пакетах задачи. Заголовок раньше говорил
+«Roadmap-level grouping of tasks» — до появления ``Roadmap`` отдельной
+таблицей это было верно, теперь роудмап это соседний модуль.
 
 Ported from ``services/task/app/api/v1/projects.py`` and the
 ``ProjectRepository``. ``task_count`` / ``done_count`` / ``progress`` were
@@ -13,8 +18,9 @@ from django.db.models import Case, Count, F, IntegerField, Sum, When
 from django.http import Http404
 
 from .. import schemas
-from ..models import TERMINAL_STATUSES, Project, Task
+from ..models import TERMINAL_STATUSES, Project, ProjectSite, Task
 from . import hydration
+from . import site_service
 
 
 def scope_for(token) -> tuple[bool, int | None]:
@@ -94,6 +100,16 @@ def build_responses(projects: list[Project]) -> list[schemas.ProjectResponse]:
     users = hydration.user_briefs([p.owner_id for p in projects])
     departments = hydration.department_briefs(
         [p.department_id for p in projects])
+    # Объекты — модель этого же аппа, поэтому один prefetch, а не батч через
+    # hydration (в отличие от владельцев и отделов, которыми владеют
+    # users/hr). Собираем на весь список сразу: иначе роадмап делал бы
+    # запрос на каждый проект.
+    site_links: dict[int, list] = {}
+    for link in (ProjectSite.objects
+                 .filter(project_id__in=[p.id for p in projects])
+                 .select_related("site")
+                 .order_by("-is_primary", "site__name")):
+        site_links.setdefault(link.project_id, []).append(link)
 
     out = []
     for project in projects:
@@ -113,6 +129,10 @@ def build_responses(projects: list[Project]) -> list[schemas.ProjectResponse]:
             "department_id": project.department_id,
             "department_name": hydration.department_name(
                 departments, project.department_id),
+            "sites": [site_service.build_project_site_ref(link)
+                      for link in site_links.get(project.id, [])],
+            "site_ids": [link.site_id for link in site_links.get(project.id, [])],
+            "use_production_calendar": project.use_production_calendar,
             "task_count": task_count,
             "done_count": done_count,
             "progress": (round(done_count / task_count * 100, 1)

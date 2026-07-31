@@ -2,14 +2,14 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '@/api/client';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { CheckCircle, XCircle, ArrowLeft } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { CheckCircle, XCircle } from 'lucide-react';
 
 interface PendingUser {
   id: number;
@@ -52,13 +52,7 @@ const AdminRegistrations = () => {
       <Header />
       <main className="flex-1 container mx-auto px-4 py-8">
         <div className="mb-6 flex flex-col gap-4">
-          <Link
-            to="/myprofile"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            {t('hr.backToMain', 'Назад в профиль')}
-          </Link>
+          <BackToProfile />
 
           <div className="flex items-center justify-between">
             <h1 className="text-3xl font-bold">{t('admin.registrations.title')}</h1>

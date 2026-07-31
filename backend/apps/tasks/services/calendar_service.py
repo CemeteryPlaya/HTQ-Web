@@ -35,7 +35,8 @@ from ..models import (
     ProductionDay, Task,
 )
 from . import hydration
-from .production_calendar import base_day_type, base_note, iter_calendar_days
+from .production_calendar import (WORKING_DAY_TYPES, base_day_type, base_note,
+                                  iter_calendar_days)
 
 MAX_RANGE_DAYS = 370
 
@@ -441,3 +442,56 @@ def _recalculate_year(year: int) -> None:
 
 def default_day_type(target_date: dt.date) -> str:
     return base_day_type(target_date)
+
+
+def working_days_between(start: dt.date, end: dt.date) -> int | None:
+    """Сколько рабочих дней в отрезке ``start..end`` включительно.
+
+    Живёт здесь, а не в ``sequence_service`` рядом с
+    ``due_date_from_working_days``, по одной причине: ``ProductionDay`` — это
+    таблица ПЕРЕОПРЕДЕЛЕНИЙ, а не календарь. Базовый календарь считается на
+    лету (``iter_calendar_days``), и в обычной базе строк нет вообще. Функция,
+    считающая по таблице, вернула бы «календаря нет» почти всегда; считать
+    надо тем же способом, что и ``list_production_days`` выше.
+
+    Разность ``working_days_since_epoch`` тоже не годится, хотя была бы
+    дешевле: счётчик сбрасывается 1 января (см. докстринг
+    ``production_calendar``), и на отрезке через Новый год дал бы
+    отрицательное число. Роудмап живёт месяцами, такие отрезки для него —
+    норма.
+
+    ``None`` для перевёрнутого отрезка. Он реален: фактические границы
+    роудмапа это ``min(start_date)`` и ``max(due_date)`` по его задачам, а у
+    задачи может быть заполнено только одно из двух полей.
+    """
+    if start is None or end is None or end < start:
+        return None
+    overrides = _overrides(dt.date(start.year, 1, 1), end)
+    return sum(1 for day in iter_calendar_days(start, end, overrides)
+               if day["day_type"] in WORKING_DAY_TYPES)
+
+
+def calendar_days_between(start: dt.date, end: dt.date) -> int | None:
+    """Сколько КАЛЕНДАРНЫХ дней в отрезке ``start..end`` включительно.
+
+    Пара к ``working_days_between``, а не «упрощённая версия»: на стройке,
+    которая идёт 7/7, это и есть правильная мера, а рабочие дни — режим для
+    офисных проектов (``Project.use_production_calendar``).
+
+    ``None`` на перевёрнутом отрезке — по той же причине и с тем же смыслом,
+    что у соседки: «сравнивать не с чем», а не «ноль дней».
+    """
+    if start is None or end is None or end < start:
+        return None
+    return (end - start).days + 1
+
+
+def days_between(start: dt.date, end: dt.date, *,
+                 working: bool) -> int | None:
+    """Длительность отрезка в той мере, которую выбрал проект.
+
+    Одна точка входа вместо ``if`` в каждом вызывающем: мера длительности —
+    свойство проекта, и разъехаться у плана с фактом она не должна.
+    """
+    return (working_days_between(start, end) if working
+            else calendar_days_between(start, end))

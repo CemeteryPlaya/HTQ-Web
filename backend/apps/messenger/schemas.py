@@ -51,6 +51,30 @@ class MessageCreateRequest(BaseModel):
     is_encrypted: bool = False
     metadata_json: Optional[dict] = None
     attachment_ids: list[uuid.UUID] = []
+    # Ответ на сообщение (цитата). Снапшот цитируемого кладётся в
+    # metadata_json сервисом — см. messenger_service._reply_snapshot.
+    reply_to: Optional[uuid.UUID] = None
+
+
+class MessageUpdateRequest(BaseModel):
+    """Тело ``PATCH /messages/{id}`` — редактирование своего сообщения.
+    Контент — та же JSON-строка ``{"text": ...}``, что и при отправке."""
+
+    content: str
+
+
+class ParticipantsAddRequest(BaseModel):
+    """Тело ``POST /rooms/{id}/participants`` — пригласить в группу."""
+
+    user_ids: list[int]
+
+
+class ParticipantRoleRequest(BaseModel):
+    """Тело ``PATCH /rooms/{id}/participants/{user_id}`` — сменить роль.
+    Без ``Literal``-ограничения (конвенция аппки: choices без CheckConstraint,
+    см. models.RoomParticipantRole) — валидирует сервис."""
+
+    role: str
 
 
 class UserKeyUploadRequest(BaseModel):

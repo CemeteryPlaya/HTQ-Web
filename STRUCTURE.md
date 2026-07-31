@@ -242,20 +242,65 @@ POST   /api/tasks/v1/tasks/{id}/watch/  •  DELETE …/watch/
 PATCH  /api/tasks/v1/tasks/{id}/progress/      body: {percent}
 ```
 
-**Projects + TaskType registry:**
+**Иерархия работ — пять уровней:**
 ```
-Project(id, name, status=active|completed|archived, color, start_date, end_date, owner_id, department_id)
-TaskType(id, slug UNIQUE, name, color, icon, is_system)   # user-extensible, 5 системных строк
-Task.project_id   → Project(id)   ON DELETE SET NULL   # NULL = standalone
-Task.task_type_id → TaskType(id) ON DELETE SET NULL
+Проект (Project)
+└── Площадка (Site, через ProjectSite M2M)
+    └── Блок (SiteBlock) ── плановые объёмы (SiteBlockVolume): «250 валов на блок 1»
+        └── Роудмап (Roadmap) ── план: сроки + ResourceRequirement
+            └── Задача (Task) ── план: TaskVolume; факт: DailyReport
+                └── Подзадача (Task.parent)
+
+Субподряд (Contractor) навешивается на проект / площадку / роудмап / задачу
+и НАСЛЕДУЕТСЯ вниз (contractor_service.effective_contractors)
 ```
-Роудмап ([HRRoadmap.tsx](frontend/src/pages/hr/HRRoadmap.tsx)) рендерит проекты → дерево задач по `parent_id`.
 ```
-GET/POST/PATCH/DELETE /api/tasks/v1/projects/[{id}/]   •   GET …/projects/{id}/tasks/
-GET/POST/PATCH/DELETE /api/tasks/v1/task-types/[{id}/]
+Project(id, name, status, color, start_date, end_date, owner_id, department_id,
+        use_production_calendar)          # False = календарные дни, стройка идёт 7/7
+Roadmap(id, project_id, site_block_id, name, status, planned_start_date,
+        planned_end_date, planned_working_days)   # площадки колонкой НЕТ — джойн site_block__site
+SiteBlock(id, site_id, name, code, order, status=planned|active|suspended|done, start_date, end_date)
+DailyReport(id, task_id, volume_type_id, author_id, work_date, quantity,
+            headcount, comment, current_revision, is_deleted)
+DailyReportRevision(id, report_id, revision_no, <снимок полей>, edited_by_id, edited_at)
+Task.project_id    → Project(id)   ON DELETE SET NULL   # NULL = standalone
+Task.roadmap_id    → Roadmap(id)   ON DELETE SET NULL   # ЗАДАЁТ проект, площадку и блок задачи
+Task.site_block_id → SiteBlock(id) ON DELETE SET NULL
 ```
 
-**Сервисы** ([apps/tasks/services/](backend/apps/tasks/services/)): `task_service.py`, `task_content_service.py`, `task_response.py`, `project_service.py`, `sequence_service.py` (Jira-style ключи), `calendar_service.py`, `production_calendar.py` (казахстанские праздники), `gantt_service.py`, `link_service.py`, `notification_service.py`, `reference_service.py`, `hydration.py`.
+Три вещи, которые определяют всё остальное:
+
+1. **Выполнение считается по объёмам в штуках**, а не по статусам задач; на статусы код
+   падает обратно только когда объёмов нет (согласование, приёмка).
+2. **Факт живёт только в `DailyReport`** — с датой ВЫПОЛНЕНИЯ работ (`work_date`, не
+   `created_at`), автором и историей правок. Колонки `completed_quantity` больше нет:
+   она была числом без даты, и по ней нельзя было ни построить S-кривую, ни спросить
+   «сколько было сделано на 5 июня». Каждая правка отчёта пишет новую
+   `DailyReportRevision` — полный снимок, по образцу `approvals.RequestFormTemplateVersion`.
+3. **План хранится, факт всегда пересчитывается.** Копия факта разошлась бы с отчётами
+   при первом же их изменении.
+
+Роудмап-дерево ([HRRoadmap.tsx](frontend/src/pages/hr/HRRoadmap.tsx)) рендерит все пять
+уровней; карточка пакета с «по дням» и лентой отчётов —
+[HRRoadmapDetail.tsx](frontend/src/pages/hr/HRRoadmapDetail.tsx); дашборд план/факта с
+S-кривой — [HRProjectPlanFact.tsx](frontend/src/pages/hr/HRProjectPlanFact.tsx).
+```
+GET/POST/PATCH/DELETE /api/tasks/v1/projects/[{id}/]   •   GET …/projects/{id}/tasks/
+GET/POST/PATCH/DELETE /api/tasks/v1/roadmaps/[{id}/]   •   GET …/roadmaps/{id}/{tasks,metrics}
+GET/POST …/sites/{id}/blocks   •   GET/PATCH/DELETE …/blocks/{id}   •   PUT …/blocks/{id}/volumes
+GET …/blocks/{id}/progress     •   GET/PUT …/tasks/{id}/volumes          # объёмы = ПЛАН
+GET/POST …/tasks/{id}/daily-reports  •  GET/PATCH/DELETE …/daily-reports/{id}   # факт
+GET …/daily-reports/{id}/revisions   •  GET …/roadmaps/{id}/daily-reports
+GET /api/tasks/v1/plan-fact/{project,roadmap}/{id}[?date=]   # SPI, прогноз, отставание, S-кривая
+GET /api/tasks/v1/equipment-usage?…                          # что занято на дату D + история
+GET/POST/PATCH/DELETE /api/tasks/v1/resource-requirements/[{id}/]   # план количеством
+GET/POST/DELETE       /api/tasks/v1/assignments/[{id}]              # факт именами
+GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,volume-types}/[{id}/]
+```
+
+**Сервисы** ([apps/tasks/services/](backend/apps/tasks/services/)): `task_service.py`, `task_content_service.py`, `task_response.py`, `project_service.py`, `roadmap_service.py` (план/факт пакета), `block_service.py` (блоки + прогресс по штукам), `daily_report_service.py` (факт + ревизии), `plan_fact_service.py` (SPI, прогноз, каскад, S-кривая), `resource_service.py` (потребности и назначения), `equipment_usage_service.py` (техника на дату D), `contractor_service.py` (в т.ч. наследование подрядчика), `site_service.py`, `sequence_service.py` (Jira-style ключи), `calendar_service.py` (в т.ч. рабочие/календарные дни), `production_calendar.py` (казахстанские праздники), `gantt_service.py`, `link_service.py`, `notification_service.py`, `reference_service.py`, `hydration.py`.
+
+Вторая очередь сверялась со спецификацией модуля (`docs/SPEC-projects-module.md`, в репозитории её больше нет). Расхождения с ней были намеренными и сохраняются в коде: `Subcontractor`, `ProjectObject` и `EquipmentEngagement` из её §3.1 НЕ заводились — их роль играют уже существующие `Contractor`, `Site`+`SiteBlock` и `ResourceRequirement(kind=equipment)`. Ссылки вида «SPEC §N» в докстрингах указывают на тот же документ и остаются как объяснение, откуда взято решение.
 
 **Kanban** ([KanbanBoard.tsx](frontend/src/components/tasks/KanbanBoard.tsx)) — без изменений на фронте.
 

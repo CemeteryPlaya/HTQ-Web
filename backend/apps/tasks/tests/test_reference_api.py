@@ -8,7 +8,8 @@ the FastAPI original, not against what felt natural to implement.
 import pytest
 from django.test import Client
 
-from apps.tasks.models import Equipment, Label, TaskSequence, TaskType
+from apps.tasks.models import (Equipment, EquipmentCategory, Label,
+                               TaskSequence, TaskType)
 from apps.tasks.services import reference_service as ref_svc
 
 from .helpers import BASE, auth, admin_token, patch_json, post_json, token
@@ -38,10 +39,15 @@ def test_list_labels():
     assert set(body[0]) == {"id", "name", "color"}
 
 
+# Labels are a shared, company-wide dictionary: reads stay open, writes are
+# admin-only, so every mutating case below carries an admin token. The
+# regular-caller 403 is asserted in test_permissions.py.
+
 @pytest.mark.django_db
 def test_create_label_returns_201():
     resp = post_json(Client(), f"{BASE}/labels/",
-                     {"name": "blocked", "color": "#123abc"}, **auth())
+                     {"name": "blocked", "color": "#123abc"},
+                     **auth(admin_token()))
     assert resp.status_code == 201
     assert resp.json()["name"] == "blocked"
     assert Label.objects.filter(name="blocked").exists()
@@ -49,7 +55,8 @@ def test_create_label_returns_201():
 
 @pytest.mark.django_db
 def test_create_label_defaults_color():
-    resp = post_json(Client(), f"{BASE}/labels/", {"name": "plain"}, **auth())
+    resp = post_json(Client(), f"{BASE}/labels/", {"name": "plain"},
+                     **auth(admin_token()))
     assert resp.status_code == 201
     assert resp.json()["color"] == "#808080"
 
@@ -59,7 +66,7 @@ def test_create_label_rejects_bad_color():
     """``LabelCreate.color`` carries a hex pattern — a bad value is a 422
     envelope, not a 500."""
     resp = post_json(Client(), f"{BASE}/labels/",
-                     {"name": "x", "color": "red"}, **auth())
+                     {"name": "x", "color": "red"}, **auth(admin_token()))
     assert resp.status_code == 422
     assert "detail" in resp.json()
 
@@ -68,13 +75,13 @@ def test_create_label_rejects_bad_color():
 def test_update_and_delete_label():
     label = Label.objects.create(name="old", color="#111111")
     resp = patch_json(Client(), f"{BASE}/labels/{label.id}/",
-                      {"name": "new"}, **auth())
+                      {"name": "new"}, **auth(admin_token()))
     assert resp.status_code == 200
     assert resp.json()["name"] == "new"
     # colour untouched by a partial update
     assert resp.json()["color"] == "#111111"
 
-    resp = Client().delete(f"{BASE}/labels/{label.id}/", **auth())
+    resp = Client().delete(f"{BASE}/labels/{label.id}/", **auth(admin_token()))
     assert resp.status_code == 204
     assert not Label.objects.filter(pk=label.id).exists()
 
@@ -82,8 +89,9 @@ def test_update_and_delete_label():
 @pytest.mark.django_db
 def test_label_detail_404_for_unknown_id():
     assert patch_json(Client(), f"{BASE}/labels/999/", {"name": "x"},
-                      **auth()).status_code == 404
-    assert Client().delete(f"{BASE}/labels/999/", **auth()).status_code == 404
+                      **auth(admin_token())).status_code == 404
+    assert Client().delete(f"{BASE}/labels/999/",
+                           **auth(admin_token())).status_code == 404
 
 
 @pytest.mark.django_db
@@ -92,7 +100,7 @@ def test_label_detail_accepts_both_slash_spellings():
     label = Label.objects.create(name="dual", color="#222222")
     for path in (f"{BASE}/labels/{label.id}", f"{BASE}/labels/{label.id}/"):
         assert patch_json(Client(), path, {"color": "#333333"},
-                          **auth()).status_code == 200
+                          **auth(admin_token())).status_code == 200
 
 
 # ── task types ──────────────────────────────────────────────────────────
@@ -187,21 +195,23 @@ def test_list_equipment_hides_inactive_by_default():
     assert {row["name"] for row in resp.json()} == {"Кран", "Списанный"}
 
 
+# Same split as labels: the equipment list is open, writes are admin-only.
+
 @pytest.mark.django_db
 def test_create_equipment_returns_201():
     resp = post_json(Client(), f"{BASE}/equipment/",
                      {"name": "Экскаватор", "inventory_no": "INV-1",
-                      "category": "Спецтехника"}, **auth())
+                      "category": "Спецтехника"}, **auth(admin_token()))
     assert resp.status_code == 201
     assert resp.json()["is_active"] is True
 
 
 @pytest.mark.django_db
 def test_delete_equipment_soft_disables_it():
-    """Historical TaskAssignment rows reference equipment — the original
+    """Historical ResourceAllocation rows reference equipment — the original
     flips ``is_active`` instead of deleting, and so does this."""
     eq = Equipment.objects.create(name="Погрузчик")
-    resp = Client().delete(f"{BASE}/equipment/{eq.id}", **auth())
+    resp = Client().delete(f"{BASE}/equipment/{eq.id}", **auth(admin_token()))
     assert resp.status_code == 204
     eq.refresh_from_db()
     assert eq.is_active is False
@@ -213,16 +223,169 @@ def test_equipment_detail_accepts_both_slash_spellings():
     trailing slash — both must work (no 307 that drops the auth header)."""
     eq = Equipment.objects.create(name="Дрель")
     assert patch_json(Client(), f"{BASE}/equipment/{eq.id}", {"name": "A"},
-                      **auth()).status_code == 200
+                      **auth(admin_token())).status_code == 200
     assert patch_json(Client(), f"{BASE}/equipment/{eq.id}/", {"name": "B"},
-                      **auth()).status_code == 200
+                      **auth(admin_token())).status_code == 200
     eq.refresh_from_db()
     assert eq.name == "B"
 
 
 @pytest.mark.django_db
 def test_equipment_404_for_unknown_id():
-    assert Client().delete(f"{BASE}/equipment/999", **auth()).status_code == 404
+    assert Client().delete(f"{BASE}/equipment/999",
+                           **auth(admin_token())).status_code == 404
+
+
+# ── категория техники: справочник за строковым полем ────────────────────
+#
+# ``category`` в контракте остался строкой, но за ней теперь таблица. Эти
+# тесты стерегут ровно стык: снаружи форма прежняя, внутри — FK.
+
+@pytest.mark.django_db
+def test_creating_equipment_by_category_name_fills_the_reference():
+    resp = post_json(Client(), f"{BASE}/equipment/",
+                     {"name": "Экскаватор", "category": "Спецтехника"},
+                     **auth(admin_token()))
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["category"] == "Спецтехника"
+    row = EquipmentCategory.objects.get(name="Спецтехника")
+    assert body["category_id"] == row.id
+    assert row.slug == "spetstehnika"
+
+
+@pytest.mark.django_db
+def test_equipment_category_name_is_matched_case_insensitively():
+    """Второй ввод того же названия в другом регистре не должен плодить
+    вторую строку справочника — иначе «2 кары» становятся неисчислимы."""
+    client = Client()
+    post_json(client, f"{BASE}/equipment/",
+              {"name": "Кара 1", "category": "Вилопогрузчик"},
+              **auth(admin_token()))
+    post_json(client, f"{BASE}/equipment/",
+              {"name": "Кара 2", "category": "вилопогрузчик "},
+              **auth(admin_token()))
+    assert EquipmentCategory.objects.filter(name__iexact="вилопогрузчик").count() == 1
+
+
+@pytest.mark.django_db
+def test_equipment_accepts_category_id_and_it_wins_over_the_name():
+    picked = EquipmentCategory.objects.create(slug="kran", name="Кран")
+    resp = post_json(Client(), f"{BASE}/equipment/",
+                     {"name": "КС-45", "category": "Мимо", "category_id": picked.id},
+                     **auth(admin_token()))
+    assert resp.json()["category"] == "Кран"
+    assert not EquipmentCategory.objects.filter(name="Мимо").exists()
+
+
+@pytest.mark.django_db
+def test_equipment_category_can_be_cleared():
+    eq = Equipment.objects.create(
+        name="Дрель",
+        category=EquipmentCategory.objects.create(slug="ruchnoy", name="Ручной"))
+    resp = patch_json(Client(), f"{BASE}/equipment/{eq.id}", {"category": ""},
+                      **auth(admin_token()))
+    assert resp.status_code == 200
+    assert resp.json()["category"] is None
+    eq.refresh_from_db()
+    assert eq.category_id is None
+
+
+@pytest.mark.django_db
+def test_equipment_can_be_filtered_by_category():
+    kran = EquipmentCategory.objects.create(slug="kran", name="Кран")
+    Equipment.objects.create(name="КС-45", category=kran)
+    Equipment.objects.create(name="Дрель")
+    resp = Client().get(f"{BASE}/equipment/?category_id={kran.id}", **auth())
+    assert [row["name"] for row in resp.json()] == ["КС-45"]
+
+
+# ── плоские справочники: типы техники, роли, виды объёмов ───────────────
+
+_FLAT = ["equipment-categories", "work-roles", "volume-types"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", _FLAT)
+def test_flat_reference_routes_require_authentication(path):
+    assert Client().get(f"{BASE}/{path}/").status_code == 401
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", _FLAT)
+def test_flat_reference_writes_are_admin_only(path):
+    resp = post_json(Client(), f"{BASE}/{path}/", {"name": "Что-то"},
+                     **auth(token()))
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", _FLAT)
+def test_flat_reference_create_generates_a_slug(path):
+    resp = post_json(Client(), f"{BASE}/{path}/", {"name": "Вилопогрузчик"},
+                     **auth(admin_token()))
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["slug"] == "vilopogruzchik"
+    assert body["is_active"] is True
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", _FLAT)
+def test_flat_reference_duplicate_name_is_409(path):
+    hdr = auth(admin_token())
+    post_json(Client(), f"{BASE}/{path}/", {"name": "Кран"}, **hdr)
+    resp = post_json(Client(), f"{BASE}/{path}/", {"name": "кран"}, **hdr)
+    assert resp.status_code == 409
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", _FLAT)
+def test_flat_reference_delete_soft_disables_and_hides_the_row(path):
+    """PROTECT на FK означает, что настоящее удаление упёрлось бы в базу —
+    ручка гасит ``is_active``, как и у техники."""
+    hdr = auth(admin_token())
+    row_id = post_json(Client(), f"{BASE}/{path}/", {"name": "Устарело"},
+                       **hdr).json()["id"]
+    assert Client().delete(f"{BASE}/{path}/{row_id}", **hdr).status_code == 204
+    assert Client().get(f"{BASE}/{path}/", **auth()).json() == []
+    shown = Client().get(f"{BASE}/{path}/?active_only=false", **auth()).json()
+    assert [r["is_active"] for r in shown] == [False]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", _FLAT)
+def test_flat_reference_detail_accepts_both_slash_spellings(path):
+    hdr = auth(admin_token())
+    row_id = post_json(Client(), f"{BASE}/{path}/", {"name": "Первое"},
+                       **hdr).json()["id"]
+    assert patch_json(Client(), f"{BASE}/{path}/{row_id}", {"name": "A"},
+                      **hdr).status_code == 200
+    assert patch_json(Client(), f"{BASE}/{path}/{row_id}/", {"name": "B"},
+                      **hdr).json()["name"] == "B"
+
+
+@pytest.mark.django_db
+def test_volume_type_carries_a_unit_and_defaults_to_pieces():
+    hdr = auth(admin_token())
+    default = post_json(Client(), f"{BASE}/volume-types/", {"name": "Валы"},
+                        **hdr).json()
+    assert default["unit"] == "piece"
+    tons = post_json(Client(), f"{BASE}/volume-types/",
+                     {"name": "Металл", "unit": "ton"}, **hdr).json()
+    assert tons["unit"] == "ton"
+
+
+@pytest.mark.django_db
+def test_flat_reference_slugs_are_unique_only_within_their_own_table():
+    """«Кран» законно существует и как тип техники, и как вид работ —
+    уникальность слага в пределах своей таблицы, а не всех сразу."""
+    hdr = auth(admin_token())
+    a = post_json(Client(), f"{BASE}/equipment-categories/", {"name": "Кран"},
+                  **hdr).json()
+    b = post_json(Client(), f"{BASE}/work-roles/", {"name": "Кран"},
+                  **hdr).json()
+    assert a["slug"] == b["slug"] == "kran"
 
 
 # ── sequences (admin-only) ──────────────────────────────────────────────

@@ -53,3 +53,8 @@ def post_json(client: Client, path: str, body: dict, **extra):
 def patch_json(client: Client, path: str, body: dict, **extra):
     return client.patch(path, data=json.dumps(body),
                         content_type="application/json", **extra)
+
+
+def put_json(client: Client, path: str, body: dict, **extra):
+    return client.put(path, data=json.dumps(body),
+                      content_type="application/json", **extra)

@@ -192,6 +192,24 @@ class NewsRead(NewsBase):
     summary: str = ""
 
 
+class NewsTranslateRequest(BaseModel):
+    """Порт ``services/cms/app/schemas/news.py::NewsTranslateRequest``."""
+
+    target: str = Field("en", min_length=2, max_length=10)
+
+
+class NewsTranslateResponse(BaseModel):
+    """Порт ``::NewsTranslateResponse``. ``task_id`` у источника — id
+    Dramatiq-сообщения; здесь это ``AsyncResult.id`` Celery-задачи
+    (``apps.cms.tasks.translate_news``), тот же смысл — ручка для отслеживания
+    поставленной в очередь работы."""
+
+    task_id: str
+    news_id: int
+    target: str
+    status: str = "queued"
+
+
 T = TypeVar("T")
 
 

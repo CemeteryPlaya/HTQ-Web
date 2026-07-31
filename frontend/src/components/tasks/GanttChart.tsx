@@ -10,20 +10,17 @@ import {
   addMonths, format, max as maxDate, min as minDate,
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { useTranslation } from 'react-i18next';
 import { Check } from 'lucide-react';
+import {
+  TASK_STATUS_ORDER, statusHex, statusLabel, statusMeta,
+} from '@/lib/tasks/status';
 import type { Task } from '@/types/tasks';
 
-/* ---- Status palette (синхронно с HRReports) ---- */
-const STATUS_COLORS: Record<string, string> = {
-  open: '#64748b', in_progress: '#3b82f6', in_review: '#a855f7',
-  done: '#22c55e', closed: '#6b7280',
-};
-const STATUS_LABELS: Record<string, string> = {
-  open: 'Открыта', in_progress: 'В работе', in_review: 'На ревью',
-  done: 'Готова', closed: 'Закрыта',
-};
-
-export type GanttGroupBy = 'none' | 'assignee' | 'department';
+export type GanttGroupBy =
+  | 'none' | 'assignee' | 'department'
+  // Оси иерархии работ: проект → объект → роудмап → задача → блок.
+  | 'site' | 'roadmap' | 'block';
 
 interface GanttChartProps {
   tasks: Task[];
@@ -45,8 +42,10 @@ function resolveSpan(t: Task): { start: Date; end: Date } | null {
     parseDate(t.start_date) ??
     parseDate(t.effective_start_date) ??
     parseDate(t.created_at);
-  // Для завершённых задач конец — фактическая дата выполнения (ключевое для отчётов).
-  const isDone = t.status === 'done' || t.status === 'closed';
+  // Для завершённых задач конец — фактическая дата выполнения (ключевое для
+  // отчётов). "Завершённая" = done | cancelled; проверка идёт через
+  // statusMeta, поэтому легаси-статусы (`closed`) тоже попадают сюда.
+  const isDone = statusMeta(t.status).isTerminal;
   const end =
     (isDone ? parseDate(t.completed_at) : null) ??
     parseDate(t.due_date) ??
@@ -58,9 +57,34 @@ function resolveSpan(t: Task): { start: Date; end: Date } | null {
   return end < start ? { start, end: start } : { start, end };
 }
 
-function groupLabel(t: Task, by: GanttGroupBy): string {
-  if (by === 'assignee') return t.assignee_name || 'Без исполнителя';
-  if (by === 'department') return t.department_name || 'Без отдела';
+function groupLabel(
+  task: Task,
+  by: GanttGroupBy,
+  t: (key: string, fallback?: string) => string,
+): string {
+  if (by === 'assignee') {
+    return task.assignee_name
+      || t('tasks.pages.reports.noAssignee', 'Без исполнителя');
+  }
+  if (by === 'department') {
+    return task.department_name
+      || t('tasks.pages.reports.noDepartment', 'Без отдела');
+  }
+  // Оси иерархии работ. Пустая корзина у каждой — не ошибка: у задачи
+  // законно может не быть объекта (исторические), пакета (заведены до
+  // роудмапов) или блока (работа не привязана к участку).
+  if (by === 'site') {
+    return task.site_name
+      || t('tasks.pages.sites.withoutSite', 'Без объекта');
+  }
+  if (by === 'roadmap') {
+    return task.roadmap_name
+      || t('tasks.pages.roadmaps.noRoadmap', 'Без роудмапа');
+  }
+  if (by === 'block') {
+    return task.site_block_name
+      || t('tasks.pages.blocks.noBlock', 'Без блока');
+  }
   return '';
 }
 
@@ -69,9 +93,10 @@ type Row =
   | { kind: 'task'; key: string; task: Task; start: Date; end: Date };
 
 export const GanttChart: React.FC<GanttChartProps> = ({ tasks, groupBy = 'none', onTaskClick }) => {
+  const { t } = useTranslation();
   const model = useMemo(() => {
     const spans = tasks
-      .map((t) => ({ t, span: resolveSpan(t) }))
+      .map((task) => ({ t: task, span: resolveSpan(task) }))
       .filter((x): x is { t: Task; span: { start: Date; end: Date } } => x.span !== null);
 
     if (spans.length === 0) return null;
@@ -92,23 +117,23 @@ export const GanttChart: React.FC<GanttChartProps> = ({ tasks, groupBy = 'none',
     const rows: Row[] = [];
     const sorted = [...spans].sort((a, b) => {
       if (groupBy !== 'none') {
-        const ga = groupLabel(a.t, groupBy);
-        const gb = groupLabel(b.t, groupBy);
+        const ga = groupLabel(a.t, groupBy, t);
+        const gb = groupLabel(b.t, groupBy, t);
         if (ga !== gb) return ga.localeCompare(gb, 'ru');
       }
       return a.span.start.getTime() - b.span.start.getTime();
     });
 
     let currentGroup: string | null = null;
-    sorted.forEach(({ t, span }) => {
+    sorted.forEach(({ t: task, span }) => {
       if (groupBy !== 'none') {
-        const g = groupLabel(t, groupBy);
+        const g = groupLabel(task, groupBy, t);
         if (g !== currentGroup) {
           currentGroup = g;
           rows.push({ kind: 'group', key: `g-${g}`, label: g });
         }
       }
-      rows.push({ kind: 'task', key: `t-${t.id}`, task: t, start: span.start, end: span.end });
+      rows.push({ kind: 'task', key: `t-${task.id}`, task, start: span.start, end: span.end });
     });
 
     // Месячные засечки для шапки.
@@ -128,12 +153,13 @@ export const GanttChart: React.FC<GanttChartProps> = ({ tasks, groupBy = 'none',
     const timelineWidth = Math.max(560, Math.round(totalDays * pxPerDay));
 
     return { rows, rangeStart, totalDays, ticks, todayLeft, timelineWidth };
-  }, [tasks, groupBy]);
+  }, [tasks, groupBy, t]);
 
   if (!model) {
     return (
       <p className="text-muted-foreground text-sm text-center py-12">
-        Нет задач с датами для построения диаграммы. Выберите задачи и убедитесь, что у них заданы даты начала/срока.
+        {t('tasks.pages.reports.ganttEmpty',
+          'Нет задач с датами для построения диаграммы. Выберите задачи и убедитесь, что у них заданы даты начала/срока.')}
       </p>
     );
   }
@@ -144,14 +170,15 @@ export const GanttChart: React.FC<GanttChartProps> = ({ tasks, groupBy = 'none',
     <div className="w-full">
       {/* Легенда */}
       <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-        {Object.entries(STATUS_LABELS).map(([k, label]) => (
-          <span key={k} className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-sm" style={{ background: STATUS_COLORS[k] }} />
-            {label}
+        {TASK_STATUS_ORDER.map((s) => (
+          <span key={s} className="inline-flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm" style={{ background: statusHex(s) }} />
+            {statusLabel(s, t)}
           </span>
         ))}
         <span className="inline-flex items-center gap-1.5">
-          <Check className="h-3 w-3 text-green-600" /> выполнена
+          <Check className="h-3 w-3 text-green-600" />
+          {t('tasks.pages.reports.legendCompleted', 'выполнена')}
         </span>
       </div>
 
@@ -160,7 +187,7 @@ export const GanttChart: React.FC<GanttChartProps> = ({ tasks, groupBy = 'none',
           {/* Шапка с месяцами */}
           <div className="flex border-b bg-muted/40 sticky top-0 z-10">
             <div style={{ width: LABEL_W }} className="shrink-0 px-3 py-2 text-xs font-medium text-muted-foreground">
-              Задача
+              {t('tasks.pages.list.table.summary')}
             </div>
             <div className="relative flex-1 h-9">
               {ticks.map((tk, i) => (
@@ -199,11 +226,11 @@ export const GanttChart: React.FC<GanttChartProps> = ({ tasks, groupBy = 'none',
                 (Math.max(1, differenceInCalendarDays(end, start)) / totalDays) * 100,
                 0.6,
               );
-              const color = STATUS_COLORS[task.status] || '#8884d8';
-              const isDone = task.status === 'done' || task.status === 'closed';
+              const color = statusHex(task.status);
+              const isDone = statusMeta(task.status).isTerminal;
               const tooltip =
                 `${task.key} · ${task.summary}\n` +
-                `${STATUS_LABELS[task.status] || task.status}` +
+                `${statusLabel(task.status, t)}` +
                 (task.assignee_name ? ` · ${task.assignee_name}` : '') +
                 `\n${format(start, 'dd.MM.yyyy')} — ${format(end, 'dd.MM.yyyy')}`;
 

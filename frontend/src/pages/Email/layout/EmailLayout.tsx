@@ -2,6 +2,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
+import { BackToProfile } from '@/components/BackToProfile';
 
 interface Props {
   sidebar: React.ReactNode;
@@ -21,6 +22,9 @@ export const EmailLayout: React.FC<Props> = ({ sidebar, children, title }) => {
       <Header />
       <main className="flex-1">
         <div className="container mx-auto px-4 py-8">
+          {/* Была единственной страницей из сайдбара профиля БЕЗ обратной
+              ссылки — доступ к почте вёл в one-way. */}
+          <BackToProfile className="mb-4" />
           {title && (
             <h1 className="mb-4 text-2xl font-semibold tracking-tight">{title}</h1>
           )}

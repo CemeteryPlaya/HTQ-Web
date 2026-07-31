@@ -132,6 +132,34 @@ def get_user_brief(user_id: int) -> dict | None:
     return _brief_from_values(row) if row is not None else None
 
 
+def verify_password(user_id: int, password: str) -> bool:
+    """Re-check one user's own password — a *step-up* confirmation, not a
+    login: it issues no token, touches no ``last_login``, and returns a plain
+    bool instead of a User.
+
+    The one caller today is ``apps.core.infrastructure``'s "reveal
+    infrastructure credentials" flow, which makes the admin re-enter their
+    password before plaintext secrets are unmasked. Before the cutover that
+    check was an HTTP round-trip from admin-service to user-service
+    (``POST /api/users/v1/token/`` with the admin's own email); in the
+    monolith there is no network hop, and neighbours may not import
+    ``apps.users.services`` directly (apps/core/tests/test_app_isolation.py),
+    so the check belongs here.
+
+    Deliberately narrower than ``auth_service.authenticate``: the caller
+    already holds a validated JWT and only needs "does this password still
+    belong to *this* user id". Non-active accounts and unknown ids answer
+    ``False`` rather than raising — a step-up prompt has exactly two useful
+    outcomes, and distinguishing "no such user" from "wrong password" here
+    would leak account state to whoever is at the keyboard.
+    """
+    require_service("users")
+    user = User.objects.filter(pk=user_id, status=UserStatus.ACTIVE).first()
+    if user is None:
+        return False
+    return user.check_password(password)
+
+
 def get_users_brief(user_ids: Iterable[int]) -> list[dict]:
     """Bulk variant of ``get_user_brief`` — one query for every id in
     ``user_ids``. Unknown ids are simply absent from the result (same

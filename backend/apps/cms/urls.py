@@ -36,6 +36,10 @@ urlpatterns = [
     path("news/", views.news_collection),
     path("news/by-slug/<str:slug>", views.news_by_slug),
     path("news/by-slug/<str:slug>/", views.news_by_slug),
+    # Более специфичный роут — ДО общего news/<id> (у Django они не
+    # пересекаются, но конвенция репо «специфичное прежде общего»).
+    path("news/<int:news_id>/translate", views.translate_news),
+    path("news/<int:news_id>/translate/", views.translate_news),
     path("news/<int:news_id>", views.news_detail),
     path("news/<int:news_id>/", views.news_detail),
     # Categories — frontend call sites: 'categories/' (list, create),
