@@ -192,6 +192,16 @@ CMS_LOCAL_STORAGE_DIR = env("CMS_LOCAL_STORAGE_DIR", str(BASE_DIR / "data" / "cm
 NEWS_SIGNED_URL_SECRET = env("NEWS_SIGNED_URL_SECRET", "change-me-news-signed-secret")
 NEWS_SIGNED_URL_TTL = int(env("NEWS_SIGNED_URL_TTL", "3600"))
 
+# ── Админ-панель инфраструктуры — GET /api/admin/v1/infrastructure/ ─────────
+# Порт services/admin/app/core/settings.py (admin-сервис снесён при cutover'е,
+# см. apps/core/infrastructure.py). Читает уже существующие DATABASES/CACHES/
+# S3_* — свои тут только «человеческие» ссылки и имя окружения.
+SERVICE_ENV = env("SERVICE_ENV", "development")
+# Ссылка «панель БД». У источника это был sqladmin снесённого admin-сервиса;
+# в монолите ту же роль играет родная админка Django.
+DB_ADMIN_URL = env("DB_ADMIN_URL", "/django-admin/")
+MINIO_CONSOLE_URL = env("MINIO_CONSOLE_URL", "http://localhost:9001")
+
 # ── Conference (SFU) runtime config — GET /api/cms/v1/conference/config ─────
 # Ported defaults from services/cms/app/data/conference.yaml (FastAPI
 # cms-service). The conference/SFU stack itself is out of service (seeded

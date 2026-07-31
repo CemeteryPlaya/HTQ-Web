@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { TasksLayout } from '@/components/tasks/TasksLayout';
 import { CreateTaskModal } from '@/components/tasks/CreateTaskModal';
 import { TaskAssignments } from '@/components/tasks/TaskAssignments';
+import { TaskDailyReporting } from '@/components/tasks/TaskDailyReporting';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +29,12 @@ import {
 import { fetchDepartments, fetchEmployeeUsers } from '@/api/hr';
 import api from '@/api/client';
 import type { UserProfile } from '@/types/userProfile';
+import {
+  TASK_STATUS_ORDER, statusBadgeClass, statusLabel,
+} from '@/lib/tasks/status';
+import {
+  TASK_PRIORITY, TASK_PRIORITY_ORDER, priorityLabel,
+} from '@/lib/tasks/priority';
 import type {
   Task, TaskPriority, TaskStatus,
   TaskComment as TComment,
@@ -35,23 +42,7 @@ import type {
 
 /* ---- Config maps ---- */
 
-const PRIORITY_CONFIG: Record<TaskPriority, { icon: string }> = {
-  critical: { icon: '🔴' },
-  high: { icon: '🟠' },
-  medium: { icon: '🟡' },
-  low: { icon: '🔵' },
-  trivial: { icon: '⚪' },
-};
 
-const STATUS_CONFIG: Record<TaskStatus, { color: string }> = {
-  backlog: { color: 'bg-slate-400 text-white' },
-  todo: { color: 'bg-slate-600 text-white' },
-  in_progress: { color: 'bg-blue-600 text-white' },
-  in_review: { color: 'bg-purple-500 text-white' },
-  blocked: { color: 'bg-red-500 text-white' },
-  done: { color: 'bg-green-500 text-white' },
-  cancelled: { color: 'bg-gray-600 text-white' },
-};
 
 // Keyed by slug; custom types fall back to a generic icon at call sites.
 const TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -224,8 +215,8 @@ const HRTaskDetail: React.FC = () => {
                   </Badge>
                 )}
                 <span className="font-mono text-lg font-bold text-primary">{task.key}</span>
-                <Badge className={STATUS_CONFIG[task.status]?.color}>
-                  {t(`tasks.pages.list.status.${task.status}`)}
+                <Badge className={statusBadgeClass(task.status)}>
+                  {statusLabel(task.status, t)}
                 </Badge>
               </div>
 
@@ -296,6 +287,15 @@ const HRTaskDetail: React.FC = () => {
             </CardContent>
           </Card>
 
+          {/* Ежедневная отчётность — сразу после описания: это ежедневное
+              действие прораба, а не справка, и ниже подзадач его не найдут. */}
+          <TaskDailyReporting
+            task={task}
+            onChanged={() => queryClient.invalidateQueries({
+              queryKey: ['hr-task', taskId],
+            })}
+          />
+
           {/* Subtasks */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between py-4">
@@ -322,8 +322,8 @@ const HRTaskDetail: React.FC = () => {
                       {TYPE_ICONS[sub.task_type]}
                       <span className="font-mono text-sm text-primary">{sub.key}</span>
                       <span className="text-sm flex-1">{sub.summary}</span>
-                      <Badge className={STATUS_CONFIG[sub.status]?.color} variant="secondary">
-                        {t(`tasks.pages.list.status.${sub.status}`)}
+                      <Badge className={statusBadgeClass(sub.status)} variant="secondary">
+                        {statusLabel(sub.status, t)}
                       </Badge>
                     </Link>
                   ))}
@@ -521,13 +521,13 @@ const HRTaskDetail: React.FC = () => {
                 >
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {Object.keys(STATUS_CONFIG).map((k) => (
+                    {TASK_STATUS_ORDER.map((k) => (
                       <SelectItem
                         key={k}
                         value={k}
                         disabled={transitions.length > 0 && !transitions.includes(k as TaskStatus)}
                       >
-                        {t(`tasks.pages.list.status.${k}`)}
+                        {statusLabel(k, t)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -543,8 +543,10 @@ const HRTaskDetail: React.FC = () => {
                 >
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {Object.entries(PRIORITY_CONFIG).map(([k, v]) => (
-                      <SelectItem key={k} value={k}>{v.icon} {t(`tasks.pages.list.priority.${k}`)}</SelectItem>
+                    {TASK_PRIORITY_ORDER.map((k) => (
+                      <SelectItem key={k} value={k}>
+                        {TASK_PRIORITY[k].icon} {priorityLabel(k, t)}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

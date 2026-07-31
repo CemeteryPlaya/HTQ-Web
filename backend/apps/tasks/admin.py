@@ -7,6 +7,13 @@ reflective meta-test ``apps/core/tests/test_invariants.py`` (Test 2) fails
 the build if one is added without it, and it did exactly that while this file
 was still the empty prep scaffold.
 
+``ProjectSite`` follows the same rule as the other junctions: it is edited
+as an inline on the project, never as a standalone changelist. So does
+``ContractorWorker`` — a person outside their organisation means nothing.
+``ContractorEngagement`` is the exception among junctions: it carries a
+contract, dates and a scope, and is searched by project and by site, so it
+gets its own section.
+
 What is deliberately NOT registered standalone: ``TaskDepartmentLink``,
 ``TaskAssignee``/``TaskDelegate``/``TaskWatcher``, ``EventException`` and
 ``CalendarEventParticipant``. They are junction rows meaningless outside
@@ -27,7 +34,20 @@ from .models import (
     CalendarEvent,
     CalendarEventParticipant,
     Equipment,
+    EquipmentCategory,
     EventException,
+    Contractor,
+    ContractorEngagement,
+    ContractorWorker,
+    DailyReport,
+    DailyReportRevision,
+    ProjectSite,
+    ResourceAllocation,
+    ResourceRequirement,
+    Roadmap,
+    Site,
+    SiteBlock,
+    SiteBlockVolume,
     Label,
     Notification,
     ProductionDay,
@@ -35,7 +55,6 @@ from .models import (
     Task,
     TaskActivity,
     TaskAssignee,
-    TaskAssignment,
     TaskAttachment,
     TaskComment,
     TaskDelegate,
@@ -44,6 +63,8 @@ from .models import (
     TaskSequence,
     TaskType,
     TaskWatcher,
+    WorkRole,
+    WorkVolumeType,
 )
 
 
@@ -97,6 +118,89 @@ class TaskTypeAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
         return super().has_delete_permission(request, obj)
 
 
+class ProjectSiteInline(admin.TabularInline):
+    """Объекты проекта. Инлайн, а не отдельный раздел: строка «проект ↔
+    объект» вне своего проекта не значит ничего."""
+
+    model = ProjectSite
+    extra = 0
+    autocomplete_fields = ("site",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+class SiteBlockInline(admin.TabularInline):
+    """Блоки площадки. Инлайн: блок вне своего объекта не значит ничего —
+    «блок 1» есть на каждой площадке и это разные блоки."""
+
+    model = SiteBlock
+    extra = 0
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Site)
+class SiteAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "name", "code", "status", "region",
+                    "department_id", "created_at")
+    list_filter = ("status", "region")
+    search_fields = ("name", "code", "address")
+    readonly_fields = ("created_at", "updated_at")
+    inlines = (SiteBlockInline,)
+
+
+class SiteBlockVolumeInline(admin.TabularInline):
+    """Плановые объёмы блока — инлайн по тому же правилу, что ProjectSite."""
+
+    model = SiteBlockVolume
+    extra = 0
+    autocomplete_fields = ("volume_type",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(SiteBlock)
+class SiteBlockAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    """Свой раздел вдобавок к инлайну на площадке: объёмы правят из карточки
+    блока, а вложенный инлайн внутри инлайна Django не умеет."""
+
+    list_display = ("id", "site", "name", "code", "order", "status",
+                    "start_date", "end_date")
+    list_filter = ("status", "site")
+    search_fields = ("name", "code", "site__name")
+    autocomplete_fields = ("site",)
+    readonly_fields = ("created_at", "updated_at")
+    inlines = (SiteBlockVolumeInline,)
+
+
+@admin.register(WorkVolumeType)
+class WorkVolumeTypeAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "slug", "name", "unit", "is_active")
+    list_filter = ("is_active", "unit")
+    search_fields = ("slug", "name")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Roadmap)
+class RoadmapAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    """Пакет работ на блоке. Свой раздел, а не инлайн проекта: роудмап
+    ищут по блоку и площадке не реже, чем по проекту, и правят как
+    самостоятельный план со сроками и владельцем."""
+
+    list_display = ("id", "name", "project", "site_block", "site_name",
+                    "status", "order", "planned_start_date",
+                    "planned_end_date", "owner_id")
+    # Площадка фильтром через блок: своей колонки у роудмапа нет и не должно
+    # быть — она выводится из блока (см. докстринг модели).
+    list_filter = ("status", "site_block__site")
+    search_fields = ("name", "description", "project__name",
+                     "site_block__name", "site_block__site__name")
+    autocomplete_fields = ("project", "site_block")
+    readonly_fields = ("created_at", "updated_at")
+    list_select_related = ("project", "site_block", "site_block__site")
+
+    @admin.display(description="Площадка", ordering="site_block__site__name")
+    def site_name(self, obj):
+        return obj.site_block.site.name
+
+
 @admin.register(Project)
 class ProjectAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "name", "status", "owner_id", "department_id",
@@ -104,6 +208,7 @@ class ProjectAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_filter = ("status",)
     search_fields = ("name", "description")
     readonly_fields = ("created_at", "updated_at")
+    inlines = (ProjectSiteInline,)
 
 
 @admin.register(Label)
@@ -113,20 +218,135 @@ class LabelAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     readonly_fields = ("created_at", "updated_at")
 
 
+@admin.register(EquipmentCategory)
+class EquipmentCategoryAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "slug", "name", "is_active")
+    list_filter = ("is_active",)
+    search_fields = ("slug", "name")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(WorkRole)
+class WorkRoleAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "slug", "name", "is_active")
+    list_filter = ("is_active",)
+    search_fields = ("slug", "name")
+    readonly_fields = ("created_at", "updated_at")
+
+
 @admin.register(Equipment)
 class EquipmentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "name", "inventory_no", "category", "is_active")
-    list_filter = ("is_active", "category")
+    list_display = ("id", "name", "inventory_no", "category_name", "ownership",
+                    "contractor", "is_active")
+    list_filter = ("is_active", "ownership", "category")
     search_fields = ("name", "inventory_no")
+    autocomplete_fields = ("contractor", "category")
+    readonly_fields = ("created_at", "updated_at")
+    list_select_related = ("category", "contractor")
+
+    @admin.display(description="Категория", ordering="category__name")
+    def category_name(self, obj):
+        # Не голый ``category``: модели этого аппа принципиально не
+        # определяют ``__str__`` (только ``__repr__`` для отладки), так что
+        # FK в колонке отрисовался бы как «EquipmentCategory object (3)» —
+        # хуже, чем текст, который тут был до перевода на справочник.
+        return obj.category.name if obj.category else "—"
+
+
+class ContractorWorkerInline(admin.TabularInline):
+    """Представители подрядчика. Инлайн: человек вне своей организации не
+    значит ничего, а ``user_id`` тут только читается — привязка аккаунта
+    появится вместе с механизмом входа."""
+
+    model = ContractorWorker
+    extra = 0
+    readonly_fields = ("user_id", "created_at", "updated_at")
+
+
+@admin.register(Contractor)
+class ContractorAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "name", "bin_iin", "status", "contact_person",
+                    "phone", "created_at")
+    list_filter = ("status",)
+    search_fields = ("name", "short_name", "bin_iin", "contact_person")
+    readonly_fields = ("created_at", "updated_at")
+    inlines = (ContractorWorkerInline,)
+
+
+@admin.register(ContractorEngagement)
+class ContractorEngagementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    """Отдельным разделом, а не инлайном: привлечение осмысленно само по
+    себе (договор, сроки, объект) и его ищут по проекту и по объекту, а не
+    только по подрядчику."""
+
+    list_display = ("id", "contractor", "project", "site", "roadmap",
+                    "contract_no", "start_date", "end_date", "is_active")
+    list_filter = ("is_active",)
+    search_fields = ("contractor__name", "contract_no", "scope")
+    autocomplete_fields = ("contractor", "project", "site", "roadmap")
     readonly_fields = ("created_at", "updated_at")
 
 
-@admin.register(TaskAssignment)
-class TaskAssignmentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "task", "employee_id", "equipment", "role",
-                    "allocation")
+@admin.register(ResourceRequirement)
+class ResourceRequirementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    """Потребность количеством — план, из которого растёт метрика
+    роудмапа. Свой раздел: она осмысленна и до того, как появятся имена."""
+
+    list_display = ("id", "kind", "quantity", "roadmap", "task", "work_role",
+                    "equipment_category", "start_date", "end_date")
+    list_filter = ("kind",)
+    search_fields = ("note", "roadmap__name", "task__key", "task__summary")
+    autocomplete_fields = ("roadmap", "work_role", "equipment_category")
     raw_id_fields = ("task",)
     readonly_fields = ("created_at", "updated_at")
+    list_select_related = ("roadmap", "task", "work_role", "equipment_category")
+
+
+@admin.register(ResourceAllocation)
+class ResourceAllocationAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "task", "roadmap", "employee_id", "equipment",
+                    "role", "allocation")
+    raw_id_fields = ("task", "requirement")
+    autocomplete_fields = ("roadmap",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+class DailyReportRevisionInline(admin.TabularInline):
+    """Лента версий — только чтение. Ревизия это снимок случившегося;
+    отредактированная задним числом ревизия — подделка отчётности, ровно
+    как отредактированная запись TaskActivity. Тот же приём, что у
+    ``approvals.RequestFormTemplateVersion``."""
+
+    model = DailyReportRevision
+    extra = 0
+    can_delete = False
+    readonly_fields = ("revision_no", "work_date", "quantity", "headcount",
+                       "comment", "edited_by_id", "edited_at")
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(DailyReport)
+class DailyReportAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    """Единственный источник факта выполнения.
+
+    ``work_date`` в списке первым столбцом после задачи: это дата
+    ВЫПОЛНЕНИЯ работ, по которой всё и считается, а ``created_at`` (дата
+    заполнения) — служебная и стоит в конце.
+    """
+
+    list_display = ("id", "task", "work_date", "volume_type", "quantity",
+                    "headcount", "author_id", "current_revision",
+                    "is_deleted", "created_at")
+    list_filter = ("is_deleted", "volume_type", "work_date")
+    search_fields = ("task__key", "task__summary", "comment")
+    raw_id_fields = ("task",)
+    autocomplete_fields = ("volume_type",)
+    readonly_fields = ("current_revision", "created_at", "updated_at")
+    date_hierarchy = "work_date"
+    list_select_related = ("task", "volume_type")
+    inlines = (DailyReportRevisionInline,)
 
 
 @admin.register(TaskLink)

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -7,7 +7,6 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
-    ArrowLeft,
     Briefcase,
     Building2,
     CalendarDays,
@@ -16,16 +15,16 @@ import {
     Mail,
     Phone,
     ShieldCheck,
-    UserCircle,
-} from 'lucide-react';
+    UserCircle } from 'lucide-react';
 
 import api from '@/api/client';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import ProfileSidebar from '@/components/profile/ProfileSidebar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { PhoneInput } from '@/components/ui/phone-input';
+import { PhoneInput, isKzPhoneValid } from '@/components/ui/phone-input';
 import {
     Form,
     FormControl,
@@ -94,12 +93,7 @@ const Settings: React.FC = () => {
             <Header />
             <main className="flex-1 container mx-auto px-4 py-8">
                 <div className="flex items-center gap-3 mb-6">
-                    <Button asChild variant="ghost" size="sm">
-                        <Link to="/myprofile" className="flex items-center gap-1">
-                            <ArrowLeft className="h-4 w-4" />
-                            {t('settingsPage.backToProfile', 'К профилю')}
-                        </Link>
-                    </Button>
+                    <BackToProfile className="mb-0" />
                     <h1 className="text-3xl font-bold">
                         {t('settingsPage.title', 'Настройки')}
                     </h1>
@@ -337,7 +331,17 @@ const PersonalInfoCard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
 // ─── Contact info card (phone + secondary email) ─────────────────────────────
 
 const contactSchema = z.object({
-    phone: z.string().max(30).optional().or(z.literal('')),
+    // Маска (PhoneInput) не даёт набрать лишнего, но недобранный номер
+    // сохранить всё же можно — это ловим здесь. Схема объявлена вне
+    // компонента, поэтому t() недоступен: сообщение задано текстом.
+    phone: z
+        .string()
+        .max(30)
+        .refine(isKzPhoneValid, {
+            message: 'Введите номер полностью: +7 (700) 483-55-81',
+        })
+        .optional()
+        .or(z.literal('')),
     secondaryEmail: z
         .string()
         .max(254)

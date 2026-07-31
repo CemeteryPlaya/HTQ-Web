@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { TasksLayout } from '@/components/tasks/TasksLayout';
+import { TaskDailyReporting } from '@/components/tasks/TaskDailyReporting';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,26 +24,14 @@ import {
 } from '@/api/tasks';
 import type { UserProfile } from '@/types/userProfile';
 import type { Task, TaskPriority, TaskStatus } from '@/types/tasks';
+import {
+    TASK_STATUS_ORDER, statusBadgeClass, statusLabel,
+} from '@/lib/tasks/status';
+import { TASK_PRIORITY, priorityLabel } from '@/lib/tasks/priority';
 
 /* ---- Config Maps ---- */
 
-const PRIORITY_CONFIG: Record<TaskPriority, { icon: string }> = {
-    critical: { icon: '🔴' },
-    high: { icon: '🟠' },
-    medium: { icon: '🟡' },
-    low: { icon: '🔵' },
-    trivial: { icon: '⚪' },
-};
 
-const STATUS_CONFIG: Record<TaskStatus, { color: string }> = {
-    backlog: { color: 'bg-slate-400 text-white' },
-    todo: { color: 'bg-slate-600 text-white' },
-    in_progress: { color: 'bg-blue-600 text-white' },
-    in_review: { color: 'bg-purple-500 text-white' },
-    blocked: { color: 'bg-red-500 text-white' },
-    done: { color: 'bg-green-500 text-white' },
-    cancelled: { color: 'bg-gray-600 text-white' },
-};
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
     task: <CheckSquare className="h-5 w-5 text-blue-500" />,
@@ -151,8 +140,8 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
                             <div className="flex items-center gap-3 mb-4">
                                 {TYPE_ICONS[task.task_type]}
                                 <span className="font-mono text-lg font-bold text-primary">{task.key}</span>
-                                <Badge className={STATUS_CONFIG[task.status]?.color}>
-                                    {t(`tasks.pages.list.status.${task.status}`)}
+                                <Badge className={statusBadgeClass(task.status)}>
+                                    {statusLabel(task.status, t)}
                                 </Badge>
                             </div>
                             <h2 className="text-2xl font-semibold mb-2">{task.summary}</h2>
@@ -167,6 +156,15 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
                             </div>
                         </CardContent>
                     </Card>
+
+                    {/* Ежедневная отчётность — здесь она нужнее всего: это
+                        карточка, которую открывает сам исполнитель. */}
+                    <TaskDailyReporting
+                        task={task}
+                        onChanged={() => queryClient.invalidateQueries({
+                            queryKey: ['employee-task', taskId],
+                        })}
+                    />
 
                     {/* Attachments */}
                     <Card>
@@ -293,15 +291,15 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
                                     >
                                         <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                                         <SelectContent>
-                                            {Object.keys(STATUS_CONFIG).map((k) => (
-                                                <SelectItem key={k} value={k}>{t(`tasks.pages.list.status.${k}`)}</SelectItem>
+                                            {TASK_STATUS_ORDER.map((k) => (
+                                                <SelectItem key={k} value={k}>{statusLabel(k, t)}</SelectItem>
                                             ))}
                                         </SelectContent>
                                     </Select>
                                 ) : (
                                     <div className="mt-1">
-                                        <Badge className={STATUS_CONFIG[task.status]?.color} variant="secondary">
-                                            {t(`tasks.pages.list.status.${task.status}`)}
+                                        <Badge className={statusBadgeClass(task.status)} variant="secondary">
+                                            {statusLabel(task.status, t)}
                                         </Badge>
                                     </div>
                                 )}
@@ -311,7 +309,7 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
                             <div>
                                 <Label className="text-xs text-muted-foreground uppercase">{t('tasks.pages.detail.priority')}</Label>
                                 <div className="text-sm mt-1 flex items-center gap-1">
-                                    {PRIORITY_CONFIG[task.priority]?.icon} {t(`tasks.pages.list.priority.${task.priority}`)}
+                                    {TASK_PRIORITY[task.priority]?.icon} {priorityLabel(task.priority, t)}
                                 </div>
                             </div>
 

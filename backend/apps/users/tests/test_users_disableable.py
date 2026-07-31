@@ -221,7 +221,9 @@ def test_options_endpoint_actually_succeeds_when_users_enabled():
     user.set_password("S3cret!")
     user.save()
     token = issue_token_pair(user)["access"]
-    resp = Client().get(f"{BASE}/users/options/", **_auth_header(token))
+    # ``query`` is required (min 2 chars) — see test_user_options_api.py.
+    resp = Client().get(f"{BASE}/users/options/?query=sweep",
+                        **_auth_header(token))
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 

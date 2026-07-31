@@ -9,20 +9,14 @@ import {
   addMonths, format,
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { useTranslation } from 'react-i18next';
 import { User, Truck } from 'lucide-react';
+import { TASK_STATUS_ORDER, statusHex, statusLabel } from '@/lib/tasks/status';
 import type { ResourceRow, ResourceKind } from '@/types/tasks';
 
-const STATUS_COLORS: Record<string, string> = {
-  open: '#64748b', in_progress: '#3b82f6', in_review: '#a855f7',
-  done: '#22c55e', closed: '#6b7280',
-};
-const STATUS_LABELS: Record<string, string> = {
-  open: 'Открыта', in_progress: 'В работе', in_review: 'На ревью',
-  done: 'Готова', closed: 'Закрыта',
-};
-const KIND_META: Record<ResourceKind, { label: string; icon: typeof User }> = {
-  employee: { label: 'Сотрудники', icon: User },
-  equipment: { label: 'Техника', icon: Truck },
+const KIND_META: Record<ResourceKind, { labelKey: string; icon: typeof User }> = {
+  employee: { labelKey: 'tasks.pages.resources.kindEmployee', icon: User },
+  equipment: { labelKey: 'tasks.pages.resources.kindEquipment', icon: Truck },
 };
 
 const LABEL_W = 240;
@@ -44,6 +38,7 @@ function parseDate(s?: string | null): Date | null {
 const clamp = (v: number) => Math.max(0, Math.min(100, v));
 
 export const ResourceGantt: React.FC<Props> = ({ resources, rangeFrom, rangeTo, onTaskClick }) => {
+  const { t } = useTranslation();
   const model = useMemo(() => {
     const start = parseDate(rangeFrom) ?? new Date();
     let end = parseDate(rangeTo) ?? addDays(start, 30);
@@ -69,7 +64,8 @@ export const ResourceGantt: React.FC<Props> = ({ resources, rangeFrom, rangeTo, 
   if (resources.length === 0) {
     return (
       <p className="text-muted-foreground text-sm text-center py-12">
-        Нет ресурсов с задачами в выбранном периоде. Измените период или фильтры.
+        {t('tasks.pages.resources.empty',
+          'Нет ресурсов с задачами в выбранном периоде. Измените период или фильтры.')}
       </p>
     );
   }
@@ -81,14 +77,15 @@ export const ResourceGantt: React.FC<Props> = ({ resources, rangeFrom, rangeTo, 
     <div className="w-full">
       {/* Легенда */}
       <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-        {Object.entries(STATUS_LABELS).map(([k, label]) => (
-          <span key={k} className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-sm" style={{ background: STATUS_COLORS[k] }} />
-            {label}
+        {TASK_STATUS_ORDER.map((s) => (
+          <span key={s} className="inline-flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm" style={{ background: statusHex(s) }} />
+            {statusLabel(s, t)}
           </span>
         ))}
         <span className="inline-flex items-center gap-1.5 opacity-80">
-          <span className="h-2.5 w-2.5 rounded-sm bg-black/25" /> остаток (по прогрессу)
+          <span className="h-2.5 w-2.5 rounded-sm bg-black/25" />
+          {t('tasks.pages.resources.legendRemaining', 'остаток (по прогрессу)')}
         </span>
       </div>
 
@@ -97,7 +94,7 @@ export const ResourceGantt: React.FC<Props> = ({ resources, rangeFrom, rangeTo, 
           {/* Шапка с месяцами */}
           <div className="flex border-b bg-muted/40">
             <div style={{ width: LABEL_W }} className="shrink-0 px-3 py-2 text-xs font-medium text-muted-foreground">
-              Ресурс
+              {t('tasks.pages.resources.resourceColumn', 'Ресурс')}
             </div>
             <div className="relative flex-1 h-9">
               {ticks.map((tk, i) => (
@@ -119,7 +116,7 @@ export const ResourceGantt: React.FC<Props> = ({ resources, rangeFrom, rangeTo, 
               <div key={r.resource_id}>
                 {groupHeader && (
                   <div className="flex items-center gap-2 border-b bg-muted/60 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-foreground">
-                    <Icon className="h-3.5 w-3.5" /> {Meta.label}
+                    <Icon className="h-3.5 w-3.5" /> {t(Meta.labelKey)}
                   </div>
                 )}
                 <div className="flex items-center border-b hover:bg-muted/30 transition-colors">
@@ -136,29 +133,29 @@ export const ResourceGantt: React.FC<Props> = ({ resources, rangeFrom, rangeTo, 
                     {todayLeft !== null && (
                       <div className="absolute top-0 h-full w-px bg-red-500/60 z-0" style={{ left: `${todayLeft}%` }} />
                     )}
-                    {r.allocated_tasks.map((t) => {
-                      const s = parseDate(t.start_date);
-                      const e = parseDate(t.end_date) ?? s;
+                    {r.allocated_tasks.map((task) => {
+                      const s = parseDate(task.start_date);
+                      const e = parseDate(task.end_date) ?? s;
                       if (!s || !e) return null;
                       const left = clamp((differenceInCalendarDays(s, start) / totalDays) * 100);
                       const rawW = (Math.max(1, differenceInCalendarDays(e, start)) / totalDays) * 100;
                       const width = Math.max(clamp(rawW) - left, 0.6);
-                      const color = STATUS_COLORS[t.status] || '#8884d8';
+                      const color = statusHex(task.status);
                       const tooltip =
-                        `${t.key} · ${t.title}\n${STATUS_LABELS[t.status] || t.status}\n` +
+                        `${task.key} · ${task.title}\n${statusLabel(task.status, t)}\n` +
                         `${format(s, 'dd.MM.yyyy')} — ${format(e, 'dd.MM.yyyy')}`;
                       return (
                         <div
-                          key={t.task_id}
-                          onClick={() => onTaskClick?.(t.task_id)}
+                          key={task.task_id}
+                          onClick={() => onTaskClick?.(task.task_id)}
                           title={tooltip}
                           className="absolute top-1/2 -translate-y-1/2 h-5 rounded-md shadow-sm overflow-hidden cursor-pointer z-[1] flex items-center"
                           style={{ left: `${left}%`, width: `${width}%`, background: color, minWidth: 8 }}
                         >
-                          <span className="truncate px-1.5 text-[10px] font-medium text-white/95">{t.key}</span>
+                          <span className="truncate px-1.5 text-[10px] font-medium text-white/95">{task.key}</span>
                           {/* остаток работы по прогрессу */}
                           <span className="absolute right-0 top-0 h-full bg-black/25"
-                            style={{ width: `${(1 - t.progress) * 100}%` }} />
+                            style={{ width: `${(1 - task.progress) * 100}%` }} />
                         </div>
                       );
                     })}

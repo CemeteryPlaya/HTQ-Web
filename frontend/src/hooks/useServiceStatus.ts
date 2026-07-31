@@ -2,13 +2,18 @@
  * hooks/useServiceStatus.ts
  *
  * Reads the service on/off registry from `GET /api/core/v1/services/`
- * (Task 0.5 — Django `core` app / ServiceGateMiddleware). The Django
- * backend isn't in the request path yet (Phase 0 is backend-only so far),
- * so this endpoint 404s/fails today. The hook MUST degrade gracefully:
- * any request failure (404, network error, CORS, timeout, …) falls back to
- * `DEFAULT_SERVICE_STATUSES` — never blocks rendering, never retries, never
- * touches the auth/refresh/logout flow (that lives entirely in
- * `api/client.ts`'s interceptor and only reacts to 401/403).
+ * (Django `core` app / ServiceGateMiddleware). That endpoint is live — the
+ * note that used to sit here, saying the Django backend "isn't in the
+ * request path yet" and that this always 404s, predates the cutover and was
+ * itself the reason a real gap went unnoticed: the dev server had no proxy
+ * rule for `/api/core/`, so the request never left Vite. Fixed in
+ * `vite.config.ts`; prod always worked via nginx's generic `location /api/`.
+ *
+ * The hook still MUST degrade gracefully: any request failure (404, network
+ * error, CORS, timeout, …) falls back to `DEFAULT_SERVICE_STATUSES` — never
+ * blocks rendering, never retries, never touches the auth/refresh/logout
+ * flow (that lives entirely in `api/client.ts`'s interceptor and only reacts
+ * to 401/403).
  */
 
 import { useQuery } from '@tanstack/react-query';

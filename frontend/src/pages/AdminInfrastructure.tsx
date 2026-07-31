@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import {
     Activity,
     AlertCircle,
-    ArrowLeft,
     CheckCircle2,
     Copy,
     Database,
@@ -17,11 +15,11 @@ import {
     Loader2,
     Lock,
     ServerCog,
-    ShieldCheck,
-} from 'lucide-react';
+    ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 
 import api from '@/api/client';
+import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import MonitoringWidget from '@/components/profile/MonitoringWidget';
@@ -353,13 +351,7 @@ const AdminInfrastructure = () => {
             <Header />
             <main className="flex-1 container mx-auto px-4 py-8">
                 <div className="mb-6 flex flex-col gap-4">
-                    <Link
-                        to="/myprofile"
-                        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
-                    >
-                        <ArrowLeft className="h-4 w-4" />
-                        Назад в профиль
-                    </Link>
+                    <BackToProfile />
 
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                         <div>

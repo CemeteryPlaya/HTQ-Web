@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
+import { BackToProfile } from '@/components/BackToProfile';
 import { type HRLevel, useHRLevel } from '@/hooks/useHRLevel';
 import {
   Users,
@@ -11,7 +12,6 @@ import {
   FileText,
   Clock,
   ClipboardList,
-  ArrowLeft,
   History,
   Handshake,
   Archive,
@@ -58,13 +58,7 @@ export const HRLayout: React.FC<Props> = ({ title, subtitle, children }) => {
       <main className="flex-1">
         <div className="container mx-auto px-4 py-8">
           <div className="mb-6 flex flex-col gap-4">
-            <Link
-              to="/myprofile"
-              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              {t('hr.backToMain')}
-            </Link>
+            <BackToProfile className="mb-0" />
 
             <div>
               <div className="text-sm uppercase tracking-[0.3em] text-muted-foreground">{t('hr.title')}</div>

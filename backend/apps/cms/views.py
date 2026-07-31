@@ -26,6 +26,7 @@ from pydantic import ValidationError
 from htqweb.http import _authenticate_jwt, api_view, json_error
 
 from . import schemas
+from . import tasks
 from .services import audit
 from .services import conference_service
 from .services import contact_requests_service as svc
@@ -305,6 +306,32 @@ def _delete_news(request, news_id: int):
         changes={"slug": slug},
     )
     return HttpResponse(status=204)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.NewsTranslateRequest,
+          status=202, admin=True)
+def translate_news(request, news_id: int, data: schemas.NewsTranslateRequest):
+    """Порт ``services/cms/app/api/v1/news.py::translate_news`` — единственный
+    роут news.py, не перенесённый в фазу cutover'а: сама фоновая работа
+    приехала (``apps.cms.tasks.translate_news``, порт ``workers/actors.py``),
+    а ставящий её в очередь HTTP-эндпойнт — нет, из-за чего кнопка перевода
+    во ``frontend/src/pages/NewsDetail.tsx`` получала 404, а ported-таск
+    оставался недостижим.
+
+    Контракт источника воспроизведён как есть: ``require_admin`` ->
+    ``admin=True``, 404 на несуществующую новость, 202 + ``{task_id, news_id,
+    target, status}``. Ответ ОСОЗНАННО асинхронный (никакого
+    ``translated_title``/``translated_content`` в теле) — ровно как у
+    источника; фронт эту ветку уже умеет («Перевод поставлен в очередь»)."""
+    news = news_svc.get_news_for_admin_or_404(news_id)
+    result = tasks.translate_news.delay(news.id, data.target)
+    logger.info(
+        "translate_news enqueued: news_id=%d target=%s task_id=%s by=%s",
+        news.id, data.target, result.id, request.token.user_id,
+    )
+    return schemas.NewsTranslateResponse(
+        task_id=str(result.id), news_id=news.id, target=data.target,
+    )
 
 
 @csrf_exempt

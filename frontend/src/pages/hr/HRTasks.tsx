@@ -25,34 +25,22 @@ import {
 } from 'lucide-react';
 import {
   fetchTasks, createTask, deleteTask, updateTask,
-  fetchLabels, fetchProjects, fetchTaskTypes,
+  fetchLabels, fetchProjects, fetchSites, fetchTaskTypes, fetchContractors,
 } from '@/api/tasks';
 import { fetchDepartments, fetchEmployeeUsers } from '@/api/hr';
 import api from '@/api/client';
 import { KanbanBoard } from '@/components/tasks/KanbanBoard';
 import { CreateTaskModal } from '@/components/tasks/CreateTaskModal';
-import type { TaskPriority, TaskStatus } from '@/types/tasks';
+import {
+  TASK_STATUS_ORDER, statusBadgeClass, statusLabel,
+} from '@/lib/tasks/status';
+import {
+  TASK_PRIORITY, TASK_PRIORITY_ORDER, priorityLabel,
+} from '@/lib/tasks/priority';
+import type { TaskStatus } from '@/types/tasks';
 import type { UserProfile } from '@/types/userProfile';
 
 /* ---- Constants ---- */
-
-const PRIORITY_CONFIG: Record<TaskPriority, { color: string; icon: string }> = {
-  critical: { color: 'bg-red-500 text-white', icon: '🔴' },
-  high: { color: 'bg-orange-500 text-white', icon: '🟠' },
-  medium: { color: 'bg-yellow-500 text-black', icon: '🟡' },
-  low: { color: 'bg-blue-500 text-white', icon: '🔵' },
-  trivial: { color: 'bg-gray-400 text-white', icon: '⚪' },
-};
-
-const STATUS_CONFIG: Record<TaskStatus, { color: string }> = {
-  backlog: { color: 'bg-slate-400 text-white' },
-  todo: { color: 'bg-slate-600 text-white' },
-  in_progress: { color: 'bg-blue-600 text-white' },
-  in_review: { color: 'bg-purple-500 text-white' },
-  blocked: { color: 'bg-red-500 text-white' },
-  done: { color: 'bg-green-500 text-white' },
-  cancelled: { color: 'bg-gray-600 text-white' },
-};
 
 // Keyed by slug; custom (user-defined) types fall back to a color dot.
 const TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -79,6 +67,10 @@ const HRTasks: React.FC = () => {
   const [supervisorFilter, setSupervisorFilter] = useState<string>('all');
   // 'all' | 'standalone' | '<projectId>'
   const [projectFilter, setProjectFilter] = useState<string>('all');
+  // 'all' | 'none' | '<siteId>' — объект работ (Алга, Сазаган, ...)
+  const [siteFilter, setSiteFilter] = useState<string>('all');
+  // 'all' | 'own' | '<contractorId>' — кто выполняет
+  const [contractorFilter, setContractorFilter] = useState<string>('all');
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'board'>('board');
 
@@ -95,6 +87,10 @@ const HRTasks: React.FC = () => {
   if (supervisorFilter !== 'all') params.supervisor = supervisorFilter;
   if (projectFilter === 'standalone') params.standalone = 'true';
   else if (projectFilter !== 'all') params.project = projectFilter;
+  if (siteFilter === 'none') params.no_site = 'true';
+  else if (siteFilter !== 'all') params.site_id = siteFilter;
+  if (contractorFilter === 'own') params.own_crew = 'true';
+  else if (contractorFilter !== 'all') params.contractor_id = contractorFilter;
 
   const { data: tasks = [], isLoading, error } = useQuery({
     queryKey: ['hr-tasks', params],
@@ -109,6 +105,16 @@ const HRTasks: React.FC = () => {
   const { data: projects = [] } = useQuery({
     queryKey: ['hr-projects'],
     queryFn: () => fetchProjects(),
+  });
+
+  const { data: sites = [] } = useQuery({
+    queryKey: ['sites'],
+    queryFn: () => fetchSites(),
+  });
+
+  const { data: contractors = [] } = useQuery({
+    queryKey: ['contractors'],
+    queryFn: () => fetchContractors({ status: 'active' }),
   });
 
   const { data: taskTypes = [] } = useQuery({
@@ -174,8 +180,8 @@ const HRTasks: React.FC = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t('tasks.pages.list.allStatuses')}</SelectItem>
-                {Object.keys(STATUS_CONFIG).map((k) => (
-                  <SelectItem key={k} value={k}>{t(`tasks.pages.list.status.${k}`)}</SelectItem>
+                {TASK_STATUS_ORDER.map((k) => (
+                  <SelectItem key={k} value={k}>{statusLabel(k, t)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -186,8 +192,10 @@ const HRTasks: React.FC = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t('tasks.pages.list.allPriorities')}</SelectItem>
-                {Object.entries(PRIORITY_CONFIG).map(([k, v]) => (
-                  <SelectItem key={k} value={k}>{v.icon} {t(`tasks.pages.list.priority.${k}`)}</SelectItem>
+                {TASK_PRIORITY_ORDER.map((k) => (
+                  <SelectItem key={k} value={k}>
+                    {TASK_PRIORITY[k].icon} {priorityLabel(k, t)}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -254,6 +262,46 @@ const HRTasks: React.FC = () => {
                         {p.name}
                       </span>
                     </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={siteFilter} onValueChange={setSiteFilter}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder={t('tasks.pages.sites.title', 'Объект')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">
+                    {t('tasks.pages.sites.allSites', 'Все объекты')}
+                  </SelectItem>
+                  <SelectItem value="none">
+                    {t('tasks.pages.sites.withoutSite', 'Без объекта')}
+                  </SelectItem>
+                  {sites.map((s) => (
+                    <SelectItem key={s.id} value={String(s.id)}>
+                      <span className="inline-flex items-center gap-2">
+                        <span className="inline-block h-2 w-2 rounded-full"
+                          style={{ backgroundColor: s.color }} />
+                        {s.name}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={contractorFilter} onValueChange={setContractorFilter}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder={t('tasks.pages.contractors.one', 'Подрядчик')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">
+                    {t('tasks.pages.contractors.allPerformers', 'Все исполнители')}
+                  </SelectItem>
+                  <SelectItem value="own">
+                    {t('tasks.pages.contractors.ownCrew', 'Своя команда')}
+                  </SelectItem>
+                  {contractors.map((c) => (
+                    <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -375,14 +423,14 @@ const HRTasks: React.FC = () => {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge className={STATUS_CONFIG[task.status]?.color || ''}>
-                          {t(`tasks.pages.list.status.${task.status}`) || task.status}
+                        <Badge className={statusBadgeClass(task.status)}>
+                          {statusLabel(task.status, t)}
                         </Badge>
                       </TableCell>
                       <TableCell>
                         <span className="text-sm">
-                          {PRIORITY_CONFIG[task.priority]?.icon}{' '}
-                          {t(`tasks.pages.list.priority.${task.priority}`) || task.priority}
+                          {TASK_PRIORITY[task.priority]?.icon}{' '}
+                          {priorityLabel(task.priority, t)}
                         </span>
                       </TableCell>
                       <TableCell className="text-sm">

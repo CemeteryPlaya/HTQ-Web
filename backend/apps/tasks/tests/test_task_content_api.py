@@ -13,7 +13,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 
 from apps.tasks.models import (
-    Equipment, LinkType, Task, TaskActivity, TaskAssignment, TaskAttachment,
+    Equipment, LinkType, Task, TaskActivity, ResourceAllocation, TaskAttachment,
     TaskComment, TaskLink,
 )
 
@@ -65,13 +65,20 @@ def test_self_link_is_rejected_by_the_schema():
 
 
 @pytest.mark.django_db
-def test_link_to_missing_task_is_400():
+def test_link_to_missing_task_is_404():
+    """Contract change from the FastAPI original, which answered 400.
+
+    Both endpoints of a link are now visibility-checked, and a task the
+    caller cannot see must be indistinguishable from one that does not
+    exist — otherwise the status code alone tells an outsider which task
+    ids are real. 404 for both is the answer that leaks nothing.
+    """
     a = _mk_task()
     resp = post_json(Client(), f"{BASE}/task-links/",
                      {"source_id": a.id, "target_id": 9999,
                       "link_type": "blocks"}, **auth())
-    assert resp.status_code == 400
-    assert "not found" in resp.json()["detail"]
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"].lower()
 
 
 @pytest.mark.django_db
@@ -272,13 +279,13 @@ def test_list_assignments_requires_task_id():
 @pytest.mark.django_db
 def test_list_and_delete_assignments():
     task = _mk_task()
-    row = TaskAssignment.objects.create(task=task, employee_id=11)
+    row = ResourceAllocation.objects.create(task=task, employee_id=11)
     resp = Client().get(f"{BASE}/assignments/?task_id={task.id}", **auth())
     assert [a["id"] for a in resp.json()] == [row.id]
 
     assert Client().delete(f"{BASE}/assignments/{row.id}",
                            **auth()).status_code == 204
-    assert not TaskAssignment.objects.filter(pk=row.id).exists()
+    assert not ResourceAllocation.objects.filter(pk=row.id).exists()
 
 
 @pytest.mark.django_db

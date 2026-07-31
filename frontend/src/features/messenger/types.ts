@@ -2,17 +2,27 @@
  * Messenger feature — TypeScript types
  */
 
+/** What `/api/messenger/v1/users/{me,search}` actually returns is the platform
+ * user brief (`apps.users.interface.list_users_brief`): `id`, `username`,
+ * `email`, `first_name`, `last_name`, `full_name`, `is_active`. Everything
+ * below that isn't in that list is optional — it came from the retired
+ * `ChatUserReplica` and is simply absent today. In particular there is no
+ * `user_id` alias: always read the numeric id via `uidOf()`. */
 export interface ChatUser {
     id: number;
-    user_id: number;
+    user_id?: number;
     username: string;
     full_name: string;
-    avatar_url: string;
-    department_path: string;
-    department_name: string;
-    position_title: string;
-    is_online: boolean;
-    last_seen: string;
+    email?: string | null;
+    first_name?: string;
+    last_name?: string;
+    is_active?: boolean;
+    avatar_url?: string;
+    department_path?: string;
+    department_name?: string;
+    position_title?: string;
+    is_online?: boolean;
+    last_seen?: string;
     /** True for system bots (Календарь / Задачи / Почта / Файлы / Новости).
      * Frontend renders a BOT badge and pins these DMs to the top of the
      * chat list. */
@@ -31,6 +41,15 @@ export interface ChatMembership {
     last_read_at: string | null;
 }
 
+/** Snapshot of the quoted message, stored server-side at send time
+ *  (metadata_json.reply_to) — survives deletion/edits of the original. */
+export interface ReplySnapshot {
+    id: string;
+    sender_id: number | null;
+    sender_name?: string | null;
+    preview: string;
+}
+
 export interface ChatMessage {
     id: number | string;
     room?: number;
@@ -45,8 +64,11 @@ export interface ChatMessage {
     pts?: number;
     pts_count?: number;
     seq_no: number | null;
-    reply_to: number | null;
+    reply_to?: ReplySnapshot | null;
     is_edited: boolean;
+    /** Tombstone: the author (or a group admin) removed it. Content and
+     *  attachments arrive blanked; the admin view still sees the original. */
+    is_deleted?: boolean;
     created_at: string;
     attachments?: ChatAttachment[];
     // Client-side decoded content (after decryption or direct decode)
@@ -84,6 +106,13 @@ export interface SendMessagePayload {
     is_encrypted?: boolean;
     metadata_json?: any;
     attachment_ids?: string[];
+    /** Id of the message being quoted — the backend builds the snapshot. */
+    reply_to?: string | null;
+}
+
+export interface PresenceEntry {
+    online: boolean;
+    last_seen: string | null;
 }
 
 export interface ChatAttachment {

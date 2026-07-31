@@ -1,8 +1,9 @@
-"""Comments, attachments, activity and resource assignments.
+"""Comments, attachments, activity and per-task work volumes.
 
 Ported from ``services/task/app/api/v1/{comments,attachments,activity,
 assignments}.py`` plus the comment/attachment endpoints that live on the
-main tasks router.
+main tasks router. Назначения ресурсов, которые сюда тоже попали при
+переносе, с появлением плана уехали в ``resource_service``.
 
 A note on the original's duplicates: ``comments.py`` and ``attachments.py``
 each registered a second, slash-less pair of routes on the same ``/tasks``
@@ -16,10 +17,14 @@ their paths are still registered (see ``urls.py``) and answer from here.
 
 from __future__ import annotations
 
+from django.db import transaction
 from django.http import Http404
 
 from .. import schemas
-from ..models import Equipment, Task, TaskActivity, TaskAssignment, TaskAttachment, TaskComment
+from ..models import (Task, TaskActivity, TaskAttachment, TaskComment,
+                      TaskVolume)
+from . import block_service
+from . import daily_report_service
 from . import hydration
 
 
@@ -106,41 +111,64 @@ def list_activity(task_id: int) -> list[schemas.ActivityResponse]:
     }) for row in rows]
 
 
-# ── resource assignments ────────────────────────────────────────────────
+# ── объёмы работ по задаче ──────────────────────────────────────────────
 
-def list_assignments(task_id: int) -> list[schemas.AssignmentResponse]:
-    return [_assignment_payload(row) for row in
-            TaskAssignment.objects.filter(task_id=task_id).order_by("id")]
+def list_task_volumes(task_id: int) -> list[dict]:
+    """Плановые объёмы задачи вместе с фактом, посчитанным из отчётов.
 
-
-def _assignment_payload(row: TaskAssignment) -> schemas.AssignmentResponse:
-    return schemas.AssignmentResponse.model_validate({
-        "id": row.id, "task_id": row.task_id, "employee_id": row.employee_id,
-        "equipment_id": row.equipment_id, "role": row.role,
-        "allocation": row.allocation,
-    })
-
-
-def create_assignment(data: schemas.AssignmentCreate) -> schemas.AssignmentResponse:
-    """Exactly one of employee/equipment, enforced here AND by a DB CHECK.
-
-    The application check exists to produce the original's 422 with a useful
-    message; the constraint exists so no other write path can violate it.
+    Факт приезжает свёрткой ``DailyReport``, а не колонкой рядом с планом:
+    у отчёта есть дата выполнения и автор, и хранить его копию значило бы
+    завести второй источник правды (см. докстринг ``TaskVolume``).
     """
-    has_employee = data.employee_id is not None
-    has_equipment = data.equipment_id is not None
-    if has_employee == has_equipment:
-        raise ValueError("Provide exactly one of employee_id or equipment_id")
-    _require_task(data.task_id)
-    if has_equipment and not Equipment.objects.filter(
-            pk=data.equipment_id).exists():
-        raise Http404("Equipment not found")
-    row = TaskAssignment.objects.create(**data.model_dump())
-    return _assignment_payload(row)
+    rows = list(TaskVolume.objects.filter(task_id=task_id)
+                .select_related("volume_type").order_by("volume_type__name"))
+    done = daily_report_service.completed_by_volume_type(task_ids=[task_id])
+    return [build_task_volume(row,
+                              completed=done.get((task_id, row.volume_type_id)))
+            for row in rows]
 
 
-def delete_assignment(assignment_id: int) -> None:
-    row = TaskAssignment.objects.filter(pk=assignment_id).first()
-    if row is None:
-        raise Http404("Assignment not found")
-    row.delete()
+def build_task_volume(row: TaskVolume, *, completed=None) -> dict:
+    return {
+        "id": row.id,
+        "task_id": row.task_id,
+        "volume_type_id": row.volume_type_id,
+        "volume_type_name": row.volume_type.name,
+        "unit": str(row.volume_type.unit),
+        "planned_quantity": float(row.planned_quantity),
+        "completed_quantity": float(completed or 0),
+    }
+
+
+@transaction.atomic
+def set_task_volumes(task_id: int, volumes: list[dict]) -> list[dict]:
+    """Заменить набор объёмов задачи целиком.
+
+    Тот же контракт «полный список», что у ``block_service.set_block_volumes``
+    и ``site_service.set_project_sites``: форма присылает всё, сервер не
+    заставляет её вычислять разницу.
+
+    Здесь ТОЛЬКО план. Факт правится ежедневными отчётами
+    (``daily_report_service``) и в это тело не приходит: у него есть дата
+    выполнения и автор, которых у строки объёма быть не может.
+    """
+    _require_task(task_id)
+    wanted = {v["volume_type_id"]: v for v in volumes}
+    # ValueError -> 422. Явно, а не через FK: нарушение внешнего ключа
+    # поднимается на коммите, уже за пределами вьюхи (см. докстринг
+    # ``block_service.require_volume_types``).
+    block_service.require_volume_types(wanted)
+
+    TaskVolume.objects.filter(task_id=task_id).exclude(
+        volume_type_id__in=wanted).delete()
+    for type_id, payload in wanted.items():
+        TaskVolume.objects.update_or_create(
+            task_id=task_id, volume_type_id=type_id,
+            defaults={"planned_quantity": payload["planned_quantity"]},
+        )
+    return list_task_volumes(task_id)
+
+
+# Назначения ресурсов переехали в ``resource_service``: вместе с планом
+# (``ResourceRequirement``) это самостоятельный сюжет, а здесь они лежали за
+# компанию с комментариями и вложениями.

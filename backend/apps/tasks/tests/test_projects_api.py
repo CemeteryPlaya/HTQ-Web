@@ -14,6 +14,9 @@ from apps.tasks.models import Project, ProjectStatus, Status, Task
 from .helpers import BASE, admin_token, auth, patch_json, post_json
 
 USER = 7
+# helpers.admin_token() issues user_id=9 — the caller in every admin-gated
+# case below (project creation, and editing a project one does not own).
+ADMIN = 9
 
 
 def _mk_task(project, status=Status.TODO, **over):
@@ -30,10 +33,10 @@ def test_projects_require_auth():
 @pytest.mark.django_db
 def test_create_project_defaults_owner_to_caller():
     resp = post_json(Client(), f"{BASE}/projects/", {"name": "Roadmap"},
-                     **auth())
+                     **auth(admin_token()))
     assert resp.status_code == 201
     body = resp.json()
-    assert body["owner_id"] == USER
+    assert body["owner_id"] == ADMIN
     assert body["status"] == ProjectStatus.ACTIVE
     assert body["color"] == "#3b82f6"
     assert body["task_count"] == 0
@@ -43,14 +46,15 @@ def test_create_project_defaults_owner_to_caller():
 @pytest.mark.django_db
 def test_create_project_respects_explicit_owner():
     resp = post_json(Client(), f"{BASE}/projects/",
-                     {"name": "P", "owner_id": 55}, **auth())
+                     {"name": "P", "owner_id": 55}, **auth(admin_token()))
     assert resp.json()["owner_id"] == 55
 
 
 @pytest.mark.django_db
 def test_project_name_must_be_unique():
     Project.objects.create(name="Dup")
-    resp = post_json(Client(), f"{BASE}/projects/", {"name": "Dup"}, **auth())
+    resp = post_json(Client(), f"{BASE}/projects/", {"name": "Dup"},
+                     **auth(admin_token()))
     # A unique-violation is an unhandled DB error -> the 500 envelope, which
     # is exactly what the FastAPI original produced (it had no 409 branch).
     assert resp.status_code == 500
@@ -113,14 +117,17 @@ def test_project_out_of_scope_is_404():
 
 @pytest.mark.django_db
 def test_update_and_delete_project():
+    """Editing now needs scope + ownership; the owner-who-is-not-admin case
+    lives in test_permissions.py, where the department resolver is stubbed."""
     project = Project.objects.create(name="Old")
     resp = patch_json(Client(), f"{BASE}/projects/{project.id}/",
-                      {"name": "New", "status": "archived"}, **auth())
+                      {"name": "New", "status": "archived"},
+                      **auth(admin_token()))
     assert resp.status_code == 200
     assert resp.json()["status"] == "archived"
 
     assert Client().delete(f"{BASE}/projects/{project.id}/",
-                           **auth()).status_code == 204
+                           **auth(admin_token())).status_code == 204
     assert not Project.objects.filter(pk=project.id).exists()
 
 
@@ -129,7 +136,7 @@ def test_deleting_a_project_leaves_its_tasks_standalone():
     """FK is SET_NULL — the tasks survive without a project."""
     project = Project.objects.create(name="Doomed")
     task = _mk_task(project)
-    Client().delete(f"{BASE}/projects/{project.id}/", **auth())
+    Client().delete(f"{BASE}/projects/{project.id}/", **auth(admin_token()))
     task.refresh_from_db()
     assert task.project_id is None
     assert task.is_deleted is False

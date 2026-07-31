@@ -135,6 +135,9 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     const editor = hasAnyRole(roles, EDITOR_ROLES);
     const hrManager = hasAnyRole(roles, HR_ROLES);
     const admin = hasAnyRole(roles, ADMIN_ROLES);
+    // Same predicate the task routes gate on (RequireAuth's ALWAYS_ALLOWED
+    // bucket): admin / superuser / staff.
+    const elevated = hasAnyRole(roles, STAFF_OR_ADMIN_ROLES);
     const hasTasksAccess = hasEmployeeTaskAccessFromParts(roles, department, position);
     const { level, hasHrAccess } = useHRLevel({ enabled: Boolean(roles?.length) });
     const showHrItem = (levels: string[]) => admin || !hasHrAccess || (level ? levels.includes(level) : false);
@@ -184,10 +187,20 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
             <SidebarSection title={t('profile.sidebar.sectionWork', 'Работа')}>
                 <SidebarItem to="/calendar" icon={Calendar} label={t('profile.sidebar.calendar', 'Календарь')} />
                 <SidebarItem to="/files" icon={FolderClosed} label={t('profile.sidebar.departmentFiles', 'Файлы отдела')} />
-                {hasTasksAccess && (
+                {hasTasksAccess && <SidebarItem to="/tasks" icon={CheckSquare} label={t('tasks.nav.tasks')} />}
+                {/* Roadmap and reports show the whole company's load, so they
+                    carry requiresRole='hr' on their routes. Offering them to a
+                    regular employee would just bounce them to /myprofile. */}
+                {hasTasksAccess && elevated && (
                     <>
-                        <SidebarItem to="/tasks" icon={CheckSquare} label={t('tasks.nav.tasks')} />
                         <SidebarItem to="/tasks/roadmap" icon={MapIcon} label={t('tasks.nav.roadmap')} />
+                        {/* Despite the /manage/ path this is a tasks page, not a
+                            CMS one: it manages apps.tasks projects and their
+                            objects. It used to sit under «Контент» next to the
+                            news editor, where a content editor could open it but
+                            got 403 from every action, and an admin without the
+                            editors role never saw it. */}
+                        <SidebarItem to="/manage/projects" icon={Layers} label={t('tasks.nav.projects', 'Проекты')} />
                         <SidebarItem to="/tasks/reports" icon={BarChart3} label={t('tasks.nav.reports')} />
                     </>
                 )}
@@ -198,7 +211,6 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
             {editor && (
                 <SidebarSection title={t('profile.sidebar.editor')}>
                     <SidebarItem to="/manage/news" icon={Newspaper} label={t('profile.sidebar.manageNews')} />
-                    <SidebarItem to="/manage/projects" icon={Layers} label={t('profile.sidebar.manageProjects')} />
                     <SidebarItem
                         to="/manage/contacts"
                         icon={Inbox}

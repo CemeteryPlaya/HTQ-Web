@@ -23,8 +23,8 @@ x-django-env: &django-env
   # Django (psycopg, sync) идёт НАПРЯМУЮ в Postgres: CONN_MAX_AGE пулит на уровне
   # приложения, а PgBouncer transaction-mode рвал бы DDL/prepared-statements.
   # Контейнер pgbouncer (:6432) остаётся для хостовых утилит/совместимости.
-  DB_HOST: db
-  DB_PORT: "5432"
+  DB_HOST: ${DB_HOST:-db}
+  DB_PORT: ${DB_PORT:-5432}
   DB_NAME: ${DB_NAME:-htqweb}
   DB_USER: ${DB_USER:-htqweb}
   DB_PASSWORD: ${DB_PASSWORD:-change-me}
@@ -216,7 +216,11 @@ services:
     restart: unless-stopped
     environment:
       <<: *django-env
-      RUN_MIGRATIONS: "1"
+      # Только `manage.py migrate`. На боевой БД держим 0 (см. корневой .env).
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
+      # collectstatic + бакеты хранилища + сид админа — к схеме БД отношения
+      # не имеют и нужны при каждом старте, поэтому НЕ зависят от флага выше.
+      RUN_BOOTSTRAP: ${RUN_BOOTSTRAP:-1}
     command: ["gunicorn", "htqweb.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "60"]
     ports:
       - "8000:8000"
