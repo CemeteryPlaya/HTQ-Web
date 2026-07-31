@@ -259,6 +259,10 @@ export interface ApprovalProcess {
   subject_facts: Record<string, unknown>;
   subject_title: string | null;
   subject_url: string | null;
+  /** Имя инициатора, развёрнутое бэкендом через apps.users. Может быть null,
+   *  если инициатор неизвестен или пользователь удалён — тогда остаётся
+   *  только `initiator_id`. */
+  initiator_name: string | null;
 }
 
 /** Строка списка «ждёт моего решения». */

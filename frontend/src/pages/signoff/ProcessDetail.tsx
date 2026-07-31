@@ -37,7 +37,16 @@
 import { Suspense, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Check, ExternalLink, Loader2, Undo2, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  Check,
+  ChevronDown,
+  ExternalLink,
+  Loader2,
+  Undo2,
+  User,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { SIGNOFF_SUBJECT_VIEWS } from '@/app/signoffSubjectViews';
@@ -55,6 +64,13 @@ import { labelMap } from '@/components/signoff/labels';
 import { reportApiError } from '@/components/signoff/apiError';
 import { Button } from '@/components/ui/button';
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -63,7 +79,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -187,6 +202,9 @@ const ProcessDetail = () => {
 
   const [reworkOpen, setReworkOpen] = useState(false);
   const [reworkComment, setReworkComment] = useState('');
+  // Диалоги отзыва и возврата открываются из общего меню «Действия», поэтому
+  // их состояние управляется здесь, а не через `AlertDialogTrigger`.
+  const [cancelOpen, setCancelOpen] = useState(false);
 
   const rework = useMutation({
     mutationFn: () =>
@@ -249,6 +267,18 @@ const ProcessDetail = () => {
               {process.finished_at
                 && ` · завершено ${formatMoment(process.finished_at)}`}
             </p>
+            {/* Кто отправил объект на согласование. Имя разворачивает бэкенд;
+                если пользователь удалён или неизвестен — остаётся id. */}
+            {process.initiator_id !== null && (
+              <p className="mt-1 inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+                <User className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                Инициатор:{' '}
+                <span className="font-medium text-foreground">
+                  {process.initiator_name
+                    ?? `Пользователь #${process.initiator_id}`}
+                </span>
+              </p>
+            )}
           </div>
 
           {/* Документ — основное содержимое, ход согласования — панель рядом.
@@ -263,54 +293,95 @@ const ProcessDetail = () => {
             <aside className="min-w-0 space-y-4 lg:order-2 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pb-2">
               {(myPending || canCancel || canRework) && (
                 <div className="flex flex-wrap gap-2">
-                  {myPending && (
-                    <>
+                  {/* Все действия над согласованием собраны в одно меню
+                      «Действия»: у согласующего-администратора их набирается
+                      до четырёх, и ряд одинаковых кнопок читается хуже, чем
+                      список с явными подписями. */}
+                  {/* modal={false}: модальное меню держит на body scroll-lock
+                      с `pointer-events: none`; открытый из его пункта диалог
+                      добавляет свой, и при закрытии диалога блокировка body
+                      остаётся — страница перестаёт кликаться. */}
+                  <DropdownMenu modal={false}>
+                    <DropdownMenuTrigger asChild>
                       <Button
-                        onClick={() =>
-                          setTarget({
-                            taskId: myPending.task.id,
-                            kind: 'approve',
-                            subjectLabel,
-                            requiresAttachment: myPending.stage.requires_attachment,
-                            attachedFileId: myPending.task.file_id,
-                          })
-                        }
+                        className="w-full justify-between"
+                        disabled={cancel.isPending || rework.isPending}
                       >
-                        <Check className="mr-1.5 h-4 w-4" />
-                        Согласовать
+                        {cancel.isPending || rework.isPending ? (
+                          <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                        ) : null}
+                        Действия
+                        <ChevronDown className="ml-1.5 h-4 w-4 opacity-70" />
                       </Button>
-                      {/* Отклонить и вернуть на доработку — РАЗНЫЕ решения:
-                          отклонённый объект остаётся запертым, возвращённый
-                          открывается автору для правки. */}
-                      <Button
-                        variant="outline"
-                        onClick={() =>
-                          setTarget({
-                            taskId: myPending.task.id,
-                            kind: 'rework',
-                            subjectLabel,
-                          })
-                        }
-                      >
-                        <Undo2 className="mr-1.5 h-4 w-4" />
-                        На доработку
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        className="text-destructive hover:text-destructive"
-                        onClick={() =>
-                          setTarget({
-                            taskId: myPending.task.id,
-                            kind: 'reject',
-                            subjectLabel,
-                          })
-                        }
-                      >
-                        <X className="mr-1.5 h-4 w-4" />
-                        Отклонить
-                      </Button>
-                    </>
-                  )}
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-56">
+                      {myPending && (
+                        <>
+                          <DropdownMenuItem
+                            onClick={() =>
+                              setTarget({
+                                taskId: myPending.task.id,
+                                kind: 'approve',
+                                subjectLabel,
+                                requiresAttachment:
+                                  myPending.stage.requires_attachment,
+                                attachedFileId: myPending.task.file_id,
+                              })
+                            }
+                          >
+                            <Check className="mr-2 h-4 w-4" />
+                            Согласовать
+                          </DropdownMenuItem>
+                          {/* Отклонить и вернуть на доработку — РАЗНЫЕ решения:
+                              отклонённый объект остаётся запертым, возвращённый
+                              открывается автору для правки. */}
+                          <DropdownMenuItem
+                            onClick={() =>
+                              setTarget({
+                                taskId: myPending.task.id,
+                                kind: 'rework',
+                                subjectLabel,
+                              })
+                            }
+                          >
+                            <Undo2 className="mr-2 h-4 w-4" />
+                            На доработку
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() =>
+                              setTarget({
+                                taskId: myPending.task.id,
+                                kind: 'reject',
+                                subjectLabel,
+                              })
+                            }
+                          >
+                            <X className="mr-2 h-4 w-4" />
+                            Отклонить
+                          </DropdownMenuItem>
+                        </>
+                      )}
+
+                      {myPending && (canRework || canCancel) && (
+                        <DropdownMenuSeparator />
+                      )}
+
+                      {canRework && (
+                        <DropdownMenuItem onClick={() => setReworkOpen(true)}>
+                          <Undo2 className="mr-2 h-4 w-4" />
+                          Вернуть на доработку
+                        </DropdownMenuItem>
+                      )}
+
+                      {canCancel && (
+                        <DropdownMenuItem onClick={() => setCancelOpen(true)}>
+                          <Undo2 className="mr-2 h-4 w-4" />
+                          Отозвать
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
 
                   {canRework && (
                     <AlertDialog
@@ -320,16 +391,6 @@ const ProcessDetail = () => {
                         if (!open) setReworkComment('');
                       }}
                     >
-                      <AlertDialogTrigger asChild>
-                        <Button variant="outline" disabled={rework.isPending}>
-                          {rework.isPending ? (
-                            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                          ) : (
-                            <Undo2 className="mr-1.5 h-4 w-4" />
-                          )}
-                          Вернуть на доработку
-                        </Button>
-                      </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
                           <AlertDialogTitle>Вернуть на доработку?</AlertDialogTitle>
@@ -373,17 +434,7 @@ const ProcessDetail = () => {
                   )}
 
                   {canCancel && (
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button variant="ghost" disabled={cancel.isPending}>
-                          {cancel.isPending ? (
-                            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                          ) : (
-                            <Undo2 className="mr-1.5 h-4 w-4" />
-                          )}
-                          Отозвать
-                        </Button>
-                      </AlertDialogTrigger>
+                    <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
                       <AlertDialogContent>
                         <AlertDialogHeader>
                           <AlertDialogTitle>Отозвать согласование?</AlertDialogTitle>
@@ -420,7 +471,10 @@ const ProcessDetail = () => {
                   <p className="text-xs text-muted-foreground">
                     {process.subject_type} · id {process.subject_id}
                     {process.initiator_id !== null
-                      && ` · отправил пользователь #${process.initiator_id}`}
+                      && ` · отправил ${
+                        process.initiator_name
+                          ?? `пользователь #${process.initiator_id}`
+                      }`}
                   </p>
                   {!process.subject_title && (
                     <p className="text-xs text-muted-foreground">

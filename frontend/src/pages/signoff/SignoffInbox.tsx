@@ -17,7 +17,14 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Inbox as InboxIcon, Paperclip, Undo2, X } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  Inbox as InboxIcon,
+  Paperclip,
+  Undo2,
+  X,
+} from 'lucide-react';
 
 import { SignoffShell } from '@/components/signoff/SignoffShell';
 import { SubjectLink } from '@/components/signoff/SubjectLink';
@@ -29,6 +36,12 @@ import {
 import { formatMoment } from '@/components/signoff/format';
 import { QUORUM_LABELS } from '@/components/signoff/labels';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -140,33 +153,45 @@ const SignoffInbox = () => {
                     {formatMoment(item.created_at)}
                   </TableCell>
                   <TableCell>
-                    <div className="flex justify-end gap-2">
-                      <Button size="sm" onClick={() => openDecision(item, 'approve')}>
-                        <Check className="mr-1.5 h-4 w-4" />
-                        Согласовать
-                      </Button>
-                      {/* «На доработку» — не мягкий отказ, а другое
-                          последствие: объект открывается автору для правки,
-                          тогда как отклонённый остаётся запертым. Поэтому
-                          кнопки две, и порядок такой: вернуть просят чаще,
-                          чем отказывают насовсем. */}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => openDecision(item, 'rework')}
-                      >
-                        <Undo2 className="mr-1.5 h-4 w-4" />
-                        На доработку
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-destructive hover:text-destructive"
-                        onClick={() => openDecision(item, 'reject')}
-                      >
-                        <X className="mr-1.5 h-4 w-4" />
-                        Отклонить
-                      </Button>
+                    <div className="flex justify-end">
+                      {/* Три решения собраны в одно меню «Действия» — тот же
+                          набор и порядок, что в карточке процесса. «На
+                          доработку» — не мягкий отказ, а другое последствие:
+                          объект открывается автору для правки, тогда как
+                          отклонённый остаётся запертым. */}
+                      {/* modal={false}: модальное меню держит на body scroll-lock
+                          с `pointer-events: none`; открытый из его пункта диалог
+                          добавляет свой, и при закрытии диалога блокировка body
+                          остаётся — страница перестаёт кликаться. */}
+                      <DropdownMenu modal={false}>
+                        <DropdownMenuTrigger asChild>
+                          <Button size="sm">
+                            Действия
+                            <ChevronDown className="ml-1.5 h-4 w-4 opacity-70" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem
+                            onClick={() => openDecision(item, 'approve')}
+                          >
+                            <Check className="mr-2 h-4 w-4" />
+                            Согласовать
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => openDecision(item, 'rework')}
+                          >
+                            <Undo2 className="mr-2 h-4 w-4" />
+                            На доработку
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => openDecision(item, 'reject')}
+                          >
+                            <X className="mr-2 h-4 w-4" />
+                            Отклонить
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </TableCell>
                 </TableRow>

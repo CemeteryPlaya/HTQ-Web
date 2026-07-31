@@ -238,6 +238,9 @@ class ProcessRead(BaseModel):
     # умеет её построить сам и не должен.
     subject_title: Optional[str] = None
     subject_url: Optional[str] = None
+    # Имя инициатора (из apps.users) — только в обогащённой карточке; сосед
+    # через interface получает по-прежнему один initiator_id.
+    initiator_name: Optional[str] = None
 
 
 # ── Решения ─────────────────────────────────────────────────────────────

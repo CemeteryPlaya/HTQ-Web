@@ -35,9 +35,14 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
 
     names: dict[int, dict] = {}
     if enrich:
-        names = _name_map([task.user_id
-                           for stage in stages
-                           for task in stage.tasks.all()])
+        # Инициатор в карту имён идёт наравне с согласующими: карточка
+        # показывает, кто отправил объект, а не только безымянный id.
+        name_ids = [task.user_id
+                    for stage in stages
+                    for task in stage.tasks.all()]
+        if process.initiator_id is not None:
+            name_ids.append(process.initiator_id)
+        names = _name_map(name_ids)
 
     card = {
         "id": process.pk,
@@ -75,6 +80,10 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
         card_info = described.get((process.subject_type, process.subject_id), {})
         card["subject_title"] = card_info.get("title")
         card["subject_url"] = card_info.get("url")
+        card["initiator_name"] = (
+            names.get(process.initiator_id, {}).get("full_name")
+            if process.initiator_id is not None else None
+        ) or None
 
     return card
 
