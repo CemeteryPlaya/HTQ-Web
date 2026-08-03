@@ -178,7 +178,14 @@ describe('EmployeeFormDialog — секции Т-2', () => {
     hasPerm.mockImplementation((key: string) => key !== 'hr.card.financial.view');
     renderDialog(EMPLOYEE);
 
+    // financial здесь скрыта (нет view), так что якорить на её значении
+    // нельзя — вместо этого ждём загруженное значение самой видимой секции
+    // (citizenship: 'KZ' из мока fetchCardT2), прежде чем её трогать. Без
+    // этого якоря editableSections = [] (данные ещё не пришли) сделал бы
+    // personal.citizenship «недирти» по той же причине, по которой это
+    // ловят два теста выше, — тест проходил бы, не проверяя ничего.
     fireEvent.click(await screen.findByText(/Личные данные/));
+    await screen.findByDisplayValue('KZ');
     await act(async () => {
       fireEvent.change(await screen.findByLabelText(/Гражданство/), { target: { value: 'RU' } });
     });

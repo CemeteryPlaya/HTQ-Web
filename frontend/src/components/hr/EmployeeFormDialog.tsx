@@ -27,7 +27,7 @@ import { useHRLevel } from '@/hooks/useHRLevel';
 import { Employee, relationId } from '@/components/hr/employeeCommon';
 import {
   SECTION_FIELDS, SECTION_TITLE, T2_SECTIONS,
-  buildCardT2Payload, emptyT2Form, t2FormFromServer, validateT2Money,
+  buildCardT2Payload, emptyT2Form, isT2SectionDirty, t2FormFromServer, validateT2Money,
   type T2FormState,
 } from '@/components/hr/cardT2Fields';
 import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
@@ -134,6 +134,15 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
   const [shareOpen, setShareOpen] = useState(false);
 
+  // Последние значения t2Form/t2Initial без попадания в зависимости эффекта
+  // ниже — иначе setT2Form/setT2Initial внутри самого эффекта переисполняли
+  // бы его на каждый повторный «чистый» посев (новая ссылка объекта от
+  // t2FormFromServer при том же cardT2) и зациклили бы рендер.
+  const t2FormRef = useRef(t2Form);
+  const t2InitialRef = useRef(t2Initial);
+  t2FormRef.current = t2Form;
+  t2InitialRef.current = t2Initial;
+
   /** Секции, которые вообще показываем: нужен view. */
   const visibleSections = useMemo(
     () => T2_SECTIONS.filter((s) => hasPerm(`hr.card.${s}.view`)),
@@ -162,13 +171,23 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     [visibleSections, hasPerm, t2Loaded],
   );
 
-  // Заполняем секции при открытии — РОВНО ОДИН РАЗ на пару (open, employee.id).
-  // Раньше эффект зависел от `cardT2` напрямую и переисполнялся при каждой
-  // смене этой ссылки — включая поздний повторный fetch/инвалидацию, которая
-  // случилась уже ПОСЛЕ того, как пользователь начал печатать, и тогда эффект
-  // тихо перезатирал набранное. `t2SeedKeyRef` защищает от повторного посева
-  // в рамках одного открытия диалога; при первом посеве мы всё равно ждём
-  // загрузки (либо employee нет — тогда ждать нечего).
+  // Заполняем секции при открытии — и повторно, если пришли более свежие
+  // данные, НО ТОЛЬКО пока форма чистая (пользователь ничего не тронул).
+  //
+  // Раньше (round 1) эффект сеял РОВНО ОДИН РАЗ на пару (open, employee.id) —
+  // это защищало от позднего fetch/инвалидации, перезатирающих набранное
+  // посреди печати, но переборщило: после сохранения `onSuccess` инвалидирует
+  // `hr-card-t2`, react-query отдаёт на следующий mount старый кэш и
+  // рефетчит в фоне — если пользователь переоткрыл тот же диалог до того, как
+  // рефетч долетел, форма сеялась устаревшими (досохраненными) значениями и
+  // больше НИКОГДА не обновлялась в рамках этой сессии диалога, даже когда
+  // свежие данные приходили следом.
+  //
+  // Различаем два случая по фактической «грязности» формы: если пользователь
+  // ничего не менял (форма == t2Initial по всем секциям), более свежий
+  // cardT2 можно и нужно принять; если хоть одна секция дирти — не трогаем
+  // ничего, ждём следующего изменения cardT2 или закрытия диалога (это и есть
+  // защита round-1 от перезатирания набранного).
   const t2SeedKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!open) {
@@ -176,14 +195,34 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       return;
     }
     const seedKey = String(employee?.id ?? 'new');
-    if (t2SeedKeyRef.current === seedKey) return;
+    const firstSeedForThisOpen = t2SeedKeyRef.current !== seedKey;
+    if (!firstSeedForThisOpen) {
+      // Читаем через ref, а не из замыкания/зависимостей — иначе setT2Form
+      // ниже сам вызвал бы этот эффект по кругу (см. комментарий у объявления
+      // t2FormRef).
+      const clean = T2_SECTIONS.every(
+        (s) => !isT2SectionDirty(t2FormRef.current, t2InitialRef.current, s),
+      );
+      if (!clean) return; // пользователь печатает — не перезатираем
+    }
     if (employee && visibleSections.length > 0 && cardT2 === undefined) return; // ждём GET
     const next = employee ? t2FormFromServer(cardT2) : emptyT2Form();
     setT2Form(next);
     setT2Initial(next);
-    setT2Errors({});
-    setOpenSections({});
+    if (firstSeedForThisOpen) {
+      // Ошибки/раскрытые секции сбрасываем только на первый посев этого
+      // открытия — повторный «тихий» посев свежими данными по чистой форме
+      // не должен сворачивать секцию, которую пользователь как раз открыл
+      // посмотреть.
+      setT2Errors({});
+      setOpenSections({});
+    }
     t2SeedKeyRef.current = seedKey;
+    // t2Form/t2Initial намеренно не в зависимостях — читаем их через ref
+    // (см. выше), поэтому lint не требует их сюда (ref-чтения исключены из
+    // exhaustive-deps): включи мы их напрямую, setT2Form/setT2Initial из
+    // этого же эффекта зациклили бы его повторный запуск на каждый чистый
+    // посев.
   }, [open, employee, cardT2, visibleSections.length]);
 
   // Заполнение формы переезжает из startCreate/startEdit в эффект — раньше
