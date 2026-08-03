@@ -23,7 +23,7 @@
 
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Wallet } from 'lucide-react';
+import { Pencil, Wallet } from 'lucide-react';
 
 import { DetailSkeleton, Field, FieldGrid } from '@/components/contracts/detail';
 import {
@@ -35,6 +35,7 @@ import {
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import {
@@ -46,7 +47,12 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { contractsApi } from '@/api/contracts';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { hasAnyRole } from '@/lib/auth/roles';
 import type { AgreementStatus } from '@/types/contracts';
+import { isEditableState } from '@/types/signoff';
+
+const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 /** Доля занятого — только для полоски. Точность здесь не важна, сами суммы
  *  всегда показываются строками. */
@@ -67,6 +73,9 @@ interface Props {
 
 const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
   const enabled = Number.isFinite(budgetId);
+
+  const { activeProfile } = useActiveProfile();
+  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
 
   const {
     data: budget,
@@ -108,6 +117,11 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
     );
   }
 
+  // Правка шапки бюджета — админская (`BudgetDetailView.patch` — admin=True) и
+  // только пока бюджет редактируем по оси согласования (`assert_editable`),
+  // иначе сохранение упрётся в 409. Гасим кнопку заранее.
+  const canEdit = isAdmin && isEditableState(budget.approval_state);
+
   // На странице процесса `h1` уже занят самим согласованием.
   const Heading = embedded ? 'h2' : 'h1';
 
@@ -135,21 +149,31 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
         </div>
 
         {!embedded && (
-          <SubmitForApproval
-            subjectType="contracts.budget"
-            subjectId={budget.id}
-            state={budget.approval_state}
-            submit={contractsApi.submitBudget}
-            invalidate={[
-              ['contracts', 'budgets'],
-              ['contracts', 'budget', budgetId],
-            ]}
-            size="default"
-            // Карточка объекта — единственное место, где ссылка на
-            // согласование нужна и у решённого объекта: там кнопка
-            // «Вернуть на доработку», без которой он заперт навсегда.
-            showProcessLink
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            {canEdit && (
+              <Button asChild variant="outline">
+                <Link to={`/contracts/budgets/${budget.id}/edit`}>
+                  <Pencil className="mr-1.5 h-4 w-4" />
+                  Редактировать
+                </Link>
+              </Button>
+            )}
+            <SubmitForApproval
+              subjectType="contracts.budget"
+              subjectId={budget.id}
+              state={budget.approval_state}
+              submit={contractsApi.submitBudget}
+              invalidate={[
+                ['contracts', 'budgets'],
+                ['contracts', 'budget', budgetId],
+              ]}
+              size="default"
+              // Карточка объекта — единственное место, где ссылка на
+              // согласование нужна и у решённого объекта: там кнопка
+              // «Вернуть на доработку», без которой он заперт навсегда.
+              showProcessLink
+            />
+          </div>
         )}
       </div>
 

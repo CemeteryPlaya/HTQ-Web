@@ -13,13 +13,14 @@
 
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Building2 } from 'lucide-react';
+import { Building2, Pencil } from 'lucide-react';
 
 import { DetailSkeleton, Field, FieldGrid } from '@/components/contracts/detail';
 import { formatAmount, formatMoment } from '@/components/contracts/format';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
@@ -30,7 +31,12 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { contractsApi } from '@/api/contracts';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { hasAnyRole } from '@/lib/auth/roles';
 import type { AgreementStatus, CounterpartyStatus } from '@/types/contracts';
+import { isEditableState } from '@/types/signoff';
+
+const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const STATUS_VARIANTS: Record<
   CounterpartyStatus,
@@ -49,6 +55,9 @@ interface Props {
 
 const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props) => {
   const enabled = Number.isFinite(counterpartyId);
+
+  const { activeProfile } = useActiveProfile();
+  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
 
   const {
     data: counterparty,
@@ -97,6 +106,11 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
     );
   }
 
+  // Правка карточки — админская (`CounterpartyDetailView.patch` — admin=True) и
+  // только пока контрагент редактируем по оси согласования (`assert_editable`),
+  // иначе сохранение упрётся в 409. Гасим кнопку заранее.
+  const canEdit = isAdmin && isEditableState(counterparty.approval_state);
+
   const Heading = embedded ? 'h2' : 'h1';
 
   return (
@@ -118,21 +132,31 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
         </div>
 
         {!embedded && (
-          <SubmitForApproval
-            subjectType="contracts.counterparty"
-            subjectId={counterparty.id}
-            state={counterparty.approval_state}
-            submit={contractsApi.submitCounterparty}
-            invalidate={[
-              ['contracts', 'counterparties'],
-              ['contracts', 'counterparty', counterpartyId],
-            ]}
-            size="default"
-            // Карточка объекта — единственное место, где ссылка на
-            // согласование нужна и у решённого объекта: там кнопка
-            // «Вернуть на доработку», без которой он заперт навсегда.
-            showProcessLink
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            {canEdit && (
+              <Button asChild variant="outline">
+                <Link to={`/contracts/counterparties/${counterparty.id}/edit`}>
+                  <Pencil className="mr-1.5 h-4 w-4" />
+                  Редактировать
+                </Link>
+              </Button>
+            )}
+            <SubmitForApproval
+              subjectType="contracts.counterparty"
+              subjectId={counterparty.id}
+              state={counterparty.approval_state}
+              submit={contractsApi.submitCounterparty}
+              invalidate={[
+                ['contracts', 'counterparties'],
+                ['contracts', 'counterparty', counterpartyId],
+              ]}
+              size="default"
+              // Карточка объекта — единственное место, где ссылка на
+              // согласование нужна и у решённого объекта: там кнопка
+              // «Вернуть на доработку», без которой он заперт навсегда.
+              showProcessLink
+            />
+          </div>
         )}
       </div>
 

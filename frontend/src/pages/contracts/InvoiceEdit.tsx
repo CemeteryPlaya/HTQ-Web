@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, Receipt } from 'lucide-react';
@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/select';
 import { formatAmount } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
-import type { BudgetLineFlat } from '@/types/contracts';
+import type { BudgetLineFlat, Counterparty, Invoice } from '@/types/contracts';
 
 /**
  * Правка счёта на оплату.
@@ -34,6 +34,15 @@ import type { BudgetLineFlat } from '@/types/contracts';
  * Файла среди полей нет намеренно: он обязателен при СОЗДАНИИ, а правка — это
  * уже существующий счёт, у которого скан приложен; замена скана живёт в
  * карточке.
+ *
+ * **Почему загрузчик и форма разделены.** Значение `<Select>` показывается
+ * лишь тогда, когда среди отрисованных пунктов есть совпадающий И это значение
+ * стоит с ПЕРВОГО рендера. Заполни мы состояние после монтирования (эффектом),
+ * Radix запомнил бы пустой плейсхолдер и не обновил подпись — поля
+ * администратора, программы и поставщика остались бы на вид пустыми. Поэтому
+ * тело формы вынесено в дочерний компонент, который монтируется ТОЛЬКО когда
+ * счёт и справочники уже загружены, и инициализирует состояние сразу из них
+ * (как это делают диалоговые формы, всплывающие уже с данными).
  */
 
 const AMOUNT_RE = /^\d+([.,]\d{1,2})?$/;
@@ -43,8 +52,6 @@ type Errors = Record<string, string>;
 const InvoiceEdit = () => {
   const { id } = useParams<{ id: string }>();
   const invoiceId = Number(id);
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
 
   const { data: invoice, isLoading: invoiceLoading, isError } = useQuery({
     queryKey: ['contracts', 'invoice', invoiceId],
@@ -60,37 +67,69 @@ const InvoiceEdit = () => {
     queryFn: () => contractsApi.listCounterparties().then((r) => r.data),
   });
 
-  const [administratorId, setAdministratorId] = useState('');
-  const [programId, setProgramId] = useState('');
-  const [lineId, setLineId] = useState('');
-  const [counterpartyId, setCounterpartyId] = useState('');
-  const [name, setName] = useState('');
-  const [note, setNote] = useState('');
-  const [amount, setAmount] = useState('');
-  const [errors, setErrors] = useState<Errors>({});
+  const backTo = `/contracts/invoices/${invoiceId}`;
+  const loading = invoiceLoading || !invoice || linesLoading || counterpartiesLoading;
 
-  // Форма засевается из загруженного счёта ровно ОДИН раз: повторный
-  // refetch (например, после инвалидции) не должен затирать уже начатые
-  // правки.
-  //
-  // Ждём ЗАГРУЗКИ справочников (`lines`, `counterparties`), а не только
-  // самого счёта: значение <Select> отображается лишь тогда, когда среди
-  // отрисованных пунктов есть совпадающий. Засей мы раньше — Radix показал бы
-  // плейсхолдер («Выберите»), потому что списка вариантов ещё нет, и поля
-  // администратора, программы и поставщика остались бы пустыми на вид.
-  const seeded = useRef(false);
-  useEffect(() => {
-    if (invoice && lines.length > 0 && counterparties.length > 0 && !seeded.current) {
-      setAdministratorId(String(invoice.administrator_id));
-      setProgramId(String(invoice.program_id));
-      setLineId(String(invoice.budget_line_id));
-      setCounterpartyId(String(invoice.counterparty_id));
-      setName(invoice.name);
-      setNote(invoice.note);
-      setAmount(invoice.amount);
-      seeded.current = true;
-    }
-  }, [invoice, lines, counterparties]);
+  return (
+    <ContractsShell>
+      <div className="max-w-3xl">
+        <div className="mb-6 flex flex-col gap-4">
+          <Link
+            to={backTo}
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            К карточке счёта
+          </Link>
+          <div className="flex items-center gap-3">
+            <Receipt className="h-7 w-7 text-muted-foreground" />
+            <h1 className="text-3xl font-bold">Правка счёта</h1>
+          </div>
+        </div>
+
+        {isError ? (
+          <p className="text-sm text-destructive">Счёт не найден или недоступен.</p>
+        ) : loading ? (
+          <div className="space-y-4">
+            <Skeleton className="h-40 w-full" />
+            <Skeleton className="h-56 w-full" />
+          </div>
+        ) : (
+          <InvoiceEditForm
+            invoice={invoice}
+            lines={lines}
+            counterparties={counterparties}
+          />
+        )}
+      </div>
+    </ContractsShell>
+  );
+};
+
+interface FormProps {
+  invoice: Invoice;
+  lines: BudgetLineFlat[];
+  counterparties: Counterparty[];
+}
+
+/**
+ * Тело формы. Монтируется только с готовыми данными, поэтому состояние
+ * инициализируется прямо из них — `<Select>` встаёт с нужным значением с
+ * первого рендера (см. докстринг загрузчика).
+ */
+const InvoiceEditForm = ({ invoice, lines, counterparties }: FormProps) => {
+  const invoiceId = invoice.id;
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const [administratorId, setAdministratorId] = useState(String(invoice.administrator_id));
+  const [programId, setProgramId] = useState(String(invoice.program_id));
+  const [lineId, setLineId] = useState(String(invoice.budget_line_id));
+  const [counterpartyId, setCounterpartyId] = useState(String(invoice.counterparty_id));
+  const [name, setName] = useState(invoice.name);
+  const [note, setNote] = useState(invoice.note);
+  const [amount, setAmount] = useState(invoice.amount);
+  const [errors, setErrors] = useState<Errors>({});
 
   const administrators = useMemo(() => {
     const seen = new Map<number, string>();
@@ -211,223 +250,196 @@ const InvoiceEdit = () => {
   const backTo = `/contracts/invoices/${invoiceId}`;
 
   return (
-    <ContractsShell>
-      <div className="max-w-3xl">
-        <div className="mb-6 flex flex-col gap-4">
-          <Link
-            to={backTo}
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            К карточке счёта
-          </Link>
-          <div className="flex items-center gap-3">
-            <Receipt className="h-7 w-7 text-muted-foreground" />
-            <h1 className="text-3xl font-bold">Правка счёта</h1>
-          </div>
-        </div>
-
-        {isError ? (
-          <p className="text-sm text-destructive">Счёт не найден или недоступен.</p>
-        ) : invoiceLoading || !invoice || linesLoading || counterpartiesLoading ? (
-          <div className="space-y-4">
-            <Skeleton className="h-40 w-full" />
-            <Skeleton className="h-56 w-full" />
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* ─── Источник финансирования ─────────────────────────────── */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Источник финансирования</CardTitle>
-                <CardDescription>
-                  Администратор и программа вместе определяют бюджетную строку,
-                  из которой оплачивается счёт.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <Label htmlFor="administrator">Администратор бюджета</Label>
-                    <Select
-                      value={administratorId}
-                      onValueChange={chooseAdministrator}
-                      disabled={administrators.length === 0}
-                    >
-                      <SelectTrigger
-                        id="administrator"
-                        className={errors.administrator ? 'border-destructive' : undefined}
-                      >
-                        <SelectValue placeholder="Выберите" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {administrators.map((row) => (
-                          <SelectItem key={row.id} value={String(row.id)}>
-                            {row.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {fieldError('administrator')}
-                  </div>
-
-                  <div>
-                    <Label htmlFor="program">Программа</Label>
-                    <Select
-                      value={programId}
-                      onValueChange={chooseProgram}
-                      disabled={!administratorId}
-                    >
-                      <SelectTrigger
-                        id="program"
-                        className={errors.program ? 'border-destructive' : undefined}
-                      >
-                        <SelectValue
-                          placeholder={
-                            administratorId ? 'Выберите' : 'Сначала администратор'
-                          }
-                        />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {programs.map((row) => (
-                          <SelectItem key={row.id} value={String(row.id)}>
-                            {row.label} — {row.hint}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {fieldError('program')}
-                  </div>
-                </div>
-
-                {yearOptions.length > 1 && (
-                  <div className="sm:w-48">
-                    <Label htmlFor="budget-year">Бюджетный год</Label>
-                    <Select value={lineId} onValueChange={setLineId}>
-                      <SelectTrigger
-                        id="budget-year"
-                        className={errors.budget ? 'border-destructive' : undefined}
-                      >
-                        <SelectValue placeholder="Выберите" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {yearOptions.map((row) => (
-                          <SelectItem key={row.id} value={String(row.id)}>
-                            {row.period_year}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {fieldError('budget')}
-                  </div>
-                )}
-
-                {selectedLine && (
-                  <div className="rounded-md border bg-muted/40 p-4 text-sm">
-                    <div className="flex flex-wrap justify-between gap-2 font-medium">
-                      <span>Остаток строки</span>
-                      <span className="tabular-nums">
-                        {formatAmount(selectedLine.remaining)} {selectedLine.currency}
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Счёт без договора остаток не уменьшает — показан для справки.
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* ─── Счёт ────────────────────────────────────────────────── */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Счёт</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <Label htmlFor="counterparty">Поставщик</Label>
-                  <Select
-                    value={counterpartyId}
-                    onValueChange={setCounterpartyId}
-                    disabled={counterparties.length === 0}
-                  >
-                    <SelectTrigger
-                      id="counterparty"
-                      className={errors.counterparty ? 'border-destructive' : undefined}
-                    >
-                      <SelectValue placeholder="Выберите из реестра" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {counterparties.map((row) => (
-                        <SelectItem key={row.id} value={String(row.id)}>
-                          {row.name} — {row.bin_iin}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {fieldError('counterparty')}
-                </div>
-
-                <div>
-                  <Label htmlFor="name">Наименование</Label>
-                  <Input
-                    id="name"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    className={errors.name ? 'border-destructive' : undefined}
-                  />
-                  {fieldError('name')}
-                </div>
-
-                <div>
-                  <Label htmlFor="note">Пояснение</Label>
-                  <Textarea
-                    id="note"
-                    value={note}
-                    onChange={(event) => setNote(event.target.value)}
-                    rows={3}
-                  />
-                </div>
-
-                <div className="sm:w-1/2">
-                  <Label htmlFor="amount">Сумма счёта</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="amount"
-                      inputMode="decimal"
-                      value={amount}
-                      onChange={(event) => setAmount(event.target.value)}
-                      className={errors.amount ? 'border-destructive' : undefined}
-                    />
-                    {selectedLine && (
-                      <span className="text-sm text-muted-foreground">
-                        {selectedLine.currency}
-                      </span>
-                    )}
-                  </div>
-                  {fieldError('amount')}
-                </div>
-              </CardContent>
-            </Card>
-
-            <div className="flex gap-3">
-              <Button type="submit" disabled={mutation.isPending}>
-                {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Сохранить
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => navigate(backTo)}
-                disabled={mutation.isPending}
+    <form onSubmit={handleSubmit} className="space-y-6">
+      {/* ─── Источник финансирования ─────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Источник финансирования</CardTitle>
+          <CardDescription>
+            Администратор и программа вместе определяют бюджетную строку,
+            из которой оплачивается счёт.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="administrator">Администратор бюджета</Label>
+              <Select
+                value={administratorId}
+                onValueChange={chooseAdministrator}
+                disabled={administrators.length === 0}
               >
-                Отмена
-              </Button>
+                <SelectTrigger
+                  id="administrator"
+                  className={errors.administrator ? 'border-destructive' : undefined}
+                >
+                  <SelectValue placeholder="Выберите" />
+                </SelectTrigger>
+                <SelectContent>
+                  {administrators.map((row) => (
+                    <SelectItem key={row.id} value={String(row.id)}>
+                      {row.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {fieldError('administrator')}
             </div>
-          </form>
-        )}
+
+            <div>
+              <Label htmlFor="program">Программа</Label>
+              <Select
+                value={programId}
+                onValueChange={chooseProgram}
+                disabled={!administratorId}
+              >
+                <SelectTrigger
+                  id="program"
+                  className={errors.program ? 'border-destructive' : undefined}
+                >
+                  <SelectValue
+                    placeholder={
+                      administratorId ? 'Выберите' : 'Сначала администратор'
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {programs.map((row) => (
+                    <SelectItem key={row.id} value={String(row.id)}>
+                      {row.label} — {row.hint}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {fieldError('program')}
+            </div>
+          </div>
+
+          {yearOptions.length > 1 && (
+            <div className="sm:w-48">
+              <Label htmlFor="budget-year">Бюджетный год</Label>
+              <Select value={lineId} onValueChange={setLineId}>
+                <SelectTrigger
+                  id="budget-year"
+                  className={errors.budget ? 'border-destructive' : undefined}
+                >
+                  <SelectValue placeholder="Выберите" />
+                </SelectTrigger>
+                <SelectContent>
+                  {yearOptions.map((row) => (
+                    <SelectItem key={row.id} value={String(row.id)}>
+                      {row.period_year}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {fieldError('budget')}
+            </div>
+          )}
+
+          {selectedLine && (
+            <div className="rounded-md border bg-muted/40 p-4 text-sm">
+              <div className="flex flex-wrap justify-between gap-2 font-medium">
+                <span>Остаток строки</span>
+                <span className="tabular-nums">
+                  {formatAmount(selectedLine.remaining)} {selectedLine.currency}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Счёт без договора остаток не уменьшает — показан для справки.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ─── Счёт ────────────────────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Счёт</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <Label htmlFor="counterparty">Поставщик</Label>
+            <Select
+              value={counterpartyId}
+              onValueChange={setCounterpartyId}
+              disabled={counterparties.length === 0}
+            >
+              <SelectTrigger
+                id="counterparty"
+                className={errors.counterparty ? 'border-destructive' : undefined}
+              >
+                <SelectValue placeholder="Выберите из реестра" />
+              </SelectTrigger>
+              <SelectContent>
+                {counterparties.map((row) => (
+                  <SelectItem key={row.id} value={String(row.id)}>
+                    {row.name} — {row.bin_iin}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {fieldError('counterparty')}
+          </div>
+
+          <div>
+            <Label htmlFor="name">Наименование</Label>
+            <Input
+              id="name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              className={errors.name ? 'border-destructive' : undefined}
+            />
+            {fieldError('name')}
+          </div>
+
+          <div>
+            <Label htmlFor="note">Пояснение</Label>
+            <Textarea
+              id="note"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              rows={3}
+            />
+          </div>
+
+          <div className="sm:w-1/2">
+            <Label htmlFor="amount">Сумма счёта</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="amount"
+                inputMode="decimal"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+                className={errors.amount ? 'border-destructive' : undefined}
+              />
+              {selectedLine && (
+                <span className="text-sm text-muted-foreground">
+                  {selectedLine.currency}
+                </span>
+              )}
+            </div>
+            {fieldError('amount')}
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="flex gap-3">
+        <Button type="submit" disabled={mutation.isPending}>
+          {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          Сохранить
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => navigate(backTo)}
+          disabled={mutation.isPending}
+        >
+          Отмена
+        </Button>
       </div>
-    </ContractsShell>
+    </form>
   );
 };
 

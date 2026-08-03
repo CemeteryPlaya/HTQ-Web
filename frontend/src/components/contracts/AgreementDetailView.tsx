@@ -34,6 +34,7 @@ import {
   FileText,
   Loader2,
   Paperclip,
+  Pencil,
   Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -63,6 +64,7 @@ import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasAnyRole } from '@/lib/auth/roles';
 import type { AgreementStatus } from '@/types/contracts';
+import { isEditableState } from '@/types/signoff';
 
 const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
@@ -175,6 +177,15 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
   const canUpload =
     agreement !== undefined
     && (isAdmin || (agreement.created_by === myId && agreement.status === 'draft'));
+  // Правка чисто админская (`AgreementDetailView.patch` — admin=True). Плюс две
+  // блокировки, которые всё равно наложит бэкенд: пока договор заперт по оси
+  // согласования (`assert_editable`) и когда он терминальный по своей машине
+  // статусов (`executed`/`terminated`). Гасим кнопку заранее, а не ловим 409.
+  const canEdit =
+    agreement !== undefined
+    && isAdmin
+    && isEditableState(agreement.approval_state)
+    && !['executed', 'terminated'].includes(agreement.status);
 
   if (isLoading) return <DetailSkeleton />;
   if (isError || !agreement) {
@@ -200,26 +211,36 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
         </div>
 
         {!embedded && (
-          <SubmitForApproval
-            subjectType="contracts.agreement"
-            subjectId={agreement.id}
-            state={agreement.approval_state}
-            submit={contractsApi.submitAgreement}
-            // Отправка переводит договор в on_review, а он уже занимает
-            // бюджет — остаток строки меняется тем же действием.
-            invalidate={[
-              ['contracts', 'agreements'],
-              ['contracts', 'agreement', agreementId],
-              ['contracts', 'budgets'],
-              ['contracts', 'budget', agreement.budget_id],
-              ['contracts', 'budget-line', agreement.budget_line_id],
-            ]}
-            size="default"
-            // Карточка объекта — единственное место, где ссылка на
-            // согласование нужна и у решённого объекта: там кнопка
-            // «Вернуть на доработку», без которой он заперт навсегда.
-            showProcessLink
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            {canEdit && (
+              <Button asChild variant="outline">
+                <Link to={`/contracts/agreements/${agreement.id}/edit`}>
+                  <Pencil className="mr-1.5 h-4 w-4" />
+                  Редактировать
+                </Link>
+              </Button>
+            )}
+            <SubmitForApproval
+              subjectType="contracts.agreement"
+              subjectId={agreement.id}
+              state={agreement.approval_state}
+              submit={contractsApi.submitAgreement}
+              // Отправка переводит договор в on_review, а он уже занимает
+              // бюджет — остаток строки меняется тем же действием.
+              invalidate={[
+                ['contracts', 'agreements'],
+                ['contracts', 'agreement', agreementId],
+                ['contracts', 'budgets'],
+                ['contracts', 'budget', agreement.budget_id],
+                ['contracts', 'budget-line', agreement.budget_line_id],
+              ]}
+              size="default"
+              // Карточка объекта — единственное место, где ссылка на
+              // согласование нужна и у решённого объекта: там кнопка
+              // «Вернуть на доработку», без которой он заперт навсегда.
+              showProcessLink
+            />
+          </div>
         )}
       </div>
 
