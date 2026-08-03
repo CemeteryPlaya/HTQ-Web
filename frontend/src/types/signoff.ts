@@ -173,6 +173,10 @@ export interface RouteStage {
   approver_kind: ApproverKind;
   /** Согласовать этап можно только приложив PDF. На отказ не влияет. */
   requires_attachment: boolean;
+  /** Согласовать этап можно только с непустым комментарием. Независимо от
+   *  `requires_attachment` и `approver_kind` — комментарий можно требовать и
+   *  от названного согласующего. На отказ/доработку не влияет. */
+  requires_comment: boolean;
   approvers: Approver[];
 }
 
@@ -232,11 +236,12 @@ export interface ProcessStage {
   /** Как этап попал в процесс. У безусловного этапа и у сработавшего
    *  «иначе» условие одинаково пустое — различает их только это поле. */
   matched_by: 'always' | 'condition' | 'fallback';
-  /** Снимок «этапа подписи» на момент запуска. `requires_attachment` здесь
-   *  — рабочее поле: правка маршрута не избавляет от документа тех, кто ещё
-   *  не решил. */
+  /** Снимок «этапа подписи» на момент запуска. `requires_attachment` и
+   *  `requires_comment` здесь — рабочие поля: правка маршрута не избавляет от
+   *  документа (или пояснения) тех, кто ещё не решил. */
   approver_kind: ApproverKind;
   requires_attachment: boolean;
+  requires_comment: boolean;
   decided_at: string | null;
   tasks: ProcessTask[];
 }
@@ -275,8 +280,10 @@ export interface InboxItem {
   subject_url: string | null;
   stage_name: string;
   quorum: Quorum;
-  /** Решение потребует PDF — видно уже в очереди, а не только в диалоге. */
+  /** Решение потребует PDF и/или пояснения — видно уже в очереди, а не
+   *  только в диалоге. */
   requires_attachment: boolean;
+  requires_comment: boolean;
   file_id: string | null;
   initiator_id: number | null;
   created_at: string;
@@ -306,6 +313,7 @@ export interface StageInput {
   is_fallback?: boolean;
   approver_kind?: ApproverKind;
   requires_attachment?: boolean;
+  requires_comment?: boolean;
 }
 
 /** PATCH этапа: `approver_ids` заменяет список ЦЕЛИКОМ, а его отсутствие
@@ -325,6 +333,7 @@ export interface StageUpdateInput {
    *  бэкенд отвергнет как противоречие). */
   approver_kind?: ApproverKind;
   requires_attachment?: boolean;
+  requires_comment?: boolean;
 }
 
 export interface DecisionInput {
