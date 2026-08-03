@@ -158,6 +158,28 @@ export const updateEmployee = async (id: number, data: Partial<Employee>): Promi
   return normalizeEmployee(res.data);
 };
 
+/**
+ * Создаёт сотрудника вместе с опциональным блоком `card_t2`.
+ *
+ * Отдельно от `createEmployee`: тот прогоняет тело через
+ * `toBackendRecord(..., EMPLOYEE_FIELD_ALIASES)`, который переименовывает
+ * ключи по плоской карте алиасов и покалечил бы вложенный объект `card_t2`.
+ * Здесь payload собирает вызывающий — ровно в форме бэкендовой
+ * `EmployeeCreateRequest`.
+ */
+export const createEmployeeWithCard = async (payload: Record<string, unknown>): Promise<Employee> => {
+  const res = await api.post(`${HR}employees/`, payload);
+  return normalizeEmployee(res.data);
+};
+
+export const updateEmployeeWithCard = async (
+  id: number,
+  payload: Record<string, unknown>,
+): Promise<Employee> => {
+  const res = await api.put(`${HR}employees/${id}/`, payload);
+  return normalizeEmployee(res.data);
+};
+
 export const deleteEmployee = async (id: number): Promise<void> => {
   await api.delete(`${HR}employees/${id}/`);
 };
