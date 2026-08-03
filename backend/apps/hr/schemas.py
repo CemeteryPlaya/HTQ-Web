@@ -738,6 +738,25 @@ class EmployeeCardT2Patch(BaseModel):
     certs: CardCerts | None = None
 
 
+class EmployeeCreateRequest(EmployeeCreate):
+    """Тело ``POST /employees/`` — колонки Employee + опциональный блок Т-2.
+
+    Отдельная схема, а не поле в ``EmployeeCreate``: сервис
+    ``employee_service.create_employee`` разворачивает схему в
+    ``Employee.objects.create(**data.model_dump())``, и лишний ключ там
+    фатален. Вьюха пересобирает чистый ``EmployeeCreate`` перед вызовом
+    сервиса.
+    """
+
+    card_t2: EmployeeCardT2Patch | None = None
+
+
+class EmployeeUpdateRequest(EmployeeUpdate):
+    """Тело ``PUT|PATCH /employees/{id}/`` — то же для правки."""
+
+    card_t2: EmployeeCardT2Patch | None = None
+
+
 class EducationItem(BaseModel):
     institution: str = ""
     degree: str = ""
