@@ -176,6 +176,18 @@ class AttachmentRequired(SignoffError):
     """
 
 
+class CommentRequired(SignoffError):
+    """Этап требует пояснение к решению, а комментарий пуст.
+
+    Проверяется, как и ``AttachmentRequired``, только на СОГЛАСОВАНИИ: у
+    отказа и возврата на доработку комментарий и так по смыслу обязателен
+    (это и есть объяснение решения), а настойчивость формы здесь пришлась бы
+    ровно на тот случай, где человек и без галочки пишет, зачем отклонил.
+    Гейт нужен обратному — «согласовано» без единого слова, — поэтому стоит
+    он на ``approve``.
+    """
+
+
 def _now() -> datetime:
     return datetime.now(_tz.utc)
 
@@ -231,6 +243,7 @@ def start(*, subject_type: str, subject_id: int,
             condition=stage.condition, matched_by=matched_by,
             approver_kind=stage.approver_kind,
             requires_attachment=stage.requires_attachment,
+            requires_comment=stage.requires_comment,
             state=StageState.ACTIVE if order == first_order else StageState.WAITING,
         )
         ApprovalTask.objects.bulk_create([
@@ -455,6 +468,15 @@ def act(*, task_id: int, actor_id: int, decision: str,
         raise AttachmentRequired(
             f"На этапе «{stage.name}» согласование возможно только с "
             f"приложенным документом — сначала загрузите PDF"
+        )
+    # Тот же гейт, что у документа, и по тем же правилам: только на согласовании,
+    # ДО любых записей. ``strip()`` — пробел не пояснение; ровно так же пустой
+    # комментарий отличает от заполненного форма (``schemas.Decision``).
+    if (decision == APPROVE and stage.requires_comment
+            and not comment.strip()):
+        raise CommentRequired(
+            f"На этапе «{stage.name}» согласование возможно только с "
+            f"пояснением — напишите комментарий к решению"
         )
 
     task.state = (TaskState.APPROVED if decision == APPROVE

@@ -90,6 +90,7 @@ class StageCreate(BaseModel):
     is_fallback: bool = False
     approver_kind: ApproverKind = ApproverKind.NAMED
     requires_attachment: bool = False
+    requires_comment: bool = False
 
     @model_validator(mode="after")
     def _approvers_match_kind(self):
@@ -124,6 +125,7 @@ class StageUpdate(BaseModel):
     # вместе с ним сервис отвергнет как противоречие).
     approver_kind: Optional[ApproverKind] = None
     requires_attachment: Optional[bool] = None
+    requires_comment: Optional[bool] = None
 
 
 class ApproverRead(BaseModel):
@@ -143,6 +145,7 @@ class StageRead(BaseModel):
     is_fallback: bool = False
     approver_kind: ApproverKind = ApproverKind.NAMED
     requires_attachment: bool = False
+    requires_comment: bool = False
     # Пустой у этапа, который согласует инициатор: конкретный человек станет
     # известен только на запуске процесса.
     approvers: list[ApproverRead]
@@ -213,10 +216,12 @@ class ProcessStageRead(BaseModel):
     condition: Condition = Field(default_factory=list)
     matched_by: str = "always"
     # Снимок «этапа подписи» на момент запуска: ``approver_kind`` объясняет,
-    # почему на этапе один человек и именно этот, ``requires_attachment``
-    # — рабочее поле, его читает engine.act на каждом решении.
+    # почему на этапе один человек и именно этот, ``requires_attachment`` и
+    # ``requires_comment`` — рабочие поля, их читает engine.act на каждом
+    # решении.
     approver_kind: ApproverKind = ApproverKind.NAMED
     requires_attachment: bool = False
+    requires_comment: bool = False
     decided_at: Optional[datetime]
     tasks: list[TaskRead]
 
@@ -274,9 +279,10 @@ class InboxItem(BaseModel):
     subject_url: Optional[str]
     stage_name: str
     quorum: str
-    # Решение по этому запросу требует приложенного PDF — видно в очереди, а
-    # не только в диалоге решения.
+    # Решение по этому запросу требует приложенного PDF и/или пояснения —
+    # видно в очереди, а не только в диалоге решения.
     requires_attachment: bool = False
+    requires_comment: bool = False
     file_id: Optional[str] = None
     initiator_id: Optional[int]
     created_at: datetime
