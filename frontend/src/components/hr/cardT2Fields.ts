@@ -10,7 +10,7 @@
  * `EmployeeCardT2Patch` на бэкенде (financial, personal, certs) — именно в нём
  * `employee_card_t2_service.upsert` применяет патч.
  */
-import type { CardT2Section } from '@/api/hr';
+import type { CardT2, CardT2Section } from '@/api/hr';
 
 export type FieldKind = 'text' | 'money' | 'date';
 
@@ -52,3 +52,93 @@ export const SECTION_TITLE: Record<CardT2Section, { key: string; fallback: strin
 
 /** Деньги: бэкенд делает Decimal(str(v)) и отвечает 422 на мусор. */
 export const MONEY_RE = /^\d+([.,]\d{1,2})?$/;
+
+/** Состояние формы Т-2: все поля всех секций как строки (пустая = «нет значения»). */
+export type T2FormState = Record<CardT2Section, Record<string, string>>;
+
+export function emptyT2Form(): T2FormState {
+  const out = {} as T2FormState;
+  for (const section of T2_SECTIONS) {
+    out[section] = Object.fromEntries(SECTION_FIELDS[section].map((f) => [f.name, '']));
+  }
+  return out;
+}
+
+/**
+ * Раскладывает ответ `GET /card/t2` в состояние формы.
+ *
+ * Секции, отсутствующей в ответе (нет права view), в форме соответствуют
+ * пустые поля — и она не должна попасть в payload: этим занимается
+ * `buildCardT2Payload`, которому вызывающий передаёт список разрешённых
+ * секций.
+ */
+export function t2FormFromServer(data: CardT2 | undefined): T2FormState {
+  const out = emptyT2Form();
+  if (!data) return out;
+  for (const section of T2_SECTIONS) {
+    const values = data[section] as Record<string, string | null> | undefined;
+    if (!values) continue;
+    for (const f of SECTION_FIELDS[section]) {
+      out[section][f.name] = values[f.name] ?? '';
+    }
+  }
+  return out;
+}
+
+export function isT2SectionDirty(
+  form: T2FormState,
+  initial: T2FormState,
+  section: CardT2Section,
+): boolean {
+  return SECTION_FIELDS[section].some(
+    (f) => (form[section][f.name] ?? '') !== (initial[section][f.name] ?? ''),
+  );
+}
+
+/**
+ * Собирает блок `card_t2` тела запроса.
+ *
+ * Отправляются ТОЛЬКО изменённые секции из числа разрешённых. Отправлять всё
+ * подряд нельзя: открыть модалку и нажать «Сохранить» означало бы переписать
+ * Т-2 тем, что успело подгрузиться (или не подгрузилось).
+ *
+ * `undefined` вместо пустого объекта — чтобы вызывающий просто не клал ключ в
+ * тело запроса.
+ */
+export function buildCardT2Payload(
+  form: T2FormState,
+  initial: T2FormState,
+  sections: CardT2Section[],
+): Record<string, Record<string, string | null>> | undefined {
+  const out: Record<string, Record<string, string | null>> = {};
+  for (const section of sections) {
+    if (!isT2SectionDirty(form, initial, section)) continue;
+    out[section] = Object.fromEntries(
+      SECTION_FIELDS[section].map((f) => {
+        const raw = (form[section][f.name] ?? '').trim();
+        if (raw === '') return [f.name, null];
+        return [f.name, f.kind === 'money' ? raw.replace(',', '.') : raw];
+      }),
+    );
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Ключи результата — `"<section>.<field>"`, чтобы форма могла подсветить поле. */
+export function validateT2Money(
+  form: T2FormState,
+  sections: CardT2Section[],
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  for (const section of sections) {
+    for (const f of SECTION_FIELDS[section]) {
+      if (f.kind !== 'money') continue;
+      const raw = (form[section][f.name] ?? '').trim();
+      if (raw === '') continue;
+      if (!MONEY_RE.test(raw)) {
+        errors[`${section}.${f.name}`] = 'Введите число, например 450000 или 450000.50';
+      }
+    }
+  }
+  return errors;
+}
