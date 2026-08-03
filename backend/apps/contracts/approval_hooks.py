@@ -54,6 +54,8 @@ from .models import (
     Budget,
     Counterparty,
     Country,
+    Invoice,
+    InvoiceStatus,
     PaymentType,
     Program,
 )
@@ -125,6 +127,110 @@ def _agreement_on_rework(subject_id: int) -> None:
 
 def _agreement_on_cancelled(subject_id: int) -> None:
     _agreement_to(subject_id, AgreementStatus.DRAFT)
+
+
+# ── Счёт: доменные последствия по образцу договора ──────────────────────
+
+def _invoice_to(subject_id: int, status: str) -> None:
+    """Сдвинуть счёт по его собственной машине статусов.
+
+    Дословно как ``_agreement_to``, только для счёта: идёт через
+    ``change_status`` (единственный источник правды о переходах), а не
+    ``update(status=...)``. ``enforce_approval_lock`` НЕ ставится — колбэк
+    двигает статус, пока ``approval_state`` ещё pending, и лок, стоящий на
+    ручном HTTP-переводе, здесь блокировал бы само согласование.
+    """
+    from .services import invoice_service as inv_svc
+
+    invoice = Invoice.objects.filter(pk=subject_id).first()
+    if invoice is None:
+        logger.warning("signoff: счёт %s не найден, статус не менялся", subject_id)
+        return
+    if invoice.status == status:
+        return
+    inv_svc.change_status(subject_id, status)
+
+
+def _invoice_on_started(subject_id: int) -> None:
+    _invoice_to(subject_id, InvoiceStatus.ON_REVIEW)
+
+
+def _invoice_on_approved(subject_id: int) -> None:
+    _invoice_to(subject_id, InvoiceStatus.APPROVED)
+
+
+def _invoice_on_rejected(subject_id: int) -> None:
+    # Отказ возвращает счёт в черновик, а не в терминальный ``cancelled``:
+    # отклонённый счёт переделывают и отправляют снова. ``cancelled`` — это
+    # отдельное решение «счёт не оплачиваем», а не результат согласования.
+    # Править счёт при этом всё равно нельзя, пока согласующий не вернёт его
+    # на доработку: за это отвечает ``approval_state``, а не ``status``.
+    _invoice_to(subject_id, InvoiceStatus.DRAFT)
+
+
+def _invoice_on_rework(subject_id: int) -> None:
+    # Возврат на доработку — тот же черновик, что и отказ (см. договор:
+    # ``status`` — это стадия жизни счёта, «на доработке» — состояние
+    # СОГЛАСОВАНИЯ, и держит его ``approval_state``). Приходит сюда счёт из
+    # ``on_review`` (вернули на ходу) и из ``approved`` (вернули уже
+    # согласованный — ``engine.reopen``); оба перехода в ``draft`` есть в
+    # ``ALLOWED_TRANSITIONS``.
+    _invoice_to(subject_id, InvoiceStatus.DRAFT)
+
+
+def _invoice_on_cancelled(subject_id: int) -> None:
+    _invoice_to(subject_id, InvoiceStatus.DRAFT)
+
+
+def _describe_invoice(subject_id: int) -> dict | None:
+    invoice = (Invoice.objects.select_related("counterparty")
+               .filter(pk=subject_id).first())
+    if invoice is None:
+        return None
+    return {
+        # Номера у счёта нет (см. докстринг модели) — опознаётся
+        # наименованием, поставщиком и суммой, тем же набором, что и __str__.
+        "title": (f"Счёт: {invoice.name} "
+                  f"({invoice.counterparty.name}, {invoice.amount} "
+                  f"{invoice.currency})"),
+        "url": f"/contracts/invoices/{invoice.pk}",
+    }
+
+
+def _invoice_facts(subject_id: int) -> dict:
+    invoice = (Invoice.objects
+               .select_related("budget_line__budget__administrator",
+                               "counterparty")
+               .filter(pk=subject_id).first())
+    if invoice is None:
+        return {}
+    return {
+        # Обе страны, названные по-разному, — по той же причине, что у
+        # договора (см. докстринг модуля): общий ``country_id`` был бы ловушкой.
+        "admin_country_id":
+            invoice.budget_line.budget.administrator.country_id,
+        "counterparty_country_id": invoice.counterparty.country_id,
+        # Программа — со СТРОКИ бюджета; на самом счёте её колонки нет.
+        "program_id": invoice.budget_line.program_id,
+        "amount": invoice.amount,
+        "currency": invoice.currency,
+    }
+
+
+def _invoice_fact_fields() -> list[dict]:
+    countries = _country_options()  # один запрос на оба поля
+    return [
+        {"key": "admin_country_id", "label": "Страна администратора бюджета",
+         "type": "choice", "options": countries},
+        {"key": "counterparty_country_id", "label": "Страна контрагента",
+         "type": "choice", "options": countries},
+        {"key": "program_id", "label": "Программа",
+         "type": "choice", "options": _program_options()},
+        {"key": "amount", "label": "Сумма счёта", "type": "number"},
+        {"key": "currency", "label": "Валюта", "type": "string"},
+        # ``payment_type`` у счёта нет — счёт просто оплачивают, без типов
+        # оплаты договора; ветку по нему предложить не из чего.
+    ]
 
 
 # ── describe: как объект выглядит в интерфейсе signoff ──────────────────
@@ -328,4 +434,17 @@ def register() -> None:
         describe=_describe_agreement,
         facts=_agreement_facts,
         fact_fields=_agreement_fact_fields,
+    )
+    signoff.register_subject(
+        Invoice.SIGNOFF_SUBJECT_TYPE,
+        label="Счёт на оплату",
+        model=Invoice,
+        on_started=_invoice_on_started,
+        on_approved=_invoice_on_approved,
+        on_rejected=_invoice_on_rejected,
+        on_rework=_invoice_on_rework,
+        on_cancelled=_invoice_on_cancelled,
+        describe=_describe_invoice,
+        facts=_invoice_facts,
+        fact_fields=_invoice_fact_fields,
     )

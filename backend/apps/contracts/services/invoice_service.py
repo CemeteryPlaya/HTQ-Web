@@ -257,6 +257,52 @@ def update_invoice(invoice_id: int, **fields) -> Invoice:
     return get_invoice_or_404(invoice.pk)
 
 
+@transaction.atomic
+def submit_for_approval(invoice_id: int, *, actor_id: int | None = None) -> dict:
+    """Отправить счёт на согласование. Возвращает карточку процесса.
+
+    Штатный путь отправки — предметные проверки проходят ДО запуска процесса,
+    как у договора (``agreement_service.submit_for_approval``). Отличий от
+    договора два, и оба — из устройства счёта:
+
+    * лимит бюджета не проверяется и строка НЕ блокируется: счёт бюджет не
+      занимает (см. докстринг модуля), блокировать нечего, и ни
+      ``check_capacity``, ни ``SELECT … FOR UPDATE`` здесь нет;
+    * скан обязателен уже на отправке. Счёт без договора и ЕСТЬ тот документ,
+      по которому платят, — согласующему без него нечего смотреть. Ту же
+      проверку продублирует ``change_status`` при переходе в ``on_review``
+      (его делает колбэк ``on_started``), но упереться в неё там значило бы
+      получить отказ из середины транзакции движка. Проверяем здесь, где
+      сообщение адресно; это ровно то место, которое предсказывал докстринг
+      ``change_status``.
+
+    Статусы бюджета и контрагента сверяются полностью: к моменту отправки
+    заблокированный контрагент или закрытый бюджет — причина не выпускать
+    счёт на согласование, в отличие от правки отдельного поля черновика
+    (``_validate_context`` с обоими флагами, как у ``create_invoice``).
+    """
+    invoice = get_invoice_or_404(invoice_id)
+    if invoice.status != InvoiceStatus.DRAFT:
+        raise InvoiceRuleViolation(
+            f"На согласование отправляется черновик; счёт в статусе "
+            f"«{invoice.get_status_display()}»"
+        )
+    if not invoice.file_id:
+        raise InvoiceRuleViolation(
+            "К счёту не приложен скан счёта на оплату — загрузите его, "
+            "прежде чем отправлять на согласование"
+        )
+
+    line = _get_line_or_404(invoice.budget_line_id)
+    _validate_context(line, invoice.counterparty)
+
+    # enrich=True: карточка уходит прямо в HTTP-ответ, и фронтенду после
+    # отправки нужно показать «кто согласует», а не голые user_id.
+    return signoff.start_process(subject_type=Invoice.SIGNOFF_SUBJECT_TYPE,
+                                 subject_id=invoice.pk, initiator_id=actor_id,
+                                 enrich=True)
+
+
 def _assert_not_pending_approval(invoice: Invoice) -> None:
     """Пока по счёту идёт согласование, статус ведёт решение согласующих, а
     не ручной перевод. Дословно как ``agreement_service._assert_not_pending_approval``:

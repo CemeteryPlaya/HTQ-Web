@@ -188,12 +188,15 @@ export const contractsApi = {
   // ─── Счета на оплату (без договора) ────────────────────────────────────
   //
   // Устроены как договоры, но проще: без `number`, `payment_type`,
-  // `signed_date`, `currency` (её снимает бэкенд со строки бюджета) и БЕЗ
-  // отправки на согласование — маршрут `submit` первой фазой не подключён,
-  // поэтому и метода под него здесь нет.
+  // `signed_date`, `currency` (её снимает бэкенд со строки бюджета).
+  // Согласование — то же, что у договора (`submitInvoice`), с одним отличием:
+  // скан обязателен уже на отправке (счёт без договора и ЕСТЬ платёжный
+  // документ), и его отсутствие бэкенд отобьёт 409-м.
   listInvoices: (params?: InvoiceListParams) =>
     api.get<Invoice[]>(path('invoices'), { params }),
   getInvoice: (id: number) => api.get<Invoice>(path(`invoices/${id}`)),
+  submitInvoice: (id: number) =>
+    api.post<ApprovalProcess>(path(`invoices/${id}/submit`)),
   createInvoice: (data: {
     name: string;
     /** Счёт ссылается на СТРОКУ бюджета: деньги выделены программе. */

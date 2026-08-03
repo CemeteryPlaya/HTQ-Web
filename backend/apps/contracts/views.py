@@ -368,6 +368,13 @@ class AgreementSubmitView(SubmitView):
             lambda **kw: agr_svc.submit_for_approval(agreement_id, **kw))
 
 
+class InvoiceSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, invoice_id: int):
+        return self.submitted(
+            lambda **kw: inv_svc.submit_for_approval(invoice_id, **kw))
+
+
 class BudgetAgreementsView(ContractsView):
     """Договоры бюджета — по ВСЕМ его строкам, то, из чего сложился остаток."""
 

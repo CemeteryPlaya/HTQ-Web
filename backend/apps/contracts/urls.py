@@ -97,9 +97,10 @@ urlpatterns = [
     path("agreements/<int:agreement_id>/", views.AgreementDetailView.as_view()),
 
     # ── Счета на оплату (без договора) ──
-    # status/file/file-url — до `<int:invoice_id>`, иначе более общий путь
-    # перехватил бы их (как у договоров). Маршрута `submit` пока нет:
-    # согласование счёта первой фазой не подключено.
+    # submit/status/file/file-url — до `<int:invoice_id>`, иначе более общий
+    # путь перехватил бы их (как у договоров).
+    path("invoices/<int:invoice_id>/submit", views.InvoiceSubmitView.as_view()),
+    path("invoices/<int:invoice_id>/submit/", views.InvoiceSubmitView.as_view()),
     path("invoices/<int:invoice_id>/status", views.InvoiceStatusView.as_view()),
     path("invoices/<int:invoice_id>/status/", views.InvoiceStatusView.as_view()),
     path("invoices/<int:invoice_id>/file", views.InvoiceFileView.as_view()),

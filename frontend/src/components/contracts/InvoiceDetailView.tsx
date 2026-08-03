@@ -2,13 +2,20 @@
  * Тело карточки счёта на оплату (без договора).
  *
  * По образцу `AgreementDetailView`, но проще: у счёта нет номера, типа
- * оплаты, даты подписания и — в первой фазе — согласования, поэтому здесь нет
- * ни блока отправки на согласование (`SubmitForApproval`), ни истории
- * процессов. Остаются две операции над уже существующим счётом:
+ * оплаты и даты подписания. Согласование — то же, что у договора:
  *
+ * - **отправка на согласование** (`SubmitForApproval`) и **история
+ *   процессов** (`SubjectProcesses`) — ровно как у договора. Отличие лишь на
+ *   бэкенде: скан обязателен уже на отправке, поэтому по счёту без файла
+ *   `/submit` ответит 409 (текст показывает `reportApiError`).
  * - **смена статуса.** Переходы разрешает бэкенд по
  *   `invoice_service.ALLOWED_TRANSITIONS`, таблица приходит с `/enums`
- *   (`invoice_transitions`) — своей копии здесь нет. Операция админская.
+ *   (`invoice_transitions`) — своей копии здесь нет. Пока идёт согласование,
+ *   ручной перевод бэкенд запирает (`enforce_approval_lock`). Операция
+ *   админская.
+ * - **правка** доступна только пока счёт правится по оси согласования
+ *   (`isEditableState`) — иначе кнопка ведёт на страницу, где сохранение
+ *   упрётся в 409 `SubjectLocked`.
  * - **скан счёта.** Загрузить может автор, пока счёт черновик, либо
  *   администратор всегда — те же условия, что проверяет бэкенд
  *   (`views.InvoiceFileView`). Повторная загрузка ЗАМЕЩАЕТ файл.
@@ -31,6 +38,8 @@ import {
   remainingTone,
 } from '@/components/contracts/format';
 import { reportApiError } from '@/components/signoff/apiError';
+import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
+import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -45,6 +54,7 @@ import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasAnyRole } from '@/lib/auth/roles';
 import type { InvoiceStatus } from '@/types/contracts';
+import { isEditableState } from '@/types/signoff';
 
 const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
@@ -146,8 +156,13 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
     invoice !== undefined
     && (isAdmin || (invoice.created_by === myId && invoice.status === 'draft'));
   // Правка — по тем же правам, что бэкенд (`InvoiceDetailView.patch`): автор
-  // своего черновика либо администратор. Кнопка их лишь отражает.
-  const canEdit = canUpload;
+  // своего черновика либо администратор. Плюс ось согласования: пока счёт
+  // заперт (`pending`/`approved`/`rejected`), править нельзя даже
+  // администратору — `assert_editable` ответит 409, кнопку гасим заранее.
+  const canEdit =
+    invoice !== undefined
+    && (isAdmin || (invoice.created_by === myId && invoice.status === 'draft'))
+    && isEditableState(invoice.approval_state);
 
   if (isLoading) return <DetailSkeleton />;
   if (isError || !invoice) {
@@ -169,13 +184,33 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
           </div>
         </div>
 
-        {!embedded && canEdit && (
-          <Button asChild variant="outline">
-            <Link to={`/contracts/invoices/${invoice.id}/edit`}>
-              <Pencil className="mr-1.5 h-4 w-4" />
-              Редактировать
-            </Link>
-          </Button>
+        {!embedded && (
+          <div className="flex flex-wrap items-center gap-2">
+            {canEdit && (
+              <Button asChild variant="outline">
+                <Link to={`/contracts/invoices/${invoice.id}/edit`}>
+                  <Pencil className="mr-1.5 h-4 w-4" />
+                  Редактировать
+                </Link>
+              </Button>
+            )}
+            <SubmitForApproval
+              subjectType="contracts.invoice"
+              subjectId={invoice.id}
+              state={invoice.approval_state}
+              submit={contractsApi.submitInvoice}
+              // Счёт бюджет не занимает — остаток строки отправка не трогает,
+              // сбрасывать бюджетные ключи незачем (в отличие от договора).
+              invalidate={[
+                ['contracts', 'invoices'],
+                ['contracts', 'invoice', invoiceId],
+              ]}
+              size="default"
+              // На карточке объекта ссылка нужна и у решённого счёта: там
+              // кнопка «Вернуть на доработку», без которой он заперт навсегда.
+              showProcessLink
+            />
+          </div>
         )}
       </div>
 
@@ -380,6 +415,10 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {!embedded && (
+        <SubjectProcesses subjectType="contracts.invoice" subjectId={invoice.id} />
       )}
     </div>
   );
