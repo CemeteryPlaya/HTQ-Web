@@ -122,6 +122,14 @@ describe('EmployeeFormDialog — секции Т-2', () => {
   it('шлёт только изменённые секции', async () => {
     renderDialog(EMPLOYEE);
 
+    // Раскрываем «Финансовые данные» и ждём, пока в поле реально появится
+    // значение с сервера (450000.00 из мока fetchCardT2) — иначе тест не
+    // отличит корректно засеянный t2Initial от несеянного вообще: обе секции
+    // «чистые» (financial) или «грязные» (personal) одинаково независимо от
+    // того, дождались ли мы GET. Этот waitFor — как раз то ожидание.
+    fireEvent.click(await screen.findByText(/Финансовые данные/));
+    await screen.findByDisplayValue('450000.00');
+
     fireEvent.click(await screen.findByText(/Личные данные/));
     await act(async () => {
       fireEvent.change(await screen.findByLabelText(/Гражданство/), { target: { value: 'RU' } });
@@ -137,7 +145,10 @@ describe('EmployeeFormDialog — секции Т-2', () => {
   it('не кладёт card_t2 в тело, если Т-2 не трогали', async () => {
     renderDialog(EMPLOYEE);
 
-    await waitFor(() => expect(screen.getByText(/Личные данные/)).toBeInTheDocument());
+    // Тот же якорь, что и выше: без него тест не заметил бы регрессию, где
+    // секция редактируема ДО того, как загрузились её текущие значения.
+    fireEvent.click(await screen.findByText(/Финансовые данные/));
+    await screen.findByDisplayValue('450000.00');
     save();
 
     await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
@@ -155,6 +166,28 @@ describe('EmployeeFormDialog — секции Т-2', () => {
 
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(screen.getByText(/Введите число/)).toBeInTheDocument();
+  });
+
+  it('секция без view никогда не уходит в payload, даже когда другая секция изменена', async () => {
+    // Вторая половина инварианта editableSections ⊆ visibleSections: тест
+    // «шлёт только изменённые секции» проверяет, что чистая секция не уходит,
+    // но editableSections = T2_SECTIONS.filter(edit) (без фильтра по view)
+    // прошёл бы его тоже — скрытая секция там не трогается и потому «чистая».
+    // Явно проверяем, что financial без view не попадает в payload, даже
+    // когда мы редактируем другую (personal) секцию.
+    hasPerm.mockImplementation((key: string) => key !== 'hr.card.financial.view');
+    renderDialog(EMPLOYEE);
+
+    fireEvent.click(await screen.findByText(/Личные данные/));
+    await act(async () => {
+      fireEvent.change(await screen.findByLabelText(/Гражданство/), { target: { value: 'RU' } });
+    });
+    save();
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    const [, payload] = mockUpdate.mock.calls[0]!;
+    expect(payload.card_t2 as object).not.toHaveProperty('financial');
+    expect(Object.keys(payload.card_t2 as object)).toEqual(['personal']);
   });
 
   it('в режиме создания нет кнопок «Открыть карточку» и «Поделиться»', () => {

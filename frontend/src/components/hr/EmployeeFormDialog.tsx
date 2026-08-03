@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -139,13 +139,6 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     () => T2_SECTIONS.filter((s) => hasPerm(`hr.card.${s}.view`)),
     [hasPerm],
   );
-  /** Секции, которые уходят в payload: нужен и view, и edit. Секцию с одним
-   *  лишь edit мы не показываем — форма не знала бы текущих значений и
-   *  сохранение затёрло бы их null-ами. */
-  const editableSections = useMemo(
-    () => visibleSections.filter((s) => hasPerm(`hr.card.${s}.edit`)),
-    [visibleSections, hasPerm],
-  );
 
   const { data: cardT2 } = useQuery({
     queryKey: ['hr-card-t2', employee?.id],
@@ -153,17 +146,45 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     enabled: open && !!employee && visibleSections.length > 0,
   });
 
-  // Заполняем секции при открытии/приходе данных. `t2Initial` — снимок для
-  // сравнения «что изменилось»; без него «открыл и сохранил» переписывало бы
-  // Т-2 целиком.
+  /** Пока идёт (или упал) запрос текущих значений редактируемого сотрудника,
+   *  секция рисуется пустой — но пустая НЕ значит «нет данных»: это может
+   *  значить «ещё не загрузились». Создание не ждёт ничего (нечего грузить). */
+  const t2Loaded = !employee || cardT2 !== undefined;
+
+  /** Секции, которые уходят в payload: нужен и view, и edit, И текущие
+   *  значения уже должны были загрузиться. Секцию с одним лишь edit мы не
+   *  показываем — форма не знала бы текущих значений и сохранение затёрло бы
+   *  их null-ами; то же самое верно, если view есть, но GET ещё не
+   *  отработал (или упал) — иначе пользователь печатал бы поверх пустого
+   *  снимка и стёр бы то, чего не видел. */
+  const editableSections = useMemo(
+    () => (t2Loaded ? visibleSections.filter((s) => hasPerm(`hr.card.${s}.edit`)) : []),
+    [visibleSections, hasPerm, t2Loaded],
+  );
+
+  // Заполняем секции при открытии — РОВНО ОДИН РАЗ на пару (open, employee.id).
+  // Раньше эффект зависел от `cardT2` напрямую и переисполнялся при каждой
+  // смене этой ссылки — включая поздний повторный fetch/инвалидацию, которая
+  // случилась уже ПОСЛЕ того, как пользователь начал печатать, и тогда эффект
+  // тихо перезатирал набранное. `t2SeedKeyRef` защищает от повторного посева
+  // в рамках одного открытия диалога; при первом посеве мы всё равно ждём
+  // загрузки (либо employee нет — тогда ждать нечего).
+  const t2SeedKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      t2SeedKeyRef.current = null;
+      return;
+    }
+    const seedKey = String(employee?.id ?? 'new');
+    if (t2SeedKeyRef.current === seedKey) return;
+    if (employee && visibleSections.length > 0 && cardT2 === undefined) return; // ждём GET
     const next = employee ? t2FormFromServer(cardT2) : emptyT2Form();
     setT2Form(next);
     setT2Initial(next);
     setT2Errors({});
     setOpenSections({});
-  }, [open, employee, cardT2]);
+    t2SeedKeyRef.current = seedKey;
+  }, [open, employee, cardT2, visibleSections.length]);
 
   // Заполнение формы переезжает из startCreate/startEdit в эффект — раньше
   // страница заполняла состояние в момент нажатия кнопки, теперь компонент
@@ -213,8 +234,15 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
         if (form.department !== 'none') patch.department_id = Number(form.department);
         if (form.date_dismissed) patch.termination_date = form.date_dismissed;
         if (cardT2) patch.card_t2 = cardT2;
+        // card_t2 может нести зарплату/паспорт/ИИН — в консоль их не пишем,
+        // только какие секции ушли (см. заголовок «Финансовые данные
+        // (конфиденциально)» — печатать её содержимое противоречило бы этому).
         // eslint-disable-next-line no-console
-        console.debug('[hr.employees] update payload', editing.id, patch);
+        console.debug(
+          '[hr.employees] update payload',
+          editing.id,
+          cardT2 ? { ...patch, card_t2: Object.keys(cardT2) } : patch,
+        );
         return updateEmployeeWithCard(editing.id, patch);
       }
 
@@ -241,7 +269,10 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       };
       if (cardT2) payload.card_t2 = cardT2;
       // eslint-disable-next-line no-console
-      console.debug('[hr.employees] create payload', payload);
+      console.debug(
+        '[hr.employees] create payload',
+        cardT2 ? { ...payload, card_t2: Object.keys(cardT2) } : payload,
+      );
       return createEmployeeWithCard(payload);
     },
     onSuccess: () => {
@@ -749,6 +780,11 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                   <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 px-4 py-3 text-sm font-medium hover:bg-muted/40">
                     <span>{t(title.key, title.fallback)}</span>
                     <span className="flex items-center gap-2">
+                      {!t2Loaded && (
+                        <span className="text-xs font-normal text-muted-foreground">
+                          {t('hr.pages.employees.cardT2.loading', 'Загрузка…')}
+                        </span>
+                      )}
                       {sectionError && (
                         <span className="text-xs font-normal text-destructive">
                           {t('hr.pages.employees.cardT2.sectionHasError', 'Проверьте поля')}
