@@ -1,19 +1,38 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# HTQWeb — Production Docker Compose
+# HTQWeb — ПРОДАКШН (самодостаточный)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Quick start:
-#   1. cp .env.production .env    (fill in secrets)
+# Быстрый старт:
+#   1. cp .env.example .env       (заполнить секреты)
 #   2. docker compose up -d --build
-#   3. docker compose ps          (verify all services are healthy)
+#   3. docker compose ps          (убедиться, что всё healthy)
 #
-# For HTTPS with Let's Encrypt:
-#   1. Set SERVER_DOMAIN=your-domain.com in .env
-#   2. docker compose up -d
+# Полный контур с nginx/sfu/certbot/webtransport — под профилем production:
+#   docker compose --profile production up -d --build
+# (профиль оставлен, потому что sfu требует ./sfu/.env, а он есть не на каждой
+#  машине; без профиля поднимается backend+фронт-сборка без edge-слоя)
+#
+# HTTPS через Let's Encrypt:
+#   1. SERVER_DOMAIN=your-domain.com в .env
+#   2. docker compose --profile production up -d
 #   3. docker compose exec certbot certbot certonly --webroot \
 #        -w /var/www/certbot -d your-domain.com --email your@email.com --agree-tos
 #   4. docker compose restart nginx
 #
+# ─── ВСЕГО ТРИ COMPOSE-ФАЙЛА, ЭТОТ — ПЕРВЫЙ ────────────────────────────────────
+#   ЭТОТ ФАЙЛ                     — ПРОД: фронт собирается в статику, gunicorn,
+#                                   nginx/sfu/certbot, БД из .env
+#   docker-compose.test-local.yml — тестовый стек: Vite HMR, DEBUG, Postgres в
+#                                   контейнере (:55432, туда же ходит pytest)
+#   docker-compose.test-env.yml   — тестовый стек: Vite HMR, DEBUG, БД из .env
+#
+# ⚠️ Файлы самостоятельные и НЕ наследуют друг друга (осознанное решение —
+#    запускать одной короткой командой). Значит правка сервиса, общего для
+#    сред (redis, minio, backend-*, grafana…), должна повторяться в остальных
+#    двух файлах. Перед коммитом сверяйте:  git diff docker-compose*.yml
+#
+# ⚠️ Локального Postgres здесь НЕТ: БД берётся из .env. Нужна база в
+#    контейнере — это docker-compose.test-local.yml.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 x-django-env: &django-env
@@ -23,7 +42,7 @@ x-django-env: &django-env
   # Django (psycopg, sync) идёт НАПРЯМУЮ в Postgres: CONN_MAX_AGE пулит на уровне
   # приложения, а PgBouncer transaction-mode рвал бы DDL/prepared-statements.
   # Контейнер pgbouncer (:6432) остаётся для хостовых утилит/совместимости.
-  DB_HOST: ${DB_HOST:-45.10.110.212}   # БД в Docker на VPS; офлайн — DB_HOST=db + --profile local-db
+  DB_HOST: ${DB_HOST:-45.10.110.212}   # БД в Docker на VPS; локальная база — docker-compose.test-local.yml
   DB_PORT: "${DB_PORT:-5432}"
   DB_NAME: ${DB_NAME:-htqweb}
   DB_USER: ${DB_USER:-htqweb}
@@ -40,74 +59,12 @@ x-django-env: &django-env
   S3_USE_PATH_STYLE: "true"
 
 services:
-  # ─── PostgreSQL (ЛОКАЛЬНАЯ, опционально) ──────────
-  # Боевая БД — в Docker на VPS (DB_HOST=45.10.110.212, см. x-django-env). Этот
-  # локальный контейнер под профилем local-db — только для офлайн-разработки без
-  # VPS: `docker compose --profile local-db up -d db` + DB_HOST=db в .env.
-  db:
-    profiles: ["local-db"] 
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${DB_NAME:-htqweb}
-      POSTGRES_USER: ${DB_USER:-htqweb}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-change-me}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./infra/db/init-ltree.sql:/docker-entrypoint-initdb.d/01-ltree.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-htqweb}"]
-      interval: 5s
-      retries: 5
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # ─── PgBouncer (только с локальной БД) ───────────
-  pgbouncer:
-    profiles: ["local-db"]   # для VPS-БД не нужен (Django ходит напрямую)
-    image: edoburu/pgbouncer:v1.25.1-p0
-    restart: unless-stopped
-    environment:
-      DB_HOST: db
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-htqweb}
-      DB_USER: ${DB_USER:-htqweb}
-      DB_PASSWORD: ${DB_PASSWORD:-change-me}
-      AUTH_TYPE: scram-sha-256
-      POOL_MODE: transaction
-      MAX_CLIENT_CONN: 1000
-      DEFAULT_POOL_SIZE: 20
-      # Reap leaked/orphaned connections so they can't exhaust the shared pool
-      # and hang the whole platform. A container recreated mid-request (deploys)
-      # orphans its server connection "idle in transaction"; without a timeout
-      # PgBouncer pins it forever. 300s is far longer than any real request.
-      IDLE_TRANSACTION_TIMEOUT: 300
-      SERVER_IDLE_TIMEOUT: 240
-      # asyncpg + SQLAlchemy sends `search_path` as a startup parameter so each
-      # service lands in its own schema; PgBouncer in transaction mode must be
-      # told to accept/forward it.
-      IGNORE_STARTUP_PARAMETERS: extra_float_digits,search_path
-    ports:
-      - "6432:5432"
-    depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${DB_USER:-htqweb} || exit 1"]
-      interval: 3s
-      retries: 10
-      start_period: 5s
-      timeout: 3s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+  # Контейнеров `db` и `pgbouncer` здесь НЕТ намеренно: боевая БД внешняя
+  # (DB_HOST из .env, по умолчанию VPS), а Django ходит в Postgres напрямую —
+  # CONN_MAX_AGE пулит на уровне приложения, тогда как PgBouncer в
+  # transaction-режиме рвал бы DDL и prepared-statements.
+  # Postgres в контейнере (и PgBouncer на :6432 для хостовых утилит) живёт в
+  # docker-compose.test-local.yml.
 
   # ─── Redis (кэш + channel layer) ────────────────
   redis:
@@ -230,12 +187,22 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      # ensure_buckets в docker-entrypoint.sh ходит в minio:9000 ещё до запуска
+      # сервера. Без этой зависимости backend-web обгоняет minio и тратит ~40 с
+      # на ретраи botocore, после чего healthcheck успевает объявить контейнер
+      # нездоровым, хотя приложение исправно.
+      minio:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/core/v1/services/').status==200 else 1)\" || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 40s
+      # Холодный старт складывается из collectstatic (~9 с), сида админа (~3 с)
+      # и загрузки Django (~7 с), а на медленной машине или при недоступном S3
+      # ещё дольше. 40 с не хватало, и compose падал с "is unhealthy" при живом
+      # приложении.
+      start_period: 120s
     logging:
       driver: json-file
       options:
@@ -569,7 +536,6 @@ services:
         max-file: "3"
 
 volumes:
-  postgres_data:
   static_files:
   media_files:
   wt_certs:

@@ -69,10 +69,7 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/tasks/contractors', component: lazyPages.HRContractors, requiresAuth: true, requiresRole: 'admin' },
   // Declared last: `/tasks/:id` would otherwise swallow the static paths above.
   { path: '/tasks/:id', component: lazyPages.TaskDetailRouter, requiresAuth: true },
-  { path: '/tasks/roadmap', component: lazyPages.HRRoadmap, requiresAuth: true },
-  { path: '/tasks/reports', component: lazyPages.HRReports, requiresAuth: true },
-  { path: '/tasks/resources', component: lazyPages.HRResourceSchedule, requiresAuth: true },
-  { path: '/tasks/equipment', component: lazyPages.HREquipment, requiresAuth: true },
+
   // ─── Contracts (бюджеты / реестр контрактов / договоры) ───────────────
   // Статический `/new` объявлен ПЕРЕД `/:id` — react-router сопоставляет в
   // порядке объявления, и иначе "new" ушёл бы в параметр.

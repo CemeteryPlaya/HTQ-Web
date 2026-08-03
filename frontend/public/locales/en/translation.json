@@ -102,7 +102,8 @@
     "login": "Login",
     "logout": "Logout",
     "requests": "Requests",
-    "tagline": "Construction services in energy sector"
+    "tagline": "Construction services in energy sector",
+    "more": "More"
   },
   "hero": {
     "tag": "Market Leader in Central Asia",
@@ -540,11 +541,16 @@
           "sroPermitNumber": "SRO permit number",
           "sroPermitExpiry": "SRO permit expiry",
           "safetyCertNumber": "Safety certificate number",
-          "safetyCertExpiry": "Safety certificate expiry"
+          "safetyCertExpiry": "Safety certificate expiry",
+          "inn": "TIN",
+          "birthDate": "Date of birth",
+          "birthPlace": "Place of birth",
+          "citizenship": "Citizenship"
         },
         "sections": {
           "sro": "SRO & Occupational Safety",
-          "financial": "Financial data (confidential)"
+          "financial": "Financial data (confidential)",
+          "personal": "Personal data"
         },
         "placeholders": {
           "selectUser": "Select user",
@@ -567,7 +573,17 @@
           "hired": "Hired",
           "actions": "Actions",
           "lastName": "Last Name"
-        }
+        },
+        "cardT2": {
+          "saved": "Saved",
+          "error": "Could not save",
+          "forbidden": "Not enough permissions to edit this section",
+          "badNumber": "Enter a number, e.g. 450000 or 450000.50"
+        },
+        "searchDepartment": "Search department…",
+        "noDepartmentFound": "Department not found",
+        "createDepartment": "Create new department",
+        "createDepartmentTitle": "New department"
       },
       "structure": {
         "title": "Company Structure",
@@ -1846,5 +1862,10 @@
       "media": "Files",
       "users": "Profile"
     }
+  },
+  "nav": {
+    "messenger": "Chats",
+    "email": "Mail",
+    "files": "Files"
   }
 }

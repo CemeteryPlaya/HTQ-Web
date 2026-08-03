@@ -1,9 +1,10 @@
-import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Briefcase,
+  Building2,
   Check,
   ChevronsUpDown,
   IdCard,
@@ -20,6 +21,7 @@ import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
 import {
   createEmployee,
   createEmployeeUser,
+  createDepartment,
   createPosition,
   deleteEmployee,
   fetchDepartments,
@@ -83,16 +85,11 @@ interface Employee {
   status: string;
   notes?: string;
   bio?: string;
-  // Sensitive (Senior-only — absent from API response for Junior)
-  salary?: string | null;
-  bonus?: string | null;
-  passport_data?: string;
-  bank_account?: string;
-  // SRO (read-only for Junior)
-  sro_permit_number?: string;
-  sro_permit_expiry?: string | null;
-  safety_cert_number?: string;
-  safety_cert_expiry?: string | null;
+  // Скалярные поля Т-2 (оклад, паспорт, СРО…) НЕ живут на Employee: они уехали
+  // на отдельную модель EmployeeCard со своим эндпойнтом
+  // `PATCH /hr/v1/employees/{id}/card/t2` и посекционным RBAC. Правятся на
+  // карточке сотрудника (HREmployeeCard + CardT2SectionDialog) — сюда их
+  // возвращать нельзя: POST/PUT /employees/ их не принимает и молча потеряет.
   // Synced from user-service via the replica worker; absent on bare-skeleton
   // employees that aren't linked to a platform user yet.
   avatar_url?: string | null;
@@ -145,6 +142,35 @@ interface Department {
   name: string;
 }
 
+/**
+ * Кнопка «Создать …» в комбобоксе — СРАЗУ под строкой поиска.
+ *
+ * Намеренно НЕ `CommandItem`: cmdk фильтрует элементы по введённому тексту, и
+ * пункт создания исчезал бы ровно тогда, когда он нужен больше всего — когда
+ * искомого в списке нет. Обычная кнопка вне `CommandList` не фильтруется и
+ * остаётся на месте при любом запросе.
+ */
+const ComboboxCreateAction = ({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: typeof Plus;
+  label: string;
+  onClick: () => void;
+}) => (
+  <div className="border-b p-1">
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm font-medium text-primary outline-none hover:bg-accent focus-visible:bg-accent"
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </button>
+  </div>
+);
+
 interface HRUser {
   id: number;
   full_name: string;
@@ -167,6 +193,7 @@ const HREmployees = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   // Lifted share-dialog state — opened from the row action button. ``null``
   // means closed; a partial Employee carries id + display name only.
   const [shareTarget, setShareTarget] = useState<{ id: number; full_name: string } | null>(null);
@@ -438,6 +465,48 @@ const HREmployees = () => {
     setCreatePositionOpen(true);
   };
 
+  // ─── Отдел: комбобокс с поиском + создание на месте ───────────────────────
+  // Раньше отдел был обычным <Select> без поиска и без возможности завести
+  // новый — при том что должность рядом и искалась, и создавалась. Из-за этого
+  // сотрудника нельзя было оформить «одним заходом», если отдела ещё нет.
+  const [departmentPopoverOpen, setDepartmentPopoverOpen] = useState(false);
+  const [createDepartmentOpen, setCreateDepartmentOpen] = useState(false);
+  const [newDepartmentForm, setNewDepartmentForm] = useState({ name: '', description: '' });
+  const [newDepartmentError, setNewDepartmentError] = useState<string | null>(null);
+
+  const createDepartmentMutation = useMutation({
+    mutationFn: () => createDepartment({
+      name: newDepartmentForm.name.trim(),
+      description: newDepartmentForm.description.trim() || undefined,
+    }),
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: ['hr-departments'] });
+      setForm((prev) => ({ ...prev, department: String(created.id) }));
+      setCreateDepartmentOpen(false);
+      setNewDepartmentForm({ name: '', description: '' });
+      setNewDepartmentError(null);
+    },
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { detail?: unknown } }; message?: string };
+      const detail = e?.response?.data?.detail;
+      setNewDepartmentError(
+        (typeof detail === 'string' ? detail : null)
+        || (Array.isArray(detail)
+          ? detail.map((d) => (d as { msg?: string })?.msg).filter(Boolean).join(' • ')
+          : null)
+        || e?.message
+        || 'Не удалось создать отдел',
+      );
+    },
+  });
+
+  const startCreateDepartment = () => {
+    setDepartmentPopoverOpen(false);
+    setNewDepartmentError(null);
+    setNewDepartmentForm({ name: '', description: '' });
+    setCreateDepartmentOpen(true);
+  };
+
   const createUserMutation = useMutation({
     mutationFn: async (data: typeof newUserForm) => {
       return createEmployeeUser(data);
@@ -487,6 +556,26 @@ const HREmployees = () => {
     });
     setDialogOpen(true);
   };
+
+  // Диплинк `/hr/employees?edit=<id>` — им пользуется кнопка «Редактировать»
+  // на карточке сотрудника (HREmployeeCard). До этого параметр никто не читал,
+  // и кнопка просто уводила на список, ничего не открывая.
+  // Параметр снимаем сразу после открытия: иначе он остался бы в истории и
+  // повторно открывал бы диалог при возврате «назад».
+  useEffect(() => {
+    const editId = Number(searchParams.get('edit'));
+    if (!Number.isFinite(editId) || editId <= 0 || !employees) return;
+    const target = employees.find((e) => e.id === editId);
+    if (!target) return;
+    startEdit(target);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('edit');
+      return next;
+    }, { replace: true });
+    // startEdit пересоздаётся каждый рендер и в зависимостях не нужен: эффект
+    // должен сработать на появление employees или параметра, а не на ререндер.
+  }, [employees, searchParams, setSearchParams]);
 
   const statusLabels: Record<string, string> = {
     active: t('hr.pages.employees.status.active'),
@@ -604,8 +693,18 @@ const HREmployees = () => {
                         <PopoverContent className="w-[400px] p-0" align="start">
                           <Command>
                             <CommandInput placeholder={t('hr.pages.employees.searchUser')} />
-                            <CommandEmpty>{t('hr.pages.employees.noUserFound')}</CommandEmpty>
+                            {canManageUserOptions && (
+                              <ComboboxCreateAction
+                                icon={UserPlus}
+                                label={t('hr.pages.employees.createUser')}
+                                onClick={() => {
+                                  setUserPopoverOpen(false);
+                                  setCreateUserOpen(true);
+                                }}
+                              />
+                            )}
                             <CommandList>
+                              <CommandEmpty>{t('hr.pages.employees.noUserFound')}</CommandEmpty>
                               <CommandGroup>
                                 <CommandItem
                                   value="none"
@@ -631,20 +730,6 @@ const HREmployees = () => {
                                   </CommandItem>
                                 ))}
                               </CommandGroup>
-                              {canManageUserOptions && (
-                                <CommandGroup>
-                                  <CommandItem
-                                    onSelect={() => {
-                                      setUserPopoverOpen(false);
-                                      setCreateUserOpen(true);
-                                    }}
-                                    className="text-primary font-medium flex items-center gap-2 cursor-pointer"
-                                  >
-                                    <UserPlus className="h-4 w-4" />
-                                    {t('hr.pages.employees.createUser')}
-                                  </CommandItem>
-                                </CommandGroup>
-                              )}
                             </CommandList>
                           </Command>
                         </PopoverContent>
@@ -666,7 +751,72 @@ const HREmployees = () => {
                   </label>
                 </div>
 
+                {/* Отдел идёт ПЕРЕД должностью: должность принадлежит отделу,
+                    и выбранный отдел подставляется в форму создания должности —
+                    обратный порядок заставлял бы возвращаться назад. */}
                 <div className="grid gap-4 md:grid-cols-2">
+                  <label className="grid gap-2 text-sm">
+                    {t('hr.pages.employees.fields.department')}
+                    <Popover open={departmentPopoverOpen} onOpenChange={setDepartmentPopoverOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          role="combobox"
+                          aria-expanded={departmentPopoverOpen}
+                          className="w-full justify-between font-normal"
+                          disabled={editing ? !canTransferEmployee : !canCreateEmployee}
+                        >
+                          <span className="truncate">
+                            {form.department && form.department !== 'none'
+                              ? departments?.find((d) => String(d.id) === form.department)?.name
+                                || t('hr.pages.employees.placeholders.selectDepartment')
+                              : t('hr.pages.employees.placeholders.selectDepartment')}
+                          </span>
+                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[--radix-popover-trigger-width] min-w-[320px] p-0" align="start">
+                        <Command>
+                          <CommandInput placeholder={t('hr.pages.employees.searchDepartment', 'Поиск отдела…')} />
+                          {(editing ? canTransferEmployee : canCreateEmployee) && (
+                            <ComboboxCreateAction
+                              icon={Plus}
+                              label={t('hr.pages.employees.createDepartment', 'Создать новый отдел')}
+                              onClick={startCreateDepartment}
+                            />
+                          )}
+                          <CommandList>
+                            <CommandEmpty>{t('hr.pages.employees.noDepartmentFound', 'Отдел не найден')}</CommandEmpty>
+                            <CommandGroup>
+                              <CommandItem
+                                value="none"
+                                onSelect={() => {
+                                  setForm({ ...form, department: 'none' });
+                                  setDepartmentPopoverOpen(false);
+                                }}
+                              >
+                                <Check className={cn('mr-2 h-4 w-4', form.department === 'none' ? 'opacity-100' : 'opacity-0')} />
+                                {t('hr.common.noDepartment')}
+                              </CommandItem>
+                              {departments?.map((dept) => (
+                                <CommandItem
+                                  key={dept.id}
+                                  value={dept.name}
+                                  onSelect={() => {
+                                    setForm({ ...form, department: String(dept.id) });
+                                    setDepartmentPopoverOpen(false);
+                                  }}
+                                >
+                                  <Check className={cn('mr-2 h-4 w-4', form.department === String(dept.id) ? 'opacity-100' : 'opacity-0')} />
+                                  <span className="flex-1 truncate">{dept.name}</span>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
+                  </label>
                   <label className="grid gap-2 text-sm">
                     {t('hr.pages.employees.fields.position')}
                     <Popover open={positionPopoverOpen} onOpenChange={setPositionPopoverOpen}>
@@ -699,8 +849,15 @@ const HREmployees = () => {
                       <PopoverContent className="w-[--radix-popover-trigger-width] min-w-[320px] p-0" align="start">
                         <Command>
                           <CommandInput placeholder={t('hr.pages.employees.searchPosition', 'Поиск должности…')} />
-                          <CommandEmpty>{t('hr.pages.employees.noPositionFound', 'Должность не найдена')}</CommandEmpty>
+                          {(editing ? canTransferEmployee : canCreateEmployee) && (
+                            <ComboboxCreateAction
+                              icon={Plus}
+                              label={t('hr.pages.employees.createPosition', 'Создать новую должность')}
+                              onClick={startCreatePosition}
+                            />
+                          )}
                           <CommandList>
+                            <CommandEmpty>{t('hr.pages.employees.noPositionFound', 'Должность не найдена')}</CommandEmpty>
                             <CommandGroup>
                               <CommandItem
                                 value="none"
@@ -734,37 +891,10 @@ const HREmployees = () => {
                                 </CommandItem>
                               ))}
                             </CommandGroup>
-                            {(editing ? canTransferEmployee : canCreateEmployee) && (
-                              <CommandGroup>
-                                <CommandItem
-                                  onSelect={startCreatePosition}
-                                  className="text-primary font-medium flex items-center gap-2 cursor-pointer"
-                                >
-                                  <Plus className="h-4 w-4" />
-                                  {t('hr.pages.employees.createPosition', 'Создать новую должность')}
-                                </CommandItem>
-                              </CommandGroup>
-                            )}
                           </CommandList>
                         </Command>
                       </PopoverContent>
                     </Popover>
-                  </label>
-                  <label className="grid gap-2 text-sm">
-                    {t('hr.pages.employees.fields.department')}
-                    <Select value={form.department} onValueChange={(value) => setForm({ ...form, department: value })} disabled={editing ? !canTransferEmployee : !canCreateEmployee}>
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('hr.pages.employees.placeholders.selectDepartment')} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">{t('hr.common.noDepartment')}</SelectItem>
-                        {departments?.map((dept) => (
-                          <SelectItem key={dept.id} value={String(dept.id)}>
-                            {dept.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
                   </label>
                 </div>
 
@@ -969,6 +1099,55 @@ const HREmployees = () => {
       />
 
       {/* Create Position Dialog */}
+      {/* Создание отдела прямо из карточки сотрудника — чтобы не уходить на
+          HR → Отделы и не терять заполненную форму. Полей ровно два: бэкенд
+          требует только name, остальное (руководитель, родитель) настраивается
+          на своей странице. */}
+      <Dialog open={createDepartmentOpen} onOpenChange={setCreateDepartmentOpen}>
+        <DialogContent className="max-w-lg" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Building2 className="h-4 w-4" />
+              {t('hr.pages.employees.createDepartmentTitle', 'Новый отдел')}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <label className="grid gap-1.5 text-sm">
+              {t('hr.pages.departments.fields.name', 'Название')}
+              <Input
+                autoFocus
+                value={newDepartmentForm.name}
+                onChange={(e) => setNewDepartmentForm({ ...newDepartmentForm, name: e.target.value })}
+              />
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              {t('hr.pages.departments.fields.description', 'Описание')}
+              <Textarea
+                value={newDepartmentForm.description}
+                onChange={(e) => setNewDepartmentForm({ ...newDepartmentForm, description: e.target.value })}
+                rows={2}
+              />
+            </label>
+            {newDepartmentError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {newDepartmentError}
+              </div>
+            )}
+            <div className="mt-2 flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setCreateDepartmentOpen(false)}>
+                {t('hr.common.cancel')}
+              </Button>
+              <Button
+                onClick={() => createDepartmentMutation.mutate()}
+                disabled={!newDepartmentForm.name.trim() || createDepartmentMutation.isPending}
+              >
+                {createDepartmentMutation.isPending ? t('hr.common.saving') : t('hr.common.save')}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={createPositionOpen} onOpenChange={setCreatePositionOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>

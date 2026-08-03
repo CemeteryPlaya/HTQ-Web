@@ -16,25 +16,45 @@ pytest-django needs a **direct** connection to Postgres so it can
   transaction-pooled, and `CREATE DATABASE`/`DROP DATABASE` cannot pass through a
   pooled connection.
 
-So `docker-compose.test.yml` (repo root) — **самодостаточный** стек: поднимает
-ТОЛЬКО одноразовый Postgres на `55432` (`.env`-var `DB_HOST_PORT`), в отдельном
-проекте `htqweb-test` и отдельном volume. Боевую БД (в Docker на VPS `45.10.110.212`,
-`docker-compose.yml`) НЕ трогает.
+Поэтому Postgres берём из `docker-compose.test-local.yml` (repo root) — его сервис
+`db` публикуется на `55432` (`.env`-var `DB_HOST_PORT`), в отдельном проекте
+`htqweb-local` и отдельном volume. Боевую БД (в Docker на VPS, `docker-compose.yml`)
+НЕ трогает.
 
 ## What to start
 
+Поднимать весь тестовый стек ради pytest не нужно — запускаем ОДИН сервис:
+
 ```bash
-docker compose -f docker-compose.test.yml up -d          # тест-Postgres на :55432
+docker compose -f docker-compose.test-local.yml up -d db     # тест-Postgres на :55432
 # ...прогнать pytest...
-docker compose -f docker-compose.test.yml down -v        # снести с данными
+docker compose -f docker-compose.test-local.yml down -v      # снести с данными
+```
+
+(Тот же файл без `db` на конце поднимает полный стек с Vite HMR — он для
+разработки, для тестов избыточен.)
+
+### Если на машине нет `.venv`
+
+Команды ниже предполагают venv в корне репозитория. Его может не быть — тогда
+сюиту можно прогнать прямо в контейнере backend'а, где все зависимости уже
+установлены. Адрес тестовой БД переопределяем на внутрисетевой, потому что
+дефолт `localhost:55432` верен только с хоста:
+
+```bash
+docker compose -f docker-compose.test-local.yml up -d backend-web
+docker compose -f docker-compose.test-local.yml exec \
+  -e TEST_DB_HOST=db -e TEST_DB_PORT=5432 backend-web python -m pytest -q
 ```
 
 ⚠️ Поднимать/пересоздавать db ТОЛЬКО через `compose up -d` — **НЕ `docker restart`**:
 плоский restart НЕ применяет публикацию порта `:55432` → pytest виснет на
 `psycopg ConnectionTimeout` (localhost→`::1`+`127.0.0.1`, timeout 130s каждый).
-Проверка: `docker port htqweb-test-db-1` должен показать `0.0.0.0:55432`.
-Креды тестовой БД (`htqweb/change-me`) независимы от боевых (`settings/test.py`
-читает `TEST_DB_*`, не `DB_*`), поэтому VPS-креды из `.env` сюда не текут.
+Проверка: `docker port htqweb-local-db-1` должен показать `0.0.0.0:55432`.
+Креды контейнера зафиксированы как `htqweb/change-me` и совпадают с дефолтами
+`TEST_DB_*`, которые читает `settings/test.py` (а не `DB_*`), поэтому VPS-креды
+из `.env` сюда не текут. Если переопределяете `TEST_DB_USER`/`TEST_DB_PASSWORD`,
+поменяйте их и в сервисе `db` — иначе pytest не пустят в базу.
 
 ## Env vars (all have working defaults, override only if needed)
 

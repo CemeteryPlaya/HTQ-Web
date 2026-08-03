@@ -55,7 +55,7 @@ document is checked against, not a FastAPI router. See
 [STRUCTURE.md](STRUCTURE.md) §3 and [backend/README.md](backend/README.md)
 for the app anatomy.
 
-## Access URLs (dev mode — `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`)
+## Access URLs (test stack — `docker compose -f docker-compose.test-local.yml up -d --build`)
 
 The Vite dev server binds `0.0.0.0:3000` with `allowedHosts: true`, so any
 of the following work identically over **plain HTTP**:
@@ -88,7 +88,7 @@ itself; hit `:8000`/`:8001` directly for that, or use the gateway-level
 
 ## Production access (nginx :80)
 
-`docker compose up -d` (without `-f docker-compose.dev.yml`, and note the
+`docker compose up -d` (the production file, and note the
 `production` compose profile that adds `nginx`/`sfu`/`certbot`/
 `webtransport`) brings up nginx on `:80`. Same routing table, but the Vite
 dev server isn't running.

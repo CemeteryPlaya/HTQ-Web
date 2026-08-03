@@ -5,11 +5,12 @@
  * данные, а корневой `.env` по умолчанию направляет backend на боевую БД
  * VPS. Стек для E2E поднимается так:
  *
- *   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
- *                  -f docker-compose.localdb.yml -f docker-compose.test.yml up -d
+ *   docker compose -f docker-compose.test-local.yml up -d
  *
- * `docker-compose.localdb.yml` пинит `DB_HOST: db` на все backend-процессы;
- * проверить можно так: `docker compose ... exec backend-web printenv DB_HOST`.
+ * Этот файл жёстко пинит `DB_HOST: db` на все backend-процессы (подстановки
+ * из `.env` там нет намеренно). Проверить: `docker compose -f
+ * docker-compose.test-local.yml exec backend-web printenv DB_HOST` → `db`.
+ * НЕ запускать против docker-compose.test-env.yml — он ходит в БД из `.env`.
  *
  * Тесты проверяют то, что модульные не видят: настоящую цепочку
  * nginx/vite → Django → Postgres и согласованность правил между слоями.

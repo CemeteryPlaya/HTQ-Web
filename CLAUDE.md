@@ -23,23 +23,33 @@ These are authoritative and maintained — prefer them over scanning the tree:
 - **[backend/README.md](backend/README.md)** — Django app anatomy, `interface`/`api_view` rules, how to add a domain. Replaces the deleted `services/README.md`.
 - **[docs/architecture.md](docs/architecture.md)** — architectural decisions (predates the cutover in places — e.g. it still talks about DRF ViewSets and a `backend/tasks/` layout that doesn't exist; treat it as background, not a source of truth for current layout).
 
-Ignore/discount at the repo root: empty `nginx/`, root `node_modules/`+`package.json` (tooling only). **Ровно два compose-файла:** `docker-compose.yml` (прод/основной — единый Django-backend; боевая БД в Docker на VPS `45.10.110.212:5432`) и `docker-compose.test.yml` (одноразовый Postgres на :55432 для pytest). Старые `docker-compose.dev.yml`, `docker-compose.django.yml`, `RUN-DJANGO-CHECK.md` удалены. The only authoritative gateway config is `infra/nginx/default.conf`.
+Ignore/discount at the repo root: empty `nginx/`, root `node_modules/`+`package.json` (tooling only). **Ровно три compose-файла, каждый самодостаточный (`-f <файл>`, БЕЗ цепочки `-f a -f b`):** `docker-compose.yml` (ПРОД — фронт собран в статику, gunicorn, nginx/sfu/certbot под профилем `production`, БД из `.env`), `docker-compose.test-local.yml` (тестовый стек: Vite HMR, DEBUG, Postgres в контейнере на `:55432` — туда же ходит pytest), `docker-compose.test-env.yml` (тестовый стек, но БД из `.env`, миграции по умолчанию OFF). Старые `docker-compose.dev.yml`, `docker-compose.localdb.yml`, `docker-compose.test.yml`, `docker-compose.django.yml`, `RUN-DJANGO-CHECK.md` удалены. Файлы намеренно НЕ наследуют друг друга, поэтому правка общего сервиса повторяется во всех трёх — сверяйте `git diff docker-compose*.yml`. The only authoritative gateway config is `infra/nginx/default.conf`.
 
 ## Commands
 
-Containers are named `htq-web-<service>-1` (e.g. `htq-web-backend-web-1`, `htq-web-db-1`, `htq-web-pgbouncer-1`) — the compose project takes its name from the repo directory.
+Каждый compose-файл объявляет своё имя проекта, поэтому контейнеры называются по нему:
+прод — `htq-web-<service>-1` (имя берётся из каталога репозитория), тестовые стеки —
+`htqweb-local-<service>-1` и `htqweb-env-<service>-1`. Тома у стеков тоже раздельные.
 
-**БД — боевая в Docker на VPS** (`DB_HOST=45.10.110.212`, `DB_PORT=5432` в `.env` +
-`x-django-env`). Локальные `db`/`pgbouncer` в `docker-compose.yml` — только под
-профилем `local-db` (офлайн-разработка без VPS: `--profile local-db up -d db` + `DB_HOST=db`).
+**БД:** прод и `test-env` берут её из `.env` (по умолчанию боевая на VPS
+`45.10.110.212:5432`); `test-local` поднимает свой Postgres в контейнере и
+**жёстко** прописывает `DB_HOST: db` — подстановки из `.env` там нет намеренно,
+иначе «локальный» стек ушёл бы на прод.
 
-**Run the stack:**
+**Run the stack** (файлы самостоятельные — никаких `-f a -f b`):
 ```bash
-docker compose up -d --build                       # backend(web/asgi/worker/beat)/flower + redis/minio + мониторинг
-docker compose --profile production up -d --build  # + nginx/sfu/certbot/webtransport (SPA раздаётся nginx)
-docker compose up -d --build --no-deps backend-web # пересобрать один процесс после правок
+# ПРОД
+docker compose up -d --build                       # backend/flower + redis/minio + мониторинг
+docker compose --profile production up -d --build  # + nginx/sfu/certbot/webtransport
+
+# ТЕСТ, локальная БД в контейнере (обычная разработка; Vite HMR :3000)
+docker compose -f docker-compose.test-local.yml up -d --build
+docker compose -f docker-compose.test-local.yml up -d --build --no-deps backend-web  # один процесс
+
+# ТЕСТ, БД из .env (посмотреть на реальных данных; миграции по умолчанию OFF)
+docker compose -f docker-compose.test-env.yml up -d --build
 ```
-Фронт-дев с HMR — отдельно: `cd frontend && npm run dev` (Vite :3000, проксирует в backend).
+⚠️ Три стека публикуют одни и те же host-порты — одновременно поднимается только один.
 
 **Frontend** (`cd frontend`):
 ```bash
@@ -55,7 +65,7 @@ Playwright: the chromium binary isn't installed; launch with `{ channel: 'msedge
 
 **Backend tests** (`cd backend`): pytest-django against **real Postgres** (no SQLite), on a dedicated host port because neither existing route works (`:5432` is a native Windows Postgres install, `:6432`/PgBouncer is transaction-pooled and can't `CREATE DATABASE`). Bring the port up once, then run the suite:
 ```bash
-docker compose -f docker-compose.test.yml up -d   # самодостаточный тест-Postgres на :55432 (НЕ docker restart!)
+docker compose -f docker-compose.test-local.yml up -d db   # ТОЛЬКО Postgres на :55432 (НЕ docker restart!)
 cd backend
 ../.venv/Scripts/python.exe -m pytest -q                                   # whole suite
 ../.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
@@ -79,7 +89,7 @@ DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
   DB_NAME=htqweb DB_USER=htqweb DB_PASSWORD=change-me JWT_SECRET=dev PYTHONIOENCODING=utf-8 \
   ../.venv/Scripts/python.exe manage.py <command>
 ```
-(`:55432` comes up with `docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db`. `PYTHONIOENCODING=utf-8` is needed or Russian output comes out mojibake on the Windows console.)
+(`:55432` comes up with `docker compose -f docker-compose.test-local.yml up -d db`. `PYTHONIOENCODING=utf-8` is needed or Russian output comes out mojibake on the Windows console.)
 
 ## Architecture invariants (the load-bearing ones)
 
@@ -96,7 +106,7 @@ DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
 
 - **Django talks straight to Postgres**: `DB_HOST=db`, `DB_PORT=5432` (psycopg, sync), `CONN_MAX_AGE=0` — pooling is app-level, not a shared external pooler. PgBouncer (`:6432`) is still in the compose file for host-side tooling/manual `psql`, but it is **not** in the live request path anymore.
 - **History (no longer applies — here so old scars make sense if you trip over them):** the FastAPI generation put every service behind PgBouncer in transaction-pooling mode, which silently drops `search_path`, so all 8 Python services (except `user`→schema `auth`) actually lived in schema `public` with a table-name-prefix convention (`hr_*`, `task_*`, `request_*`, `cms_*`, `email_*`), and Alembic needed a fresh-thread-per-migration dance to survive the pooler. None of that applies to Django: one schema (`public`), natural table names (`<app>_<model>`), `managed=True`, plain `makemigrations`/`migrate`.
-- **Tests need a real, unpooled Postgres** — `CREATE DATABASE`/`DROP DATABASE test_htqweb` cannot pass through PgBouncer's transaction pool. That's what host port `:55432` (`docker-compose.test.yml`) is for; see [backend/README-tests.md](backend/README-tests.md).
+- **Tests need a real, unpooled Postgres** — `CREATE DATABASE`/`DROP DATABASE test_htqweb` cannot pass through PgBouncer's transaction pool. That's what host port `:55432` (the `db` service of `docker-compose.test-local.yml`) is for; see [backend/README-tests.md](backend/README-tests.md).
 
 ## Host / Windows environment notes
 

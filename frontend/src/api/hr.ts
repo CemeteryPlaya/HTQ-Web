@@ -232,6 +232,29 @@ export const fetchCardT2 = async (employeeId: number): Promise<CardT2> => {
   return res.data;
 };
 
+/** Секции Т-2 карточки — совпадают с ключами `EmployeeCardT2Patch` бэкенда. */
+export type CardT2Section = 'financial' | 'personal' | 'certs';
+
+/**
+ * Пишет ОДНУ секцию Т-2 карточки.
+ *
+ * Бэкенд (`employee_card_t2_service.upsert`) применяет патч целиком или никак:
+ * отказ прав на любой секции откатывает и уже применённые. Поэтому шлём по
+ * одной секции за запрос — иначе отказ на «Финансах» молча потерял бы и
+ * правки «Личных данных». Строку карточки upsert создаёт сам, если её ещё нет,
+ * так что сотруднику не требуется никакой предварительной подготовки.
+ *
+ * Возвращает секции, видимые вызывающему после записи (ответ эндпойнта).
+ */
+export const updateCardT2 = async (
+  employeeId: number,
+  section: CardT2Section,
+  values: Record<string, string | null>,
+): Promise<CardT2> => {
+  const res = await api.patch(`${HR}employees/${employeeId}/card/t2`, { [section]: values });
+  return res.data;
+};
+
 /* ---------- Employee Share Links ---------- */
 export interface EmployeeShareLinkCreateInput {
   employee_id: number;
