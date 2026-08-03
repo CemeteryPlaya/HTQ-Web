@@ -124,7 +124,14 @@ export function buildCardT2Payload(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-/** Ключи результата — `"<section>.<field>"`, чтобы форма могла подсветить поле. */
+/**
+ * Ключи результата — `"<section>.<field>"`, чтобы форма могла подсветить поле.
+ * Значения — i18n-КЛЮЧ (`hr.pages.employees.cardT2.badNumber`), а не готовое
+ * сообщение: модуль обязан оставаться чистым (без `t()`), поэтому перевод —
+ * забота вызывающего (`EmployeeFormDialog`), у которого есть `useTranslation`.
+ * Тот же ключ используется в `CardT2SectionDialog` — один текст в обоих
+ * местах на обоих языках, а не осиротевший русский на одной из форм.
+ */
 export function validateT2Money(
   form: T2FormState,
   sections: CardT2Section[],
@@ -136,7 +143,7 @@ export function validateT2Money(
       const raw = (form[section][f.name] ?? '').trim();
       if (raw === '') continue;
       if (!MONEY_RE.test(raw)) {
-        errors[`${section}.${f.name}`] = 'Введите число, например 450000 или 450000.50';
+        errors[`${section}.${f.name}`] = 'hr.pages.employees.cardT2.badNumber';
       }
     }
   }

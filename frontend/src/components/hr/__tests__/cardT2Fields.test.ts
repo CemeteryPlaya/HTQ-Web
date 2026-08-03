@@ -97,10 +97,16 @@ describe('buildCardT2Payload', () => {
 });
 
 describe('validateT2Money', () => {
-  it('ловит нечисловую сумму и возвращает ключ вида section.field', () => {
+  it('ловит нечисловую сумму и возвращает i18n-ключ (не готовое сообщение) под ключом вида section.field', () => {
+    // Значение — КЛЮЧ hr.pages.employees.cardT2.badNumber, а не русский
+    // текст: cardT2Fields.ts обязан оставаться чистым (без t()), перевод —
+    // забота вызывающего. Тот же ключ использует CardT2SectionDialog — один
+    // текст на обоих языках в обоих местах, а не осиротевший русский здесь.
     const form = emptyT2Form();
     form.financial.salary = 'много';
-    expect(Object.keys(validateT2Money(form, ['financial']))).toEqual(['financial.salary']);
+    expect(validateT2Money(form, ['financial'])).toEqual({
+      'financial.salary': 'hr.pages.employees.cardT2.badNumber',
+    });
   });
 
   it('пропускает пустое и валидное', () => {

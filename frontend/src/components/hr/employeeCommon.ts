@@ -38,11 +38,13 @@ export interface Employee {
   status: string;
   notes?: string;
   bio?: string;
-  // Скалярные поля Т-2 (оклад, паспорт, СРО…) НЕ живут на Employee: они уехали
-  // на отдельную модель EmployeeCard со своим эндпойнтом
-  // `PATCH /hr/v1/employees/{id}/card/t2` и посекционным RBAC. Правятся на
-  // карточке сотрудника (HREmployeeCard + CardT2SectionDialog) — сюда их
-  // возвращать нельзя: POST/PUT /employees/ их не принимает и молча потеряет.
+  // Скалярные поля Т-2 (оклад, паспорт, СРО…) НЕ живут на Employee: они
+  // хранятся на отдельной модели EmployeeCard с посекционным RBAC
+  // (`hr.card.<section>.view`/`.edit`). Пишутся двумя путями: точечно —
+  // `PATCH /hr/v1/employees/{id}/card/t2` (карточка сотрудника,
+  // CardT2SectionDialog) — или всем скопом при создании/правке самого
+  // сотрудника — блоком `card_t2` в теле `POST`/`PUT /hr/v1/employees/`
+  // (EmployeeFormDialog), который бэкенд применяет в той же транзакции.
   // Synced from user-service via the replica worker; absent on bare-skeleton
   // employees that aren't linked to a platform user yet.
   avatar_url?: string | null;

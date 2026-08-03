@@ -188,6 +188,19 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   // cardT2 можно и нужно принять; если хоть одна секция дирти — не трогаем
   // ничего, ждём следующего изменения cardT2 или закрытия диалога (это и есть
   // защита round-1 от перезатирания набранного).
+  //
+  // round 3: компонент не размонтируется между открытиями (HREmployees
+  // держит его смонтированным постоянно), поэтому t2Form переживает закрытие
+  // диалога. Раньше первый посев ПРИ ХОЛОДНОМ КЭШЕ (cardT2 === undefined) не
+  // трогал t2Form вообще (`return` до setT2Form) — и пока GET не долетел, на
+  // экране оставались значения ПРЕДЫДУЩЕГО открытого сотрудника: правильный
+  // заголовок, чужие оклад/паспорт/ИИН. Секцию нельзя было отправить
+  // (editableSections пуст, пока t2Loaded === false), но показывать её было
+  // нельзя тем более — это чужие конфиденциальные данные под чужим именем.
+  // Теперь при первом посеве этого открытия, если данные ещё не готовы, сеем
+  // пустую форму сразу — и НЕ трогаем t2SeedKeyRef, чтобы эффект посчитал
+  // следующий свой запуск (когда придёт cardT2) тем же «первым посевом» и
+  // выполнил уже авторитетный посев данными сервера.
   const t2SeedKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!open) {
@@ -205,7 +218,18 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       );
       if (!clean) return; // пользователь печатает — не перезатираем
     }
-    if (employee && visibleSections.length > 0 && cardT2 === undefined) return; // ждём GET
+    const dataReady = !(employee && visibleSections.length > 0 && cardT2 === undefined);
+    if (firstSeedForThisOpen && !dataReady) {
+      // Холодный кэш: сеем пустую форму вместо того, что осталось от
+      // предыдущего сотрудника, и ждём следующего запуска эффекта (придёт
+      // cardT2 — сработает ветка ниже). t2SeedKeyRef НЕ обновляем.
+      setT2Form(emptyT2Form());
+      setT2Initial(emptyT2Form());
+      setT2Errors({});
+      setOpenSections({});
+      return;
+    }
+    if (!dataReady) return; // ждём GET
     const next = employee ? t2FormFromServer(cardT2) : emptyT2Form();
     setT2Form(next);
     setT2Initial(next);
@@ -331,13 +355,43 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       // eslint-disable-next-line no-console
       console.warn('[hr.employees] save error', err?.response?.status, data);
 
-      // 403 из card_t2 приходит как "Missing permission: hr.card.<section>.edit" —
-      // раскрываем виноватую секцию, чтобы ошибка не выглядела беспричинной.
-      const missing = typeof data?.detail === 'string'
-        ? /Missing permission: hr\.card\.(\w+)\.edit/.exec(data.detail)
-        : null;
-      if (missing) {
-        setOpenSections((prev) => ({ ...prev, [missing[1]!]: true }));
+      const detail = typeof data?.detail === 'string' ? data.detail : null;
+
+      // 403 из card_t2_svc.upsert приходит как ТОЧНАЯ строка
+      // "Missing permission: hr.card.<section>.edit" — раскрываем виноватую
+      // секцию И подсвечиваем её заголовок (t2Errors), а не только баннер:
+      // без t2Errors sectionError всегда undefined, бейдж в заголовке не
+      // рисуется, и пользователь видит только общую (сырую английскую) фразу
+      // в баннере, не понимая, какая секция виновата.
+      const missingPerm = detail ? /Missing permission: hr\.card\.(\w+)\.edit/.exec(detail) : null;
+      const section = missingPerm ? T2_SECTIONS.find((s) => s === missingPerm[1]) : undefined;
+      if (section) {
+        const forbiddenMsg = t('hr.pages.employees.cardT2.forbidden', 'Недостаточно прав для правки этого раздела');
+        setOpenSections((prev) => ({ ...prev, [section]: true }));
+        setT2Errors((prev) => ({ ...prev, [`${section}.__server`]: forbiddenMsg }));
+        setFieldErrors({});
+        setFormError(forbiddenMsg);
+        return;
+      }
+
+      // 422 из того же upsert — "Invalid decimal for <field>: <value>".
+      // Клиентский MONEY_RE ловит мусор раньше, так что это почти
+      // недостижимо, но если бэкенд всё же его вернул (например, кэш прав
+      // устарел не в ту сторону и permission-проверка не сработала первой),
+      // раскрываем секцию нужного поля и подсвечиваем именно его — как и
+      // клиентская validateT2Money.
+      const badDecimal = detail ? /Invalid decimal for (\w+)/.exec(detail) : null;
+      const badField = badDecimal ? badDecimal[1]! : null;
+      const badSection = badField
+        ? T2_SECTIONS.find((s) => SECTION_FIELDS[s].some((f) => f.name === badField))
+        : undefined;
+      if (badSection && badField) {
+        const badNumberMsg = t('hr.pages.employees.cardT2.badNumber', 'Введите число, например 450000 или 450000.50');
+        setOpenSections((prev) => ({ ...prev, [badSection]: true }));
+        setT2Errors((prev) => ({ ...prev, [`${badSection}.${badField}`]: badNumberMsg }));
+        setFieldErrors({});
+        setFormError(badNumberMsg);
+        return;
       }
 
       // FastAPI 422 — { detail: [{ loc: ["body","field"], msg, type }, ...] }
@@ -393,12 +447,22 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
 
     const moneyErrors = validateT2Money(t2Form, editableSections);
     if (Object.keys(moneyErrors).length > 0) {
-      setT2Errors(moneyErrors);
+      // validateT2Money возвращает i18n-КЛЮЧ (модуль cardT2Fields должен
+      // оставаться чистым, без t()) — переводим здесь, у формы уже есть
+      // useTranslation. Ключ общий с CardT2SectionDialog, поэтому один и тот
+      // же текст (и его EN-перевод) показывается в обоих местах.
+      const translated = Object.fromEntries(
+        Object.entries(moneyErrors).map(([key, i18nKey]) => [
+          key,
+          t(i18nKey, 'Введите число, например 450000 или 450000.50'),
+        ]),
+      );
+      setT2Errors(translated);
       // Раскрываем секции с ошибками — иначе подсказка не видна под свёрнутым
       // заголовком.
       setOpenSections((prev) => {
         const next = { ...prev };
-        for (const key of Object.keys(moneyErrors)) next[key.split('.')[0]!] = true;
+        for (const key of Object.keys(translated)) next[key.split('.')[0]!] = true;
         return next;
       });
       setFormError(t('hr.pages.employees.errors.fillRequired', 'Заполните обязательные поля'));

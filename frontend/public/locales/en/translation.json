@@ -578,12 +578,18 @@
           "saved": "Saved",
           "error": "Could not save",
           "forbidden": "Not enough permissions to edit this section",
-          "badNumber": "Enter a number, e.g. 450000 or 450000.50"
+          "badNumber": "Enter a number, e.g. 450000 or 450000.50",
+          "loading": "Loading…",
+          "sectionHasError": "Check the fields"
         },
         "searchDepartment": "Search department…",
         "noDepartmentFound": "Department not found",
         "createDepartment": "Create new department",
-        "createDepartmentTitle": "New department"
+        "createDepartmentTitle": "New department",
+        "openCard": "Open card",
+        "actions": {
+          "share": "Share"
+        }
       },
       "structure": {
         "title": "Company Structure",

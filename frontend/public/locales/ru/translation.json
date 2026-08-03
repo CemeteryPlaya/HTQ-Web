@@ -764,12 +764,18 @@
           "saved": "Сохранено",
           "error": "Не удалось сохранить",
           "forbidden": "Недостаточно прав для правки этого раздела",
-          "badNumber": "Введите число, например 450000 или 450000.50"
+          "badNumber": "Введите число, например 450000 или 450000.50",
+          "loading": "Загрузка…",
+          "sectionHasError": "Проверьте поля"
         },
         "searchDepartment": "Поиск отдела…",
         "noDepartmentFound": "Отдел не найден",
         "createDepartment": "Создать новый отдел",
-        "createDepartmentTitle": "Новый отдел"
+        "createDepartmentTitle": "Новый отдел",
+        "openCard": "Открыть карточку",
+        "actions": {
+          "share": "Поделиться"
+        }
       },
       "structure": {
         "title": "Структура компании",

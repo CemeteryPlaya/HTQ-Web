@@ -72,7 +72,7 @@ const EMPLOYEE = {
 
 function renderDialog(employee: typeof EMPLOYEE | null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  return render(
     <MemoryRouter>
       <QueryClientProvider client={client}>
         <EmployeeFormDialog open employee={employee as never} onOpenChange={vi.fn()} />
@@ -209,5 +209,85 @@ describe('EmployeeFormDialog — секции Т-2', () => {
 
     expect(await screen.findByRole('button', { name: /Открыть карточку/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Поделиться/ })).toBeInTheDocument();
+  });
+
+  it('создание уходит одним POST с вложенным card_t2', async () => {
+    // Это и есть headline user story фичи — завести сотрудника вместе с Т-2
+    // за один заход. Без этого теста регрессия, уронившая card_t2 из ветки
+    // создания, осталась бы зелёной на фронте (её ловит только бэкенд).
+    renderDialog(null);
+
+    // В режиме создания role="combobox" получают 4 элемента: Пользователь,
+    // Статус (это тоже Radix Select — он тоже рендерит role="combobox"),
+    // Отдел, Должность — в этом порядке в DOM. Статус нам не нужен.
+    await waitFor(() => expect(screen.getAllByRole('combobox')).toHaveLength(4));
+    const [userCombo, , departmentCombo, positionCombo] = screen.getAllByRole('combobox');
+
+    fireEvent.click(userCombo!);
+    fireEvent.click(await screen.findByText(/Иванов Иван/));
+
+    fireEvent.click(departmentCombo!);
+    fireEvent.click(await screen.findByText('ИТ'));
+
+    fireEvent.click(positionCombo!);
+    fireEvent.click(await screen.findByText('Инженер'));
+
+    // Dialog рендерится в портал document.body, а не в container render()-а —
+    // ищем по всему документу.
+    const dateInput = document.querySelector('input[type="date"]');
+    expect(dateInput).toBeTruthy();
+    fireEvent.change(dateInput!, { target: { value: '2024-05-01' } });
+
+    // Заполняем Т-2 поле — секция открыта по умолчанию правами (hasPerm
+    // мокнут в true), только раскрываем Collapsible.
+    fireEvent.click(await screen.findByText(/Финансовые данные/));
+    await act(async () => {
+      fireEvent.change(await screen.findByLabelText(/Оклад/), { target: { value: '600000' } });
+    });
+
+    save();
+
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+    const [payload] = mockCreate.mock.calls[0]!;
+    expect(payload).toMatchObject({
+      user_id: 7,
+      department_id: 1,
+      position_id: 2,
+      hire_date: '2024-05-01',
+    });
+    expect(payload.card_t2).toEqual({
+      financial: { salary: '600000', bonus: null, bank_account: null },
+    });
+  });
+
+  it('403 "Missing permission: hr.card.<section>.edit" разворачивает секцию и подсвечивает ошибку в её заголовке', async () => {
+    // Раньше 403 раскрывал секцию, но никогда не populate-ил t2Errors — бейдж
+    // в заголовке (sectionHasError) не рисовался, и пользователь видел только
+    // сырую английскую строку в общем баннере, не понимая, какая секция
+    // виновата.
+    mockUpdate.mockRejectedValueOnce({
+      response: { status: 403, data: { detail: 'Missing permission: hr.card.financial.edit' } },
+    });
+    renderDialog(EMPLOYEE);
+
+    // Ждём, пока GET /card/t2 долетит и авторитетный посев (round 1/3
+    // эффекта) уже случится, ПРЕЖДЕ чем сохранять — иначе тест ловил бы не
+    // «403 не подсвечивает ошибку», а отдельную (не входящую в этот finding)
+    // гонку между поздним GET и уже показанной ошибкой: посев сбрасывает
+    // t2Errors/openSections на первый показ данных, и он может случиться уже
+    // ПОСЛЕ того, как onError их выставил, если кликнуть «Сохранить» раньше,
+    // чем прогрузится карточка.
+    await waitFor(() => expect(screen.queryByText('Загрузка…')).not.toBeInTheDocument());
+    // Секция «Финансовые данные» пока свёрнута — «Оклад» ещё не в DOM.
+    expect(screen.queryByLabelText(/Оклад/)).not.toBeInTheDocument();
+
+    save();
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    // Секция раскрылась — поле «Оклад» из CollapsibleContent теперь в DOM
+    // (Radix Collapsible размонтирует закрытое содержимое).
+    expect(await screen.findByLabelText(/Оклад/)).toBeInTheDocument();
+    // И заголовок секции подсвечен бейджем ошибки.
+    expect(await screen.findByText('Проверьте поля')).toBeInTheDocument();
   });
 });
