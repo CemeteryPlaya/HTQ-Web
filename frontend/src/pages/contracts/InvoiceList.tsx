@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatAmount } from '@/components/contracts/format';
+import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { contractsApi } from '@/api/contracts';
 import type { InvoiceStatus } from '@/types/contracts';
 
@@ -95,6 +96,7 @@ const InvoiceList = () => {
                 <TableHead>Бюджет</TableHead>
                 <TableHead className="text-right">Сумма</TableHead>
                 <TableHead>Статус</TableHead>
+                <TableHead className="text-right">Согласование</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -132,6 +134,18 @@ const InvoiceList = () => {
                     <Badge variant={STATUS_VARIANTS[row.status]}>
                       {statusLabel(row.status)}
                     </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <SubmitForApproval
+                      subjectType="contracts.invoice"
+                      subjectId={row.id}
+                      state={row.approval_state}
+                      submit={contractsApi.submitInvoice}
+                      // Счёт бюджет не занимает — сбрасываем только списки
+                      // счетов, бюджетные ключи трогать незачем (в отличие
+                      // от договора).
+                      invalidate={[['contracts', 'invoices']]}
+                    />
                   </TableCell>
                 </TableRow>
               ))}
