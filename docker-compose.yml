@@ -38,6 +38,16 @@ x-django-env: &django-env
   S3_BUCKET: htqweb-cms
   MEDIA_S3_BUCKET: htqweb-media
   S3_USE_PATH_STYLE: "true"
+  # ── Конференция (GET /api/cms/v1/conference/config) ──
+  # SFU-сигналинг идёт тем же origin'ом, что и страница (nginx → /ws/sfu/),
+  # поэтому URL пуст: фронт соберёт ws(s)://<origin>/ws/sfu/ сам.
+  CONFERENCE_SFU_URL: ${CONFERENCE_SFU_URL:-}
+  # QUIC-мост: публичный https-адрес webtransport-контейнера (UDP :4433).
+  # Пусто = мост не анонсируем, фронт остаётся на WebSocket.
+  CONFERENCE_WT_URL: ${CONFERENCE_WT_URL:-}
+  # Отпечаток самоподписанного сертификата моста (том wt_certs). С
+  # сертификатом от настоящего CA файла нет — и он не нужен.
+  CONFERENCE_WT_CERT_HASH_FILE: ${CONFERENCE_WT_CERT_HASH_FILE:-/app/wt-certs/cert.sha256}
 
 services:
   # ─── PostgreSQL ───────────────────────────────────
@@ -224,6 +234,10 @@ services:
     command: ["gunicorn", "htqweb.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "60"]
     ports:
       - "8000:8000"
+    volumes:
+      # Только чтобы прочитать cert.sha256 QUIC-моста и отдать его фронту
+      # в conference/config (dev-сценарий с самоподписанным сертификатом).
+      - wt_certs:/app/wt-certs:ro
     depends_on:
       db:
         condition: service_healthy
@@ -324,9 +338,13 @@ services:
         max-file: "2"
 
   # ─── SFU (Mediasoup signaling + media) ──────────
-  # Conference / WebRTC — requires TLS certs in production. Disabled in dev
-  # (the `/conference` page is the only consumer; re-enable with
-  # `docker compose --profile production up`).
+  # Conference / WebRTC. Сигналинг — plain ws внутри сети compose: TLS
+  # терминирует nginx (prod) / Vite-прокси (dev), поэтому SIGNALING_REQUIRE_TLS
+  # выключен, а вместо него обязателен платформенный JWT (SIGNALING_REQUIRE_AUTH).
+  #
+  # WEBRTC_ANNOUNCED_IP обязателен: с wildcard listenIp и пустым announcedIp
+  # SFU падает на старте (sfu/src/config.ts::validateListenIps), иначе клиенты
+  # получили бы SDP с 0.0.0.0 и чёрное видео. В прод — публичный IP хоста.
   sfu:
     build:
       context: ./sfu
@@ -335,18 +353,41 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
-    profiles:
-      - production
-    env_file: ./sfu/.env
+    # Тонкая настройка (битрейты, TURN, воркеры) — необязательный sfu/.env;
+    # ключи из environment ниже имеют приоритет над ним.
+    env_file:
+      - path: ./sfu/.env
+        required: false
     restart: unless-stopped
     environment:
-      # Only overrides; everything else (WEBRTC_*, bitrates, TURN) comes from sfu/.env.
       SFU_HOST: 0.0.0.0
-      SIGNALING_DISABLE_ORIGIN_CHECK: "true"
+      SFU_PORT: "4443"
+      # JWT: тот же секрет и issuer, что у Django (htqweb/authn/jwt.py).
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER:-htqweb-auth}
+      SIGNALING_REQUIRE_AUTH: ${SFU_REQUIRE_AUTH:-true}
+      SIGNALING_REQUIRE_TLS: ${SFU_REQUIRE_TLS:-false}
+      SIGNALING_DISABLE_ORIGIN_CHECK: ${SFU_DISABLE_ORIGIN_CHECK:-true}
+      SIGNALING_ALLOWED_ORIGINS: ${SFU_ALLOWED_ORIGINS:-}
+      WEBRTC_LISTEN_IP: ${WEBRTC_LISTEN_IP:-0.0.0.0}
+      WEBRTC_ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-}
+      WEBRTC_SERVER_PORT: ${WEBRTC_SERVER_PORT:-44444}
+      MEDIASOUP_WORKERS: ${MEDIASOUP_WORKERS:-1}
     ports:
       - "4443:4443"
       - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/udp"
       - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/tcp"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "require('http').get('http://127.0.0.1:4443/healthz',
+          r => process.exit(r.statusCode === 200 ? 0 : 1))
+          .on('error', () => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     logging:
       driver: json-file
       options:
@@ -425,24 +466,36 @@ services:
         max-file: "2"
 
   # ─── WebTransport Proxy (QUIC signaling) ────────
-  # Uses a self-signed cert from wt_certs volume and only makes sense in front
-  # of the SFU. Off in dev along with SFU.
+  # Мост браузер ──QUIC/HTTP3──► :4433 ──WebSocket──► SFU. Токен из query
+  # CONNECT-запроса пробрасывается в SFU (заголовки туда не доходят).
+  #
+  # Сертификат: по умолчанию самоподписанный из тома wt_certs (браузер примет
+  # его только через serverCertificateHashes — см. CONFERENCE_WT_CERT_HASHES).
+  # В прод смонтируйте сюда live-сертификат certbot'а.
   webtransport:
     build:
       context: ./webtransport
       dockerfile: Dockerfile
-    profiles:
-      - production
     restart: unless-stopped
     environment:
-      SFU_WS_URL: "ws://sfu:4443"
+      SFU_WS_URL: ${SFU_WS_URL:-ws://sfu:4443/ws/sfu/}
       WT_HOST: "0.0.0.0"
       WT_PORT: "4433"
       LOG_LEVEL: ${WT_LOG_LEVEL:-INFO}
+      # Прод: укажите живой сертификат домена из тома certbot'а, например
+      # WT_CERT_FILE=/etc/letsencrypt/live/<домен>/fullchain.pem
+      # WT_KEY_FILE=/etc/letsencrypt/live/<домен>/privkey.pem
+      # Тогда самоподписанный не выпускается, а отпечатки фронту не нужны.
+      CERT_FILE: ${WT_CERT_FILE:-certs/cert.pem}
+      KEY_FILE: ${WT_KEY_FILE:-certs/key.pem}
+      # SAN самоподписанного сертификата (dev): localhost и 127.0.0.1 всегда,
+      # остальное — сюда через запятую (например LAN-IP хоста).
+      WT_CERT_HOSTS: ${WT_CERT_HOSTS:-}
     ports:
       - "4433:4433/udp"
     volumes:
       - wt_certs:/app/certs
+      - certbot_conf:/etc/letsencrypt:ro
     depends_on:
       - sfu
     logging:

@@ -103,6 +103,89 @@ def create_document(data) -> Document:
     )
 
 
+class DocumentUploadRejected(Exception):
+    """Хранилище отказало в файле (размер/mime/скоуп) — ``apps.media_files``.
+
+    Несёт статус и текст ровно как их отдал media-слой, чтобы клиент увидел
+    причину, а не общий 400 (та же схема, что ``department_file_service``).
+    """
+
+    def __init__(self, status_code: int, detail) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+class EmployeeNotFound(Exception):
+    """``employee_id`` не указывает на существующего сотрудника."""
+
+
+def create_document_from_upload(
+    token, *, employee_id: int, title: str, doc_type: str, file, description: str = "",
+) -> dict:
+    """Загрузка файла + карточка документа — multipart-ветка ``POST /documents/``.
+
+    JSON-контракт исходника (``DocumentCreate``: ``file_path``/``file_size``/
+    ``mime_type``/``uploaded_by`` от клиента) предполагает, что файл кто-то
+    положил в хранилище заранее, — у фронта такого шага нет, он шлёт сам
+    файл. Здесь ровно тот же путь, которым уже пользуется
+    ``department_file_service.upload_department_file``: байты уезжают в
+    ``apps.media_files`` через его ``interface`` (единственный разрешённый
+    способ ходить в соседнюю аппку), а сюда сохраняется ссылка.
+
+    ``description`` в модели колонки не имеет (её не было и в исходнике),
+    поэтому вместе с id медиафайла и исходным именем кладём его в
+    ``metadata`` — это JSONB, ровно для такого и заведён.
+
+    ``uploaded_by`` заполняется карточкой сотрудника, привязанной к учётке.
+    Если карточки нет (платформенный admin, интеграция) — остаётся пустым;
+    авторство не теряется: id пользователя пишется в
+    ``metadata["uploaded_by_user_id"]`` в любом случае.
+    """
+    from apps.media_files import interface as media_interface
+
+    from apps.hr.models import Employee
+
+    if not Employee.objects.filter(id=employee_id, is_deleted=False).exists():
+        raise EmployeeNotFound
+
+    uploader = Employee.objects.filter(
+        user_id=token.user_id, is_deleted=False,
+    ).first()
+
+    try:
+        stored = media_interface.store_file(
+            data=file.read(),
+            filename=file.name or "upload.bin",
+            mime=file.content_type or "application/octet-stream",
+            scope="hr_doc",
+            owner_id=token.user_id,
+            internal_authorized=True,
+        )
+    except ValueError as exc:
+        status_code = getattr(exc, "status_code", 400)
+        detail = getattr(exc, "detail", str(exc))
+        raise DocumentUploadRejected(status_code, detail) from exc
+
+    media_file_id = str(stored["id"])
+    doc = Document.objects.create(
+        employee_id=employee_id,
+        title=title,
+        doc_type=doc_type,
+        file_path=stored.get("url") or f"/api/media/v1/files/{media_file_id}",
+        file_size=int(stored.get("size") or 0),
+        mime_type=stored.get("mime") or file.content_type or "application/octet-stream",
+        uploaded_by_id=uploader.id if uploader else None,
+        metadata={
+            "media_file_id": media_file_id,
+            "original_filename": stored.get("original_filename") or file.name or "",
+            "description": description or "",
+            "uploaded_by_user_id": token.user_id,
+        },
+    )
+    return serialize(doc)
+
+
 def delete_document(id: int) -> None:
     doc = get_document(id)
     doc.delete()

@@ -86,6 +86,10 @@ class OAuthToken(models.Model):
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
+    class Meta:
+        verbose_name = "OAuth-токен"
+        verbose_name_plural = "OAuth-токены"
+
     def __str__(self) -> str:
         return f"<OAuthToken(id={self.id}, provider={self.provider})>"
 
@@ -153,6 +157,10 @@ class ProvisionedMailbox(models.Model):
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
     archived_at = models.DateTimeField(null=True, blank=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Выданный ящик"
+        verbose_name_plural = "Выданные ящики"
 
     def __str__(self) -> str:
         return f"<ProvisionedMailbox(id={self.id}, address={self.address!r}, status={self.status})>"
@@ -222,6 +230,8 @@ class EmailAccount(models.Model):
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
     class Meta:
+        verbose_name = "Почтовый аккаунт"
+        verbose_name_plural = "Почтовые аккаунты"
         constraints = [
             models.UniqueConstraint(
                 fields=["user_id", "address"], name="uq_email_accounts_user_address",
@@ -275,6 +285,10 @@ class AuditLog(models.Model):
     user_agent = models.TextField(null=True, blank=True)
     correlation_id = models.CharField(max_length=36, null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
+
+    class Meta:
+        verbose_name = "Запись аудита"
+        verbose_name_plural = "Журнал аудита"
 
     def __str__(self) -> str:
         return f"<AuditLog(id={self.id}, action={self.action})>"
@@ -386,6 +400,8 @@ class EmailMessage(models.Model):
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
     class Meta:
+        verbose_name = "Письмо"
+        verbose_name_plural = "Письма"
         indexes = [
             models.Index(fields=["user_id", "account", "folder", "-date"]),
         ]
@@ -430,6 +446,10 @@ class EmailAttachment(models.Model):
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
+    class Meta:
+        verbose_name = "Вложение письма"
+        verbose_name_plural = "Вложения писем"
+
     def __str__(self) -> str:
         return f"<EmailAttachment(id={self.id}, filename={self.filename!r})>"
 
@@ -452,6 +472,10 @@ class RecipientStatus(models.Model):
 
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
+
+    class Meta:
+        verbose_name = "Статус получателя"
+        verbose_name_plural = "Статусы получателей"
 
     def __str__(self) -> str:
         return f"<RecipientStatus(id={self.id}, recipient_email={self.recipient_email!r}, status={self.status!r})>"

@@ -27,7 +27,6 @@ import {
     Handshake,
     Link2,
     Network,
-    SlidersHorizontal,
     UserCog,
     UserPlus,
     MessagesSquare,
@@ -42,6 +41,7 @@ import { useTranslation } from 'react-i18next';
 import api from '@/api/client';
 import { apiPath } from '@/api/endpoints';
 import { Badge } from '@/components/ui/badge';
+import { DjangoIcon } from '@/components/icons/DjangoIcon';
 import { ServiceUnavailableDialog } from '@/components/ServiceUnavailableDialog';
 import { useHRLevel } from '@/hooks/useHRLevel';
 import { useServiceStatus } from '@/hooks/useServiceStatus';
@@ -71,9 +71,13 @@ const hasAnyRole = (roles?: string[], expected: string[] = []) =>
 
 // ── Item / Section components ────────────────────────────────────────────────
 
+// Почти все пункты берут иконку из lucide, но брендовых иконок там нет —
+// DjangoIcon свой, с обычными SVG-пропсами. Union, чтобы оба типа подходили.
+type IconComponent = LucideIcon | React.FC<React.SVGProps<SVGSVGElement>>;
+
 type ItemProps = {
     to: string;
-    icon: LucideIcon;
+    icon: IconComponent;
     label: string;
     badge?: React.ReactNode;
     external?: boolean;
@@ -226,7 +230,6 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
                     {showHrItem(['junior', 'middle', 'senior', 'lead']) && <SidebarItem to="/hr/employees" icon={Users} label={t('hr.nav.employees')} />}
                     {showHrItem(['middle', 'senior', 'lead']) && <SidebarItem to="/hr/departments" icon={Building2} label={t('hr.nav.structure')} />}
                     {showHrItem(['middle', 'senior', 'lead']) && <SidebarItem to="/hr/positions" icon={Briefcase} label={t('hr.nav.positions')} />}
-                    {showHrItem(['lead']) && <SidebarItem to="/admin/levels" icon={SlidersHorizontal} label={t('hr.nav.levels')} />}
                     {showHrItem(['junior', 'middle', 'senior', 'lead']) && <SidebarItem to="/hr/org-chart" icon={Network} label={t('hr.nav.orgChart')} />}
                     {showHrItem(['senior', 'lead']) && <SidebarItem to="/hr/pmo" icon={Handshake} label={t('hr.nav.pmo')} />}
                     {showHrItem(['senior', 'lead']) && <SidebarItem to="/hr/share-links" icon={Link2} label={t('hr.nav.shareLinks')} />}
@@ -239,7 +242,9 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
                 </SidebarSection>
             )}
 
-            {/* ── Администрирование (user/messenger admin + sqladmin) ───── */}
+            {/* ── Администрирование (user/messenger admin + админка Django) ─
+                Раньше в конце секции стоял sqladmin снесённого admin-сервиса;
+                его роль в монолите играет /django-admin/. ── */}
             {admin && (
                 <SidebarSection title={t('profile.sidebar.adminTools')}>
                     <SidebarItem to="/admin/users" icon={UserCog} label={t('profile.sidebar.manageUsers', 'Управление пользователями')} />
@@ -252,6 +257,17 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
                     <SidebarItem to="/admin/chats" icon={MessagesSquare} label={t('profile.sidebar.manageChats', 'Управление чатами')} />
                     <SidebarItem to="/admin/mailboxes" icon={MailIcon} label={t('profile.sidebar.manageMailboxes', 'Корпоративные ящики')} />
                     <SidebarItem to="/admin/infrastructure" icon={ServerCog} label={t('profile.sidebar.infrastructure', 'Инфраструктура')} />
+                    {/* Админка Django — серверный рендер, не роут SPA, поэтому
+                        external: нужен полноценный переход, а не NavLink.
+                        Слэш на конце обязателен: APPEND_SLASH=False, редиректа
+                        с /django-admin нет (см. htqweb/settings/base.py). */}
+                    <SidebarItem
+                        to="/django-admin/"
+                        icon={DjangoIcon}
+                        label={t('profile.sidebar.djangoAdmin', 'Админка Django')}
+                        badge={<ExternalLink className="h-3 w-3 text-muted-foreground" />}
+                        external
+                    />
                 </SidebarSection>
             )}
 

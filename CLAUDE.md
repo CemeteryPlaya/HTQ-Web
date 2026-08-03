@@ -35,7 +35,13 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 # rebuild + recreate one process after code changes:
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --no-deps backend-web
 ```
-Prod stack is plain `docker compose up -d` (adds nginx/sfu/certbot/webtransport under the `production` profile).
+Prod stack is plain `docker compose up -d` (adds nginx/certbot under the `production` profile).
+
+**Конференция (SFU) поднята и в dev, и в проде.** `sfu` (mediasoup, сигналинг `:4443`, медиа `:44444/udp+tcp`) и `webtransport` (QUIC-мост `:4433/udp`) больше не под профилем `production` — стартуют вместе со стеком. Что важно знать:
+- **Сигналинг требует платформенный JWT.** SFU валидирует токен на WS-upgrade тем же `JWT_SECRET`/HS256, что и Django (`sfu/src/auth.ts`); браузер передаёт его подпротоколом `['htqweb.jwt', <token>]`, WebTransport-мост — параметром `?token=`. Без токена — 401 на upgrade. Отключается только для локальной отладки: `SFU_REQUIRE_AUTH=false`.
+- **`WEBRTC_ANNOUNCED_IP` обязателен.** С wildcard listenIp и пустым announced SFU падает на старте намеренно (иначе — чёрное видео). В dev подставляется `127.0.0.1` (браузер на той же машине); для проверки с другого устройства поставьте LAN-IP хоста в корневом `.env`, в проде — публичный IP.
+- **Транспорт сигналинга:** фронт сначала пробует WebTransport (QUIC), при неудаче сам откатывается на WebSocket (`WebRTCManager.buildSignalingAttempts`). Адрес моста и отпечаток его самоподписанного сертификата приезжают в `GET /api/cms/v1/conference/config` (`wt_signaling_url` / `wt_certificate_hashes`).
+- Флаг сервиса в реестре включён миграцией `core/0003_enable_conference`; на боевой БД с `RUN_MIGRATIONS=0` её нужно применить руками (`manage.py migrate core`) либо флипнуть `manage.py service conference --on`.
 
 **Frontend** (`cd frontend`):
 ```bash

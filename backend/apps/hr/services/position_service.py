@@ -11,6 +11,11 @@
   БУКВАЛЬНОЕ поведение исходника: ``_recompute_levels_in_range`` там
   определён, но НИКОГДА не вызывается ни одним эндпойнтом — мёртвый код;
   порт его не переносит, а ``_recompute_all_levels`` зовётся везде).
+* ``create_position``/``update_position`` принимают необязательный
+  ``level`` — это НЕ запись в кэш-поле, а выбор веса: вес подбирается
+  внутри диапазона порога (``_resolve_weight_for_level``), а ``level``
+  по-прежнему приходит из ``_compute_level``. Так селект «Уровень» в UI
+  должностей не заводит второй источник истины рядом с весом.
 * ``move``/``rebalance`` сначала пробуют локальный пересчёт веса
   (``_apply_new_weight``), а при конфликте/выходе за диапазон порога —
   делают полный ребаланс уровня через двухфазную схему (все веса сначала
@@ -109,6 +114,46 @@ class MoveValidationError(Exception):
         super().__init__(detail)
 
 
+class LevelWeightMismatch(Exception):
+    """422: явный вес не попадает в диапазон явно выбранного уровня."""
+
+    def __init__(self, weight: int, threshold: LevelThreshold) -> None:
+        self.detail = (
+            f"Вес {weight} вне диапазона уровня L{threshold.level_number} "
+            f"({threshold.weight_from}-{threshold.weight_to})"
+        )
+        super().__init__(self.detail)
+
+
+class LevelRangeUnavailable(Exception):
+    """409: нет места под диапазон нового уровня на его позиции в иерархии."""
+
+    def __init__(self, prev: LevelThreshold | None, next_: LevelThreshold) -> None:
+        nxt = f"L{next_.level_number} ({next_.weight_from}-{next_.weight_to})"
+        if prev is None:
+            self.detail = (
+                f"Перед {nxt} нет свободных весов — сдвиньте его диапазон вверх"
+            )
+        else:
+            self.detail = (
+                f"Между L{prev.level_number} ({prev.weight_from}-{prev.weight_to}) "
+                f"и {nxt} нет свободных весов — расширьте диапазон соседнего уровня"
+            )
+        super().__init__(self.detail)
+
+
+class LevelFull(Exception):
+    """409: в диапазоне уровня не осталось ни одного свободного веса."""
+
+    def __init__(self, threshold: LevelThreshold) -> None:
+        self.detail = (
+            f"В диапазоне уровня L{threshold.level_number} "
+            f"({threshold.weight_from}-{threshold.weight_to}) не осталось "
+            "свободных весов — расширьте диапазон уровня"
+        )
+        super().__init__(self.detail)
+
+
 # ── сериализаторы (формы из schemas/position.py) ─────────────────────────────
 
 def _serialize_permissions(raw: dict | None) -> dict | None:
@@ -167,6 +212,95 @@ def _compute_level(weight: int) -> int:
 
 def _get_threshold(level_number: int) -> LevelThreshold | None:
     return LevelThreshold.objects.filter(level_number=level_number).first()
+
+
+def _require_threshold(level_number: int) -> LevelThreshold:
+    threshold = _get_threshold(level_number)
+    if threshold is None:
+        raise Http404(f"Level threshold {level_number} not found")
+    return threshold
+
+
+def next_free_weight(level_number: int, *, exclude_id: int | None = None) -> int:
+    """Свободный вес для новой должности на уровне ``level_number``.
+
+    Логика та же, что у ребаланса (``_final_weights``): встаём В КОНЕЦ уровня
+    с шагом 100, а если разреженный шаг уже не помещается в диапазон — берём
+    первый свободный целый. Вес глобально уникален, поэтому «свободный»
+    проверяется по всем должностям, а не только по должностям этого уровня
+    (в диапазон могла попасть строка с рассинхроненным кэшем level).
+    """
+    threshold = _require_threshold(level_number)
+    qs = Position.objects.filter(
+        weight__gte=threshold.weight_from, weight__lte=threshold.weight_to,
+    )
+    if exclude_id is not None:
+        qs = qs.exclude(id=exclude_id)
+    taken = set(qs.values_list("weight", flat=True))
+
+    candidate = threshold.weight_from if not taken else max(taken) + 100
+    if candidate <= threshold.weight_to and candidate not in taken:
+        return candidate
+
+    for weight in range(threshold.weight_from, threshold.weight_to + 1):
+        if weight not in taken:
+            return weight
+    raise LevelFull(threshold)
+
+
+_DEFAULT_LEVEL_BLOCK = 300  # ~3 должности при шаге 100 из _final_weights
+
+
+def next_free_range(level_number: int) -> tuple[int, int]:
+    """Диапазон весов для НОВОГО уровня — по его месту среди существующих.
+
+    Порядок level_number обязан совпадать с порядком диапазонов (меньший вес =
+    выше в иерархии), поэтому берём не «после последнего», а зазор между
+    соседями ПО НОМЕРУ уровня: иначе добавленный L1 при существующих L2-L3
+    получил бы самые тяжёлые веса и оказался внизу оргчарта.
+    """
+    prev = (
+        LevelThreshold.objects.filter(level_number__lt=level_number)
+        .order_by("-level_number").first()
+    )
+    nxt = (
+        LevelThreshold.objects.filter(level_number__gt=level_number)
+        .order_by("level_number").first()
+    )
+
+    lower = 0 if prev is None else prev.weight_to + 1
+    if nxt is None:
+        return lower, lower + _DEFAULT_LEVEL_BLOCK - 1
+
+    upper = nxt.weight_from - 1
+    if upper < lower:
+        raise LevelRangeUnavailable(prev, nxt)
+    return lower, upper
+
+
+def next_weight_for_level(level_number: int) -> dict:
+    """Подсказка для селекта «Уровень» в UI: свободный вес + границы уровня."""
+    threshold = _require_threshold(level_number)
+    return {
+        "level_number": threshold.level_number,
+        "weight": next_free_weight(level_number),
+        "weight_from": threshold.weight_from,
+        "weight_to": threshold.weight_to,
+    }
+
+
+def _resolve_weight_for_level(
+    level_number: int, requested_weight: int | None, exclude_id: int | None,
+) -> int:
+    """Вес для явно выбранного уровня: заданный — если он в диапазоне порога,
+    иначе подобранный. Уровень как таковой в модель не пишется — его, как и
+    раньше, выведет ``_compute_level`` из этого веса."""
+    threshold = _require_threshold(level_number)
+    if requested_weight is None:
+        return next_free_weight(level_number, exclude_id=exclude_id)
+    if not (threshold.weight_from <= requested_weight <= threshold.weight_to):
+        raise LevelWeightMismatch(requested_weight, threshold)
+    return requested_weight
 
 
 def _assert_weight_free(weight: int, exclude_id: int | None = None) -> None:
@@ -243,10 +377,17 @@ def get_position(id: int) -> Position:
 
 @transaction.atomic
 def create_position(data) -> Position:
-    _assert_weight_free(data.weight)
-    level = _compute_level(data.weight)
     payload = data.model_dump()
-    payload["level"] = level
+    requested_level = payload.pop("level", None)
+    if requested_level is not None:
+        # weight объявлен с default=100, поэтому «не передан» отличаем по
+        # model_fields_set, а не по значению: иначе вес 100 из дефолта
+        # молча ушёл бы в проверку диапазона как явно заданный.
+        explicit_weight = data.weight if "weight" in data.model_fields_set else None
+        payload["weight"] = _resolve_weight_for_level(requested_level, explicit_weight, None)
+
+    _assert_weight_free(payload["weight"])
+    payload["level"] = _compute_level(payload["weight"])
     # Всё созданное через API по определению не системное; is_system=True
     # ставит только alembic-бэкфилл 013 (сюда он не переносится).
     payload["is_system"] = False
@@ -259,6 +400,10 @@ def update_position(id: int, data, *, actor_user_id: int | None = None) -> Posit
     pos = get_position(id)
     patch = data.model_dump(exclude_none=True)
     next_weight = patch.pop("weight", None)
+    # level в модели — кэш, а в патче это ЗАПРОС на переезд между уровнями.
+    # Снимаем его до setattr-цикла ниже: прямая запись прошла бы мимо
+    # _compute_level и разъехалась бы с весом.
+    next_level = patch.pop("level", None)
 
     if pos.is_system:
         # Системные должности — часть базового оргчарта. Переименование /
@@ -273,8 +418,21 @@ def update_position(id: int, data, *, actor_user_id: int | None = None) -> Posit
         for field, value in patch.items():
             setattr(pos, field, value)
         pos.save()
+
+    if next_level is not None:
+        threshold = _require_threshold(next_level)
+        already_in_level = threshold.weight_from <= pos.weight <= threshold.weight_to
+        # Уровень тот же и вес не задан — не двигаем: иначе правка одного
+        # только названия сбрасывала бы должность в конец своего уровня.
+        if next_weight is not None or not already_in_level:
+            next_weight = _resolve_weight_for_level(next_level, next_weight, exclude_id=pos.id)
+
     if next_weight is not None:
-        pos = _apply_new_weight(pos, next_weight, reason="manual", actor_user_id=actor_user_id)
+        pos = _apply_new_weight(
+            pos, next_weight,
+            reason="level_change" if next_level is not None else "manual",
+            actor_user_id=actor_user_id,
+        )
     return pos
 
 
@@ -483,10 +641,20 @@ def list_thresholds() -> list[LevelThreshold]:
 def create_threshold(data, *, actor_user_id: int | None = None) -> LevelThreshold:
     if _get_threshold(data.level_number):
         raise ThresholdExists(data.level_number)
-    _assert_threshold_range_free(
-        level_number=data.level_number, weight_from=data.weight_from, weight_to=data.weight_to,
-    )
-    threshold = LevelThreshold.objects.create(**data.model_dump())
+
+    payload = data.model_dump()
+    # Диапазон не задан — подбираем сами. Проверять пересечение после этого
+    # не нужно: next_free_range по построению возвращает зазор между соседями
+    # либо поднимает LevelRangeUnavailable.
+    if payload["weight_from"] is None or payload["weight_to"] is None:
+        payload["weight_from"], payload["weight_to"] = next_free_range(data.level_number)
+    else:
+        _assert_threshold_range_free(
+            level_number=data.level_number,
+            weight_from=payload["weight_from"], weight_to=payload["weight_to"],
+        )
+
+    threshold = LevelThreshold.objects.create(**payload)
     _recompute_all_levels(actor_user_id=actor_user_id)
     threshold.refresh_from_db()
     return threshold

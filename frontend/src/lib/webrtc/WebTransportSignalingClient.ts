@@ -32,8 +32,34 @@ import type { Result } from './result';
 import { ok, err } from './result';
 import type { WebRTCError } from './WebRTCError';
 import { createWebRTCError, signalingErrorFromMessage } from './WebRTCError';
+import type { AuthTokenSource } from './SignalingClient';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface WebTransportSignalingOptions {
+  /** Платформенный JWT: уезжает в query CONNECT-запроса (заголовков там нет). */
+  authToken?: AuthTokenSource;
+  /**
+   * SHA-256 сертификата моста в hex — нужны только для самоподписанного
+   * сертификата (dev). Пустой список = доверяем цепочке CA как обычно.
+   */
+  certificateHashes?: string[];
+}
+
+/** hex → байты; null, если строка не похожа на SHA-256. */
+function hexToBytes(rawHex: string): Uint8Array | null {
+  const hex = String(rawHex || '').trim().toLowerCase().replace(/[\s:]/g, '');
+  if (!/^[0-9a-f]+$/.test(hex) || hex.length % 2 !== 0) {
+    console.warn('[WT Signaling] Пропускаем некорректный отпечаток сертификата:', rawHex);
+    return null;
+  }
+
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i += 1) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
 
 interface PendingRequest {
   method: string;
@@ -91,10 +117,58 @@ export class WebTransportSignalingClient implements ISignalingClient {
   private readonly encoder = new TextEncoder();
   private readonly decoder = new TextDecoder();
   private readonly url: string;
+  private readonly authToken?: AuthTokenSource;
+  private readonly certificateHashes: string[];
 
-  constructor(url: string) {
+  constructor(url: string, options: WebTransportSignalingOptions = {}) {
     this.url = url;
+    this.authToken = options.authToken;
+    this.certificateHashes = options.certificateHashes ?? [];
     console.info('[WT Signaling] Using WebTransport endpoint:', url);
+  }
+
+  /**
+   * URL сессии с токеном в query: CONNECT-запрос WebTransport не несёт
+   * пользовательских заголовков, поэтому мост (webtransport/server.py)
+   * забирает токен именно оттуда и подставляет в WebSocket-адрес SFU.
+   */
+  private buildSessionUrl(): string {
+    const token =
+      typeof this.authToken === 'function' ? this.authToken() : this.authToken;
+    const normalized = String(token || '').trim();
+    if (!normalized) {
+      return this.url;
+    }
+
+    try {
+      const parsed = new URL(this.url, window.location.origin);
+      parsed.searchParams.set('token', normalized);
+      return parsed.toString();
+    } catch {
+      return this.url;
+    }
+  }
+
+  /**
+   * `serverCertificateHashes` — единственный способ доверять
+   * самоподписанному сертификату QUIC-моста без флагов браузера. Формат
+   * ждёт «сырые» байты SHA-256, backend отдаёт их hex-строкой.
+   */
+  private buildTransportOptions(): WebTransportOptions | undefined {
+    const hashes = this.certificateHashes
+      .map((value) => hexToBytes(value))
+      .filter((value): value is Uint8Array => value !== null);
+
+    if (hashes.length === 0) {
+      return undefined;
+    }
+
+    return {
+      serverCertificateHashes: hashes.map((value) => ({
+        algorithm: 'sha-256',
+        value,
+      })),
+    };
   }
 
   // ─── ISignalingClient: connect ────────────────────────────────────────────
@@ -237,7 +311,7 @@ export class WebTransportSignalingClient implements ISignalingClient {
   // ─── Private: connection lifecycle ────────────────────────────────────────
 
   private async doConnect(): Promise<void> {
-    const wt = new WebTransport(this.url);
+    const wt = new WebTransport(this.buildSessionUrl(), this.buildTransportOptions());
     this.wt = wt;
 
     // Wait for QUIC handshake to complete

@@ -103,6 +103,10 @@ class FileMetadata(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Файл"
+        verbose_name_plural = "Файлы"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<FileMetadata id={self.id} path={self.path!r} size={self.size}>"
 
@@ -128,6 +132,8 @@ class FileVariant(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Вариант файла"
+        verbose_name_plural = "Варианты файлов"
         constraints = [
             models.UniqueConstraint(fields=["file", "variant"], name="unique_file_variant"),
         ]
@@ -150,3 +156,7 @@ class AuditLog(models.Model):
     user_agent = models.TextField(null=True, blank=True)
     correlation_id = models.CharField(max_length=36, null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Запись аудита"
+        verbose_name_plural = "Журнал аудита"

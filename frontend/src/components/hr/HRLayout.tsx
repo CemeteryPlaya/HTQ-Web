@@ -17,7 +17,6 @@ import {
   Archive,
   Link2,
   Network,
-  SlidersHorizontal,
   IdCard,
   CalendarDays,
   Wallet
@@ -26,8 +25,9 @@ const navItems = [
   { to: '/hr/employees', icon: Users, labelKey: 'hr.nav.employees', levels: ['junior', 'middle', 'senior', 'lead'] },
   { to: '/hr/accounts', icon: IdCard, labelKey: 'hr.nav.accounts', levels: ['lead'] },
   { to: '/hr/departments', icon: Building2, labelKey: 'hr.nav.structure', levels: ['middle', 'senior', 'lead'] },
+  // Уровни должностей — вкладка внутри «Должностей» (/hr/positions?tab=levels),
+  // отдельного пункта меню у них больше нет.
   { to: '/hr/positions', icon: Briefcase, labelKey: 'hr.nav.positions', levels: ['middle', 'senior', 'lead'] },
-  { to: '/admin/levels', icon: SlidersHorizontal, labelKey: 'hr.nav.levels', levels: ['lead'] },
   { to: '/hr/org-chart', icon: Network, labelKey: 'hr.nav.orgChart', levels: ['junior', 'middle', 'senior', 'lead'] },
   { to: '/hr/pmo', icon: Handshake, labelKey: 'hr.nav.pmo', levels: ['senior', 'lead'] },
   { to: '/hr/share-links', icon: Link2, labelKey: 'hr.nav.shareLinks', levels: ['senior', 'lead'] },

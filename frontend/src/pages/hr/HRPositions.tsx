@@ -1,25 +1,21 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { GripVertical, Lock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import api from '@/api/client';
 import HRLayout from '@/components/hr/HRLayout';
+import PositionLevelsPanel from '@/components/hr/PositionLevelsPanel';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useHRLevel } from '@/hooks/useHRLevel';
-
-interface LevelThreshold {
-  id: number;
-  level_number: number;
-  weight_from: number;
-  weight_to: number;
-  label: string | null;
-  color: string | null;
-}
+import { errorDetail, reportApiError } from '@/lib/apiError';
+import type { LevelThreshold, NextWeightForLevel } from '@/types/hr';
 
 type HRLevelKey = 'junior' | 'middle' | 'senior' | 'lead';
 
@@ -81,77 +77,21 @@ function sortedPositions(items: Position[]): Position[] {
   ));
 }
 
-function WeightCell({
-  position,
-  canEdit,
-  onSave,
-}: {
-  position: Position;
-  canEdit: boolean;
-  onSave: (id: number, weight: number) => Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(String(position.weight));
-  const [saving, setSaving] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const startEdit = () => {
-    if (!canEdit) return;
-    setDraft(String(position.weight));
-    setEditing(true);
-    setTimeout(() => inputRef.current?.select(), 0);
-  };
-
-  const commit = async () => {
-    const val = parseInt(draft, 10);
-    if (Number.isNaN(val) || val < 0 || val === position.weight) {
-      setEditing(false);
-      return;
-    }
-    setSaving(true);
-    try {
-      await onSave(position.id, val);
-    } finally {
-      setSaving(false);
-      setEditing(false);
-    }
-  };
-
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        type="number"
-        min={0}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') commit();
-          if (e.key === 'Escape') setEditing(false);
-        }}
-        className="h-8 w-24 rounded border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-        disabled={saving}
-      />
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={startEdit}
-      title={canEdit ? 'Изменить вес' : undefined}
-      className={`h-8 w-24 rounded border border-transparent px-2 text-left font-mono text-sm tabular-nums ${canEdit ? 'hover:border-border hover:bg-muted' : ''}`}
-    >
-      {position.weight}
-    </button>
-  );
-}
-
 const HRPositions = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { isSenior } = useHRLevel();
+
+  // Вкладка живёт в ?tab= — справочник уровней был отдельным адресом
+  // (/admin/levels), поэтому на него должна оставаться прямая ссылка.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get('tab') === 'levels' ? 'levels' : 'positions';
+  const setTab = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value === 'positions') next.delete('tab');
+    else next.set('tab', value);
+    setSearchParams(next, { replace: true });
+  };
 
   const { data: positionsRaw, isLoading, error } = useQuery<Position[]>({
     queryKey: ['hr-positions-v1'],
@@ -182,11 +122,18 @@ const HRPositions = () => {
   const [form, setForm] = useState<{
     title: string;
     department_id: string;
+    level: string;
     weight: string;
     grade: string;
     hr_level: HRLevelKey | '';
     permissions: string[];
-  }>({ title: '', department_id: '', weight: '100', grade: '1', hr_level: '', permissions: [] });
+  }>({ title: '', department_id: '', level: '', weight: '100', grade: '1', hr_level: '', permissions: [] });
+  // Сообщение о том, что серверу не удалось подобрать свободный вес в уровне
+  // (диапазон порога занят целиком) — вес тогда вводится вручную.
+  const [levelWeightError, setLevelWeightError] = useState<string | null>(null);
+  // Ошибка сохранения — отдельно от тоста: диалог остаётся открытым, и тост
+  // в углу экрана легко пропустить, продолжая жать «Сохранить».
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [departmentFilter, setDepartmentFilter] = useState('all');
 
   const editingIsSystem = !!editingPos?.is_system;
@@ -203,6 +150,24 @@ const HRPositions = () => {
     const fromPositions = visiblePositions.map((item) => item.level);
     return Array.from(new Set([...fromThresholds, ...fromPositions])).sort((a, b) => a - b);
   }, [thresholds, visiblePositions]);
+
+  const sortedThresholds = useMemo(
+    () => [...(thresholds ?? [])].sort((a, b) => a.level_number - b.level_number),
+    [thresholds],
+  );
+
+  // Порог выбранного в диалоге уровня + проверка веса на попадание в диапазон.
+  // Ту же проверку делает бэкенд (422), здесь — чтобы не отправлять заведомо
+  // отклоняемое сохранение.
+  const selectedThreshold = sortedThresholds.find(
+    (item) => item.level_number === Number(form.level),
+  );
+  const weightOutOfLevelRange = Boolean(
+    selectedThreshold
+    && form.weight !== ''
+    && (Number(form.weight) < selectedThreshold.weight_from
+      || Number(form.weight) > selectedThreshold.weight_to),
+  );
 
   const groups = useMemo(() => {
     const map = new Map<number, Position[]>();
@@ -229,6 +194,9 @@ const HRPositions = () => {
         grade: Number(form.grade),
         permissions,
       };
+      // level — не поле модели, а выбор веса: бэкенд проверит, что вес попал
+      // в диапазон порога (422 иначе), и выведет level из веса как обычно.
+      if (form.level) payload.level = Number(form.level);
       if (!editingIsSystem) {
         payload.title = form.title;
         payload.department_id = Number(form.department_id);
@@ -240,15 +208,24 @@ const HRPositions = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['hr-positions-v1'] });
+      queryClient.invalidateQueries({ queryKey: ['org-tree'] });
       setDialogOpen(false);
       setEditingPos(null);
-      setForm({ title: '', department_id: '', weight: '100', grade: '1', hr_level: '', permissions: [] });
+      setSaveError(null);
+      setForm({ title: '', department_id: '', level: '', weight: '100', grade: '1', hr_level: '', permissions: [] });
+    },
+    onError: (err) => {
+      // 409 (вес занят / системная должность) и 422 (вес вне диапазона) —
+      // бэкенд присылает готовое объяснение, показываем его, а не «ошибка».
+      setSaveError(errorDetail(err) ?? 'Не удалось сохранить должность');
+      reportApiError(err, 'Не удалось сохранить должность');
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.delete(`hr/v1/positions/${id}/`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['hr-positions-v1'] }),
+    onError: (err) => reportApiError(err, 'Не удалось удалить должность'),
   });
 
   const moveMutation = useMutation({
@@ -275,10 +252,13 @@ const HRPositions = () => {
       ));
       return { previous };
     },
-    onError: (_err, _payload, context) => {
+    onError: (err, _payload, context) => {
       if (context?.previous) {
         queryClient.setQueryData(['hr-positions-v1'], context.previous);
       }
+      // Откат карточки на место без объяснения выглядел как «перетаскивание
+      // не сработало»: 409 при коллизии веса внутри уровня тут реален.
+      reportApiError(err, 'Не удалось переместить должность');
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['hr-positions-v1'] });
@@ -289,24 +269,58 @@ const HRPositions = () => {
   const rebalanceMutation = useMutation({
     mutationFn: (level?: number) => api.post('hr/v1/positions/rebalance', level ? { level } : {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['hr-positions-v1'] }),
+    onError: (err) => reportApiError(err, 'Не удалось выровнять порядок'),
   });
 
-  const updateWeight = async (id: number, weight: number) => {
-    await api.patch(`hr/v1/positions/${id}/weight`, { weight });
-    queryClient.invalidateQueries({ queryKey: ['hr-positions-v1'] });
+  /** Подставляет свободный вес выбранного уровня. Считает сервер: вес глобально
+   *  уникален, а фронт видит лишь первую страницу должностей. */
+  const suggestWeightForLevel = async (levelNumber: number) => {
+    try {
+      const res = await api.get<NextWeightForLevel>(
+        `hr/v1/positions/levels/${levelNumber}/next-weight`,
+      );
+      setForm((prev) => (
+        Number(prev.level) === levelNumber ? { ...prev, weight: String(res.data.weight) } : prev
+      ));
+      setLevelWeightError(null);
+    } catch (err) {
+      setLevelWeightError(errorDetail(err, 'Не удалось подобрать вес — задайте его вручную.'));
+    }
+  };
+
+  const changeLevel = (value: string) => {
+    setForm((prev) => ({ ...prev, level: value }));
+    setLevelWeightError(null);
+    const levelNumber = Number(value);
+    if (levelNumber) void suggestWeightForLevel(levelNumber);
   };
 
   const startCreate = () => {
     setEditingPos(null);
-    setForm({ title: '', department_id: '', weight: '100', grade: '1', hr_level: '', permissions: [] });
+    setLevelWeightError(null);
+    setSaveError(null);
+    const firstLevel = sortedThresholds[0];
+    setForm({
+      title: '',
+      department_id: '',
+      level: firstLevel ? String(firstLevel.level_number) : '',
+      weight: String(firstLevel?.weight_from ?? 100),
+      grade: '1',
+      hr_level: '',
+      permissions: [],
+    });
     setDialogOpen(true);
+    if (firstLevel) void suggestWeightForLevel(firstLevel.level_number);
   };
 
   const startEdit = (pos: Position) => {
     setEditingPos(pos);
+    setLevelWeightError(null);
+    setSaveError(null);
     setForm({
       title: pos.title,
       department_id: pos.department_id ? String(pos.department_id) : '',
+      level: String(pos.level),
       weight: String(pos.weight),
       grade: String(pos.grade),
       hr_level: pos.permissions?.hr_level ?? '',
@@ -364,27 +378,17 @@ const HRPositions = () => {
     });
   };
 
-  if (isLoading) {
-    return (
-      <HRLayout title={t('hr.pages.positions.title')} subtitle={t('hr.pages.positions.subtitle')}>
-        <div className="rounded-lg border bg-card p-8 text-center">{t('hr.common.loading')}</div>
-      </HRLayout>
-    );
-  }
-
-  if (error) {
-    return (
-      <HRLayout title={t('hr.pages.positions.title')} subtitle={t('hr.pages.positions.subtitle')}>
-        <div className="rounded-lg border bg-card p-8 text-center text-red-500">
-          {t('hr.pages.positions.error')}
-        </div>
-      </HRLayout>
-    );
-  }
-
-  return (
-    <HRLayout title={t('hr.pages.positions.title')} subtitle={t('hr.pages.positions.subtitle')}>
-      <div className="flex flex-col gap-4">
+  // Загрузка/ошибка списка должностей — состояние ВКЛАДКИ, а не страницы:
+  // ранний return из компонента отрезал бы доступ к вкладке «Уровни», хотя
+  // пороги грузятся отдельным запросом и обычно уже на руках.
+  const positionsView = isLoading ? (
+    <div className="rounded-lg border bg-card p-8 text-center">{t('hr.common.loading')}</div>
+  ) : error ? (
+    <div className="rounded-lg border bg-card p-8 text-center text-red-500">
+      {t('hr.pages.positions.error')}
+    </div>
+  ) : (
+    <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-3">
             <div className="text-sm text-muted-foreground">
@@ -414,7 +418,7 @@ const HRPositions = () => {
                 disabled={rebalanceMutation.isPending}
               >
                 <RefreshCw className="mr-2 h-4 w-4" />
-                Перебалансировать все
+                Выровнять порядок
               </Button>
               <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogTrigger asChild>
@@ -467,27 +471,93 @@ const HRPositions = () => {
                         </SelectContent>
                       </Select>
                     </label>
-                    <div className="grid grid-cols-2 gap-4">
-                      <label className="grid gap-2 text-sm">
+                    <label className="grid gap-2 text-sm">
+                      {t('hr.pages.positions.fields.level')}
+                      <Select value={form.level} onValueChange={changeLevel}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Выберите уровень" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {sortedThresholds.map((threshold) => (
+                            <SelectItem
+                              key={threshold.id}
+                              value={String(threshold.level_number)}
+                            >
+                              <span className="flex items-center gap-2">
+                                <span
+                                  className="h-2.5 w-2.5 rounded-full"
+                                  style={{
+                                    backgroundColor: colorForLevel(threshold.level_number, thresholds),
+                                  }}
+                                />
+                                L{threshold.level_number}{threshold.label ? `: ${threshold.label}` : ''}
+                              </span>
+                            </SelectItem>
+                          ))}
+                          {/* Уровень должности может не покрываться ни одним порогом
+                              (fallback L5 на бэкенде) — показываем его, чтобы селект
+                              не выглядел пустым и не терял текущее значение. */}
+                          {form.level && !selectedThreshold && (
+                            <SelectItem value={form.level}>
+                              L{form.level} — не заведён в справочнике
+                            </SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      <span className="text-xs text-muted-foreground">
+                        {sortedThresholds.length === 0
+                          ? 'Уровни ещё не заведены — добавьте их на вкладке «Уровни».'
+                          : 'Место должности в иерархии оргструктуры.'}
+                      </span>
+                    </label>
+
+                    <label className="grid gap-2 text-sm">
+                      Грейд
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={form.grade}
+                        onChange={(e) => setForm({ ...form, grade: e.target.value })}
+                      />
+                      <span className="text-xs text-muted-foreground">
+                        Квалификационный разряд 1–10. С уровнем в иерархии не связан.
+                      </span>
+                    </label>
+
+                    {/* Вес — внутренний порядок сортировки, HR им не оперирует:
+                        уровень задаётся селектом выше, порядок внутри уровня —
+                        перетаскиванием карточек. Поле оставлено для разбора
+                        нештатных ситуаций и по умолчанию свёрнуто. */}
+                    <details className="rounded-lg border bg-muted/30 p-3">
+                      <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+                        Служебное
+                      </summary>
+                      <label className="mt-3 grid gap-2 text-sm">
                         Вес
                         <Input
                           type="number"
                           min={0}
+                          aria-label="Вес"
                           value={form.weight}
                           onChange={(e) => setForm({ ...form, weight: e.target.value })}
                         />
+                        {weightOutOfLevelRange && selectedThreshold ? (
+                          <span className="text-xs text-destructive">
+                            Вес вне диапазона уровня L{selectedThreshold.level_number}
+                            {' '}({selectedThreshold.weight_from}–{selectedThreshold.weight_to})
+                          </span>
+                        ) : selectedThreshold ? (
+                          <span className="text-xs text-muted-foreground">
+                            Порядок внутри уровня. Диапазон L{selectedThreshold.level_number}:
+                            {' '}{selectedThreshold.weight_from}–{selectedThreshold.weight_to}
+                          </span>
+                        ) : null}
+                        {levelWeightError && (
+                          <span className="text-xs text-destructive">{levelWeightError}</span>
+                        )}
                       </label>
-                      <label className="grid gap-2 text-sm">
-                        Грейд
-                        <Input
-                          type="number"
-                          min={1}
-                          max={10}
-                          value={form.grade}
-                          onChange={(e) => setForm({ ...form, grade: e.target.value })}
-                        />
-                      </label>
-                    </div>
+                    </details>
 
                     <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
                       <div className="text-sm font-semibold">Уровень доступа HR</div>
@@ -553,14 +623,21 @@ const HRPositions = () => {
                       </div>
                     </div>
 
+                    {saveError && (
+                      <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                        {saveError}
+                      </div>
+                    )}
+
                     <div className="flex justify-end gap-2">
                       <Button variant="outline" onClick={() => setDialogOpen(false)}>
                         {t('hr.common.cancel')}
                       </Button>
                       <Button
-                        onClick={() => saveMutation.mutate()}
+                        onClick={() => { setSaveError(null); saveMutation.mutate(); }}
                         disabled={
                           (!editingIsSystem && (!form.title || !form.department_id))
+                          || weightOutOfLevelRange
                           || saveMutation.isPending
                         }
                       >
@@ -584,7 +661,9 @@ const HRPositions = () => {
                 style={{ borderColor: color, backgroundColor: `${color}1a`, color }}
               >
                 L{threshold.level_number}{threshold.label ? `: ${threshold.label}` : ''}
-                <span className="font-mono">{threshold.weight_from}-{threshold.weight_to}</span>
+                <span className="tabular-nums opacity-70">
+                  {(groups.get(threshold.level_number) ?? []).length}
+                </span>
               </span>
             );
           })}
@@ -610,9 +689,9 @@ const HRPositions = () => {
                         </h2>
                         <Badge variant="outline">{items.length}</Badge>
                       </div>
-                      {threshold && (
+                      {!threshold && (
                         <p className="mt-1 text-xs text-muted-foreground">
-                          {threshold.weight_from}-{threshold.weight_to}
+                          Уровень не заведён в справочнике
                         </p>
                       )}
                     </div>
@@ -622,7 +701,7 @@ const HRPositions = () => {
                         variant="ghost"
                         onClick={() => rebalanceMutation.mutate(level)}
                         disabled={rebalanceMutation.isPending}
-                        title="Перебалансировать уровень"
+                        title="Выровнять порядок внутри уровня"
                       >
                         <RefreshCw className="h-4 w-4" />
                       </Button>
@@ -672,10 +751,9 @@ const HRPositions = () => {
                                     )}
                                   </div>
                                   <div className="truncate text-xs text-muted-foreground">
-                                    {position.department_name ?? 'Без отдела'} · grade {position.grade}
+                                    {position.department_name ?? 'Без отдела'} · грейд {position.grade}
                                   </div>
                                 </div>
-                                <WeightCell position={position} canEdit={isSenior} onSave={updateWeight} />
                                 {isSenior && (
                                   <div className="flex items-center gap-1">
                                     <Button size="sm" variant="ghost" onClick={() => startEdit(position)} title={t('hr.common.edit')}>
@@ -716,7 +794,23 @@ const HRPositions = () => {
             })}
           </div>
         </DragDropContext>
-      </div>
+    </div>
+  );
+
+  return (
+    <HRLayout title={t('hr.pages.positions.title')} subtitle={t('hr.pages.positions.subtitle')}>
+      {isSenior ? (
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList>
+            <TabsTrigger value="positions">{t('hr.pages.positions.tabs.positions')}</TabsTrigger>
+            <TabsTrigger value="levels">{t('hr.pages.positions.tabs.levels')}</TabsTrigger>
+          </TabsList>
+          <TabsContent value="positions" className="mt-4">{positionsView}</TabsContent>
+          <TabsContent value="levels" className="mt-4">
+            <PositionLevelsPanel />
+          </TabsContent>
+        </Tabs>
+      ) : positionsView}
     </HRLayout>
   );
 };

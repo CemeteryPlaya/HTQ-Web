@@ -50,6 +50,11 @@ services:
     command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
     environment:
       DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+      # QUIC-мост опубликован на хост как UDP :4433. localhost — secure
+      # context, поэтому WebTransport из http://localhost:3000 работает;
+      # с LAN-адреса (http://192.168.x.y:3000) браузер его не даст —
+      # это не наш баг, нужен HTTPS.
+      CONFERENCE_WT_URL: ${CONFERENCE_WT_URL:-https://localhost:4433/sfu}
     volumes:
       - ./backend:/app
 
@@ -72,6 +77,18 @@ services:
       DJANGO_SETTINGS_MODULE: htqweb.settings.dev
     volumes:
       - ./backend:/app
+
+  # ─── SFU (dev) ──────────────────────────────────────────────────────────────
+  # Сигналинг браузер видит как ws://localhost:3000/ws/sfu/ — Vite-прокси
+  # (VITE_SFU_WS_TARGET выше) отправляет его в этот контейнер.
+  #
+  # WEBRTC_ANNOUNCED_IP=127.0.0.1 годится, пока браузер на той же машине:
+  # порт 44444 опубликован на хост. Для проверки с телефона/второго ноутбука
+  # поставьте LAN-IP хоста в корневом .env (WEBRTC_ANNOUNCED_IP=192.168.x.y),
+  # иначе ICE-кандидаты будут указывать на loopback второго устройства.
+  sfu:
+    environment:
+      WEBRTC_ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-127.0.0.1}
 
   # ─── MinIO (dev) ────────────────────────────────────────────────────────────
   # Консоль: http://localhost:9001 (minioadmin / minioadmin). В проде — остановить

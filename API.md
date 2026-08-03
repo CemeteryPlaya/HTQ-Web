@@ -89,9 +89,10 @@ itself; hit `:8000`/`:8001` directly for that, or use the gateway-level
 ## Production access (nginx :80)
 
 `docker compose up -d` (without `-f docker-compose.dev.yml`, and note the
-`production` compose profile that adds `nginx`/`sfu`/`certbot`/
-`webtransport`) brings up nginx on `:80`. Same routing table, but the Vite
-dev server isn't running.
+`production` compose profile that adds `nginx`/`certbot`) brings up nginx on
+`:80`. Same routing table, but the Vite dev server isn't running. `sfu` и
+`webtransport` профиля не требуют — они поднимаются вместе с остальным
+стеком в обоих режимах.
 
 ---
 
@@ -123,7 +124,8 @@ same backend.
 | `/api/contracts/v1/*`               | `backend` (WSGI)   | Budgets, counterparty registry, agreements   |
 | `/api/signoff/v1/*`                 | `backend` (WSGI)   | Approval routes + running approvals — **not** `apps.approvals` (`/api/requests/v1`) |
 | `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
-| `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django |
+| `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django. JWT обязателен: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=` (иначе 401 на upgrade) |
+| `:4433/udp` (в обход nginx)         | `webtransport`     | QUIC-сигналинг того же SFU: браузер ходит прямо на UDP-порт, nginx его не проксирует. Токен — в `?token=` |
 | `/django-admin/`                    | `backend` (WSGI)   | Django's own admin, session-authenticated (see Authentication) |
 | `/static/`                          | `backend` (WSGI)   | `collectstatic` output |
 | `/grafana/`, `/prometheus/`         | grafana / prometheus | Observability — see below |
@@ -566,6 +568,14 @@ dive.
 | `/api/cms/v1/contact-requests/{id}/reply`        | POST   |                                    |
 | `/api/cms/v1/conference/config`                  | GET    | Static SFU/ICE config (no DB) — `apps.cms.services.conference_service` |
 
+`conference/config` отдаёт: `sfu_signaling_url` (пустой = фронт берёт
+`ws(s)://<origin>/ws/sfu/`), `sfu_signaling_path`, `ice_servers`, `enabled`
+(флаг сервиса `conference` в реестре) и пару полей QUIC-сигналинга —
+`wt_signaling_url` (адрес моста `webtransport`, пустой = мост не
+анонсирован, работаем по WebSocket) и `wt_certificate_hashes` (DER SHA-256
+самоподписанного сертификата моста для dev; с сертификатом от настоящего CA
+список пуст).
+
 ---
 
 ## `apps.contracts` — `/api/contracts/v1`
@@ -836,7 +846,7 @@ own port directly, these are not under `/api/`):**
 ```
 GET /health/               → 200 {"status":"ok","service":"backend","timestamp":"..."}
 GET /health/ready/         → 200 {"status":"ok"} or 503 {"status":"unavailable"}  (checks DB with SELECT 1)
-GET /api/core/v1/services/ → 200 {"services": {"users": true, "hr": true, ..., "conference": false}}
+GET /api/core/v1/services/ → 200 {"services": {"users": true, "hr": true, ..., "conference": true}}
 ```
 `/api/core/v1/services/` is what `docker-compose.yml`'s own healthcheck for
 `backend-web` polls, and what nginx's `/health/ready` proxies to — it's the

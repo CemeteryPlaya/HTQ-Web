@@ -15,4 +15,6 @@ class ServiceStatus(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = "Состояние сервиса"
+        verbose_name_plural = "Состояния сервисов"
         db_table = "core_service_status"

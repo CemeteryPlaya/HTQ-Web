@@ -380,7 +380,7 @@
       "manageNews": "Новости",
       "manageProjects": "Проекты",
       "contactRequests": "Запросы контактов",
-      "djangoAdmin": "База данных",
+      "djangoAdmin": "Админка Django",
       "hrManagement": "HR",
       "adminTools": "Администрирование",
       "employees": "Сотрудники",
@@ -403,8 +403,7 @@
       "actionLogs": "Журнал действий",
       "registrations": "Регистрации",
       "manageUsers": "Пользователи",
-      "manageChats": "Чаты",
-      "sqladmin": "База данных"
+      "manageChats": "Чаты"
     },
     "errors": {
       "nameMin": "Имя должно содержать минимум 2 символа",
@@ -510,8 +509,8 @@
       "password": "Пароль",
       "passwordHint": "Минимум 8 символов. Пользователь может быть обязан сменить его при первом входе.",
       "passwordMin": "Пароль минимум 8 символов",
-      "isStaffHint": "Доступ к sqladmin и admin-панели.",
-      "isSuperuserHint": "Полный административный доступ.",
+      "isStaffHint": "Повышенные права в API (админские эндпоинты). В /django-admin/ НЕ пускает.",
+      "isSuperuserHint": "Полный административный доступ, включая панель /django-admin/.",
       "mustChangePassword": "Сменить пароль при входе",
       "mustChangePasswordHint": "При следующем входе пользователь будет вынужден задать новый пароль.",
       "passwordResetHint": "Установите временный пароль. Пользователь сможет сменить его при входе, если включён флаг выше.",
@@ -592,7 +591,6 @@
       "departments": "Отделы",
       "structure": "Структура",
       "positions": "Должности",
-      "levels": "Уровни должностей",
       "orgChart": "Оргструктура",
       "pmo": "PMO",
       "shareLinks": "Публичные ссылки",
@@ -790,13 +788,18 @@
         "new": "Новая должность",
         "edit": "Редактировать должность",
         "deleteConfirm": "Удалить эту должность?",
+        "tabs": {
+          "positions": "Должности",
+          "levels": "Уровни"
+        },
         "filters": {
           "department": "Фильтр по отделу",
           "allDepartments": "Все отделы"
         },
         "fields": {
           "title": "Название",
-          "department": "Отдел"
+          "department": "Отдел",
+          "level": "Уровень"
         },
         "placeholders": {
           "selectDepartment": "Выберите отдел"

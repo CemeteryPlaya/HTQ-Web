@@ -79,6 +79,10 @@ class Department(HrBase):
         db_default=UnitType.DEPARTMENT.value,
     )
 
+    class Meta:
+        verbose_name = "Отдел"
+        verbose_name_plural = "Отделы"
+
     def __str__(self) -> str:
         return self.name
 
@@ -103,6 +107,10 @@ class Position(HrBase):
     # должности (app/auth/hr_access.py в исходнике).
     # Форма: {"hr_level": "junior|middle|senior|lead", "permissions": [str, ...]}
     permissions = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Должность"
+        verbose_name_plural = "Должности"
 
     def __str__(self) -> str:
         return self.title
@@ -135,6 +143,10 @@ class Employee(HrBase):
     bio = models.TextField(null=True, blank=True)
     is_deleted = models.BooleanField(default=False, db_default=False)  # soft delete
 
+    class Meta:
+        verbose_name = "Сотрудник"
+        verbose_name_plural = "Сотрудники"
+
     def __str__(self) -> str:
         return f"{self.last_name} {self.first_name}"
 
@@ -149,6 +161,8 @@ class LevelThreshold(HrBase):
     color = models.CharField(max_length=7, null=True, blank=True)
 
     class Meta:
+        verbose_name = "Уровень должностей"
+        verbose_name_plural = "Уровни должностей"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(weight_from__lte=models.F("weight_to")),
@@ -191,6 +205,8 @@ class PositionWeightAudit(models.Model):
     reason = models.CharField(max_length=64, null=True, blank=True)
 
     class Meta:
+        verbose_name = "Изменение веса должности"
+        verbose_name_plural = "История весов должностей"
         # Составной индекс (position_id, changed_at) — порт
         # Index("ix_hr_position_weight_audit_position", "position_id", "changed_at").
         # Имя не задаём явно: Django сам генерирует детерминированное короткое
@@ -241,6 +257,8 @@ class AuditLog(HrBase):
     user_agent = models.CharField(max_length=500, null=True, blank=True)
 
     class Meta:
+        verbose_name = "Запись аудита"
+        verbose_name_plural = "Журнал аудита"
         # Порт Index("ix_audit_log_entity", "entity_type", "entity_id") —
         # единственный индекс исходника на этой таблице.
         indexes = [models.Index(fields=["entity_type", "entity_id"])]
@@ -286,6 +304,8 @@ class ReportingRelation(HrBase):
     effective_to = models.DateField(null=True, blank=True)
 
     class Meta:
+        verbose_name = "Подчинение"
+        verbose_name_plural = "Подчинения"
         constraints = [
             models.UniqueConstraint(
                 fields=["superior_position", "subordinate_position", "relation_type"],
@@ -316,6 +336,10 @@ class OrgSettings(models.Model):
     value = models.CharField(max_length=500)
     description = models.TextField(null=True, blank=True)
     updated_at = models.DateTimeField(db_default=Now())
+
+    class Meta:
+        verbose_name = "Настройка оргструктуры"
+        verbose_name_plural = "Настройки оргструктуры"
 
     def __str__(self) -> str:
         return f"{self.key}={self.value!r}"
@@ -386,6 +410,10 @@ class Vacancy(HrBase):
         related_name="assigned_vacancies",
     )
 
+    class Meta:
+        verbose_name = "Вакансия"
+        verbose_name_plural = "Вакансии"
+
     def __str__(self) -> str:
         return f"{self.title} ({self.status})"
 
@@ -414,6 +442,10 @@ class Application(HrBase):
     applied_at = models.DateTimeField(db_default=Now())
     notes = models.TextField(null=True, blank=True)
 
+    class Meta:
+        verbose_name = "Отклик на вакансию"
+        verbose_name_plural = "Отклики на вакансии"
+
     def __str__(self) -> str:
         return f"{self.candidate_name} -> vacancy #{self.vacancy_id} ({self.status})"
 
@@ -430,12 +462,20 @@ class Document(HrBase):
     Таблица — дефолтное имя Django: hr_document (не hr_documents исходника,
     решение D2, как и у остальных моделей домена).
 
-    Оба FK (``employee``/``uploaded_by``) — NOT NULL без явного ondelete в
-    исходнике -> PROTECT (тот же выбор, что для Vacancy.department/position,
+    Оба FK (``employee``/``uploaded_by``) — без явного ondelete в исходнике
+    -> PROTECT (тот же выбор, что для Vacancy.department/position,
     Application.vacancy). Без ``db_index=False`` — исходник не индексирует их
     явно, но конвенция порта (см. Vacancy.department/position) не убирает
     дефолтную индексацию Django FK без документированной причины (составной
     индекс, левый префикс и т.п.) — здесь такой причины нет.
+
+    ``uploaded_by`` — единственное отступление от NOT NULL исходника
+    (миграция ``0015_document_uploaded_by_nullable``): документы грузят и
+    платформенные учётки без карточки сотрудника (admin, интеграции), а
+    NOT NULL делал такую загрузку невозможной в принципе. Кто загрузил —
+    не теряется: ``metadata["uploaded_by_user_id"]`` пишется всегда, в том
+    числе когда карточка есть. ``on_delete`` оставлен PROTECT: он и дальше
+    не даст удалить сотрудника, за которым числятся документы.
 
     ``metadata`` — исходник называет атрибут ``metadata_`` (маппится на
     колонку ``metadata``) ТОЛЬКО потому, что SQLAlchemy ``DeclarativeBase``
@@ -466,8 +506,13 @@ class Document(HrBase):
     )
     uploaded_by = models.ForeignKey(
         Employee, on_delete=models.PROTECT, related_name="uploaded_documents",
+        null=True, blank=True,
     )
     metadata = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Документ"
+        verbose_name_plural = "Документы"
 
     def __str__(self) -> str:
         return f"<Document(id={self.id}, title='{self.title}', employee_id={self.employee_id})>"
@@ -502,6 +547,8 @@ class EmployeeDocumentBlob(models.Model):
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
 
     class Meta:
+        verbose_name = "Файл документа сотрудника"
+        verbose_name_plural = "Файлы документов сотрудников"
         indexes = [models.Index(fields=["employee_id", "doc_type"])]
 
     def __str__(self) -> str:
@@ -528,6 +575,10 @@ class EmployeeGroups(models.Model):
 
     employee_id = models.IntegerField(unique=True)
     data = models.JSONField(default=dict, db_default={})
+
+    class Meta:
+        verbose_name = "Группа сотрудников"
+        verbose_name_plural = "Группы сотрудников"
 
     def __str__(self) -> str:
         return f"<EmployeeGroups(employee_id={self.employee_id})>"
@@ -582,6 +633,10 @@ class EmployeeCard(HrBase):
     safety_cert_number = models.CharField(max_length=100, null=True, blank=True)
     safety_cert_expiry = models.DateField(null=True, blank=True)
 
+    class Meta:
+        verbose_name = "Карточка сотрудника"
+        verbose_name_plural = "Карточки сотрудников"
+
     def __str__(self) -> str:
         return f"<EmployeeCard(employee_id={self.employee_id})>"
 
@@ -617,6 +672,8 @@ class TimeEntry(HrBase):
     task = models.CharField(max_length=255, null=True, blank=True)
 
     class Meta:
+        verbose_name = "Отметка времени"
+        verbose_name_plural = "Учёт времени"
         constraints = [
             models.UniqueConstraint(
                 fields=["employee", "date", "start_time"], name="uq_employee_time_entry",
@@ -646,6 +703,10 @@ class StaffingPosition(HrBase):
     headcount = models.DecimalField(max_digits=5, decimal_places=2, default=1, db_default=1)
     salary = models.DecimalField(max_digits=12, decimal_places=2, default=0, db_default=0)
     note = models.CharField(max_length=255, null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Штатная единица"
+        verbose_name_plural = "Штатное расписание"
 
     def __str__(self) -> str:
         return (f"<StaffingPosition(id={self.id}, position_id={self.position_id}, "
@@ -709,6 +770,10 @@ class PersonnelHistory(HrBase):
     # user-service").
     created_by = models.IntegerField(null=True, blank=True, db_index=True)
 
+    class Meta:
+        verbose_name = "Кадровое событие"
+        verbose_name_plural = "Кадровая история"
+
     def __str__(self) -> str:
         return f"<PersonnelHistory(id={self.id}, employee_id={self.employee_id}, event={self.event_type})>"
 
@@ -745,6 +810,10 @@ class WeekTemplate(HrBase):
     # — ключи "0".."6" (понедельник..воскресенье), валидируется в schemas.py.
     days = models.JSONField(default=dict, db_default={})
 
+    class Meta:
+        verbose_name = "Шаблон недели"
+        verbose_name_plural = "Шаблоны недели"
+
     def __str__(self) -> str:
         return self.name
 
@@ -765,6 +834,10 @@ class CalendarDay(HrBase):
     day_type = models.CharField(max_length=16)
     norm_hours = models.DecimalField(max_digits=4, decimal_places=2, default=0, db_default=0)
     note = models.CharField(max_length=255, null=True, blank=True)
+
+    class Meta:
+        verbose_name = "День календаря"
+        verbose_name_plural = "Производственный календарь"
 
     def __str__(self) -> str:
         return f"{self.day} ({self.day_type})"
@@ -791,6 +864,10 @@ class EmployeeWeekTemplate(HrBase):
         WeekTemplate, on_delete=models.CASCADE, related_name="employee_assignments",
     )
 
+    class Meta:
+        verbose_name = "Шаблон недели сотрудника"
+        verbose_name_plural = "Шаблоны недели сотрудников"
+
     def __str__(self) -> str:
         return f"<EmployeeWeekTemplate(employee_id={self.employee_id}, week_template_id={self.week_template_id})>"
 
@@ -806,6 +883,10 @@ class ShiftPattern(HrBase):
     # [{"type": "work"|"off", "hours": <number>}, ...]; len(slots) = длина цикла.
     slots = models.JSONField(default=list, db_default=[])
     holidays_off = models.BooleanField(default=False, db_default=False)
+
+    class Meta:
+        verbose_name = "Шаблон смены"
+        verbose_name_plural = "Шаблоны смен"
 
     def __str__(self) -> str:
         return self.name
@@ -829,6 +910,10 @@ class EmployeeShiftAssignment(HrBase):
         ShiftPattern, on_delete=models.CASCADE, related_name="employee_assignments",
     )
     anchor_date = models.DateField()
+
+    class Meta:
+        verbose_name = "Назначение смены"
+        verbose_name_plural = "Назначения смен"
 
     def __str__(self) -> str:
         return f"<EmployeeShiftAssignment(employee_id={self.employee_id}, shift_pattern_id={self.shift_pattern_id})>"
@@ -860,6 +945,8 @@ class EmployeeDayOverride(HrBase):
     note = models.CharField(max_length=255, null=True, blank=True)
 
     class Meta:
+        verbose_name = "Исключение по дню"
+        verbose_name_plural = "Исключения по дням"
         constraints = [
             models.UniqueConstraint(fields=["employee", "day"], name="uq_hr_emp_day_override"),
         ]
@@ -915,6 +1002,8 @@ class PMO(HrBase):
     )
 
     class Meta:
+        verbose_name = "Проектный офис"
+        verbose_name_plural = "Проектные офисы"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(status__in=list(PMOStatus.values)),
@@ -971,6 +1060,8 @@ class PMODepartment(models.Model):
     pk = models.CompositePrimaryKey("pmo", "department")
 
     class Meta:
+        verbose_name = "Отдел проектного офиса"
+        verbose_name_plural = "Отделы проектного офиса"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(role__in=list(PMODepartmentRole.values)),
@@ -997,6 +1088,10 @@ class PMOPosition(models.Model):
     headcount = models.IntegerField(default=1, db_default=1)
 
     pk = models.CompositePrimaryKey("pmo", "position")
+
+    class Meta:
+        verbose_name = "Должность проектного офиса"
+        verbose_name_plural = "Должности проектного офиса"
 
     def __str__(self) -> str:
         return f"<PMOPosition(pmo_id={self.pmo_id}, position_id={self.position_id})>"
@@ -1044,6 +1139,8 @@ class PMOMember(models.Model):
     is_primary = models.BooleanField(default=False, db_default=False)
 
     class Meta:
+        verbose_name = "Участник проектного офиса"
+        verbose_name_plural = "Участники проектных офисов"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(membership_type__in=list(PMOMembershipType.values)),
@@ -1166,6 +1263,8 @@ class ShareableLink(models.Model):
     created_at = models.DateTimeField(db_default=Now())
 
     class Meta:
+        verbose_name = "Публичная ссылка"
+        verbose_name_plural = "Публичные ссылки"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(link_type__in=list(ShareLinkType.values)),
@@ -1234,6 +1333,8 @@ class ShareLinkAudit(models.Model):
     reason = models.CharField(max_length=64, null=True, blank=True)
 
     class Meta:
+        verbose_name = "Обращение по ссылке"
+        verbose_name_plural = "Журнал публичных ссылок"
         indexes = [models.Index(fields=["link", "occurred_at"])]
         constraints = [
             models.CheckConstraint(
@@ -1276,6 +1377,8 @@ class DepartmentFileFolder(HrBase):
     created_by_name = models.CharField(max_length=255, null=True, blank=True)
 
     class Meta:
+        verbose_name = "Папка файлов отдела"
+        verbose_name_plural = "Папки файлов отделов"
         constraints = [
             models.UniqueConstraint(
                 fields=["department", "name"],
@@ -1323,6 +1426,10 @@ class DepartmentFile(HrBase):
     uploaded_by_user_id = models.IntegerField(null=True, blank=True, db_index=True)
     uploaded_by_name = models.CharField(max_length=255, null=True, blank=True)
     description = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "Файл отдела"
+        verbose_name_plural = "Файлы отделов"
 
     def __str__(self) -> str:
         return f"<DepartmentFile(id={self.id}, department_id={self.department_id}, name='{self.name}')>"

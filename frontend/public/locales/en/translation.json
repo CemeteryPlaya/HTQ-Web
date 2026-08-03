@@ -50,7 +50,7 @@
       "manageNews": "News",
       "manageProjects": "Projects",
       "contactRequests": "Contact requests",
-      "djangoAdmin": "Database admin",
+      "djangoAdmin": "Django admin",
       "hrManagement": "HR",
       "adminTools": "Administration",
       "employees": "Employees",
@@ -73,8 +73,7 @@
       "actionLogs": "Action logs",
       "registrations": "Registrations",
       "manageUsers": "Users",
-      "manageChats": "Chats",
-      "sqladmin": "Database (sqladmin)"
+      "manageChats": "Chats"
     },
     "errors": {
       "nameMin": "Name must be at least 2 characters",
@@ -429,7 +428,6 @@
       "departments": "Departments",
       "structure": "Structure",
       "positions": "Positions",
-      "levels": "Position Levels",
       "orgChart": "Org Chart",
       "pmo": "PMO",
       "shareLinks": "Public Links",
@@ -604,13 +602,18 @@
         "new": "New Position",
         "edit": "Edit Position",
         "deleteConfirm": "Delete this position?",
+        "tabs": {
+          "positions": "Positions",
+          "levels": "Levels"
+        },
         "filters": {
           "department": "Filter by department",
           "allDepartments": "All departments"
         },
         "fields": {
           "title": "Title",
-          "department": "Department"
+          "department": "Department",
+          "level": "Level"
         },
         "placeholders": {
           "selectDepartment": "Select department"

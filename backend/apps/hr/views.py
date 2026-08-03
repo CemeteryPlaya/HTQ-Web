@@ -234,8 +234,10 @@ def _list_positions(request):
 def _create_position(request, data: schemas.PositionCreate):
     try:
         pos = pos_svc.create_position(data)
-    except pos_svc.WeightTaken as exc:
+    except (pos_svc.WeightTaken, pos_svc.LevelFull) as exc:
         return json_error(exc.detail, 409)
+    except pos_svc.LevelWeightMismatch as exc:
+        return json_error(exc.detail, 422)
     return pos_svc.serialize(pos)
 
 
@@ -258,7 +260,11 @@ def _list_level_thresholds(request):
 def _create_level_threshold(request, data: schemas.LevelThresholdCreate):
     try:
         threshold = pos_svc.create_threshold(data, actor_user_id=request.token.user_id)
-    except (pos_svc.ThresholdExists, pos_svc.ThresholdRangeOverlap) as exc:
+    except (
+        pos_svc.ThresholdExists,
+        pos_svc.ThresholdRangeOverlap,
+        pos_svc.LevelRangeUnavailable,
+    ) as exc:
         return json_error(exc.detail, 409)
     except pos_svc.ThresholdRangeInvalid as exc:
         return json_error(exc.detail, 422)
@@ -288,6 +294,20 @@ def _update_level_threshold(request, level_number: int, data: schemas.LevelThres
 def _delete_level_threshold(request, level_number: int):
     pos_svc.delete_threshold(level_number, actor_user_id=request.token.user_id)
     return HttpResponse(status=204)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def next_weight_for_level(request, level_number: int):
+    """Свободный вес в конце уровня — подсказка для селекта «Уровень» в UI.
+
+    Считается на сервере, а не на фронте: вес глобально уникален, а список
+    должностей фронт грузит страницами (limit<=200), так что «занятые» веса
+    он видит не все. Http404 (нет такого порога) отдаёт api_view.
+    """
+    try:
+        return pos_svc.next_weight_for_level(level_number)
+    except pos_svc.LevelFull as exc:
+        return json_error(exc.detail, 409)
 
 
 def level_threshold_detail(request, level_number: int):
@@ -341,9 +361,9 @@ def _update_position(request, id: int, data: schemas.PositionUpdate):
         pos = pos_svc.update_position(id, data, actor_user_id=request.token.user_id)
     except pos_svc.SystemPositionFieldsLocked as exc:
         return json_error(exc.detail, 409)
-    except pos_svc.WeightTaken as exc:
+    except (pos_svc.WeightTaken, pos_svc.LevelFull) as exc:
         return json_error(exc.detail, 409)
-    except pos_svc.WeightInvalid as exc:
+    except (pos_svc.WeightInvalid, pos_svc.LevelWeightMismatch) as exc:
         return json_error(exc.detail, 422)
     return pos_svc.serialize(pos)
 
@@ -1756,10 +1776,66 @@ def _upload_document(request, data: schemas.DocumentCreate):
     return doc_svc.serialize(doc_svc.create_document(data))
 
 
+@api_view(methods=("POST",), auth="jwt", status=201)
+def _upload_document_multipart(request):
+    """multipart-ветка ``POST /documents/`` — файл приходит самим запросом.
+
+    JSON-контракт исходника (``_upload_document``) ждёт уже загруженный
+    куда-то файл: ``file_path``/``file_size``/``mime_type``/``uploaded_by``
+    приходят от клиента. Фронт HR-«Документов» такого шага не делает и шлёт
+    обычную форму с файлом — раньше она разбивалась о JSON-парсер
+    (422 ``Invalid JSON``). Разбор формы — как у
+    ``_upload_department_file``: POST Django парсит сам в
+    ``request.POST``/``request.FILES``.
+    """
+    # Скоуп ``hr_doc`` в media — restricted (решение Д1): вызывающий домен
+    # обязан сам проверить свои права, прежде чем ручаться за запись
+    # (``store_file(internal_authorized=True)``). У JSON-ветки исходника
+    # проверки нет и мы её туда не добавляем, но здесь без неё ручаться
+    # не за что.
+    try:
+        hr_access.require_can_write_basic(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+
+    employee_raw = request.POST.get("employee") or request.POST.get("employee_id")
+    try:
+        employee_id = int(employee_raw)
+    except (TypeError, ValueError):
+        return json_error({"employee": "field required"}, 422)
+
+    title = (request.POST.get("title") or "").strip()
+    if not title:
+        return json_error({"title": "field required"}, 422)
+
+    upload = request.FILES.get("file")
+    if upload is None:
+        return json_error({"file": "field required"}, 422)
+
+    try:
+        return doc_svc.create_document_from_upload(
+            request.token,
+            employee_id=employee_id,
+            title=title,
+            doc_type=request.POST.get("doc_type") or "other",
+            file=upload,
+            description=request.POST.get("description", ""),
+        )
+    except doc_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+    except doc_svc.DocumentUploadRejected as exc:
+        return json_error(exc.detail, exc.status_code)
+
+
 def documents_collection(request):
     if request.method == "GET":
         return _list_documents(request)
     if request.method == "POST":
+        # Форма с файлом и JSON-контракт живут на одном URL — различаем по
+        # Content-Type, как это делает FastAPI разными сигнатурами роутера.
+        content_type = (request.content_type or "").lower()
+        if content_type.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+            return _upload_document_multipart(request)
         return _upload_document(request)
     return json_error("Method Not Allowed", 405)
 

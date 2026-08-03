@@ -50,7 +50,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { useHRLevel } from '@/hooks/useHRLevel';
-import type { Department, Employee, HRUserOption, Position } from '@/types/hr';
+import type {
+  Department, Employee, HRUserOption, LevelThreshold, NextWeightForLevel, Position,
+} from '@/types/hr';
 
 interface Employee {
   id: number;
@@ -375,12 +377,32 @@ const HREmployees = () => {
   const [newPositionForm, setNewPositionForm] = useState<{
     title: string;
     department_id: string;
+    level: string;
     weight: string;
     grade: string;
     description: string;
     hr_level: '' | 'junior' | 'middle' | 'senior' | 'lead';
-  }>({ title: '', department_id: '', weight: '100', grade: '1', description: '', hr_level: '' });
+  }>({ title: '', department_id: '', level: '', weight: '100', grade: '1', description: '', hr_level: '' });
   const [newPositionError, setNewPositionError] = useState<string | null>(null);
+
+  // Ключ общий со страницей «Должности» — справочник уровней тянется один раз.
+  const { data: levelThresholds } = useQuery<LevelThreshold[]>({
+    queryKey: ['hr-level-thresholds'],
+    queryFn: async () => (await api.get<LevelThreshold[]>('hr/v1/positions/levels/')).data,
+  });
+  const sortedThresholds = useMemo(
+    () => [...(levelThresholds ?? [])].sort((a, b) => a.level_number - b.level_number),
+    [levelThresholds],
+  );
+  const newPositionThreshold = sortedThresholds.find(
+    (item) => item.level_number === Number(newPositionForm.level),
+  );
+  const newPositionWeightOutOfRange = Boolean(
+    newPositionThreshold
+    && newPositionForm.weight !== ''
+    && (Number(newPositionForm.weight) < newPositionThreshold.weight_from
+      || Number(newPositionForm.weight) > newPositionThreshold.weight_to),
+  );
 
   const createPositionMutation = useMutation({
     mutationFn: async () => {
@@ -391,6 +413,7 @@ const HREmployees = () => {
         grade: Number(newPositionForm.grade) || 1,
         description: newPositionForm.description || undefined,
       };
+      if (newPositionForm.level) payload.level = Number(newPositionForm.level);
       if (newPositionForm.hr_level) {
         payload.permissions = { hr_level: newPositionForm.hr_level, permissions: [] };
       }
@@ -409,7 +432,10 @@ const HREmployees = () => {
           : (created.department_id ? String(created.department_id) : prev.department),
       }));
       setCreatePositionOpen(false);
-      setNewPositionForm({ title: '', department_id: '', weight: '100', grade: '1', description: '', hr_level: '' });
+      setNewPositionForm({
+        title: '', department_id: '', level: '', weight: '100', grade: '1',
+        description: '', hr_level: '',
+      });
       setNewPositionError(null);
     },
     onError: (err: any) => {
@@ -423,19 +449,47 @@ const HREmployees = () => {
     },
   });
 
+  /** Свободный вес выбранного уровня подбирает сервер: вес глобально уникален,
+   *  и этот диалог не видит, какие значения уже заняты. */
+  const suggestWeightForLevel = async (levelNumber: number) => {
+    try {
+      const res = await api.get<NextWeightForLevel>(
+        `hr/v1/positions/levels/${levelNumber}/next-weight`,
+      );
+      setNewPositionForm((prev) => (
+        Number(prev.level) === levelNumber ? { ...prev, weight: String(res.data.weight) } : prev
+      ));
+    } catch {
+      setNewPositionError('Не удалось подобрать свободный вес — задайте его вручную.');
+    }
+  };
+
+  const changeNewPositionLevel = (value: string) => {
+    setNewPositionForm((prev) => ({ ...prev, level: value }));
+    setNewPositionError(null);
+    const levelNumber = Number(value);
+    if (levelNumber) void suggestWeightForLevel(levelNumber);
+  };
+
   const startCreatePosition = () => {
     setPositionPopoverOpen(false);
     setNewPositionError(null);
+    // Вес НЕ фиксируем на 100: он глобально уникален, и 100 почти всегда уже
+    // занят — диалог падал с 409 «Weight 100 is already taken» у всех подряд.
+    // Берём первый уровень и просим у сервера свободный вес внутри него.
+    const firstLevel = sortedThresholds[0];
     setNewPositionForm({
       title: '',
       // Preselect the department picked on the employee form, if any.
       department_id: form.department && form.department !== 'none' ? form.department : '',
-      weight: '100',
+      level: firstLevel ? String(firstLevel.level_number) : '',
+      weight: String(firstLevel?.weight_from ?? 100),
       grade: '1',
       description: '',
       hr_level: '',
     });
     setCreatePositionOpen(true);
+    if (firstLevel) void suggestWeightForLevel(firstLevel.level_number);
   };
 
   const createUserMutation = useMutation({
@@ -1004,6 +1058,35 @@ const HREmployees = () => {
                 </SelectContent>
               </Select>
             </label>
+            <label className="grid gap-1.5 text-sm">
+              {t('hr.pages.positions.fields.level')}
+              <Select value={newPositionForm.level} onValueChange={changeNewPositionLevel}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Выберите уровень" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sortedThresholds.map((threshold) => (
+                    <SelectItem key={threshold.id} value={String(threshold.level_number)}>
+                      <span className="flex items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: threshold.color ?? '#64748b' }}
+                        />
+                        L{threshold.level_number}{threshold.label ? `: ${threshold.label}` : ''}
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {threshold.weight_from}-{threshold.weight_to}
+                        </span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {sortedThresholds.length === 0 && (
+                <span className="text-xs text-muted-foreground">
+                  Уровни ещё не заведены — добавьте их в HR → Должности, вкладка «Уровни».
+                </span>
+              )}
+            </label>
             <div className="grid grid-cols-2 gap-3">
               <label className="grid gap-1.5 text-sm">
                 {t('hr.pages.employees.weight', 'Вес')}
@@ -1013,6 +1096,16 @@ const HREmployees = () => {
                   value={newPositionForm.weight}
                   onChange={(e) => setNewPositionForm({ ...newPositionForm, weight: e.target.value })}
                 />
+                {newPositionWeightOutOfRange && newPositionThreshold ? (
+                  <span className="text-xs text-destructive">
+                    Вес вне диапазона уровня L{newPositionThreshold.level_number}
+                    {' '}({newPositionThreshold.weight_from}–{newPositionThreshold.weight_to})
+                  </span>
+                ) : newPositionThreshold ? (
+                  <span className="text-xs text-muted-foreground">
+                    Порядок внутри уровня, {newPositionThreshold.weight_from}–{newPositionThreshold.weight_to}
+                  </span>
+                ) : null}
               </label>
               <label className="grid gap-1.5 text-sm">
                 {t('hr.pages.employees.grade', 'Грейд')}
@@ -1073,6 +1166,7 @@ const HREmployees = () => {
                 disabled={
                   !newPositionForm.title.trim()
                   || !newPositionForm.department_id
+                  || newPositionWeightOutOfRange
                   || createPositionMutation.isPending
                 }
               >

@@ -51,6 +51,9 @@ urlpatterns = [
     path("positions/levels/", views.level_thresholds_collection),
     path("positions/levels", views.level_thresholds_collection),
 
+    path("positions/levels/<int:level_number>/next-weight", views.next_weight_for_level),
+    path("positions/levels/<int:level_number>/next-weight/", views.next_weight_for_level),
+
     path("positions/levels/<int:level_number>", views.level_threshold_detail),
     path("positions/levels/<int:level_number>/", views.level_threshold_detail),
 

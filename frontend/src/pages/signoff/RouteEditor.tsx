@@ -48,7 +48,7 @@ import { ApproverPicker } from '@/components/signoff/ApproverPicker';
 import { ConditionEditor } from '@/components/signoff/ConditionEditor';
 import { conditionText } from '@/components/signoff/format';
 import { APPROVER_KIND_LABELS, QUORUM_LABELS } from '@/components/signoff/labels';
-import { reportApiError } from '@/components/signoff/apiError';
+import { reportApiError } from '@/lib/apiError';
 import {
   AlertDialog,
   AlertDialogAction,

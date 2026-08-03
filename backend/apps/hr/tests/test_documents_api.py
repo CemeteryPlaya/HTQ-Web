@@ -34,6 +34,7 @@ from __future__ import annotations
 import datetime
 
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 
 from apps.hr.models import Department, Document, Employee, EmployeeDocumentBlob, Position
@@ -221,6 +222,188 @@ def test_upload_document_invalid_employee_id_500(auth, emp):
         content_type="application/json", **auth,
     )
     assert resp.status_code == 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  POST /documents/ — multipart-ветка (сверх портированного контракта)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# JSON-контракт исходника ждёт уже загруженный куда-то файл (file_path/
+# file_size/mime_type/uploaded_by от клиента). Фронт HR-«Документов» шлёт
+# обычную форму с файлом — она разбивалась о JSON-парсер (422 "Invalid
+# JSON"). Ветка добавлена по образцу /department-files/: байты уезжают в
+# apps.media_files через его interface, сюда пишется ссылка.
+#
+# Хранилище подменяем тем же способом, что test_department_files_api.py:
+# настоящего S3/MinIO в тестовом прогоне нет.
+
+
+# Скоуп hr_doc в media — PDF-only с проверкой сигнатуры (scope_policy.py),
+# поэтому в тестах нужен файл, который реально начинается с %PDF.
+_PDF_BYTES = (
+    b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+)
+
+
+def _pdf(name: str = "doc.pdf") -> SimpleUploadedFile:
+    return SimpleUploadedFile(name, _PDF_BYTES, content_type="application/pdf")
+
+
+class _FakeStorage:
+    def __init__(self):
+        self.objects: dict[str, bytes] = {}
+
+    def save(self, path, data, content_type=None):
+        self.objects[path] = data
+
+    def open(self, path, byte_range=None):
+        return self.objects[path]
+
+    def delete(self, path):
+        self.objects.pop(path, None)
+
+    def exists(self, path):
+        return path in self.objects
+
+    def size(self, path):
+        return len(self.objects[path])
+
+
+@pytest.fixture
+def fake_media_storage(monkeypatch):
+    from apps.media_files.services import upload_service as media_upload_service
+
+    storage = _FakeStorage()
+    monkeypatch.setattr(media_upload_service, "get_storage", lambda bucket=None: storage)
+    return storage
+
+
+@pytest.fixture
+def hr_uploader_auth(db, dep, pos):
+    """HR-сотрудник с правом записи (is_staff) И карточкой Employee.
+
+    Оба условия обязательны: скоуп ``hr_doc`` в media — restricted, поэтому
+    вьюха сначала проверяет HR-доступ, а ``Document.uploaded_by`` — NOT NULL
+    FK на Employee, поэтому загрузить документ от лица пользователя без
+    карточки некуда.
+    """
+    user = User.objects.create(
+        username="doc-uploader", email="doc-uploader@htq.test", password="x",
+        status=UserStatus.ACTIVE, is_staff=True,
+    )
+    user.set_password("Adm1n!Pass")
+    user.save()
+    Employee.objects.create(
+        first_name="Загрузчик", last_name="Кадровик", email="doc-uploader@htq.test",
+        department=dep, position=pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
+    )
+    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+
+
+@pytest.mark.django_db
+def test_multipart_upload_creates_document(hr_uploader_auth, emp, fake_media_storage):
+    upload = _pdf("contract.pdf")
+    resp = Client().post(
+        f"{BASE}/",
+        data={
+            "employee": str(emp.id), "title": "Трудовой договор",
+            "doc_type": "contract", "description": "скан", "file": upload,
+        },
+        **hr_uploader_auth,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["employee_id"] == emp.id
+    assert body["title"] == "Трудовой договор"
+    assert body["file_size"] == len(_PDF_BYTES)
+    # Ссылка на media + description, которому в модели колонки нет, — в metadata.
+    assert body["metadata"]["media_file_id"]
+    assert body["metadata"]["description"] == "скан"
+    assert body["file_path"].startswith("/api/media/v1/files/")
+    assert fake_media_storage.objects, "файл должен уехать в хранилище"
+
+
+@pytest.mark.django_db
+def test_multipart_upload_appears_in_list(hr_uploader_auth, emp, fake_media_storage):
+    Client().post(
+        f"{BASE}/",
+        data={
+            "employee": str(emp.id), "title": "Приказ", "doc_type": "order",
+            "file": _pdf("order.pdf"),
+        },
+        **hr_uploader_auth,
+    )
+    resp = Client().get(f"{BASE}/", **hr_uploader_auth)
+    assert resp.status_code == 200
+    assert [d["title"] for d in resp.json()["items"]] == ["Приказ"]
+
+
+@pytest.mark.django_db
+def test_multipart_upload_without_file_422(hr_uploader_auth, emp, fake_media_storage):
+    resp = Client().post(
+        f"{BASE}/", data={"employee": str(emp.id), "title": "Без файла"}, **hr_uploader_auth,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.django_db
+def test_multipart_upload_unknown_employee_404(hr_uploader_auth, fake_media_storage):
+    resp = Client().post(
+        f"{BASE}/",
+        data={
+            "employee": "999999", "title": "Ничей документ",
+            "file": _pdf(),
+        },
+        **hr_uploader_auth,
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_multipart_upload_without_employee_card_succeeds(admin_auth, emp, fake_media_storage):
+    """admin_auth — is_staff без карточки Employee.
+
+    Документы грузят и платформенные учётки, поэтому ``uploaded_by``
+    сделан nullable (миграция 0015). Авторство при этом не теряется —
+    id пользователя уезжает в metadata.
+    """
+    resp = Client().post(
+        f"{BASE}/",
+        data={
+            "employee": str(emp.id), "title": "Договор",
+            "file": _pdf(),
+        },
+        **admin_auth,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["uploaded_by"] is None
+    assert body["metadata"]["uploaded_by_user_id"] == User.objects.get(username="doc-admin").id
+
+
+@pytest.mark.django_db
+def test_multipart_upload_denied_without_hr_write(auth, emp, fake_media_storage):
+    """Обычный пользователь: JSON-ветка ему открыта (странность исходника),
+    но за запись в restricted-скоуп media вьюха ручается только при HR-праве."""
+    resp = Client().post(
+        f"{BASE}/",
+        data={
+            "employee": str(emp.id), "title": "Договор",
+            "file": _pdf(),
+        },
+        **auth,
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_json_contract_still_works_alongside_multipart(auth, emp):
+    """Ветка выбирается по Content-Type — портированный JSON-путь не задет."""
+    resp = Client().post(
+        f"{BASE}/", data=_create_payload(emp), content_type="application/json", **auth,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["file_path"] == "/files/order.pdf"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

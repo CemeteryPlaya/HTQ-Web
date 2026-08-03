@@ -25,6 +25,24 @@ export interface Position {
   } | null;
 }
 
+/** Диапазон весов -> уровень иерархии должностей (hr/v1/positions/levels). */
+export interface LevelThreshold {
+  id: number;
+  level_number: number;
+  weight_from: number;
+  weight_to: number;
+  label: string | null;
+  color: string | null;
+}
+
+/** Ответ hr/v1/positions/levels/{n}/next-weight — подсказка для селекта уровня. */
+export interface NextWeightForLevel {
+  level_number: number;
+  weight: number;
+  weight_from: number;
+  weight_to: number;
+}
+
 export type EmployeeStatus =
   | 'active'
   | 'inactive'

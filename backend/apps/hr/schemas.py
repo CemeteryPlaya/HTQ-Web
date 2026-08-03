@@ -68,6 +68,12 @@ class PositionCreate(BaseModel):
     requirements: dict | None = None
     is_active: bool = True
     weight: int = Field(default=100, ge=0)
+    # НЕ поле модели: level в БД — кэш, вычисляемый из веса. Здесь это способ
+    # выбрать вес («поставь должность на уровень L3»): сервис подбирает
+    # свободный вес внутри диапазона порога, а level, как и прежде, приходит
+    # из _compute_level. Вес, заданный явно вместе с level, обязан попадать
+    # в диапазон этого уровня — иначе 422.
+    level: int | None = Field(default=None, ge=1)
     permissions: PositionPermissions | None = None
 
 
@@ -82,6 +88,7 @@ class PositionUpdate(BaseModel):
     requirements: dict | None = None
     is_active: bool | None = None
     weight: int | None = Field(default=None, ge=0)
+    level: int | None = Field(default=None, ge=1)  # см. PositionCreate.level
     permissions: PositionPermissions | None = None
 
 
@@ -109,8 +116,12 @@ class PositionListQuery(BaseModel):
 
 class LevelThresholdCreate(BaseModel):
     level_number: int = Field(..., ge=1)
-    weight_from: int = Field(..., ge=0)
-    weight_to: int = Field(..., ge=0)
+    # Диапазон необязателен: UI просит у HR только номер, название и цвет, а
+    # веса подбирает сервис (position_service.next_free_range) по МЕСТУ уровня
+    # среди существующих. Переданный явно — работает как раньше, с проверкой
+    # на пересечение.
+    weight_from: int | None = Field(default=None, ge=0)
+    weight_to: int | None = Field(default=None, ge=0)
     label: str | None = Field(default=None, max_length=100)
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
 

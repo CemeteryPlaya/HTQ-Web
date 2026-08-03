@@ -15,7 +15,10 @@ ALLOWED_HOSTS = ["*"]           # локальный запуск; деплой 
 APPEND_SLASH = False            # пути повторяют API.md буквально, без редиректов
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
+    # Вместо "django.contrib.admin" — свой AdminConfig: он поднимает
+    # htqweb.admin_site.HTQAdminSite (брендинг + порядок разделов) как
+    # admin.site, поэтому @admin.register во всех аппках работает как раньше.
+    "htqweb.apps.HTQAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -77,7 +80,10 @@ WSGI_APPLICATION = "htqweb.wsgi.application"
 
 TEMPLATES = [{
     "BACKEND": "django.template.backends.django.DjangoTemplates",
-    "DIRS": [],
+    # Проектные шаблоны ищутся ДО аппочных (APP_DIRS ниже), поэтому
+    # templates/admin/base_site.html перекрывает стоковый шаблон админки —
+    # это и подключает фирменную тему (см. static/admin/htqweb.css).
+    "DIRS": [BASE_DIR / "templates"],
     "APP_DIRS": True,
     "OPTIONS": {"context_processors": [
         "django.template.context_processors.request",
@@ -142,6 +148,9 @@ USE_TZ = True
 CELERY_TIMEZONE = TIME_ZONE
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# Своя статика проекта (фирменная тема админки). collectstatic сливает её
+# со статикой аппок в STATIC_ROOT — см. docker-entrypoint.sh (RUN_BOOTSTRAP=1).
+STATICFILES_DIRS = [BASE_DIR / "static"]
 # WhiteNoise: сжатие + manifest-хэши собранной статики (django-admin CSS/JS). S3/медиа
 # идут через htqweb.storage напрямую (не через Django default_storage), поэтому
 # default-сторедж — обычная ФС. В dev manifest отключён (см. settings/dev.py), иначе
@@ -216,16 +225,34 @@ MINIO_CONSOLE_URL = env("MINIO_CONSOLE_URL", "http://localhost:9001")
 
 # ── Conference (SFU) runtime config — GET /api/cms/v1/conference/config ─────
 # Ported defaults from services/cms/app/data/conference.yaml (FastAPI
-# cms-service). The conference/SFU stack itself is out of service (seeded
-# disabled by apps.core's registry migration — see apps/cms/services/
-# conference_service.py), but static WebRTC config is still served so the
-# frontend's ConferencePage.tsx behaves identically once it comes back.
-CONFERENCE_SFU_URL = env("CONFERENCE_SFU_URL", "ws://sfu:4443")
+# cms-service); отдаётся ConferencePage.tsx как рантайм-конфиг WebRTC.
+#
+# CONFERENCE_SFU_URL по умолчанию ПУСТ, и это осознанно: и nginx (prod), и
+# Vite-прокси (dev) отдают сигналинг на том же origin, что и страницу, а
+# фронт при пустом URL сам собирает ws(s)://<origin>/ws/sfu/. Прежний дефолт
+# ws://sfu:4443 — имя внутри docker-сети, из браузера оно не резолвится.
+# Задавайте явно только если SFU живёт на отдельном хосте/порту.
+CONFERENCE_SFU_URL = env("CONFERENCE_SFU_URL", "")
 CONFERENCE_SFU_PATH = env("CONFERENCE_SFU_PATH", "/ws/sfu/")
 CONFERENCE_ICE_SERVERS = [
     {"urls": "stun:stun.l.google.com:19302"},
     {"urls": "stun:stun1.l.google.com:19302"},
 ]
+
+# ── WebTransport (QUIC) сигналинг — предпочтительный транспорт ──────────────
+# Мост webtransport/ (aioquic, UDP :4433) принимает WebTransport-сессию и
+# перекладывает те же JSON-сообщения в WebSocket SFU. Пустой URL = мост не
+# развёрнут: ConferencePage.tsx молча остаётся на WebSocket.
+#
+# Хэши сертификата нужны ТОЛЬКО для самоподписанного сертификата (dev):
+# браузер принимает такой QUIC-эндпоинт лишь через serverCertificateHashes.
+# Мост пишет DER SHA-256 в certs/cert.sha256 при каждом старте — путь к
+# этому файлу и кладём в CONFERENCE_WT_CERT_HASH_FILE, чтобы отпечаток не
+# приходилось копировать руками. С сертификатом от настоящего CA (certbot)
+# оба параметра оставляют пустыми.
+CONFERENCE_WT_URL = env("CONFERENCE_WT_URL", "")
+CONFERENCE_WT_CERT_HASHES = env("CONFERENCE_WT_CERT_HASHES", "")
+CONFERENCE_WT_CERT_HASH_FILE = env("CONFERENCE_WT_CERT_HASH_FILE", "")
 
 # ── cms background tasks (apps/cms/tasks.py) — ported defaults from
 # services/cms/app/core/settings.py + .env.example, byte-for-byte, so both

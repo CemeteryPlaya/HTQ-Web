@@ -375,10 +375,11 @@ GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,
 | Компонент | Где | Что делает |
 |---|---|---|
 | **SFU** | [sfu/src/server.ts](./sfu/src/server.ts), [sfu/src/room.ts](./sfu/src/room.ts) | Mediasoup SFU, медиа-роутинг. Кодеки: `media-codecs.config.json`. Не тронут миграцией. |
-| **WebTransport proxy** | [webtransport/server.py](./webtransport/server.py) | QUIC-сигнализация (aioquic) для SFU. Не тронут миграцией. |
+| **WebTransport proxy** | [webtransport/server.py](./webtransport/server.py) | QUIC-сигнализация (aioquic) для SFU: принимает WebTransport-сессию на `:4433/udp` (в обход nginx) и перекладывает те же JSON-строки в WebSocket SFU, пробрасывая `?token=`. Сертификат — [webtransport/generate_cert.py](./webtransport/generate_cert.py): ECDSA P-256 на 13 дней + DER SHA-256 в `certs/cert.sha256` (иначе браузер самоподписанный QUIC-эндпоинт не примет). |
 | **Frontend WebRTC** | [frontend/src/lib/webrtc/](./frontend/src/lib/webrtc/) | `MediaEngine`, `WebRTCManager`, `SignalingClient`(WS)/`WebTransportSignalingClient`, `SdpMunger`, `BitrateController`. |
 | **UI** | [frontend/src/pages/ConferencePage.tsx](./frontend/src/pages/ConferencePage.tsx) | Страница конференции. |
-| **Конфиг конференции** | `apps.cms.services.conference_service` ([backend/apps/cms/services/conference_service.py](backend/apps/cms/services/conference_service.py)), `GET /api/cms/v1/conference/config` | Статический ICE/SFU-конфиг из `htqweb/settings/base.py` (`CONFERENCE_SFU_URL`/`_PATH`/`ICE_SERVERS`) — порт `services/cms/app/data/conference.yaml`. Сам SFU-стек (`conference` в реестре) по умолчанию выключен через `ServiceStatus`, но статический конфиг отдаётся всегда. |
+| **Конфиг конференции** | `apps.cms.services.conference_service` ([backend/apps/cms/services/conference_service.py](backend/apps/cms/services/conference_service.py)), `GET /api/cms/v1/conference/config` | ICE/SFU-конфиг из `htqweb/settings/base.py` (`CONFERENCE_SFU_URL`/`_PATH`/`ICE_SERVERS` + `CONFERENCE_WT_*`) — порт `services/cms/app/data/conference.yaml`. `CONFERENCE_SFU_URL` пуст по умолчанию: фронт берёт сигналинг с того же origin (`/ws/sfu/`). Плюс `enabled` (сервис `conference` в реестре — включён миграцией `core/0003_enable_conference`) и адрес QUIC-моста с отпечатками его сертификата. |
+| **Аутентификация сигналинга** | [sfu/src/auth.ts](./sfu/src/auth.ts) | Проверка платформенного JWT (HS256, тот же `JWT_SECRET`, что у Django) на WS-upgrade: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=`. Без токена — 401. Выключается только `SIGNALING_REQUIRE_AUTH=false`. |
 
 Туннели/HTTPS для LAN: [docs/TUNNEL_SETUP.md](./docs/TUNNEL_SETUP.md), скрипты — [scripts/start-sfu-tunnel.ps1](./scripts/start-sfu-tunnel.ps1).
 
