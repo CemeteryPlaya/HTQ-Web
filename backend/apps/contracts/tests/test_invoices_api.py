@@ -258,16 +258,40 @@ def test_reading_needs_a_token_creating_does_not_need_an_admin():
 
 
 @pytest.mark.django_db
-def test_editing_and_deleting_still_need_an_admin():
+def test_author_can_edit_their_own_draft():
+    """Автор правит свой черновик без админских прав — до отправки на
+    согласование опечатку исправляет он сам, а не администратор."""
     line = make_line()
-    invoice = make_invoice(line=line, status=InvoiceStatus.DRAFT)
-    client = Client()
+    invoice = make_invoice(line=line, status=InvoiceStatus.DRAFT, created_by=7)
 
-    edited = patch_json(client, f"{BASE}/invoices/{invoice.pk}",
-                        {"name": "Другое"}, **auth(token()))
-    assert edited.status_code == 403
-    assert client.delete(f"{BASE}/invoices/{invoice.pk}",
-                         **auth(token())).status_code == 403
+    resp = patch_json(Client(), f"{BASE}/invoices/{invoice.pk}",
+                      {"name": "Исправленное наименование", "amount": "555000.00"},
+                      **auth(token()))
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    assert body["name"] == "Исправленное наименование"
+    assert body["amount"] == "555000.00"
+
+
+@pytest.mark.django_db
+def test_a_stranger_cannot_edit_someone_elses_invoice():
+    line = make_line()
+    invoice = make_invoice(line=line, status=InvoiceStatus.DRAFT, created_by=999)
+
+    resp = patch_json(Client(), f"{BASE}/invoices/{invoice.pk}",
+                      {"name": "Чужое"}, **auth(token()))
+    assert resp.status_code == 403
+    assert "автор или администратор" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_deleting_still_needs_an_admin():
+    line = make_line()
+    invoice = make_invoice(line=line, status=InvoiceStatus.DRAFT, created_by=7)
+
+    # Даже автор — удаление осталось админским (как у договоров).
+    assert Client().delete(f"{BASE}/invoices/{invoice.pk}",
+                           **auth(token())).status_code == 403
 
 
 # ── Скан счёта ────────────────────────────────────────────────────────────

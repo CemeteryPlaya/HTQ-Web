@@ -20,7 +20,7 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, Loader2, Paperclip, Receipt, Upload } from 'lucide-react';
+import { Download, Loader2, Paperclip, Pencil, Receipt, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { DetailSkeleton, Field, FieldGrid } from '@/components/contracts/detail';
@@ -145,6 +145,9 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
   const canUpload =
     invoice !== undefined
     && (isAdmin || (invoice.created_by === myId && invoice.status === 'draft'));
+  // Правка — по тем же правам, что бэкенд (`InvoiceDetailView.patch`): автор
+  // своего черновика либо администратор. Кнопка их лишь отражает.
+  const canEdit = canUpload;
 
   if (isLoading) return <DetailSkeleton />;
   if (isError || !invoice) {
@@ -165,6 +168,15 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
             </Badge>
           </div>
         </div>
+
+        {!embedded && canEdit && (
+          <Button asChild variant="outline">
+            <Link to={`/contracts/invoices/${invoice.id}/edit`}>
+              <Pencil className="mr-1.5 h-4 w-4" />
+              Редактировать
+            </Link>
+          </Button>
+        )}
       </div>
 
       <Card>

@@ -682,8 +682,22 @@ class InvoiceDetailView(ContractsView):
         return schemas.InvoiceRead.model_validate(
             inv_svc.serialize_invoice(inv_svc.get_invoice_or_404(invoice_id)))
 
-    @write("PATCH", body=schemas.InvoiceUpdate)
+    @write("PATCH", body=schemas.InvoiceUpdate, admin=False)
     def patch(self, request, invoice_id: int, data: schemas.InvoiceUpdate):
+        # Правка по тем же правам, что и скан (``InvoiceFileView``): автор
+        # правит СВОЙ счёт, пока он черновик, администратор — всегда. У
+        # договоров правка осталась чисто админской, но у счёта без договора
+        # заводит его сотрудник, и не дать ему исправить собственный черновик
+        # до отправки значило бы гонять за каждой опечаткой к администратору.
+        invoice = inv_svc.get_invoice_or_404(invoice_id)
+        if not request.token.is_elevated:
+            if invoice.created_by != request.token.user_id:
+                return json_error(
+                    "Редактировать счёт может автор или администратор", 403)
+            if invoice.status != InvoiceStatus.DRAFT:
+                return json_error(
+                    f"Счёт в статусе «{invoice.get_status_display()}» — "
+                    f"править может только администратор", 403)
         try:
             invoice = inv_svc.update_invoice(invoice_id, **data.model_dump())
         except CONFLICTS as exc:

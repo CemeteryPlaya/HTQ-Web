@@ -95,6 +95,7 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/contracts/invoices', component: lazyPages.ContractsInvoiceList, requiresAuth: true },
   { path: '/contracts/invoices/new', component: lazyPages.ContractsInvoiceCreate, requiresAuth: true },
   { path: '/contracts/invoices/:id', component: lazyPages.ContractsInvoiceDetail, requiresAuth: true },
+  { path: '/contracts/invoices/:id/edit', component: lazyPages.ContractsInvoiceEdit, requiresAuth: true },
 
   // ─── Signoff (универсальное согласование, apps.signoff) ───────────────
   // Очередь и карточки открыты любому сотруднику: решает НАЗВАННЫЙ в
