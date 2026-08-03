@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Briefcase, Building2, Check, ChevronsUpDown, Lock, Plus, UserPlus } from 'lucide-react';
+import { Briefcase, Building2, Check, ChevronDown, ChevronsUpDown, IdCard, Lock, Plus, Share2, UserPlus } from 'lucide-react';
 import {
   createDepartment,
   createEmployeeUser,
   createEmployeeWithCard,
   createPosition,
+  fetchCardT2,
   fetchDepartments,
   fetchEmployeeUsers,
   fetchPositions,
@@ -23,6 +25,14 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { cn } from '@/lib/utils';
 import { useHRLevel } from '@/hooks/useHRLevel';
 import { Employee, relationId } from '@/components/hr/employeeCommon';
+import {
+  SECTION_FIELDS, SECTION_TITLE, T2_SECTIONS,
+  buildCardT2Payload, emptyT2Form, t2FormFromServer, validateT2Money,
+  type T2FormState,
+} from '@/components/hr/cardT2Fields';
+import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Label } from '@/components/ui/label';
 
 /**
  * Кнопка «Создать …» в комбобоксе — СРАЗУ под строкой поиска.
@@ -72,6 +82,7 @@ interface Props {
 export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const editing = employee;
 
   const {
@@ -80,6 +91,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     canTransferEmployee,
     canListUserOptions,
     canManageUserOptions,
+    hasPerm,
   } = useHRLevel();
 
   // Запросы включаются только когда диалог открыт, чтобы не дёргать API на
@@ -116,6 +128,43 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
+  const [t2Form, setT2Form] = useState<T2FormState>(emptyT2Form);
+  const [t2Initial, setT2Initial] = useState<T2FormState>(emptyT2Form);
+  const [t2Errors, setT2Errors] = useState<Record<string, string>>({});
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  const [shareOpen, setShareOpen] = useState(false);
+
+  /** Секции, которые вообще показываем: нужен view. */
+  const visibleSections = useMemo(
+    () => T2_SECTIONS.filter((s) => hasPerm(`hr.card.${s}.view`)),
+    [hasPerm],
+  );
+  /** Секции, которые уходят в payload: нужен и view, и edit. Секцию с одним
+   *  лишь edit мы не показываем — форма не знала бы текущих значений и
+   *  сохранение затёрло бы их null-ами. */
+  const editableSections = useMemo(
+    () => visibleSections.filter((s) => hasPerm(`hr.card.${s}.edit`)),
+    [visibleSections, hasPerm],
+  );
+
+  const { data: cardT2 } = useQuery({
+    queryKey: ['hr-card-t2', employee?.id],
+    queryFn: () => fetchCardT2(employee!.id),
+    enabled: open && !!employee && visibleSections.length > 0,
+  });
+
+  // Заполняем секции при открытии/приходе данных. `t2Initial` — снимок для
+  // сравнения «что изменилось»; без него «открыл и сохранил» переписывало бы
+  // Т-2 целиком.
+  useEffect(() => {
+    if (!open) return;
+    const next = employee ? t2FormFromServer(cardT2) : emptyT2Form();
+    setT2Form(next);
+    setT2Initial(next);
+    setT2Errors({});
+    setOpenSections({});
+  }, [open, employee, cardT2]);
+
   // Заполнение формы переезжает из startCreate/startEdit в эффект — раньше
   // страница заполняла состояние в момент нажатия кнопки, теперь компонент
   // реагирует на props.
@@ -151,6 +200,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   const saveMutation = useMutation({
     mutationFn: async () => {
       const backendStatus = STATUS_TO_BACKEND[form.status] || 'active';
+      const cardT2 = buildCardT2Payload(t2Form, t2Initial, editableSections);
 
       if (editing) {
         // EmployeeUpdate — every field optional. Only send what changed.
@@ -162,6 +212,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
         if (form.position !== 'none') patch.position_id = Number(form.position);
         if (form.department !== 'none') patch.department_id = Number(form.department);
         if (form.date_dismissed) patch.termination_date = form.date_dismissed;
+        if (cardT2) patch.card_t2 = cardT2;
         // eslint-disable-next-line no-console
         console.debug('[hr.employees] update payload', editing.id, patch);
         return updateEmployeeWithCard(editing.id, patch);
@@ -176,7 +227,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       const [splitFirst = '', ...splitRest] = (selected.full_name || '').trim().split(/\s+/);
       const splitLast = splitRest.join(' ');
 
-      const payload = {
+      const payload: Record<string, unknown> = {
         user_id: selected.id,
         first_name: selected.first_name || splitFirst || 'Unknown',
         last_name: selected.last_name || splitLast || '',
@@ -188,6 +239,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
         status: backendStatus,
         bio: form.notes || undefined,
       };
+      if (cardT2) payload.card_t2 = cardT2;
       // eslint-disable-next-line no-console
       console.debug('[hr.employees] create payload', payload);
       return createEmployeeWithCard(payload);
@@ -195,6 +247,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['hr-employees'] });
       queryClient.invalidateQueries({ queryKey: ['hr-employee-users'] });
+      if (editing) queryClient.invalidateQueries({ queryKey: ['hr-card-t2', editing.id] });
       onOpenChange(false);
       setFormError(null);
       setFieldErrors({});
@@ -207,6 +260,15 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       const data = err?.response?.data;
       // eslint-disable-next-line no-console
       console.warn('[hr.employees] save error', err?.response?.status, data);
+
+      // 403 из card_t2 приходит как "Missing permission: hr.card.<section>.edit" —
+      // раскрываем виноватую секцию, чтобы ошибка не выглядела беспричинной.
+      const missing = typeof data?.detail === 'string'
+        ? /Missing permission: hr\.card\.(\w+)\.edit/.exec(data.detail)
+        : null;
+      if (missing) {
+        setOpenSections((prev) => ({ ...prev, [missing[1]!]: true }));
+      }
 
       // FastAPI 422 — { detail: [{ loc: ["body","field"], msg, type }, ...] }
       if (data && Array.isArray(data.detail)) {
@@ -258,6 +320,22 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       return;
     }
     setFieldErrors({});
+
+    const moneyErrors = validateT2Money(t2Form, editableSections);
+    if (Object.keys(moneyErrors).length > 0) {
+      setT2Errors(moneyErrors);
+      // Раскрываем секции с ошибками — иначе подсказка не видна под свёрнутым
+      // заголовком.
+      setOpenSections((prev) => {
+        const next = { ...prev };
+        for (const key of Object.keys(moneyErrors)) next[key.split('.')[0]!] = true;
+        return next;
+      });
+      setFormError(t('hr.pages.employees.errors.fillRequired', 'Заполните обязательные поля'));
+      return;
+    }
+    setT2Errors({});
+
     setFormError(null);
     saveMutation.mutate();
   };
@@ -656,20 +734,118 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               <Textarea value={form.notes} readOnly={!canWriteBasic} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
             </label>
 
+            {visibleSections.map((section) => {
+              const canEdit = editableSections.includes(section);
+              const title = SECTION_TITLE[section];
+              const sectionError = Object.entries(t2Errors)
+                .find(([key]) => key.startsWith(`${section}.`))?.[1];
+              return (
+                <Collapsible
+                  key={section}
+                  open={openSections[section] ?? false}
+                  onOpenChange={(o) => setOpenSections((prev) => ({ ...prev, [section]: o }))}
+                  className="rounded-lg border"
+                >
+                  <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 px-4 py-3 text-sm font-medium hover:bg-muted/40">
+                    <span>{t(title.key, title.fallback)}</span>
+                    <span className="flex items-center gap-2">
+                      {sectionError && (
+                        <span className="text-xs font-normal text-destructive">
+                          {t('hr.pages.employees.cardT2.sectionHasError', 'Проверьте поля')}
+                        </span>
+                      )}
+                      <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+                    </span>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="grid gap-3 border-t p-4 md:grid-cols-2">
+                    {SECTION_FIELDS[section].map((f) => {
+                      const errorKey = `${section}.${f.name}`;
+                      return (
+                        <div key={f.name} className="grid gap-1.5">
+                          <Label htmlFor={`t2-${section}-${f.name}`} className="text-sm">
+                            {t(f.labelKey, f.labelFallback)}
+                          </Label>
+                          <Input
+                            id={`t2-${section}-${f.name}`}
+                            type={f.kind === 'date' ? 'date' : 'text'}
+                            inputMode={f.kind === 'money' ? 'decimal' : undefined}
+                            readOnly={!canEdit}
+                            value={t2Form[section][f.name] ?? ''}
+                            onChange={(e) =>
+                              setT2Form((prev) => ({
+                                ...prev,
+                                [section]: { ...prev[section], [f.name]: e.target.value },
+                              }))
+                            }
+                            aria-invalid={Boolean(t2Errors[errorKey])}
+                          />
+                          {t2Errors[errorKey] && (
+                            <p className="text-xs text-destructive">{t2Errors[errorKey]}</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </CollapsibleContent>
+                </Collapsible>
+              );
+            })}
+
             {formError && (
               <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 {formError}
               </div>
             )}
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => onOpenChange(false)}>{t('hr.common.cancel')}</Button>
-              <Button onClick={handleSave} disabled={(!editing && form.user === 'none') || saveMutation.isPending}>
-                {saveMutation.isPending ? t('hr.common.saving') : t('hr.common.save')}
-              </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {editing && (
+                <>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    onClick={() => {
+                      onOpenChange(false);
+                      navigate(`/hr/employees/${editing.id}`);
+                    }}
+                    className="gap-1.5"
+                  >
+                    <IdCard className="h-4 w-4" />
+                    {t('hr.pages.employees.openCard', 'Открыть карточку')}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    onClick={() => setShareOpen(true)}
+                    className="gap-1.5"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    {t('hr.pages.employees.actions.share', 'Поделиться')}
+                  </Button>
+                </>
+              )}
+              <div className="ml-auto flex gap-2">
+                <Button variant="outline" onClick={() => onOpenChange(false)}>
+                  {t('hr.common.cancel', 'Отмена')}
+                </Button>
+                <Button onClick={handleSave} disabled={(!editing && form.user === 'none') || saveMutation.isPending}>
+                  {saveMutation.isPending ? t('hr.common.saving', 'Сохранение...') : t('hr.common.save', 'Сохранить')}
+                </Button>
+              </div>
             </div>
           </div>
         </DialogContent>
       </Dialog>
+
+      {editing && (
+        <ShareEmployeeDialog
+          open={shareOpen}
+          employee={{
+            id: editing.id,
+            full_name: editing.full_name
+              || [editing.last_name, editing.first_name, editing.middle_name].filter(Boolean).join(' ')
+              || editing.email,
+          }}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
 
       {/* Create Department Dialog */}
       {/* Создание отдела прямо из карточки сотрудника — чтобы не уходить на
