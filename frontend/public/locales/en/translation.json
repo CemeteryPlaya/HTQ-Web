@@ -545,7 +545,8 @@
           "inn": "TIN",
           "birthDate": "Date of birth",
           "birthPlace": "Place of birth",
-          "citizenship": "Citizenship"
+          "citizenship": "Citizenship",
+          "password": "Password"
         },
         "sections": {
           "sro": "SRO & Occupational Safety",
@@ -589,7 +590,12 @@
         "openCard": "Open card",
         "actions": {
           "share": "Share"
-        }
+        },
+        "usernameHint": "Username will be derived from the email:",
+        "passwordPlaceholder": "Set or generate",
+        "generatePassword": "Generate",
+        "passwordHint": "The password is shown in clear — pass it to the employee. It cannot be viewed later.",
+        "mustChangePasswordNotice": "On first sign-in the employee must replace this password with their own — the one you gave stops working."
       },
       "structure": {
         "title": "Company Structure",

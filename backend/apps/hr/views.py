@@ -507,6 +507,10 @@ def _create_user_option(request, data: schemas.HRUserCreateRequest):
 
     if not data.email or "@" not in data.email:
         return json_error("Email обязателен и должен быть валидным", 422)
+    # Пароль обязателен: сгенерированный за кулисами никто не увидит, и
+    # сотрудник останется без входа (см. докстринг HRUserCreateRequest).
+    if not (data.password or "").strip():
+        return json_error("Пароль обязателен", 422)
 
     try:
         user = users_interface.create_user(
@@ -514,6 +518,12 @@ def _create_user_option(request, data: schemas.HRUserCreateRequest):
             first_name=data.first_name,
             last_name=data.last_name,
             patronymic=data.patronymic,
+            password=data.password,
+            # Жёстко True, не из тела запроса: пароль сотруднику назначил HR и
+            # видел его открытым текстом, поэтому первый вход обязан
+            # заканчиваться сменой. См. докстринг HRUserCreateRequest — поля в
+            # схеме нет, чтобы гарантия не зависела от клиента.
+            must_change_password=True,
         )
     except (users_interface.DuplicateEmail, users_interface.DuplicateUsername):
         return json_error("Пользователь с такими данными уже существует", 409)

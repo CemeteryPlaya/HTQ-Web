@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Briefcase, Building2, Check, ChevronDown, ChevronsUpDown, IdCard, Lock, Plus, Share2, UserPlus } from 'lucide-react';
+import { Briefcase, Building2, Check, ChevronDown, ChevronsUpDown, IdCard, KeyRound, Lock, Plus, Share2, UserPlus } from 'lucide-react';
 import {
   createDepartment,
   createEmployeeUser,
@@ -62,6 +62,37 @@ const ComboboxCreateAction = ({
     </button>
   </div>
 );
+
+/**
+ * Логин, который выведет бэкенд из email.
+ *
+ * Зеркало `apps.users.interface._derive_username`: локальная часть адреса,
+ * очищенная до alnum/`.`/`_`/`-` и обрезанная до 32 символов. Нужен только для
+ * подсказки в форме — авторитетно логин всё равно считает сервер. Если правило
+ * там изменится, здесь разъедется лишь подпись под полем, не поведение.
+ */
+const derivedUsername = (email: string): string => {
+  const local = (email.split('@', 1)[0] || '').trim();
+  const cleaned = [...local].filter((c) => /[a-zA-Z0-9._-]/.test(c)).join('').slice(0, 32);
+  return cleaned || (email.trim() ? 'user' : '');
+};
+
+/**
+ * Тот же генератор, что в админской панели (components/admin/UserEditDialog):
+ * 16 символов из смешанного алфавита через crypto.getRandomValues.
+ */
+const generatePassword = (length = 16): string => {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_-+=';
+  const arr = new Uint32Array(length);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, (n) => alphabet[n % alphabet.length]).join('');
+};
+
+/** Чистая форма нового пользователя. Отдельной функцией, а не константой:
+ *  объект мутабельный, общий экземпляр протёк бы между открытиями диалога. */
+const blankNewUser = () => ({
+  first_name: '', last_name: '', patronymic: '', email: '', password: '',
+});
 
 /** Frontend-friendly status values mapped to the backend's allowed pattern. */
 const STATUS_TO_BACKEND: Record<string, 'active' | 'inactive' | 'terminated'> = {
@@ -476,7 +507,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
 
   const [userPopoverOpen, setUserPopoverOpen] = useState(false);
   const [createUserOpen, setCreateUserOpen] = useState(false);
-  const [newUserForm, setNewUserForm] = useState({ first_name: '', last_name: '', patronymic: '', email: '' });
+  const [newUserForm, setNewUserForm] = useState(blankNewUser);
 
   const [positionPopoverOpen, setPositionPopoverOpen] = useState(false);
   const [createPositionOpen, setCreatePositionOpen] = useState(false);
@@ -596,7 +627,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       queryClient.invalidateQueries({ queryKey: ['hr-employee-users'] });
       setForm((prev) => ({ ...prev, user: String(data.id) }));
       setCreateUserOpen(false);
-      setNewUserForm({ first_name: '', last_name: '', patronymic: '', email: '' });
+      setNewUserForm(blankNewUser());
       setUserPopoverOpen(false);
     },
   });
@@ -646,6 +677,10 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                             label={t('hr.pages.employees.createUser')}
                             onClick={() => {
                               setUserPopoverOpen(false);
+                              // Чистим форму на открытии: иначе пароль от
+                              // прошлой отменённой попытки достался бы
+                              // следующему пользователю.
+                              setNewUserForm(blankNewUser());
                               setCreateUserOpen(true);
                             }}
                           />
@@ -1186,14 +1221,63 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                 value={newUserForm.email}
                 onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
               />
+              <span className="text-xs text-muted-foreground">
+                {t('hr.pages.employees.usernameHint', 'Логин будет выведен из email:')}{' '}
+                <strong>{derivedUsername(newUserForm.email) || '—'}</strong>
+              </span>
             </label>
+
+            {/* Пароль обязателен. До этого HR-форма его не спрашивала, а бэкенд
+                молча генерировал случайный, которого не видел никто — сотрудник
+                не мог войти, пока администратор не сбросит пароль вручную. */}
+            <label className="grid gap-2 text-sm">
+              {t('hr.pages.employees.fields.password', 'Пароль')}
+              <div className="flex gap-2">
+                <Input
+                  type="text"
+                  autoComplete="new-password"
+                  value={newUserForm.password}
+                  onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                  placeholder={t('hr.pages.employees.passwordPlaceholder', 'Задайте или сгенерируйте')}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0 gap-1.5"
+                  onClick={() => setNewUserForm({ ...newUserForm, password: generatePassword() })}
+                >
+                  <KeyRound className="h-4 w-4" />
+                  {t('hr.pages.employees.generatePassword', 'Сгенерировать')}
+                </Button>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                {t('hr.pages.employees.passwordHint',
+                  'Пароль показывается открыто — передайте его сотруднику. Позже увидеть его будет негде.')}
+              </span>
+            </label>
+
+            {/* Переключателя тут нет намеренно: пароль назначает HR и видит его
+                открытым, поэтому смена при первом входе обязательна всегда.
+                Это не подсказка о состоянии галочки, а сообщение о гарантии —
+                бэкенд проставляет флаг сам и не читает его из тела запроса. */}
+            <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              {t('hr.pages.employees.mustChangePasswordNotice',
+                'При первом входе сотрудник обязан будет сменить этот пароль на свой — переданный вами перестанет действовать.')}
+            </p>
+
             <div className="flex justify-end gap-2 mt-4">
               <Button variant="outline" onClick={() => setCreateUserOpen(false)}>
                 {t('hr.common.cancel')}
               </Button>
               <Button
                 onClick={() => createUserMutation.mutate(newUserForm)}
-                disabled={!newUserForm.last_name || !newUserForm.first_name || !newUserForm.email || createUserMutation.isPending}
+                disabled={
+                  !newUserForm.last_name
+                  || !newUserForm.first_name
+                  || !newUserForm.email
+                  || !newUserForm.password.trim()
+                  || createUserMutation.isPending
+                }
               >
                 {createUserMutation.isPending ? t('hr.common.saving') : t('hr.common.save')}
               </Button>

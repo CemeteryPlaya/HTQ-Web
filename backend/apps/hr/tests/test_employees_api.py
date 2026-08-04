@@ -887,7 +887,7 @@ def test_users_post_201_for_lead_creates_user(lead):
     _emp, headers = lead
     resp = Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "New", "last_name": "Hire", "patronymic": "P", "email": "new-hire@htq.test"}',
+        data='{"first_name": "New", "last_name": "Hire", "patronymic": "P", "email": "new-hire@htq.test", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **headers,
     )
@@ -909,7 +909,7 @@ def test_users_post_201_for_lead_creates_user(lead):
 def test_users_post_201_for_admin(admin_auth):
     resp = Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "Admin", "last_name": "Made", "email": "admin-made@htq.test"}',
+        data='{"first_name": "Admin", "last_name": "Made", "email": "admin-made@htq.test", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **admin_auth,
     )
@@ -921,13 +921,13 @@ def test_users_post_409_on_duplicate_email(lead):
     _emp, headers = lead
     Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "First", "last_name": "One", "email": "dupe@htq.test"}',
+        data='{"first_name": "First", "last_name": "One", "email": "dupe@htq.test", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **headers,
     )
     resp = Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "Second", "last_name": "One", "email": "dupe@htq.test"}',
+        data='{"first_name": "Second", "last_name": "One", "email": "dupe@htq.test", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **headers,
     )
@@ -939,7 +939,7 @@ def test_users_post_422_invalid_email(lead):
     _emp, headers = lead
     resp = Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "Bad", "last_name": "Email", "email": "not-an-email"}',
+        data='{"first_name": "Bad", "last_name": "Email", "email": "not-an-email", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **headers,
     )
@@ -951,7 +951,7 @@ def test_users_post_no_slash_variant(lead):
     _emp, headers = lead
     resp = Client().post(
         f"{BASE}/users",
-        data='{"first_name": "No", "last_name": "Slash", "email": "no-slash@htq.test"}',
+        data='{"first_name": "No", "last_name": "Slash", "email": "no-slash@htq.test", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **headers,
     )
@@ -1229,3 +1229,83 @@ def test_update_employee_rolls_back_basic_fields_when_card_forbidden(creator_no_
     target.refresh_from_db()
     assert target.phone == "+7700"
     assert not EmployeeCard.objects.filter(employee_id=target.id).exists()
+
+
+# ── Пароль при создании пользователя из HR-формы ────────────────────────────
+#
+# До этого форма пароль не спрашивала, а apps.users.interface.create_user
+# минтил случайный `secrets.token_urlsafe(12)`, которого не видел никто:
+# аккаунт заводился, но войти в него было нельзя до админского сброса.
+# Пароль стал обязательным, поэтому его отсутствие — 422, а переданный
+# должен реально работать при входе.
+
+@pytest.mark.django_db
+def test_users_post_422_without_password(lead):
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "No", "last_name": "Password", "email": "no-pwd@htq.test"}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Пароль обязателен"
+
+    from apps.users.models import User as _User
+    assert not _User.objects.filter(email="no-pwd@htq.test").exists()
+
+
+@pytest.mark.django_db
+def test_users_post_422_on_blank_password(lead):
+    """Пробелы — не пароль: иначе форму можно было бы «обойти» пробелом."""
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "Blank", "last_name": "Password", "email": "blank-pwd@htq.test", "password": "   "}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.django_db
+def test_users_post_sets_the_given_password(lead):
+    """Главное: переданным паролем действительно можно войти."""
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "Real", "last_name": "Login", "email": "real-login@htq.test", "password": "Str0ng!Passw0rd"}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 201
+
+    from apps.users.models import User as _User
+    created = _User.objects.get(email="real-login@htq.test")
+    assert created.check_password("Str0ng!Passw0rd")
+    # По умолчанию — смена при первом входе (пароль назначал не сам сотрудник).
+    assert created.must_change_password is True
+
+
+@pytest.mark.django_db
+def test_users_post_forces_password_change_even_if_client_says_otherwise(lead):
+    """Смена пароля при первом входе на этом маршруте НЕ отключаема.
+
+    Пароль назначает HR и видит его открытым текстом, поэтому сотрудник обязан
+    сменить его при первом входе. Поля в схеме нет, вьюха проставляет True
+    жёстко — присланный клиентом ``false`` должен игнорироваться, а не
+    приниматься. Тест бьёт именно в обход UI: через форму такой запрос не
+    отправить, а напрямую — сколько угодно.
+    """
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data=('{"first_name": "Keep", "last_name": "Password", "email": "keep-pwd@htq.test",'
+              ' "password": "Str0ng!Passw0rd", "must_change_password": false}'),
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 201
+
+    from apps.users.models import User as _User
+    assert _User.objects.get(email="keep-pwd@htq.test").must_change_password is True

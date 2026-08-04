@@ -138,11 +138,25 @@ export const fetchEmployeeUsers = async (params?: Record<string, string>): Promi
   return unwrap<HRUserOption>(res.data);
 };
 
+/**
+ * Заводит платформенного пользователя из HR-формы.
+ *
+ * `password` обязателен (бэкенд отбивает пустой 422). Раньше поля не было, и
+ * `apps.users.interface.create_user` генерировал случайный пароль, которого не
+ * видел никто: аккаунт существовал, но войти в него было невозможно до
+ * админского сброса.
+ *
+ * `must_change_password` тут НЕ передаётся: на этом маршруте бэкенд ставит его
+ * жёстко в true и поля в схеме нет. Пароль назначает HR и видит его открытым,
+ * поэтому первый вход сотрудника обязан заканчиваться сменой — гарантия не
+ * должна зависеть от того, что пришлёт клиент.
+ */
 export const createEmployeeUser = async (data: {
   first_name: string;
   last_name: string;
   patronymic?: string;
   email: string;
+  password: string;
 }): Promise<HRUserOption> => {
   const res = await api.post(`${HR}employees/users/`, data);
   return res.data;
