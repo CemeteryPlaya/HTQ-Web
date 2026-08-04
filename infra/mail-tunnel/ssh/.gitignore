@@ -1,0 +1,14 @@
+# Ключи и known_hosts SSH-туннеля до почтового сервера — секреты, в git не
+# попадают НИКОГДА. Каталог в репозитории нужен только как точка монтирования
+# (docker-compose: ./infra/mail-tunnel/ssh:/ssh:ro).
+#
+# Что сюда положить перед `docker compose --profile mail-tunnel up -d`:
+#
+#   id_ed25519        приватный ключ доступа к ssh-хосту (chmod 600)
+#   known_hosts       ssh-keyscan -p <порт> <хост> > known_hosts
+#
+# Проверка ключа хоста включена намеренно (StrictHostKeyChecking=yes): по
+# туннелю ходят почтовые пароли, и без known_hosts туннель откажется
+# подниматься, а не тихо доверится кому попало.
+*
+!.gitignore

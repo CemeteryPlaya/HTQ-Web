@@ -157,18 +157,24 @@ def test_conference_config_matches_fastapi_schema_shape_plus_intentional_enabled
     services/cms/app/schemas/conference.py::ConferenceConfig — NOT a live
     FastAPI capture (see module docstring).
 
-    ``enabled`` is NOT part of the FastAPI ``ConferenceConfig`` — it is
-    Django's one intentional addition beyond the port (Task 1.5, see
-    ``apps/cms/schemas.py``'s ``ConferenceConfig`` docstring), so it is
-    passed here as an explicitly allowed extra key rather than folded into
-    the ported contract.
+    Ни ``enabled``, ни ``wt_*`` не входят в FastAPI-контракт
+    ``ConferenceConfig`` — это осознанные добавления Django (Task 1.5 и
+    WebTransport-сигналинг, см. докстринг ``ConferenceConfig`` в
+    ``apps/cms/schemas.py``), поэтому они передаются явным списком
+    разрешённых лишних ключей, а не подмешиваются в портированный контракт.
     """
     contract = _load("conference_config.json")
     resp = Client().get(f"{BASE}/conference/config", **_auth_header())
     assert resp.status_code == 200
     body = resp.json()
-    _assert_matches_contract(body, contract, extra_allowed=frozenset({"enabled"}))
+    _assert_matches_contract(
+        body,
+        contract,
+        extra_allowed=frozenset({"enabled", "wt_signaling_url", "wt_certificate_hashes"}),
+    )
     assert isinstance(body["enabled"], bool)
+    assert isinstance(body["wt_signaling_url"], str)
+    assert isinstance(body["wt_certificate_hashes"], list)
 
 
 @pytest.mark.django_db

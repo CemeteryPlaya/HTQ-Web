@@ -118,6 +118,10 @@ class RequestProject(models.Model):
                                       db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Проект заявок"
+        verbose_name_plural = "Проекты заявок"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<RequestProject id={self.id} name={self.name!r}>"
 
@@ -135,6 +139,8 @@ class RequestProjectMember(models.Model):
     granted_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Участник проекта"
+        verbose_name_plural = "Участники проекта"
         constraints = [
             models.UniqueConstraint(fields=["project", "user_id"],
                                     name="uq_request_project_member"),
@@ -180,6 +186,8 @@ class RequestFormTemplate(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Шаблон формы"
+        verbose_name_plural = "Шаблоны форм"
         constraints = [
             models.UniqueConstraint(fields=["project", "slug"],
                                     name="uq_request_form_template_slug"),
@@ -207,6 +215,8 @@ class RequestFormTemplateVersion(models.Model):
     published_by = models.IntegerField(null=True, blank=True)
 
     class Meta:
+        verbose_name = "Версия шаблона формы"
+        verbose_name_plural = "Версии шаблонов форм"
         constraints = [
             models.UniqueConstraint(fields=["template", "version"],
                                     name="uq_request_form_template_version"),
@@ -252,6 +262,10 @@ class RequestInstance(models.Model):
                                       db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Заявка"
+        verbose_name_plural = "Заявки"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<RequestInstance id={self.id} code={self.code!r} " \
                f"status={self.status}>"
@@ -281,6 +295,10 @@ class ApprovalAction(models.Model):
     reminded_at = models.DateTimeField(null=True, blank=True)
     reminders_sent = models.IntegerField(default=0, db_default=0)
 
+    class Meta:
+        verbose_name = "Действие согласования"
+        verbose_name_plural = "Действия согласования"
+
 
 class RequestActivity(models.Model):
     """Append-only log of everything that happens to a request."""
@@ -293,6 +311,10 @@ class RequestActivity(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now(),
                                       db_index=True)
 
+    class Meta:
+        verbose_name = "Событие заявки"
+        verbose_name_plural = "События заявок"
+
 
 class RequestWatcher(models.Model):
     """A user following a request without holding an approval role."""
@@ -302,6 +324,8 @@ class RequestWatcher(models.Model):
     user_id = models.IntegerField(db_index=True)
 
     class Meta:
+        verbose_name = "Наблюдатель заявки"
+        verbose_name_plural = "Наблюдатели заявок"
         constraints = [
             models.UniqueConstraint(fields=["request", "user_id"],
                                     name="uq_request_watcher"),
@@ -324,6 +348,10 @@ class NotificationsLog(models.Model):
     dedup_key = models.CharField(max_length=200, unique=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now(),
                                       db_index=True)
+
+    class Meta:
+        verbose_name = "Уведомление"
+        verbose_name_plural = "Журнал уведомлений"
 
 
 class RequestStatsDaily(models.Model):
@@ -348,6 +376,8 @@ class RequestStatsDaily(models.Model):
     time_to_decision_seconds_sum = models.IntegerField(default=0, db_default=0)
 
     class Meta:
+        verbose_name = "Статистика заявок за день"
+        verbose_name_plural = "Статистика заявок по дням"
         constraints = [
             models.UniqueConstraint(fields=["date", "project_id",
                                             "template_id"],
@@ -381,6 +411,10 @@ class RequestReferenceSource(models.Model):
                                       db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Справочник"
+        verbose_name_plural = "Справочники"
+
     @property
     def columns(self) -> list:
         return self.columns_json or []
@@ -395,6 +429,10 @@ class RequestReferenceRow(models.Model):
     # For a template data table: the request instance this row mirrors, so
     # the row can be upserted on every instance change. NULL for manual rows.
     instance_id = models.IntegerField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        verbose_name = "Строка справочника"
+        verbose_name_plural = "Строки справочников"
 
     @property
     def data(self) -> dict:
@@ -426,3 +464,7 @@ class AuditLog(models.Model):
                                       db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now(),
                                       db_index=True)
+
+    class Meta:
+        verbose_name = "Запись аудита"
+        verbose_name_plural = "Журнал аудита"

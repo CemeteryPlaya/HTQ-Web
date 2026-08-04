@@ -11,6 +11,7 @@ import { MessageList } from '@/pages/Email/components/MessageList';
 import { MessageView } from '@/pages/Email/components/MessageView';
 import { ComposeDialog } from '@/pages/Email/components/ComposeDialog';
 import { ConnectAccountDialog } from '@/pages/Email/components/ConnectAccountDialog';
+import { ConnectImapAccount } from '@/components/mail/ConnectImapAccount';
 
 import {
   useEmailAccounts,
@@ -71,6 +72,7 @@ export default function EmailPage() {
   const [selectedId, setSelectedId] = React.useState<string | null>(initialMessageId);
   const [composeOpen, setComposeOpen] = React.useState(false);
   const [connectOpen, setConnectOpen] = React.useState(false);
+  const [imapOpen, setImapOpen] = React.useState(false);
 
   // Persist active selections.
   React.useEffect(() => {
@@ -138,6 +140,7 @@ export default function EmailPage() {
         onChange={setActiveAccountId}
         unreadByAccount={unread.by_account}
         onAddAccount={() => setConnectOpen(true)}
+        onAddImap={() => setImapOpen(true)}
       />
       <FolderList
         active={folder}
@@ -211,6 +214,9 @@ export default function EmailPage() {
         onOpenChange={setConnectOpen}
         accounts={accounts}
       />
+      {/* Открывается и отсюда (пункт селектора), и изнутри диалога
+          подключения — состояние своё, чтобы не тянуть один за другой. */}
+      <ConnectImapAccount open={imapOpen} onClose={() => setImapOpen(false)} />
     </EmailLayout>
   );
 }

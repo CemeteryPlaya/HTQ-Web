@@ -391,13 +391,13 @@ export const UserEditDialog: React.FC<Props> = ({ open, onOpenChange, mode, user
 
                         <ToggleRow
                             label="is_staff"
-                            description={t('admin.users.isStaffHint', 'Доступ к sqladmin и admin-панели.')}
+                            description={t('admin.users.isStaffHint', 'Повышенные права в API (админские эндпоинты). В /django-admin/ НЕ пускает.')}
                             checked={form.is_staff}
                             onCheckedChange={(v) => set('is_staff', v)}
                         />
                         <ToggleRow
                             label="is_superuser"
-                            description={t('admin.users.isSuperuserHint', 'Полный административный доступ.')}
+                            description={t('admin.users.isSuperuserHint', 'Полный административный доступ, включая панель /django-admin/.')}
                             checked={form.is_superuser}
                             onCheckedChange={(v) => set('is_superuser', v)}
                         />

@@ -247,7 +247,9 @@ frontend/src/
 
 ## 4.1 Email (`apps.mail`) — дуальная архитектура (corp + personal)
 
-С одной страницы [/email](frontend/src/pages/Email/EmailPage.tsx) пользователь работает с **корпоративным ящиком** (Mailcow) и подключёнными **личными** Gmail / Outlook — переключение через account-selector в сайдбаре. Код — [backend/apps/mail/](./backend/apps/mail/), перенесён из `services/email` практически 1:1 по контракту.
+С одной страницы [/email](frontend/src/pages/Email/EmailPage.tsx) пользователь работает с **корпоративным ящиком** и подключёнными **личными** Gmail / Outlook — переключение через account-selector в сайдбаре. Код — [backend/apps/mail/](./backend/apps/mail/), перенесён из `services/email` практически 1:1 по контракту.
+
+Корпоративным сервером может быть **Mailcow** (REST API) или **любой сервер с IMAP/SMTP** — разница вынесена в настройку `MAIL_PROVISIONER`, см. «Провижининг ящиков» ниже. Управление ящиками — [/admin/mailboxes](frontend/src/pages/AdminMailboxes.tsx) (создание, сброс пароля, архив/удаление, сверка с сервером, алиасы).
 
 **Pivot-таблица:** одна `mail_emailaccount` строка на mailbox (Django-имя таблицы; логически — та же `email_accounts`). CHECK-consistency с провайдером сохранена в `apps/mail/models.py`:
 ```
@@ -259,15 +261,45 @@ EmailAccount(id, user_id, type=corporate|personal, provider=mailcow|google|micro
 ```
 
 **Sync** ([apps/mail/services/sync/](backend/apps/mail/services/sync/)):
-- `gmail.py` — `users.history.list` + `messages.list`/`get`; push через `users.watch` → Pub/Sub
-- `microsoft.py` — `/me/messages/delta` + persisted `@odata.deltaLink`; push через Graph subscriptions
-- `mailcow_imap.py` — IMAP backfill; live-push через `python manage.py run_imap_idle` (замена отдельного `email-imap-idle`-контейнера FastAPI-эпохи)
+- `gmail.py` — `users.history.list` + `messages.list`/`get`; push через `users.watch` → Pub/Sub. **Драйвер не портирован** — перенесён только маппер payload'ов
+- `microsoft.py` — `/me/messages/delta` + persisted `@odata.deltaLink`; push через Graph subscriptions. **Тоже только маппер**
+- `mailcow_imap.py` — разбор RFC 5322 (`parse_eml`), без сети
+- `imap_sync.py` — **рабочий двусторонний драйвер** корпоративных ящиков (`mailcow` и `imap`): тянет письма по папкам из `MAIL_SYNC_FOLDERS`, курсор UID лежит в `EmailAccount.sync_state` и обязательно сверяется по `UIDVALIDITY` (сервер пересобрал папку → курсор сбрасывается, иначе папка молча выпала бы из синхронизации), и толкает обратно `\Seen` для прочитанного в платформе (`MAIL_SYNC_PUSH_FLAGS`). `message_id` = `<папка>:<uidvalidity>:<uid>` — он обязан быть и стабильным (уникальный индекс), и обратимым в UID (иначе флаги некуда толкать)
+- Живое соединение — [apps/mail/services/imap_client.py](backend/apps/mail/services/imap_client.py) (stdlib `imaplib`, синхронно, без новых зависимостей); единственный сетевой seam — `_open_connection`
+- Запускается из `incremental_sync_account`, который каждые 60 с ставит `imap_poll_fallback`. Для не-Mailcow сервера этот опрос — ЕДИНСТВЕННЫЙ источник новых писем (webhook'ов у него нет). `manage.py run_imap_idle` остаётся заглушкой: IDLE сократил бы задержку до секунд, но почта работает и без него
 - UPSERT с `(account_id, message_id)` UNIQUE → идемпотентно
 - `pg_try_advisory_lock` сериализует concurrent runs (`_try_advisory_lock` в `apps/mail/tasks.py`)
 
+**Провижининг ящиков** ([apps/mail/services/provisioning/](backend/apps/mail/services/provisioning/)) — подключаемый слой, выбирается настройкой `MAIL_PROVISIONER` (`auto`|`mailcow`|`imap`|`none`), а не веткой в коде:
+- `mailcow.py` — REST API: ящик реально создаётся/правится/выключается/удаляется, домен отдаёт полный список ящиков
+- `imap.py` — сервер без админ-API. В IMAP **нет команды «создать ящик»** (`CREATE` заводит папку ВНУТРИ существующего), поэтому «создание на сайте» здесь = проверить учётку живым логином и привязать существующий ящик. Занятый адрес → 409, а не тихое переименование в `i.ivanov2`: адрес обязан совпасть с реальным ящиком
+- `noop.py` — почтовый сервер не подключён: только строка в БД (историческое поведение, дефолт для ненастроенного окружения)
+
+`mailbox_service` всегда выполняет локальный переход, а отказ сервера кладёт в `ProvisionedMailbox.last_error` (+ `status="error"` для create/reset-password) — админка ящиков показывает это в таблице. Пароль ящика хранится зашифрованным в `encrypted_smtp_app_password`; им пользуются и синхронизация, и отправка.
+
+**Сверка** ([apps/mail/services/reconcile_service.py](backend/apps/mail/services/reconcile_service.py)) — `GET/POST /api/email/v1/mailboxes/reconcile/` + ежечасная задача (миграция `0007`). Сравнивает обе стороны: `only_local` / `only_remote` / `mismatched`. Режим `listing` (Mailcow отдаёт список) видит обе стороны; режим `probe` (голый IMAP) проверяет только известные платформе ящики поштучным логином и честно помечает это в отчёте — про ящики, заведённые на сервере мимо платформы, узнать неоткуда. По умолчанию сверка ничего не меняет; направление (`pull`/`push`/`both`) выбирает админ.
+
+**Доступ к закрытому почтовому серверу** — профиль `mail-tunnel` ([infra/mail-tunnel/](infra/mail-tunnel/)): autossh пробрасывает IMAP и SMTP, `IMAP_HOST`/`SMTP_HOST` смотрят на туннель. Проверка ключа хоста включена (по каналу идут почтовые пароли). Настройка — в `.env.example`.
+
+**Настройки подключения** ([apps/mail/services/mail_config.py](backend/apps/mail/services/mail_config.py)) — единственная точка, откуда домен берёт реквизиты. Строка `MailServerConfig` (синглтон, правится на вкладке «Подключение» в `/admin/mailboxes`) ложится **поверх** env по правилу «пустое поле = берём из окружения». Отсюда три следствия: окружение, где UI не трогали, работает как раньше; env остаётся способом первичной раскатки; очистка поля в форме возвращает значение из env. Булевы в БД nullable намеренно — иначе `imap_ssl=false` не смог бы перекрыть `IMAP_SSL=true`. Кэшируется ТОЛЬКО чтение строки (5 с): закэшируй мы смерженный результат, `override_settings` перестал бы действовать. Секрет Mailcow хранится зашифрованным и наружу не читается.
+
+**Диагностика** ([apps/mail/services/connection_check.py](backend/apps/mail/services/connection_check.py)) — одна логика на двоих: `manage.py mail_check` и кнопка «Проверить» в интерфейсе. Проверяет цепочку по порядку зависимости (настройки → порт → IMAP → вход → папки → SMTP) и останавливается на первом провале, чтобы не сыпать производными ошибками; к каждому провалу приложена конкретная починка, а не констатация. Без адреса ящика секретов не требует. Пароли в отчёт не попадают — он уезжает и в браузер, и в тикеты.
+
+**Три способа подключить почту** (`EmailAccount` разрешает ровно один источник учётки, это проверяет `ck_email_accounts_type_consistency`):
+
+| Способ | Учётка | Кто заводит |
+|---|---|---|
+| `corporate` | `ProvisionedMailbox` | админ платформы либо сам сотрудник (см. ниже) |
+| `personal` + OAuth | `OAuthToken` | пользователь, Gmail/Outlook |
+| `personal` + IMAP | `ImapAccountSettings` | пользователь, ЛЮБОЙ сервер |
+
+Третья ветка добавлена к исходному контракту ([imap_account_service.py](backend/apps/mail/services/imap_account_service.py)): раньше personal-аккаунт мог быть только OAuth-овым, и подключить почту вне Google/Microsoft было нечем. Пользователь вводит хост и порт сам, как в почтовом клиенте; форма предзаполняется по домену (известные провайдеры — точными значениями, остальные — догадкой `imap.<домен>`, помеченной как догадка, чтобы её не приняли за факт). Учётка проверяется живым входом ДО записи в БД. Синхронизация и отправка для такого аккаунта идут на ЕГО сервер, а не на корпоративный (`imap_sync.imap_client_for`, `corporate_smtp.account_smtp_target`) — иначе при совпадении логинов попали бы в чужой ящик.
+
+**Самоподключение** ([apps/mail/services/self_service.py](backend/apps/mail/services/self_service.py), `POST /api/email/v1/accounts/connect-corporate/`) — единственная точка домена, где НЕпривилегированный пользователь заводит `ProvisionedMailbox`, поэтому ограничения явные: режим включает админ (`allow_self_service`, по умолчанию выключен), домен адреса обязан совпасть с корпоративным, ящик, уже привязанный к другому сотруднику, — 409 (знание пароля от общего ящика не должно уводить чужую привязку), а учётка проверяется живым входом ДО записи в БД. Блок на странице профиля сам скрывается, когда режим выключен.
+
 **Push-приёмники** ([apps/mail/webhooks.py](backend/apps/mail/webhooks.py)) — `POST /api/email/v1/webhooks/{gmail,microsoft,mailcow}`, public, БЕЗ rate-limit на nginx-уровне (см. §6). Auth: Gmail Bearer JWT (google-auth) + fallback token; Graph initial `validationToken` echo.
 
-**Send** ([apps/mail/services/sender/](backend/apps/mail/services/sender/)) — стратегия по `provider`: Gmail API `messages.send` (base64url MIME), Graph `/me/sendMail` (JSON), Mailcow SMTP 587 STARTTLS. `POST /api/email/v1/send` ставит `folder='outbox'` + `deliver_email.delay(...)` (Celery-таск, `apps/mail/tasks.py`, вместо Dramatiq-актора).
+**Send** ([apps/mail/services/sender/](backend/apps/mail/services/sender/)) — стратегия по `provider`: Gmail API `messages.send` (base64url MIME), Graph `/me/sendMail` (JSON), Mailcow SMTP 587 STARTTLS (`mailcow_smtp.py`), произвольный корпоративный сервер (`corporate_smtp.py`, провайдер `imap`: хост/порт/TLS из `SMTP_*` с откатом на `IMAP_HOST`). `POST /api/email/v1/send` ставит `folder='outbox'` + `deliver_email.delay(...)` (Celery-таск, `apps/mail/tasks.py`, вместо Dramatiq-актора).
 
 **Вложения писем — НЕ полноценно подключены** (не регрессия миграции, так было и в FastAPI-исходнике): `EmailAttachment` остаётся metadata-only, ни один из `emails.py`-роутов не принимает байты. `apps/mail/services/attachment_service.py::store_attachment` — подготовленный сеам на будущее, хранит через `apps.media_files.interface` (scope `generic`), а не через собственный бакет.
 
@@ -374,10 +406,11 @@ GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,
 | Компонент | Где | Что делает |
 |---|---|---|
 | **SFU** | [sfu/src/server.ts](./sfu/src/server.ts), [sfu/src/room.ts](./sfu/src/room.ts) | Mediasoup SFU, медиа-роутинг. Кодеки: `media-codecs.config.json`. Не тронут миграцией. |
-| **WebTransport proxy** | [webtransport/server.py](./webtransport/server.py) | QUIC-сигнализация (aioquic) для SFU. Не тронут миграцией. |
+| **WebTransport proxy** | [webtransport/server.py](./webtransport/server.py) | QUIC-сигнализация (aioquic) для SFU: принимает WebTransport-сессию на `:4433/udp` (в обход nginx) и перекладывает те же JSON-строки в WebSocket SFU, пробрасывая `?token=`. Сертификат — [webtransport/generate_cert.py](./webtransport/generate_cert.py): ECDSA P-256 на 13 дней + DER SHA-256 в `certs/cert.sha256` (иначе браузер самоподписанный QUIC-эндпоинт не примет). |
 | **Frontend WebRTC** | [frontend/src/lib/webrtc/](./frontend/src/lib/webrtc/) | `MediaEngine`, `WebRTCManager`, `SignalingClient`(WS)/`WebTransportSignalingClient`, `SdpMunger`, `BitrateController`. |
 | **UI** | [frontend/src/pages/ConferencePage.tsx](./frontend/src/pages/ConferencePage.tsx) | Страница конференции. |
-| **Конфиг конференции** | `apps.cms.services.conference_service` ([backend/apps/cms/services/conference_service.py](backend/apps/cms/services/conference_service.py)), `GET /api/cms/v1/conference/config` | Статический ICE/SFU-конфиг из `htqweb/settings/base.py` (`CONFERENCE_SFU_URL`/`_PATH`/`ICE_SERVERS`) — порт `services/cms/app/data/conference.yaml`. Сам SFU-стек (`conference` в реестре) по умолчанию выключен через `ServiceStatus`, но статический конфиг отдаётся всегда. |
+| **Конфиг конференции** | `apps.cms.services.conference_service` ([backend/apps/cms/services/conference_service.py](backend/apps/cms/services/conference_service.py)), `GET /api/cms/v1/conference/config` | ICE/SFU-конфиг из `htqweb/settings/base.py` (`CONFERENCE_SFU_URL`/`_PATH`/`ICE_SERVERS` + `CONFERENCE_WT_*`) — порт `services/cms/app/data/conference.yaml`. `CONFERENCE_SFU_URL` пуст по умолчанию: фронт берёт сигналинг с того же origin (`/ws/sfu/`). Плюс `enabled` (сервис `conference` в реестре — включён миграцией `core/0003_enable_conference`) и адрес QUIC-моста с отпечатками его сертификата. |
+| **Аутентификация сигналинга** | [sfu/src/auth.ts](./sfu/src/auth.ts) | Проверка платформенного JWT (HS256, тот же `JWT_SECRET`, что у Django) на WS-upgrade: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=`. Без токена — 401. Выключается только `SIGNALING_REQUIRE_AUTH=false`. |
 
 Туннели/HTTPS для LAN: [docs/TUNNEL_SETUP.md](./docs/TUNNEL_SETUP.md), скрипты — [scripts/start-sfu-tunnel.ps1](./scripts/start-sfu-tunnel.ps1).
 

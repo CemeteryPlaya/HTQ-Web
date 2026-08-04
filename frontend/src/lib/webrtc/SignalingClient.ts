@@ -38,6 +38,20 @@ interface SignalingEnvelope {
 const DEFAULT_SIGNALING_PATH = '/ws/sfu/';
 const CONNECT_WELCOME_TIMEOUT_MS = 30_000;
 
+/**
+ * Маркер подпротокола, которым SFU принимает платформенный JWT: заголовки
+ * в браузерном `new WebSocket()` не задать, а `Sec-WebSocket-Protocol` —
+ * можно. Отправляем `['htqweb.jwt', '<jwt>']`; сервер (sfu/src/server.ts)
+ * подтверждает только маркер, сам токен обратно не эхоится.
+ */
+const AUTH_SUBPROTOCOL = 'htqweb.jwt';
+
+/**
+ * Токен либо строкой, либо функцией — при переподключении она вызывается
+ * заново, поэтому долгая встреча переживает ротацию access-токена.
+ */
+export type AuthTokenSource = string | (() => string | null | undefined);
+
 function canUseWindowLocation(): boolean {
   return typeof window !== 'undefined' && !!window.location;
 }
@@ -106,17 +120,30 @@ export class SignalingClient {
   private notificationDispatchChain: Promise<void> = Promise.resolve();
   private isClosing = false;
   private bootstrapRoomId: string | null = null;
+  private readonly authToken?: AuthTokenSource;
 
   public peerId: string | null = null;
   public connected = false;
 
-  constructor(url: string) {
+  constructor(url: string, authToken?: AuthTokenSource) {
     const normalizedUrl = normalizeSignalingUrl(url);
     this.url = normalizedUrl;
+    this.authToken = authToken;
 
     if (normalizedUrl !== url) {
       console.info(`[Signaling] URL normalized: ${url} -> ${normalizedUrl}`);
     }
+  }
+
+  /** Подпротоколы для текущей попытки подключения (токен читаем каждый раз). */
+  private buildSubprotocols(): string[] | undefined {
+    const token =
+      typeof this.authToken === 'function' ? this.authToken() : this.authToken;
+    const normalized = String(token || '').trim();
+    if (!normalized) {
+      return undefined;
+    }
+    return [AUTH_SUBPROTOCOL, normalized];
   }
 
   // ─────────────────────────────────────────────────────
@@ -187,7 +214,7 @@ export class SignalingClient {
       this.on('welcome', onWelcome);
 
       try {
-        this.ws = new WebSocket(this.url);
+        this.ws = new WebSocket(this.url, this.buildSubprotocols());
         this.ws.binaryType = 'arraybuffer';
       } catch (cause) {
         this.off('welcome', onWelcome);

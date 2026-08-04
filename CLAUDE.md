@@ -38,18 +38,17 @@ Ignore/discount at the repo root: empty `nginx/`, root `node_modules/`+`package.
 
 **Run the stack** (файлы самостоятельные — никаких `-f a -f b`):
 ```bash
-# ПРОД
-docker compose up -d --build                       # backend/flower + redis/minio + мониторинг
-docker compose --profile production up -d --build  # + nginx/sfu/certbot/webtransport
-
-# ТЕСТ, локальная БД в контейнере (обычная разработка; Vite HMR :3000)
-docker compose -f docker-compose.test-local.yml up -d --build
-docker compose -f docker-compose.test-local.yml up -d --build --no-deps backend-web  # один процесс
-
-# ТЕСТ, БД из .env (посмотреть на реальных данных; миграции по умолчанию OFF)
-docker compose -f docker-compose.test-env.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# rebuild + recreate one process after code changes:
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --no-deps backend-web
 ```
-⚠️ Три стека публикуют одни и те же host-порты — одновременно поднимается только один.
+Prod stack is plain `docker compose up -d` (adds nginx/certbot under the `production` profile).
+
+**Конференция (SFU) поднята и в dev, и в проде.** `sfu` (mediasoup, сигналинг `:4443`, медиа `:44444/udp+tcp`) и `webtransport` (QUIC-мост `:4433/udp`) больше не под профилем `production` — стартуют вместе со стеком. Что важно знать:
+- **Сигналинг требует платформенный JWT.** SFU валидирует токен на WS-upgrade тем же `JWT_SECRET`/HS256, что и Django (`sfu/src/auth.ts`); браузер передаёт его подпротоколом `['htqweb.jwt', <token>]`, WebTransport-мост — параметром `?token=`. Без токена — 401 на upgrade. Отключается только для локальной отладки: `SFU_REQUIRE_AUTH=false`.
+- **`WEBRTC_ANNOUNCED_IP` обязателен.** С wildcard listenIp и пустым announced SFU падает на старте намеренно (иначе — чёрное видео). В dev подставляется `127.0.0.1` (браузер на той же машине); для проверки с другого устройства поставьте LAN-IP хоста в корневом `.env`, в проде — публичный IP.
+- **Транспорт сигналинга:** фронт сначала пробует WebTransport (QUIC), при неудаче сам откатывается на WebSocket (`WebRTCManager.buildSignalingAttempts`). Адрес моста и отпечаток его самоподписанного сертификата приезжают в `GET /api/cms/v1/conference/config` (`wt_signaling_url` / `wt_certificate_hashes`).
+- Флаг сервиса в реестре включён миграцией `core/0003_enable_conference`; на боевой БД с `RUN_MIGRATIONS=0` её нужно применить руками (`manage.py migrate core`) либо флипнуть `manage.py service conference --on`.
 
 **Frontend** (`cd frontend`):
 ```bash
@@ -79,7 +78,12 @@ cd backend
 ../.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
 ../.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
 ../.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
+../.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
 ```
+Mail-server credentials live in **two layers**: `MailServerConfig` (one DB row, edited at `/admin/mailboxes` → «Подключение») **over** the env vars, merged by `apps/mail/services/mail_config.py` with the rule *empty field in the DB = take it from env*. Never read `settings.IMAP_HOST` (or any other `MAILCOW_*`/`IMAP_*`/`SMTP_*`) directly from `apps/mail` — go through `mail_config.get_config()`, or UI-set values will be silently ignored.
+
+`mail_check` is the first thing to run when corporate mail misbehaves: it prints the resolved config (provisioner mode, domain, IMAP/SMTP targets), then checks each link **in dependency order** — port reachable → IMAP connect → login → folders (including whether `MAIL_SYNC_FOLDERS` actually exist on that server, the usual `Sent` vs `Sent Items` trap) → SMTP connect → SMTP login. The first failure stops the chain so you get the one real cause instead of derived errors, and every failure carries the concrete fix. Without `--mailbox` it needs no secrets at all (config + tunnel only); `--password` is optional for an already-provisioned mailbox (the stored one is decrypted from the DB). Passwords never appear in the output. Exits non-zero on any failure, so it works in scripts.
+
 `seed_tasks_demo` fills the whole five-level hierarchy (project → site → block → roadmap → task) plus volumes, resource requirements and dated daily reports; it needs `seed_hr_demo` to have run first (it reads departments/employees through `apps.hr.interface`). `--purge` removes only what it seeded, `--wipe` TRUNCATEs every table of the `tasks` app and re-seeds — including restoring the five system `TaskType` rows that migration `0002` had put there.
 
 **Reaching the dev database from the host**: `manage.py` defaults to `localhost:6432` (PgBouncer), whose credentials fail SASL from the host. Use the unpooled port instead — same server, dev database:

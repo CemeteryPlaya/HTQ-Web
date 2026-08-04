@@ -347,6 +347,24 @@ export default defineConfig(({ mode }) => {
     // играет родная админка Django.
     "/django-admin": {
       target: adminServiceTarget,
+      // ЕДИНСТВЕННОЕ правило с changeOrigin: false — и это не небрежность.
+      // Админка, в отличие от /api/ (JWT + ApiCsrfExemptMiddleware), работает
+      // на сессии и живом Django-CSRF. changeOrigin переписывает Host на
+      // backend-web:8000, а браузер шлёт Origin: http://localhost:3000 —
+      // CsrfViewMiddleware сверяет их и отдаёт 403 «Origin checking failed»
+      // на форме входа. Пропуская Host как есть, мы даём Django совпадение
+      // (ALLOWED_HOSTS=["*"]) и не заводим CSRF_TRUSTED_ORIGINS со списком
+      // хостов, который пришлось бы дописывать под каждый LAN-адрес.
+      changeOrigin: false,
+    },
+    // Статика самой админки (STATIC_URL="static/"): её CSS/JS/иконки плюс
+    // фирменная тема backend/static/admin/htqweb.css. Без этого правила
+    // /static/... проваливался в SPA-fallback Vite и возвращал index.html с
+    // Content-Type: text/html — страница открывалась, но полностью без стилей.
+    // Неймспейс /static свободен: у фронта своя статика лежит в /assets,
+    // /fonts, /images, /locales (см. frontend/public).
+    "/static": {
+      target: adminServiceTarget,
       changeOrigin: true,
     },
     // ─── Monitoring (Grafana + Prometheus) ─────────────────────────────────

@@ -198,8 +198,6 @@ _PERMISSION_CATALOG = {
         {"key": "hr.card.financial.edit", "label": "Финансы — изменение", "description": None, "group": "Карточка"},
         {"key": "hr.card.personal.view",  "label": "Личные данные — просмотр", "description": None, "group": "Карточка"},
         {"key": "hr.card.personal.edit",  "label": "Личные данные — изменение", "description": None, "group": "Карточка"},
-        {"key": "hr.card.certs.view",     "label": "Сертификаты/СРО — просмотр", "description": None, "group": "Карточка"},
-        {"key": "hr.card.certs.edit",     "label": "Сертификаты/СРО — изменение", "description": None, "group": "Карточка"},
         {"key": "hr.card.groups.view",    "label": "Образование/стаж/семья — просмотр", "description": None, "group": "Карточка"},
         {"key": "hr.card.groups.edit",    "label": "Образование/стаж/семья — изменение", "description": None, "group": "Карточка"},
 
@@ -235,8 +233,10 @@ def _list_positions(request):
 def _create_position(request, data: schemas.PositionCreate):
     try:
         pos = pos_svc.create_position(data)
-    except pos_svc.WeightTaken as exc:
+    except (pos_svc.WeightTaken, pos_svc.LevelFull) as exc:
         return json_error(exc.detail, 409)
+    except pos_svc.LevelWeightMismatch as exc:
+        return json_error(exc.detail, 422)
     return pos_svc.serialize(pos)
 
 
@@ -259,7 +259,11 @@ def _list_level_thresholds(request):
 def _create_level_threshold(request, data: schemas.LevelThresholdCreate):
     try:
         threshold = pos_svc.create_threshold(data, actor_user_id=request.token.user_id)
-    except (pos_svc.ThresholdExists, pos_svc.ThresholdRangeOverlap) as exc:
+    except (
+        pos_svc.ThresholdExists,
+        pos_svc.ThresholdRangeOverlap,
+        pos_svc.LevelRangeUnavailable,
+    ) as exc:
         return json_error(exc.detail, 409)
     except pos_svc.ThresholdRangeInvalid as exc:
         return json_error(exc.detail, 422)
@@ -289,6 +293,20 @@ def _update_level_threshold(request, level_number: int, data: schemas.LevelThres
 def _delete_level_threshold(request, level_number: int):
     pos_svc.delete_threshold(level_number, actor_user_id=request.token.user_id)
     return HttpResponse(status=204)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def next_weight_for_level(request, level_number: int):
+    """Свободный вес в конце уровня — подсказка для селекта «Уровень» в UI.
+
+    Считается на сервере, а не на фронте: вес глобально уникален, а список
+    должностей фронт грузит страницами (limit<=200), так что «занятые» веса
+    он видит не все. Http404 (нет такого порога) отдаёт api_view.
+    """
+    try:
+        return pos_svc.next_weight_for_level(level_number)
+    except pos_svc.LevelFull as exc:
+        return json_error(exc.detail, 409)
 
 
 def level_threshold_detail(request, level_number: int):
@@ -342,9 +360,9 @@ def _update_position(request, id: int, data: schemas.PositionUpdate):
         pos = pos_svc.update_position(id, data, actor_user_id=request.token.user_id)
     except pos_svc.SystemPositionFieldsLocked as exc:
         return json_error(exc.detail, 409)
-    except pos_svc.WeightTaken as exc:
+    except (pos_svc.WeightTaken, pos_svc.LevelFull) as exc:
         return json_error(exc.detail, 409)
-    except pos_svc.WeightInvalid as exc:
+    except (pos_svc.WeightInvalid, pos_svc.LevelWeightMismatch) as exc:
         return json_error(exc.detail, 422)
     return pos_svc.serialize(pos)
 
@@ -1797,10 +1815,66 @@ def _upload_document(request, data: schemas.DocumentCreate):
     return doc_svc.serialize(doc_svc.create_document(data))
 
 
+@api_view(methods=("POST",), auth="jwt", status=201)
+def _upload_document_multipart(request):
+    """multipart-ветка ``POST /documents/`` — файл приходит самим запросом.
+
+    JSON-контракт исходника (``_upload_document``) ждёт уже загруженный
+    куда-то файл: ``file_path``/``file_size``/``mime_type``/``uploaded_by``
+    приходят от клиента. Фронт HR-«Документов» такого шага не делает и шлёт
+    обычную форму с файлом — раньше она разбивалась о JSON-парсер
+    (422 ``Invalid JSON``). Разбор формы — как у
+    ``_upload_department_file``: POST Django парсит сам в
+    ``request.POST``/``request.FILES``.
+    """
+    # Скоуп ``hr_doc`` в media — restricted (решение Д1): вызывающий домен
+    # обязан сам проверить свои права, прежде чем ручаться за запись
+    # (``store_file(internal_authorized=True)``). У JSON-ветки исходника
+    # проверки нет и мы её туда не добавляем, но здесь без неё ручаться
+    # не за что.
+    try:
+        hr_access.require_can_write_basic(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+
+    employee_raw = request.POST.get("employee") or request.POST.get("employee_id")
+    try:
+        employee_id = int(employee_raw)
+    except (TypeError, ValueError):
+        return json_error({"employee": "field required"}, 422)
+
+    title = (request.POST.get("title") or "").strip()
+    if not title:
+        return json_error({"title": "field required"}, 422)
+
+    upload = request.FILES.get("file")
+    if upload is None:
+        return json_error({"file": "field required"}, 422)
+
+    try:
+        return doc_svc.create_document_from_upload(
+            request.token,
+            employee_id=employee_id,
+            title=title,
+            doc_type=request.POST.get("doc_type") or "other",
+            file=upload,
+            description=request.POST.get("description", ""),
+        )
+    except doc_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+    except doc_svc.DocumentUploadRejected as exc:
+        return json_error(exc.detail, exc.status_code)
+
+
 def documents_collection(request):
     if request.method == "GET":
         return _list_documents(request)
     if request.method == "POST":
+        # Форма с файлом и JSON-контракт живут на одном URL — различаем по
+        # Content-Type, как это делает FastAPI разными сигнатурами роутера.
+        content_type = (request.content_type or "").lower()
+        if content_type.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+            return _upload_document_multipart(request)
         return _upload_document(request)
     return json_error("Method Not Allowed", 405)
 
@@ -1809,6 +1883,24 @@ def documents_collection(request):
 def _get_document(request, id: int):
     try:
         return doc_svc.serialize(doc_svc.get_document(id))
+    except doc_svc.DocumentNotFound:
+        return json_error("Document not found", 404)
+
+
+@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.DocumentPatch)
+def _patch_document(request, id: int, data: schemas.DocumentPatch):
+    """Правка карточки документа — сверх контракта порта (см. схему).
+
+    PUT регистрируем рядом с PATCH: фронт исторически слал именно PUT и
+    получал 405, а семантика тут одна — частичное обновление переданных
+    полей (та же пара методов, что у employees/positions/time-entries).
+    """
+    try:
+        hr_access.require_can_write_basic(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    try:
+        return doc_svc.patch_document(id, data)
     except doc_svc.DocumentNotFound:
         return json_error("Document not found", 404)
 
@@ -1825,92 +1917,22 @@ def _delete_document(request, id: int):
 def document_detail(request, id: int):
     if request.method == "GET":
         return _get_document(request, id=id)
+    if request.method in ("PUT", "PATCH"):
+        return _patch_document(request, id=id)
     if request.method == "DELETE":
         return _delete_document(request, id=id)
     return json_error("Method Not Allowed", 405)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  /mongo-documents/* — порт services/hr/app/api/v1/mongo_documents.py
-#  (5 эндпойнтов, ex-Mongo коллекция hr_documents → EmployeeDocumentBlob
-#  JSONB, решение D6)
+#  /mongo-documents/* — УДАЛЕНО
 # ═══════════════════════════════════════════════════════════════════════════
-#
-# Авторизация — БУКВАЛЬНО как в исходнике: reads (list/get) =
-# ``get_current_user`` -> ``api_view(auth="jwt")``; writes (create/update/
-# delete) = ``require_hr_write`` (``current_user.is_elevated``) ->
-# ``api_view(auth="jwt", admin=True)`` — та же пара, что у positions/org.
-#
-# ``_require_collection`` 503-деградация исходника (пустой ``mongo_uri``) не
-# переносится — Postgres не бывает "не настроен" так, как опциональный Mongo
-# (см. document_service.py докстринг).
-
-@api_view(methods=("GET",), auth="jwt")
-def _list_mongo_documents(request):
-    try:
-        query = schemas.MongoDocumentListQuery.model_validate(dict(request.GET.items()))
-    except ValidationError as exc:
-        return _query_error(exc)
-    # Голый список — НЕ PaginatedResponse-конверт (буквально как в исходнике:
-    # response_model=list[HRDocumentOut], без items/total/page/pages).
-    return doc_svc.list_mongo_documents(
-        employee_id=query.employee_id, doc_type=query.doc_type, page=query.page, limit=query.limit,
-    )
-
-
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.HRDocumentCreate, status=201)
-def _create_mongo_document(request, data: schemas.HRDocumentCreate):
-    return doc_svc.create_mongo_document(data, created_by_user_id=request.token.user_id)
-
-
-def mongo_documents_collection(request):
-    if request.method == "GET":
-        return _list_mongo_documents(request)
-    if request.method == "POST":
-        return _create_mongo_document(request)
-    return json_error("Method Not Allowed", 405)
-
-
-@api_view(methods=("GET",), auth="jwt")
-def _get_mongo_document(request, doc_id: str):
-    pk = doc_svc.parse_blob_id(doc_id)
-    if pk is None:
-        return json_error("Invalid document ID format", 400)
-    out = doc_svc.get_mongo_document(pk)
-    if out is None:
-        return json_error("Document not found", 404)
-    return out
-
-
-@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.HRDocumentUpdate)
-def _update_mongo_document(request, doc_id: str, data: schemas.HRDocumentUpdate):
-    pk = doc_svc.parse_blob_id(doc_id)
-    if pk is None:
-        return json_error("Invalid document ID format", 400)
-    out = doc_svc.update_mongo_document(pk, data)
-    if out is None:
-        return json_error("Document not found", 404)
-    return out
-
-
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
-def _delete_mongo_document(request, doc_id: str):
-    pk = doc_svc.parse_blob_id(doc_id)
-    if pk is None:
-        return json_error("Invalid document ID format", 400)
-    if not doc_svc.delete_mongo_document(pk):
-        return json_error("Document not found", 404)
-    return HttpResponse(status=204)
-
-
-def mongo_document_detail(request, doc_id: str):
-    if request.method == "GET":
-        return _get_mongo_document(request, doc_id=doc_id)
-    if request.method == "PATCH":
-        return _update_mongo_document(request, doc_id=doc_id)
-    if request.method == "DELETE":
-        return _delete_mongo_document(request, doc_id=doc_id)
-    return json_error("Method Not Allowed", 405)
+#  Пять эндпойнтов над ex-Mongo коллекцией hr_documents (решение D6) сняты:
+#  Mongo из платформы ушла вместе с FastAPI-поколением, писать в
+#  EmployeeDocumentBlob больше нечем (единственный писатель — разовый
+#  `manage.py etl_hr`, которому неоткуда читать), а фронт этих путей не
+#  звал никогда. Сама модель и таблица оставлены: там могут лежать
+#  перенесённые при cutover'е блоба — они видны в django-admin.
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1928,7 +1950,7 @@ def mongo_document_detail(request, doc_id: str):
 # ``can_see_department`` -> 404 "Employee not found") — тот же хелпер, что уже
 # используют employee_calendar*, переиспользуется буквально, не дублируется.
 #
-# Полевой RBAC-гейтинг Т-2 секций (financial/personal/certs) — ВНУТРИ
+# Полевой RBAC-гейтинг Т-2 секций (financial/personal) — ВНУТРИ
 # ``card_t2_svc.read_sections``/``upsert``
 # (``apps/hr/services/employee_card_t2_service.py::_SECTIONS`` — секция
 # видна/редактируема ТОЛЬКО при ``access.has(<view|edit_key>)``); вьюха здесь

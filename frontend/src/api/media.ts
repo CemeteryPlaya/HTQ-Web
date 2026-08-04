@@ -13,5 +13,7 @@ export const mediaApi = {
     });
   },
   download: (fileId: string) => api.get(`${MEDIA_FILES}${fileId}`, { responseType: 'blob' }),
-  delete: (fileId: string) => api.delete(`${MEDIA_FILES}${fileId}`),
+  // Удаления файла в API нет: apps.media_files отдаёт на /files/{id} только
+  // GET (405 на DELETE). Прежний метод `delete` никто не звал и звать было
+  // нечего — удалён, чтобы не выглядел рабочим.
 };

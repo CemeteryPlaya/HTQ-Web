@@ -39,9 +39,18 @@ class AccountType(models.TextChoices):
 
 
 class AccountProvider(models.TextChoices):
-    """Порт account.py: ``provider IN ('mailcow','google','microsoft')``."""
+    """Порт account.py: ``provider IN ('mailcow','google','microsoft')``,
+    расширенный ``imap``.
+
+    ``imap`` — корпоративный почтовый сервер без Mailcow-API: подключение по
+    обычному IMAP + SMTP submission (``services/imap_client.py``,
+    ``sender/corporate_smtp.py``). Значение ДОБАВЛЕНО, а не заменяет
+    ``mailcow``: инсталляции на Mailcow продолжают работать как работали —
+    у них тот же провайдер, тот же отправитель, та же строка в БД.
+    """
 
     MAILCOW = "mailcow", "Mailcow"
+    IMAP = "imap", "IMAP/SMTP"
     GOOGLE = "google", "Google"
     MICROSOFT = "microsoft", "Microsoft"
 
@@ -86,8 +95,112 @@ class OAuthToken(models.Model):
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
+    class Meta:
+        verbose_name = "OAuth-токен"
+        verbose_name_plural = "OAuth-токены"
+
     def __str__(self) -> str:
         return f"<OAuthToken(id={self.id}, provider={self.provider})>"
+
+
+class MailServerConfig(models.Model):
+    """Реквизиты корпоративного почтового сервера, задаваемые из интерфейса.
+
+    Раньше единственным местом настройки был ``.env`` + перезапуск всех
+    backend-контейнеров. Для реквизитов, которые подбираются итеративно (хост,
+    порт, режим TLS, имена папок), это неудобно и приводит к опечаткам,
+    которые видно только по битым ящикам. Эта таблица позволяет править их из
+    ``/admin/mailboxes`` и сразу проверять кнопкой «Проверить».
+
+    **Отношение к env — перекрытие, а не замена.** Пустое поле означает
+    «взять из настроек» (``htqweb/settings/base.py``), заполненное —
+    «использовать это». Поэтому окружение, где ничего не заводили через UI,
+    ведёт себя ровно как раньше, а env остаётся рабочим способом
+    первоначальной раскатки.
+
+    Строка ОДНА (``pk=1``, см. ``mail_config.get_config``): почтовый сервер у
+    платформы один. Синглтон сделан через фиксированный pk, а не через
+    отдельную таблицу-однострочник — так ``update_or_create`` не может
+    случайно расплодить конкурирующие конфигурации.
+
+    Секреты (Mailcow API-ключ) лежат зашифрованными тем же AES-256-GCM, что и
+    пароли ящиков (``services/crypto.py``), и наружу отдаются только флагом
+    «задан/не задан» — прочитать их через API нельзя.
+    """
+
+    SINGLETON_PK = 1
+
+    # "" = взять MAIL_PROVISIONER из settings
+    provisioner = models.CharField(
+        max_length=16, blank=True, default="",
+        choices=[("", "Из настроек окружения"), ("auto", "Автоматически"),
+                 ("mailcow", "Mailcow API"), ("imap", "IMAP/SMTP"), ("none", "Не подключён")],
+        verbose_name="Режим провижининга",
+    )
+    domain = models.CharField(max_length=255, blank=True, default="", verbose_name="Домен ящиков")
+
+    imap_host = models.CharField(max_length=255, blank=True, default="")
+    imap_port = models.IntegerField(null=True, blank=True)
+    # null = «из настроек»; True/False = явное значение. Обычный BooleanField
+    # не различил бы «выключено» и «не задано».
+    imap_ssl = models.BooleanField(null=True, blank=True)
+    imap_starttls = models.BooleanField(null=True, blank=True)
+    imap_tls_server_hostname = models.CharField(max_length=255, blank=True, default="")
+
+    smtp_host = models.CharField(max_length=255, blank=True, default="")
+    smtp_port = models.IntegerField(null=True, blank=True)
+    smtp_ssl = models.BooleanField(null=True, blank=True)
+    smtp_starttls = models.BooleanField(null=True, blank=True)
+
+    mailcow_api_url = models.CharField(max_length=500, blank=True, default="")
+    encrypted_mailcow_api_key = models.TextField(blank=True, default="")
+
+    # "" = из настроек; иначе список папок через запятую.
+    sync_folders = models.CharField(max_length=500, blank=True, default="")
+    sync_push_flags = models.BooleanField(null=True, blank=True)
+
+    # Шаблон автогенерации адреса из имени сотрудника. "" = взять из
+    # окружения. Соглашение об именовании у каждой компании своё, а промах
+    # тут особенно дорог в IMAP-режиме: адрес обязан совпасть с реальным
+    # ящиком на сервере, иначе создание просто не пройдёт.
+    local_part_pattern = models.CharField(
+        max_length=16, blank=True, default="",
+        choices=[
+            ("", "Из настроек окружения"),
+            ("first.last", "sanzhar.inamzhanov"),
+            ("f.last", "s.inamzhanov"),
+            ("firstlast", "sanzharinamzhanov"),
+            ("first_last", "sanzhar_inamzhanov"),
+            ("flast", "sinamzhanov"),
+            ("last.first", "inamzhanov.sanzhar"),
+            ("first", "sanzhar"),
+        ],
+        verbose_name="Шаблон адреса",
+    )
+
+    #: разрешено ли сотрудникам подключать свой ящик самостоятельно
+    allow_self_service = models.BooleanField(
+        default=False, verbose_name="Самоподключение ящиков сотрудниками",
+    )
+
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by_user_id = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Настройки почтового сервера"
+        verbose_name_plural = "Настройки почтового сервера"
+
+    def __str__(self) -> str:
+        return f"<MailServerConfig(domain={self.domain!r}, imap={self.imap_host!r})>"
+
+    def save(self, *args, **kwargs):
+        # Синглтон: любая запись — в одну и ту же строку.
+        self.pk = self.SINGLETON_PK
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        """Удаление = сброс к значениям из env, а не исчезновение строки."""
+        return super().delete(*args, **kwargs)
 
 
 class MailboxStatus(models.TextChoices):
@@ -154,18 +267,73 @@ class ProvisionedMailbox(models.Model):
     archived_at = models.DateTimeField(null=True, blank=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
 
+    class Meta:
+        verbose_name = "Выданный ящик"
+        verbose_name_plural = "Выданные ящики"
+
     def __str__(self) -> str:
         return f"<ProvisionedMailbox(id={self.id}, address={self.address!r}, status={self.status})>"
+
+
+class ImapAccountSettings(models.Model):
+    """Реквизиты СВОЕГО почтового сервера для отдельного аккаунта.
+
+    Отличие от ``MailServerConfig``: та строка одна на всю платформу и
+    описывает корпоративный сервер, а эта — по одной на подключённый
+    пользователем ящик. Так сотрудник может добавить почту, о которой
+    платформа ничего не знает (личный ящик на своём хостинге, почта
+    подрядчика, второй домен компании), указав хост и порт сам — как в любом
+    почтовом клиенте.
+
+    Пароль хранится зашифрованным (AES-256-GCM, ``services/crypto.py``), тем
+    же способом, что пароли выданных ящиков. Наружу не отдаётся никогда.
+
+    ``smtp_host`` пустой означает «тот же хост, что IMAP» — типовой случай, и
+    заставлять пользователя вводить одно и то же дважды незачем.
+    """
+
+    imap_host = models.CharField(max_length=255)
+    imap_port = models.IntegerField(default=993)
+    imap_ssl = models.BooleanField(default=True)
+    imap_starttls = models.BooleanField(default=False)
+
+    smtp_host = models.CharField(max_length=255, blank=True, default="")
+    smtp_port = models.IntegerField(default=587)
+    smtp_ssl = models.BooleanField(default=False)
+    smtp_starttls = models.BooleanField(default=True)
+
+    # Логин обычно совпадает с адресом, но не всегда (бывает "ivanov" или
+    # "ivanov@домен-хостера") — поэтому отдельным полем.
+    username = models.CharField(max_length=255)
+    encrypted_password = models.TextField()
+
+    created_at = models.DateTimeField(db_default=Now(), db_index=True)
+    updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
+
+    class Meta:
+        verbose_name = "IMAP-реквизиты аккаунта"
+        verbose_name_plural = "IMAP-реквизиты аккаунтов"
+
+    def __str__(self) -> str:
+        return f"<ImapAccountSettings(id={self.id}, host={self.imap_host!r}, user={self.username!r})>"
+
+    def effective_smtp_host(self) -> str:
+        return self.smtp_host or self.imap_host
 
 
 class EmailAccount(models.Model):
     """Порт services/email/app/models/account.py::EmailAccount.
 
     Одна строка — один почтовый ящик, связанный с платформенным
-    пользователем: либо Mailcow ``ProvisionedMailbox`` (corporate), либо
-    ``OAuthToken`` внешнего провайдера (personal). Ровно одно из
-    ``mailbox_id``/``oauth_token_id`` заполнено — типовая согласованность
-    проверяется CheckConstraint ``ck_email_accounts_type_consistency``.
+    пользователем. Способов подключения три, и ровно один источник учётки
+    заполнен (проверяется CheckConstraint ``ck_email_accounts_type_consistency``):
+
+    * ``corporate`` → ``mailbox`` — ящик на корпоративном сервере платформы;
+    * ``personal`` + ``oauth_token`` — Gmail/Outlook по OAuth;
+    * ``personal`` + ``imap_settings`` — любой другой сервер по IMAP/SMTP,
+      реквизиты которого пользователь ввёл сам (ветка добавлена к исходному
+      контракту: раньше personal-аккаунт мог быть ТОЛЬКО OAuth-овым, и
+      подключить почту вне Google/Microsoft было нечем).
 
     ``mailbox`` (mailboxes-под-задача, закрывает D-mail-2 mail-core): теперь
     настоящий ``ForeignKey`` на ``ProvisionedMailbox`` — порт исходника
@@ -206,6 +374,13 @@ class EmailAccount(models.Model):
         OAuthToken, null=True, blank=True, unique=True,
         on_delete=models.SET_NULL, related_name="email_account",
     )
+    # Третий способ подключения: свой IMAP/SMTP-сервер. ``on_delete=CASCADE``,
+    # в отличие от двух FK выше: реквизиты не имеют смысла в отрыве от
+    # аккаунта, и осиротевшая строка с зашифрованным паролем — лишний риск.
+    imap_settings = models.OneToOneField(
+        ImapAccountSettings, null=True, blank=True,
+        on_delete=models.CASCADE, related_name="email_account",
+    )
 
     # Per-provider непрозрачный курсор синхронизации (google: history_id,
     # microsoft: delta_link, mailcow: uidvalidity/uidnext, ...) — под-задача
@@ -222,6 +397,8 @@ class EmailAccount(models.Model):
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
     class Meta:
+        verbose_name = "Почтовый аккаунт"
+        verbose_name_plural = "Почтовые аккаунты"
         constraints = [
             models.UniqueConstraint(
                 fields=["user_id", "address"], name="uq_email_accounts_user_address",
@@ -244,6 +421,14 @@ class EmailAccount(models.Model):
                     | models.Q(
                         type=AccountType.PERSONAL,
                         oauth_token_id__isnull=False,
+                        mailbox_id__isnull=True,
+                        imap_settings__isnull=True,
+                    )
+                    # Personal по IMAP: реквизиты вместо OAuth-токена.
+                    | models.Q(
+                        type=AccountType.PERSONAL,
+                        imap_settings__isnull=False,
+                        oauth_token_id__isnull=True,
                         mailbox_id__isnull=True,
                     )
                 ),
@@ -275,6 +460,10 @@ class AuditLog(models.Model):
     user_agent = models.TextField(null=True, blank=True)
     correlation_id = models.CharField(max_length=36, null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
+
+    class Meta:
+        verbose_name = "Запись аудита"
+        verbose_name_plural = "Журнал аудита"
 
     def __str__(self) -> str:
         return f"<AuditLog(id={self.id}, action={self.action})>"
@@ -386,6 +575,8 @@ class EmailMessage(models.Model):
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
     class Meta:
+        verbose_name = "Письмо"
+        verbose_name_plural = "Письма"
         indexes = [
             models.Index(fields=["user_id", "account", "folder", "-date"]),
         ]
@@ -430,6 +621,10 @@ class EmailAttachment(models.Model):
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
+    class Meta:
+        verbose_name = "Вложение письма"
+        verbose_name_plural = "Вложения писем"
+
     def __str__(self) -> str:
         return f"<EmailAttachment(id={self.id}, filename={self.filename!r})>"
 
@@ -452,6 +647,10 @@ class RecipientStatus(models.Model):
 
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
+
+    class Meta:
+        verbose_name = "Статус получателя"
+        verbose_name_plural = "Статусы получателей"
 
     def __str__(self) -> str:
         return f"<RecipientStatus(id={self.id}, recipient_email={self.recipient_email!r}, status={self.status!r})>"

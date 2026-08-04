@@ -20,10 +20,9 @@ export const fetchMyFolders = async (): Promise<DepartmentFolder[]> => {
   return unwrap<DepartmentFolder>(res.data);
 };
 
-export const fetchFolder = async (id: number): Promise<DepartmentFolder> => {
-  const res = await api.get(`${HR}department-folders/${id}/`);
-  return res.data;
-};
+// fetchFolder(id) удалён: в бэкенде есть только коллекция
+// `department-folders/` (список папок, доступных пользователю), карточки
+// одной папки нет — вызов уходил в 404. Потребителей у хелпера не было.
 
 export const fetchDepartmentFileFolders = async (
   departmentId: number,

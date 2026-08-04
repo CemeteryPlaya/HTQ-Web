@@ -214,7 +214,7 @@ class EmployeeGroupsAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 @admin.register(EmployeeCard)
 class EmployeeCardAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "employee", "salary", "bonus", "sro_permit_expiry")
+    list_display = ("id", "employee", "salary", "bonus", "inn")
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("employee",)
 

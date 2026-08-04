@@ -5,7 +5,7 @@ import api from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
 import type {
   Department, Position, Employee, EmployeeStats, HRUserOption,
-  Vacancy, Application, TimeRecord, HRDocument, HRActionLog,
+  Vacancy, Application,
 } from '@/types/hr';
 
 const HR = `${API_ENDPOINTS.hr}/`;
@@ -260,7 +260,6 @@ export const fetchMyEmployeeCard = async (): Promise<EmployeeCard> => {
 export interface CardT2 {
   financial?: { salary: string | null; bonus: string | null; bank_account: string | null };
   personal?: { passport_data: string | null; inn: string | null; birth_date: string | null; birth_place: string | null; citizenship: string | null };
-  certs?: { sro_permit_number: string | null; sro_permit_expiry: string | null; safety_cert_number: string | null; safety_cert_expiry: string | null };
 }
 
 export const fetchCardT2 = async (employeeId: number): Promise<CardT2> => {
@@ -372,61 +371,14 @@ export const deleteApplication = async (id: number): Promise<void> => {
   await api.delete(`${HR}applications/${id}/`);
 };
 
-/* ---------- Time Tracking ---------- */
-export const fetchTimeRecords = async (params?: Record<string, string>): Promise<TimeRecord[]> => {
-  const query = params ? '?' + new URLSearchParams(params).toString() : '';
-  const res = await api.get(`${HR}time-tracking/${query}`);
-  return unwrap<TimeRecord>(res.data);
-};
-
-export const createTimeRecord = async (data: Partial<TimeRecord>): Promise<TimeRecord> => {
-  const res = await api.post(`${HR}time-tracking/`, data);
-  return res.data;
-};
-
-export const updateTimeRecord = async (id: number, data: Partial<TimeRecord>): Promise<TimeRecord> => {
-  const res = await api.patch(`${HR}time-tracking/${id}/`, data);
-  return res.data;
-};
-
-export const approveTimeRecord = async (id: number): Promise<TimeRecord> => {
-  const res = await api.post(`${HR}time-tracking/${id}/approve/`);
-  return res.data;
-};
-
-export const rejectTimeRecord = async (id: number): Promise<TimeRecord> => {
-  const res = await api.post(`${HR}time-tracking/${id}/reject/`);
-  return res.data;
-};
-
-export const deleteTimeRecord = async (id: number): Promise<void> => {
-  await api.delete(`${HR}time-tracking/${id}/`);
-};
-
-/* ---------- Documents ---------- */
-export const fetchDocuments = async (params?: Record<string, string>): Promise<HRDocument[]> => {
-  const query = params ? '?' + new URLSearchParams(params).toString() : '';
-  const res = await api.get(`${HR}documents/${query}`);
-  return unwrap<HRDocument>(res.data);
-};
-
-export const uploadDocument = async (data: FormData): Promise<HRDocument> => {
-  const res = await api.post(`${HR}documents/`, data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
-  return res.data;
-};
-
-export const deleteDocument = async (id: number): Promise<void> => {
-  await api.delete(`${HR}documents/${id}/`);
-};
-
-/* ---------- Action Logs ---------- */
-export const fetchActionLogs = async (params?: Record<string, string>): Promise<HRActionLog[]> => {
-  const query = params ? '?' + new URLSearchParams(params).toString() : '';
-  const res = await api.get(`${HR}logs/${query}`);
-  return unwrap<HRActionLog>(res.data);
-};
+/* ---------- Time Tracking / Documents / Action Logs ----------
+ * Хелперов здесь больше нет. Табель и документы страницы зовут напрямую
+ * через `api` (см. pages/hr/HRTimeTracking.tsx, pages/hr/HRDocuments.tsx):
+ * прежние обёртки писались под старый Django-монолит и били в маршруты,
+ * которых в этом бэкенде нет (`time-tracking/{id}/`, `.../approve|reject`),
+ * а их единственными потребителями были неподключённые страницы-дубли
+ * из `src/pages/` — удалены вместе с ними.
+ */
 
 /* ---------- Production Calendar ---------- */
 export interface WeekTemplate { id: number; name: string; is_default: boolean; days: Record<string, { type: string; hours: number }>; }

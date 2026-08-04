@@ -23,6 +23,18 @@ function envStr(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
+/**
+ * Как envStr, но пустая строка считается «не задано».
+ *
+ * docker-compose не умеет условно не выставлять ключ: `${VAR:-}` приходит
+ * пустой строкой и затирает осмысленный дефолт (например, список
+ * разрешённых origin'ов — пустой список запретил бы вообще всех).
+ */
+function envStrNonEmpty(key: string, fallback: string): string {
+  const raw = process.env[key];
+  return raw && raw.trim() ? raw : fallback;
+}
+
 function envBool(key: string, fallback: boolean): boolean {
   const raw = process.env[key];
   if (raw === undefined) return fallback;
@@ -75,7 +87,7 @@ function parseList(raw: string): string[] {
 }
 
 function parseAllowedOriginPatterns(): string[] {
-  const raw = envStr(
+  const raw = envStrNonEmpty(
     'SIGNALING_ALLOWED_ORIGINS',
     'https://*.instatunnel.my,http://*.instatunnel.my'
   );
@@ -354,10 +366,46 @@ export const config = {
     allowRequestsWithoutOrigin: envBool('SIGNALING_ALLOW_NO_ORIGIN', true),
     allowedOriginPatterns: parseAllowedOriginPatterns(),
   },
+
+  // ── Аутентификация (платформенный JWT, тот же секрет, что у Django) ──
+  // Без токена сигналинг открыт любому, кто дотянулся до /ws/sfu/: peerId
+  // выдаётся всем, а roomId — единственное, что отделяет чужую встречу от
+  // своей. Поэтому проверка включена по умолчанию; выключать только для
+  // локальной отладки без бэкенда.
+  auth: {
+    required: envBool('SIGNALING_REQUIRE_AUTH', true),
+    jwtSecret: envStr('JWT_SECRET', ''),
+    jwtIssuer: envStrNonEmpty('JWT_ISSUER', 'htqweb-auth'),
+    clockToleranceSec: envInt('JWT_CLOCK_TOLERANCE_SEC', 30),
+  },
 } as const;
+
+/**
+ * Включённая аутентификация без секрета молча пропускала бы всех (или
+ * отвергала всех — в зависимости от того, где потеряется проверка), поэтому
+ * падаем на старте, как и при кривых listenIps.
+ */
+function validateAuth(): void {
+  if (config.auth.required && !config.auth.jwtSecret.trim()) {
+    throw new Error(
+      '[config] ФАТАЛЬНО: SIGNALING_REQUIRE_AUTH=true, но JWT_SECRET пуст. ' +
+      'Пробросьте тот же JWT_SECRET, что у Django-бэкенда (корневой .env), ' +
+      'или явно выставьте SIGNALING_REQUIRE_AUTH=false для локальной отладки.'
+    );
+  }
+
+  if (!config.auth.required) {
+    console.warn(
+      '[config] SIGNALING_REQUIRE_AUTH=false — сигналинг открыт без токена. ' +
+      'Любой, кто дотянется до /ws/sfu/, сможет войти в комнату по её ID. ' +
+      'Так можно только локально.'
+    );
+  }
+}
 
 // Валидация при загрузке модуля — убивает процесс до создания воркеров.
 validateListenIps(config.mediasoup.listenIps);
+validateAuth();
 warnIfSuspiciousBitrate(
   'WEBRTC_INITIAL_AVAILABLE_OUTGOING_BITRATE',
   config.mediasoup.webRtcTransport.initialAvailableOutgoingBitrate,

@@ -49,6 +49,10 @@ class Category(models.Model):
     description = models.CharField(max_length=500, default="", blank=True, db_default="")
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Категория"
+        verbose_name_plural = "Категории"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Category id={self.id} slug={self.slug!r}>"
 
@@ -57,6 +61,10 @@ class Tag(models.Model):
     slug = models.CharField(max_length=80, unique=True)
     name = models.CharField(max_length=80)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Тег"
+        verbose_name_plural = "Теги"
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Tag id={self.id} slug={self.slug!r}>"
@@ -102,6 +110,10 @@ class News(models.Model):
     # so Django is left to manage its own join table normally.
     tags = models.ManyToManyField(Tag, related_name="news_set", blank=True)
 
+    class Meta:
+        verbose_name = "Новость"
+        verbose_name_plural = "Новости"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<News id={self.id} slug={self.slug!r} status={self.status}>"
 
@@ -118,6 +130,10 @@ class ContactRequest(models.Model):
     reply_message = models.TextField(default="", blank=True, db_default="")
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now(), db_index=True)
 
+    class Meta:
+        verbose_name = "Обращение с сайта"
+        verbose_name_plural = "Обращения с сайта"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<ContactRequest id={self.id} email={self.email!r} handled={self.handled}>"
 
@@ -133,6 +149,10 @@ class NewsAttachment(models.Model):
     uploaded_by = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Вложение новости"
+        verbose_name_plural = "Вложения новостей"
+
 
 class AuditLog(models.Model):
     user_id = models.IntegerField(null=True, blank=True, db_index=True)
@@ -144,3 +164,7 @@ class AuditLog(models.Model):
     user_agent = models.TextField(null=True, blank=True)
     correlation_id = models.CharField(max_length=36, null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Запись аудита"
+        verbose_name_plural = "Журнал аудита"

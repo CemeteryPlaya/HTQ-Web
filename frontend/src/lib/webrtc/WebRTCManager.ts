@@ -8,6 +8,8 @@ import {
 import { Result, err, ok } from './result';
 import { WebRTCError, createWebRTCError } from './WebRTCError';
 import { QualityMetrics } from './BitrateController';
+import type { ISignalingClient } from './ISignalingClient';
+import { WebTransportSignalingClient } from './WebTransportSignalingClient';
 
 export interface WebRTCManagerEvents {
   onRemoteStream?: (stream: RemoteStream) => void;
@@ -26,6 +28,23 @@ export interface WebRTCManagerOptions
   extends Omit<ConferenceOptions, 'videoCodecPolicy'> {
   initialVideoCodecPolicy?: VideoCodecPolicy;
   autoVp8Fallback?: boolean;
+  /**
+   * QUIC-сигналинг. Если задан и браузер умеет WebTransport — пробуем его
+   * первым, WebSocket остаётся запасным маршрутом (мост может быть не
+   * поднят, UDP :4433 — прикрыт файрволом, сертификат — просрочен).
+   */
+  webTransport?: {
+    url: string;
+    /** Отпечатки самоподписанного сертификата (dev). */
+    certificateHashes?: string[];
+  };
+}
+
+/** Одна попытка подключения к сигналингу: транспорт + адрес. */
+interface SignalingAttempt {
+  label: string;
+  signalingUrl: string;
+  signalingFactory?: (url: string) => ISignalingClient;
 }
 
 /**
@@ -37,7 +56,7 @@ export interface WebRTCManagerOptions
  */
 export class WebRTCManager {
   private readonly baseOptions: Omit<ConferenceOptions, 'videoCodecPolicy'>;
-  private readonly signalingUrlCandidates: string[];
+  private readonly signalingAttempts: SignalingAttempt[];
   private readonly events: WebRTCManagerEvents;
   private readonly initialVideoCodecPolicy: VideoCodecPolicy;
   private readonly autoVp8Fallback: boolean;
@@ -51,6 +70,7 @@ export class WebRTCManager {
     const {
       initialVideoCodecPolicy = 'balanced',
       autoVp8Fallback = true,
+      webTransport,
       ...conferenceOptions
     } = options;
 
@@ -62,8 +82,11 @@ export class WebRTCManager {
       // Runtime ICE from backend/env is additive and can append TURN.
       iceServers: WebRTCManager.buildMergedIceServers(conferenceOptions.iceServers),
     };
-    this.signalingUrlCandidates = WebRTCManager.buildSignalingUrlCandidates(
-      conferenceOptions.signalingUrl
+    this.signalingAttempts = WebRTCManager.buildSignalingAttempts(
+      conferenceOptions.signalingUrl,
+      webTransport,
+      conferenceOptions.authToken,
+      conferenceOptions.signalingFactory
     );
     this.events = events;
   }
@@ -159,18 +182,19 @@ export class WebRTCManager {
 
     let lastFailure: Result<MediaStream, WebRTCError> | null = null;
 
-    for (let idx = 0; idx < this.signalingUrlCandidates.length; idx += 1) {
-      const signalingUrl = this.signalingUrlCandidates[idx];
+    for (let idx = 0; idx < this.signalingAttempts.length; idx += 1) {
+      const attempt = this.signalingAttempts[idx];
       if (idx > 0) {
         this.events.onInfo?.(
-          `Пробуем резервный signaling URL: ${signalingUrl}`
+          `Пробуем резервный канал сигналинга: ${attempt.label}`
         );
       }
 
       const engine = new MediaEngine(
         {
           ...this.baseOptions,
-          signalingUrl,
+          signalingUrl: attempt.signalingUrl,
+          signalingFactory: attempt.signalingFactory,
           videoCodecPolicy: policy,
         },
         this.buildEngineEvents()
@@ -187,7 +211,7 @@ export class WebRTCManager {
       this.engine = null;
 
       const shouldTryNext =
-        idx < this.signalingUrlCandidates.length - 1 &&
+        idx < this.signalingAttempts.length - 1 &&
         (joinResult.error.code === 'SIGNALING_TIMEOUT' ||
           joinResult.error.code === 'SIGNALING_CONNECTION_FAILED');
 
@@ -197,8 +221,12 @@ export class WebRTCManager {
       }
 
       if (shouldTryNext) {
-        const nextSignalingUrl = this.signalingUrlCandidates[idx + 1];
-        await this.waitBeforeNextSignalingCandidate(idx, signalingUrl, nextSignalingUrl);
+        const nextAttempt = this.signalingAttempts[idx + 1];
+        await this.waitBeforeNextSignalingCandidate(
+          idx,
+          attempt.label,
+          nextAttempt.label
+        );
       }
 
       if (!shouldTryNext) {
@@ -372,6 +400,50 @@ export class WebRTCManager {
     return server;
   }
 
+  /**
+   * Порядок попыток подключения: сначала QUIC (если настроен и поддержан),
+   * затем WebSocket-кандидаты. Явно переданная фабрика (тесты, ручная
+   * инъекция транспорта) отключает автоподбор и используется как есть.
+   */
+  private static buildSignalingAttempts(
+    signalingUrl: string,
+    webTransport: WebRTCManagerOptions['webTransport'],
+    authToken: ConferenceOptions['authToken'],
+    explicitFactory: ConferenceOptions['signalingFactory']
+  ): SignalingAttempt[] {
+    const wsAttempts: SignalingAttempt[] = WebRTCManager
+      .buildSignalingUrlCandidates(signalingUrl)
+      .map((url) => ({
+        label: `WebSocket ${url || '(origin)'}`,
+        signalingUrl: url,
+        signalingFactory: explicitFactory,
+      }));
+
+    if (explicitFactory) {
+      return wsAttempts;
+    }
+
+    const wtUrl = String(webTransport?.url || '').trim();
+    const wtSupported = typeof window !== 'undefined' && 'WebTransport' in window;
+    if (!wtUrl || !wtSupported) {
+      if (wtUrl && !wtSupported) {
+        console.info('[WebRTC] WebTransport не поддержан браузером — сигналинг по WebSocket');
+      }
+      return wsAttempts;
+    }
+
+    const certificateHashes = webTransport?.certificateHashes;
+    return [
+      {
+        label: `WebTransport ${wtUrl}`,
+        signalingUrl: wtUrl,
+        signalingFactory: () =>
+          new WebTransportSignalingClient(wtUrl, { authToken, certificateHashes }),
+      },
+      ...wsAttempts,
+    ];
+  }
+
   private static buildSignalingUrlCandidates(primaryUrl: string): string[] {
     const normalizedPrimary = String(primaryUrl || '').trim();
     if (!normalizedPrimary) {
@@ -409,10 +481,10 @@ export class WebRTCManager {
 
   private async waitBeforeNextSignalingCandidate(
     failureIndex: number,
-    failedUrl: string,
-    nextUrl: string | undefined
+    failedLabel: string,
+    nextLabel: string | undefined
   ): Promise<void> {
-    if (!nextUrl) {
+    if (!nextLabel) {
       return;
     }
 
@@ -424,7 +496,7 @@ export class WebRTCManager {
     const totalDelayMs = exponentialDelay + jitter;
 
     this.events.onInfo?.(
-      `Signaling retry: ${failedUrl} недоступен, ждём ${totalDelayMs} мс перед переходом на ${nextUrl}`
+      `Signaling retry: ${failedLabel} недоступен, ждём ${totalDelayMs} мс перед переходом на ${nextLabel}`
     );
 
     await new Promise<void>((resolve) => {

@@ -88,10 +88,11 @@ itself; hit `:8000`/`:8001` directly for that, or use the gateway-level
 
 ## Production access (nginx :80)
 
-`docker compose up -d` (the production file, and note the
-`production` compose profile that adds `nginx`/`sfu`/`certbot`/
-`webtransport`) brings up nginx on `:80`. Same routing table, but the Vite
-dev server isn't running.
+`docker compose up -d` (without `-f docker-compose.dev.yml`, and note the
+`production` compose profile that adds `nginx`/`certbot`) brings up nginx on
+`:80`. Same routing table, but the Vite dev server isn't running. `sfu` и
+`webtransport` профиля не требуют — они поднимаются вместе с остальным
+стеком в обоих режимах.
 
 ---
 
@@ -123,7 +124,8 @@ same backend.
 | `/api/contracts/v1/*`               | `backend` (WSGI)   | Budgets, counterparty registry, agreements   |
 | `/api/signoff/v1/*`                 | `backend` (WSGI)   | Approval routes + running approvals — **not** `apps.approvals` (`/api/requests/v1`) |
 | `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
-| `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django |
+| `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django. JWT обязателен: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=` (иначе 401 на upgrade) |
+| `:4433/udp` (в обход nginx)         | `webtransport`     | QUIC-сигналинг того же SFU: браузер ходит прямо на UDP-порт, nginx его не проксирует. Токен — в `?token=` |
 | `/django-admin/`                    | `backend` (WSGI)   | Django's own admin, session-authenticated (see Authentication) |
 | `/static/`                          | `backend` (WSGI)   | `collectstatic` output |
 | `/grafana/`, `/prometheus/`         | grafana / prometheus | Observability — see below |
@@ -522,13 +524,20 @@ not the FastAPI original.
 | `/api/email/v1/oauth/connect/{provider}`             | POST   | `provider` = `google`\|`microsoft` — returns the provider's consent URL |
 | `/api/email/v1/oauth/callback`                       | GET    | `auth=None` — the provider redirects the browser here directly |
 | `/api/email/v1/oauth/disconnect`                     | DELETE | Disconnects all of the caller's OAuth accounts |
-| `/api/email/v1/mailboxes/`                           | GET, POST | Corporate mailbox provisioning (admin) |
+| `/api/email/v1/mailboxes/`                           | GET, POST | Corporate mailbox provisioning (admin). POST really creates the mailbox on the mail server; `502` + `{detail, mailbox}` when the server refuses (the local row survives, flagged `status=error`) |
+| `/api/email/v1/mailboxes/status/`                    | GET    | What the connected mail server can do — `provisioner` (`mailcow`\|`imap`\|`none`), `domain`, `can_create_remotely`, `can_list_remote`, `allow_self_service`. The admin UI reads it to avoid promising what the server can't do |
+| `/api/email/v1/mailboxes/settings/`                  | GET, PUT | Mail-server credentials, editable from the UI. Response splits `value` (stored in the DB; empty = inherit) from `effective` (what actually applies), plus `overridden` listing which fields the DB wins. The Mailcow API key is write-only — `mailcow_api_key_set` is the only thing read back; `""` means "leave unchanged", `null` clears the override |
+| `/api/email/v1/mailboxes/settings/test/`             | POST   | Runs the same check chain as `manage.py mail_check` and returns it as `{ok, steps[]}` — each step carries `status` (`ok`\|`fail`\|`skip`), `detail`, an actionable `hint`, and `data` (e.g. the server's real folder list). Passwords are never echoed back |
+| `/api/email/v1/accounts/connect-imap/`               | GET, POST | **Non-admin.** Connect any mailbox over IMAP/SMTP — the third way to add mail, next to OAuth and the corporate mailbox. GET (`?address=`) returns suggested server settings (known providers verbatim, otherwise `imap.<domain>` flagged `guessed`); POST verifies the credentials with a live IMAP login **before** writing anything. No domain restriction — this is the user's own mailbox, not a platform resource |
+| `/api/email/v1/accounts/{id}/imap-password/`         | POST   | **Non-admin.** Update the stored password after changing it on the server; the new one is verified by logging in, so sync cannot silently stall |
+| `/api/email/v1/accounts/connect-corporate/`          | GET, POST, DELETE | **Non-admin.** Self-service: an employee connects their own corporate mailbox (`{address, password}` verified by a live IMAP login before anything is written). GET reports `allowed`/`domain`/current mailbox; DELETE detaches it from the platform without touching the mail server. Requires `allow_self_service`; the address domain must match the corporate one, and a mailbox already owned by someone else is a `409` |
+| `/api/email/v1/mailboxes/reconcile/`                 | GET, POST | Two-way platform ↔ mail-server reconciliation. GET = report only. POST body `{apply, direction}`, `direction` = `report`\|`pull`\|`push`\|`both` |
 | `/api/email/v1/mailboxes/{id}/`                      | GET, PATCH |                                 |
-| `/api/email/v1/mailboxes/{id}/reset-password/`       | POST   |                                    |
-| `/api/email/v1/mailboxes/{id}/archive/` / `/restore/`| POST   |                                    |
-| `/api/email/v1/mailboxes/{id}/forwarding/`           | POST   |                                    |
-| `/api/email/v1/mailboxes/aliases/`                   | GET, POST |                                 |
-| `/api/email/v1/mailboxes/aliases/{id}/`              | DELETE |                                    |
+| `/api/email/v1/mailboxes/{id}/reset-password/`       | POST   | `502` when the mail server rejects the change — the stored password is left untouched |
+| `/api/email/v1/mailboxes/{id}/archive/` / `/restore/`| POST   | Also disables/enables the mailbox on the server |
+| `/api/email/v1/mailboxes/{id}/forwarding/`           | POST   | Mailcow only                       |
+| `/api/email/v1/mailboxes/aliases/`                   | GET, POST | Mailcow only                    |
+| `/api/email/v1/mailboxes/aliases/{id}/`              | DELETE | Mailcow only                       |
 | `/api/email/v1/webhooks/gmail`                       | POST   | Public, no rate limit — Gmail Pub/Sub, Bearer JWT verified in-app |
 | `/api/email/v1/webhooks/microsoft`                   | POST   | Public, no rate limit — Graph subscriptions (`validationToken` echo) |
 | `/api/email/v1/webhooks/mailcow`                     | POST   | Public, no rate limit |
@@ -539,12 +548,52 @@ too, not a migration regression). `apps/mail/services/attachment_service.py`
 has a `store_attachment` seam ready (via `apps.media_files.interface`,
 scope `generic`) for whenever that's wired up.
 
-Sync engine (`apps/mail/services/sync/{gmail,microsoft,mailcow_imap}.py`),
-send strategy (`apps/mail/services/sender/`), OAuth-token encryption
+Sync engine (`apps/mail/services/sync/`), send strategy
+(`apps/mail/services/sender/`), OAuth-token encryption
 (`apps/mail/services/crypto.py`, AES-256-GCM) and the mailbox-archive/purge
 Celery beat job (`final_purge_archived_mailboxes`, cron 03:15) are ported
 from `services/email` — see [STRUCTURE.md §4.1](STRUCTURE.md) for the deep
 dive.
+
+### Corporate mail server
+
+**Where the settings live.** `apps/mail/services/mail_config.py` is the single
+resolver every consumer reads: it merges the `MailServerConfig` row (edited in
+the UI, `/admin/mailboxes` → «Подключение») **over** the env defaults, with one
+rule — *an empty field in the DB means "take it from env"*. So an environment
+that never touched the UI behaves exactly as before, env stays valid for the
+initial rollout, and clearing a field in the form reverts it. Booleans in the
+DB are nullable precisely so `imap_ssl=false` can override `IMAP_SSL=true`
+(a plain boolean could not tell "off" from "unset"). Only the DB read is
+cached (5s); the merge runs per call, so `override_settings` keeps working.
+
+Which server the platform talks to is a runtime setting, not a code branch —
+`MAIL_PROVISIONER` (`auto`\|`mailcow`\|`imap`\|`none`), resolved by
+`apps/mail/services/provisioning/factory.py`:
+
+* **`mailcow`** — Mailcow REST API (`MAILCOW_API_URL` + `MAILCOW_API_KEY`).
+  Creates, edits, disables and deletes mailboxes for real, and can list every
+  mailbox of the domain, so reconciliation sees both sides.
+* **`imap`** — a plain IMAP/SMTP server with no admin API (`IMAP_HOST`).
+  IMAP has no "create mailbox" command, so creating from the site means
+  *verify the credentials with a live IMAP login and link the existing
+  mailbox*; reconciliation falls back to probing each known row
+  (`mode: "probe"` in the report — server-only mailboxes are undetectable
+  there by construction, and the report says so).
+* **`none`** (default when nothing is configured) — local row only, exactly
+  the pre-existing behaviour.
+
+Messages sync both ways for corporate accounts
+(`apps/mail/services/sync/imap_sync.py`): new mail is pulled per folder using
+a `UIDVALIDITY`-checked UID cursor kept in `EmailAccount.sync_state`, and
+messages read in the platform are pushed back as `\Seen`
+(`MAIL_SYNC_PUSH_FLAGS`). The driver runs from `incremental_sync_account`,
+enqueued every 60s by `imap_poll_fallback` — for a non-Mailcow server that
+poll is the only source of new mail, since there are no webhooks.
+
+When the mail server is only reachable over SSH, the `mail-tunnel` compose
+profile (`infra/mail-tunnel/`) forwards IMAP and SMTP; point `IMAP_HOST`/
+`SMTP_HOST` at it. Setup is in `.env.example`.
 
 ---
 
@@ -565,6 +614,14 @@ dive.
 | `/api/cms/v1/contact-requests/{id}`              | GET, PATCH, DELETE |                          |
 | `/api/cms/v1/contact-requests/{id}/reply`        | POST   |                                    |
 | `/api/cms/v1/conference/config`                  | GET    | Static SFU/ICE config (no DB) — `apps.cms.services.conference_service` |
+
+`conference/config` отдаёт: `sfu_signaling_url` (пустой = фронт берёт
+`ws(s)://<origin>/ws/sfu/`), `sfu_signaling_path`, `ice_servers`, `enabled`
+(флаг сервиса `conference` в реестре) и пару полей QUIC-сигналинга —
+`wt_signaling_url` (адрес моста `webtransport`, пустой = мост не
+анонсирован, работаем по WebSocket) и `wt_certificate_hashes` (DER SHA-256
+самоподписанного сертификата моста для dev; с сертификатом от настоящего CA
+список пуст).
 
 ---
 
@@ -836,7 +893,7 @@ own port directly, these are not under `/api/`):**
 ```
 GET /health/               → 200 {"status":"ok","service":"backend","timestamp":"..."}
 GET /health/ready/         → 200 {"status":"ok"} or 503 {"status":"unavailable"}  (checks DB with SELECT 1)
-GET /api/core/v1/services/ → 200 {"services": {"users": true, "hr": true, ..., "conference": false}}
+GET /api/core/v1/services/ → 200 {"services": {"users": true, "hr": true, ..., "conference": true}}
 ```
 `/api/core/v1/services/` is what `docker-compose.yml`'s own healthcheck for
 `backend-web` polls, and what nginx's `/health/ready` proxies to — it's the

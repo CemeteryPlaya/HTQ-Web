@@ -34,6 +34,53 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { useHRLevel } from '@/hooks/useHRLevel';
+import type { Department, Employee, HRUserOption, Position } from '@/types/hr';
+
+interface Employee {
+  id: number;
+  // Backend EmployeeOut: ``user_id`` is the platform-user link.
+  user_id?: number | null;
+  // Legacy alias retained for older endpoints — read both when present.
+  user?: number | null;
+  // Names live separately on the backend; older responses sometimes
+  // synthesised ``full_name`` — keep it optional as a fallback.
+  first_name?: string;
+  last_name?: string;
+  middle_name?: string | null;
+  full_name?: string;
+  username?: string;
+  email: string;
+  // EmployeeOut returns ``position_id`` + nested ``position: {id, title}``.
+  position_id?: number | null;
+  position?: { id: number; title: string } | number | null;
+  position_title?: string;
+  department_id?: number | null;
+  department?: { id: number; name: string } | number | null;
+  department_name?: string;
+  phone?: string;
+  // EmployeeOut: ``hire_date`` / ``termination_date``. Older endpoints used
+  // ``date_hired``/``date_dismissed`` — accept either.
+  hire_date?: string | null;
+  date_hired?: string | null;
+  termination_date?: string | null;
+  date_dismissed?: string | null;
+  status: string;
+  notes?: string;
+  bio?: string;
+  // Sensitive (Senior-only — absent from API response for Junior)
+  salary?: string | null;
+  bonus?: string | null;
+  passport_data?: string;
+  bank_account?: string;
+  // SRO (read-only for Junior)
+  sro_permit_number?: string;
+  sro_permit_expiry?: string | null;
+  safety_cert_number?: string;
+  safety_cert_expiry?: string | null;
+  // Synced from user-service via the replica worker; absent on bare-skeleton
+  // employees that aren't linked to a platform user yet.
+  avatar_url?: string | null;
+}
 
 const STATUS_BADGE: Record<string, { className: string; dot: string }> = {
   active:     { className: 'bg-emerald-500/10 text-emerald-700 border-emerald-300', dot: 'bg-emerald-500' },
@@ -101,6 +148,16 @@ const HREmployees = () => {
     });
   }, [employees, search, statusFilter]);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    if (searchParams.get('action') === 'new' && canCreateEmployee) {
+      startCreate();
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete('action');
+      setSearchParams(newParams, { replace: true });
+    }
+  }, [searchParams, canCreateEmployee]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
 
@@ -114,28 +171,157 @@ const HREmployees = () => {
     },
   });
 
-  const startCreate = () => { setEditing(null); setDialogOpen(true); };
-  const startEdit = (emp: Employee) => { setEditing(emp); setDialogOpen(true); };
+  /** Front-side validation that mirrors the backend's required-field set
+   * (first_name / last_name / email / department_id / position_id /
+   * hire_date). We block the request before it hits the API so the user
+   * gets a fast, field-pinned hint instead of a generic 422. */
+  const handleSave = () => {
+    const errs: Record<string, string> = {};
+    if (!editing) {
+      if (form.user === 'none' || !form.user) {
+        errs.user = t('hr.pages.employees.errors.userRequired', 'Выберите пользователя');
+      }
+      if (form.department === 'none') {
+        errs.department = t('hr.pages.employees.errors.departmentRequired', 'Выберите отдел');
+      }
+      if (form.position === 'none') {
+        errs.position = t('hr.pages.employees.errors.positionRequired', 'Выберите должность');
+      }
+      if (!form.date_hired) {
+        errs.date_hired = t('hr.pages.employees.errors.hireDateRequired', 'Укажите дату приёма');
+      }
+    }
+    if (Object.keys(errs).length > 0) {
+      setFieldErrors(errs);
+      setFormError(t('hr.pages.employees.errors.fillRequired', 'Заполните обязательные поля'));
+      return;
+    }
+    setFieldErrors({});
+    setFormError(null);
+    saveMutation.mutate();
+  };
 
-  // Диплинк `/hr/employees?edit=<id>` — им пользуется кнопка «Редактировать»
-  // на карточке сотрудника (HREmployeeCard). До этого параметр никто не читал,
-  // и кнопка просто уводила на список, ничего не открывая.
-  // Параметр снимаем сразу после открытия: иначе он остался бы в истории и
-  // повторно открывал бы диалог при возврате «назад».
-  useEffect(() => {
-    const editId = Number(searchParams.get('edit'));
-    if (!Number.isFinite(editId) || editId <= 0 || !employees) return;
-    const target = employees.find((e) => e.id === editId);
-    if (!target) return;
-    startEdit(target);
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.delete('edit');
-      return next;
-    }, { replace: true });
-    // startEdit пересоздаётся каждый рендер и в зависимостях не нужен: эффект
-    // должен сработать на появление employees или параметра, а не на ререндер.
-  }, [employees, searchParams, setSearchParams]);
+  const [userPopoverOpen, setUserPopoverOpen] = useState(false);
+  const [createUserOpen, setCreateUserOpen] = useState(false);
+  const [newUserForm, setNewUserForm] = useState({ first_name: '', last_name: '', patronymic: '', email: '' });
+
+  const [positionPopoverOpen, setPositionPopoverOpen] = useState(false);
+  const [createPositionOpen, setCreatePositionOpen] = useState(false);
+  const [newPositionForm, setNewPositionForm] = useState<{
+    title: string;
+    department_id: string;
+    weight: string;
+    grade: string;
+    description: string;
+    hr_level: '' | 'junior' | 'middle' | 'senior' | 'lead';
+  }>({ title: '', department_id: '', weight: '100', grade: '1', description: '', hr_level: '' });
+  const [newPositionError, setNewPositionError] = useState<string | null>(null);
+
+  const createPositionMutation = useMutation({
+    mutationFn: async () => {
+      const payload: Record<string, unknown> = {
+        title: newPositionForm.title.trim(),
+        department_id: Number(newPositionForm.department_id),
+        weight: Number(newPositionForm.weight) || 100,
+        grade: Number(newPositionForm.grade) || 1,
+        description: newPositionForm.description || undefined,
+      };
+      if (newPositionForm.hr_level) {
+        payload.permissions = { hr_level: newPositionForm.hr_level, permissions: [] };
+      }
+      return createPosition(payload);
+    },
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: ['hr-positions'] });
+      queryClient.invalidateQueries({ queryKey: ['hr-positions-v1'] });
+      setForm((prev) => ({
+        ...prev,
+        position: String(created.id),
+        // Если у новой должности задан отдел и в форме отдел ещё не выбран —
+        // подставим его, чтобы создать сотрудника одним движением.
+        department: prev.department && prev.department !== 'none'
+          ? prev.department
+          : (created.department_id ? String(created.department_id) : prev.department),
+      }));
+      setCreatePositionOpen(false);
+      setNewPositionForm({ title: '', department_id: '', weight: '100', grade: '1', description: '', hr_level: '' });
+      setNewPositionError(null);
+    },
+    onError: (err: any) => {
+      const data = err?.response?.data;
+      setNewPositionError(
+        (typeof data?.detail === 'string' ? data.detail : null)
+        || (Array.isArray(data?.detail) ? data.detail.map((d: any) => d.msg).join(' • ') : null)
+        || err?.message
+        || 'Не удалось создать должность',
+      );
+    },
+  });
+
+  const startCreatePosition = () => {
+    setPositionPopoverOpen(false);
+    setNewPositionError(null);
+    setNewPositionForm({
+      title: '',
+      // Preselect the department picked on the employee form, if any.
+      department_id: form.department && form.department !== 'none' ? form.department : '',
+      weight: '100',
+      grade: '1',
+      description: '',
+      hr_level: '',
+    });
+    setCreatePositionOpen(true);
+  };
+
+  const createUserMutation = useMutation({
+    mutationFn: async (data: typeof newUserForm) => {
+      return createEmployeeUser(data);
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['hr-employee-users'] });
+      setForm((prev) => ({ ...prev, user: String(data.id) }));
+      setCreateUserOpen(false);
+      setNewUserForm({ first_name: '', last_name: '', patronymic: '', email: '' });
+      setUserPopoverOpen(false);
+    },
+  });
+
+  const startCreate = () => {
+    setEditing(null);
+    setFormError(null);
+    setFieldErrors({});
+    setForm({
+      user: 'none', position: 'none', department: 'none', phone: '',
+      date_hired: '', date_dismissed: '', status: 'active', notes: '',
+    });
+    setDialogOpen(true);
+  };
+
+  const startEdit = (emp: Employee) => {
+    setEditing(emp);
+    setFormError(null);
+    setFieldErrors({});
+
+    // Backend EmployeeOut uses ``user_id`` / nested ``position``+``department``
+    // objects / ``hire_date`` / ``termination_date``; older endpoints used
+    // ``user`` / ``date_hired`` / ``date_dismissed``. Read both shapes so the
+    // edit dialog works regardless of which response format we got.
+    const userId = emp.user_id ?? (typeof emp.user === 'number' ? emp.user : null);
+    const positionId = emp.position_id ?? relationId(emp.position);
+    const departmentId = emp.department_id ?? relationId(emp.department);
+
+    setForm({
+      user: userId ? String(userId) : 'none',
+      position: positionId ? String(positionId) : 'none',
+      department: departmentId ? String(departmentId) : 'none',
+      phone: emp.phone || '',
+      date_hired: emp.hire_date || emp.date_hired || '',
+      date_dismissed: emp.termination_date || emp.date_dismissed || '',
+      status: emp.status || 'active',
+      notes: emp.bio || emp.notes || '',
+    });
+    setDialogOpen(true);
+  };
 
   const statusLabels: Record<string, string> = {
     active: t('hr.pages.employees.status.active'),
@@ -208,15 +394,256 @@ const HREmployees = () => {
               {level && <span className="ml-2 uppercase tracking-wide">({level.replace('_', ' ')})</span>}
             </div>
           </div>
-          {canCreateEmployee && (
-            <Button onClick={startCreate} className="h-9 shrink-0">
-              <UserPlus className="mr-2 h-4 w-4" />
-              {t('hr.pages.employees.add')}
-            </Button>
-          )}
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            {canCreateEmployee && (
+              <DialogTrigger asChild>
+                <Button onClick={startCreate} className="h-9 shrink-0">
+                  <UserPlus className="mr-2 h-4 w-4" />
+                  {t('hr.pages.employees.add')}
+                </Button>
+              </DialogTrigger>
+            )}
+            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{editing ? t('hr.pages.employees.edit') : t('hr.pages.employees.new')}</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  {editing ? (
+                    <label className="grid gap-2 text-sm">
+                      {t('hr.pages.employees.fields.user')}
+                      <Input
+                        value={`${editing.full_name
+                          || [editing.last_name, editing.first_name, editing.middle_name].filter(Boolean).join(' ')
+                          || editing.email} (${editing.email})`}
+                        readOnly
+                      />
+                    </label>
+                  ) : (
+                    <label className="grid gap-2 text-sm">
+                      {t('hr.pages.employees.fields.user')}
+                      <Popover open={userPopoverOpen} onOpenChange={setUserPopoverOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            role="combobox"
+                            aria-expanded={userPopoverOpen}
+                            className="w-full justify-between font-normal"
+                          >
+                            {form.user && form.user !== 'none'
+                              ? users?.find((u) => String(u.id) === form.user)?.full_name || t('hr.pages.employees.placeholders.selectUser')
+                              : t('hr.pages.employees.placeholders.selectUser')}
+                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-[400px] p-0" align="start">
+                          <Command>
+                            <CommandInput placeholder={t('hr.pages.employees.searchUser')} />
+                            <CommandEmpty>{t('hr.pages.employees.noUserFound')}</CommandEmpty>
+                            <CommandList>
+                              <CommandGroup>
+                                <CommandItem
+                                  value="none"
+                                  onSelect={() => {
+                                    setForm({ ...form, user: 'none' });
+                                    setUserPopoverOpen(false);
+                                  }}
+                                >
+                                  <Check className={cn("mr-2 h-4 w-4", form.user === 'none' ? "opacity-100" : "opacity-0")} />
+                                  {t('hr.pages.employees.placeholders.selectUser')}
+                                </CommandItem>
+                                {users?.map((u) => (
+                                  <CommandItem
+                                    key={u.id}
+                                    value={`${u.full_name} ${u.email}`}
+                                    onSelect={() => {
+                                      setForm({ ...form, user: String(u.id) });
+                                      setUserPopoverOpen(false);
+                                    }}
+                                  >
+                                    <Check className={cn("mr-2 h-4 w-4", form.user === String(u.id) ? "opacity-100" : "opacity-0")} />
+                                    {u.full_name} ({u.email})
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                              {canManageUserOptions && (
+                                <CommandGroup>
+                                  <CommandItem
+                                    onSelect={() => {
+                                      setUserPopoverOpen(false);
+                                      setCreateUserOpen(true);
+                                    }}
+                                    className="text-primary font-medium flex items-center gap-2 cursor-pointer"
+                                  >
+                                    <UserPlus className="h-4 w-4" />
+                                    {t('hr.pages.employees.createUser')}
+                                  </CommandItem>
+                                </CommandGroup>
+                              )}
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                    </label>
+                  )}
+                  <label className="grid gap-2 text-sm">
+                    {t('hr.pages.employees.fields.status')}
+                    <Select value={form.status} onValueChange={(value) => setForm({ ...form, status: value })} disabled={!canWriteBasic}>
+                      <SelectTrigger>
+                        <SelectValue placeholder={t('hr.pages.employees.placeholders.selectStatus')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="active">{t('hr.pages.employees.status.active')}</SelectItem>
+                        <SelectItem value="inactive">{t('hr.pages.employees.status.inactive', 'Неактивен')}</SelectItem>
+                        <SelectItem value="terminated">{t('hr.pages.employees.status.terminated', 'Уволен')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="grid gap-2 text-sm">
+                    {t('hr.pages.employees.fields.position')}
+                    <Popover open={positionPopoverOpen} onOpenChange={setPositionPopoverOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          role="combobox"
+                          aria-expanded={positionPopoverOpen}
+                          className="w-full justify-between font-normal"
+                          disabled={editing ? !canTransferEmployee : !canCreateEmployee}
+                        >
+                          <span className="flex items-center gap-2 truncate">
+                            {form.position && form.position !== 'none' ? (
+                              <>
+                                <span className="truncate">
+                                  {positions?.find((p) => String(p.id) === form.position)?.title
+                                    || t('hr.pages.employees.placeholders.selectPosition')}
+                                </span>
+                                {positions?.find((p) => String(p.id) === form.position)?.is_system && (
+                                  <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                )}
+                              </>
+                            ) : (
+                              t('hr.pages.employees.placeholders.selectPosition')
+                            )}
+                          </span>
+                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[--radix-popover-trigger-width] min-w-[320px] p-0" align="start">
+                        <Command>
+                          <CommandInput placeholder={t('hr.pages.employees.searchPosition', 'Поиск должности…')} />
+                          <CommandEmpty>{t('hr.pages.employees.noPositionFound', 'Должность не найдена')}</CommandEmpty>
+                          <CommandList>
+                            <CommandGroup>
+                              <CommandItem
+                                value="none"
+                                onSelect={() => {
+                                  setForm({ ...form, position: 'none' });
+                                  setPositionPopoverOpen(false);
+                                }}
+                              >
+                                <Check className={cn('mr-2 h-4 w-4', form.position === 'none' ? 'opacity-100' : 'opacity-0')} />
+                                {t('hr.common.noPosition')}
+                              </CommandItem>
+                              {positions?.map((pos) => (
+                                <CommandItem
+                                  key={pos.id}
+                                  value={`${pos.title} ${pos.department_name ?? ''}`}
+                                  onSelect={() => {
+                                    setForm({ ...form, position: String(pos.id) });
+                                    setPositionPopoverOpen(false);
+                                  }}
+                                >
+                                  <Check className={cn('mr-2 h-4 w-4', form.position === String(pos.id) ? 'opacity-100' : 'opacity-0')} />
+                                  <span className="flex-1 truncate">{pos.title}</span>
+                                  {pos.is_system && (
+                                    <span
+                                      className="ml-2 inline-flex items-center gap-1 rounded border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                      title="Системная должность — нельзя удалить или переименовать"
+                                    >
+                                      <Lock className="h-3 w-3" /> сист.
+                                    </span>
+                                  )}
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                            {(editing ? canTransferEmployee : canCreateEmployee) && (
+                              <CommandGroup>
+                                <CommandItem
+                                  onSelect={startCreatePosition}
+                                  className="text-primary font-medium flex items-center gap-2 cursor-pointer"
+                                >
+                                  <Plus className="h-4 w-4" />
+                                  {t('hr.pages.employees.createPosition', 'Создать новую должность')}
+                                </CommandItem>
+                              </CommandGroup>
+                            )}
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
+                  </label>
+                  <label className="grid gap-2 text-sm">
+                    {t('hr.pages.employees.fields.department')}
+                    <Select value={form.department} onValueChange={(value) => setForm({ ...form, department: value })} disabled={editing ? !canTransferEmployee : !canCreateEmployee}>
+                      <SelectTrigger>
+                        <SelectValue placeholder={t('hr.pages.employees.placeholders.selectDepartment')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">{t('hr.common.noDepartment')}</SelectItem>
+                        {departments?.map((dept) => (
+                          <SelectItem key={dept.id} value={String(dept.id)}>
+                            {dept.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="grid gap-2 text-sm">
+                    {t('hr.pages.employees.fields.phone')}
+                    <PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
+                  </label>
+                  <label className="grid gap-2 text-sm">
+                    {t('hr.pages.employees.fields.dateHired')}
+                    <Input type="date" value={form.date_hired} onChange={(e) => setForm({ ...form, date_hired: e.target.value })} />
+                  </label>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="grid gap-2 text-sm">
+                    {t('hr.pages.employees.fields.dateDismissed')}
+                    <Input type="date" value={form.date_dismissed} readOnly={!canTransferEmployee} onChange={(e) => setForm({ ...form, date_dismissed: e.target.value })} />
+                  </label>
+                </div>
+
+                <label className="grid gap-2 text-sm">
+                  {t('hr.pages.employees.fields.notes')}
+                  <Textarea value={form.notes} readOnly={!canWriteBasic} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+                </label>
+
+                {formError && (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {formError}
+                  </div>
+                )}
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setDialogOpen(false)}>{t('hr.common.cancel')}</Button>
+                  <Button onClick={handleSave} disabled={(!editing && form.user === 'none') || saveMutation.isPending}>
+                    {saveMutation.isPending ? t('hr.common.saving') : t('hr.common.save')}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
         </div>
 
-        <div className="bg-card rounded-2xl border">
+        <div className="bg-card rounded-3xl border shadow-2xs overflow-hidden">
           <Table className="text-sm">
             <TableHeader>
               <TableRow>
@@ -377,14 +804,176 @@ const HREmployees = () => {
         onClose={() => setShareTarget(null)}
       />
 
-      <EmployeeFormDialog
-        open={dialogOpen}
-        employee={editing}
-        onOpenChange={(next) => {
-          setDialogOpen(next);
-          if (!next) setEditing(null);
-        }}
-      />
+      {/* Create Position Dialog */}
+      <Dialog open={createPositionOpen} onOpenChange={setCreatePositionOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Briefcase className="h-4 w-4" />
+              {t('hr.pages.employees.createPositionTitle', 'Новая должность')}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <label className="grid gap-1.5 text-sm">
+              {t('hr.pages.positions.fields.title')}
+              <Input
+                value={newPositionForm.title}
+                onChange={(e) => setNewPositionForm({ ...newPositionForm, title: e.target.value })}
+                placeholder={t('hr.pages.employees.positionTitlePlaceholder', 'Например, Старший аналитик')}
+                autoFocus
+              />
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              {t('hr.pages.positions.fields.department')}
+              <Select
+                value={newPositionForm.department_id || 'none'}
+                onValueChange={(v) => setNewPositionForm({ ...newPositionForm, department_id: v === 'none' ? '' : v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={t('hr.pages.positions.placeholders.selectDepartment')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">—</SelectItem>
+                  {departments?.map((d) => (
+                    <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="grid gap-1.5 text-sm">
+                {t('hr.pages.employees.weight', 'Вес')}
+                <Input
+                  type="number"
+                  min={0}
+                  value={newPositionForm.weight}
+                  onChange={(e) => setNewPositionForm({ ...newPositionForm, weight: e.target.value })}
+                />
+              </label>
+              <label className="grid gap-1.5 text-sm">
+                {t('hr.pages.employees.grade', 'Грейд')}
+                <Input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={newPositionForm.grade}
+                  onChange={(e) => setNewPositionForm({ ...newPositionForm, grade: e.target.value })}
+                />
+              </label>
+            </div>
+            <label className="grid gap-1.5 text-sm">
+              {t('hr.pages.employees.hrLevel', 'Уровень HR-доступа')}
+              <Select
+                value={newPositionForm.hr_level || 'none'}
+                onValueChange={(v) =>
+                  setNewPositionForm({
+                    ...newPositionForm,
+                    hr_level: v === 'none' ? '' : (v as typeof newPositionForm.hr_level),
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Без HR-доступа</SelectItem>
+                  <SelectItem value="junior">Junior — базовый просмотр</SelectItem>
+                  <SelectItem value="middle">Middle — редактирование своего отдела</SelectItem>
+                  <SelectItem value="senior">Senior — полный просмотр + создание</SelectItem>
+                  <SelectItem value="lead">Lead — полный доступ</SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              {t('hr.pages.employees.description', 'Описание')}
+              <Textarea
+                value={newPositionForm.description}
+                onChange={(e) => setNewPositionForm({ ...newPositionForm, description: e.target.value })}
+                rows={2}
+              />
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Расширенную настройку прав можно сделать позже на странице <strong>HR → Должности</strong>.
+            </p>
+            {newPositionError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {newPositionError}
+              </div>
+            )}
+            <div className="flex justify-end gap-2 mt-2">
+              <Button variant="outline" onClick={() => setCreatePositionOpen(false)}>
+                {t('hr.common.cancel')}
+              </Button>
+              <Button
+                onClick={() => createPositionMutation.mutate()}
+                disabled={
+                  !newPositionForm.title.trim()
+                  || !newPositionForm.department_id
+                  || createPositionMutation.isPending
+                }
+              >
+                {createPositionMutation.isPending ? t('hr.common.saving') : t('hr.common.save')}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create User Dialog */}
+      <Dialog open={createUserOpen} onOpenChange={setCreateUserOpen}>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{t('hr.pages.employees.createUserTitle')}</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <label className="grid gap-2 text-sm">
+              {t('hr.pages.employees.fields.lastName')}
+              <Input
+                value={newUserForm.last_name}
+                onChange={(e) => setNewUserForm({ ...newUserForm, last_name: e.target.value })}
+              />
+            </label>
+            <label className="grid gap-2 text-sm">
+              {t('hr.pages.employees.fields.firstName')}
+              <Input
+                value={newUserForm.first_name}
+                onChange={(e) => setNewUserForm({ ...newUserForm, first_name: e.target.value })}
+              />
+            </label>
+            <label className="grid gap-2 text-sm">
+              {t('hr.pages.employees.fields.patronymic')}
+              <Input
+                value={newUserForm.patronymic}
+                onChange={(e) => setNewUserForm({ ...newUserForm, patronymic: e.target.value })}
+              />
+            </label>
+            <label className="grid gap-2 text-sm">
+              {t('hr.pages.employees.fields.email')}
+              <Input
+                type="email"
+                value={newUserForm.email}
+                onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+              />
+            </label>
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={() => setCreateUserOpen(false)}>
+                {t('hr.common.cancel')}
+              </Button>
+              <Button
+                onClick={() => createUserMutation.mutate(newUserForm)}
+                disabled={!newUserForm.last_name || !newUserForm.first_name || !newUserForm.email || createUserMutation.isPending}
+              >
+                {createUserMutation.isPending ? t('hr.common.saving') : t('hr.common.save')}
+              </Button>
+            </div>
+            {createUserMutation.isError && (
+              <p className="text-red-500 text-sm mt-2">
+                {(createUserMutation.error as any)?.response?.data?.detail || t('hr.common.unknownError')}
+              </p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };

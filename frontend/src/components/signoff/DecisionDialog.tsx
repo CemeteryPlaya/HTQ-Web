@@ -47,7 +47,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { signoffApi } from '@/api/signoff';
 import type { ApprovalProcess } from '@/types/signoff';
 
-import { reportApiError } from './apiError';
+import { reportApiError } from '@/lib/apiError';
 
 export type DecisionKind = 'approve' | 'reject' | 'rework';
 

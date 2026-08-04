@@ -38,10 +38,13 @@ def test_other_services_unaffected():
 
 
 @pytest.mark.django_db
-def test_status_endpoint_lists_conference_disabled():
+def test_status_endpoint_lists_conference_enabled():
+    """Раньше здесь ждали False: SFU-стек был отложен и сидировался
+    выключенным (миграция ``core/0001``). Стек поднят — ``core/0003``
+    включает сервис, и реестр должен это показывать."""
     resp = Client().get("/api/core/v1/services/")
     assert resp.status_code == 200
-    assert resp.json()["services"]["conference"] is False  # сид из миграции
+    assert resp.json()["services"]["conference"] is True
 
 
 @pytest.mark.django_db

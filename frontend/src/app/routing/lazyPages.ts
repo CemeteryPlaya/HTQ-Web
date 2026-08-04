@@ -16,6 +16,7 @@ export const lazyPages = {
   Login: React.lazy(() => import('@/pages/Login')),
   Register: React.lazy(() => import('@/pages/Register')),
   MyProfile: React.lazy(() => import('@/pages/MyProfile')),
+  MyEmployeeCard: React.lazy(() => import('@/pages/MyEmployeeCard')),
   Settings: React.lazy(() => import('@/pages/Settings')),
   Messenger: React.lazy(() => import('@/features/messenger/MessengerPage')),
   NotificationsHistory: React.lazy(() => import('@/pages/NotificationsHistory')),
@@ -71,7 +72,6 @@ export const lazyPages = {
   HRPMO: React.lazy(() => import('@/pages/hr/HRPMO')),
   HRShareLinks: React.lazy(() => import('@/pages/hr/HRShareLinks')),
   HRPositions: React.lazy(() => import('@/pages/hr/HRPositions')),
-  HRLevelsAdmin: React.lazy(() => import('@/pages/hr/HRLevelsAdmin')),
   HRAccessLevels: React.lazy(() => import('@/pages/hr/HRAccessLevels')),
   // Standalone-обёртки (HRLayout вокруг голого фрагмента-вкладки) — по
   // прямому URL эти страницы раньше открывались без шапки и навигации,

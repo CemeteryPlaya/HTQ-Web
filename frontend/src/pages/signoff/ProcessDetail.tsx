@@ -61,7 +61,7 @@ import { ProcessTimeline } from '@/components/signoff/ProcessTimeline';
 import { formatMoment } from '@/components/signoff/format';
 import { ProcessStateBadge } from '@/components/signoff/states';
 import { labelMap } from '@/components/signoff/labels';
-import { reportApiError } from '@/components/signoff/apiError';
+import { reportApiError } from '@/lib/apiError';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,

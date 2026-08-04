@@ -38,6 +38,7 @@ export const protectedRoutes: RouteConfig[] = [
 
   // ─── Personal / messenger / tasks (any logged-in user) ────────────────
   { path: '/myprofile', component: lazyPages.MyProfile, requiresAuth: true },
+  { path: '/employee/me', component: lazyPages.MyEmployeeCard, requiresAuth: true },
   { path: '/settings', component: lazyPages.Settings, requiresAuth: true },
   { path: '/messenger', component: lazyPages.Messenger, requiresAuth: true },
   { path: '/notifications', component: lazyPages.NotificationsHistory, requiresAuth: true },
@@ -124,10 +125,9 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/admin/users', component: lazyPages.AdminUsers, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/chats', component: lazyPages.AdminChats, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/mailboxes', component: lazyPages.AdminMailboxes, requiresAuth: true, requiresRole: 'admin' },
-  // Two distinct screens, one address until now: the ungated duplicate above
-  // pointed at HRAccessLevels and shadowed this one, so HRLevelsAdmin was
-  // unreachable. Both are wanted, so they get an address each.
-  { path: '/admin/levels', component: lazyPages.HRLevelsAdmin, requiresAuth: true, requiresRole: 'admin' },
+  // Не путать с уровнями ДОЛЖНОСТЕЙ: это уровни HR-ДОСТУПА
+  // (junior/middle/senior/lead). Справочник уровней должностей раньше жил на
+  // соседнем /admin/levels, а теперь это вкладка на /hr/positions?tab=levels.
   { path: '/admin/access-levels', component: lazyPages.HRAccessLevels, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/registrations', component: lazyPages.AdminRegistrations, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/infrastructure', component: lazyPages.AdminInfrastructure, requiresAuth: true, requiresRole: 'admin' },

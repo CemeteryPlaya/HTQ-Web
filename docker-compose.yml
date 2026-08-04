@@ -57,6 +57,42 @@ x-django-env: &django-env
   S3_BUCKET: htqweb-cms
   MEDIA_S3_BUCKET: htqweb-media
   S3_USE_PATH_STYLE: "true"
+  # ── Конференция (GET /api/cms/v1/conference/config) ──
+  # SFU-сигналинг идёт тем же origin'ом, что и страница (nginx → /ws/sfu/),
+  # поэтому URL пуст: фронт соберёт ws(s)://<origin>/ws/sfu/ сам.
+  CONFERENCE_SFU_URL: ${CONFERENCE_SFU_URL:-}
+  # QUIC-мост: публичный https-адрес webtransport-контейнера (UDP :4433).
+  # Пусто = мост не анонсируем, фронт остаётся на WebSocket.
+  CONFERENCE_WT_URL: ${CONFERENCE_WT_URL:-}
+  # Отпечаток самоподписанного сертификата моста (том wt_certs). С
+  # сертификатом от настоящего CA файла нет — и он не нужен.
+  CONFERENCE_WT_CERT_HASH_FILE: ${CONFERENCE_WT_CERT_HASH_FILE:-/app/wt-certs/cert.sha256}
+  # ── Корпоративная почта (apps/mail) ──
+  # Пусто = почтовый сервер не подключён: ящики заводятся только локальной
+  # строкой, сверка сообщает "сервер недоступен". Подробности и рецепты —
+  # в .env.example.
+  CORPORATE_MAIL_DOMAIN: ${CORPORATE_MAIL_DOMAIN:-}
+  MAILCOW_DOMAIN: ${MAILCOW_DOMAIN:-}
+  MAILCOW_API_URL: ${MAILCOW_API_URL:-}
+  MAILCOW_API_KEY: ${MAILCOW_API_KEY:-}
+  MAILCOW_DEFAULT_QUOTA_MB: ${MAILCOW_DEFAULT_QUOTA_MB:-1024}
+  # auto | mailcow | imap | none
+  MAIL_PROVISIONER: ${MAIL_PROVISIONER:-auto}
+  # Через SSH-туннель: IMAP_HOST=mail-tunnel, IMAP_PORT=1143, IMAP_SSL=false
+  # (шифрует SSH). Напрямую: реальный хост, 993, IMAP_SSL=true.
+  IMAP_HOST: ${IMAP_HOST:-}
+  IMAP_PORT: ${IMAP_PORT:-993}
+  IMAP_SSL: ${IMAP_SSL:-true}
+  IMAP_STARTTLS: ${IMAP_STARTTLS:-false}
+  IMAP_TLS_SERVER_HOSTNAME: ${IMAP_TLS_SERVER_HOSTNAME:-}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_SSL: ${SMTP_SSL:-false}
+  SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+  MAIL_SYNC_FOLDERS: ${MAIL_SYNC_FOLDERS:-INBOX,Sent}
+  MAIL_SYNC_MAX_MESSAGES: ${MAIL_SYNC_MAX_MESSAGES:-200}
+  MAIL_SYNC_PUSH_FLAGS: ${MAIL_SYNC_PUSH_FLAGS:-true}
+  MAIL_RECONCILE_AUTO_APPLY: ${MAIL_RECONCILE_AUTO_APPLY:-false}
 
 services:
   # Контейнеров `db` и `pgbouncer` здесь НЕТ намеренно: боевая БД внешняя
@@ -164,6 +200,55 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ─── SSH-туннель до корпоративного почтового сервера ────────────────────
+  # Профиль `mail-tunnel`: сервис стартует только там, где почтовый сервер
+  # закрыт наружу и доступен исключительно по SSH.
+  #
+  #   docker compose --profile mail-tunnel up -d mail-tunnel
+  #
+  # Подготовка (один раз):
+  #   1. положить приватный ключ в infra/mail-tunnel/ssh/id_ed25519 (chmod 600);
+  #   2. ssh-keyscan -p <порт> <хост> > infra/mail-tunnel/ssh/known_hosts;
+  #   3. заполнить MAIL_TUNNEL_* в .env;
+  #   4. указать backend'у адрес туннеля:
+  #        IMAP_HOST=mail-tunnel   IMAP_PORT=1143
+  #        SMTP_HOST=mail-tunnel   SMTP_PORT=1587
+  #
+  # Порты наружу НЕ публикуются: туннель виден только контейнерам этой сети.
+  mail-tunnel:
+    build:
+      context: ./infra/mail-tunnel
+      dockerfile: Dockerfile
+    profiles:
+      - mail-tunnel
+    restart: unless-stopped
+    environment:
+      MAIL_TUNNEL_SSH_HOST: ${MAIL_TUNNEL_SSH_HOST:-}
+      MAIL_TUNNEL_SSH_PORT: ${MAIL_TUNNEL_SSH_PORT:-22}
+      MAIL_TUNNEL_SSH_USER: ${MAIL_TUNNEL_SSH_USER:-}
+      MAIL_TUNNEL_SSH_KEY: ${MAIL_TUNNEL_SSH_KEY:-/ssh/id_ed25519}
+      MAIL_TUNNEL_REMOTE_IMAP_HOST: ${MAIL_TUNNEL_REMOTE_IMAP_HOST:-127.0.0.1}
+      MAIL_TUNNEL_REMOTE_IMAP_PORT: ${MAIL_TUNNEL_REMOTE_IMAP_PORT:-993}
+      MAIL_TUNNEL_REMOTE_SMTP_HOST: ${MAIL_TUNNEL_REMOTE_SMTP_HOST:-}
+      MAIL_TUNNEL_REMOTE_SMTP_PORT: ${MAIL_TUNNEL_REMOTE_SMTP_PORT:-587}
+      MAIL_TUNNEL_LOCAL_IMAP_PORT: ${MAIL_TUNNEL_LOCAL_IMAP_PORT:-1143}
+      MAIL_TUNNEL_LOCAL_SMTP_PORT: ${MAIL_TUNNEL_LOCAL_SMTP_PORT:-1587}
+    volumes:
+      - ./infra/mail-tunnel/ssh:/ssh:ro
+    healthcheck:
+      # Порт слушает ⇒ ssh -L поднялся. Логин на почтовый сервер отсюда не
+      # проверяем: у туннеля нет и не должно быть почтовых учёток.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${MAIL_TUNNEL_LOCAL_IMAP_PORT:-1143} || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # ─── Django backend — WSGI (весь /api/*, django-admin, static) ──────────
   # Единый Django заменил девять FastAPI-микросервисов. migrate + идемпотентный
   # сид админа (admin/admin12345) — ТОЛЬКО backend-web (RUN_MIGRATIONS=1);
@@ -183,6 +268,10 @@ services:
     command: ["gunicorn", "htqweb.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "60"]
     ports:
       - "8000:8000"
+    volumes:
+      # Только чтобы прочитать cert.sha256 QUIC-моста и отдать его фронту
+      # в conference/config (dev-сценарий с самоподписанным сертификатом).
+      - wt_certs:/app/wt-certs:ro
     # БД внешняя (VPS) — depends_on не нужен; docker-entrypoint.sh сам ждёт DB_HOST:DB_PORT.
     depends_on:
       redis:
@@ -292,9 +381,13 @@ services:
         max-file: "2"
 
   # ─── SFU (Mediasoup signaling + media) ──────────
-  # Conference / WebRTC — requires TLS certs in production. Disabled in dev
-  # (the `/conference` page is the only consumer; re-enable with
-  # `docker compose --profile production up`).
+  # Conference / WebRTC. Сигналинг — plain ws внутри сети compose: TLS
+  # терминирует nginx (prod) / Vite-прокси (dev), поэтому SIGNALING_REQUIRE_TLS
+  # выключен, а вместо него обязателен платформенный JWT (SIGNALING_REQUIRE_AUTH).
+  #
+  # WEBRTC_ANNOUNCED_IP обязателен: с wildcard listenIp и пустым announcedIp
+  # SFU падает на старте (sfu/src/config.ts::validateListenIps), иначе клиенты
+  # получили бы SDP с 0.0.0.0 и чёрное видео. В прод — публичный IP хоста.
   sfu:
     build:
       context: ./sfu
@@ -303,18 +396,41 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
-    profiles:
-      - production
-    env_file: ./sfu/.env
+    # Тонкая настройка (битрейты, TURN, воркеры) — необязательный sfu/.env;
+    # ключи из environment ниже имеют приоритет над ним.
+    env_file:
+      - path: ./sfu/.env
+        required: false
     restart: unless-stopped
     environment:
-      # Only overrides; everything else (WEBRTC_*, bitrates, TURN) comes from sfu/.env.
       SFU_HOST: 0.0.0.0
-      SIGNALING_DISABLE_ORIGIN_CHECK: "true"
+      SFU_PORT: "4443"
+      # JWT: тот же секрет и issuer, что у Django (htqweb/authn/jwt.py).
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER:-htqweb-auth}
+      SIGNALING_REQUIRE_AUTH: ${SFU_REQUIRE_AUTH:-true}
+      SIGNALING_REQUIRE_TLS: ${SFU_REQUIRE_TLS:-false}
+      SIGNALING_DISABLE_ORIGIN_CHECK: ${SFU_DISABLE_ORIGIN_CHECK:-true}
+      SIGNALING_ALLOWED_ORIGINS: ${SFU_ALLOWED_ORIGINS:-}
+      WEBRTC_LISTEN_IP: ${WEBRTC_LISTEN_IP:-0.0.0.0}
+      WEBRTC_ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-}
+      WEBRTC_SERVER_PORT: ${WEBRTC_SERVER_PORT:-44444}
+      MEDIASOUP_WORKERS: ${MEDIASOUP_WORKERS:-1}
     ports:
       - "4443:4443"
       - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/udp"
       - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/tcp"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "require('http').get('http://127.0.0.1:4443/healthz',
+          r => process.exit(r.statusCode === 200 ? 0 : 1))
+          .on('error', () => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     logging:
       driver: json-file
       options:
@@ -393,24 +509,36 @@ services:
         max-file: "2"
 
   # ─── WebTransport Proxy (QUIC signaling) ────────
-  # Uses a self-signed cert from wt_certs volume and only makes sense in front
-  # of the SFU. Off in dev along with SFU.
+  # Мост браузер ──QUIC/HTTP3──► :4433 ──WebSocket──► SFU. Токен из query
+  # CONNECT-запроса пробрасывается в SFU (заголовки туда не доходят).
+  #
+  # Сертификат: по умолчанию самоподписанный из тома wt_certs (браузер примет
+  # его только через serverCertificateHashes — см. CONFERENCE_WT_CERT_HASHES).
+  # В прод смонтируйте сюда live-сертификат certbot'а.
   webtransport:
     build:
       context: ./webtransport
       dockerfile: Dockerfile
-    profiles:
-      - production
     restart: unless-stopped
     environment:
-      SFU_WS_URL: "ws://sfu:4443"
+      SFU_WS_URL: ${SFU_WS_URL:-ws://sfu:4443/ws/sfu/}
       WT_HOST: "0.0.0.0"
       WT_PORT: "4433"
       LOG_LEVEL: ${WT_LOG_LEVEL:-INFO}
+      # Прод: укажите живой сертификат домена из тома certbot'а, например
+      # WT_CERT_FILE=/etc/letsencrypt/live/<домен>/fullchain.pem
+      # WT_KEY_FILE=/etc/letsencrypt/live/<домен>/privkey.pem
+      # Тогда самоподписанный не выпускается, а отпечатки фронту не нужны.
+      CERT_FILE: ${WT_CERT_FILE:-certs/cert.pem}
+      KEY_FILE: ${WT_KEY_FILE:-certs/key.pem}
+      # SAN самоподписанного сертификата (dev): localhost и 127.0.0.1 всегда,
+      # остальное — сюда через запятую (например LAN-IP хоста).
+      WT_CERT_HOSTS: ${WT_CERT_HOSTS:-}
     ports:
       - "4433:4433/udp"
     volumes:
       - wt_certs:/app/certs
+      - certbot_conf:/etc/letsencrypt:ro
     depends_on:
       - sfu
     logging:

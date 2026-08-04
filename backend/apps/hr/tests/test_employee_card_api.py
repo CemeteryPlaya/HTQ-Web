@@ -174,24 +174,21 @@ def test_card_t2_get_empty_for_level_without_any_card_key(junior):
 
 
 @pytest.mark.django_db
-def test_card_t2_get_shows_only_certs_for_middle(middle):
+def test_card_t2_get_empty_for_middle(middle):
+    """Единственной Т-2 секцией middle была certs — после её удаления у
+    уровня не остаётся ни одного t2 view-ключа, тело пустое."""
     emp, headers = middle
     resp = Client().get(f"{BASE}/{emp.id}/card/t2", **headers)
     assert resp.status_code == 200
-    body = resp.json()
-    assert set(body.keys()) == {"certs"}
-    assert body["certs"] == {
-        "sro_permit_number": None, "sro_permit_expiry": None,
-        "safety_cert_number": None, "safety_cert_expiry": None,
-    }
+    assert resp.json() == {}
 
 
 @pytest.mark.django_db
-def test_card_t2_get_shows_all_three_sections_for_senior(senior):
+def test_card_t2_get_shows_both_sections_for_senior(senior):
     emp, headers = senior
     resp = Client().get(f"{BASE}/{emp.id}/card/t2", **headers)
     assert resp.status_code == 200
-    assert set(resp.json().keys()) == {"financial", "personal", "certs"}
+    assert set(resp.json().keys()) == {"financial", "personal"}
 
 
 @pytest.mark.django_db
@@ -220,14 +217,20 @@ def test_card_t2_patch_rejects_section_without_edit_key(middle):
 
 
 @pytest.mark.django_db
-def test_card_t2_patch_allows_certs_for_middle(middle):
-    emp, headers = middle
+def test_card_t2_patch_ignores_removed_certs_section(admin_auth, hr_dep):
+    """Секции certs больше нет в EmployeeCardT2Patch. Устаревший клиент,
+    который всё ещё её шлёт, получает 200 — Pydantic отбрасывает лишний
+    ключ, до сервиса он не доходит и в ответе не появляется."""
+    target = _emp(hr_dep, _pos("Legacy", hr_dep, weight=207), "t2-legacy@htq.test")
     resp = Client().patch(
-        f"{BASE}/{emp.id}/card/t2", data={"certs": {"sro_permit_number": "SRO-1"}},
-        content_type="application/json", **headers,
+        f"{BASE}/{target.id}/card/t2",
+        data={"certs": {"sro_permit_number": "SRO-1"}, "personal": {"citizenship": "KZ"}},
+        content_type="application/json", **admin_auth,
     )
     assert resp.status_code == 200
-    assert resp.json()["certs"]["sro_permit_number"] == "SRO-1"
+    body = resp.json()
+    assert "certs" not in body
+    assert body["personal"]["citizenship"] == "KZ"
 
 
 @pytest.mark.django_db
@@ -238,7 +241,6 @@ def test_card_t2_patch_then_get_roundtrip_admin(admin_auth, hr_dep):
         data={
             "financial": {"salary": "1234.50", "bonus": "200", "bank_account": "KZ123"},
             "personal": {"birth_place": "Astana", "citizenship": "KZ"},
-            "certs": {"sro_permit_number": "SRO-9"},
         },
         content_type="application/json", **admin_auth,
     )
@@ -247,7 +249,6 @@ def test_card_t2_patch_then_get_roundtrip_admin(admin_auth, hr_dep):
     assert body["financial"]["salary"] == "1234.50"
     assert body["financial"]["bonus"] == "200.00"
     assert body["personal"]["birth_place"] == "Astana"
-    assert body["certs"]["sro_permit_number"] == "SRO-9"
 
     get_resp = Client().get(f"{BASE}/{target.id}/card/t2", **admin_auth)
     assert get_resp.json() == body
@@ -285,7 +286,7 @@ def test_card_t2_patch_partial_failure_persists_nothing(financial_edit_only):
 def test_card_t2_patch_requires_visible_employee(auth, hr_dep):
     target = _emp(hr_dep, _pos("V", hr_dep, weight=205), "t2-visible@htq.test")
     resp = Client().patch(
-        f"{BASE}/{target.id}/card/t2", data={"certs": {"sro_permit_number": "X"}},
+        f"{BASE}/{target.id}/card/t2", data={"personal": {"citizenship": "X"}},
         content_type="application/json", **auth,
     )
     assert resp.status_code == 403
