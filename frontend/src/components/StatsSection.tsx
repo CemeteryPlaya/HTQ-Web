@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useHomeSection } from '@/hooks/useHomeContent';
 
 const useCountUp = (end: number, duration: number = 2000) => {
   const [count, setCount] = useState(0);
@@ -43,12 +44,26 @@ const useCountUp = (end: number, duration: number = 2000) => {
 
 export const StatsSection = () => {
   const { t } = useTranslation();
+  const home = useHomeSection('stats');
 
-  const stats = [
+  // Цифры из БД, если редактор их завёл; иначе прежние статические.
+  // `value` в базе — строка («722», «10+»), поэтому разбираем её на число и
+  // суффикс: анимация счётчика умеет считать только до числа.
+  const fallbackStats = [
     { value: 10, suffix: '+', label: t('stats.items.years') },
     { value: 15, suffix: '+', label: t('stats.items.projects') },
     { value: 722, suffix: '', label: t('stats.items.megawatts') },
   ];
+  const stats = home.items.length
+    ? home.items.map((item) => {
+      const match = /^(\d+)(.*)$/.exec(item.value.trim());
+      return {
+        value: match ? Number(match[1]) : 0,
+        suffix: match ? match[2].trim() : item.value,
+        label: item.title || item.description,
+      };
+    })
+    : fallbackStats;
 
   return (
     <section className="py-20 bg-primary relative overflow-hidden">
@@ -61,9 +76,9 @@ export const StatsSection = () => {
       <div className="container-custom relative z-10">
         {/* Header */}
         <div className="text-center max-w-3xl mx-auto mb-16">
-          <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('stats.tag')}</span>
+          <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{home.text('tag', 'stats.tag')}</span>
           <h2 className="font-display text-4xl md:text-5xl font-bold text-primary-foreground mt-2">
-            {t('stats.title')}
+            {home.text('title', 'stats.title')}
           </h2>
         </div>
 

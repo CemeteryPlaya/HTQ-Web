@@ -26,6 +26,9 @@ export const protectedRoutes: RouteConfig[] = [
   // ─── CMS / marketing manage pages ─────────────────────────────────────
   // Editorial role (or higher) — protect against random users hitting
   // ``/manage/news`` directly and altering published content.
+  // Блоки лендинга: порядок, видимость, тексты. Роль editor — тот же
+  // контур, что новости и обращения; правит содержимое сайта, не систему.
+  { path: '/manage/home', component: lazyPages.ManageHomeSections, requiresAuth: true, requiresRole: 'editor' },
   { path: '/manage/news', component: lazyPages.AdminNews, requiresAuth: true, requiresRole: 'editor' },
   { path: '/manage/contacts', component: lazyPages.AdminContacts, requiresAuth: true, requiresRole: 'editor' },
   // ``/manage/projects`` keeps its historical path but is NOT a CMS page: it

@@ -345,8 +345,8 @@ DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
 | 9090 | Prometheus (под `/prometheus`) | всегда |
 | 3100 | Loki | всегда |
 | 9187 / 9121 | postgres-exporter / redis-exporter | всегда |
-| 4443 + 44444 (UDP/TCP) | SFU: сигнализация + медиа | production |
-| 4433 (UDP) | WebTransport-прокси (QUIC) | production |
+| 4443 + 44444 (UDP/TCP) | SFU: сигнализация + медиа | всегда |
+| 4433 (UDP) | WebTransport-прокси (QUIC) | всегда |
 | 5000 | LibreTranslate | профиль `translation` |
 
 ---

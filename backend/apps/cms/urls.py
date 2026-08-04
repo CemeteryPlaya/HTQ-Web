@@ -54,4 +54,23 @@ urlpatterns = [
     path("tags/", views.tags_collection),
     path("tags/<int:tag_id>", views.tag_detail),
     path("tags/<int:tag_id>/", views.tag_detail),
+    # ── Блоки главной страницы ───────────────────────────────────────────
+    # Публичное чтение — лендинг открыт анонимам. Оба написания, как и у
+    # соседей выше: APPEND_SLASH=False, редиректа не будет.
+    path("home/sections", views.home_sections_public),
+    path("home/sections/", views.home_sections_public),
+    # Редакторские роуты: /admin/ ПЕРЕД общим <int:section_id>, иначе
+    # "admin" ушёл бы в параметр и отдал 404.
+    path("home/admin/sections", views.home_sections_admin),
+    path("home/admin/sections/", views.home_sections_admin),
+    path("home/admin/sections/reorder", views.home_sections_reorder),
+    path("home/admin/sections/reorder/", views.home_sections_reorder),
+    path("home/admin/sections/<int:section_id>", views.home_section_detail),
+    path("home/admin/sections/<int:section_id>/", views.home_section_detail),
+    path("home/admin/sections/<int:section_id>/items", views.home_items_collection),
+    path("home/admin/sections/<int:section_id>/items/", views.home_items_collection),
+    path("home/admin/sections/<int:section_id>/items/reorder", views.home_items_reorder),
+    path("home/admin/sections/<int:section_id>/items/reorder/", views.home_items_reorder),
+    path("home/admin/items/<int:item_id>", views.home_item_detail),
+    path("home/admin/items/<int:item_id>/", views.home_item_detail),
 ]

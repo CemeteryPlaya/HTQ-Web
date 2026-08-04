@@ -21,10 +21,16 @@ import api from '@/api/client';
 import { apiPath } from '@/api/endpoints';
 
 /**
- * Local fallback registry. Every service defaults to enabled EXCEPT
- * `conference` — the SFU/webtransport stack is deliberately not wired up
- * yet (plan rev. 2, D10), so conference is treated as disabled unless the
- * backend explicitly says otherwise.
+ * Local fallback registry — действует, ПОКА ответ реестра не пришёл (или если
+ * запрос упал). Все сервисы по умолчанию включены, включая `conference`.
+ *
+ * Раньше здесь стояло `conference: false` — наследие тех времён, когда
+ * SFU/webtransport ещё не были подключены (plan rev. 2, D10). С тех пор они
+ * стартуют вместе со стеком, и этот дефолт стал вредным: до первого ответа
+ * реестра (а при упавшем запросе — навсегда) рабочая функция выглядела
+ * отключённой. Оптимистичный дефолт безопасен: если сервис действительно
+ * выключен, бэкенд ответит 503 `service_disabled`, и его перехватит
+ * ServiceUnavailableListener — та же модалка, но по факту, а не по догадке.
  */
 export const DEFAULT_SERVICE_STATUSES: Record<string, boolean> = {
   users: true,
@@ -35,7 +41,7 @@ export const DEFAULT_SERVICE_STATUSES: Record<string, boolean> = {
   media: true,
   mail: true,
   messenger: true,
-  conference: false,
+  conference: true,
 };
 
 interface ServiceStatusResponse {

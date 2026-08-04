@@ -168,3 +168,119 @@ class AuditLog(models.Model):
     class Meta:
         verbose_name = "Запись аудита"
         verbose_name_plural = "Журнал аудита"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Блоки главной страницы — управляемый лендинг
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# До этого вся главная была захардкожена: тексты приходили из i18n-файлов
+# (`t('hero.title')`), а списки услуг/проектов — из `frontend/src/data/*.ts`,
+# где прямо стояло «TODO: будут редактироваться через admin panel». Правка
+# любой запятой требовала пересборки фронта.
+#
+# ПОЧЕМУ ДВЕ МОДЕЛИ, А НЕ ОДНА С JSON. Все секции лендинга оказались одной
+# формы: подпись-тег, заголовок, описание и СПИСОК однотипных элементов
+# (направления, услуги, проекты, цифры, карточки миссии). Список — это строки,
+# которые надо поштучно двигать, прятать и редактировать; в JSON-поле они
+# превратились бы в неатомарные правки (двое редакторов затирают друг друга
+# целиком) и потеряли бы валидацию. Поэтому элементы — отдельная таблица.
+#
+# ПОЧЕМУ ДВА ЯЗЫКА КОЛОНКАМИ, А НЕ ТАБЛИЦЕЙ ПЕРЕВОДОВ. Языка ровно два и
+# добавление третьего — событие уровня «переверстать сайт», а не рутина.
+# Колонки дают простой запрос без джойнов и понятную форму с вкладками RU/EN.
+
+
+class HomeSection(models.Model):
+    """Секция главной страницы.
+
+    ``key`` — стабильный идентификатор, по которому компонент фронтенда
+    находит свои данные (``hero``, ``directions``, ``projects``…). Именно он,
+    а не ``id``, потому что у каждой секции свой макет в React: связь
+    «запись ↔ компонент» должна переживать пересоздание строки и перенос
+    между окружениями.
+
+    Секцию НЕЛЬЗЯ создать из интерфейса — только отредактировать, скрыть или
+    подвинуть. Новая секция означает новый React-компонент, то есть работу
+    разработчика; кнопка «добавить» в UI обещала бы то, чего система не умеет.
+    """
+
+    class Layout(models.TextChoices):
+        """Готовые макеты для блоков, созданных из интерфейса.
+
+        Секции лендинга свелись к четырём формам — именно поэтому создание
+        блоков вообще возможно: bespoke в них только фотографии и иконки, а
+        каркас повторяется. У девяти исходных секций свои React-компоненты
+        (``is_system``), и ``layout`` для них не используется.
+        """
+        FEATURES = "features_grid", "Сетка карточек (иконка, заголовок, текст)"
+        STATS = "stats", "Цифры (значение и подпись)"
+        CTA = "cta", "Призыв к действию (заголовок, текст, кнопка)"
+        TEXT_MEDIA = "text_media", "Текст с картинкой"
+
+    key = models.SlugField(max_length=64, unique=True)
+    layout = models.CharField(max_length=32, choices=Layout.choices, default=Layout.FEATURES)
+    # Девять исходных секций: у каждой свой React-компонент со своей вёрсткой.
+    # Их можно прятать, двигать и править, но НЕ удалять: строка в БД лишь
+    # питает компонент, и пересоздать её из интерфейса нельзя — новый блок
+    # получил бы generic-макет и выглядел иначе. У созданных из UI — False.
+    is_system = models.BooleanField(default=False)
+    # Русский обязателен, английский — нет: непереведённое поле отдаётся
+    # по-русски, а не пустотой (см. схемы и `localized()` ниже).
+    tag_ru = models.CharField(max_length=120, blank=True, default="")
+    tag_en = models.CharField(max_length=120, blank=True, default="")
+    title_ru = models.CharField(max_length=255, blank=True, default="")
+    title_en = models.CharField(max_length=255, blank=True, default="")
+    description_ru = models.TextField(blank=True, default="")
+    description_en = models.TextField(blank=True, default="")
+    is_visible = models.BooleanField(default=True)
+    # Разреженный шаг (10, 20, 30…) в сиде: вставить между соседями можно без
+    # переписывания всей таблицы.
+    order = models.IntegerField(default=0, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["order", "id"]
+        verbose_name = "Блок главной страницы"
+        verbose_name_plural = "Блоки главной страницы"
+
+    def __str__(self) -> str:
+        return f"{self.order}. {self.title_ru or self.key}"
+
+
+class HomeSectionItem(models.Model):
+    """Элемент внутри секции: направление, услуга, проект, цифра, карточка.
+
+    Поля намеренно обобщённые, а не «одна модель на каждый тип секции»: все
+    элементы лендинга сводятся к «заголовок + описание (+ число / иконка /
+    картинка / ссылка)», и десять почти одинаковых таблиц дали бы десять почти
+    одинаковых форм и вьюх. Незаполненные поля просто не рисуются — какие
+    именно нужны, решает макет конкретной секции.
+    """
+
+    section = models.ForeignKey(HomeSection, on_delete=models.CASCADE, related_name="items")
+    title_ru = models.CharField(max_length=255, blank=True, default="")
+    title_en = models.CharField(max_length=255, blank=True, default="")
+    description_ru = models.TextField(blank=True, default="")
+    description_en = models.TextField(blank=True, default="")
+    # Строка, а не число: сюда попадают и «722», и «90+», и «10+ лет».
+    # Анимацию счётчика фронт включает сам, если строка начинается с цифр.
+    value = models.CharField(max_length=64, blank=True, default="")
+    # Имя иконки lucide-react (`Zap`, `Sun`…) — рендерится по словарю на
+    # фронте. Хранить сам SVG незачем: набор иконок фиксирован сборкой.
+    icon = models.CharField(max_length=64, blank=True, default="")
+    # Путь/URL картинки. Свободная строка, а не FK в media_files: на лендинге
+    # лежат и статические файлы из `public/images`, и будущие загрузки.
+    image = models.CharField(max_length=512, blank=True, default="")
+    link = models.CharField(max_length=512, blank=True, default="")
+    is_visible = models.BooleanField(default=True)
+    order = models.IntegerField(default=0, db_index=True)
+
+    class Meta:
+        ordering = ["order", "id"]
+        verbose_name = "Элемент блока"
+        verbose_name_plural = "Элементы блоков"
+
+    def __str__(self) -> str:
+        return f"{self.section.key} / {self.order}. {self.title_ru or '—'}"

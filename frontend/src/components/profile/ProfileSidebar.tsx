@@ -15,6 +15,7 @@ import {
     Newspaper,
     Layers,
     Inbox,
+    LayoutTemplate,
     Users,
     Building2,
     Briefcase,
@@ -196,7 +197,13 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
         { id: 'messenger', to: '/messenger', icon: MessageSquare, label: t('profile.sidebar.messenger', 'Мессенджер') },
         { id: 'conference', to: '/conference', icon: Video, label: t('profile.sidebar.conference', 'Видеоконференция'), onClick: gateService('conference') },
         { id: 'email', to: '/email', icon: Mail, label: t('profile.sidebar.email', 'Почта') },
-    ], [t]);
+        // `isDisabled` В ЗАВИСИМОСТЯХ ОБЯЗАТЕЛЕН. Без него мемо считался один раз,
+        // на первом рендере — когда ответ реестра ещё не пришёл и действовал
+        // локальный фолбэк. Обработчик клика застывал на том состоянии и
+        // блокировал раздел навсегда, даже после успешного ответа: именно так
+        // «Видеоконференция» показывала «Функция временно отключена» при
+        // включённом сервисе.
+    ], [t, isDisabled]);
 
     const workItems: ItemConfig[] = useMemo(() => {
         const items: ItemConfig[] = [
@@ -220,6 +227,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     const contentItems: ItemConfig[] = useMemo(() => {
         if (!editor) return [];
         return [
+            { id: 'home', to: '/manage/home', icon: LayoutTemplate, label: t('profile.sidebar.manageHome', 'Главная страница') },
             { id: 'news', to: '/manage/news', icon: Newspaper, label: t('profile.sidebar.manageNews') },
             { id: 'contacts', to: '/manage/contacts', icon: Inbox, label: t('profile.sidebar.contactRequests'), badge: <UnreadContactsBadge /> },
         ];

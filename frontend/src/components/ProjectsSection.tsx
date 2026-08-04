@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useHomeSection } from '@/hooks/useHomeContent';
 import { Link } from 'react-router-dom';
 import { Plus, Minus, MapPin, Zap, ArrowRight } from 'lucide-react';
 import { projects } from '@/data/projects';
@@ -11,6 +12,7 @@ interface ProjectsSectionProps {
 
 export const ProjectsSection = ({ limit = 10 }: ProjectsSectionProps) => {
   const { t } = useTranslation();
+  const home = useHomeSection('projects');
   const [expandedIndex, setExpandedIndex] = useState<number | null>(0);
 
   const displayedProjects = projects.slice(0, limit);
@@ -22,14 +24,14 @@ export const ProjectsSection = ({ limit = 10 }: ProjectsSectionProps) => {
         {/* Header */}
         <div className="grid lg:grid-cols-2 gap-8 lg:gap-16 mb-12">
           <div>
-            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('projects.tag')}</span>
+            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{home.text('tag', 'projects.tag')}</span>
             <h2 className="font-display text-4xl md:text-5xl font-bold text-foreground mt-2">
-              {t('projects.title')}
+              {home.text('title', 'projects.title')}
             </h2>
           </div>
           <div className="flex items-end">
             <p className="text-muted-foreground text-lg leading-relaxed">
-              {t('projects.desc')}
+              {home.text('description', 'projects.desc')}
             </p>
           </div>
         </div>
