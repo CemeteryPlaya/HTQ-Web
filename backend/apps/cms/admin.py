@@ -3,7 +3,8 @@ from django.db import models as db_models
 
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
-from .models import AuditLog, Category, ContactRequest, News, NewsAttachment, Tag
+from .models import (AuditLog, Category, ContactRequest, HomeSection, HomeSectionItem,
+                     News, NewsAttachment, Tag)
 
 try:
     from django_json_widget.widgets import JSONEditorWidget
@@ -77,3 +78,25 @@ class AuditLogAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
         # the service gate (denying add regardless of cms's enabled state)
         # rather than a stand-in for it.
         return False
+
+
+class HomeSectionItemInline(admin.TabularInline):
+    """Элементы правятся внутри своей секции: по отдельности они бессмысленны,
+    а отдельный пункт меню заставлял бы каждый раз выбирать секцию вручную."""
+    model = HomeSectionItem
+    extra = 0
+    fields = ("order", "is_visible", "title_ru", "title_en", "value", "icon", "image", "link")
+    ordering = ("order", "id")
+
+
+@admin.register(HomeSection)
+class HomeSectionAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("order", "key", "title_ru", "is_visible", "updated_at")
+    list_editable = ("is_visible",)
+    list_filter = ("is_visible",)
+    search_fields = ("key", "title_ru", "title_en")
+    ordering = ("order", "id")
+    inlines = [HomeSectionItemInline]
+    # `key` только на чтение: по нему React-компонент находит свои данные, и
+    # переименование оставило бы секцию без макета.
+    readonly_fields = ("key", "updated_at", "updated_by")

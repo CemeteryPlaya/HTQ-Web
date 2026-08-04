@@ -1,0 +1,110 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  HTTPS для HTQWeb — включается ВРУЧНУЮ после выпуска сертификата
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ЗАЧЕМ. Браузеры дают доступ к камере и микрофону только в защищённом
+# контексте. По http:// (кроме localhost) `getUserMedia` не сработает ни у
+# кого — видеоконференция без HTTPS в проде не запускается в принципе.
+# Основной default.conf слушает только :80, потому что без сертификата
+# nginx с блоком 443 просто не стартует.
+#
+# КАК ВКЛЮЧИТЬ
+#   1. SERVER_DOMAIN=<домен> в корневом .env, домен направлен на сервер (A-запись).
+#   2. Поднять стек: docker compose --profile production up -d
+#   3. Выпустить сертификат (nginx уже отдаёт /.well-known/acme-challenge/):
+#        docker compose exec certbot certbot certonly --webroot \
+#          -w /var/www/certbot -d <домен> --email <почта> --agree-tos
+#   4. Скопировать этот файл рядом с основным конфигом и заменить <домен>:
+#        cp infra/nginx/tls.conf.example infra/nginx/tls.conf
+#        sed -i 's/ВАШ_ДОМЕН/<домен>/g' infra/nginx/tls.conf
+#      затем примонтировать его в контейнер nginx (docker-compose.yml,
+#      секция volumes рядом с default.conf):
+#        - ./infra/nginx/tls.conf:/etc/nginx/conf.d/tls.conf:ro
+#   5. docker compose restart nginx
+#
+# ПОСЛЕ ВКЛЮЧЕНИЯ в default.conf стоит заменить содержимое server{listen 80}
+# на редирект: return 301 https://$host$request_uri; — иначе сайт останется
+# доступен и по http, где камера всё равно не работает.
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ВАШ_ДОМЕН;
+
+    ssl_certificate     /etc/letsencrypt/live/ВАШ_ДОМЕН/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ВАШ_ДОМЕН/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    client_max_body_size 100m;
+
+    # ── Сигналинг конференции (WSS) ────────────────────────────────────────
+    # Тот же upstream, что в default.conf. Таймауты суточные: соединение
+    # держится всю встречу, и обычные 60 секунд рвали бы её на молчании.
+    location /ws/sfu/ {
+        proxy_pass http://sfu:4443;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    # ── Socket.IO мессенджера + SSE ────────────────────────────────────────
+    location /ws/ {
+        proxy_pass http://backend_asgi;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400s;
+    }
+
+    location = /api/requests/v1/stream {
+        proxy_pass http://backend_asgi;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+
+    location /api/ {
+        proxy_pass http://backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-ID $request_id;
+    }
+
+    location /django-admin/ {
+        proxy_pass http://backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /static/ {
+        alias /app/staticfiles/;
+        expires 30d;
+        access_log off;
+    }
+
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri $uri/ /index.html;
+        location ~* \.html$ { add_header Cache-Control "no-cache"; }
+    }
+}

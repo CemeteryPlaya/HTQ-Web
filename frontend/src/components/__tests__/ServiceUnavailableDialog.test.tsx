@@ -11,7 +11,16 @@ describe("ServiceUnavailableDialog", () => {
 });
 
 describe("useServiceStatus defaults", () => {
-  it("конференция выключена по умолчанию (SFU не задействован)", () => {
-    expect(DEFAULT_SERVICE_STATUSES.conference).toBe(false);
+  // Дефолты действуют, ПОКА ответ реестра не пришёл (или если запрос упал).
+  // Раньше `conference` тут стоял в false — наследие тех времён, когда SFU не
+  // был подключён. Из-за этого рабочая функция выглядела отключённой до
+  // первого ответа, а при упавшем запросе — навсегда. Источник правды —
+  // реестр на бэкенде; если сервис действительно выключен, придёт 503
+  // `service_disabled`, и его перехватит ServiceUnavailableListener.
+  it("все сервисы включены по умолчанию, включая конференцию", () => {
+    for (const [name, enabled] of Object.entries(DEFAULT_SERVICE_STATUSES)) {
+      expect(enabled, `сервис ${name} не должен быть выключен локальным дефолтом`).toBe(true);
+    }
+    expect(DEFAULT_SERVICE_STATUSES.conference).toBe(true);
   });
 });

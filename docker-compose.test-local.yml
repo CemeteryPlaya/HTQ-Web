@@ -336,6 +336,10 @@ services:
       VITE_BACKEND_TARGET: "http://backend-web:8000"
       VITE_ASGI_TARGET: "http://backend-asgi:8000"
       VITE_MESSENGER_WS_TARGET: "ws://backend-asgi:8000"
+      # Без этого Vite проксирует /ws/sfu на дефолтный ws://127.0.0.1:4443,
+      # то есть на сам контейнер фронта, и сигналинг конференции не
+      # находит SFU. Имя сервиса резолвится в docker-сети.
+      VITE_SFU_WS_TARGET: "ws://sfu:4443"
     depends_on:
       backend-web:
         condition: service_healthy
@@ -470,9 +474,111 @@ services:
       driver: json-file
       options: { max-size: "5m", max-file: "3" }
 
+  # ═══ Видеоконференция ═══════════════════════════════════════════════════
+  # Перенесено из docker-compose.yml. При сведении четырёх compose-файлов в три
+  # эти два сервиса не попали в тестовые стеки: они собирались по прежнему
+  # dev-оверлею, где SFU сидел под профилем `production`. Профиль с тех пор
+  # снят, и страница /conference обязана работать и здесь.
+
+  # WEBRTC_ANNOUNCED_IP обязателен: с wildcard listenIp и пустым announcedIp
+  # SFU падает на старте (sfu/src/config.ts::validateListenIps), иначе клиенты
+  # получили бы SDP с 0.0.0.0 и чёрное видео. В прод — публичный IP хоста.
+  sfu:
+    build:
+      context: ./sfu
+      dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    # Тонкая настройка (битрейты, TURN, воркеры) — необязательный sfu/.env;
+    # ключи из environment ниже имеют приоритет над ним.
+    env_file:
+      - path: ./sfu/.env
+        required: false
+    restart: unless-stopped
+    environment:
+      SFU_HOST: 0.0.0.0
+      SFU_PORT: "4443"
+      # JWT: тот же секрет и issuer, что у Django (htqweb/authn/jwt.py).
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER:-htqweb-auth}
+      SIGNALING_REQUIRE_AUTH: ${SFU_REQUIRE_AUTH:-true}
+      SIGNALING_REQUIRE_TLS: ${SFU_REQUIRE_TLS:-false}
+      SIGNALING_DISABLE_ORIGIN_CHECK: ${SFU_DISABLE_ORIGIN_CHECK:-true}
+      SIGNALING_ALLOWED_ORIGINS: ${SFU_ALLOWED_ORIGINS:-}
+      WEBRTC_LISTEN_IP: ${WEBRTC_LISTEN_IP:-0.0.0.0}
+      # Непустой дефолт: с пустым announcedIp SFU падает на старте намеренно.
+      # 127.0.0.1 — браузер на той же машине; для проверки с телефона
+      # поставьте LAN-IP хоста в корневом .env.
+      WEBRTC_ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-127.0.0.1}
+      WEBRTC_SERVER_PORT: ${WEBRTC_SERVER_PORT:-44444}
+      MEDIASOUP_WORKERS: ${MEDIASOUP_WORKERS:-1}
+    ports:
+      - "4443:4443"
+      - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/udp"
+      - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/tcp"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "require('http').get('http://127.0.0.1:4443/healthz',
+          r => process.exit(r.statusCode === 200 ? 0 : 1))
+          .on('error', () => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ─── Frontend builder (one-shot) ────────────────
+
+
+  # Сертификат: по умолчанию самоподписанный из тома wt_certs (браузер примет
+  # его только через serverCertificateHashes — см. CONFERENCE_WT_CERT_HASHES).
+  # В прод смонтируйте сюда live-сертификат certbot'а.
+  webtransport:
+    build:
+      context: ./webtransport
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SFU_WS_URL: ${SFU_WS_URL:-ws://sfu:4443/ws/sfu/}
+      WT_HOST: "0.0.0.0"
+      WT_PORT: "4433"
+      LOG_LEVEL: ${WT_LOG_LEVEL:-INFO}
+      # Прод: укажите живой сертификат домена из тома certbot'а, например
+      # WT_CERT_FILE=/etc/letsencrypt/live/<домен>/fullchain.pem
+      # WT_KEY_FILE=/etc/letsencrypt/live/<домен>/privkey.pem
+      # Тогда самоподписанный не выпускается, а отпечатки фронту не нужны.
+      CERT_FILE: ${WT_CERT_FILE:-certs/cert.pem}
+      KEY_FILE: ${WT_KEY_FILE:-certs/key.pem}
+      # SAN самоподписанного сертификата (dev): localhost и 127.0.0.1 всегда,
+      # остальное — сюда через запятую (например LAN-IP хоста).
+      WT_CERT_HOSTS: ${WT_CERT_HOSTS:-}
+    ports:
+      - "4433:4433/udp"
+    volumes:
+      # Только самоподписанный из wt_certs: тома certbot_conf в тестовых
+      # стеках нет (Let's Encrypt живёт в прод-контуре).
+      - wt_certs:/app/certs
+    depends_on:
+      - sfu
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+
 volumes:
   postgres_data:
   minio_data:
   loki_data:
   grafana_data:
   prometheus_data:
+  wt_certs:

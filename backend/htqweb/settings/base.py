@@ -235,10 +235,34 @@ MINIO_CONSOLE_URL = env("MINIO_CONSOLE_URL", "http://localhost:9001")
 # Задавайте явно только если SFU живёт на отдельном хосте/порту.
 CONFERENCE_SFU_URL = env("CONFERENCE_SFU_URL", "")
 CONFERENCE_SFU_PATH = env("CONFERENCE_SFU_PATH", "/ws/sfu/")
+# ICE-серверы, которые бэкенд отдаёт фронту в GET /api/cms/v1/conference/config.
+#
+# STUN лишь сообщает клиенту его внешний адрес. Когда обе стороны за
+# СИММЕТРИЧНЫМ NAT (мобильный интернет, корпоративные сети со строгим
+# firewall), прямой путь для медиа не находится, и связь не устанавливается
+# между разными сетями — при том что внутри одной сети всё работает. Это и
+# есть типовой «чёрный экран у части участников». Лечится только TURN:
+# он ретранслирует медиа через себя, когда прямой путь невозможен.
+#
+# TURN_URLS — через запятую, формат WebRTC:
+#   turn:turn.example.com:3478?transport=udp,turns:turn.example.com:5349
+# Пусто — остаются только публичные STUN, и это НЕ конфигурация для прода.
+_TURN_URLS = [u.strip() for u in env("TURN_URLS", "").split(",") if u.strip()]
+_TURN_USERNAME = env("TURN_USERNAME", "")
+_TURN_CREDENTIAL = env("TURN_CREDENTIAL", "")
+
 CONFERENCE_ICE_SERVERS = [
     {"urls": "stun:stun.l.google.com:19302"},
     {"urls": "stun:stun1.l.google.com:19302"},
 ]
+if _TURN_URLS:
+    # Одной записью со списком urls, а не по записи на URL: браузер сам
+    # переберёт транспорты внутри одной записи с общими кредами.
+    CONFERENCE_ICE_SERVERS.append({
+        "urls": _TURN_URLS if len(_TURN_URLS) > 1 else _TURN_URLS[0],
+        "username": _TURN_USERNAME or None,
+        "credential": _TURN_CREDENTIAL or None,
+    })
 
 # ── WebTransport (QUIC) сигналинг — предпочтительный транспорт ──────────────
 # Мост webtransport/ (aioquic, UDP :4433) принимает WebTransport-сессию и

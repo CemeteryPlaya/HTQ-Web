@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useHomeSection } from '@/hooks/useHomeContent';
 import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { OptimizedImage } from './OptimizedImage';
 
@@ -11,6 +12,7 @@ const directionLogo5 = '/images/directionsLogo5.webp';
 
 export const ActivityDirections = () => {
   const { t } = useTranslation();
+  const home = useHomeSection('directions');
   const [activeIndex, setActiveIndex] = useState(0);
 
   const directions = [
@@ -55,9 +57,9 @@ export const ActivityDirections = () => {
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
           <div>
-            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('directions.tag')}</span>
+            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{home.text('tag', 'directions.tag')}</span>
             <h2 className="font-display text-4xl md:text-5xl font-bold text-foreground mt-2">
-              {t('directions.title')}
+              {home.text('title', 'directions.title')}
             </h2>
           </div>
           <div className="flex gap-3">

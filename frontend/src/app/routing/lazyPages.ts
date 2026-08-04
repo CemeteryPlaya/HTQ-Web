@@ -41,6 +41,7 @@ export const lazyPages = {
   SignoffRouteEditor: React.lazy(() => import('@/pages/signoff/RouteEditor')),
 
   AdminNews: React.lazy(() => import('@/pages/AdminNews')),
+  ManageHomeSections: React.lazy(() => import('@/pages/ManageHomeSections')),
   AdminContacts: React.lazy(() => import('@/pages/AdminContacts')),
   HRProjects: React.lazy(() => import('@/pages/hr/HRProjects')),
   AdminUsers: React.lazy(() => import('@/pages/AdminUsers')),

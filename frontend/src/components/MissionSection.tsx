@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { useHomeSection } from '@/hooks/useHomeContent';
 import { ArrowRight, Target, Shield, Lightbulb } from 'lucide-react';
 import { Button } from './ui/button';
 
@@ -6,6 +7,7 @@ const panels4 = '/images/panels4.webp';
 
 export const MissionSection = () => {
   const { t } = useTranslation();
+  const home = useHomeSection('mission');
 
   const missionPoints = [
     {
@@ -34,7 +36,7 @@ export const MissionSection = () => {
             <div className="rounded-2xl overflow-hidden shadow-elevated">
               <img
                 src={panels4}
-                alt={t('mission.title')}
+                alt={home.text('title', 'mission.title')}
                 loading="lazy"
                 className="w-full h-[500px] object-cover"
               />
@@ -50,12 +52,12 @@ export const MissionSection = () => {
 
           {/* Content Side */}
           <div className="order-1 lg:order-2">
-            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('mission.tag')}</span>
+            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{home.text('tag', 'mission.tag')}</span>
             <h2 className="font-display text-4xl md:text-5xl font-bold text-foreground mt-2 mb-6">
-              {t('mission.title')}
+              {home.text('title', 'mission.title')}
             </h2>
             <p className="text-muted-foreground text-lg leading-relaxed mb-8">
-              {t('mission.desc')}
+              {home.text('description', 'mission.desc')}
             </p>
 
             {/* Points */}

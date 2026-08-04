@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useHomeSection } from '@/hooks/useHomeContent';
 
 const partners = [
   { name: 'Risen', logo: '/logos/risenLogo.webp' },
@@ -13,6 +14,7 @@ const partners = [
 
 export const PartnersSection = () => {
   const { t } = useTranslation();
+  const home = useHomeSection('partners');
   const trackRef = useRef<HTMLDivElement>(null);
   const posRef = useRef(0);
   const pausedRef = useRef(false);
@@ -42,9 +44,9 @@ export const PartnersSection = () => {
     <section className="py-16 bg-background border-y border-border">
       <div className="container-custom">
         <div className="text-center mb-12">
-          <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('partners.tag')}</span>
+          <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{home.text('tag', 'partners.tag')}</span>
           <h3 className="font-display text-2xl md:text-3xl font-bold text-foreground mt-2">
-            {t('partners.title')}
+            {home.text('title', 'partners.title')}
           </h3>
         </div>
 
