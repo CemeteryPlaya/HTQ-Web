@@ -32,8 +32,19 @@ log = logging.getLogger(__name__)
 
 
 def _smtp_host() -> str:
-    url = getattr(settings, "MAILCOW_API_URL", "")
-    return url.replace("https://", "").replace("http://", "").split("/")[0]
+    """Хост submission: имя из ``MAILCOW_API_URL``, как в исходнике.
+
+    Откат на ``SMTP_HOST``/``IMAP_HOST`` добавлен для инсталляций, где
+    Mailcow-ящики есть, а REST API наружу не выставлен (тогда раньше
+    получалась пустая строка и гарантированный отказ отправки) — и для
+    доступа через SSH-туннель, где submission живёт на адресе туннеля, а не
+    на адресе API.
+    """
+    from apps.mail.services.mail_config import get_config
+
+    cfg = get_config()
+    host = cfg.mailcow_api_url.replace("https://", "").replace("http://", "").split("/")[0]
+    return host or cfg.effective_smtp_host()
 
 
 def _send_via_smtp(

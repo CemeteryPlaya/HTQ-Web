@@ -35,7 +35,7 @@ import { Button } from '@/components/ui/button';
 import { signoffApi } from '@/api/signoff';
 import type { ApprovalProcess, ApprovalState } from '@/types/signoff';
 
-import { reportApiError } from './apiError';
+import { reportApiError } from '@/lib/apiError';
 import { ApprovalStateBadge } from './states';
 
 interface Props {

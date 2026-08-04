@@ -3,20 +3,20 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from "sonner";
 import { useTranslation } from 'react-i18next';
-import { ArrowRight, IdCard, Share2 } from 'lucide-react';
+import { ArrowRight, IdCard, Share2, Calendar as CalendarIcon, FolderGit2 } from 'lucide-react';
 import api from '../api/client';
 import { Header } from '../components/Header';
 import { Footer } from '../components/Footer';
 import { ProfileHeader } from '../components/profile/ProfileHeader';
 import ProfileSidebar from '../components/profile/ProfileSidebar';
-import { ProfileForm } from '../components/profile/ProfileForm';
+import { ConnectCorporateMailbox } from '@/components/mail/ConnectCorporateMailbox';
 import { CalendarWidget } from '../components/calendar/CalendarWidget';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmployeeCardView } from '@/components/hr/EmployeeCardView';
 import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
 import { fetchMyEmployeeCard, type EmployeeCard } from '@/api/hr';
-import { UserProfile, ProfileFormData } from '../types/userProfile';
+import { UserProfile } from '../types/userProfile';
 import {
     clearAuthStorage,
     readCachedProfile,
@@ -58,8 +58,6 @@ const MyProfile = () => {
 
     const totalPmoAllocation = myPmos.reduce((sum, item) => sum + item.allocation_percent, 0);
 
-    // HR card — silently absent for users without an Employee row (e.g.
-    // admins not registered as HR employees). 404 stops further retries.
     const { data: myHrCard } = useQuery<EmployeeCard>({
         queryKey: ['my-hr-card'],
         queryFn: fetchMyEmployeeCard,
@@ -81,8 +79,6 @@ const MyProfile = () => {
             if (data.bio !== undefined) formData.append('bio', data.bio);
             if (data.settings) formData.append('settings', JSON.stringify(data.settings));
             if (data.avatar) {
-                // Server expects a filename for multipart parts; provide a stable
-                // one since the cropper produces an unnamed Blob.
                 const filename = data.avatar instanceof File ? data.avatar.name : 'avatar.jpg';
                 formData.append('avatar', data.avatar, filename);
             }
@@ -102,19 +98,12 @@ const MyProfile = () => {
         }
     });
 
-    const handleFormSubmit = (data: ProfileFormData) => {
-        const { avatar, ...rest } = data;
-        updateProfileMutation.mutate(rest);
-    };
-
     const handleAvatarChange = (file: Blob) => {
         updateProfileMutation.mutate({ avatar: file });
     };
 
     const handleLogout = async () => {
         clearAuthStorage();
-
-        // Clear axios default header if client exists
         try {
             const client = await (api as any).getClient();
             if (client && client.defaults && client.defaults.headers) {
@@ -123,26 +112,61 @@ const MyProfile = () => {
         } catch (e) {
             // ignore
         }
-
-        // Clear cached profile data
         queryClient.clear();
-
-        // Redirect to login
         navigate('/login');
     };
 
-    if (isLoading && !profile) return <div className="min-h-screen flex items-center justify-center">{t('profile.loading')}</div>;
-    if (error && !profile) return <div className="min-h-screen flex items-center justify-center text-red-500">{t('profile.error')}</div>;
+    if (isLoading && !profile) {
+        return (
+            <div className="min-h-screen bg-background flex flex-col">
+                <Header />
+                <main className="flex-1 container mx-auto px-4 py-16 flex items-center justify-center">
+                    <div className="flex items-center gap-3 text-muted-foreground animate-pulse">
+                        <div className="h-5 w-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                        <span className="font-medium text-sm">{t('profile.loading', 'Загрузка профиля...')}</span>
+                    </div>
+                </main>
+                <Footer />
+            </div>
+        );
+    }
+
+    if (error && !profile) {
+        return (
+            <div className="min-h-screen bg-background flex flex-col">
+                <Header />
+                <main className="flex-1 container mx-auto px-4 py-16 flex items-center justify-center">
+                    <div className="text-center space-y-3">
+                        <p className="text-destructive font-medium">{t('profile.error', 'Ошибка загрузки профиля')}</p>
+                        <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+                            Обновить страницу
+                        </Button>
+                    </div>
+                </main>
+                <Footer />
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-background flex flex-col">
             <Header />
-            <main className="flex-1 container mx-auto px-4 py-8">
-                <h1 className="text-3xl font-bold mb-6">{t('profile.title')}</h1>
+
+            <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+                {/* Page Title Header */}
+                <div className="mb-6 flex items-center justify-between">
+                    <div>
+                        <h1 className="text-3xl font-extrabold tracking-tight">{t('profile.title', 'Мой профиль')}</h1>
+                        <p className="text-xs text-muted-foreground mt-1">
+                            Личные данные, настройки аккаунта и рабочая HR-информация
+                        </p>
+                    </div>
+                </div>
 
                 {profile && (
-                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-                        <div className="lg:col-span-1">
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        {/* Sidebar */}
+                        <div className="lg:col-span-3">
                             <ProfileSidebar
                                 roles={profile.roles}
                                 department={profile.department}
@@ -150,37 +174,48 @@ const MyProfile = () => {
                             />
                         </div>
 
-                        <div className="lg:col-span-3 space-y-6">
+                        {/* Main Content Area */}
+                        <div className="lg:col-span-9 space-y-6">
+                            {/* Profile Hero Header */}
                             <ProfileHeader
                                 profile={profile}
                                 onAvatarChange={handleAvatarChange}
                                 onLogout={handleLogout}
                             />
 
-                            <div className="bg-card rounded-3xl border p-6 shadow-sm overflow-hidden">
-                                <h3 className="text-xl font-bold mb-4 px-2">{t('hr.calendar.title')}</h3>
+                            {/* Корпоративная почта — блок сам скрывается,
+                                если админ не включил самоподключение. */}
+                            <ConnectCorporateMailbox />
+
+                            {/* Calendar Widget Card */}
+                            <div className="bg-card rounded-3xl border p-6 shadow-2xs hover:shadow-xs transition-all">
+                                <div className="mb-4 flex items-center gap-2 px-1">
+                                    <CalendarIcon className="h-5 w-5 text-primary" />
+                                    <h3 className="text-lg font-bold">{t('hr.calendar.title', 'Календарь')}</h3>
+                                </div>
                                 <CalendarWidget compact initialView="month" />
                             </div>
 
+                            {/* HR Card Block */}
                             {myHrCard ? (
-                                <div className="bg-card rounded-3xl border p-6 shadow-sm overflow-hidden">
-                                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-2">
+                                <div className="bg-card rounded-3xl border p-6 shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-1">
                                         <div className="flex items-center gap-2">
-                                            <IdCard className="h-5 w-5 text-muted-foreground" />
-                                            <h3 className="text-xl font-bold">Моя HR-карточка</h3>
+                                            <IdCard className="h-5 w-5 text-primary" />
+                                            <h3 className="text-lg font-bold">Моя HR-карточка</h3>
                                         </div>
                                         <div className="flex gap-2">
                                             <Button
                                                 size="sm"
                                                 variant="outline"
-                                                className="gap-1.5"
+                                                className="gap-1.5 rounded-xl"
                                                 onClick={() => setShareCardOpen(true)}
                                             >
                                                 <Share2 className="h-4 w-4" />
                                                 Поделиться
                                             </Button>
-                                            <Button asChild size="sm" className="gap-1.5">
-                                                <Link to={`/hr/employees/${myHrCard.id}`}>
+                                            <Button asChild size="sm" className="gap-1.5 rounded-xl">
+                                                <Link to="/employee/me">
                                                     Открыть
                                                     <ArrowRight className="h-4 w-4" />
                                                 </Link>
@@ -190,30 +225,41 @@ const MyProfile = () => {
                                     <EmployeeCardView card={myHrCard} mode="auth" hideHeader />
                                 </div>
                             ) : myPmos.length > 0 && (
-                                <div className="bg-card rounded-3xl border p-6 shadow-sm overflow-hidden">
-                                    <div className="mb-4 flex items-center justify-between gap-3 px-2">
-                                        <h3 className="text-xl font-bold">Мои проекты PMO</h3>
+                                <div className="bg-card rounded-3xl border p-6 shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                                    <div className="mb-4 flex items-center justify-between gap-3 px-1">
+                                        <div className="flex items-center gap-2">
+                                            <FolderGit2 className="h-5 w-5 text-primary" />
+                                            <h3 className="text-lg font-bold">Мои проекты PMO</h3>
+                                        </div>
                                         <Badge variant={totalPmoAllocation > 100 ? 'destructive' : 'outline'}>
-                                            {totalPmoAllocation}%
+                                            Загрузка: {totalPmoAllocation}%
                                         </Badge>
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="space-y-2.5">
                                         {myPmos.map((item) => (
-                                            <div key={item.pmo_id} className="flex items-center gap-3 rounded-lg border bg-background px-4 py-3">
+                                            <div
+                                                key={item.pmo_id}
+                                                className="flex items-center gap-4 rounded-xl border bg-muted/30 hover:bg-muted/50 px-4 py-3.5 transition-colors"
+                                            >
                                                 <div className="min-w-0 flex-1">
-                                                    <p className="truncate text-sm font-medium">{item.pmo_name}</p>
-                                                    <p className="truncate text-xs text-muted-foreground">
+                                                    <p className="truncate text-sm font-semibold">{item.pmo_name}</p>
+                                                    <p className="truncate text-xs text-muted-foreground mt-0.5">
                                                         {item.pmo_code} · {item.position_in_pmo || item.membership_type}
                                                     </p>
                                                 </div>
-                                                {item.is_primary && <Badge variant="outline">Лид</Badge>}
-                                                <span className="font-mono text-sm tabular-nums">{item.allocation_percent}%</span>
+                                                {item.is_primary && (
+                                                    <Badge variant="secondary" className="text-[11px]">
+                                                        Лид
+                                                    </Badge>
+                                                )}
+                                                <span className="font-mono text-sm font-semibold tabular-nums text-foreground">
+                                                    {item.allocation_percent}%
+                                                </span>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
                             )}
-
                         </div>
                     </div>
                 )}

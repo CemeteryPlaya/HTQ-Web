@@ -44,7 +44,10 @@ class User(AbstractBaseUser):
     """
 
     id = models.AutoField(primary_key=True)
-    username = models.CharField(max_length=150, unique=True)
+    # verbose_name — не косметика: форма входа в django-admin берёт подпись
+    # поля USERNAME_FIELD, и без неё на русской странице стояло «Username:»
+    # рядом с «Пароль:».
+    username = models.CharField("Имя пользователя", max_length=150, unique=True)
     email = models.EmailField(max_length=254, unique=True)
     password = models.CharField(max_length=256, db_column="password_hash")
 
@@ -73,6 +76,10 @@ class User(AbstractBaseUser):
     USERNAME_FIELD = "username"
     EMAIL_FIELD = "email"
     REQUIRED_FIELDS = ["email"]
+
+    class Meta:
+        verbose_name = "Пользователь"
+        verbose_name_plural = "Пользователи"
 
     @property
     def is_active(self) -> bool:  # Django-контракт; колонки нет — есть status
@@ -126,5 +133,9 @@ class AuditLog(models.Model):
     user_agent = models.TextField(null=True, blank=True)
     correlation_id = models.CharField(max_length=36, null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Запись аудита"
+        verbose_name_plural = "Журнал аудита"
 
 

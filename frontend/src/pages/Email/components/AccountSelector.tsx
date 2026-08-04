@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Inbox, Mail, Plus } from 'lucide-react';
+import { ChevronDown, Inbox, Mail, Plus, Server, AlertTriangle } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,11 +17,13 @@ interface Props {
   onChange: (id: ActiveAccountId) => void;
   unreadByAccount: Record<string, number>;
   onAddAccount: () => void;
+  onAddImap: () => void;
 }
 
 function providerEmoji(provider: string): string {
   if (provider === 'google') return '🟢';
   if (provider === 'microsoft') return '🟦';
+  if (provider === 'imap') return '📨'; // свой сервер, подключён пользователем
   return '🏢'; // mailcow / corporate
 }
 
@@ -35,6 +37,7 @@ export const AccountSelector: React.FC<Props> = ({
   onChange,
   unreadByAccount,
   onAddAccount,
+  onAddImap,
 }) => {
   const { t } = useTranslation();
   const active =
@@ -99,9 +102,15 @@ export const AccountSelector: React.FC<Props> = ({
               <span className="mr-2">{providerEmoji(acc.provider)}</span>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate">{acc.address}</span>
-                {acc.is_default && (
+                {acc.is_default && !acc.last_sync_error && (
                   <span className="text-xs text-muted-foreground">
                     {t('email.accounts.default', 'основной')}
+                  </span>
+                )}
+                {acc.last_sync_error && (
+                  <span className="flex items-center gap-1 text-xs text-destructive">
+                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                    {t('email.accounts.syncFailed', 'синхронизация не идёт')}
                   </span>
                 )}
               </span>
@@ -117,6 +126,12 @@ export const AccountSelector: React.FC<Props> = ({
         <DropdownMenuItem onClick={onAddAccount}>
           <Plus className="mr-2 h-4 w-4" />
           {t('email.accounts.connect', 'Подключить аккаунт')}
+        </DropdownMenuItem>
+        {/* Отдельным пунктом: внутри диалога эту кнопку не находят —
+            до неё три клика, и она не видна из списка аккаунтов. */}
+        <DropdownMenuItem onClick={onAddImap}>
+          <Server className="mr-2 h-4 w-4" />
+          {t('email.accounts.addImap', 'Другая почта (IMAP)')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

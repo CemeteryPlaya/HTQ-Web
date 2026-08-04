@@ -1,0 +1,308 @@
+/* Фирменная тема /django-admin/ — HTQWeb.
+ *
+ * Подключается из templates/admin/base_site.html в блоке {% block extrastyle %},
+ * который в admin/base.html идёт ПОСЛЕ base.css и dark_mode.css, — поэтому
+ * достаточно переопределить те же CSS-переменные, без !important и без правки
+ * чужих правил.
+ *
+ * Django разводит темы четырьмя контекстами, и все четыре обязаны быть здесь,
+ * иначе переключатель «авто/светлая/тёмная» в шапке поедет:
+ *   base.css      -> :root                              (светлая по умолчанию)
+ *   base.css      -> html[data-theme="light"]            (явно выбранная светлая,
+ *                                                         бьёт @media ниже)
+ *   dark_mode.css -> @media (prefers-color-scheme: dark) :root   (авто)
+ *   dark_mode.css -> html[data-theme="dark"]             (явно выбранная тёмная)
+ *
+ * Палитра — те же HSL-числа, что у токенов SPA (frontend/src/index.css):
+ * фирменный тёмно-зелёный hsl(145 45% 22%) и нейтральный сине-серый
+ * hsl(210 …). Значения оставлены в HSL, а не переведены в hex, чтобы правка
+ * оттенка на фронте и здесь оставалась сравнимой глазом.
+ */
+
+/* ── светлая ─────────────────────────────────────────────────────────────── */
+
+:root,
+html[data-theme="light"] {
+  --primary: hsl(145 45% 22%);
+  --primary-fg: #fff;
+  --secondary: hsl(145 46% 15%);
+  --accent: hsl(145 40% 74%);
+
+  --body-fg: hsl(210 20% 12%);
+  --body-bg: hsl(210 20% 99%);
+  --body-quiet-color: hsl(210 10% 45%);
+  --body-medium-color: hsl(210 12% 32%);
+  --body-loud-color: hsl(210 22% 8%);
+
+  --header-color: hsl(145 25% 86%);
+  --header-branding-color: var(--accent);
+  --header-bg: var(--secondary);
+  --header-link-color: #fff;
+
+  --breadcrumbs-fg: hsl(145 22% 84%);
+  --breadcrumbs-link-fg: #fff;
+  --breadcrumbs-bg: hsl(145 45% 22%);
+
+  --link-fg: hsl(145 48% 26%);
+  --link-hover-color: hsl(145 55% 17%);
+  --link-selected-fg: hsl(145 40% 32%);
+
+  --hairline-color: hsl(210 15% 92%);
+  --border-color: hsl(210 15% 86%);
+
+  --darkened-bg: hsl(210 16% 97%);
+  --selected-bg: hsl(145 30% 96%);
+  --selected-row: hsl(145 40% 91%);
+
+  --button-bg: var(--primary);
+  --button-fg: #fff;
+  --button-hover-bg: hsl(145 45% 28%);
+  --default-button-bg: hsl(145 46% 15%);
+  --default-button-hover-bg: hsl(145 52% 11%);
+  --close-button-bg: hsl(210 10% 45%);
+  --close-button-hover-bg: hsl(210 12% 32%);
+
+  --object-tools-fg: #fff;
+  --object-tools-bg: hsl(210 12% 38%);
+  --object-tools-hover-bg: hsl(210 14% 24%);
+
+  --font-family-primary: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* ── тёмная: авто (по системе) и выбранная вручную ───────────────────────── */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: hsl(145 45% 42%);
+    --primary-fg: hsl(210 20% 8%);
+    --secondary: hsl(210 18% 17%);
+    --accent: hsl(145 45% 62%);
+
+    --body-fg: hsl(210 20% 90%);
+    --body-bg: hsl(210 16% 13%);
+    --body-quiet-color: hsl(210 12% 68%);
+    --body-medium-color: hsl(210 14% 78%);
+    --body-loud-color: hsl(210 20% 97%);
+
+    --header-color: hsl(210 14% 78%);
+    --header-branding-color: var(--accent);
+    --header-bg: var(--secondary);
+    --header-link-color: hsl(210 20% 94%);
+
+    --breadcrumbs-fg: hsl(210 12% 70%);
+    --breadcrumbs-link-fg: hsl(210 20% 92%);
+    --breadcrumbs-bg: hsl(210 18% 18%);
+
+    --link-fg: hsl(145 50% 62%);
+    --link-hover-color: hsl(145 58% 74%);
+    --link-selected-fg: hsl(145 40% 55%);
+
+    --hairline-color: hsl(210 18% 20%);
+    --border-color: hsl(210 18% 26%);
+
+    --darkened-bg: hsl(210 18% 16%);
+    --selected-bg: hsl(210 18% 19%);
+    --selected-row: hsl(145 28% 22%);
+
+    --button-bg: hsl(145 45% 36%);
+    --button-fg: hsl(210 20% 97%);
+    --button-hover-bg: hsl(145 45% 44%);
+    --default-button-bg: hsl(145 40% 28%);
+    --default-button-hover-bg: hsl(145 44% 36%);
+    --close-button-bg: hsl(210 12% 32%);
+    --close-button-hover-bg: hsl(210 12% 44%);
+
+    --object-tools-bg: hsl(210 14% 30%);
+    --object-tools-hover-bg: hsl(210 14% 40%);
+  }
+}
+
+html[data-theme="dark"] {
+  --primary: hsl(145 45% 42%);
+  --primary-fg: hsl(210 20% 8%);
+  --secondary: hsl(210 18% 17%);
+  --accent: hsl(145 45% 62%);
+
+  --body-fg: hsl(210 20% 90%);
+  --body-bg: hsl(210 16% 13%);
+  --body-quiet-color: hsl(210 12% 68%);
+  --body-medium-color: hsl(210 14% 78%);
+  --body-loud-color: hsl(210 20% 97%);
+
+  --header-color: hsl(210 14% 78%);
+  --header-branding-color: var(--accent);
+  --header-bg: var(--secondary);
+  --header-link-color: hsl(210 20% 94%);
+
+  --breadcrumbs-fg: hsl(210 12% 70%);
+  --breadcrumbs-link-fg: hsl(210 20% 92%);
+  --breadcrumbs-bg: hsl(210 18% 18%);
+
+  --link-fg: hsl(145 50% 62%);
+  --link-hover-color: hsl(145 58% 74%);
+  --link-selected-fg: hsl(145 40% 55%);
+
+  --hairline-color: hsl(210 18% 20%);
+  --border-color: hsl(210 18% 26%);
+
+  --darkened-bg: hsl(210 18% 16%);
+  --selected-bg: hsl(210 18% 19%);
+  --selected-row: hsl(145 28% 22%);
+
+  --button-bg: hsl(145 45% 36%);
+  --button-fg: hsl(210 20% 97%);
+  --button-hover-bg: hsl(145 45% 44%);
+  --default-button-bg: hsl(145 40% 28%);
+  --default-button-hover-bg: hsl(145 44% 36%);
+  --close-button-bg: hsl(210 12% 32%);
+  --close-button-hover-bg: hsl(210 12% 44%);
+
+  --object-tools-bg: hsl(210 14% 30%);
+  --object-tools-hover-bg: hsl(210 14% 40%);
+}
+
+/* ── форма ──────────────────────────────────────────────────────────────────
+ * Дальше — только скругления, отступы и плотность. Правила намеренно
+ * держатся за долгоживущие id/классы админки (#header, .module, #result_list,
+ * #nav-sidebar, .object-tools), новую разметку не вводим: чем меньше
+ * зацепок за внутренности Django, тем спокойнее апгрейд версии.
+ */
+
+body {
+  font-family: var(--font-family-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+#header {
+  padding: 14px 40px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
+}
+
+#site-name a:link,
+#site-name a:visited {
+  color: var(--header-branding-color);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+div.breadcrumbs {
+  padding: 10px 40px;
+  font-size: 0.8125rem;
+}
+
+/* Карточки разделов и модулей */
+.module {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--hairline-color);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+
+.module caption,
+.module h2 {
+  letter-spacing: 0.01em;
+  font-weight: 600;
+}
+
+/* Кнопки */
+.button,
+input[type="submit"],
+input[type="button"],
+.submit-row input,
+a.button {
+  border-radius: 8px;
+  font-weight: 500;
+  transition: background 0.12s ease-in-out;
+}
+
+.submit-row {
+  border-radius: 10px;
+}
+
+.object-tools a {
+  border-radius: 8px;
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-size: 0.75rem;
+}
+
+/* Таблицы списков: плотнее строки и заметный ховер */
+#result_list tbody tr:hover > * {
+  background: var(--selected-bg);
+}
+
+#result_list td,
+#result_list th {
+  padding: 9px 12px;
+}
+
+#result_list thead th {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Поля ввода */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="url"],
+input[type="number"],
+input[type="tel"],
+textarea,
+select,
+.vTextField {
+  border-radius: 8px;
+  border-color: var(--border-color);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
+}
+
+/* Боковой сайдбар разделов */
+#nav-sidebar {
+  border-inline-end: 1px solid var(--hairline-color);
+}
+
+#nav-sidebar .current-model {
+  border-radius: 6px;
+}
+
+.toggle-nav-sidebar {
+  border-inline-end: 1px solid var(--hairline-color);
+}
+
+/* Фильтры справа */
+#changelist-filter {
+  border-radius: 10px;
+}
+
+/* Страница входа — карточка по центру вместо голой формы */
+body.login #container {
+  border-radius: 12px;
+  border: 1px solid var(--hairline-color);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 10%);
+  overflow: hidden;
+}
+
+body.login #header {
+  border-radius: 0;
+  padding: 16px 20px;
+}
+
+/* Шапка входа узкая (карточка ~390px) — на общем размере длинный site_header
+   переносится на две строки. Уменьшаем только здесь. */
+body.login #site-name,
+body.login #site-name a:link,
+body.login #site-name a:visited {
+  font-size: 0.95rem;
+  line-height: 1.3;
+}
+
+body.login .submit-row input {
+  width: 100%;
+}

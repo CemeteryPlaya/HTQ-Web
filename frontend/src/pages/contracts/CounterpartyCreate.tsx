@@ -5,7 +5,9 @@ import { ArrowLeft, Building2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ContractsShell } from '@/components/contracts/ContractsShell';
+import { BinIinInput } from '@/components/ui/bin-iin-input';
 import { Button } from '@/components/ui/button';
+import { InternationalPhoneInput } from '@/components/ui/international-phone-input';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -122,16 +124,19 @@ const CounterpartyCreate = () => {
       toast.success(`Контрагент добавлен: ${row.name}`);
       navigate('/contracts/counterparties');
     },
-    onError: (error: any) => {
-      const httpStatus = error?.response?.status;
-      const detail = error?.response?.data?.detail;
+    onError: (error: unknown) => {
+      const axiosError = error as import('axios').AxiosError<{
+        detail?: unknown;
+      }>;
+      const httpStatus = axiosError?.response?.status;
+      const detail = axiosError?.response?.data?.detail;
       if (httpStatus === 409 && typeof detail === 'string') {
         // Практически всегда — дубль БИН/ИИН. Текст с бэкенда осмысленный.
         toast.error(detail);
         return;
       }
       if (httpStatus === 422 && Array.isArray(detail)) {
-        toast.error(detail.map((item: any) => item.msg).join('; '));
+        toast.error(detail.map((item) => (item as { msg?: string }).msg ?? '').join('; '));
         return;
       }
       toast.error('Не удалось добавить контрагента');
@@ -188,11 +193,10 @@ const CounterpartyCreate = () => {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <Label htmlFor="bin-iin">БИН / ИИН</Label>
-                  <Input
+                  <BinIinInput
                     id="bin-iin"
                     value={binIin}
-                    onChange={(event) => setBinIin(event.target.value)}
-                    placeholder="123456789012"
+                    onChange={setBinIin}
                     className={errors.binIin ? 'border-destructive' : undefined}
                   />
                   {fieldError('binIin')}
@@ -301,13 +305,10 @@ const CounterpartyCreate = () => {
                 </div>
                 <div>
                   <Label htmlFor="phone">Телефон</Label>
-                  <Input
+                  <InternationalPhoneInput
                     id="phone"
-                    type="tel"
                     value={phone}
-                    onChange={(event) => setPhone(event.target.value)}
-                    placeholder="+7 700 000 00 00"
-                    maxLength={30}
+                    onChange={setPhone}
                   />
                 </div>
                 <div>

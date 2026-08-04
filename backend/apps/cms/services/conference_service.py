@@ -7,16 +7,21 @@ themselves overridable via env — see ``htqweb/settings/base.py``) and
 normalises the signaling URL against the current request host so browsers
 never get a container-internal or localhost URL when hitting a public host.
 
-The one addition beyond the port (Task 1.5) is ``enabled``: the SFU stack is
-deliberately out of service and seeded DISABLED in the ``apps.core`` service
-registry, so the response also carries ``service_enabled("conference")`` —
-the frontend learns that from the same config fetch it already makes,
-instead of only from ``/api/core/v1/services/``.
+Дополнения сверх порта:
+
+* ``enabled`` (Task 1.5) — ``service_enabled("conference")`` из реестра
+  ``apps.core``: фронт узнаёт статус сервиса из того же запроса конфига,
+  а не только из ``/api/core/v1/services/``. Сервис включён (миграция
+  ``core/0003_enable_conference``) — SFU поднят и в dev, и в проде.
+* ``wt_signaling_url`` / ``wt_certificate_hashes`` — адрес QUIC-моста
+  (``webtransport/``) и отпечатки его самоподписанного сертификата для
+  dev. Фронт предпочитает WebTransport, а WebSocket держит запасным.
 """
 
 from __future__ import annotations
 
 import ipaddress
+from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 from django.conf import settings
@@ -87,6 +92,36 @@ def _resolve_signaling_url(request: HttpRequest, raw_sfu_url: str, raw_sfu_path:
     return urlunparse(parsed._replace(scheme=scheme, path=path))
 
 
+def _wt_certificate_hashes() -> list[str]:
+    """Отпечатки самоподписанного сертификата QUIC-моста (dev).
+
+    Источника два: явный ``CONFERENCE_WT_CERT_HASHES`` (список hex через
+    запятую) и файл, который мост пишет при каждом старте
+    (``CONFERENCE_WT_CERT_HASH_FILE``, том ``wt_certs``). Файл читаем на
+    каждый запрос: сертификат живёт 13 дней и перевыпускается, а конфиг
+    фронт запрашивает раз в сессию — кэшировать нечего, а устаревший
+    отпечаток сломал бы подключение.
+    """
+    hashes: list[str] = [
+        value.strip()
+        for value in settings.CONFERENCE_WT_CERT_HASHES.split(",")
+        if value.strip()
+    ]
+
+    hash_file = (settings.CONFERENCE_WT_CERT_HASH_FILE or "").strip()
+    if hash_file:
+        try:
+            from_file = Path(hash_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            # Мост ещё не стартовал или том не смонтирован — не повод
+            # ронять конфиг: без хэшей фронт просто уйдёт на WebSocket.
+            from_file = ""
+        if from_file and from_file not in hashes:
+            hashes.append(from_file)
+
+    return hashes
+
+
 def get_conference_config(request: HttpRequest) -> schemas.ConferenceConfig:
     return schemas.ConferenceConfig(
         sfu_signaling_url=_resolve_signaling_url(
@@ -95,4 +130,6 @@ def get_conference_config(request: HttpRequest) -> schemas.ConferenceConfig:
         sfu_signaling_path=_normalize_path(settings.CONFERENCE_SFU_PATH),
         ice_servers=settings.CONFERENCE_ICE_SERVERS,
         enabled=service_enabled("conference"),
+        wt_signaling_url=(settings.CONFERENCE_WT_URL or "").strip(),
+        wt_certificate_hashes=_wt_certificate_hashes(),
     )

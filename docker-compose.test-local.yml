@@ -1,0 +1,584 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# HTQWeb — ТЕСТОВЫЙ стек с ЛОКАЛЬНОЙ БД (самодостаточный)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+#   docker compose -f docker-compose.test-local.yml up -d --build
+#
+# Приложение: http://localhost:3000 (Vite HMR) · django-admin :8000/django-admin/
+# Учётка админа заводится сама при старте backend-web: admin / admin12345
+#
+# ТОЛЬКО Postgres для pytest (без остального стека — быстро и легко):
+#   docker compose -f docker-compose.test-local.yml up -d db
+#   cd backend && ../.venv/Scripts/python.exe -m pytest -q
+#
+# Пересобрать один процесс после правки кода:
+#   docker compose -f docker-compose.test-local.yml up -d --build --no-deps backend-web
+#
+# Снести вместе с данными:
+#   docker compose -f docker-compose.test-local.yml down -v
+#
+# ─── ЧЕМ ОТЛИЧАЕТСЯ ОТ ДВУХ ДРУГИХ ФАЙЛОВ ──────────────────────────────────────
+#   docker-compose.yml            — ПРОД: сборка фронта в статику, gunicorn,
+#                                   nginx/sfu/certbot, БД из .env
+#   docker-compose.test-env.yml   — тот же тестовый стек, но БД БЕРЁТСЯ ИЗ .env
+#                                   (обычно боевой VPS) и миграции по умолчанию OFF
+#   ЭТОТ ФАЙЛ                     — БД в контейнере рядом, миграции ON, данные
+#                                   одноразовые
+#
+# ⚠️ Файлы самостоятельные и НЕ наследуют друг друга (осознанное решение —
+#    запускать одной короткой командой). Значит правка сервиса, общего для
+#    сред (redis, minio, backend-*, grafana…), должна повторяться в остальных
+#    двух файлах. Перед коммитом сверяйте:  git diff docker-compose*.yml
+#
+# ⚠️ Три стека публикуют ОДНИ И ТЕ ЖЕ host-порты (3000/8000/8001/5555/9000…),
+#    поэтому одновременно поднимается только один. Имя проекта у каждого своё,
+#    так что тома не пересекаются.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: htqweb-local
+
+x-django-env: &django-env
+  # DEBUG-настройки: подробные трейсбеки, без обязательного ALLOWED_HOSTS.
+  DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
+  JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
+  # ⚠️ ЖЁСТКО `db`, а НЕ ${DB_HOST} — в этом весь смысл файла. В корневом .env
+  # лежит адрес боевой БД, и подстановка увела бы «локальный» стек на прод:
+  # миграции, сиды и проверки «а что если удалить» ушли бы туда же.
+  # Учётка тоже фиксирована: боевой пароль в локальный контейнер не пустят
+  # (POSTGRES_PASSWORD применяется лишь при первой инициализации каталога).
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_NAME: htqweb
+  DB_USER: htqweb
+  DB_PASSWORD: change-me
+  REDIS_URL: redis://redis:6379/1
+  CELERY_BROKER_URL: redis://redis:6379/2
+  STORAGE_BACKEND: s3
+  S3_ENDPOINT: http://minio:9000
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+  S3_BUCKET: ${S3_BUCKET:-htqweb-cms}
+  MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-htqweb-media}
+  S3_USE_PATH_STYLE: "true"
+
+services:
+  # ─── PostgreSQL (локальная, одноразовая) ────────────────────────────────────
+  # Публикуется на :55432, а НЕ на :5432 — на Windows-хостах :5432 занят
+  # нативной установкой PostgreSQL. Этот же порт использует backend-сюита:
+  # pytest-django делает CREATE/DROP test_htqweb, что не проходит через
+  # PgBouncer (transaction-пул). См. backend/README-tests.md.
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: htqweb
+      POSTGRES_USER: htqweb
+      POSTGRES_PASSWORD: change-me
+    ports:
+      - "${DB_HOST_PORT:-55432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/db/init-ltree.sql:/docker-entrypoint-initdb.d/01-ltree.sql:ro
+    # max_connections=300: длинная Django-сюита + тесты @django_db(transaction=True)
+    # под дефолтными 100 к концу прогона упираются в лимит (SystemExit-teardown,
+    # ERROR в хвосте). См. backend/README-tests.md.
+    command: ["postgres", "-c", "max_connections=300"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U htqweb"]
+      interval: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── PgBouncer — только для хостовых утилит/ручного psql на :6432 ───────────
+  # В путь живого запроса НЕ входит: Django ходит в Postgres напрямую
+  # (CONN_MAX_AGE пулит на уровне приложения, а transaction-пул рвал бы
+  # DDL/prepared-statements).
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.1-p0
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: htqweb
+      DB_USER: htqweb
+      DB_PASSWORD: change-me
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: 20
+      IDLE_TRANSACTION_TIMEOUT: 300
+      SERVER_IDLE_TIMEOUT: 240
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,search_path
+    ports:
+      - "6432:5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U htqweb || exit 1"]
+      interval: 3s
+      retries: 10
+      start_period: 5s
+      timeout: 3s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── Redis (кэш + брокер Celery) ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  # ─── MinIO (S3-совместимое хранилище) ───────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      MINIO_PROMETHEUS_AUTH_TYPE: "public"
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # веб-консоль
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  # Одноразовое создание бакетов (идемпотентно). Это подстраховка, а не
+  # единственный механизм: точечный запуск (`up -d backend-web`, `--no-deps`)
+  # этот job не поднимает — основную гарантию даёт `manage.py ensure_buckets`
+  # в backend/docker-entrypoint.sh.
+  # Бакетов ровно два — по потребителям htqweb.storage.get_storage():
+  # S3_BUCKET (снапшоты новостей cms) и MEDIA_S3_BUCKET (ВСЕ бинарные файлы —
+  # каждая аппка пишет через apps.media_files.interface.store_file()).
+  minio-bootstrap:
+    image: minio/mc:RELEASE.2025-01-17T23-25-50Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MC_HOST_local: http://${S3_ACCESS_KEY:-minioadmin}:${S3_SECRET_KEY:-minioadmin}@minio:9000
+    entrypoint: >
+      /bin/sh -c "
+        set -e;
+        for b in ${S3_BUCKET:-htqweb-cms} ${MEDIA_S3_BUCKET:-htqweb-media}; do
+          mc mb --ignore-existing local/$$b;
+        done;
+        echo placeholder | mc pipe local/${S3_BUCKET:-htqweb-cms}/news/.keep;
+        echo bootstrap-done;
+      "
+    restart: "no"
+
+  # ─── Django backend — WSGI (весь /api/*, django-admin, статика) ─────────────
+  # ТОЛЬКО этот процесс мигрирует и сидит админа (admin/admin12345).
+  backend-web:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+      # Миграции на локальной базе — норма: она для того и заведена.
+      RUN_MIGRATIONS: "1"
+      RUN_BOOTSTRAP: "1"
+    # runserver вместо gunicorn: автоперезагрузка по правке смонтированных исходников.
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # ensure_buckets в docker-entrypoint.sh ходит в minio:9000 ещё до запуска
+      # сервера. Без этой зависимости backend-web обгоняет minio и тратит ~40 с
+      # на ретраи botocore, после чего healthcheck успевает объявить контейнер
+      # нездоровым, хотя приложение исправно.
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/core/v1/services/').status==200 else 1)\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      # Холодный старт складывается из collectstatic (~9 с), сида админа (~3 с)
+      # и загрузки Django (~7 с), а на медленной машине или при недоступном S3
+      # ещё дольше. 40 с не хватало, и compose падал с "is unhealthy" при живом
+      # приложении.
+      start_period: 120s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── Django backend — ASGI (SSE /api/requests/v1/stream + WS /ws/) ──────────
+  backend-asgi:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["uvicorn", "htqweb.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend-web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── Celery worker (фоновые задачи всех доменов) ────────────────────────────
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["celery", "-A", "htqweb", "worker", "-l", "info"]
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend-web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── Celery beat (периодика из БД: django-celery-beat) ──────────────────────
+  backend-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["celery", "-A", "htqweb", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend-web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── Flower (мониторинг Celery) ─────────────────────────────────────────────
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["celery", "-A", "htqweb", "flower", "--port=5555"]
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+  # ─── Frontend — Vite dev-сервер с HMR ───────────────────────────────────────
+  # Прокси Vite (frontend/vite.config.ts) повторяет сплит nginx:
+  # /api → backend-web (WSGI), SSE и /ws → backend-asgi (ASGI).
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    entrypoint: []
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_DEV_HTTPS: "false"
+      VITE_DISABLE_HMR: "false"
+      VITE_BACKEND_TARGET: "http://backend-web:8000"
+      VITE_ASGI_TARGET: "http://backend-asgi:8000"
+      VITE_MESSENGER_WS_TARGET: "ws://backend-asgi:8000"
+      # Без этого Vite проксирует /ws/sfu на дефолтный ws://127.0.0.1:4443,
+      # то есть на сам контейнер фронта, и сигналинг конференции не
+      # находит SFU. Имя сервиса резолвится в docker-сети.
+      VITE_SFU_WS_TARGET: "ws://sfu:4443"
+    depends_on:
+      backend-web:
+        condition: service_healthy
+
+  # ─── Наблюдаемость ──────────────────────────────────────────────────────────
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://htqweb:change-me@db:5432/htqweb?sslmode=disable
+    ports:
+      - "9187:9187"
+    depends_on:
+      db:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.58.0
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  prometheus:
+    build:
+      context: ./infra/logging/prometheus
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+    healthcheck:
+      # Prometheus отдаётся под префиксом /prometheus (--web.external-url),
+      # поэтому health лежит на /prometheus/-/healthy, а не на /-/healthy.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/prometheus/-/healthy || exit 1"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  loki:
+    image: grafana/loki:2.9.10
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yml
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/logging/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready | grep -q ready || exit 1"]
+      interval: 10s
+      retries: 12
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  promtail:
+    image: grafana/promtail:2.9.10
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./infra/logging/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  grafana:
+    image: grafana/grafana-oss:10.4.4
+    restart: unless-stopped
+    # Собираем JWKS из платформенного HS256-секрета до старта, чтобы [auth.jwt]
+    # принимал те же access-токены, что выпускает apps.users. Файл кладём в /tmp
+    # (grafana работает непривилегированно, /etc/grafana только на чтение).
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        k=$$(printf '%s' "$$JWT_SECRET" | base64 | tr -d '\n=' | tr '+/' '-_')
+        printf '{"keys":[{"kty":"oct","use":"sig","alg":"HS256","k":"%s"}]}' "$$k" > /tmp/htqweb-jwks.json
+        exec /run.sh
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # SSO платформенными аккаунтами: superuser → Admin, staff → Editor,
+      # остальные отклоняются (role_attribute_strict). Локальный admin/admin
+      # продолжает работать.
+      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
+      GF_AUTH_JWT_ENABLED: "true"
+      GF_AUTH_JWT_HEADER_NAME: "X-JWT-Assertion"
+      GF_AUTH_JWT_URL_LOGIN: "true"
+      GF_AUTH_JWT_USERNAME_CLAIM: "username"
+      GF_AUTH_JWT_EMAIL_CLAIM: "email"
+      GF_AUTH_JWT_AUTO_SIGN_UP: "true"
+      GF_AUTH_JWT_JWK_SET_FILE: /tmp/htqweb-jwks.json
+      GF_AUTH_JWT_EXPECT_CLAIMS: '{"iss": "htqweb-auth"}'
+      GF_AUTH_JWT_ROLE_ATTRIBUTE_PATH: "is_superuser && 'Admin' || is_staff && 'Editor'"
+      GF_AUTH_JWT_ROLE_ATTRIBUTE_STRICT: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/htqweb-prometheus-services.json
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/logging/grafana-provisioning:/etc/grafana/provisioning:ro
+      - ./infra/logging/grafana-dashboards:/etc/grafana/dashboards:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  # ═══ Видеоконференция ═══════════════════════════════════════════════════
+  # Перенесено из docker-compose.yml. При сведении четырёх compose-файлов в три
+  # эти два сервиса не попали в тестовые стеки: они собирались по прежнему
+  # dev-оверлею, где SFU сидел под профилем `production`. Профиль с тех пор
+  # снят, и страница /conference обязана работать и здесь.
+
+  # WEBRTC_ANNOUNCED_IP обязателен: с wildcard listenIp и пустым announcedIp
+  # SFU падает на старте (sfu/src/config.ts::validateListenIps), иначе клиенты
+  # получили бы SDP с 0.0.0.0 и чёрное видео. В прод — публичный IP хоста.
+  sfu:
+    build:
+      context: ./sfu
+      dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    # Тонкая настройка (битрейты, TURN, воркеры) — необязательный sfu/.env;
+    # ключи из environment ниже имеют приоритет над ним.
+    env_file:
+      - path: ./sfu/.env
+        required: false
+    restart: unless-stopped
+    environment:
+      SFU_HOST: 0.0.0.0
+      SFU_PORT: "4443"
+      # JWT: тот же секрет и issuer, что у Django (htqweb/authn/jwt.py).
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER:-htqweb-auth}
+      SIGNALING_REQUIRE_AUTH: ${SFU_REQUIRE_AUTH:-true}
+      SIGNALING_REQUIRE_TLS: ${SFU_REQUIRE_TLS:-false}
+      SIGNALING_DISABLE_ORIGIN_CHECK: ${SFU_DISABLE_ORIGIN_CHECK:-true}
+      SIGNALING_ALLOWED_ORIGINS: ${SFU_ALLOWED_ORIGINS:-}
+      WEBRTC_LISTEN_IP: ${WEBRTC_LISTEN_IP:-0.0.0.0}
+      # Непустой дефолт: с пустым announcedIp SFU падает на старте намеренно.
+      # 127.0.0.1 — браузер на той же машине; для проверки с телефона
+      # поставьте LAN-IP хоста в корневом .env.
+      WEBRTC_ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-127.0.0.1}
+      WEBRTC_SERVER_PORT: ${WEBRTC_SERVER_PORT:-44444}
+      MEDIASOUP_WORKERS: ${MEDIASOUP_WORKERS:-1}
+    ports:
+      - "4443:4443"
+      - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/udp"
+      - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/tcp"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "require('http').get('http://127.0.0.1:4443/healthz',
+          r => process.exit(r.statusCode === 200 ? 0 : 1))
+          .on('error', () => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ─── Frontend builder (one-shot) ────────────────
+
+
+  # Сертификат: по умолчанию самоподписанный из тома wt_certs (браузер примет
+  # его только через serverCertificateHashes — см. CONFERENCE_WT_CERT_HASHES).
+  # В прод смонтируйте сюда live-сертификат certbot'а.
+  webtransport:
+    build:
+      context: ./webtransport
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SFU_WS_URL: ${SFU_WS_URL:-ws://sfu:4443/ws/sfu/}
+      WT_HOST: "0.0.0.0"
+      WT_PORT: "4433"
+      LOG_LEVEL: ${WT_LOG_LEVEL:-INFO}
+      # Прод: укажите живой сертификат домена из тома certbot'а, например
+      # WT_CERT_FILE=/etc/letsencrypt/live/<домен>/fullchain.pem
+      # WT_KEY_FILE=/etc/letsencrypt/live/<домен>/privkey.pem
+      # Тогда самоподписанный не выпускается, а отпечатки фронту не нужны.
+      CERT_FILE: ${WT_CERT_FILE:-certs/cert.pem}
+      KEY_FILE: ${WT_KEY_FILE:-certs/key.pem}
+      # SAN самоподписанного сертификата (dev): localhost и 127.0.0.1 всегда,
+      # остальное — сюда через запятую (например LAN-IP хоста).
+      WT_CERT_HOSTS: ${WT_CERT_HOSTS:-}
+    ports:
+      - "4433:4433/udp"
+    volumes:
+      # Только самоподписанный из wt_certs: тома certbot_conf в тестовых
+      # стеках нет (Let's Encrypt живёт в прод-контуре).
+      - wt_certs:/app/certs
+    depends_on:
+      - sfu
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+
+volumes:
+  postgres_data:
+  minio_data:
+  loki_data:
+  grafana_data:
+  prometheus_data:
+  wt_certs:

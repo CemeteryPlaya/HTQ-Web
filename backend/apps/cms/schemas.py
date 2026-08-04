@@ -61,16 +61,25 @@ class ConferenceConfig(BaseModel):
     Field-for-field port of the FastAPI original's ``ConferenceConfig``
     (``services/cms/app/schemas/conference.py``) — the frontend's WebRTC
     layer (``ConferencePage.tsx``) parses these names as-is, so they are not
-    renamed. ``enabled`` is the one addition beyond the port (Task 1.5):
-    whether the conference/SFU service itself is on in the service registry
-    (``apps.core.services.service_enabled``), placed last so it doesn't
-    disturb the ported fields.
+    renamed. Everything after ``ice_servers`` is an addition beyond the port,
+    placed last so the ported fields keep their order:
+
+    * ``enabled`` (Task 1.5) — whether the conference/SFU service is on in
+      the service registry (``apps.core.services.service_enabled``);
+    * ``wt_signaling_url`` / ``wt_certificate_hashes`` — WebTransport (QUIC)
+      сигналинг: предпочтительный транспорт, WebSocket остаётся запасным.
+      Пустой URL = QUIC-мост не развёрнут, фронт сразу идёт по WebSocket.
+      Хэши нужны только для самоподписанного сертификата в dev
+      (``new WebTransport(url, {serverCertificateHashes})``); с сертификатом
+      от настоящего CA список пуст.
     """
 
     sfu_signaling_url: str = ""
     sfu_signaling_path: str = "/ws/sfu/"
     ice_servers: list[IceServer] = Field(default_factory=list)
     enabled: bool = True
+    wt_signaling_url: str = ""
+    wt_certificate_hashes: list[str] = Field(default_factory=list)
 
 
 class ContactRequestListQuery(BaseModel):
@@ -234,3 +243,128 @@ class NewsListQuery(BaseModel):
     q: Optional[str] = Field(None, max_length=200)
     page: int = Field(1, ge=1)
     page_size: int = Field(12, ge=1, le=100)
+
+
+# ── Блоки главной страницы ───────────────────────────────────────────────────
+#
+# Две формы одних и тех же данных:
+#   * публичная (``HomeSectionPublic``) — уже локализованная, по одному
+#     значению на поле: лендингу незачем знать про существование второго языка;
+#   * редакторская (``HomeSectionAdmin``) — оба языка сразу, чтобы форма
+#     показывала вкладки RU/EN без второго запроса.
+
+class HomeItemPublic(BaseModel):
+    id: int
+    title: str = ""
+    description: str = ""
+    value: str = ""
+    icon: str = ""
+    image: str = ""
+    link: str = ""
+
+
+class HomeSectionPublic(BaseModel):
+    id: int
+    key: str
+    layout: str = "features_grid"
+    is_system: bool = False
+    tag: str = ""
+    title: str = ""
+    description: str = ""
+    items: list[HomeItemPublic] = []
+
+
+class HomeItemAdmin(BaseModel):
+    id: int
+    title_ru: str = ""
+    title_en: str = ""
+    description_ru: str = ""
+    description_en: str = ""
+    value: str = ""
+    icon: str = ""
+    image: str = ""
+    link: str = ""
+    is_visible: bool = True
+    order: int = 0
+
+
+class HomeSectionAdmin(BaseModel):
+    id: int
+    key: str
+    layout: str = "features_grid"
+    is_system: bool = False
+    tag_ru: str = ""
+    tag_en: str = ""
+    title_ru: str = ""
+    title_en: str = ""
+    description_ru: str = ""
+    description_en: str = ""
+    is_visible: bool = True
+    order: int = 0
+    items: list[HomeItemAdmin] = []
+
+
+class HomeSectionUpdate(BaseModel):
+    """PATCH секции. Все поля необязательны — форма шлёт только изменённое.
+
+    ``key`` менять нельзя: по нему React-компонент находит свои данные, и
+    переименование молча оставило бы секцию без макета. В схеме его нет вовсе,
+    так что попытка прислать key просто игнорируется.
+    """
+    tag_ru: str | None = None
+    tag_en: str | None = None
+    title_ru: str | None = None
+    title_en: str | None = None
+    description_ru: str | None = None
+    description_en: str | None = None
+    is_visible: bool | None = None
+
+
+class HomeItemUpsert(BaseModel):
+    title_ru: str = ""
+    title_en: str = ""
+    description_ru: str = ""
+    description_en: str = ""
+    value: str = ""
+    icon: str = ""
+    image: str = ""
+    link: str = ""
+    is_visible: bool = True
+
+
+class HomeItemUpdate(BaseModel):
+    title_ru: str | None = None
+    title_en: str | None = None
+    description_ru: str | None = None
+    description_en: str | None = None
+    value: str | None = None
+    icon: str | None = None
+    image: str | None = None
+    link: str | None = None
+    is_visible: bool | None = None
+
+
+class HomeReorder(BaseModel):
+    """Массовая перестановка: список id в нужном порядке.
+
+    Одним запросом, а не PATCH на каждую строку: перетаскивание меняет позиции
+    сразу нескольким соседям, и построчная запись оставила бы порядок битым,
+    если часть запросов не дойдёт.
+    """
+    ids: list[int]
+
+
+class HomeSectionCreate(BaseModel):
+    """Создание блока из интерфейса.
+
+    ``key`` не спрашиваем: он служебный (по нему рендерер находит макет) и
+    редактору не нужен — сервер выведет его из заголовка и разведёт коллизии
+    сам. Ручной ввод дал бы поле, в котором нечего написать правильно.
+    """
+    title_ru: str
+    title_en: str = ""
+    layout: str = "features_grid"
+    tag_ru: str = ""
+    tag_en: str = ""
+    description_ru: str = ""
+    description_en: str = ""

@@ -33,6 +33,13 @@ from django.conf import settings
 log = logging.getLogger(__name__)
 
 
+def _configured_domain() -> str:
+    """Домен из эффективных настроек (интерфейс поверх env)."""
+    from apps.mail.services.mail_config import get_config
+
+    return get_config().domain
+
+
 class MailcowError(RuntimeError):
     """Raised when Mailcow returns a non-success payload or the call fails."""
 
@@ -44,8 +51,11 @@ class MailcowClient:
         api_key: str | None = None,
         timeout: float = 15.0,
     ) -> None:
-        self.base_url = (base_url or getattr(settings, "MAILCOW_API_URL", "")).rstrip("/")
-        self.api_key = api_key or getattr(settings, "MAILCOW_API_KEY", "")
+        from apps.mail.services.mail_config import get_config
+
+        cfg = get_config()
+        self.base_url = (base_url or cfg.mailcow_api_url).rstrip("/")
+        self.api_key = api_key or cfg.mailcow_api_key
         self.timeout = timeout
         if not self.base_url or not self.api_key:
             log.warning("mailcow_client_unconfigured")
@@ -174,7 +184,7 @@ class MailcowClient:
         return self._get(f"/get/mailbox/{address}")
 
     def list_mailboxes(self, domain: str | None = None) -> list[dict[str, Any]]:
-        domain = domain or getattr(settings, "MAILCOW_DOMAIN", "")
+        domain = domain or _configured_domain()
         data = self._get(f"/get/mailbox/all/{domain}")
         return data if isinstance(data, list) else []
 
@@ -188,7 +198,7 @@ class MailcowClient:
         )
 
     def list_aliases(self, domain: str | None = None) -> list[dict[str, Any]]:
-        domain = domain or getattr(settings, "MAILCOW_DOMAIN", "")
+        domain = domain or _configured_domain()
         data = self._get(f"/get/alias/all/{domain}")
         return data if isinstance(data, list) else []
 

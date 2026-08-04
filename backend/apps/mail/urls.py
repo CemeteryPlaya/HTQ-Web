@@ -42,6 +42,19 @@ urlpatterns = [
     path("accounts/", views.accounts_collection),
     path("accounts", views.accounts_collection),
 
+    # Самоподключение корпоративного ящика сотрудником (GET/POST/DELETE).
+    # Литеральный путь — ДО ``accounts/<int:account_id>/``.
+    path("accounts/connect-corporate/", views.corporate_connect),
+    path("accounts/connect-corporate", views.corporate_connect),
+
+    # Подключение произвольного аккаунта по IMAP (GET — подсказка настроек
+    # по адресу, POST — подключить).
+    path("accounts/connect-imap/", views.imap_connect),
+    path("accounts/connect-imap", views.imap_connect),
+
+    path("accounts/<int:account_id>/imap-password/", views.imap_account_password),
+    path("accounts/<int:account_id>/imap-password", views.imap_account_password),
+
     path("accounts/<int:account_id>/set-default/", views.account_set_default),
     path("accounts/<int:account_id>/set-default", views.account_set_default),
 
@@ -109,6 +122,22 @@ urlpatterns = [
     # Литеральный ``mailboxes/aliases/`` — ДО ``mailboxes/<int:mailbox_id>/``
     # (конвенция репозитория; <int:...> и так не матчит "aliases", но порядок
     # соблюдён явно).
+    # Литеральные подпути mailboxes/* — ДО ``mailboxes/<int:mailbox_id>/``
+    # (та же конвенция, что и aliases ниже).
+    path("mailboxes/status/", views.mailbox_status),
+    path("mailboxes/status", views.mailbox_status),
+
+    # Реквизиты почтового сервера из интерфейса. ``settings/test/`` — ДО
+    # ``settings/``, иначе более общий путь перехватил бы его.
+    path("mailboxes/settings/test/", views.test_mail_connection),
+    path("mailboxes/settings/test", views.test_mail_connection),
+
+    path("mailboxes/settings/", views.mail_settings),
+    path("mailboxes/settings", views.mail_settings),
+
+    path("mailboxes/reconcile/", views.reconcile_mailboxes),
+    path("mailboxes/reconcile", views.reconcile_mailboxes),
+
     path("mailboxes/aliases/", views.aliases_collection),
     path("mailboxes/aliases", views.aliases_collection),
 

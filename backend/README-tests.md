@@ -16,22 +16,45 @@ pytest-django needs a **direct** connection to Postgres so it can
   transaction-pooled, and `CREATE DATABASE`/`DROP DATABASE` cannot pass through a
   pooled connection.
 
-So `docker-compose.test.yml` (repo root, new file) publishes the `db` container on a
-free port, `55432` (from the already-present but previously-unwired `.env` var
-`DB_HOST_PORT`), **without touching `docker-compose.yml`/`docker-compose.dev.yml`** —
-deploy configuration is untouched; this override is test-only infrastructure.
+Поэтому Postgres берём из `docker-compose.test-local.yml` (repo root) — его сервис
+`db` публикуется на `55432` (`.env`-var `DB_HOST_PORT`), в отдельном проекте
+`htqweb-local` и отдельном volume. Боевую БД (в Docker на VPS, `docker-compose.yml`)
+НЕ трогает.
 
 ## What to start
 
+Поднимать весь тестовый стек ради pytest не нужно — запускаем ОДИН сервис:
+
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db
+docker compose -f docker-compose.test-local.yml up -d db     # тест-Postgres на :55432
+# ...прогнать pytest...
+docker compose -f docker-compose.test-local.yml down -v      # снести с данными
 ```
 
-This recreates just the `db` service with the extra port mapping
-(`${DB_HOST_PORT:-55432}:5432`, additive to the existing `5432:5432` mapping — it
-does not remove or change the production port). Verified after bringing it up that
-`localhost:55432` really reaches the **container** (schemas `auth, cms, email, media,
-messenger` — Postgres 16.13 Alpine) and not the native Windows Postgres 18.
+(Тот же файл без `db` на конце поднимает полный стек с Vite HMR — он для
+разработки, для тестов избыточен.)
+
+### Если на машине нет `.venv`
+
+Команды ниже предполагают venv в корне репозитория. Его может не быть — тогда
+сюиту можно прогнать прямо в контейнере backend'а, где все зависимости уже
+установлены. Адрес тестовой БД переопределяем на внутрисетевой, потому что
+дефолт `localhost:55432` верен только с хоста:
+
+```bash
+docker compose -f docker-compose.test-local.yml up -d backend-web
+docker compose -f docker-compose.test-local.yml exec \
+  -e TEST_DB_HOST=db -e TEST_DB_PORT=5432 backend-web python -m pytest -q
+```
+
+⚠️ Поднимать/пересоздавать db ТОЛЬКО через `compose up -d` — **НЕ `docker restart`**:
+плоский restart НЕ применяет публикацию порта `:55432` → pytest виснет на
+`psycopg ConnectionTimeout` (localhost→`::1`+`127.0.0.1`, timeout 130s каждый).
+Проверка: `docker port htqweb-local-db-1` должен показать `0.0.0.0:55432`.
+Креды контейнера зафиксированы как `htqweb/change-me` и совпадают с дефолтами
+`TEST_DB_*`, которые читает `settings/test.py` (а не `DB_*`), поэтому VPS-креды
+из `.env` сюда не текут. Если переопределяете `TEST_DB_USER`/`TEST_DB_PASSWORD`,
+поменяйте их и в сервисе `db` — иначе pytest не пустят в базу.
 
 ## Env vars (all have working defaults, override only if needed)
 

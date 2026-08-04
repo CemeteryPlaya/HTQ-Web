@@ -35,7 +35,7 @@ htqweb/http.py). 3 пути ("/mailboxes/", "/mailboxes/{id}/",
 """
 from __future__ import annotations
 
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 
 from htqweb.http import api_view, json_error
 
@@ -44,6 +44,8 @@ from .services import account_service as acct_svc
 from .services import email_service as mail_svc
 from .services import mailbox_service as mbx_svc
 from .services import oauth_service as oauth_svc
+from .services import (connection_check, imap_account_service, provisioning,
+                       reconcile_service, self_service, settings_service)
 from .services.mailcow_client import MailcowClient
 
 _VALID_PROVIDERS = ("google", "microsoft")
@@ -124,6 +126,121 @@ def account_detail(request, account_id: int):
             "Corporate mailboxes are removed via /mailboxes/{id}/archive/", 400,
         )
     return HttpResponse(status=204)
+
+
+# ── /accounts/connect-corporate/ — сотрудник подключает свой ящик сам ─────
+#
+# Единственная точка домена, где НЕпривилегированный пользователь заводит
+# ProvisionedMailbox. Все ограничения — в services/self_service.py (режим
+# включается админом, домен обязан совпасть, чужой ящик не увести).
+
+
+@api_view(methods=("GET",), auth="jwt")
+def corporate_connect_info(request):
+    """Что показать сотруднику: можно ли подключать ящик и в каком домене.
+
+    Отдаётся обычному пользователю, поэтому наружу идёт только необходимое —
+    без адресов серверов и прочих деталей инфраструктуры.
+    """
+    info = provisioning.describe()
+    mailbox = _current_mailbox(request.token.user_id)
+    return {
+        "allowed": info["allow_self_service"],
+        "domain": info["domain"],
+        "mailbox": mailbox,
+    }
+
+
+def _current_mailbox(user_id: int):
+    """Ящик пользователя в форме, пригодной для показа ему самому."""
+    from .models import ProvisionedMailbox
+
+    mb = ProvisionedMailbox.objects.filter(user_id=user_id).exclude(status="deleted").first()
+    return mbx_svc.serialize(mb) if mb is not None else None
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.MailboxConnectRequest, status=201)
+def _corporate_connect(request, data: schemas.MailboxConnectRequest):
+    try:
+        return self_service.connect_own_mailbox(
+            user_id=request.token.user_id, address=data.address, password=data.password,
+        )
+    except self_service.SelfServiceDisabled:
+        return json_error(
+            "Самостоятельное подключение ящиков отключено — обратитесь к администратору", 403,
+        )
+    except self_service.WrongDomain as exc:
+        return json_error(exc.detail, 400)
+    except self_service.MailboxTakenByAnotherUser as exc:
+        return json_error(exc.detail, 409)
+    except self_service.VerificationFailed as exc:
+        return json_error(exc.detail, 400)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def _corporate_disconnect(request):
+    if not self_service.disconnect_own_mailbox(user_id=request.token.user_id):
+        return json_error("Подключённого корпоративного ящика нет", 404)
+    return HttpResponse(status=204)
+
+
+def corporate_connect(request):
+    if request.method == "GET":
+        return corporate_connect_info(request)
+    if request.method == "POST":
+        return _corporate_connect(request)
+    if request.method == "DELETE":
+        return _corporate_disconnect(request)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /accounts/connect-imap/ — свой почтовый сервер ────────────────────────
+#
+# Третий способ добавить почту рядом с OAuth и корпоративным ящиком: любой
+# сервер, реквизиты которого пользователь вводит сам. Ограничение по домену
+# ЗДЕСЬ намеренно отсутствует (в отличие от connect-corporate): это личный
+# ящик пользователя, а не ресурс платформы.
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _imap_connect_hint(request):
+    """Предзаполнение формы по адресу — чтобы не гадать над портами."""
+    return imap_account_service.suggest_settings(request.GET.get("address", ""))
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.ImapAccountConnectRequest, status=201)
+def _imap_connect(request, data: schemas.ImapAccountConnectRequest):
+    try:
+        account = imap_account_service.connect(user_id=request.token.user_id, payload=data)
+    except imap_account_service.AccountAlreadyConnected as exc:
+        return json_error(exc.detail, 409)
+    except imap_account_service.ImapVerificationFailed as exc:
+        return json_error(exc.detail, 400)
+    return acct_svc.serialize(account)
+
+
+def imap_connect(request):
+    if request.method == "GET":
+        return _imap_connect_hint(request)
+    if request.method == "POST":
+        return _imap_connect(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.ImapAccountPasswordRequest)
+def imap_account_password(request, account_id: int, data: schemas.ImapAccountPasswordRequest):
+    """Сменить сохранённый пароль — пользователь поменял его на сервере."""
+    from .models import EmailAccount
+
+    try:
+        account = imap_account_service.update_password(
+            user_id=request.token.user_id, account_id=account_id, password=data.password,
+        )
+    except EmailAccount.DoesNotExist:
+        return json_error("Account not found", 404)
+    except imap_account_service.ImapVerificationFailed as exc:
+        return json_error(exc.detail, 400)
+    return acct_svc.serialize(account)
 
 
 # ── /oauth/* ──────────────────────────────────────────────────────────────
@@ -268,8 +385,17 @@ def _create_mailbox(request, data: schemas.MailboxCreateRequest):
         return json_error("MAILCOW_DOMAIN not configured", 500)
     except mbx_svc.MailboxUserConflict as exc:
         return json_error(exc.detail, 409)
+    except mbx_svc.MailboxAddressTaken as exc:
+        return json_error(exc.detail, 409)
     except mbx_svc.InvalidLocalPart:
         return json_error("Invalid local_part", 400)
+    except mbx_svc.RemoteProvisioningFailed as exc:
+        # Строка создана и помечена error — отдаём её вместе с текстом отказа,
+        # чтобы админ видел, что именно чинить, и не создавал дубль.
+        body = {"detail": exc.detail}
+        if exc.mailbox is not None:
+            body["mailbox"] = mbx_svc.serialize(exc.mailbox)
+        return JsonResponse(body, status=502)
     return {**mbx_svc.serialize(mb), "generated_password": generated_password}
 
 
@@ -334,6 +460,10 @@ def reset_mailbox_password(request, mailbox_id: int, data: schemas.MailboxResetP
         return json_error("Mailbox not found", 404)
     except mbx_svc.MailboxNotActive:
         return json_error("Mailbox is not active", 409)
+    except mbx_svc.RemoteProvisioningFailed as exc:
+        # Пароль на сервере НЕ сменился — сообщаем прямо, иначе админ будет
+        # думать, что выдал сотруднику рабочий пароль.
+        return json_error(exc.detail, 502)
     return {**mbx_svc.serialize(mb), "generated_password": generated_password}
 
 
@@ -357,6 +487,88 @@ def restore_mailbox(request, mailbox_id: int):
     except mbx_svc.CannotRestore:
         return json_error("Only archived mailboxes can be restored", 409)
     return mbx_svc.serialize(mb)
+
+
+# ── /mailboxes/status/ ────────────────────────────────────────────────────
+#
+# Что именно произойдёт при нажатии «Создать ящик»: подключён ли почтовый
+# сервер, заведёт ли он ящик сам или только проверит существующий. Форма
+# создания в админке читает это, чтобы не обещать невозможного.
+
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def mailbox_status(request):
+    return provisioning.describe()
+
+
+# ── /mailboxes/settings/ — реквизиты почтового сервера из интерфейса ──────
+#
+# GET  — что записано в БД + что реально действует (с учётом окружения).
+# PUT  — сохранить; пустое поле = «вернуться к значению из окружения».
+# POST /settings/test/ — прогнать ту же цепочку проверок, что и mail_check.
+
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def _get_mail_settings(request):
+    return settings_service.serialize()
+
+
+@api_view(methods=("PUT",), auth="jwt", admin=True, body=schemas.MailSettingsRequest)
+def _put_mail_settings(request, data: schemas.MailSettingsRequest):
+    return settings_service.update(data, user_id=request.token.user_id)
+
+
+def mail_settings(request):
+    if request.method == "GET":
+        return _get_mail_settings(request)
+    if request.method == "PUT":
+        return _put_mail_settings(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.MailConnectionTestRequest)
+def test_mail_connection(request, data: schemas.MailConnectionTestRequest):
+    """Проверка «на месте»: та же логика, что у ``manage.py mail_check``.
+
+    Пароль принимается в теле и НИКУДА не сохраняется — он нужен только для
+    одного пробного входа. Если его не передали, берётся сохранённый пароль
+    уже заведённого ящика.
+    """
+    password = data.password
+    if data.mailbox and not password:
+        password = mbx_svc.stored_password(data.mailbox) or ""
+
+    report = connection_check.run_check(
+        mailbox=data.mailbox or None,
+        password=password or None,
+        send_to=data.send_to or None,
+        timeout=data.timeout,
+    )
+    return report.to_dict()
+
+
+# ── /mailboxes/reconcile/ ─────────────────────────────────────────────────
+#
+# GET  — только отчёт о расхождениях, ничего не меняет.
+# POST — применить решение (direction=pull|push|both), тело — ReconcileRequest.
+
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def _reconcile_report(request):
+    return reconcile_service.reconcile(apply=False).to_dict()
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.ReconcileRequest)
+def _reconcile_apply(request, data: schemas.ReconcileRequest):
+    return reconcile_service.reconcile(apply=data.apply, direction=data.direction).to_dict()
+
+
+def reconcile_mailboxes(request):
+    if request.method == "GET":
+        return _reconcile_report(request)
+    if request.method == "POST":
+        return _reconcile_apply(request)
+    return json_error("Method Not Allowed", 405)
 
 
 # ── /mailboxes/aliases/* (проксируется живьём в Mailcow, локально не

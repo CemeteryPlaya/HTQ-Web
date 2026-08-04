@@ -26,6 +26,9 @@ export const protectedRoutes: RouteConfig[] = [
   // ─── CMS / marketing manage pages ─────────────────────────────────────
   // Editorial role (or higher) — protect against random users hitting
   // ``/manage/news`` directly and altering published content.
+  // Блоки лендинга: порядок, видимость, тексты. Роль editor — тот же
+  // контур, что новости и обращения; правит содержимое сайта, не систему.
+  { path: '/manage/home', component: lazyPages.ManageHomeSections, requiresAuth: true, requiresRole: 'editor' },
   { path: '/manage/news', component: lazyPages.AdminNews, requiresAuth: true, requiresRole: 'editor' },
   { path: '/manage/contacts', component: lazyPages.AdminContacts, requiresAuth: true, requiresRole: 'editor' },
   // ``/manage/projects`` keeps its historical path but is NOT a CMS page: it
@@ -38,6 +41,7 @@ export const protectedRoutes: RouteConfig[] = [
 
   // ─── Personal / messenger / tasks (any logged-in user) ────────────────
   { path: '/myprofile', component: lazyPages.MyProfile, requiresAuth: true },
+  { path: '/employee/me', component: lazyPages.MyEmployeeCard, requiresAuth: true },
   { path: '/settings', component: lazyPages.Settings, requiresAuth: true },
   { path: '/messenger', component: lazyPages.Messenger, requiresAuth: true },
   { path: '/notifications', component: lazyPages.NotificationsHistory, requiresAuth: true },
@@ -69,10 +73,7 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/tasks/contractors', component: lazyPages.HRContractors, requiresAuth: true, requiresRole: 'admin' },
   // Declared last: `/tasks/:id` would otherwise swallow the static paths above.
   { path: '/tasks/:id', component: lazyPages.TaskDetailRouter, requiresAuth: true },
-  { path: '/tasks/roadmap', component: lazyPages.HRRoadmap, requiresAuth: true },
-  { path: '/tasks/reports', component: lazyPages.HRReports, requiresAuth: true },
-  { path: '/tasks/resources', component: lazyPages.HRResourceSchedule, requiresAuth: true },
-  { path: '/tasks/equipment', component: lazyPages.HREquipment, requiresAuth: true },
+
   // ─── Contracts (бюджеты / реестр контрактов / договоры) ───────────────
   // Статический `/new` объявлен ПЕРЕД `/:id` — react-router сопоставляет в
   // порядке объявления, и иначе "new" ушёл бы в параметр.
@@ -127,10 +128,9 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/admin/users', component: lazyPages.AdminUsers, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/chats', component: lazyPages.AdminChats, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/mailboxes', component: lazyPages.AdminMailboxes, requiresAuth: true, requiresRole: 'admin' },
-  // Two distinct screens, one address until now: the ungated duplicate above
-  // pointed at HRAccessLevels and shadowed this one, so HRLevelsAdmin was
-  // unreachable. Both are wanted, so they get an address each.
-  { path: '/admin/levels', component: lazyPages.HRLevelsAdmin, requiresAuth: true, requiresRole: 'admin' },
+  // Не путать с уровнями ДОЛЖНОСТЕЙ: это уровни HR-ДОСТУПА
+  // (junior/middle/senior/lead). Справочник уровней должностей раньше жил на
+  // соседнем /admin/levels, а теперь это вкладка на /hr/positions?tab=levels.
   { path: '/admin/access-levels', component: lazyPages.HRAccessLevels, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/registrations', component: lazyPages.AdminRegistrations, requiresAuth: true, requiresRole: 'admin' },
   { path: '/admin/infrastructure', component: lazyPages.AdminInfrastructure, requiresAuth: true, requiresRole: 'admin' },

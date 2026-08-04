@@ -1,20 +1,3 @@
-/**
- * HRDailyReports — «Ежедневка»: одна страница, чтобы закрыть день.
- *
- * До неё отчитаться можно было только по одной задаче за раз — открыть
- * карточку, нажать «Отчитаться», закрыть, открыть следующую. Прораб с
- * четырьмя порциями на блоке делал это четыре раза. Здесь дата задаётся
- * один раз сверху, а строки заполняются подряд.
- *
- * Показываются ТОЛЬКО те задачи, куда сохранение пройдёт: сервер отбирает
- * их тем же правилом, что проверяет запись (``soft_edit_q``). Строка,
- * которую нельзя сохранить, хуже отсутствующей.
- *
- * Ввод всегда СОЗДАЁТ новый отчёт, а не правит вчерашний: за день бывает
- * несколько смен, и они складываются — ``UNIQUE(task, work_date)`` в модели
- * нет намеренно. Уже поданные за эту дату отчёты показаны рядом со строкой,
- * править их — через карточку задачи, где есть история версий.
- */
 import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -22,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   AlertTriangle, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight,
-  ClipboardList, Search,
+  ClipboardList, Search, UserCheck, Check
 } from 'lucide-react';
 
 import { TasksLayout } from '@/components/tasks/TasksLayout';
@@ -74,15 +57,9 @@ const BoardRow: React.FC<{
   const { t } = useTranslation();
   const [draft, setDraft] = useState<Draft>(emptyDraft);
 
-  // Вид работ спрашиваем только когда их несколько: при одном сервер
-  // подставит его сам (resolve_volume_type), и лишний селект в каждой
-  // строке — клик впустую на каждую смену.
   const needsType = row.volumes.length > 1;
   const filedToday = row.reports.reduce((sum, item) => sum + item.quantity, 0);
 
-  // Единица берётся у выбранного вида работ и подставляется в подпись поля:
-  // «Выполнено за день, шт» отвечает на вопрос «сколько чего» само, без
-  // сверки со строкой плана выше.
   const activeVolume = needsType
     ? row.volumes.find((v) => String(v.volume_type_id) === draft.volume_type_id)
     : row.volumes[0];
@@ -99,373 +76,302 @@ const BoardRow: React.FC<{
         : {}),
     }),
     onSuccess: () => {
-      toast.success(t('tasks.dailyReports.created', 'Отчёт добавлен'));
+      toast.success(t('tasks.dailyReports.saved', 'Отчёт записан'));
       setDraft(emptyDraft());
       onSaved();
     },
-    onError: (err) => toast.error(
-      errorDetail(err) || t('tasks.dailyReports.saveError',
-        'Не удалось сохранить отчёт'),
-    ),
+    onError: (err) => {
+      toast.error(errorDetail(err) || t('tasks.dailyReports.saveError', 'Не удалось отправить отчёт'));
+    },
   });
 
-  const canSave = draft.quantity !== '' && Number(draft.quantity) >= 0
-    && (!needsType || draft.volume_type_id !== '');
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!draft.quantity || Number(draft.quantity) <= 0) return;
+    if (needsType && !draft.volume_type_id) return;
+    save.mutate();
+  };
 
   return (
-    <div className="space-y-2 rounded-lg border p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Link
-          to={`/tasks/${row.task_id}`}
-          className="font-mono text-sm text-primary hover:underline"
-        >
-          {row.key}
-        </Link>
-        <span className="flex-1 truncate text-sm font-medium">{row.summary}</span>
+    <div className="rounded-2xl border bg-card/70 p-4 shadow-2xs space-y-3 hover:border-primary/30 transition-colors">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+        <div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Link
+              to={`/tasks/${row.task_id}`}
+              className="font-mono text-xs font-bold text-primary hover:underline"
+            >
+              {row.task_key}
+            </Link>
+            <span className="font-semibold text-sm text-foreground">{row.task_summary}</span>
+            <Badge className={statusBadgeClass(row.task_status)}>
+              {statusLabel(row.task_status, t)}
+            </Badge>
+          </div>
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {[row.project_name, row.site_name, row.block_name, row.roadmap_title].filter(Boolean).join(' / ') || 'Без привязки к объекту'}
+          </div>
+        </div>
+
         {filedToday > 0 && (
-          <Badge variant="outline" className="gap-1 text-[10px] text-emerald-600">
-            <CheckCircle2 className="h-3 w-3" />
-            {t('tasks.dailyReports.filedToday', 'за день')}: {filedToday}
+          <Badge variant="secondary" className="gap-1 text-xs self-start md:self-auto rounded-xl">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+            {t('tasks.dailyReports.filedToday', 'Подано за день')}: {filedToday} {volumeUnitLabel(activeUnit, t)}
           </Badge>
         )}
-        <Badge className={statusBadgeClass(row.status)} variant="secondary">
-          {statusLabel(row.status, t)}
-        </Badge>
       </div>
 
-      {row.roadmap_name && (
-        <p className="text-xs text-muted-foreground">
-          {row.roadmap_name}
-          {row.due_date && ` · ${t('tasks.projects.end', 'Завершение')}: ${row.due_date}`}
-        </p>
-      )}
-
-      {/* План/факт — чтобы не считать в уме, сколько осталось. */}
-      <div className="space-y-1">
-        {row.volumes.map((volume) => {
-          const percent = volume.planned_quantity > 0
-            ? Math.min(volume.completed_quantity / volume.planned_quantity * 100, 100)
-            : null;
-          const left = volume.planned_quantity - volume.completed_quantity;
-          return (
-            <div key={volume.volume_type_id} className="flex items-center gap-2">
-              <span className="w-44 truncate text-xs text-muted-foreground">
-                {volume.volume_type_name}
-              </span>
-              <span className="tabular-nums text-xs">
-                {volume.completed_quantity} / {volume.planned_quantity}{' '}
-                {volumeUnitLabel(volume.unit)}
-              </span>
-              <div className="w-24">
-                <Progress value={percent ?? 0} className="h-1.5" />
-              </div>
-              {left > 0 && (
-                <span className="text-xs text-muted-foreground">
-                  {t('tasks.dailyReports.left', 'осталось')}{' '}
-                  {Math.round(left * 100) / 100} {volumeUnitLabel(volume.unit)}
-                </span>
-              )}
+      {/* Выполнение по видам работ */}
+      <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
+        {row.volumes.map((v) => (
+          <div key={v.id} className="rounded-xl border bg-muted/20 p-2.5 text-xs space-y-1">
+            <div className="font-medium text-foreground flex items-center justify-between">
+              <span>{v.volume_type_name}</span>
+              <span className="text-muted-foreground">{v.actual_volume} / {v.planned_volume} {volumeUnitLabel(v.unit, t)}</span>
             </div>
-          );
-        })}
+            <Progress value={v.planned_volume ? Math.min(100, Math.round((v.actual_volume / v.planned_volume) * 100)) : 0} className="h-1.5 rounded-full" />
+          </div>
+        ))}
       </div>
 
-      {/* Поля с подписями, а не с одними подсказками внутри: «Сделано» и
-          «чел.» без единицы и пояснения читаются как загадка, а заполняет
-          их прораб на телефоне между делом. */}
-      <div className="flex flex-wrap items-end gap-2 border-t pt-2">
+      {/* Форма ввода отчёта */}
+      <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3 pt-1 border-t">
         {needsType && (
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">
-              {t('tasks.volumes.type', 'Вид работ')}
-            </Label>
-            <Select
-              value={draft.volume_type_id}
-              onValueChange={(value) => setDraft((prev) => ({
-                ...prev, volume_type_id: value,
-              }))}
-            >
-              <SelectTrigger className="h-9 w-52">
-                <SelectValue placeholder={t('tasks.dailyReports.pickType',
-                  'Выберите вид работ')} />
+          <div className="grid gap-1 min-w-[140px]">
+            <Label className="text-[11px] text-muted-foreground">{t('tasks.dailyReports.volumeType', 'Вид работ')}</Label>
+            <Select value={draft.volume_type_id} onValueChange={(val) => setDraft({ ...draft, volume_type_id: val })}>
+              <SelectTrigger className="h-8 text-xs rounded-xl bg-muted/30">
+                <SelectValue placeholder="Выберите..." />
               </SelectTrigger>
-              <SelectContent>
-                {row.volumes.map((volume) => (
-                  <SelectItem key={volume.volume_type_id}
-                              value={String(volume.volume_type_id)}>
-                    {volume.volume_type_name} ({volumeUnitLabel(volume.unit)})
+              <SelectContent className="rounded-2xl">
+                {row.volumes.map((v) => (
+                  <SelectItem key={v.id} value={String(v.volume_type_id)}>
+                    {v.volume_type_name}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
         )}
-        <div className="space-y-1">
-          <Label htmlFor={`qty-${row.task_id}`} className="text-xs text-muted-foreground">
-            {t('tasks.dailyReports.doneLabel', 'Выполнено за день')}
-            {activeUnit && `, ${volumeUnitLabel(activeUnit)}`}
-          </Label>
-          <Input
-            id={`qty-${row.task_id}`}
-            type="number" min="0" step="any" className="h-9 w-32 tabular-nums"
-            placeholder="0"
-            value={draft.quantity}
-            onChange={(event) => setDraft((prev) => ({
-              ...prev, quantity: event.target.value,
-            }))}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor={`crew-${row.task_id}`} className="text-xs text-muted-foreground">
-            {t('tasks.dailyReports.crewLabel', 'Человек на смене')}
-          </Label>
-          <Input
-            id={`crew-${row.task_id}`}
-            type="number" min="0" step="1" className="h-9 w-32 tabular-nums"
-            placeholder="—"
-            value={draft.headcount}
-            onChange={(event) => setDraft((prev) => ({
-              ...prev, headcount: event.target.value,
-            }))}
-          />
-        </div>
-        <div className="min-w-[12rem] flex-1 space-y-1">
-          <Label htmlFor={`note-${row.task_id}`} className="text-xs text-muted-foreground">
-            {t('tasks.dailyReports.commentLabel', 'Комментарий (необязательно)')}
-          </Label>
-          <Input
-            id={`note-${row.task_id}`}
-            className="h-9"
-            placeholder={t('tasks.dailyReports.commentHint',
-              'Например: одна кара в ремонте')}
-            value={draft.comment}
-            onChange={(event) => setDraft((prev) => ({
-              ...prev, comment: event.target.value,
-            }))}
-          />
-        </div>
-        <Button
-          size="sm"
-          className="h-9"
-          disabled={!canSave || save.isPending}
-          title={canSave ? undefined : t('tasks.dailyReports.needQuantity',
-            'Укажите, сколько выполнено за этот день')}
-          onClick={() => save.mutate()}
-        >
-          {save.isPending
-            ? t('common.saving', 'Сохранение...')
-            : t('tasks.dailyReports.write', 'Записать')}
-        </Button>
-      </div>
 
-      {row.reports.length > 0 && (
-        <div className="space-y-0.5 border-t pt-2">
-          {row.reports.map((report) => (
-            <p key={report.id} className="text-xs text-muted-foreground">
-              {report.quantity} {volumeUnitLabel(report.unit)}
-              {' · '}{report.volume_type_name}
-              {report.headcount !== null
-                && ` · ${report.headcount} ${t('tasks.dailyReports.people', 'чел.')}`}
-              {report.author_name && ` · ${report.author_name}`}
-              {report.comment && ` — ${report.comment}`}
-            </p>
-          ))}
+        <div className="grid gap-1 w-32">
+          <Label className="text-[11px] text-muted-foreground">
+            {t('tasks.dailyReports.quantity', 'Объем')}{activeUnit ? `, ${volumeUnitLabel(activeUnit, t)}` : ''}
+          </Label>
+          <Input
+            type="number"
+            step="any"
+            placeholder="0"
+            className="h-8 text-xs rounded-xl bg-muted/30"
+            value={draft.quantity}
+            onChange={(e) => setDraft({ ...draft, quantity: e.target.value })}
+          />
         </div>
-      )}
+
+        <div className="grid gap-1 w-28">
+          <Label className="text-[11px] text-muted-foreground">{t('tasks.dailyReports.headcount', 'Человек')}</Label>
+          <Input
+            type="number"
+            placeholder="—"
+            className="h-8 text-xs rounded-xl bg-muted/30"
+            value={draft.headcount}
+            onChange={(e) => setDraft({ ...draft, headcount: e.target.value })}
+          />
+        </div>
+
+        <div className="grid gap-1 flex-1 min-w-[160px]">
+          <Label className="text-[11px] text-muted-foreground">{t('tasks.dailyReports.comment', 'Комментарий')}</Label>
+          <Input
+            placeholder="Примечание..."
+            className="h-8 text-xs rounded-xl bg-muted/30"
+            value={draft.comment}
+            onChange={(e) => setDraft({ ...draft, comment: e.target.value })}
+          />
+        </div>
+
+        <Button
+          type="submit"
+          size="sm"
+          disabled={!draft.quantity || Number(draft.quantity) <= 0 || (needsType && !draft.volume_type_id) || save.isPending}
+          className="h-8 px-4 rounded-xl bg-primary text-primary-foreground font-medium text-xs shadow-2xs"
+        >
+          {save.isPending ? t('common.saving', 'Сохранение...') : t('common.save', 'Отчитаться')}
+        </Button>
+      </form>
     </div>
   );
 };
 
-/* ────────────────────────────── Страница ────────────────────────────── */
+/* ────────────────────────────── Главный компонент ────────────────────────────── */
 
 const HRDailyReports: React.FC = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [date, setDate] = useState(today);
+  const [date, setDate] = useState<string>(today());
   const [search, setSearch] = useState('');
   const [place, setPlace] = useState('all');
 
-  const { data: rows = [], isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['daily-report-board', date],
+  const { data: board, isLoading, isError, error, refetch } = useQuery({
+    queryKey: ['hr-daily-report-board', date],
     queryFn: () => fetchDailyReportBoard(date),
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['daily-report-board'] });
-    // Отчёт меняет факт везде, где он считается свёрткой.
-    queryClient.invalidateQueries({ queryKey: ['task-daily-reports'] });
-    queryClient.invalidateQueries({ queryKey: ['roadmap-metrics'] });
-    queryClient.invalidateQueries({ queryKey: ['plan-fact'] });
-    queryClient.invalidateQueries({ queryKey: ['block-progress'] });
+    queryClient.invalidateQueries({ queryKey: ['hr-daily-report-board'] });
   };
 
-  /** Подпись места — она же ключ группировки и значение фильтра. */
-  const placeOf = React.useCallback((row: DailyReportBoardRow) => (
-    [row.site_name, row.site_block_name].filter(Boolean).join(' · ')
-    || t('tasks.dailyReports.noBlock', 'Вне объектов')
-  ), [t]);
+  const rows = board?.rows ?? [];
 
-  const places = useMemo(
-    () => [...new Set(rows.map(placeOf))].sort((a, b) => a.localeCompare(b)),
-    [rows, placeOf],
-  );
+  const places = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) {
+      const label = [r.site_name, r.block_name].filter(Boolean).join(' / ');
+      if (label) set.add(label);
+    }
+    return Array.from(set).sort();
+  }, [rows]);
 
-  /**
-   * Поиск и фильтр по участку — на клиенте, а не запросом: сводка за день
-   * это десятки строк, они уже здесь, и лишний круг к серверу на каждую
-   * букву сделал бы поле медленнее бумаги.
-   */
   const visible = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    return rows.filter((row) => {
-      if (place !== 'all' && placeOf(row) !== place) return false;
-      if (!needle) return true;
-      return `${row.key} ${row.summary} ${row.roadmap_name ?? ''}`
-        .toLowerCase().includes(needle);
+    const q = search.trim().toLowerCase();
+    return rows.filter((r) => {
+      const placeLabel = [r.site_name, r.block_name].filter(Boolean).join(' / ');
+      if (place !== 'all' && placeLabel !== place) return false;
+      if (!q) return true;
+      const hay = [r.task_key, r.task_summary, r.project_name, r.site_name, r.block_name, r.roadmap_title]
+        .filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
     });
-  }, [rows, search, place, placeOf]);
+  }, [rows, search, place]);
 
-  /** Группировка по блоку: бригада работает на участке, не по всей стройке. */
   const groups = useMemo(() => {
-    const byBlock = new Map<string, DailyReportBoardRow[]>();
-    visible.forEach((row) => {
-      const key = placeOf(row);
-      if (!byBlock.has(key)) byBlock.set(key, []);
-      byBlock.get(key)!.push(row);
-    });
-    return [...byBlock.entries()];
-  }, [visible, placeOf]);
+    const map = new Map<string, DailyReportBoardRow[]>();
+    for (const r of visible) {
+      const key = [r.project_name, r.site_name, r.block_name].filter(Boolean).join(' / ') || 'Без привязки к объекту';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(r);
+    }
+    return Array.from(map.entries());
+  }, [visible]);
 
-  const filed = visible.filter((row) => row.reports.length > 0).length;
-  const filtered = visible.length !== rows.length;
+  const filed = visible.filter((r) => r.reports.length > 0).length;
+  const filtered = search.trim() !== '' || place !== 'all';
 
   return (
     <TasksLayout
-      title={t('tasks.nav.daily', 'Ежедневка')}
-      subtitle={t('tasks.dailyReports.subtitle',
-        'Отчёт о выполненном за смену — по дате выполнения работ')}
+      title={t('tasks.dailyReports.pageTitle', 'Ежедневные отчеты')}
+      subtitle={t('tasks.dailyReports.pageSubtitle', 'Быстрая подача отчетов по работам за смену')}
     >
-      <Card className="mb-4">
-        <CardContent className="flex flex-wrap items-center gap-3 p-4">
-          <CalendarDays className="h-5 w-5 text-muted-foreground" />
-          <span className="text-sm font-medium">
-            {t('tasks.dailyReports.workDate', 'Дата выполнения работ')}
-          </span>
-          <Button size="icon" variant="outline" className="h-9 w-9"
-                  aria-label={t('tasks.dailyReports.prevDay', 'Предыдущий день')}
-                  onClick={() => setDate((prev) => shiftDay(prev, -1))}>
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Input
-            type="date" className="h-9 w-40"
-            value={date}
-            onChange={(event) => setDate(event.target.value || today())}
-          />
-          <Button size="icon" variant="outline" className="h-9 w-9"
-                  aria-label={t('tasks.dailyReports.nextDay', 'Следующий день')}
-                  onClick={() => setDate((prev) => shiftDay(prev, 1))}>
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          {date !== today() && (
-            <Button size="sm" variant="ghost" onClick={() => setDate(today())}>
-              {t('tasks.dailyReports.today', 'Сегодня')}
+      {/* Переключатель даты */}
+      <div className="rounded-3xl border bg-card p-4 shadow-2xs flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-2xl bg-primary/10 flex items-center justify-center text-primary shrink-0">
+            <CalendarDays className="h-5 w-5" />
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="icon"
+              variant="outline"
+              className="h-8 w-8 rounded-xl"
+              onClick={() => setDate((prev) => shiftDay(prev, -1))}
+            >
+              <ChevronLeft className="h-4 w-4" />
             </Button>
-          )}
-          <span className="flex-1" />
-          <span className="text-sm text-muted-foreground">
-            {t('tasks.dailyReports.filedOf', 'Отчитано')}: {filed} / {visible.length}
-          </span>
-        </CardContent>
-      </Card>
 
-      {/* Поиск и участок — рядом с датой, потому что на большой стройке
-          список за день это не десять строк, а сотня. */}
-      {rows.length > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[16rem] flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              className="h-9 pl-9"
-              placeholder={t('tasks.dailyReports.search',
-                'Поиск по номеру, названию или пакету работ')}
+              type="date"
+              className="h-8 text-xs w-36 rounded-xl bg-muted/30 font-medium"
+              value={date}
+              onChange={(e) => setDate(e.target.value || today())}
+            />
+
+            <Button
+              size="icon"
+              variant="outline"
+              className="h-8 w-8 rounded-xl"
+              onClick={() => setDate((prev) => shiftDay(prev, 1))}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+
+            {date !== today() && (
+              <Button size="sm" variant="ghost" className="h-8 text-xs rounded-xl" onClick={() => setDate(today())}>
+                Сегодня
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="text-xs font-semibold text-muted-foreground bg-muted/30 px-3 py-1.5 rounded-xl border">
+          {t('tasks.dailyReports.filedOf', 'Отчитано')}: <span className="text-primary font-bold">{filed}</span> / {visible.length}
+        </div>
+      </div>
+
+      {/* Поиск и фильтры по участкам */}
+      {rows.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              className="h-9 pl-9 text-xs rounded-xl bg-card border-border/60"
+              placeholder={t('tasks.dailyReports.search', 'Поиск по номеру, названию или объекту…')}
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+
           {places.length > 1 && (
             <Select value={place} onValueChange={setPlace}>
-              <SelectTrigger className="h-9 w-64">
+              <SelectTrigger className="h-9 w-[220px] text-xs rounded-xl bg-card">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">
-                  {t('tasks.dailyReports.allPlaces', 'Все участки')}
-                </SelectItem>
+              <SelectContent className="rounded-2xl">
+                <SelectItem value="all">{t('tasks.dailyReports.allPlaces', 'Все участки')}</SelectItem>
                 {places.map((name) => (
                   <SelectItem key={name} value={name}>{name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           )}
+
           {filtered && (
-            <Button size="sm" variant="ghost"
-                    onClick={() => { setSearch(''); setPlace('all'); }}>
+            <Button size="sm" variant="ghost" className="h-9 text-xs rounded-xl" onClick={() => { setSearch(''); setPlace('all'); }}>
               {t('common.reset', 'Сбросить')}
             </Button>
           )}
         </div>
       )}
 
+      {/* Данные отчетов */}
       {isLoading ? (
-        <p className="py-8 text-sm text-muted-foreground">
-          {t('common.loading', 'Загрузка...')}
-        </p>
+        <div className="py-12 text-center text-xs text-muted-foreground">{t('common.loading', 'Загрузка задач…')}</div>
       ) : isError ? (
-        /* Ошибку нельзя показывать как «нет задач»: это разные вещи, и
-           первая требует не заводить отчёт, а чинить связь с сервером. */
-        <Card className="border-destructive/40">
-          <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-            <AlertTriangle className="h-8 w-8 text-destructive" />
-            <p className="text-sm font-medium">
-              {t('tasks.dailyReports.boardError',
-                'Не удалось получить сводку за день')}
-            </p>
-            <p className="max-w-lg text-xs text-muted-foreground">
-              {errorDetail(error)
-                || t('tasks.dailyReports.boardErrorHint',
-                  'Сервер не ответил на запрос сводки. Если это локальная среда — возможно, бэкенд запущен со старым кодом и его нужно перезапустить.')}
-            </p>
-            <Button size="sm" variant="outline" onClick={() => refetch()}>
-              {t('common.retry', 'Повторить')}
-            </Button>
-          </CardContent>
-        </Card>
+        <div className="rounded-3xl border border-destructive/30 bg-destructive/10 p-8 text-center space-y-3">
+          <AlertTriangle className="h-8 w-8 text-destructive mx-auto" />
+          <p className="text-sm font-semibold text-destructive">{t('tasks.dailyReports.boardError', 'Не удалось получить сводку за день')}</p>
+          <Button size="sm" variant="outline" className="rounded-xl" onClick={() => refetch()}>
+            {t('common.retry', 'Повторить')}
+          </Button>
+        </div>
       ) : visible.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
-            <ClipboardList className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              {rows.length > 0
-                ? t('tasks.dailyReports.nothingMatches',
-                  'Под фильтр ничего не подошло — измените поиск или участок.')
-                : t('tasks.dailyReports.boardEmpty',
-                  'Нет задач, по которым вы можете отчитаться. Отчитываются по задачам с плановым объёмом работ — задайте его на карточке задачи.')}
-            </p>
-          </CardContent>
-        </Card>
+        <div className="rounded-3xl border bg-card p-12 text-center space-y-2">
+          <ClipboardList className="h-8 w-8 text-muted-foreground mx-auto" />
+          <p className="text-xs text-muted-foreground">
+            {rows.length > 0
+              ? t('tasks.dailyReports.nothingMatches', 'Под фильтр ничего не подошло — измените выбор.')
+              : t('tasks.dailyReports.boardEmpty', 'Нет задач, по которым требуется отчитаться на эту дату.')}
+          </p>
+        </div>
       ) : (
         <div className="space-y-4">
           {groups.map(([name, groupRows]) => (
-            <Card key={name}>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">
+            <div key={name} className="rounded-3xl border bg-card p-4 shadow-2xs space-y-3">
+              <div className="flex items-center justify-between border-b pb-3">
+                <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                   {name}
-                  <span className="ml-2 text-sm font-normal text-muted-foreground">
-                    {groupRows.length}
-                  </span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 pt-0">
+                  <Badge variant="outline" className="rounded-md font-mono text-[10px]">{groupRows.length}</Badge>
+                </h3>
+              </div>
+              <div className="space-y-3">
                 {groupRows.map((row) => (
                   <BoardRow
                     key={row.task_id}
@@ -474,8 +380,8 @@ const HRDailyReports: React.FC = () => {
                     onSaved={invalidate}
                   />
                 ))}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ))}
         </div>
       )}

@@ -88,6 +88,10 @@ class Room(models.Model):
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
+    class Meta:
+        verbose_name = "Комната"
+        verbose_name_plural = "Комнаты"
+
     def __str__(self) -> str:
         return f"<Room(id={self.id}, room_type={self.room_type!r})>"
 
@@ -132,6 +136,10 @@ class RoomParticipant(models.Model):
 
     pk = models.CompositePrimaryKey("room", "user_id")
 
+    class Meta:
+        verbose_name = "Участник комнаты"
+        verbose_name_plural = "Участники комнат"
+
     def __str__(self) -> str:
         return f"<RoomParticipant(room_id={self.room_id}, user_id={self.user_id})>"
 
@@ -158,6 +166,10 @@ class Message(models.Model):
 
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
+
+    class Meta:
+        verbose_name = "Сообщение"
+        verbose_name_plural = "Сообщения"
 
     def __str__(self) -> str:
         return f"<Message(id={self.id}, room_id={self.room_id})>"
@@ -202,6 +214,10 @@ class AuditLog(models.Model):
     user_agent = models.TextField(null=True, blank=True)
     correlation_id = models.CharField(max_length=36, null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
+
+    class Meta:
+        verbose_name = "Запись аудита"
+        verbose_name_plural = "Журнал аудита"
 
     def __str__(self) -> str:
         return f"<AuditLog(id={self.id}, action={self.action!r})>"
@@ -308,6 +324,10 @@ class ChatAttachment(models.Model):
     created_at = models.DateTimeField(db_default=Now(), db_index=True)
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
+    class Meta:
+        verbose_name = "Вложение чата"
+        verbose_name_plural = "Вложения чатов"
+
     @property
     def url(self) -> str | None:
         """Порт ``ChatAttachment.url`` исходника (``return self.public_url``)
@@ -348,6 +368,10 @@ class UserKey(models.Model):
     updated_at = models.DateTimeField(db_default=Now(), auto_now=True)
 
     pk = models.CompositePrimaryKey("user_id", "device_id")
+
+    class Meta:
+        verbose_name = "Ключ шифрования"
+        verbose_name_plural = "Ключи шифрования"
 
     def __str__(self) -> str:
         return f"<UserKey(user_id={self.user_id}, device_id={self.device_id!r})>"

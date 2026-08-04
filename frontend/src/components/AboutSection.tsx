@@ -1,10 +1,12 @@
 import { useTranslation } from 'react-i18next';
+import { useHomeSection } from '@/hooks/useHomeContent';
 import { ArrowRight, Leaf, Sun, Zap } from 'lucide-react';
 
 const panels1 = '/images/panels1.webp';
 
 export const AboutSection = () => {
   const { t } = useTranslation();
+  const home = useHomeSection('about');
 
   const features = [
     {
@@ -54,9 +56,9 @@ export const AboutSection = () => {
 
           {/* Content */}
           <div>
-            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('about.tag')}</span>
+            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{home.text('tag', 'about.tag')}</span>
             <h2 className="font-display text-4xl md:text-5xl font-bold text-foreground mt-2 mb-6">
-              {t('about.title')}
+              {home.text('title', 'about.title')}
             </h2>
             <p className="text-muted-foreground text-lg leading-relaxed mb-6">
               {t('about.p1')}

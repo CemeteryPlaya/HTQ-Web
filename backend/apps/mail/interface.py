@@ -19,9 +19,14 @@ pub/sub), тот же наблюдаемый эффект.
 """
 from __future__ import annotations
 
-from apps.core.services import require_service
+import logging
+from dataclasses import dataclass
+
+from apps.core.services import ServiceDisabled, require_service
 from apps.mail.models import AccountType, EmailAccount, ProvisionedMailbox
 from apps.mail.services import mailbox_service as mbx_svc
+
+log = logging.getLogger(__name__)
 
 
 def archive_user_mailboxes(user_id: int) -> None:
@@ -59,3 +64,85 @@ def archive_user_mailboxes(user_id: int) -> None:
             mbx_svc.archive(mb.id)
         except mbx_svc.CannotArchive:
             pass
+
+
+# ── Провижининг ящика при создании пользователя ───────────────────────────
+
+
+@dataclass(frozen=True)
+class _MailboxRequest:
+    """Форма, которую ждёт ``mailbox_service.create``.
+
+    Отдельный лёгкий объект вместо ``schemas.MailboxCreateRequest``: аппка
+    users не должна знать про pydantic-схемы соседа, а сервису достаточно
+    утиной типизации по этим полям.
+    """
+
+    user_id: int | None = None
+    local_part: str = ""
+    first_name: str = ""
+    last_name: str = ""
+    full_name: str = ""
+    password: str = ""
+    quota_mb: int = 0
+    must_change_password: bool = True
+
+
+def provision_mailbox(
+    *, user_id: int, first_name: str = "", last_name: str = "", full_name: str = "",
+    local_part: str = "", password: str = "", quota_mb: int = 0,
+) -> tuple[dict | None, str | None]:
+    """Завести корпоративный ящик для пользователя платформы.
+
+    Потребитель — ``apps.users.services.admin_service.create_user``: галочка
+    «создать почтовый ящик» в форме создания пользователя раньше принималась
+    и молча игнорировалась (S2S-вызов в удалённый email-сервис), из-за чего
+    админ получал ``mailbox_error`` вместо ящика.
+
+    Возвращает ``(mailbox_dict | None, error | None)`` и НИКОГДА не бросает:
+    неудачное создание ящика не должно откатывать уже созданного
+    пользователя — админ увидит текст ошибки и заведёт ящик отдельно из
+    раздела «Корпоративные ящики». Отключённая аппка mail — тоже штатный
+    случай (а не 503 на весь запрос создания пользователя): в отличие от
+    остальных функций этого модуля, ``ServiceDisabled`` здесь ловится и
+    превращается в тот же ``error``.
+    """
+    try:
+        require_service("mail")
+    except ServiceDisabled as exc:
+        return None, f"Почтовый модуль отключён: {exc.message}"
+
+    payload = _MailboxRequest(
+        user_id=user_id, local_part=local_part, first_name=first_name,
+        last_name=last_name, full_name=full_name, password=password, quota_mb=quota_mb,
+    )
+    try:
+        mb, generated_password = mbx_svc.create(payload)
+    except mbx_svc.MailboxDomainNotConfigured:
+        return None, (
+            "Домен корпоративной почты не настроен (MAILCOW_DOMAIN / "
+            "CORPORATE_MAIL_DOMAIN) — ящик не создан."
+        )
+    except mbx_svc.MailboxUserConflict as exc:
+        return None, exc.detail
+    except mbx_svc.MailboxAddressTaken as exc:
+        return None, exc.detail
+    except mbx_svc.InvalidLocalPart:
+        return None, "Некорректный адрес ящика (local_part)"
+    except mbx_svc.RemoteProvisioningFailed as exc:
+        # Строка создана и помечена error — отдаём её вместе с ошибкой, чтобы
+        # админ видел, какой именно ящик чинить.
+        payload_out = mbx_svc.serialize(exc.mailbox) if exc.mailbox is not None else None
+        return payload_out, exc.detail
+    except Exception as exc:  # noqa: BLE001 — создание пользователя важнее
+        log.exception("provision_mailbox_failed user_id=%s", user_id)
+        return None, f"Не удалось создать ящик: {exc}"
+
+    return {**mbx_svc.serialize(mb), "generated_password": generated_password}, None
+
+
+def get_user_mailbox(user_id: int) -> dict | None:
+    """Ящик пользователя (или None) — для карточек/профиля."""
+    require_service("mail")
+    mb = ProvisionedMailbox.objects.filter(user_id=user_id).exclude(status="deleted").first()
+    return mbx_svc.serialize(mb) if mb is not None else None

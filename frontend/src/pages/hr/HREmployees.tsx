@@ -1,46 +1,30 @@
-import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Briefcase,
-  Check,
-  ChevronsUpDown,
   IdCard,
-  Lock,
   MoreHorizontal,
   Pencil,
-  Plus,
   Search,
   Share2,
   Trash2,
   UserPlus,
 } from 'lucide-react';
 import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
+import { EmployeeFormDialog } from '@/components/hr/EmployeeFormDialog';
+import { Employee, relationLabel } from '@/components/hr/employeeCommon';
 import {
-  createEmployee,
-  createEmployeeUser,
-  createPosition,
   deleteEmployee,
-  fetchDepartments,
   fetchEmployees,
-  fetchEmployeeUsers,
-  fetchPositions,
-  updateEmployee,
 } from '@/api/hr';
-import api from '@/api/client';
 import HRLayout from '@/components/hr/HRLayout';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { PhoneInput } from '@/components/ui/phone-input';
-import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -124,49 +108,11 @@ const formatShortName = (last: string, first: string, patronymic: string): strin
   return [last, initials].filter(Boolean).join(' ').trim();
 };
 
-/** Pull the int id from a relation that may arrive as either a flat int
- * or a nested ``{id, ...}`` object (depends on the endpoint version). */
-const relationId = (rel: unknown): number | null => {
-  if (rel == null) return null;
-  if (typeof rel === 'number') return rel;
-  if (typeof rel === 'object' && 'id' in (rel as any)) return Number((rel as any).id);
-  return null;
-};
-
-const relationLabel = (rel: unknown, key: 'title' | 'name'): string => {
-  if (rel && typeof rel === 'object' && key in (rel as any)) {
-    return String((rel as any)[key] || '');
-  }
-  return '';
-};
-
-interface Department {
-  id: number;
-  name: string;
-}
-
-interface HRUser {
-  id: number;
-  full_name: string;
-  email: string;
-  /** Sent by backend HRUserOption — used to prefill EmployeeCreate.first_name / last_name. */
-  first_name?: string;
-  last_name?: string;
-}
-
-/** Frontend-friendly status values mapped to the backend's allowed pattern. */
-const STATUS_TO_BACKEND: Record<string, 'active' | 'inactive' | 'terminated'> = {
-  active: 'active',
-  on_leave: 'inactive',
-  inactive: 'inactive',
-  dismissed: 'terminated',
-  terminated: 'terminated',
-};
-
 const HREmployees = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   // Lifted share-dialog state — opened from the row action button. ``null``
   // means closed; a partial Employee carries id + display name only.
   const [shareTarget, setShareTarget] = useState<{ id: number; full_name: string } | null>(null);
@@ -175,34 +121,13 @@ const HREmployees = () => {
     hasHrAccess,
     canWriteBasic,
     canCreateEmployee,
-    canTransferEmployee,
     canDeleteEmployee,
-    canListUserOptions,
-    canManageUserOptions,
     isLoading: levelLoading,
   } = useHRLevel();
   const { data: employees, isLoading, error } = useQuery({
     queryKey: ['hr-employees'],
     queryFn: () => fetchEmployees({ limit: '200' }),
     enabled: hasHrAccess,
-  });
-
-  const { data: departments } = useQuery({
-    queryKey: ['hr-departments'],
-    queryFn: fetchDepartments,
-    enabled: hasHrAccess,
-  });
-
-  const { data: positions } = useQuery({
-    queryKey: ['hr-positions'],
-    queryFn: fetchPositions,
-    enabled: hasHrAccess,
-  });
-
-  const { data: users } = useQuery({
-    queryKey: ['hr-employee-users'],
-    queryFn: () => fetchEmployeeUsers(),
-    enabled: canListUserOptions,
   });
 
   const [search, setSearch] = useState('');
@@ -223,108 +148,18 @@ const HREmployees = () => {
     });
   }, [employees, search, statusFilter]);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    if (searchParams.get('action') === 'new' && canCreateEmployee) {
+      startCreate();
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete('action');
+      setSearchParams(newParams, { replace: true });
+    }
+  }, [searchParams, canCreateEmployee]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
-  const [form, setForm] = useState({
-    user: 'none',
-    position: 'none',
-    department: 'none',
-    phone: '',
-    date_hired: '',
-    date_dismissed: '',
-    status: 'active',
-    notes: '',
-  });
-
-  const [formError, setFormError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      const backendStatus = STATUS_TO_BACKEND[form.status] || 'active';
-
-      if (editing) {
-        // EmployeeUpdate — every field optional. Only send what changed.
-        const patch: Record<string, unknown> = {
-          status: backendStatus,
-          phone: form.phone || undefined,
-          bio: form.notes || undefined,
-        };
-        if (form.position !== 'none') patch.position_id = Number(form.position);
-        if (form.department !== 'none') patch.department_id = Number(form.department);
-        if (form.date_dismissed) patch.termination_date = form.date_dismissed;
-        // eslint-disable-next-line no-console
-        console.debug('[hr.employees] update payload', editing.id, patch);
-        const res = await api.put(`hr/v1/employees/${editing.id}/`, patch);
-        return res.data;
-      }
-
-      // EmployeeCreate — first_name / last_name / email / department_id /
-      // position_id / hire_date are all REQUIRED by the backend. We pull
-      // name+email from the selected user record.
-      const selected = users?.find((u) => String(u.id) === form.user);
-      if (!selected) throw new Error('user_required');
-
-      const [splitFirst = '', ...splitRest] = (selected.full_name || '').trim().split(/\s+/);
-      const splitLast = splitRest.join(' ');
-
-      const payload = {
-        user_id: selected.id,
-        first_name: selected.first_name || splitFirst || 'Unknown',
-        last_name: selected.last_name || splitLast || '',
-        email: selected.email,
-        phone: form.phone || undefined,
-        department_id: Number(form.department),
-        position_id: Number(form.position),
-        hire_date: form.date_hired,
-        status: backendStatus,
-        bio: form.notes || undefined,
-      };
-      // eslint-disable-next-line no-console
-      console.debug('[hr.employees] create payload', payload);
-      const res = await api.post('hr/v1/employees/', payload);
-      return res.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['hr-employees'] });
-      queryClient.invalidateQueries({ queryKey: ['hr-employee-users'] });
-      setDialogOpen(false);
-      setEditing(null);
-      setFormError(null);
-      setFieldErrors({});
-      setForm({
-        user: 'none', position: 'none', department: 'none', phone: '',
-        date_hired: '', date_dismissed: '', status: 'active', notes: '',
-      });
-    },
-    onError: (err: any) => {
-      const data = err?.response?.data;
-      // eslint-disable-next-line no-console
-      console.warn('[hr.employees] save error', err?.response?.status, data);
-
-      // FastAPI 422 — { detail: [{ loc: ["body","field"], msg, type }, ...] }
-      if (data && Array.isArray(data.detail)) {
-        const fields: Record<string, string> = {};
-        const summary: string[] = [];
-        for (const item of data.detail) {
-          const loc = Array.isArray(item.loc) ? item.loc : [];
-          const field = loc.length ? String(loc[loc.length - 1]) : 'unknown';
-          fields[field] = item.msg || String(item);
-          summary.push(`${field}: ${item.msg || ''}`);
-        }
-        setFieldErrors(fields);
-        setFormError(summary.join(' • '));
-        return;
-      }
-
-      setFieldErrors({});
-      setFormError(
-        (typeof data?.detail === 'string' ? data.detail : null) ||
-          err?.message ||
-          'Не удалось сохранить сотрудника',
-      );
-    },
-  });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
@@ -806,8 +641,9 @@ const HREmployees = () => {
             </DialogContent>
           </Dialog>
         </div>
+        </div>
 
-        <div className="bg-card rounded-2xl border">
+        <div className="bg-card rounded-3xl border shadow-2xs overflow-hidden">
           <Table className="text-sm">
             <TableHeader>
               <TableRow>

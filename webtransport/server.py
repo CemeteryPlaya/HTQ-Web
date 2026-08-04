@@ -26,8 +26,14 @@ TLS:
     For local dev: generate a self-signed cert with generate_cert.py.
     For production: use a cert signed by a trusted CA (e.g. Let's Encrypt).
 
+Authentication:
+    The SFU validates the platform JWT on WebSocket upgrade
+    (SIGNALING_REQUIRE_AUTH). A WebTransport CONNECT request carries no
+    custom headers, so the browser passes the token in the query string
+    (``?token=…``) and this proxy forwards it — and only it — to the SFU.
+
 Environment variables:
-    SFU_WS_URL          WebSocket URL of the SFU  (default: ws://sfu:4443)
+    SFU_WS_URL          WebSocket URL of the SFU  (default: ws://sfu:4443/ws/sfu/)
     WT_HOST             Listen host               (default: 0.0.0.0)
     WT_PORT             Listen UDP port           (default: 4433)
     CERT_FILE           TLS certificate path      (default: certs/cert.pem)
@@ -41,9 +47,8 @@ import asyncio
 import logging
 import os
 import signal
-import ssl
 import sys
-from collections import defaultdict
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 import websockets
 from aioquic.asyncio import serve
@@ -59,7 +64,9 @@ from aioquic.quic.events import QuicEvent
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-SFU_WS_URL = os.environ.get("SFU_WS_URL", "ws://sfu:4443")
+# Путь обязателен: SFU принимает upgrade только на /ws/sfu (или /ws/sfu/),
+# всё остальное отбивает 404 (sfu/src/server.ts::isAllowedWsPath).
+SFU_WS_URL = os.environ.get("SFU_WS_URL", "ws://sfu:4443/ws/sfu/")
 WT_HOST    = os.environ.get("WT_HOST",    "0.0.0.0")
 WT_PORT    = int(os.environ.get("WT_PORT", "4433"))
 CERT_FILE  = os.environ.get("CERT_FILE",  "certs/cert.pem")
@@ -72,6 +79,41 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger("wt-proxy")
+
+# Параметры запроса браузера, которые пробрасываем дальше в SFU. Всё
+# остальное отбрасываем — путь до SFU не должен зависеть от того, что
+# клиент допишет в query.
+FORWARDED_QUERY_PARAMS = ("token", "access_token")
+
+# Сколько сообщений SFU держим, пока браузер не открыл свой поток.
+MAX_PENDING_DOWNSTREAM = 64
+
+
+def build_sfu_url(browser_query: str) -> str:
+    """URL SFU c пробросом токена из query браузерного CONNECT-запроса."""
+    if not browser_query:
+        return SFU_WS_URL
+
+    incoming = parse_qs(browser_query, keep_blank_values=False)
+    forwarded = {
+        key: incoming[key][0]
+        for key in FORWARDED_QUERY_PARAMS
+        if incoming.get(key)
+    }
+    if not forwarded:
+        return SFU_WS_URL
+
+    parsed = urlsplit(SFU_WS_URL)
+    merged = urlencode(forwarded)
+    if parsed.query:
+        merged = f"{parsed.query}&{merged}"
+    return urlunsplit(parsed._replace(query=merged))
+
+
+def redact_url(url: str) -> str:
+    """URL без query — чтобы токен не попал в логи."""
+    parsed = urlsplit(url)
+    return urlunsplit(parsed._replace(query="", fragment=""))
 
 
 # ─── Stream Bridge ─────────────────────────────────────────────────────────────
@@ -100,19 +142,63 @@ class StreamBridge:
         session_id: int,
         stream_id: int,
         protocol: "SfuBridgeProtocol",
+        sfu_url: str = SFU_WS_URL,
     ) -> None:
         self.session_id = session_id
         self.stream_id  = stream_id
         self.protocol   = protocol
+        self.sfu_url    = sfu_url
 
         self._to_sfu: asyncio.Queue[str | None] = asyncio.Queue(maxsize=200)
         self._line_buf = b""
+        self._stream_bound = False
+        # SFU шлёт `welcome` сразу после подключения — возможно, ещё до того,
+        # как браузер запишет первый байт в свой поток. Пока поток не
+        # известен, ответы копим здесь, иначе первое сообщение уйдёт в
+        # управляющий поток сессии и клиент зависнет на ожидании welcome.
+        self._pending_downstream: list[bytes] = []
+
+    def bind_stream(self, stream_id: int) -> None:
+        """Запомнить реальный поток браузера и слить в него накопленное.
+
+        До первого WebTransportStreamDataReceived известен только id
+        CONNECT-потока, который держится как заглушка.
+        """
+        if self._stream_bound and self.stream_id == stream_id:
+            return
+
+        logger.debug(
+            "[Session %s] Bound to WebTransport stream %s", self.session_id, stream_id
+        )
+        self.stream_id = stream_id
+        self._stream_bound = True
+
+        pending, self._pending_downstream = self._pending_downstream, []
+        for raw in pending:
+            self.protocol.send_to_stream(self.session_id, self.stream_id, raw)
+
+    def _send_downstream(self, raw: bytes) -> None:
+        if not self._stream_bound:
+            if len(self._pending_downstream) >= MAX_PENDING_DOWNSTREAM:
+                logger.warning(
+                    "[Session %s] Browser stream still not open, dropping message",
+                    self.session_id,
+                )
+                return
+            self._pending_downstream.append(raw)
+            return
+
+        self.protocol.send_to_stream(self.session_id, self.stream_id, raw)
 
     async def run(self) -> None:
         """Connect to the SFU and bridge traffic until either side closes."""
-        logger.info("[Session %s] Connecting to SFU at %s", self.session_id, SFU_WS_URL)
+        logger.info(
+            "[Session %s] Connecting to SFU at %s",
+            self.session_id,
+            redact_url(self.sfu_url),
+        )
         try:
-            async with websockets.connect(SFU_WS_URL, max_size=2**20) as ws:
+            async with websockets.connect(self.sfu_url, max_size=2**20) as ws:
                 logger.info("[Session %s] SFU WebSocket connected", self.session_id)
                 await asyncio.gather(
                     self._sfu_to_browser(ws),
@@ -136,7 +222,13 @@ class StreamBridge:
             # Ensure the message is newline-terminated before sending downstream
             if not raw.endswith(b"\n"):
                 raw = raw + b"\n"
-            self.protocol.send_to_stream(self.session_id, self.stream_id, raw)
+            logger.debug(
+                "[Session %s] SFU → browser %d bytes on stream %s",
+                self.session_id,
+                len(raw),
+                self.stream_id if self._stream_bound else "(pending)",
+            )
+            self._send_downstream(raw)
 
     async def _browser_to_sfu(self, ws: websockets.WebSocketClientProtocol) -> None:
         """Forward JSON lines from the browser queue to the SFU WebSocket."""
@@ -212,6 +304,7 @@ class SfuBridgeProtocol(QuicConnectionProtocol):
         elif isinstance(event, WebTransportStreamDataReceived):
             bridge = self._bridges.get(event.session_id)
             if bridge is not None:
+                bridge.bind_stream(event.stream_id)
                 bridge.receive_from_browser(event.data, event.stream_ended)
 
     def _handle_headers(self, event: HeadersReceived) -> None:
@@ -223,10 +316,12 @@ class SfuBridgeProtocol(QuicConnectionProtocol):
         if method != b"CONNECT" or protocol != b"webtransport":
             return
 
+        # В query CONNECT'а приезжает access-токен — в лог его не пишем.
+        split_path = urlsplit(path)
         logger.info(
             "[QUIC] WebTransport CONNECT from %s (path=%s)",
             self._quic._network_paths[0].addr if self._quic._network_paths else "?",
-            path,
+            split_path.path,
         )
 
         # Accept the WebTransport session
@@ -241,15 +336,15 @@ class SfuBridgeProtocol(QuicConnectionProtocol):
 
         session_id = event.stream_id
 
-        # The browser will open a bidirectional stream immediately after.
-        # We pre-create the bridge without a stream_id; the first
-        # WebTransportStreamDataReceived will carry the real stream_id.
-        # For simplicity we use the session_id as a placeholder stream_id
-        # until the actual stream arrives. The bridge is keyed by session_id.
+        # Браузер откроет двунаправленный поток сразу следом. До этого
+        # момента реального stream_id нет — держим session_id заглушкой,
+        # а первый WebTransportStreamDataReceived вызовет bind_stream()
+        # и подменит его настоящим. Мост живёт под ключом session_id.
         bridge = StreamBridge(
             session_id=session_id,
             stream_id=session_id,   # updated on first stream data if needed
             protocol=self,
+            sfu_url=build_sfu_url(split_path.query),
         )
         self._bridges[session_id] = bridge
         task = asyncio.ensure_future(bridge.run())
@@ -279,7 +374,7 @@ class SfuBridgeProtocol(QuicConnectionProtocol):
 async def main() -> None:
     logger.info("Starting WebTransport ↔ WebSocket proxy")
     logger.info("  Listening  : UDP %s:%s", WT_HOST, WT_PORT)
-    logger.info("  SFU target : %s", SFU_WS_URL)
+    logger.info("  SFU target : %s", redact_url(SFU_WS_URL))
     logger.info("  TLS cert   : %s", CERT_FILE)
 
     quic_config = QuicConfiguration(

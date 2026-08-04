@@ -30,6 +30,9 @@ export interface Contractor {
   address: string | null;
   notes: string;
   status: ContractorStatus;
+  /** См. API: количество активных работников и привлечений. */
+  workers_count?: number;
+  engagements_count?: number;
   created_at: string;
   updated_at: string;
 }

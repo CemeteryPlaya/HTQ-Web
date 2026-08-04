@@ -5,7 +5,7 @@ import api from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
 import type {
   Department, Position, Employee, EmployeeStats, HRUserOption,
-  Vacancy, Application, TimeRecord, HRDocument, HRActionLog,
+  Vacancy, Application,
 } from '@/types/hr';
 
 const HR = `${API_ENDPOINTS.hr}/`;
@@ -138,11 +138,25 @@ export const fetchEmployeeUsers = async (params?: Record<string, string>): Promi
   return unwrap<HRUserOption>(res.data);
 };
 
+/**
+ * Заводит платформенного пользователя из HR-формы.
+ *
+ * `password` обязателен (бэкенд отбивает пустой 422). Раньше поля не было, и
+ * `apps.users.interface.create_user` генерировал случайный пароль, которого не
+ * видел никто: аккаунт существовал, но войти в него было невозможно до
+ * админского сброса.
+ *
+ * `must_change_password` тут НЕ передаётся: на этом маршруте бэкенд ставит его
+ * жёстко в true и поля в схеме нет. Пароль назначает HR и видит его открытым,
+ * поэтому первый вход сотрудника обязан заканчиваться сменой — гарантия не
+ * должна зависеть от того, что пришлёт клиент.
+ */
 export const createEmployeeUser = async (data: {
   first_name: string;
   last_name: string;
   patronymic?: string;
   email: string;
+  password: string;
 }): Promise<HRUserOption> => {
   const res = await api.post(`${HR}employees/users/`, data);
   return res.data;
@@ -155,6 +169,28 @@ export const createEmployee = async (data: Partial<Employee>): Promise<Employee>
 
 export const updateEmployee = async (id: number, data: Partial<Employee>): Promise<Employee> => {
   const res = await api.put(`${HR}employees/${id}/`, toBackendRecord(data as Record<string, any>, EMPLOYEE_FIELD_ALIASES));
+  return normalizeEmployee(res.data);
+};
+
+/**
+ * Создаёт сотрудника вместе с опциональным блоком `card_t2`.
+ *
+ * Отдельно от `createEmployee`: тот прогоняет тело через
+ * `toBackendRecord(..., EMPLOYEE_FIELD_ALIASES)`, который переименовывает
+ * ключи по плоской карте алиасов и покалечил бы вложенный объект `card_t2`.
+ * Здесь payload собирает вызывающий — ровно в форме бэкендовой
+ * `EmployeeCreateRequest`.
+ */
+export const createEmployeeWithCard = async (payload: Record<string, unknown>): Promise<Employee> => {
+  const res = await api.post(`${HR}employees/`, payload);
+  return normalizeEmployee(res.data);
+};
+
+export const updateEmployeeWithCard = async (
+  id: number,
+  payload: Record<string, unknown>,
+): Promise<Employee> => {
+  const res = await api.put(`${HR}employees/${id}/`, payload);
   return normalizeEmployee(res.data);
 };
 
@@ -224,11 +260,33 @@ export const fetchMyEmployeeCard = async (): Promise<EmployeeCard> => {
 export interface CardT2 {
   financial?: { salary: string | null; bonus: string | null; bank_account: string | null };
   personal?: { passport_data: string | null; inn: string | null; birth_date: string | null; birth_place: string | null; citizenship: string | null };
-  certs?: { sro_permit_number: string | null; sro_permit_expiry: string | null; safety_cert_number: string | null; safety_cert_expiry: string | null };
 }
 
 export const fetchCardT2 = async (employeeId: number): Promise<CardT2> => {
   const res = await api.get(`${HR}employees/${employeeId}/card/t2`);
+  return res.data;
+};
+
+/** Секции Т-2 карточки — совпадают с ключами `EmployeeCardT2Patch` бэкенда. */
+export type CardT2Section = 'financial' | 'personal' | 'certs';
+
+/**
+ * Пишет ОДНУ секцию Т-2 карточки.
+ *
+ * Бэкенд (`employee_card_t2_service.upsert`) применяет патч целиком или никак:
+ * отказ прав на любой секции откатывает и уже применённые. Поэтому шлём по
+ * одной секции за запрос — иначе отказ на «Финансах» молча потерял бы и
+ * правки «Личных данных». Строку карточки upsert создаёт сам, если её ещё нет,
+ * так что сотруднику не требуется никакой предварительной подготовки.
+ *
+ * Возвращает секции, видимые вызывающему после записи (ответ эндпойнта).
+ */
+export const updateCardT2 = async (
+  employeeId: number,
+  section: CardT2Section,
+  values: Record<string, string | null>,
+): Promise<CardT2> => {
+  const res = await api.patch(`${HR}employees/${employeeId}/card/t2`, { [section]: values });
   return res.data;
 };
 
@@ -313,61 +371,14 @@ export const deleteApplication = async (id: number): Promise<void> => {
   await api.delete(`${HR}applications/${id}/`);
 };
 
-/* ---------- Time Tracking ---------- */
-export const fetchTimeRecords = async (params?: Record<string, string>): Promise<TimeRecord[]> => {
-  const query = params ? '?' + new URLSearchParams(params).toString() : '';
-  const res = await api.get(`${HR}time-tracking/${query}`);
-  return unwrap<TimeRecord>(res.data);
-};
-
-export const createTimeRecord = async (data: Partial<TimeRecord>): Promise<TimeRecord> => {
-  const res = await api.post(`${HR}time-tracking/`, data);
-  return res.data;
-};
-
-export const updateTimeRecord = async (id: number, data: Partial<TimeRecord>): Promise<TimeRecord> => {
-  const res = await api.patch(`${HR}time-tracking/${id}/`, data);
-  return res.data;
-};
-
-export const approveTimeRecord = async (id: number): Promise<TimeRecord> => {
-  const res = await api.post(`${HR}time-tracking/${id}/approve/`);
-  return res.data;
-};
-
-export const rejectTimeRecord = async (id: number): Promise<TimeRecord> => {
-  const res = await api.post(`${HR}time-tracking/${id}/reject/`);
-  return res.data;
-};
-
-export const deleteTimeRecord = async (id: number): Promise<void> => {
-  await api.delete(`${HR}time-tracking/${id}/`);
-};
-
-/* ---------- Documents ---------- */
-export const fetchDocuments = async (params?: Record<string, string>): Promise<HRDocument[]> => {
-  const query = params ? '?' + new URLSearchParams(params).toString() : '';
-  const res = await api.get(`${HR}documents/${query}`);
-  return unwrap<HRDocument>(res.data);
-};
-
-export const uploadDocument = async (data: FormData): Promise<HRDocument> => {
-  const res = await api.post(`${HR}documents/`, data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
-  return res.data;
-};
-
-export const deleteDocument = async (id: number): Promise<void> => {
-  await api.delete(`${HR}documents/${id}/`);
-};
-
-/* ---------- Action Logs ---------- */
-export const fetchActionLogs = async (params?: Record<string, string>): Promise<HRActionLog[]> => {
-  const query = params ? '?' + new URLSearchParams(params).toString() : '';
-  const res = await api.get(`${HR}logs/${query}`);
-  return unwrap<HRActionLog>(res.data);
-};
+/* ---------- Time Tracking / Documents / Action Logs ----------
+ * Хелперов здесь больше нет. Табель и документы страницы зовут напрямую
+ * через `api` (см. pages/hr/HRTimeTracking.tsx, pages/hr/HRDocuments.tsx):
+ * прежние обёртки писались под старый Django-монолит и били в маршруты,
+ * которых в этом бэкенде нет (`time-tracking/{id}/`, `.../approve|reject`),
+ * а их единственными потребителями были неподключённые страницы-дубли
+ * из `src/pages/` — удалены вместе с ними.
+ */
 
 /* ---------- Production Calendar ---------- */
 export interface WeekTemplate { id: number; name: string; is_default: boolean; days: Record<string, { type: string; hours: number }>; }

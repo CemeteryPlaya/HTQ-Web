@@ -25,6 +25,11 @@ import { v4 as uuidv4 } from 'uuid';
 
 import { config } from './config.js';
 import { Room, ActiveSpeakerInfo } from './room.js';
+import {
+  AccessTokenClaims,
+  describeClaims,
+  verifyAccessToken,
+} from './auth.js';
 
 // ═══════════════════════════════════════════════════════════
 // Types
@@ -35,6 +40,8 @@ interface PeerConnection {
   ws: WebSocket;
   roomId: string | null;
   displayName: string;
+  /** Claim'ы платформенного JWT; null только при SIGNALING_REQUIRE_AUTH=false. */
+  identity: AccessTokenClaims | null;
   rtpCapabilities: mediasoupTypes.RtpCapabilities | null;
   sendTransportId: string | null;
   recvTransportId: string | null;
@@ -491,6 +498,85 @@ function isAllowedWsPath(pathname: string): boolean {
   });
 }
 
+/**
+ * Подпротокол, которым браузер передаёт access-токен: заголовки в
+ * `new WebSocket(url)` задать нельзя, а `Sec-WebSocket-Protocol` — можно.
+ * Клиент шлёт `['htqweb.jwt', '<jwt>']`, сервер эхом возвращает только
+ * маркер (см. handleProtocols), чтобы сам токен не уехал в ответный
+ * заголовок и в логи прокси.
+ */
+const WS_AUTH_SUBPROTOCOL = 'htqweb.jwt';
+
+function extractAccessToken(req: IncomingMessage): string | null {
+  // 1) Sec-WebSocket-Protocol: htqweb.jwt, <jwt> — основной путь для браузера.
+  const rawProtocols = req.headers['sec-websocket-protocol'];
+  const protocolHeader = Array.isArray(rawProtocols)
+    ? rawProtocols.join(',')
+    : rawProtocols;
+  if (protocolHeader) {
+    const offered = protocolHeader
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const markerIdx = offered.indexOf(WS_AUTH_SUBPROTOCOL);
+    if (markerIdx >= 0 && offered[markerIdx + 1]) {
+      return offered[markerIdx + 1];
+    }
+  }
+
+  // 2) Authorization: Bearer <jwt> — для не-браузерных клиентов и curl'а.
+  const authHeader = Array.isArray(req.headers.authorization)
+    ? req.headers.authorization[0]
+    : req.headers.authorization;
+  if (authHeader && /^bearer\s+/i.test(authHeader)) {
+    return authHeader.replace(/^bearer\s+/i, '').trim();
+  }
+
+  // 3) ?token= / ?access_token= — WebTransport-мост (заголовки CONNECT-запроса
+  //    до SFU не доходят) и ручная отладка.
+  try {
+    const url = new URL(req.url || '/', 'http://localhost');
+    const queryToken =
+      url.searchParams.get('token') || url.searchParams.get('access_token');
+    if (queryToken) {
+      return queryToken.trim();
+    }
+  } catch {
+    // Некорректный URL — токена в нём точно нет.
+  }
+
+  return null;
+}
+
+/**
+ * Возвращает claim'ы при успехе, строку-причину при отказе и `null`, если
+ * проверка выключена (SIGNALING_REQUIRE_AUTH=false).
+ */
+function authenticateUpgrade(
+  req: IncomingMessage
+): { ok: true; claims: AccessTokenClaims | null } | { ok: false; reason: string } {
+  if (!config.auth.required) {
+    return { ok: true, claims: null };
+  }
+
+  const token = extractAccessToken(req);
+  if (!token) {
+    return { ok: false, reason: 'access token is missing' };
+  }
+
+  const verified = verifyAccessToken(token, {
+    secret: config.auth.jwtSecret,
+    issuer: config.auth.jwtIssuer,
+    clockToleranceSec: config.auth.clockToleranceSec,
+  });
+
+  if (!verified.ok) {
+    return { ok: false, reason: verified.reason };
+  }
+
+  return { ok: true, claims: verified.claims };
+}
+
 function isSecureRequest(req: IncomingMessage): boolean {
   const isDirectTls = !!(req.socket as any)?.encrypted;
   if (isDirectTls) {
@@ -514,11 +600,13 @@ function rejectUpgrade(
   const statusText =
     statusCode === 400
       ? 'Bad Request'
-      : statusCode === 403
-        ? 'Forbidden'
-        : statusCode === 404
-          ? 'Not Found'
-          : 'Upgrade Rejected';
+      : statusCode === 401
+        ? 'Unauthorized'
+        : statusCode === 403
+          ? 'Forbidden'
+          : statusCode === 404
+            ? 'Not Found'
+            : 'Upgrade Rejected';
 
   socket.write(
     `HTTP/1.1 ${statusCode} ${statusText}\r\n` +
@@ -606,7 +694,9 @@ async function handleMessage(
       case 'joinRoom': {
         const data = asRecord(msg.data);
         const roomId = String(data.roomId || '');
-        const displayName = String(data.displayName || 'Guest');
+        const displayName = String(
+          data.displayName || peerConn.identity?.username || 'Guest'
+        );
         if (!roomId) return respondError('roomId is required');
 
         // If peer moves from another room, clean old media and room bindings.
@@ -899,7 +989,14 @@ async function main(): Promise<void> {
   }
 
   // 3. Attach WebSocket signaling server with explicit Upgrade handling.
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({
+    noServer: true,
+    // Клиент предлагает ['htqweb.jwt', '<jwt>']; подтверждаем только маркер.
+    // Дефолт ws вернул бы первый предложенный подпротокол — при другом
+    // порядке это отправило бы сам токен обратно в заголовке ответа.
+    handleProtocols: (protocols) =>
+      protocols.has(WS_AUTH_SUBPROTOCOL) ? WS_AUTH_SUBPROTOCOL : false,
+  });
 
   httpServer.on('upgrade', (req, socket, head) => {
     const connectionHeader = String(req.headers.connection || '').toLowerCase();
@@ -941,8 +1038,13 @@ async function main(): Promise<void> {
       return rejectUpgrade(req, socket, 403, 'TLS is required for signaling');
     }
 
+    const authResult = authenticateUpgrade(req);
+    if (!authResult.ok) {
+      return rejectUpgrade(req, socket, 401, `Unauthorized: ${authResult.reason}`);
+    }
+
     wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req);
+      wss.emit('connection', ws, req, authResult.claims);
     });
   });
 
@@ -973,13 +1075,18 @@ async function main(): Promise<void> {
     }
   }, WS_HEARTBEAT_INTERVAL_MS);
 
-  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+  wss.on('connection', (
+    ws: WebSocket,
+    req: IncomingMessage,
+    identity: AccessTokenClaims | null = null
+  ) => {
     const peerId = uuidv4();
     const peerConn: PeerConnection = {
       peerId,
       ws,
       roomId: null,
       displayName: '',
+      identity,
       rtpCapabilities: null,
       sendTransportId: null,
       recvTransportId: null,
@@ -989,7 +1096,8 @@ async function main(): Promise<void> {
 
     peerConnections.set(peerId, peerConn);
     console.log(
-      `[Server] Client connected: ${peerId} path=${getRequestPath(req)} origin=${req.headers.origin || 'n/a'}`
+      `[Server] Client connected: ${peerId} user=${identity ? describeClaims(identity) : 'anonymous'} ` +
+      `path=${getRequestPath(req)} origin=${req.headers.origin || 'n/a'}`
     );
 
     // Send peer their ID
@@ -1027,7 +1135,8 @@ async function main(): Promise<void> {
     );
     console.log(
       `[Server] WS paths: ${config.signaling.wsPaths.join(', ')} | ` +
-        `Origin check: ${config.signaling.disableOriginCheck ? 'disabled' : 'enabled'}`
+        `Origin check: ${config.signaling.disableOriginCheck ? 'disabled' : 'enabled'} | ` +
+        `JWT auth: ${config.auth.required ? `required (iss=${config.auth.jwtIssuer})` : 'DISABLED'}`
     );
     if (!config.signaling.disableOriginCheck) {
       console.log(

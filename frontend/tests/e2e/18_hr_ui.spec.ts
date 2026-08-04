@@ -37,7 +37,8 @@ const HR_PAGES: { path: string; marker: RegExp }[] = [
   { path: "/hr/pmo", marker: /PMO/i },
   { path: "/hr/share-links", marker: /ссылк|link/i },
   { path: "/hr/production-calendar", marker: /Календар|Calendar/i },
-  { path: "/admin/levels", marker: /Уровн|Level/i },
+  // Уровни должностей — вкладка внутри «Должностей», отдельного адреса нет.
+  { path: "/hr/positions?tab=levels", marker: /Уровн|Level/i },
   { path: "/admin/access-levels", marker: /Уровн|Level|Доступ/i },
 ];
 

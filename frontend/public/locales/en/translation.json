@@ -50,7 +50,7 @@
       "manageNews": "News",
       "manageProjects": "Projects",
       "contactRequests": "Contact requests",
-      "djangoAdmin": "Database admin",
+      "djangoAdmin": "Django admin",
       "hrManagement": "HR",
       "adminTools": "Administration",
       "employees": "Employees",
@@ -73,8 +73,7 @@
       "actionLogs": "Action logs",
       "registrations": "Registrations",
       "manageUsers": "Users",
-      "manageChats": "Chats",
-      "sqladmin": "Database (sqladmin)"
+      "manageChats": "Chats"
     },
     "errors": {
       "nameMin": "Name must be at least 2 characters",
@@ -102,7 +101,8 @@
     "login": "Login",
     "logout": "Logout",
     "requests": "Requests",
-    "tagline": "Construction services in energy sector"
+    "tagline": "Construction services in energy sector",
+    "more": "More"
   },
   "hero": {
     "tag": "Market Leader in Central Asia",
@@ -429,7 +429,6 @@
       "departments": "Departments",
       "structure": "Structure",
       "positions": "Positions",
-      "levels": "Position Levels",
       "orgChart": "Org Chart",
       "pmo": "PMO",
       "shareLinks": "Public Links",
@@ -540,11 +539,17 @@
           "sroPermitNumber": "SRO permit number",
           "sroPermitExpiry": "SRO permit expiry",
           "safetyCertNumber": "Safety certificate number",
-          "safetyCertExpiry": "Safety certificate expiry"
+          "safetyCertExpiry": "Safety certificate expiry",
+          "inn": "TIN",
+          "birthDate": "Date of birth",
+          "birthPlace": "Place of birth",
+          "citizenship": "Citizenship",
+          "password": "Password"
         },
         "sections": {
           "sro": "SRO & Occupational Safety",
-          "financial": "Financial data (confidential)"
+          "financial": "Financial data (confidential)",
+          "personal": "Personal data"
         },
         "placeholders": {
           "selectUser": "Select user",
@@ -567,7 +572,28 @@
           "hired": "Hired",
           "actions": "Actions",
           "lastName": "Last Name"
-        }
+        },
+        "cardT2": {
+          "saved": "Saved",
+          "error": "Could not save",
+          "forbidden": "Not enough permissions to edit this section",
+          "badNumber": "Enter a number, e.g. 450000 or 450000.50",
+          "loading": "Loading…",
+          "sectionHasError": "Check the fields"
+        },
+        "searchDepartment": "Search department…",
+        "noDepartmentFound": "Department not found",
+        "createDepartment": "Create new department",
+        "createDepartmentTitle": "New department",
+        "openCard": "Open card",
+        "actions": {
+          "share": "Share"
+        },
+        "usernameHint": "Username will be derived from the email:",
+        "passwordPlaceholder": "Set or generate",
+        "generatePassword": "Generate",
+        "passwordHint": "The password is shown in clear — pass it to the employee. It cannot be viewed later.",
+        "mustChangePasswordNotice": "On first sign-in the employee must replace this password with their own — the one you gave stops working."
       },
       "structure": {
         "title": "Company Structure",
@@ -604,13 +630,18 @@
         "new": "New Position",
         "edit": "Edit Position",
         "deleteConfirm": "Delete this position?",
+        "tabs": {
+          "positions": "Positions",
+          "levels": "Levels"
+        },
         "filters": {
           "department": "Filter by department",
           "allDepartments": "All departments"
         },
         "fields": {
           "title": "Title",
-          "department": "Department"
+          "department": "Department",
+          "level": "Level"
         },
         "placeholders": {
           "selectDepartment": "Select department"
@@ -623,45 +654,38 @@
       },
       "timeTracking": {
         "title": "Time Tracking",
-        "subtitle": "Leave requests, approvals, and attendance status.",
+        "subtitle": "Hours worked per day: interval, break, project and task.",
         "error": "Error loading time tracking",
-        "add": "Add Record",
-        "new": "New Record",
-        "edit": "Edit Record",
-        "deleteConfirm": "Delete this record?",
+        "empty": "No entries yet",
+        "add": "Add entry",
+        "new": "New entry",
+        "edit": "Edit entry",
+        "deleteConfirm": "Delete this entry?",
         "fields": {
           "employee": "Employee",
-          "leaveType": "Leave type",
-          "status": "Status",
-          "startDate": "Start date",
-          "endDate": "End date",
-          "comment": "Comment"
+          "date": "Date",
+          "startTime": "Start",
+          "endTime": "End",
+          "breakMinutes": "Break, min",
+          "project": "Project",
+          "task": "Task",
+          "description": "Description"
         },
         "placeholders": {
-          "selectEmployee": "Select employee",
-          "selectType": "Select type",
-          "selectStatus": "Select status"
+          "selectEmployee": "Select employee"
         },
-        "leaveTypes": {
-          "vacation": "Vacation",
-          "sickLeave": "Sick leave",
-          "dayOff": "Day off",
-          "businessTrip": "Business trip",
-          "unpaid": "Unpaid"
-        },
-        "status": {
-          "pending": "Pending",
-          "approved": "Approved",
-          "rejected": "Rejected",
-          "cancelled": "Cancelled"
+        "report": {
+          "employee": "Employee",
+          "month": "Month",
+          "total": "Hours this month"
         },
         "table": {
           "employee": "Employee",
-          "type": "Type",
-          "period": "Period",
-          "days": "Days",
-          "status": "Status",
-          "approvedBy": "Approved By",
+          "date": "Date",
+          "interval": "Interval",
+          "break": "Break, min",
+          "worked": "Worked",
+          "projectTask": "Project / task",
           "actions": "Actions"
         }
       },
@@ -783,7 +807,6 @@
         "emptyDocuments": "No archived documents yet",
         "filters": {
           "all": "All",
-          "noStatus": "No status",
           "dateFrom": "Date from",
           "dateTo": "Date to",
           "clear": "Clear"
@@ -809,29 +832,13 @@
         },
         "documents": {
           "employee": "Employee",
-          "candidate": "Candidate",
           "title": "Document",
           "type": "Type",
-          "status": "Application Status",
-          "date": "Date",
-          "file": "File"
+          "date": "Date"
         },
         "editDialog": {
-          "title": "Edit Document",
-          "replaceFile": "Replace file",
-          "regenerateHint": "Edit PDF content",
-          "regenerate": "Regenerate PDF",
-          "fields": {
-            "candidateName": "Full name",
-            "candidateEmail": "Email",
-            "vacancyTitle": "Position",
-            "departmentName": "Department",
-            "hireDate": "Hire date",
-            "workConditions": "Employment conditions",
-            "workType": "Work type",
-            "probationPeriod": "Probation period",
-            "workSchedule": "Work schedule"
-          }
+          "title": "Edit document",
+          "cardOnlyHint": "Card only: title, type and description. Replace the file by uploading a new one in Documents."
         }
       },
       "documents": {
@@ -1814,6 +1821,111 @@
       "markHandled": "Mark Handled",
       "delete": "Delete",
       "deleteConfirm": "Delete this request?"
+    },
+    "mailboxes": {
+      "address": "Address",
+      "aliasActive": "Active",
+      "aliasAddress": "Alias",
+      "aliasCreated": "Alias created",
+      "aliasDeleted": "Alias deleted",
+      "aliasGoto": "Forwards to",
+      "aliasHint": "An alias address accepts mail and forwards it to one or more mailboxes (comma-separated).",
+      "aliasesEmpty": "No aliases",
+      "apiKey": "API key",
+      "apiKeyPlaceholder": "leave empty to keep unchanged",
+      "apiKeySet": "set",
+      "archived": "Mailbox archived",
+      "bannerImap": "IMAP/SMTP mode ({{host}}:{{port}}, domain {{domain}}). IMAP cannot create mailboxes — create it on the mail server, enter the address and password here, and the platform will verify the credentials and link the mailbox.",
+      "bannerMailcow": "Mailcow API mode (domain {{domain}}). Mailboxes are really created, archived and deleted on the mail server.",
+      "bannerNone": "No mail server connected: mailboxes are only stored in the platform database and will not appear on the server. Set MAILCOW_API_URL + MAILCOW_API_KEY or IMAP_HOST.",
+      "confirmDeleteDesc": "The mailbox and all its data will be irrevocably removed from the mail server. This is the second stage of the two-step deletion (after archiving).",
+      "confirmDeleteTitle": "Delete permanently?",
+      "create": "Create mailbox",
+      "createAlias": "Create alias",
+      "createDesc": "The address is optional — it is derived from the first and last name (Ivan Ivanov -> i.ivanov). An empty password means auto-generation.",
+      "createDescImap": "The mailbox must already exist on the mail server. Enter its address and password — the platform will verify the credentials over IMAP and link the mailbox.",
+      "createError": "Could not create the mailbox",
+      "created": "Mailbox created",
+      "deleteConfirmBtn": "Delete forever",
+      "deleted": "Mailbox permanently deleted",
+      "diffAction": "Action",
+      "diffDetail": "Details",
+      "diffKind": "Difference",
+      "diffMismatched": "Diverged",
+      "diffOnlyLocal": "Platform only",
+      "diffOnlyRemote": "Server only",
+      "domainField": "Mailbox domain",
+      "empty": "No mailboxes",
+      "forceChange": "Force change on next sign-in",
+      "fromEnv": "from environment",
+      "imapHost": "Host",
+      "localPart": "Address (before @)",
+      "localPartPattern": "Address pattern from name",
+      "localPartPatternHint": "How to build the address from the employee's first and last name. It must match your company's convention, otherwise the platform generates an address that does not exist on the server.",
+      "localPartPlaceholder": "i.ivanov — empty = from name",
+      "modeAuto": "Automatic",
+      "modeEnv": "From environment",
+      "modeImap": "IMAP/SMTP",
+      "modeMailcow": "Mailcow API",
+      "modeNone": "Not connected",
+      "newPassword": "New password",
+      "password": "Password",
+      "passwordOnce": "Password (shown once)",
+      "passwordRequiredPlaceholder": "mailbox password on the mail server",
+      "passwordResetOnce": "New password (shown once)",
+      "port": "Port",
+      "provisioner": "Connection mode",
+      "pushFlags": "Mark messages read on the server",
+      "quota": "Quota",
+      "quotaPlaceholder": "empty = default",
+      "reconcileApplied": "Reconciliation applied",
+      "reconcileClean": "No differences — the platform and the mail server match.",
+      "reconcileHelp": "Reconciliation compares platform mailboxes with mail server mailboxes in both directions. Review the report first — it changes nothing — and only then apply a direction.",
+      "reconcileInSync": "In sync",
+      "reconcileLocal": "In platform",
+      "reconcileMode": "Mode",
+      "reconcileProbeNote": "The server does not expose a mailbox list, so only mailboxes known to the platform were checked, via a live IMAP login. Mailboxes created on the server outside the platform cannot be seen in this mode.",
+      "reconcilePull": "Accept server data",
+      "reconcilePullHint": "The mail server is the source of truth: missing mailboxes are imported into the platform and differing values are pulled from the server.",
+      "reconcilePush": "Write platform data",
+      "reconcilePushDisabled": "The current mail server cannot create mailboxes through an API.",
+      "reconcilePushHint": "The platform is the source of truth: missing mailboxes are created on the server and differing values are pushed there.",
+      "reconcileRemote": "On server",
+      "reconcileRun": "Check for differences",
+      "resetTitle": "Reset mailbox password",
+      "restored": "Mailbox restored",
+      "selfService": "Let employees connect their own mailbox",
+      "selfServiceHint": "The employee enters the mailbox address and password; the platform verifies them against the server",
+      "serverFolders": "Folders on the server",
+      "settingsHelp": "Values from the environment (.env) apply until a field is changed here. Clear a field to fall back to the environment value. Active mode: {{mode}}.",
+      "settingsSaved": "Settings saved",
+      "smtpHost": "Host",
+      "smtpHostPlaceholder": "empty = same as IMAP",
+      "statusLabel": "Status",
+      "subtitle": "Manage mailboxes on the corporate domain. Deletion is two-step: archive first, then delete permanently.",
+      "syncFolders": "Folders to sync",
+      "syncSection": "Synchronisation",
+      "tabAliases": "Aliases",
+      "tabConnection": "Connection",
+      "tabMailboxes": "Mailboxes",
+      "tabReconcile": "Reconciliation",
+      "test": "Test connection",
+      "testHelp": "Checks the chain in order: settings -> port -> IMAP -> login -> folders -> SMTP, stopping at the first failure. Mailbox address and password are optional — without them only settings and port reachability are checked.",
+      "testMailbox": "Mailbox (optional)",
+      "testOk": "The mail server is reachable",
+      "testPassword": "Password (optional)",
+      "testPasswordPlaceholder": "empty = stored mailbox password",
+      "testTitle": "Connection test",
+      "testing": "Testing…",
+      "title": "Corporate mailboxes",
+      "tlsHostname": "Certificate hostname",
+      "tlsHostnamePlaceholder": "only for TLS inside the tunnel",
+      "tunnelTlsHint": "Usually unnecessary over an SSH tunnel — SSH already encrypts it",
+      "useSsl": "Use SSL/TLS",
+      "user": "User",
+      "userId": "User ID",
+      "userIdHint": "With a user set, the mailbox shows up in their Mail section: the platform creates a mail account for them.",
+      "userIdPlaceholder": "optional"
     }
   },
   "common": {
@@ -1846,5 +1958,66 @@
       "media": "Files",
       "users": "Profile"
     }
+  },
+  "mail": {
+    "connect": {
+      "address": "Mailbox address",
+      "checking": "Checking…",
+      "connect": "Connect mailbox",
+      "connected": "Mailbox connected",
+      "disconnect": "Disconnect",
+      "disconnected": "Mailbox disconnected from the platform",
+      "error": "Could not connect the mailbox",
+      "hint": "Enter the address and password of your work mailbox — the same ones you use in your mail client. The platform verifies them against the mail server and stores them encrypted.",
+      "password": "Mailbox password",
+      "security": "The password is stored encrypted and is used only to fetch and send your mail.",
+      "subtitle": "Connect your work mailbox @{{domain}} to read and send mail here.",
+      "title": "Corporate mail",
+      "update": "Update password"
+    },
+    "imap": {
+      "address": "Address",
+      "advanced": "Advanced: SMTP, encryption, username",
+      "appPasswordHint": "Many providers (Gmail, Yandex, Mail.ru) require a separate app password rather than your account password.",
+      "checking": "Verifying login…",
+      "connect": "Connect",
+      "connected": "Account connected",
+      "corporate": "This is the corporate domain — the working mail-server address was taken from the platform settings.",
+      "description": "For mail that is neither Google nor Outlook: your own hosting, a contractor's mail, another domain. The credentials are the same ones you enter in a mail client.",
+      "displayName": "Sender name",
+      "error": "Could not connect the account",
+      "guessed": "The server was guessed from the domain — check the hosts and ports if the login fails.",
+      "imapHost": "IMAP server",
+      "imapPort": "IMAP port",
+      "imapSsl": "IMAP: SSL/TLS",
+      "imapStarttls": "IMAP: STARTTLS",
+      "known": "This provider's settings were filled in automatically.",
+      "password": "Password",
+      "security": "The platform verifies the login against the server before saving. The password is stored encrypted and used only for your mail.",
+      "smtpHost": "SMTP server",
+      "smtpHostPlaceholder": "empty = same as IMAP",
+      "smtpPort": "SMTP port",
+      "smtpSsl": "SMTP: SSL/TLS",
+      "smtpStarttls": "SMTP: STARTTLS",
+      "title": "Connect mail over IMAP",
+      "username": "Username",
+      "usernamePlaceholder": "empty = the full address"
+    }
+  },
+  "email": {
+    "accounts": {
+      "addImap": "Other mail (IMAP)",
+      "checking": "Checking…",
+      "newPasswordPlaceholder": "new mailbox password",
+      "passwordError": "The server rejected the password",
+      "save": "Save",
+      "syncFailed": "sync is failing",
+      "updatePassword": "Update password"
+    }
+  },
+  "nav": {
+    "messenger": "Chats",
+    "email": "Mail",
+    "files": "Files"
   }
 }

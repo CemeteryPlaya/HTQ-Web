@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useHRLevel } from '@/hooks/useHRLevel';
-import { ChevronDown, ChevronRight, Plus, Pencil, Trash2, Building2, Briefcase } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Pencil, Trash2, Building2, Briefcase, Search } from 'lucide-react';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                             */
@@ -177,72 +177,86 @@ const HRDepartments = () => {
 
   return (
     <HRLayout title={t('hr.pages.structure.title')} subtitle={t('hr.pages.structure.subtitle')}>
-      {/* ---- Header row ---- */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3 flex-1">
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t('hr.pages.departments.searchPlaceholder')}
-            className="max-w-sm"
-          />
-          <span className="text-sm text-muted-foreground whitespace-nowrap">
-            {t('hr.common.total')}: {filtered.length}
-          </span>
+      {/* ---- Header Action Control Bar ---- */}
+      <div className="rounded-3xl border bg-card p-4 shadow-2xs">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 flex-1 w-full sm:w-auto">
+            <div className="relative flex-1 max-w-sm">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t('hr.pages.departments.searchPlaceholder', 'Поиск по подразделениям и должностям...')}
+                className="pl-9 h-9 text-xs bg-muted/30 rounded-xl"
+              />
+            </div>
+            <span className="text-xs font-semibold text-muted-foreground whitespace-nowrap">
+              {t('hr.common.total')}: {filtered.length}
+            </span>
+          </div>
+
+          <Button onClick={startCreateDept} className="gap-2 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 font-semibold shadow-2xs">
+            <Plus className="h-4 w-4" />
+            {t('hr.pages.departments.create', 'Создать подразделение')}
+          </Button>
         </div>
-        <Button onClick={startCreateDept} className="gap-2">
-          <Plus className="h-4 w-4" />
-          {t('hr.pages.departments.create')}
-        </Button>
       </div>
 
-      {/* ---- Tree ---- */}
-      <div className="space-y-3 mt-6">
+      {/* ---- Tree Cards ---- */}
+      <div className="space-y-3 mt-4">
         {filtered.map((dept) => {
           const isOpen = expanded.has(dept.id);
           const posCount = dept.positions?.length || 0;
 
           return (
-            <div key={dept.id} className="rounded-2xl border bg-card/70 shadow-[var(--shadow-soft)] overflow-hidden">
+            <div key={dept.id} className="rounded-3xl border bg-card shadow-2xs hover:shadow-xs transition-all overflow-hidden">
               {/* Department row */}
-              <div className="flex items-center gap-3 px-5 py-4">
+              <div className="flex items-center gap-3 px-6 py-4">
                 <button
                   type="button"
                   onClick={() => toggle(dept.id)}
-                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  className="rounded-lg p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                   aria-label="Toggle positions"
                 >
                   {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                 </button>
 
-                <Building2 className="h-4 w-4 text-primary shrink-0" />
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary shrink-0">
+                  <Building2 className="h-4.5 w-4.5" />
+                </div>
 
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-muted-foreground">{dept.index}</span>
-                    <span className="font-medium truncate">{dept.name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      ({posCount} {t('hr.pages.structure.positionsCount')})
+                  <div className="flex flex-wrap items-center gap-2">
+                    {dept.index && (
+                      <span className="text-xs font-mono font-bold text-muted-foreground bg-muted/60 px-2 py-0.5 rounded-md">
+                        № {dept.index}
+                      </span>
+                    )}
+                    <span className="font-bold text-base truncate text-foreground">{dept.name}</span>
+                    <span className="inline-flex items-center rounded-full bg-muted/80 px-2.5 py-0.5 text-xs font-semibold text-muted-foreground">
+                      {posCount} должностей
                     </span>
                   </div>
                   {dept.description && (
-                    <p className="text-sm text-muted-foreground mt-0.5 truncate">{dept.description}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">{dept.description}</p>
                   )}
                 </div>
 
-                <div className="flex items-center gap-1 shrink-0">
-                  <Button size="sm" variant="ghost" onClick={() => startCreatePos(dept.id)} title={t('hr.pages.structure.addPosition')}>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button size="sm" variant="outline" className="gap-1.5 text-xs rounded-xl h-8" onClick={() => startCreatePos(dept.id)} title={t('hr.pages.structure.addPosition')}>
                     <Plus className="h-3.5 w-3.5" />
+                    <span>Должность</span>
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => startEditDept(dept)}>
+                  <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-xl" onClick={() => startEditDept(dept)} title="Редактировать">
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
                   {isSenior && (
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="text-destructive hover:text-destructive"
+                      className="h-8 w-8 p-0 rounded-xl text-destructive hover:text-destructive hover:bg-destructive/10"
                       onClick={() => handleDeleteDept(dept.id, dept.name)}
+                      title="Удалить"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
