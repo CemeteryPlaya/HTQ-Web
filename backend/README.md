@@ -310,7 +310,7 @@ Then:
 ## Local run
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+docker compose -f docker-compose.test-local.yml up -d --build
 ```
 Brings up `backend-web` (gunicorn WSGI in prod / `runserver` in dev, `:8000`→host `:8000`),
 `backend-asgi` (uvicorn ASGI, SSE `/api/requests/v1/stream` + WS `/ws/`, `:8000`→host `:8001`),
@@ -319,7 +319,7 @@ Vite dev server (`:3000`) which proxies to all of the above. `backend-web` is th
 that runs `migrate` and seeds `admin`/`admin12345` (`RUN_MIGRATIONS=1`, see
 `docker-entrypoint.sh`). Rebuild one process after a code change:
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --no-deps backend-web
+docker compose -f docker-compose.test-local.yml up -d --build --no-deps backend-web
 ```
 
 ## Tests
@@ -328,7 +328,7 @@ pytest-django against **real Postgres**, not SQLite — see [README-tests.md](./
 for the full story (why port `:55432`, not `:5432`/`:6432`). Short version:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d db   # once, publishes :55432
+docker compose -f docker-compose.test-local.yml up -d db   # once, publishes :55432
 cd backend
 .venv/Scripts/python.exe -m pytest -q                                    # whole suite
 .venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name    # single test

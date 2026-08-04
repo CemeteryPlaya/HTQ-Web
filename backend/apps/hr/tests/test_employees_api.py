@@ -40,7 +40,7 @@ import datetime
 import pytest
 from django.test import Client
 
-from apps.hr.models import AuditLog, Department, Employee, PMO, PMOMember, Position
+from apps.hr.models import AuditLog, Department, Employee, EmployeeCard, PMO, PMOMember, Position
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -887,7 +887,7 @@ def test_users_post_201_for_lead_creates_user(lead):
     _emp, headers = lead
     resp = Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "New", "last_name": "Hire", "patronymic": "P", "email": "new-hire@htq.test"}',
+        data='{"first_name": "New", "last_name": "Hire", "patronymic": "P", "email": "new-hire@htq.test", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **headers,
     )
@@ -909,7 +909,7 @@ def test_users_post_201_for_lead_creates_user(lead):
 def test_users_post_201_for_admin(admin_auth):
     resp = Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "Admin", "last_name": "Made", "email": "admin-made@htq.test"}',
+        data='{"first_name": "Admin", "last_name": "Made", "email": "admin-made@htq.test", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **admin_auth,
     )
@@ -921,13 +921,13 @@ def test_users_post_409_on_duplicate_email(lead):
     _emp, headers = lead
     Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "First", "last_name": "One", "email": "dupe@htq.test"}',
+        data='{"first_name": "First", "last_name": "One", "email": "dupe@htq.test", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **headers,
     )
     resp = Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "Second", "last_name": "One", "email": "dupe@htq.test"}',
+        data='{"first_name": "Second", "last_name": "One", "email": "dupe@htq.test", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **headers,
     )
@@ -939,7 +939,7 @@ def test_users_post_422_invalid_email(lead):
     _emp, headers = lead
     resp = Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "Bad", "last_name": "Email", "email": "not-an-email"}',
+        data='{"first_name": "Bad", "last_name": "Email", "email": "not-an-email", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **headers,
     )
@@ -951,7 +951,7 @@ def test_users_post_no_slash_variant(lead):
     _emp, headers = lead
     resp = Client().post(
         f"{BASE}/users",
-        data='{"first_name": "No", "last_name": "Slash", "email": "no-slash@htq.test"}',
+        data='{"first_name": "No", "last_name": "Slash", "email": "no-slash@htq.test", "password": "Str0ng!Passw0rd"}',
         content_type="application/json",
         **headers,
     )
@@ -1003,11 +1003,14 @@ def test_me_card_t2_empty_without_any_card_permission(junior):
 
 
 @pytest.mark.django_db
-def test_me_card_t2_shows_certs_section_for_middle(middle):
+def test_me_card_t2_empty_for_middle(middle):
+    """После удаления секции certs у middle не остаётся ни одного hr.card.*
+    view-ключа НА Т-2 (groups — отдельный ресурс, не секция t2): тело пустое,
+    как и у junior, но эндпойнт по-прежнему 200."""
     _emp_, headers = middle
     resp = Client().get(f"{BASE}/me/card", **headers)
     assert resp.status_code == 200
-    assert set(resp.json()["t2"].keys()) == {"certs"}
+    assert resp.json()["t2"] == {}
 
 
 @pytest.mark.django_db
@@ -1083,7 +1086,7 @@ def test_id_card_admin_sees_all_t2_sections_and_pmos(admin_auth, hr_dep):
     resp = Client().get(f"{BASE}/{target.id}/card", **admin_auth)
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body["t2"].keys()) == {"financial", "personal", "certs"}
+    assert set(body["t2"].keys()) == {"financial", "personal"}
     assert [p["pmo_id"] for p in body["pmos"]] == [pmo.id]
 
 
@@ -1091,3 +1094,221 @@ def test_id_card_admin_sees_all_t2_sections_and_pmos(admin_auth, hr_dep):
 def test_id_card_trailing_slash_variant(admin_auth, hr_dep):
     target = _emp(hr_dep, _pos("C4", hr_dep, weight=293), "card-target4@htq.test")
     assert Client().get(f"{BASE}/{target.id}/card/", **admin_auth).status_code == 200
+
+
+# ── card_t2 в теле создания/обновления (единый атомарный запрос) ────────────
+
+@pytest.fixture
+def creator_no_financial(db, hr_dep):
+    """Явная матрица прав: МОЖЕТ создавать/править сотрудников и править
+    certs, НО НЕ имеет hr.card.financial.edit. Нужна, чтобы доказать, что
+    отказ на секции Т-2 откатывает и само создание сотрудника."""
+    pos = _pos(
+        "Custom Recruiter", hr_dep, weight=250,
+        permissions={"permissions": [
+            "hr.employees.view", "hr.employees.view.all", "hr.employees.create",
+            "hr.employees.edit", "hr.card.certs.view", "hr.card.certs.edit",
+        ]},
+    )
+    user, headers = _user_auth("create-no-fin@htq.test")
+    emp = _emp(hr_dep, pos, "create-no-fin@htq.test", user_id=user.id)
+    return emp, headers
+
+
+def _create_body(dep, pos, email, **extra):
+    body = {
+        "first_name": "Пётр", "last_name": "Петров", "email": email,
+        "department_id": dep.id, "position_id": pos.id,
+        "hire_date": "2026-08-03", "status": "active",
+    }
+    body.update(extra)
+    return body
+
+
+@pytest.mark.django_db
+def test_create_employee_with_card_t2_writes_card(admin_auth, hr_dep):
+    pos = _pos("Инженер", hr_dep, weight=310)
+    resp = Client().post(
+        f"{BASE}/",
+        data=_create_body(hr_dep, pos, "with-t2@htq.test", card_t2={
+            "financial": {"salary": "450000", "bonus": "50000", "bank_account": "KZ42"},
+            "personal": {"citizenship": "KZ", "birth_date": "1990-05-05"},
+            "certs": {"sro_permit_number": "СРО-11"},
+        }),
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 201, resp.content
+    employee_id = resp.json()["id"]
+
+    card = EmployeeCard.objects.get(employee_id=employee_id)
+    assert str(card.salary) == "450000.00"
+    assert card.citizenship == "KZ"
+    assert card.birth_date == datetime.date(1990, 5, 5)
+    assert card.sro_permit_number == "СРО-11"
+
+
+@pytest.mark.django_db
+def test_create_employee_without_card_t2_unchanged(admin_auth, hr_dep):
+    """Тела без card_t2 обрабатываются ровно как раньше — карточка не заводится."""
+    pos = _pos("Инженер-2", hr_dep, weight=311)
+    resp = Client().post(
+        f"{BASE}/", data=_create_body(hr_dep, pos, "no-t2@htq.test"),
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 201, resp.content
+    assert not EmployeeCard.objects.filter(employee_id=resp.json()["id"]).exists()
+
+
+@pytest.mark.django_db
+def test_create_employee_rolls_back_when_card_section_forbidden(creator_no_financial, hr_dep):
+    """Главный инвариант атомарности: 403 на секции Т-2 означает, что
+    сотрудник НЕ создан — а не «создан наполовину»."""
+    _actor, headers = creator_no_financial
+    pos = _pos("Инженер-3", hr_dep, weight=312)
+    before = Employee.objects.count()
+
+    resp = Client().post(
+        f"{BASE}/",
+        data=_create_body(hr_dep, pos, "rollback@htq.test", card_t2={
+            "financial": {"salary": "1000"},
+        }),
+        content_type="application/json", **headers,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Missing permission: hr.card.financial.edit"
+    assert Employee.objects.count() == before
+    assert not Employee.objects.filter(email="rollback@htq.test").exists()
+
+
+@pytest.mark.django_db
+def test_create_employee_rolls_back_on_invalid_decimal(admin_auth, hr_dep):
+    pos = _pos("Инженер-4", hr_dep, weight=313)
+    before = Employee.objects.count()
+
+    resp = Client().post(
+        f"{BASE}/",
+        data=_create_body(hr_dep, pos, "bad-money@htq.test", card_t2={
+            "financial": {"salary": "много"},
+        }),
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 422
+    assert "Invalid decimal for salary" in resp.json()["detail"]
+    assert Employee.objects.count() == before
+
+
+@pytest.mark.django_db
+def test_update_employee_with_card_t2_applies_both(admin_auth, hr_dep):
+    pos = _pos("Инженер-5", hr_dep, weight=314)
+    target = _emp(hr_dep, pos, "upd-t2@htq.test", phone="+7700")
+
+    resp = Client().put(
+        f"{BASE}/{target.id}/",
+        data={"phone": "+77012345678", "card_t2": {"certs": {"sro_permit_number": "СРО-88"}}},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 200, resp.content
+
+    target.refresh_from_db()
+    assert target.phone == "+77012345678"
+    assert EmployeeCard.objects.get(employee_id=target.id).sro_permit_number == "СРО-88"
+
+
+@pytest.mark.django_db
+def test_update_employee_rolls_back_basic_fields_when_card_forbidden(creator_no_financial, hr_dep):
+    """Отказ на секции Т-2 откатывает и уже применённые базовые поля."""
+    _actor, headers = creator_no_financial
+    pos = _pos("Инженер-6", hr_dep, weight=315)
+    target = _emp(hr_dep, pos, "upd-rollback@htq.test", phone="+7700")
+
+    resp = Client().put(
+        f"{BASE}/{target.id}/",
+        data={"phone": "+77019999999", "card_t2": {"financial": {"salary": "1"}}},
+        content_type="application/json", **headers,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Missing permission: hr.card.financial.edit"
+
+    target.refresh_from_db()
+    assert target.phone == "+7700"
+    assert not EmployeeCard.objects.filter(employee_id=target.id).exists()
+
+
+# ── Пароль при создании пользователя из HR-формы ────────────────────────────
+#
+# До этого форма пароль не спрашивала, а apps.users.interface.create_user
+# минтил случайный `secrets.token_urlsafe(12)`, которого не видел никто:
+# аккаунт заводился, но войти в него было нельзя до админского сброса.
+# Пароль стал обязательным, поэтому его отсутствие — 422, а переданный
+# должен реально работать при входе.
+
+@pytest.mark.django_db
+def test_users_post_422_without_password(lead):
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "No", "last_name": "Password", "email": "no-pwd@htq.test"}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Пароль обязателен"
+
+    from apps.users.models import User as _User
+    assert not _User.objects.filter(email="no-pwd@htq.test").exists()
+
+
+@pytest.mark.django_db
+def test_users_post_422_on_blank_password(lead):
+    """Пробелы — не пароль: иначе форму можно было бы «обойти» пробелом."""
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "Blank", "last_name": "Password", "email": "blank-pwd@htq.test", "password": "   "}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.django_db
+def test_users_post_sets_the_given_password(lead):
+    """Главное: переданным паролем действительно можно войти."""
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "Real", "last_name": "Login", "email": "real-login@htq.test", "password": "Str0ng!Passw0rd"}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 201
+
+    from apps.users.models import User as _User
+    created = _User.objects.get(email="real-login@htq.test")
+    assert created.check_password("Str0ng!Passw0rd")
+    # По умолчанию — смена при первом входе (пароль назначал не сам сотрудник).
+    assert created.must_change_password is True
+
+
+@pytest.mark.django_db
+def test_users_post_forces_password_change_even_if_client_says_otherwise(lead):
+    """Смена пароля при первом входе на этом маршруте НЕ отключаема.
+
+    Пароль назначает HR и видит его открытым текстом, поэтому сотрудник обязан
+    сменить его при первом входе. Поля в схеме нет, вьюха проставляет True
+    жёстко — присланный клиентом ``false`` должен игнорироваться, а не
+    приниматься. Тест бьёт именно в обход UI: через форму такой запрос не
+    отправить, а напрямую — сколько угодно.
+    """
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data=('{"first_name": "Keep", "last_name": "Password", "email": "keep-pwd@htq.test",'
+              ' "password": "Str0ng!Passw0rd", "must_change_password": false}'),
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 201
+
+    from apps.users.models import User as _User
+    assert _User.objects.get(email="keep-pwd@htq.test").must_change_password is True

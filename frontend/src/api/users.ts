@@ -29,7 +29,9 @@ export const searchUserOptions = async (
   limit = 20,
 ): Promise<UserOption[]> => {
   if (query.trim().length < 2) return [];
-  const res = await api.get(apiPath('users', 'options/'), {
+  // Ручка смонтирована как users/v1/users/options/ (apps.users.urls) —
+  // прежний путь users/v1/options/ отдавал 404, и подбор молча ломался.
+  const res = await api.get(apiPath('users', 'users/options/'), {
     params: { query: query.trim(), limit },
   });
   return Array.isArray(res.data) ? res.data : [];

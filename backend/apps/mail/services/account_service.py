@@ -95,16 +95,36 @@ def set_default_account(user_id: int, account_id: int) -> dict:
 
 
 def trigger_sync(user_id: int, account_id: int) -> dict:
+    """Синхронизировать аккаунт по кнопке «Синхронизировать».
+
+    Раньше функция возвращала ``status="queued"``, НЕ ставя ничего в очередь
+    (Р2: постановка задачи была отложена вместе с воркерами). Наблюдаемо это
+    выглядело как работающая кнопка, после которой ничего не происходит.
+    Задача есть — ставим её по-настоящему.
+
+    Отказ брокера не превращаем в 500: письма всё равно приедут ближайшим
+    периодическим опросом (``imap_poll_fallback``, раз в 60 с), поэтому
+    честнее вернуть статус, чем оборвать запрос.
+    """
     account = _get_owned(user_id, account_id)
     if not account.is_active:
         raise AccountInactive
 
     from django.utils import timezone
 
+    from apps.mail.tasks import incremental_sync_account
+
+    status = "queued"
+    try:
+        incremental_sync_account.delay(account.id)
+    except Exception as exc:  # noqa: BLE001 — брокер недоступен
+        log.warning("sync_enqueue_failed account=%s: %s", account.id, exc)
+        status = "deferred"
+
     return {
         "account_id": account.id,
         "queued_at": timezone.now().isoformat(),
-        "status": "queued",
+        "status": status,
     }
 
 
@@ -148,6 +168,17 @@ def disconnect_account(user_id: int, account_id: int) -> None:
             except Exception as exc:  # best-effort, буквально как в исходнике
                 log.warning("oauth_revoke_failed: %s", exc)
 
+    # Аккаунт, подключённый по IMAP: revoke'ить нечего (токена нет), но
+    # реквизиты нужно убрать вместе с ним — осиротевшая строка с
+    # зашифрованным паролем не нужна никому и остаётся лишним риском.
+    # Удаляем ПОСЛЕ аккаунта по той же причине, что и OAuthToken выше:
+    # ссылающаяся строка должна исчезнуть первой.
+    from apps.mail.models import ImapAccountSettings
+
+    imap_settings_id = account.imap_settings_id
+
     account.delete()
     if token_row is not None:
         token_row.delete()
+    if imap_settings_id is not None:
+        ImapAccountSettings.objects.filter(id=imap_settings_id).delete()

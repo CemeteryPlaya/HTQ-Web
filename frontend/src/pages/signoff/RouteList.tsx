@@ -24,7 +24,7 @@ import { AlertTriangle, GitBranch, Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { SignoffShell } from '@/components/signoff/SignoffShell';
-import { reportApiError } from '@/components/signoff/apiError';
+import { reportApiError } from '@/lib/apiError';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';

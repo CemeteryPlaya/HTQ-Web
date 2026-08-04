@@ -61,16 +61,25 @@ class ConferenceConfig(BaseModel):
     Field-for-field port of the FastAPI original's ``ConferenceConfig``
     (``services/cms/app/schemas/conference.py``) — the frontend's WebRTC
     layer (``ConferencePage.tsx``) parses these names as-is, so they are not
-    renamed. ``enabled`` is the one addition beyond the port (Task 1.5):
-    whether the conference/SFU service itself is on in the service registry
-    (``apps.core.services.service_enabled``), placed last so it doesn't
-    disturb the ported fields.
+    renamed. Everything after ``ice_servers`` is an addition beyond the port,
+    placed last so the ported fields keep their order:
+
+    * ``enabled`` (Task 1.5) — whether the conference/SFU service is on in
+      the service registry (``apps.core.services.service_enabled``);
+    * ``wt_signaling_url`` / ``wt_certificate_hashes`` — WebTransport (QUIC)
+      сигналинг: предпочтительный транспорт, WebSocket остаётся запасным.
+      Пустой URL = QUIC-мост не развёрнут, фронт сразу идёт по WebSocket.
+      Хэши нужны только для самоподписанного сертификата в dev
+      (``new WebTransport(url, {serverCertificateHashes})``); с сертификатом
+      от настоящего CA список пуст.
     """
 
     sfu_signaling_url: str = ""
     sfu_signaling_path: str = "/ws/sfu/"
     ice_servers: list[IceServer] = Field(default_factory=list)
     enabled: bool = True
+    wt_signaling_url: str = ""
+    wt_certificate_hashes: list[str] = Field(default_factory=list)
 
 
 class ContactRequestListQuery(BaseModel):

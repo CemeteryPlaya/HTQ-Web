@@ -14,6 +14,7 @@ import type { RouteConfig } from '@/app/routing/types';
 import { getAccessToken } from '@/lib/auth/profileStorage';
 import { ConferenceNotifier } from '@/components/ConferenceNotifier';
 import { ServiceUnavailableListener } from '@/components/ServiceUnavailableListener';
+import { BodyPointerEventsGuard } from '@/components/BodyPointerEventsGuard';
 
 registerRoutePrefetch();
 
@@ -71,9 +72,10 @@ const App = () => {
   }, []);
 
   // bfcache safeguard: when the user navigates to an external non-SPA page
-  // (e.g. /sqladmin/) and presses Back, some browsers restore the cached SPA
-  // with stale internal state — react-router can desync from window.history
-  // and throw "useLocation() may be used only in the context of a <Router>".
+  // (e.g. /django-admin/, /grafana/) and presses Back, some browsers restore
+  // the cached SPA with stale internal state — react-router can desync from
+  // window.history and throw "useLocation() may be used only in the context
+  // of a <Router>".
   // Force a clean reload on persisted pageshow to dodge that whole class of
   // bugs. Fresh navigations have event.persisted=false and are unaffected.
   useEffect(() => {
@@ -91,6 +93,7 @@ const App = () => {
       <AppErrorBoundary>
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <ScrollToTop />
+          <BodyPointerEventsGuard />
           {showDeferredUi && (
             <Suspense fallback={null}>
               <DeferredToaster />

@@ -746,3 +746,316 @@ def test_move_into_level_weight_collision_returns_409_not_500(admin_auth, dep):
     )
     assert resp.status_code == 409, resp.content
     assert "detail" in resp.json()
+
+
+# ── level как ВЫБОР ВЕСА (селект «Уровень» в UI должностей) ────────────────
+#
+# `level` в create/update — не запись в кэш-поле, а запрос «поставь должность
+# на уровень L{n}»: сервис подбирает вес внутри диапазона порога, а сам level
+# по-прежнему выводится из веса через _compute_level. Инвариант
+# `level == _compute_level(weight)` не должен нарушаться ни одним из путей.
+
+@pytest.mark.django_db
+def test_create_with_level_picks_free_weight_in_range(admin_auth, dep):
+    _threshold(1, 0, 99)
+    _threshold(3, 300, 599)
+
+    resp = Client().post(
+        f"{BASE}/", data={"title": "Главный инженер", "department_id": dep.id, "level": 3},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 201, resp.content
+    body = resp.json()
+    assert body["level"] == 3
+    assert 300 <= body["weight"] <= 599
+
+
+@pytest.mark.django_db
+def test_create_with_level_appends_after_last_position_of_level(admin_auth, dep):
+    _threshold(3, 300, 599)
+    _pos("Первый", dep, weight=300, level=3)
+
+    resp = Client().post(
+        f"{BASE}/", data={"title": "Второй", "department_id": dep.id, "level": 3},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 201, resp.content
+    assert resp.json()["weight"] == 400  # последний вес уровня + 100
+
+
+@pytest.mark.django_db
+def test_create_with_level_and_explicit_weight_in_range_keeps_weight(admin_auth, dep):
+    _threshold(3, 300, 599)
+
+    resp = Client().post(
+        f"{BASE}/",
+        data={"title": "Инженер", "department_id": dep.id, "level": 3, "weight": 555},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 201, resp.content
+    assert resp.json()["weight"] == 555
+    assert resp.json()["level"] == 3
+
+
+@pytest.mark.django_db
+def test_create_with_level_and_weight_outside_range_422(admin_auth, dep):
+    _threshold(3, 300, 599)
+
+    resp = Client().post(
+        f"{BASE}/",
+        data={"title": "Инженер", "department_id": dep.id, "level": 3, "weight": 700},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 422, resp.content
+    assert "700" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_create_with_unknown_level_404(admin_auth, dep):
+    resp = Client().post(
+        f"{BASE}/", data={"title": "Инженер", "department_id": dep.id, "level": 9},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 404, resp.content
+
+
+@pytest.mark.django_db
+def test_create_with_full_level_range_409(admin_auth, dep):
+    _threshold(3, 300, 301)  # ровно два веса в диапазоне
+    _pos("A", dep, weight=300, level=3)
+    _pos("B", dep, weight=301, level=3)
+
+    resp = Client().post(
+        f"{BASE}/", data={"title": "Третий", "department_id": dep.id, "level": 3},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409, resp.content
+
+
+@pytest.mark.django_db
+def test_update_level_moves_weight_into_range_and_records_audit(admin_auth, dep):
+    _threshold(1, 0, 99)
+    _threshold(3, 300, 599)
+    pos = _pos("Инженер", dep, weight=50, level=1)
+
+    resp = Client().patch(
+        f"{BASE}/{pos.id}/", data={"level": 3},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    assert body["level"] == 3
+    assert 300 <= body["weight"] <= 599
+
+    audit = PositionWeightAudit.objects.filter(position_id=pos.id).latest("changed_at")
+    assert audit.reason == "level_change"
+    assert audit.old_level == 1
+    assert audit.new_level == 3
+
+
+@pytest.mark.django_db
+def test_update_level_with_explicit_weight_outside_range_422(admin_auth, dep):
+    _threshold(1, 0, 99)
+    _threshold(3, 300, 599)
+    pos = _pos("Инженер", dep, weight=50, level=1)
+
+    resp = Client().patch(
+        f"{BASE}/{pos.id}/", data={"level": 3, "weight": 50},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 422, resp.content
+    pos.refresh_from_db()
+    assert (pos.weight, pos.level) == (50, 1)  # транзакция откатилась целиком
+
+
+@pytest.mark.django_db
+def test_update_with_same_level_does_not_shuffle_position(admin_auth, dep):
+    """Фронт шлёт level каждым сохранением: правка одного названия не должна
+    сбрасывать должность в конец своего уровня."""
+    _threshold(3, 300, 599)
+    _pos("Сосед", dep, weight=300, level=3)
+    pos = _pos("Инженер", dep, weight=400, level=3)
+
+    resp = Client().patch(
+        f"{BASE}/{pos.id}/", data={"level": 3, "title": "Инженер-технолог"},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["weight"] == 400
+    assert resp.json()["title"] == "Инженер-технолог"
+
+
+@pytest.mark.django_db
+def test_update_level_unknown_404(admin_auth, dep):
+    pos = _pos("Инженер", dep, weight=50)
+    resp = Client().patch(
+        f"{BASE}/{pos.id}/", data={"level": 9},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 404, resp.content
+
+
+@pytest.mark.django_db
+def test_update_level_never_writes_cache_field_directly(admin_auth, dep):
+    """Регрессия: level из патча обязан пройти через _compute_level, а не
+    попасть в модель setattr-циклом — иначе кэш разъедется с весом."""
+    _threshold(1, 0, 99)
+    pos = _pos("Инженер", dep, weight=50, level=1)
+
+    # уровня 4 нет среди порогов -> 404, а не тихая запись level=4
+    assert Client().patch(
+        f"{BASE}/{pos.id}/", data={"level": 4},
+        content_type="application/json", **admin_auth,
+    ).status_code == 404
+    pos.refresh_from_db()
+    assert pos.level == 1
+
+
+# ── GET /levels/{n}/next-weight ───────────────────────────────────────────
+
+@pytest.mark.django_db
+def test_next_weight_returns_free_weight_and_bounds(admin_auth, dep):
+    _threshold(3, 300, 599, label="Руководители")
+    _pos("Первый", dep, weight=300, level=3)
+
+    resp = Client().get(f"{BASE}/levels/3/next-weight", **admin_auth)
+    assert resp.status_code == 200, resp.content
+    assert resp.json() == {
+        "level_number": 3, "weight": 400, "weight_from": 300, "weight_to": 599,
+    }
+
+
+@pytest.mark.django_db
+def test_next_weight_on_empty_level_is_range_start(admin_auth):
+    _threshold(3, 300, 599)
+    resp = Client().get(f"{BASE}/levels/3/next-weight", **admin_auth)
+    assert resp.json()["weight"] == 300
+
+
+@pytest.mark.django_db
+def test_next_weight_skips_taken_weights_when_step_overflows(admin_auth, dep):
+    _threshold(3, 300, 350)  # шаг 100 из 350 уже не влезает
+    _pos("A", dep, weight=300, level=3)
+
+    resp = Client().get(f"{BASE}/levels/3/next-weight", **admin_auth)
+    assert resp.json()["weight"] == 301  # первый свободный целый в диапазоне
+
+
+@pytest.mark.django_db
+def test_next_weight_unknown_level_404(admin_auth):
+    assert Client().get(f"{BASE}/levels/9/next-weight", **admin_auth).status_code == 404
+
+
+@pytest.mark.django_db
+def test_next_weight_full_level_409(admin_auth, dep):
+    _threshold(3, 300, 301)
+    _pos("A", dep, weight=300, level=3)
+    _pos("B", dep, weight=301, level=3)
+
+    assert Client().get(f"{BASE}/levels/3/next-weight", **admin_auth).status_code == 409
+
+
+@pytest.mark.django_db
+def test_next_weight_requires_jwt():
+    assert Client().get(f"{BASE}/levels/3/next-weight").status_code == 401
+
+
+@pytest.mark.django_db
+def test_next_weight_readable_by_plain_jwt_user(auth):
+    """Read, а не write: гейт тот же, что у списка порогов."""
+    _threshold(3, 300, 599)
+    assert Client().get(f"{BASE}/levels/3/next-weight", **auth).status_code == 200
+
+
+# ── создание порога БЕЗ диапазона ─────────────────────────────────────────
+#
+# UI просит у HR только номер, название и цвет — «вес» это внутренняя механика
+# сортировки, и заставлять кадровика придумывать непересекающиеся диапазоны
+# нельзя. Диапазон подбирает next_free_range по МЕСТУ уровня среди
+# существующих: порядок level_number обязан совпадать с порядком весов.
+
+def _post_level(admin_auth, **payload):
+    return Client().post(
+        f"{BASE}/levels/", data=payload, content_type="application/json", **admin_auth,
+    )
+
+
+@pytest.mark.django_db
+def test_create_threshold_without_range_on_empty_db(admin_auth):
+    resp = _post_level(admin_auth, level_number=1, label="Руководство")
+    assert resp.status_code == 201, resp.content
+    body = resp.json()
+    assert (body["weight_from"], body["weight_to"]) == (0, 299)
+
+
+@pytest.mark.django_db
+def test_create_threshold_without_range_appends_after_last(admin_auth):
+    _threshold(1, 0, 99)
+    _threshold(2, 100, 299)
+
+    resp = _post_level(admin_auth, level_number=3, label="Руководители")
+    assert resp.status_code == 201, resp.content
+    body = resp.json()
+    assert (body["weight_from"], body["weight_to"]) == (300, 599)
+
+
+@pytest.mark.django_db
+def test_create_threshold_without_range_takes_gap_between_neighbours(admin_auth):
+    """Уровень вставлен МЕЖДУ существующими — занимает зазор, а не хвост.
+
+    Иначе добавленный L2 получил бы веса тяжелее L3 и уехал вниз оргчарта.
+    """
+    _threshold(1, 0, 99)
+    _threshold(3, 300, 599)
+
+    resp = _post_level(admin_auth, level_number=2, label="Директора")
+    assert resp.status_code == 201, resp.content
+    body = resp.json()
+    assert (body["weight_from"], body["weight_to"]) == (100, 299)
+
+
+@pytest.mark.django_db
+def test_create_threshold_without_range_no_gap_409(admin_auth):
+    _threshold(1, 0, 99)
+    _threshold(3, 100, 299)  # вплотную к L1 — места под L2 нет
+
+    resp = _post_level(admin_auth, level_number=2, label="Директора")
+    assert resp.status_code == 409, resp.content
+    assert "L1" in resp.json()["detail"] and "L3" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_create_first_threshold_with_no_room_before_it_409(admin_auth):
+    """Соседа слева нет, но и нулевой вес уже занят соседом справа."""
+    _threshold(5, 0, 99)
+
+    resp = _post_level(admin_auth, level_number=2, label="Директора")
+    assert resp.status_code == 409, resp.content
+    assert "L5" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_create_threshold_with_explicit_range_still_honoured(admin_auth):
+    resp = _post_level(admin_auth, level_number=4, weight_from=700, weight_to=800)
+    assert resp.status_code == 201, resp.content
+    body = resp.json()
+    assert (body["weight_from"], body["weight_to"]) == (700, 800)
+
+
+@pytest.mark.django_db
+def test_create_threshold_with_explicit_overlapping_range_still_409(admin_auth):
+    """Явный диапазон по-прежнему проверяется на пересечение."""
+    _threshold(1, 0, 99)
+    resp = _post_level(admin_auth, level_number=2, weight_from=50, weight_to=150)
+    assert resp.status_code == 409, resp.content
+
+
+@pytest.mark.django_db
+def test_create_threshold_without_range_recomputes_positions(admin_auth, dep):
+    """Автодиапазон обязан подхватывать уже существующие должности."""
+    pos = _pos("Инженер", dep, weight=42, level=5)  # изначально fallback
+
+    resp = _post_level(admin_auth, level_number=1, label="Руководство")
+    assert resp.status_code == 201, resp.content
+    pos.refresh_from_db()
+    assert pos.level == 1  # 42 попал в автоподобранный 0-299

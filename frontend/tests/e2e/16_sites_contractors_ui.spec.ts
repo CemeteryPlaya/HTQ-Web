@@ -9,9 +9,7 @@
  * эта проблема не воспроизводится.
  *
  *   # терминал 1 — стек на локальной БД
- *   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
- *                  -f docker-compose.localdb.yml -f docker-compose.test.yml \
- *                  up -d db redis minio backend-web
+ *   docker compose -f docker-compose.test-local.yml up -d db redis minio backend-web
  *   # терминал 2 — фронт
  *   cd frontend && npm run dev
  *   # терминал 3 — тесты (порт подставить тот, что занял Vite)

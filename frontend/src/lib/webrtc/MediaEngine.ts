@@ -7,7 +7,7 @@
  * - Stable video codec policy: VP8 + H264 Baseline only.
  */
 
-import { SignalingClient } from './SignalingClient';
+import { SignalingClient, type AuthTokenSource } from './SignalingClient';
 import type { ISignalingClient } from './ISignalingClient';
 import { BitrateController, QualityMetrics } from './BitrateController';
 // Removed SdpMunger dependencies for bitrate tuning
@@ -37,6 +37,12 @@ export interface ConferenceOptions {
   displayName: string;
   videoCodecPolicy?: VideoCodecPolicy;
   iceServers?: RTCIceServer[];
+  /**
+   * Платформенный access-токен для сигналинга: SFU проверяет его на upgrade
+   * (`SIGNALING_REQUIRE_AUTH`). Функция вместо строки — чтобы переподключение
+   * читало актуальный токен, а не тот, что был на момент входа в комнату.
+   */
+  authToken?: AuthTokenSource;
   /**
    * Optional factory that returns a custom signaling client.
    * When provided, the engine uses it instead of the default WebSocket-based SignalingClient.
@@ -298,7 +304,7 @@ export class MediaEngine {
     this.events = events;
     this.signaling = options.signalingFactory
       ? options.signalingFactory(options.signalingUrl)
-      : new SignalingClient(options.signalingUrl);
+      : new SignalingClient(options.signalingUrl, options.authToken);
     this.videoCodecPolicy = options.videoCodecPolicy || 'balanced';
   }
 

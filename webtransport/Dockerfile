@@ -8,11 +8,11 @@ RUN pip install --no-cache-dir -r requirements.txt cryptography
 
 COPY . .
 
-# Generate a self-signed TLS certificate if not already present.
-# Mount a named volume at /app/certs in production to persist a real certificate.
-RUN python generate_cert.py
-
 # UDP port for QUIC/WebTransport
 EXPOSE 4433/udp
 
-CMD ["python", "server.py"]
+# Сертификат выпускаем на старте, а не на сборке: самоподписанный живёт
+# 13 дней (лимит браузера на serverCertificateHashes — 14), поэтому срок
+# нужно перепроверять при каждом запуске. Настоящий CA-сертификат,
+# смонтированный в /app/certs, скрипт не трогает.
+CMD ["sh", "-c", "python generate_cert.py && exec python server.py"]

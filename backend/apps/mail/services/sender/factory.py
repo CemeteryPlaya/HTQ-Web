@@ -17,4 +17,9 @@ def get_sender(provider: str) -> Sender:
     if provider == "mailcow":
         from apps.mail.services.sender.mailcow_smtp import MailcowSmtpSender
         return MailcowSmtpSender()
+    # Корпоративный сервер без Mailcow-API: тот же SMTP submission, но хост и
+    # режим TLS берутся из SMTP_*/IMAP_HOST (см. corporate_smtp.py).
+    if provider == "imap":
+        from apps.mail.services.sender.corporate_smtp import CorporateSmtpSender
+        return CorporateSmtpSender()
     raise ValueError(f"Unsupported sender provider: {provider!r}")

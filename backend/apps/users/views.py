@@ -18,6 +18,7 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
 
+from apps.mail import interface as mail_interface
 from htqweb.authn.jwt import AuthError, decode_token, issue_token_pair
 from htqweb.http import api_view, json_error
 
@@ -328,16 +329,13 @@ def _admin_list_users(request):
     return [schemas.AdminUserResponse(**admin_service.serialize_admin_user(u)) for u in users]
 
 
-_MAILBOX_UNAVAILABLE = "Провижининг почтового ящика недоступен: email-service переезжает в фазе 7"
-
-
 @api_view(methods=("POST",), auth="jwt", body=schemas.AdminUserCreateRequest, status=201, admin=True)
 def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
     payload = data.model_dump()
     create_mailbox = payload.pop("create_mailbox")
-    payload.pop("mailbox_local_part", None)
-    payload.pop("mailbox_password", None)
-    payload.pop("mailbox_quota_mb", None)
+    mailbox_local_part = payload.pop("mailbox_local_part", None) or ""
+    mailbox_password = payload.pop("mailbox_password", None) or ""
+    mailbox_quota_mb = payload.pop("mailbox_quota_mb", None) or 0
     try:
         user = admin_service.create_user(**payload)
     except admin_service.DuplicateEmail:
@@ -347,8 +345,21 @@ def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
     except admin_service.InvalidStatus as exc:
         return json_error(str(exc), 400)
     # Decision Р2: source publishes user_upserted.send(...) when status==ACTIVE — dropped.
-    # Decision Р3: no S2S mailbox provisioning — loud mailbox_error instead of a silent no-op.
-    mailbox_error = _MAILBOX_UNAVAILABLE if create_mailbox else None
+    # Ящик заводится через apps.mail.interface (S2S-вызов в удалённый
+    # email-сервис заменён обычным вызовом соседней аппки). Раньше здесь
+    # стояла заглушка, которая на любую галочку отвечала "провижининг
+    # недоступен" — из-за неё ящик при создании пользователя не появлялся.
+    mailbox, mailbox_error = None, None
+    if create_mailbox:
+        mailbox, mailbox_error = mail_interface.provision_mailbox(
+            user_id=user.id,
+            first_name=user.first_name or "",
+            last_name=user.last_name or "",
+            full_name=user.display_name or "",
+            local_part=mailbox_local_part,
+            password=mailbox_password,
+            quota_mb=mailbox_quota_mb,
+        )
     # `payload` still has every field `admin_service.create_user` was called
     # with EXCEPT `password` — never let the plaintext password (or, were
     # this ever refactored, a hash) reach the audit log's `changes` JSON.
@@ -362,7 +373,7 @@ def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
     )
     return schemas.AdminUserCreatedResponse(
         **admin_service.serialize_admin_user(user),
-        mailbox=None,
+        mailbox=mailbox,
         mailbox_error=mailbox_error,
     )
 

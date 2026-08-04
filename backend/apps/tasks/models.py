@@ -127,6 +127,10 @@ class TaskType(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Тип задачи"
+        verbose_name_plural = "Типы задач"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<TaskType id={self.id} slug={self.slug!r}>"
 
@@ -139,6 +143,10 @@ class Label(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Метка"
+        verbose_name_plural = "Метки"
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Label id={self.id} name={self.name!r}>"
@@ -167,6 +175,10 @@ class EquipmentCategory(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Категория техники"
+        verbose_name_plural = "Категории техники"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<EquipmentCategory id={self.id} slug={self.slug!r}>"
 
@@ -189,6 +201,10 @@ class WorkRole(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Рабочая роль"
+        verbose_name_plural = "Рабочие роли"
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<WorkRole id={self.id} slug={self.slug!r}>"
@@ -221,6 +237,10 @@ class WorkVolumeType(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Вид объёма работ"
+        verbose_name_plural = "Виды объёмов работ"
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<WorkVolumeType id={self.id} slug={self.slug!r}>"
@@ -272,6 +292,8 @@ class Equipment(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Техника"
+        verbose_name_plural = "Техника"
         constraints = [
             # Техника подрядчика обязана называть подрядчика. Стиль тот же,
             # что у ck_assignment_exactly_one_resource ниже: правило про одну
@@ -352,6 +374,10 @@ class Contractor(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Подрядчик"
+        verbose_name_plural = "Подрядчики"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Contractor id={self.id} name={self.name!r}>"
 
@@ -390,6 +416,10 @@ class ContractorWorker(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Работник подрядчика"
+        verbose_name_plural = "Работники подрядчиков"
 
     @property
     def full_name(self) -> str:
@@ -448,6 +478,10 @@ class Site(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Площадка"
+        verbose_name_plural = "Площадки"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Site id={self.id} name={self.name!r}>"
 
@@ -497,6 +531,8 @@ class SiteBlock(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Блок площадки"
+        verbose_name_plural = "Блоки площадок"
         constraints = [
             # Уникальность в пределах площадки, а не глобально: «блок 1»
             # есть и на Сазагане, и на Алге, и это разные блоки.
@@ -540,6 +576,8 @@ class SiteBlockVolume(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Объём по блоку"
+        verbose_name_plural = "Объёмы по блокам"
         constraints = [
             models.UniqueConstraint(fields=["block", "volume_type"],
                                     name="uq_site_block_volume"),
@@ -614,6 +652,10 @@ class Project(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Проект"
+        verbose_name_plural = "Проекты"
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Project id={self.id} name={self.name!r}>"
 
@@ -643,6 +685,8 @@ class ProjectSite(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Площадка проекта"
+        verbose_name_plural = "Площадки проектов"
         constraints = [
             models.UniqueConstraint(fields=["project", "site"],
                                     name="uq_project_site"),
@@ -730,6 +774,8 @@ class Roadmap(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Дорожная карта"
+        verbose_name_plural = "Дорожные карты"
         constraints = [
             # Уникальность в пределах пары проект+блок: «развозка валов»
             # законно идёт и на блоке 1, и на блоке 2, и это разные пакеты.
@@ -792,6 +838,8 @@ class ContractorEngagement(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Привлечение подрядчика"
+        verbose_name_plural = "Привлечения подрядчиков"
         constraints = [
             # nulls_distinct=False — иначе констрейнт бесполезен ровно там,
             # где он нужнее всего. В SQL два NULL считаются РАЗНЫМИ, так что
@@ -944,6 +992,8 @@ class Task(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Задача"
+        verbose_name_plural = "Задачи"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(start_date__isnull=True)
@@ -1000,6 +1050,8 @@ class TaskDepartmentLink(models.Model):
     department_id = models.IntegerField(db_index=True)
 
     class Meta:
+        verbose_name = "Отдел задачи"
+        verbose_name_plural = "Отделы задач"
         constraints = [
             models.UniqueConstraint(fields=["task", "department_id"],
                                     name="uq_task_department_link"),
@@ -1027,6 +1079,8 @@ class TaskAssignee(models.Model):
     assigned_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Исполнитель задачи"
+        verbose_name_plural = "Исполнители задач"
         constraints = [
             models.UniqueConstraint(fields=["task", "user_id"],
                                     name="uq_task_assignee"),
@@ -1048,6 +1102,8 @@ class TaskDelegate(models.Model):
     granted_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Делегат задачи"
+        verbose_name_plural = "Делегаты задач"
         constraints = [
             models.UniqueConstraint(fields=["task", "user_id"],
                                     name="uq_task_delegate"),
@@ -1063,6 +1119,8 @@ class TaskWatcher(models.Model):
     subscribed_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Наблюдатель задачи"
+        verbose_name_plural = "Наблюдатели задач"
         constraints = [
             models.UniqueConstraint(fields=["task", "user_id"],
                                     name="uq_task_watcher"),
@@ -1098,6 +1156,8 @@ class TaskVolume(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Объём работ"
+        verbose_name_plural = "Объёмы работ"
         constraints = [
             models.UniqueConstraint(fields=["task", "volume_type"],
                                     name="uq_task_volume"),
@@ -1159,6 +1219,8 @@ class DailyReport(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Ежедневный отчёт"
+        verbose_name_plural = "Ежедневные отчёты"
         indexes = [
             models.Index(fields=["task", "work_date"],
                          name="ix_daily_report_task_date"),
@@ -1204,6 +1266,8 @@ class DailyReportRevision(models.Model):
     edited_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Версия отчёта"
+        verbose_name_plural = "Версии отчётов"
         ordering = ["revision_no"]
         constraints = [
             models.UniqueConstraint(fields=["report", "revision_no"],
@@ -1224,6 +1288,10 @@ class TaskComment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Комментарий к задаче"
+        verbose_name_plural = "Комментарии к задачам"
+
 
 class TaskAttachment(models.Model):
     """File attached to a task.
@@ -1241,6 +1309,10 @@ class TaskAttachment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Вложение задачи"
+        verbose_name_plural = "Вложения задач"
+
 
 class TaskActivity(models.Model):
     """Append-only log of task field changes."""
@@ -1254,6 +1326,10 @@ class TaskActivity(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Событие задачи"
+        verbose_name_plural = "События задач"
 
 
 class TaskLink(models.Model):
@@ -1270,6 +1346,8 @@ class TaskLink(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Связь задач"
+        verbose_name_plural = "Связи задач"
         constraints = [
             models.UniqueConstraint(fields=["source", "target", "link_type"],
                                     name="uq_task_link"),
@@ -1330,6 +1408,8 @@ class ResourceRequirement(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Потребность в ресурсе"
+        verbose_name_plural = "Потребности в ресурсах"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(roadmap__isnull=True, task__isnull=False)
@@ -1407,6 +1487,8 @@ class ResourceAllocation(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Выделение ресурса"
+        verbose_name_plural = "Выделение ресурсов"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(employee_id__isnull=True,
@@ -1460,6 +1542,10 @@ class Notification(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Уведомление"
+        verbose_name_plural = "Уведомления"
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # Sequences and the production calendar
@@ -1479,6 +1565,10 @@ class TaskSequence(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Нумератор задач"
+        verbose_name_plural = "Нумераторы задач"
+
 
 class ProductionDay(models.Model):
     """One day of the production calendar (Kazakhstan).
@@ -1497,6 +1587,10 @@ class ProductionDay(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Производственный день"
+        verbose_name_plural = "Производственные дни"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1531,6 +1625,8 @@ class CalendarEvent(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Событие календаря"
+        verbose_name_plural = "События календаря"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(event_type__in=["personal", "department",
@@ -1555,6 +1651,10 @@ class EventException(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
+    class Meta:
+        verbose_name = "Исключение события"
+        verbose_name_plural = "Исключения событий"
+
 
 class CalendarEventParticipant(models.Model):
     """Invitee of a calendar event.
@@ -1577,6 +1677,8 @@ class CalendarEventParticipant(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:
+        verbose_name = "Участник события"
+        verbose_name_plural = "Участники событий"
         constraints = [
             models.UniqueConstraint(fields=["event", "user_id"],
                                     name="uq_calendar_event_participant"),

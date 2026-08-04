@@ -14,6 +14,7 @@ from .models import (
     EmailAccount,
     EmailAttachment,
     EmailMessage,
+    MailServerConfig,
     OAuthToken,
     ProvisionedMailbox,
     RecipientStatus,
@@ -92,3 +93,26 @@ class ProvisionedMailboxAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_filter = ("status",)
     search_fields = ("address", "local_part", "domain")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(MailServerConfig)
+class MailServerConfigAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    """Реквизиты почтового сервера. Штатное место правки — вкладка
+    «Подключение» на /admin/mailboxes (там же есть кнопка «Проверить»);
+    здесь — аварийный доступ, когда фронт недоступен.
+
+    Строка одна (синглтон, pk=1), поэтому добавление запрещено: вторая
+    конфигурация не имела бы смысла и молча игнорировалась бы резолвером.
+    Ключ Mailcow хранится зашифрованным и в форме не показывается.
+    """
+
+    list_display = ("__str__", "provisioner", "domain", "imap_host", "updated_at")
+    readonly_fields = ("updated_at", "updated_by_user_id", "encrypted_mailcow_api_key")
+
+    def has_add_permission(self, request):
+        return not MailServerConfig.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        # Удаление строки = молчаливый откат всех настроек к окружению.
+        # Чтобы отказаться от перекрытия, поле очищают, а не сносят строку.
+        return False

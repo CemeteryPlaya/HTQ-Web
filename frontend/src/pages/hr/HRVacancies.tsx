@@ -154,82 +154,84 @@ const HRVacancies = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="text-sm text-muted-foreground">{t('hr.common.total')}: {vacancies?.length || 0}</div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={startCreate} className="gap-2">
-              <Plus className="h-4 w-4" />
-              {t('hr.pages.vacancies.actions.add')}
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>{editing ? t('hr.pages.vacancies.edit') : t('hr.pages.vacancies.new')}</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-4">
-              <label className="grid gap-2 text-sm">
-                {t('hr.pages.vacancies.fields.title')}
-                <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-              </label>
-              <label className="grid gap-2 text-sm">
-                {t('hr.pages.vacancies.fields.department')}
-                <Select value={form.department} onValueChange={(value) => setForm({ ...form, department: value })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={t('hr.pages.vacancies.placeholders.selectDepartment')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">{t('hr.common.noDepartment')}</SelectItem>
-                    {departments?.map((dept) => (
-                      <SelectItem key={dept.id} value={String(dept.id)}>
-                        {dept.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
-              <label className="grid gap-2 text-sm">
-                {t('hr.pages.vacancies.fields.status')}
-                <Select value={form.status} onValueChange={(value) => setForm({ ...form, status: value })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={t('hr.pages.vacancies.placeholders.selectStatus')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="open">{t('hr.pages.vacancies.status.open')}</SelectItem>
-                    <SelectItem value="closed">{t('hr.pages.vacancies.status.closed')}</SelectItem>
-                    <SelectItem value="on_hold">{t('hr.pages.vacancies.status.onHold')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </label>
-              {isSenior && (
-                <div className="grid gap-4 md:grid-cols-2">
-                  <label className="grid gap-2 text-sm">
-                    {t('hr.pages.vacancies.fields.salaryMin')}
-                    <Input type="number" value={form.salary_min} onChange={(e) => setForm({ ...form, salary_min: e.target.value })} />
-                  </label>
-                  <label className="grid gap-2 text-sm">
-                    {t('hr.pages.vacancies.fields.salaryMax')}
-                    <Input type="number" value={form.salary_max} onChange={(e) => setForm({ ...form, salary_max: e.target.value })} />
-                  </label>
+      <div className="rounded-3xl border bg-card p-4 shadow-2xs">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="text-xs font-semibold text-muted-foreground">{t('hr.common.total')}: {vacancies?.length || 0} открытых/активных вакансий</div>
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button onClick={startCreate} className="h-9 gap-2 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 font-semibold shadow-2xs">
+                <Plus className="h-4 w-4" />
+                {t('hr.pages.vacancies.create', 'Открыть вакансию')}
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>{editing ? t('hr.pages.vacancies.edit') : t('hr.pages.vacancies.new')}</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4">
+                <label className="grid gap-2 text-sm">
+                  {t('hr.pages.vacancies.fields.title')}
+                  <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm">
+                  {t('hr.pages.vacancies.fields.department')}
+                  <Select value={form.department} onValueChange={(value) => setForm({ ...form, department: value })}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t('hr.pages.vacancies.placeholders.selectDepartment')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">{t('hr.common.noDepartment')}</SelectItem>
+                      {departments?.map((dept) => (
+                        <SelectItem key={dept.id} value={String(dept.id)}>
+                          {dept.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
+                <label className="grid gap-2 text-sm">
+                  {t('hr.pages.vacancies.fields.status')}
+                  <Select value={form.status} onValueChange={(value) => setForm({ ...form, status: value })}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t('hr.pages.vacancies.placeholders.selectStatus')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="open">{t('hr.pages.vacancies.status.open')}</SelectItem>
+                      <SelectItem value="closed">{t('hr.pages.vacancies.status.closed')}</SelectItem>
+                      <SelectItem value="on_hold">{t('hr.pages.vacancies.status.onHold')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </label>
+                {isSenior && (
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <label className="grid gap-2 text-sm">
+                      {t('hr.pages.vacancies.fields.salaryMin')}
+                      <Input type="number" value={form.salary_min} onChange={(e) => setForm({ ...form, salary_min: e.target.value })} />
+                    </label>
+                    <label className="grid gap-2 text-sm">
+                      {t('hr.pages.vacancies.fields.salaryMax')}
+                      <Input type="number" value={form.salary_max} onChange={(e) => setForm({ ...form, salary_max: e.target.value })} />
+                    </label>
+                  </div>
+                )}
+                <label className="grid gap-2 text-sm">
+                  {t('hr.pages.vacancies.fields.description')}
+                  <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                </label>
+                <label className="grid gap-2 text-sm">
+                  {t('hr.pages.vacancies.fields.requirements')}
+                  <Textarea value={form.requirements} onChange={(e) => setForm({ ...form, requirements: e.target.value })} />
+                </label>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setDialogOpen(false)}>{t('hr.common.cancel')}</Button>
+                  <Button onClick={() => saveMutation.mutate()} disabled={!form.title || saveMutation.isPending}>
+                    {saveMutation.isPending ? t('hr.common.saving') : t('hr.common.save')}
+                  </Button>
                 </div>
-              )}
-              <label className="grid gap-2 text-sm">
-                {t('hr.pages.vacancies.fields.description')}
-                <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-              </label>
-              <label className="grid gap-2 text-sm">
-                {t('hr.pages.vacancies.fields.requirements')}
-                <Textarea value={form.requirements} onChange={(e) => setForm({ ...form, requirements: e.target.value })} />
-              </label>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setDialogOpen(false)}>{t('hr.common.cancel')}</Button>
-                <Button onClick={() => saveMutation.mutate()} disabled={!form.title || saveMutation.isPending}>
-                  {saveMutation.isPending ? t('hr.common.saving') : t('hr.common.save')}
-                </Button>
               </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       <div className="bg-card rounded-2xl border overflow-x-auto">

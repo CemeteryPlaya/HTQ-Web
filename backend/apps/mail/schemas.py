@@ -88,6 +88,150 @@ class AliasCreateRequest(BaseModel):
         return v
 
 
+class ReconcileRequest(BaseModel):
+    """Body for `POST /api/email/v1/mailboxes/reconcile/`.
+
+    ``apply=False`` (дефолт) — тот же отчёт, что и на GET: посчитать
+    расхождения, ничего не трогая. ``direction`` определяет, кто источник
+    правды при ``apply=True`` (см. reconcile_service.reconcile).
+    """
+
+    apply: bool = False
+    direction: str = Field(default="report", description="report | pull | push | both")
+
+    @field_validator("direction")
+    @classmethod
+    def _validate_direction(cls, v: str) -> str:
+        allowed = ("report", "pull", "push", "both")
+        if v not in allowed:
+            raise ValueError(f"direction must be one of {allowed}")
+        return v
+
+
+class ImapAccountConnectRequest(BaseModel):
+    """Body for `POST /api/email/v1/accounts/connect-imap/`.
+
+    Пользователь подключает СВОЙ почтовый аккаунт на произвольном сервере —
+    поля те же, что просит любой почтовый клиент. Значения по умолчанию
+    (993/SSL для IMAP, 587/STARTTLS для SMTP) покрывают большинство серверов;
+    предзаполнить форму помогает `GET .../connect-imap/?address=...`.
+    """
+
+    address: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=1)
+    # Логин обычно равен адресу, но не везде — оставляем возможность задать.
+    username: str = Field(default="", max_length=255)
+    display_name: str = Field(default="", max_length=255)
+
+    imap_host: str = Field(..., min_length=1, max_length=255)
+    imap_port: int = Field(default=993, ge=1, le=65535)
+    imap_ssl: bool = True
+    imap_starttls: bool = False
+
+    # "" = тот же хост, что IMAP.
+    smtp_host: str = Field(default="", max_length=255)
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_ssl: bool = False
+    smtp_starttls: bool = True
+
+    @field_validator("address")
+    @classmethod
+    def _validate_address(cls, v: str) -> str:
+        if not re.match(_EMAIL_RE, v):
+            raise ValueError("invalid email address")
+        return v
+
+
+class ImapAccountPasswordRequest(BaseModel):
+    """Body for `POST /api/email/v1/accounts/{id}/imap-password/`."""
+
+    password: str = Field(..., min_length=1)
+
+
+class MailSettingsRequest(BaseModel):
+    """Body for `PUT /api/email/v1/mailboxes/settings/`.
+
+    Все поля необязательны и обрабатываются по ``exclude_unset``: форма шлёт
+    только то, что реально меняет. Пустая строка / ``null`` в текстовом поле
+    означает «убрать перекрытие и вернуться к переменной окружения» — см.
+    ``services/mail_config.py`` про правило слияния.
+    """
+
+    provisioner: Optional[str] = Field(default=None, description="'' | auto | mailcow | imap | none")
+    domain: Optional[str] = Field(default=None, max_length=255)
+
+    imap_host: Optional[str] = Field(default=None, max_length=255)
+    imap_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    imap_ssl: Optional[bool] = None
+    imap_starttls: Optional[bool] = None
+    imap_tls_server_hostname: Optional[str] = Field(default=None, max_length=255)
+
+    smtp_host: Optional[str] = Field(default=None, max_length=255)
+    smtp_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    smtp_ssl: Optional[bool] = None
+    smtp_starttls: Optional[bool] = None
+
+    mailcow_api_url: Optional[str] = Field(default=None, max_length=500)
+    # "" = не менять (форма не знает текущего значения, секрет наружу не
+    # отдаётся); null = стереть и вернуться к MAILCOW_API_KEY из окружения.
+    mailcow_api_key: Optional[str] = None
+
+    sync_folders: Optional[list[str]] = None
+    sync_push_flags: Optional[bool] = None
+    allow_self_service: Optional[bool] = None
+    local_part_pattern: Optional[str] = Field(
+        default=None, description="'' | first.last | f.last | firstlast | first_last | flast | last.first | first",
+    )
+
+    @field_validator("local_part_pattern")
+    @classmethod
+    def _validate_local_part_pattern(cls, v: str | None) -> str | None:
+        from apps.mail.services.mailbox_service import LOCAL_PART_PATTERNS
+
+        if v not in (None, "", *LOCAL_PART_PATTERNS):
+            raise ValueError(
+                "local_part_pattern must be one of: " + ", ".join(LOCAL_PART_PATTERNS)
+            )
+        return v
+
+    @field_validator("provisioner")
+    @classmethod
+    def _validate_provisioner(cls, v: str | None) -> str | None:
+        allowed = ("", "auto", "mailcow", "imap", "none")
+        if v is not None and v not in allowed:
+            raise ValueError(f"provisioner must be one of {allowed}")
+        return v
+
+
+class MailConnectionTestRequest(BaseModel):
+    """Body for `POST /api/email/v1/mailboxes/settings/test/`.
+
+    Без ``mailbox`` проверяются только настройки и доступность портов — этого
+    достаточно для отладки туннеля и не требует ни одного секрета.
+    ``send_to`` отправляет НАСТОЯЩЕЕ письмо, поэтому задаётся явно.
+    """
+
+    mailbox: str = ""
+    password: str = ""
+    send_to: str = ""
+    timeout: int = Field(default=10, ge=1, le=60)
+
+
+class MailboxConnectRequest(BaseModel):
+    """Body for `POST /api/email/v1/accounts/connect-corporate/` —
+    самоподключение ящика сотрудником."""
+
+    address: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=1)
+
+    @field_validator("address")
+    @classmethod
+    def _validate_address(cls, v: str) -> str:
+        if not re.match(_EMAIL_RE, v):
+            raise ValueError("invalid email address")
+        return v
+
+
 class ForwardingSetRequest(BaseModel):
     forward_to: str = Field(..., max_length=255)
     keep_local_copy: bool = True

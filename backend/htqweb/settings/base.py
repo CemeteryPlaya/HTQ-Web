@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from pathlib import Path
@@ -15,7 +16,10 @@ ALLOWED_HOSTS = ["*"]           # локальный запуск; деплой 
 APPEND_SLASH = False            # пути повторяют API.md буквально, без редиректов
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
+    # Вместо "django.contrib.admin" — свой AdminConfig: он поднимает
+    # htqweb.admin_site.HTQAdminSite (брендинг + порядок разделов) как
+    # admin.site, поэтому @admin.register во всех аппках работает как раньше.
+    "htqweb.apps.HTQAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -77,7 +81,10 @@ WSGI_APPLICATION = "htqweb.wsgi.application"
 
 TEMPLATES = [{
     "BACKEND": "django.template.backends.django.DjangoTemplates",
-    "DIRS": [],
+    # Проектные шаблоны ищутся ДО аппочных (APP_DIRS ниже), поэтому
+    # templates/admin/base_site.html перекрывает стоковый шаблон админки —
+    # это и подключает фирменную тему (см. static/admin/htqweb.css).
+    "DIRS": [BASE_DIR / "templates"],
     "APP_DIRS": True,
     "OPTIONS": {"context_processors": [
         "django.template.context_processors.request",
@@ -142,6 +149,9 @@ USE_TZ = True
 CELERY_TIMEZONE = TIME_ZONE
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# Своя статика проекта (фирменная тема админки). collectstatic сливает её
+# со статикой аппок в STATIC_ROOT — см. docker-entrypoint.sh (RUN_BOOTSTRAP=1).
+STATICFILES_DIRS = [BASE_DIR / "static"]
 # WhiteNoise: сжатие + manifest-хэши собранной статики (django-admin CSS/JS). S3/медиа
 # идут через htqweb.storage напрямую (не через Django default_storage), поэтому
 # default-сторедж — обычная ФС. В dev manifest отключён (см. settings/dev.py), иначе
@@ -216,16 +226,34 @@ MINIO_CONSOLE_URL = env("MINIO_CONSOLE_URL", "http://localhost:9001")
 
 # ── Conference (SFU) runtime config — GET /api/cms/v1/conference/config ─────
 # Ported defaults from services/cms/app/data/conference.yaml (FastAPI
-# cms-service). The conference/SFU stack itself is out of service (seeded
-# disabled by apps.core's registry migration — see apps/cms/services/
-# conference_service.py), but static WebRTC config is still served so the
-# frontend's ConferencePage.tsx behaves identically once it comes back.
-CONFERENCE_SFU_URL = env("CONFERENCE_SFU_URL", "ws://sfu:4443")
+# cms-service); отдаётся ConferencePage.tsx как рантайм-конфиг WebRTC.
+#
+# CONFERENCE_SFU_URL по умолчанию ПУСТ, и это осознанно: и nginx (prod), и
+# Vite-прокси (dev) отдают сигналинг на том же origin, что и страницу, а
+# фронт при пустом URL сам собирает ws(s)://<origin>/ws/sfu/. Прежний дефолт
+# ws://sfu:4443 — имя внутри docker-сети, из браузера оно не резолвится.
+# Задавайте явно только если SFU живёт на отдельном хосте/порту.
+CONFERENCE_SFU_URL = env("CONFERENCE_SFU_URL", "")
 CONFERENCE_SFU_PATH = env("CONFERENCE_SFU_PATH", "/ws/sfu/")
 CONFERENCE_ICE_SERVERS = [
     {"urls": "stun:stun.l.google.com:19302"},
     {"urls": "stun:stun1.l.google.com:19302"},
 ]
+
+# ── WebTransport (QUIC) сигналинг — предпочтительный транспорт ──────────────
+# Мост webtransport/ (aioquic, UDP :4433) принимает WebTransport-сессию и
+# перекладывает те же JSON-сообщения в WebSocket SFU. Пустой URL = мост не
+# развёрнут: ConferencePage.tsx молча остаётся на WebSocket.
+#
+# Хэши сертификата нужны ТОЛЬКО для самоподписанного сертификата (dev):
+# браузер принимает такой QUIC-эндпоинт лишь через serverCertificateHashes.
+# Мост пишет DER SHA-256 в certs/cert.sha256 при каждом старте — путь к
+# этому файлу и кладём в CONFERENCE_WT_CERT_HASH_FILE, чтобы отпечаток не
+# приходилось копировать руками. С сертификатом от настоящего CA (certbot)
+# оба параметра оставляют пустыми.
+CONFERENCE_WT_URL = env("CONFERENCE_WT_URL", "")
+CONFERENCE_WT_CERT_HASHES = env("CONFERENCE_WT_CERT_HASHES", "")
+CONFERENCE_WT_CERT_HASH_FILE = env("CONFERENCE_WT_CERT_HASH_FILE", "")
 
 # ── cms background tasks (apps/cms/tasks.py) — ported defaults from
 # services/cms/app/core/settings.py + .env.example, byte-for-byte, so both
@@ -283,6 +311,136 @@ EMAIL_PORT = int(env("EMAIL_PORT", "587"))
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = env("EMAIL_USE_TLS", "true").lower() in ("1", "true", "yes")
+
+# ── корпоративная почта (apps/mail) ──────────────────────────────────────
+# До этого блока НИ ОДНОЙ MAILCOW_*/IMAP_* настройки в settings не было:
+# apps/mail читал их через ``getattr(settings, "MAILCOW_DOMAIN", "")``, всегда
+# получал "" и падал 500 "MAILCOW_DOMAIN not configured" на POST
+# /api/email/v1/mailboxes/ — то самое "невозможно добавить почтовый ящик".
+# Дефолты пустые НАМЕРЕННО: неконфигурированное окружение (в т.ч. CI) ведёт
+# себя ровно как раньше, включая тот же 500 (обратная совместимость,
+# apps/mail/tests/test_mailboxes_api.py::test_create_requires_mailcow_domain_
+# configured опирается на это).
+
+def _flag(name: str, default: str) -> bool:
+    return env(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _mail_domain(name: str, default: str = "") -> str:
+    """Почтовый домен из env, приведённый к каноническому виду.
+
+    Значение подставляется в адрес как ``f"{local}@{domain}"``, поэтому любой
+    лишний символ давал бы молча битые ящики (``i.ivanov@@htq.group``), и
+    заметили бы это уже на почтовом сервере. Типовые опечатки лечатся здесь:
+
+      ``ЛИДЕР@htq.group``           → ``htq.group``   (ведущая @)
+      `` htq.group``                → ``htq.group``   (пробел после ``=``,
+                                                       Compose его сохраняет)
+      ``https://mail.htq.group/``   → ``mail.htq.group`` (перепутано с
+                                                       MAILCOW_API_URL)
+
+    Последний случай нормализуется, но НЕ угадывается: ``mail.htq.group`` —
+    это имя хоста веб-панели, а ящики почти всегда живут на ``htq.group``.
+    Поэтому вдобавок пишется предупреждение в лог — молча подставить домен,
+    которого админ не имел в виду, хуже, чем сказать об этом.
+    """
+    raw = env(name, default).strip()
+    if not raw:
+        return ""
+
+    normalized = raw
+    looked_like_url = False
+    for scheme in ("https://", "http://"):
+        if normalized.lower().startswith(scheme):
+            normalized, looked_like_url = normalized[len(scheme):], True
+    normalized = normalized.split("/")[0].strip()
+    normalized = normalized.lstrip("@").strip()
+    # ``user@host`` — админ вписал адрес целиком вместо домена.
+    if "@" in normalized:
+        normalized = normalized.rsplit("@", 1)[-1].strip()
+    normalized = normalized.rstrip(".").lower()
+
+    if normalized != raw:
+        logging.getLogger(__name__).warning(
+            "%s=%r приведено к %r. Ожидается ГОЛЫЙ почтовый домен (htq.group); "
+            "адрес панели/API задаётся отдельно в MAILCOW_API_URL.%s",
+            name, raw, normalized,
+            " Похоже, сюда попал URL — проверьте, что домен ящиков именно такой."
+            if looked_like_url else "",
+        )
+    return normalized
+
+
+# Домен, в котором заводятся корпоративные ящики (``i.ivanov@<домен>``).
+# MAILCOW_DOMAIN — историческое имя (его читает mailbox_service);
+# CORPORATE_MAIL_DOMAIN — нейтральный синоним для не-Mailcow серверов.
+CORPORATE_MAIL_DOMAIN = _mail_domain("CORPORATE_MAIL_DOMAIN")
+MAILCOW_DOMAIN = _mail_domain("MAILCOW_DOMAIN", CORPORATE_MAIL_DOMAIN)
+MAILCOW_DEFAULT_QUOTA_MB = int(env("MAILCOW_DEFAULT_QUOTA_MB", "1024"))
+
+# Mailcow REST API — есть только у Mailcow-инсталляций. Пусто => провижининг
+# через API невозможен, apps/mail/services/provisioning/factory.py выберет
+# IMAP-режим (verify-and-link) или no-op.
+MAILCOW_API_URL = env("MAILCOW_API_URL", "")
+MAILCOW_API_KEY = env("MAILCOW_API_KEY", "")
+
+# Кто реально заводит ящики на почтовом сервере:
+#   auto    — mailcow, если задан MAILCOW_API_URL+KEY; иначе imap, если задан
+#             IMAP_HOST; иначе none (историческое поведение — только локальная
+#             строка в БД).
+#   mailcow — только Mailcow REST API.
+#   imap    — сервер без админ-API: ящик обязан существовать, платформа
+#             проверяет учётку живым IMAP-логином и привязывает её.
+#   none    — ничего наружу не вызывать.
+MAIL_PROVISIONER = env("MAIL_PROVISIONER", "auto").strip().lower()
+
+# IMAP корпоративного сервера. При доступе через SSH-туннель (сервис
+# ``mail-tunnel`` в docker-compose.yml) сюда идёт адрес туннеля, напр.
+# IMAP_HOST=mail-tunnel, IMAP_PORT=1143, IMAP_SSL=false, IMAP_STARTTLS=true —
+# наружу канал всё равно шифрует SSH.
+IMAP_HOST = env("IMAP_HOST", "")
+IMAP_PORT = int(env("IMAP_PORT", "993"))
+IMAP_SSL = _flag("IMAP_SSL", "true")            # implicit TLS (993)
+IMAP_STARTTLS = _flag("IMAP_STARTTLS", "false")  # STARTTLS поверх 143/1143
+IMAP_TIMEOUT = int(env("IMAP_TIMEOUT", "30"))
+# Имя, по которому проверять TLS-сертификат, когда подключаемся НЕ по нему.
+# Нужно ровно в одном сценарии: TLS сквозь SSH-туннель — соединение идёт на
+# ``mail-tunnel``, а сертификат выписан на ``mail.company.ru``, и проверка
+# имени иначе падает. Пусто = проверять по IMAP_HOST (обычное поведение).
+# Отключения проверки сертификата нет намеренно: через туннель достаточно
+# оставить IMAP_SSL=false — шифрует SSH, и это безопаснее, чем TLS без
+# валидации.
+IMAP_TLS_SERVER_HOSTNAME = env("IMAP_TLS_SERVER_HOSTNAME", "")
+
+# SMTP submission того же сервера. Пусто => берётся IMAP_HOST (типовой
+# случай: один хост и для IMAP, и для submission).
+SMTP_HOST = env("SMTP_HOST", "")
+SMTP_PORT = int(env("SMTP_PORT", "587"))
+SMTP_SSL = _flag("SMTP_SSL", "false")            # implicit TLS (465)
+SMTP_STARTTLS = _flag("SMTP_STARTTLS", "true")   # STARTTLS (587)
+SMTP_TIMEOUT = int(env("SMTP_TIMEOUT", "30"))
+
+# Сколько писем максимум тянуть за один прогон синхронизации одного ящика и
+# какие папки обходить (канонические имена — apps/mail/models.py::Folder).
+MAIL_SYNC_MAX_MESSAGES = int(env("MAIL_SYNC_MAX_MESSAGES", "200"))
+MAIL_SYNC_FOLDERS = [
+    f.strip() for f in env("MAIL_SYNC_FOLDERS", "INBOX,Sent").split(",") if f.strip()
+]
+# Толкать ли локально прочитанное обратно на сервер флагом \Seen (вторая
+# половина двусторонней синхронизации писем).
+MAIL_SYNC_PUSH_FLAGS = _flag("MAIL_SYNC_PUSH_FLAGS", "true")
+
+# Сверка "платформа ↔ почтовый сервер" (apps/mail/services/reconcile_service.py).
+# По умолчанию периодическая задача только СЧИТАЕТ расхождения и пишет их в
+# лог; применение изменений — явное действие админа из UI.
+MAIL_RECONCILE_AUTO_APPLY = _flag("MAIL_RECONCILE_AUTO_APPLY", "false")
+
+# Как собирать адрес из имени сотрудника: first.last | f.last | firstlast |
+# first_last | flast | last.first | first. Дефолт "f.last" — историческое
+# поведение платформы (i.ivanov), менять его глобально нельзя, не сломав
+# существующие инсталляции; своё соглашение задаётся здесь или в интерфейсе
+# («Корпоративные ящики» → «Подключение»).
+MAILBOX_LOCAL_PART_PATTERN = env("MAILBOX_LOCAL_PART_PATTERN", "f.last").strip().lower()
 
 # ── media upload pipeline (apps/media_files, task 3.2) — ported defaults
 # from services/media/app/core/settings.py, byte-for-byte where the setting

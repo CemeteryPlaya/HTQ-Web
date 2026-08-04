@@ -1,0 +1,241 @@
+- generic:
+  - generic:
+    - list
+    - region "Notifications alt+T"
+    - generic:
+      - banner:
+        - generic:
+          - link:
+            - /url: /
+            - generic:
+              - generic: Hi-Tech Group
+              - generic: Construction services in energy sector
+          - navigation:
+            - link:
+              - /url: /tasks
+              - text: Задачи
+            - link:
+              - /url: /calendar
+              - text: Календарь
+            - link:
+              - /url: /messenger
+              - text: Чаты
+            - link:
+              - /url: /email
+              - text: Почта
+            - button: Ещё
+            - button
+            - link:
+              - /url: /messenger
+            - button
+            - button:
+              - generic: RU
+          - generic:
+            - link:
+              - /url: /myprofile
+              - generic: Профиль
+      - main:
+        - generic:
+          - generic:
+            - link:
+              - /url: /myprofile
+              - text: Назад в профиль
+            - generic:
+              - generic: HR Management
+              - heading [level=1]: Сотрудники
+              - paragraph: Активные сотрудники, роли и контактные данные.
+          - generic:
+            - complementary:
+              - generic:
+                - generic: Навигация
+                - navigation:
+                  - link:
+                    - /url: /hr/employees
+                    - text: Сотрудники
+                  - link:
+                    - /url: /hr/accounts
+                    - text: Аккаунты
+                  - link:
+                    - /url: /hr/departments
+                    - text: Структура
+                  - link:
+                    - /url: /hr/positions
+                    - text: Должности
+                  - link:
+                    - /url: /admin/levels
+                    - text: Уровни должностей
+                  - link:
+                    - /url: /hr/org-chart
+                    - text: Оргструктура
+                  - link:
+                    - /url: /hr/pmo
+                    - text: PMO
+                  - link:
+                    - /url: /hr/share-links
+                    - text: Публичные ссылки
+                  - link:
+                    - /url: /hr/time-tracking
+                    - text: Учет времени
+                  - link:
+                    - /url: /hr/recruitment
+                    - text: Рекрутинг
+                  - link:
+                    - /url: /hr/archive
+                    - text: Архив
+                  - link:
+                    - /url: /hr/documents
+                    - text: Документы
+                  - link:
+                    - /url: /hr/history
+                    - text: Кадровая история
+                  - link:
+                    - /url: /hr/production-calendar
+                    - text: Произв. календарь
+                  - link:
+                    - /url: /hr/staffing
+                    - text: Штатное расписание
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - textbox:
+                      - /placeholder: Поиск по ФИО, email, телефону, должности…
+                  - combobox:
+                    - generic: Все статусы
+                  - generic:
+                    - text: "Всего: 0"
+                    - generic: (lead)
+                - button [expanded]: Добавить сотрудника
+              - generic:
+                - generic:
+                  - table:
+                    - rowgroup:
+                      - row:
+                        - columnheader: Сотрудник
+                        - columnheader: Должность
+                        - columnheader: Телефон
+                        - columnheader: Статус
+                        - columnheader: Принят
+                        - columnheader: Действия
+                    - rowgroup:
+                      - row:
+                        - cell: Нет сотрудников по выбранным условиям
+      - contentinfo:
+        - generic:
+          - generic:
+            - generic:
+              - link:
+                - /url: "#"
+                - generic: Hi-Tech Group
+              - paragraph: Лидер рынка ВИЭ в Центральной Азии. Строим устойчивое будущее через инновационные солнечные решения.
+              - generic:
+                - link:
+                  - /url: "#"
+                  - generic: linkedin
+                - link:
+                  - /url: "#"
+                  - generic: twitter
+                - link:
+                  - /url: "#"
+                  - generic: facebook
+            - generic:
+              - heading [level=4]: Компания
+              - list:
+                - listitem:
+                  - link:
+                    - /url: "#about"
+                    - text: О компании
+                - listitem:
+                  - link:
+                    - /url: /projects
+                    - text: Проекты
+                - listitem:
+                  - link:
+                    - /url: /services
+                    - text: Услуги
+                - listitem:
+                  - link:
+                    - /url: "#news"
+                    - text: Новости
+            - generic:
+              - heading [level=4]: Услуги
+              - list:
+                - listitem:
+                  - link:
+                    - /url: "#"
+                    - text: Услуги инженера заказчика
+                - listitem:
+                  - link:
+                    - /url: "#"
+                    - text: Испытание на выдергивание (POT)
+                - listitem:
+                  - link:
+                    - /url: "#"
+                    - text: Строительные услуги
+                - listitem:
+                  - link:
+                    - /url: "#"
+                    - text: Эксплуатация и техническое обслуживание
+            - generic:
+              - heading [level=4]: Контакты
+              - list:
+                - listitem:
+                  - generic: Казахстан, г.Тараз, мкрн.Акбулак, 9А
+                - listitem:
+                  - link:
+                    - /url: mailto:info@hi-techkz.com
+                    - text: info@hi-techkz.com
+                - listitem:
+                  - link:
+                    - /url: tel:+77271234567
+                    - text: +7 (727) 123-4567
+        - generic:
+          - generic:
+            - paragraph: © 2026 Hi-Tech Group. Все права защищены.
+            - generic:
+              - link:
+                - /url: "#"
+                - text: Политика конфиденциальности
+              - link:
+                - /url: "#"
+                - text: Условия использования
+  - dialog [ref=f4e388]:
+    - heading "Новый сотрудник" [level=2] [ref=f4e390]
+    - generic [ref=f4e391]:
+      - generic [ref=f4e392]:
+        - generic [ref=f4e393]:
+          - text: Пользователь
+          - combobox "Пользователь" [active] [ref=f4e394] [cursor=pointer]: Выберите пользователя
+        - generic [ref=f4e395]:
+          - text: Статус
+          - combobox "Статус" [ref=f4e396] [cursor=pointer]:
+            - generic: Активен
+      - generic [ref=f4e399]:
+        - generic [ref=f4e400]:
+          - text: Отдел
+          - combobox "Отдел" [ref=f4e401] [cursor=pointer]:
+            - generic [ref=f4e402]: Выберите отдел
+        - generic [ref=f4e403]:
+          - text: Должность
+          - combobox "Должность" [ref=f4e404] [cursor=pointer]:
+            - generic [ref=f4e405]: Выберите должность
+      - generic [ref=f4e406]:
+        - generic [ref=f4e407]:
+          - text: Телефон
+          - generic [ref=f4e408]:
+            - generic: "+7"
+            - textbox "Телефон" [ref=f4e409]:
+              - /placeholder: (700) 483-55-81
+        - generic [ref=f4e410]:
+          - text: Дата приема
+          - textbox "Дата приема" [ref=f4e411]
+      - generic [ref=f4e413]:
+        - text: Дата увольнения
+        - textbox "Дата увольнения" [ref=f4e414]
+      - generic [ref=f4e415]:
+        - text: Заметки
+        - textbox "Заметки" [ref=f4e416]
+      - generic [ref=f4e417]:
+        - button "Отмена" [ref=f4e418] [cursor=pointer]
+        - button "Сохранить" [disabled]
+    - button "Close" [ref=f4e419] [cursor=pointer]

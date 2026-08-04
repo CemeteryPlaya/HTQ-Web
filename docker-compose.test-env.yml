@@ -1,0 +1,404 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# HTQWeb — ТЕСТОВЫЙ стек с БД ИЗ .env (самодостаточный)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+#   docker compose -f docker-compose.test-env.yml up -d --build
+#
+# Приложение: http://localhost:3000 (Vite HMR) · django-admin :8000/django-admin/
+#
+# Тот же тестовый стек, что docker-compose.test-local.yml, с одним отличием:
+# контейнера Postgres здесь НЕТ — backend идёт в БД, указанную в корневом .env
+# (DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD). Нужен, когда надо посмотреть
+# фронт/бэк на РЕАЛЬНЫХ данных, не поднимая базу локально.
+#
+# ⚠️ ГЛАВНОЕ ПРЕДУПРЕЖДЕНИЕ. В корневом .env обычно прописана БОЕВАЯ база на
+#    VPS. Этот стек пишет в неё по-настоящему: созданное здесь появится у
+#    пользователей, удалённое — исчезнет у них же. Поэтому:
+#      • МИГРАЦИИ ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНЫ (RUN_MIGRATIONS=0, см. backend-web) —
+#        схему боевой БД меняют осознанно и вручную, а не побочным эффектом
+#        поднятия стека;
+#      • E2E-тесты и любые проверки «а что если удалить» гоняйте на
+#        docker-compose.test-local.yml, а не здесь.
+#    Проверить, куда реально смотрит поднятый backend:
+#      docker compose -f docker-compose.test-env.yml exec backend-web printenv DB_HOST
+#
+# Снести:
+#   docker compose -f docker-compose.test-env.yml down          # БД внешняя, -v её не тронет
+#
+# ─── ЧЕМ ОТЛИЧАЕТСЯ ОТ ДВУХ ДРУГИХ ФАЙЛОВ ──────────────────────────────────────
+#   docker-compose.yml            — ПРОД: сборка фронта в статику, gunicorn,
+#                                   nginx/sfu/certbot
+#   docker-compose.test-local.yml — тот же тестовый стек, но с локальным
+#                                   Postgres в контейнере и миграциями ON
+#   ЭТОТ ФАЙЛ                     — без своей БД, всё берётся из .env
+#
+# ⚠️ Файлы самостоятельные и НЕ наследуют друг друга (осознанное решение —
+#    запускать одной короткой командой). Значит правка сервиса, общего для
+#    сред (redis, minio, backend-*, grafana…), должна повторяться в остальных
+#    двух файлах. Перед коммитом сверяйте:  git diff docker-compose*.yml
+#
+# ⚠️ Три стека публикуют ОДНИ И ТЕ ЖЕ host-порты (3000/8000/8001/5555/9000…),
+#    поэтому одновременно поднимается только один.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: htqweb-env
+
+x-django-env: &django-env
+  # DEBUG-настройки: подробные трейсбеки, без обязательного ALLOWED_HOSTS.
+  DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
+  JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
+  # Всё из .env. Дефолты повторяют docker-compose.yml, чтобы поведение стеков
+  # не расходилось, когда переменная в .env не задана.
+  DB_HOST: ${DB_HOST:-45.10.110.212}
+  DB_PORT: "${DB_PORT:-5432}"
+  DB_NAME: ${DB_NAME:-htqweb}
+  DB_USER: ${DB_USER:-htqweb}
+  DB_PASSWORD: ${DB_PASSWORD:-change-me}
+  REDIS_URL: redis://redis:6379/1
+  CELERY_BROKER_URL: redis://redis:6379/2
+  STORAGE_BACKEND: s3
+  S3_ENDPOINT: http://minio:9000
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+  S3_BUCKET: ${S3_BUCKET:-htqweb-cms}
+  MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-htqweb-media}
+  S3_USE_PATH_STYLE: "true"
+
+services:
+  # Контейнера `db` здесь нет намеренно — БД внешняя, из .env.
+  # PgBouncer тоже не нужен: Django ходит в Postgres напрямую.
+
+  # ─── Redis (кэш + брокер Celery) ────────────────────────────────────────────
+  # Локальный, а не общий с боевым: фоновые задачи этого стека не должны
+  # попадать в очередь, которую разбирают боевые воркеры.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  # ─── MinIO (S3-совместимое хранилище) ───────────────────────────────────────
+  # Тоже локальный: файлы из этого стека не смешиваются с боевым бакетом.
+  # Следствие — у записей из боевой БД вложения/аватарки здесь не откроются
+  # (ссылки указывают на объекты, которых в локальном MinIO нет). Это ожидаемо.
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      MINIO_PROMETHEUS_AUTH_TYPE: "public"
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # веб-консоль
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  minio-bootstrap:
+    image: minio/mc:RELEASE.2025-01-17T23-25-50Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MC_HOST_local: http://${S3_ACCESS_KEY:-minioadmin}:${S3_SECRET_KEY:-minioadmin}@minio:9000
+    entrypoint: >
+      /bin/sh -c "
+        set -e;
+        for b in ${S3_BUCKET:-htqweb-cms} ${MEDIA_S3_BUCKET:-htqweb-media}; do
+          mc mb --ignore-existing local/$$b;
+        done;
+        echo placeholder | mc pipe local/${S3_BUCKET:-htqweb-cms}/news/.keep;
+        echo bootstrap-done;
+      "
+    restart: "no"
+
+  # ─── Django backend — WSGI (весь /api/*, django-admin, статика) ─────────────
+  backend-web:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+      # ⚠️ 0 ПО УМОЛЧАНИЮ — БД здесь чужая (обычно боевая). Чтобы применить
+      # миграции осознанно: RUN_MIGRATIONS=1 docker compose -f … up -d backend-web
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-0}
+      # collectstatic + бакеты + идемпотентный сид админа — к схеме БД отношения
+      # не имеют и нужны при каждом старте, поэтому от флага выше не зависят.
+      RUN_BOOTSTRAP: ${RUN_BOOTSTRAP:-1}
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    # БД внешняя — depends_on не нужен; docker-entrypoint.sh сам ждёт DB_HOST:DB_PORT.
+    depends_on:
+      redis:
+        condition: service_healthy
+      # ensure_buckets в docker-entrypoint.sh ходит в minio:9000 ещё до запуска
+      # сервера. Без этой зависимости backend-web обгоняет minio и тратит ~40 с
+      # на ретраи botocore, после чего healthcheck успевает объявить контейнер
+      # нездоровым, хотя приложение исправно.
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/core/v1/services/').status==200 else 1)\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      # Холодный старт складывается из collectstatic (~9 с), сида админа (~3 с)
+      # и загрузки Django (~7 с), а на медленной машине или при недоступном S3
+      # ещё дольше. 40 с не хватало, и compose падал с "is unhealthy" при живом
+      # приложении.
+      start_period: 120s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── Django backend — ASGI (SSE /api/requests/v1/stream + WS /ws/) ──────────
+  backend-asgi:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["uvicorn", "htqweb.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend-web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── Celery worker (фоновые задачи всех доменов) ────────────────────────────
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["celery", "-A", "htqweb", "worker", "-l", "info"]
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend-web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── Celery beat (периодика из БД: django-celery-beat) ──────────────────────
+  backend-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["celery", "-A", "htqweb", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend-web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ─── Flower (мониторинг Celery) ─────────────────────────────────────────────
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+    command: ["celery", "-A", "htqweb", "flower", "--port=5555"]
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+  # ─── Frontend — Vite dev-сервер с HMR ───────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    entrypoint: []
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_DEV_HTTPS: "false"
+      VITE_DISABLE_HMR: "false"
+      VITE_BACKEND_TARGET: "http://backend-web:8000"
+      VITE_ASGI_TARGET: "http://backend-asgi:8000"
+      VITE_MESSENGER_WS_TARGET: "ws://backend-asgi:8000"
+    depends_on:
+      backend-web:
+        condition: service_healthy
+
+  # ─── Наблюдаемость ──────────────────────────────────────────────────────────
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://${DB_USER:-htqweb}:${DB_PASSWORD:-change-me}@${DB_HOST:-45.10.110.212}:${DB_PORT:-5432}/${DB_NAME:-htqweb}?sslmode=disable
+    ports:
+      - "9187:9187"
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.58.0
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  prometheus:
+    build:
+      context: ./infra/logging/prometheus
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/prometheus/-/healthy || exit 1"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  loki:
+    image: grafana/loki:2.9.10
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yml
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/logging/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready | grep -q ready || exit 1"]
+      interval: 10s
+      retries: 12
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  promtail:
+    image: grafana/promtail:2.9.10
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./infra/logging/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  grafana:
+    image: grafana/grafana-oss:10.4.4
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        k=$$(printf '%s' "$$JWT_SECRET" | base64 | tr -d '\n=' | tr '+/' '-_')
+        printf '{"keys":[{"kty":"oct","use":"sig","alg":"HS256","k":"%s"}]}' "$$k" > /tmp/htqweb-jwks.json
+        exec /run.sh
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
+      GF_AUTH_JWT_ENABLED: "true"
+      GF_AUTH_JWT_HEADER_NAME: "X-JWT-Assertion"
+      GF_AUTH_JWT_URL_LOGIN: "true"
+      GF_AUTH_JWT_USERNAME_CLAIM: "username"
+      GF_AUTH_JWT_EMAIL_CLAIM: "email"
+      GF_AUTH_JWT_AUTO_SIGN_UP: "true"
+      GF_AUTH_JWT_JWK_SET_FILE: /tmp/htqweb-jwks.json
+      GF_AUTH_JWT_EXPECT_CLAIMS: '{"iss": "htqweb-auth"}'
+      GF_AUTH_JWT_ROLE_ATTRIBUTE_PATH: "is_superuser && 'Admin' || is_staff && 'Editor'"
+      GF_AUTH_JWT_ROLE_ATTRIBUTE_STRICT: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/htqweb-prometheus-services.json
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/logging/grafana-provisioning:/etc/grafana/provisioning:ro
+      - ./infra/logging/grafana-dashboards:/etc/grafana/dashboards:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+volumes:
+  minio_data:
+  loki_data:
+  grafana_data:
+  prometheus_data:

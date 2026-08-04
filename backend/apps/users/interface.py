@@ -200,21 +200,27 @@ def list_users_brief(search: str | None = None, limit: int = 100) -> list[dict]:
 
 
 def create_user(*, email: str, first_name: str = "", last_name: str = "",
-                patronymic: str = "") -> dict:
+                patronymic: str = "", password: str = "",
+                must_change_password: bool = True) -> dict:
     """Create a platform user from a neighbour app — hr's "create employee
-    from a brand-new user" dialog (``HRUserCreateRequest``: only ФИО +
-    email, no username/password prompt).
+    from a brand-new user" dialog (``HRUserCreateRequest``).
 
     Reuses ``apps.users.services.admin_service.create_user`` for the actual
     creation (uniqueness checks, ``set_password``, ``must_change_password``)
-    rather than duplicating it — this function only adds the bits the
+    rather than duplicating it — this function only adds the bit the
     source's ``create_user_option`` did locally before calling user-service:
-    deriving ``username`` from the email local-part and minting a random
-    temp password the caller never sees or needs (``must_change_password``
-    forces a reset on first login). Raises this module's own
+    deriving ``username`` from the email local-part. Raises this module's own
     ``DuplicateEmail``/``DuplicateUsername`` (never ``admin_service``'s —
     neighbours may not import ``apps.users.services``, only this module) so
-    the caller can map them to 409 without knowing admin_service exists."""
+    the caller can map them to 409 without knowing admin_service exists.
+
+    ``password`` передаёт ВЫЗЫВАЮЩИЙ, и hr-вьюха требует его непустым. Раньше
+    здесь минтился ``secrets.token_urlsafe(12)``, которого не видел никто:
+    аккаунт заводился, но войти в него было невозможно до админского сброса.
+    Фолбэк на случайный пароль оставлен только для вызовов без аргумента —
+    сам по себе он аккаунт не открывает, но и не даёт завести пользователя с
+    пустым/предсказуемым паролем, если однажды появится сосед, которому
+    пароль спрашивать негде."""
     require_service("users")
     email_norm = (email or "").strip().lower()
     username = _derive_username(email_norm)
@@ -224,12 +230,12 @@ def create_user(*, email: str, first_name: str = "", last_name: str = "",
         user = admin_service.create_user(
             username=username,
             email=email_norm,
-            password=secrets.token_urlsafe(12),
+            password=password or secrets.token_urlsafe(12),
             first_name=first_name,
             last_name=last_name,
             patronymic=patronymic,
             display_name=display_name,
-            must_change_password=True,
+            must_change_password=must_change_password,
         )
     except admin_service.DuplicateEmail:
         raise DuplicateEmail() from None
