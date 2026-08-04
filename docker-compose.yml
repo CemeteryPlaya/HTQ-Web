@@ -48,6 +48,32 @@ x-django-env: &django-env
   # Отпечаток самоподписанного сертификата моста (том wt_certs). С
   # сертификатом от настоящего CA файла нет — и он не нужен.
   CONFERENCE_WT_CERT_HASH_FILE: ${CONFERENCE_WT_CERT_HASH_FILE:-/app/wt-certs/cert.sha256}
+  # ── Корпоративная почта (apps/mail) ──
+  # Пусто = почтовый сервер не подключён: ящики заводятся только локальной
+  # строкой, сверка сообщает "сервер недоступен". Подробности и рецепты —
+  # в .env.example.
+  CORPORATE_MAIL_DOMAIN: ${CORPORATE_MAIL_DOMAIN:-}
+  MAILCOW_DOMAIN: ${MAILCOW_DOMAIN:-}
+  MAILCOW_API_URL: ${MAILCOW_API_URL:-}
+  MAILCOW_API_KEY: ${MAILCOW_API_KEY:-}
+  MAILCOW_DEFAULT_QUOTA_MB: ${MAILCOW_DEFAULT_QUOTA_MB:-1024}
+  # auto | mailcow | imap | none
+  MAIL_PROVISIONER: ${MAIL_PROVISIONER:-auto}
+  # Через SSH-туннель: IMAP_HOST=mail-tunnel, IMAP_PORT=1143, IMAP_SSL=false
+  # (шифрует SSH). Напрямую: реальный хост, 993, IMAP_SSL=true.
+  IMAP_HOST: ${IMAP_HOST:-}
+  IMAP_PORT: ${IMAP_PORT:-993}
+  IMAP_SSL: ${IMAP_SSL:-true}
+  IMAP_STARTTLS: ${IMAP_STARTTLS:-false}
+  IMAP_TLS_SERVER_HOSTNAME: ${IMAP_TLS_SERVER_HOSTNAME:-}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_SSL: ${SMTP_SSL:-false}
+  SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+  MAIL_SYNC_FOLDERS: ${MAIL_SYNC_FOLDERS:-INBOX,Sent}
+  MAIL_SYNC_MAX_MESSAGES: ${MAIL_SYNC_MAX_MESSAGES:-200}
+  MAIL_SYNC_PUSH_FLAGS: ${MAIL_SYNC_PUSH_FLAGS:-true}
+  MAIL_RECONCILE_AUTO_APPLY: ${MAIL_RECONCILE_AUTO_APPLY:-false}
 
 services:
   # ─── PostgreSQL ───────────────────────────────────
@@ -209,6 +235,55 @@ services:
       timeout: 5s
       retries: 10
       start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── SSH-туннель до корпоративного почтового сервера ────────────────────
+  # Профиль `mail-tunnel`: сервис стартует только там, где почтовый сервер
+  # закрыт наружу и доступен исключительно по SSH.
+  #
+  #   docker compose --profile mail-tunnel up -d mail-tunnel
+  #
+  # Подготовка (один раз):
+  #   1. положить приватный ключ в infra/mail-tunnel/ssh/id_ed25519 (chmod 600);
+  #   2. ssh-keyscan -p <порт> <хост> > infra/mail-tunnel/ssh/known_hosts;
+  #   3. заполнить MAIL_TUNNEL_* в .env;
+  #   4. указать backend'у адрес туннеля:
+  #        IMAP_HOST=mail-tunnel   IMAP_PORT=1143
+  #        SMTP_HOST=mail-tunnel   SMTP_PORT=1587
+  #
+  # Порты наружу НЕ публикуются: туннель виден только контейнерам этой сети.
+  mail-tunnel:
+    build:
+      context: ./infra/mail-tunnel
+      dockerfile: Dockerfile
+    profiles:
+      - mail-tunnel
+    restart: unless-stopped
+    environment:
+      MAIL_TUNNEL_SSH_HOST: ${MAIL_TUNNEL_SSH_HOST:-}
+      MAIL_TUNNEL_SSH_PORT: ${MAIL_TUNNEL_SSH_PORT:-22}
+      MAIL_TUNNEL_SSH_USER: ${MAIL_TUNNEL_SSH_USER:-}
+      MAIL_TUNNEL_SSH_KEY: ${MAIL_TUNNEL_SSH_KEY:-/ssh/id_ed25519}
+      MAIL_TUNNEL_REMOTE_IMAP_HOST: ${MAIL_TUNNEL_REMOTE_IMAP_HOST:-127.0.0.1}
+      MAIL_TUNNEL_REMOTE_IMAP_PORT: ${MAIL_TUNNEL_REMOTE_IMAP_PORT:-993}
+      MAIL_TUNNEL_REMOTE_SMTP_HOST: ${MAIL_TUNNEL_REMOTE_SMTP_HOST:-}
+      MAIL_TUNNEL_REMOTE_SMTP_PORT: ${MAIL_TUNNEL_REMOTE_SMTP_PORT:-587}
+      MAIL_TUNNEL_LOCAL_IMAP_PORT: ${MAIL_TUNNEL_LOCAL_IMAP_PORT:-1143}
+      MAIL_TUNNEL_LOCAL_SMTP_PORT: ${MAIL_TUNNEL_LOCAL_SMTP_PORT:-1587}
+    volumes:
+      - ./infra/mail-tunnel/ssh:/ssh:ro
+    healthcheck:
+      # Порт слушает ⇒ ssh -L поднялся. Логин на почтовый сервер отсюда не
+      # проверяем: у туннеля нет и не должно быть почтовых учёток.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${MAIL_TUNNEL_LOCAL_IMAP_PORT:-1143} || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     logging:
       driver: json-file
       options:

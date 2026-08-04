@@ -23,8 +23,6 @@ _SECTIONS: dict[str, tuple[tuple[str, ...], str, str]] = {
                   "hr.card.financial.view", "hr.card.financial.edit"),
     "personal": (("passport_data", "inn", "birth_date", "birth_place", "citizenship"),
                  "hr.card.personal.view", "hr.card.personal.edit"),
-    "certs": (("sro_permit_number", "sro_permit_expiry", "safety_cert_number", "safety_cert_expiry"),
-              "hr.card.certs.view", "hr.card.certs.edit"),
 }
 _MONEY = {"salary", "bonus"}
 
@@ -64,8 +62,8 @@ def upsert(employee_id: int, patch: dict, access: HRAccess) -> dict:
     ``ValueError``, поднятые в середине multi-секционного патча, откатывают
     ВСЁ (включая уже применённые setattr на более ранние по порядку секции),
     не только оставшуюся часть. Порядок секций — порядок ``patch.items()``,
-    то есть порядок полей ``EmployeeCardT2Patch`` (financial, personal,
-    certs), а не порядок ключей JSON-тела запроса.
+    то есть порядок полей ``EmployeeCardT2Patch`` (financial, personal),
+    а не порядок ключей JSON-тела запроса.
     """
     card = _get(employee_id)
     if card is None:

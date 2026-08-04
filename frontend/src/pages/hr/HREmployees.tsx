@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useMemo, useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -90,11 +90,6 @@ interface Employee {
   bonus?: string | null;
   passport_data?: string;
   bank_account?: string;
-  // SRO (read-only for Junior)
-  sro_permit_number?: string;
-  sro_permit_expiry?: string | null;
-  safety_cert_number?: string;
-  safety_cert_expiry?: string | null;
   // Synced from user-service via the replica worker; absent on bare-skeleton
   // employees that aren't linked to a platform user yet.
   avatar_url?: string | null;
@@ -225,6 +220,16 @@ const HREmployees = () => {
     });
   }, [employees, search, statusFilter]);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    if (searchParams.get('action') === 'new' && canCreateEmployee) {
+      startCreate();
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete('action');
+      setSearchParams(newParams, { replace: true });
+    }
+  }, [searchParams, canCreateEmployee]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
   const [form, setForm] = useState({
@@ -585,43 +590,45 @@ const HREmployees = () => {
   return (
     <>
       <HRLayout title={t('hr.pages.employees.title')} subtitle={t('hr.pages.employees.subtitle')}>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-1 flex-wrap items-center gap-2">
-            <div className="relative flex-1 min-w-[200px] max-w-md">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={t('hr.pages.employees.searchPlaceholder', 'Поиск по ФИО, email, телефону, должности…')}
-                className="pl-8 h-9"
-              />
+        <div className="rounded-3xl border bg-card p-4 shadow-2xs mb-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-1 flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[220px] max-w-md">
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t('hr.pages.employees.searchPlaceholder', 'Поиск по ФИО, email, телефону, должности…')}
+                  className="pl-9 h-9 text-xs bg-muted/30 rounded-xl"
+                />
+              </div>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="h-9 w-[160px] text-xs rounded-xl bg-muted/30">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="rounded-2xl">
+                  <SelectItem value="all">{t('hr.pages.employees.filters.allStatuses', 'Все статусы')}</SelectItem>
+                  <SelectItem value="active">{t('hr.pages.employees.status.active')}</SelectItem>
+                  <SelectItem value="inactive">{t('hr.pages.employees.status.inactive', 'Неактивен')}</SelectItem>
+                  <SelectItem value="terminated">{t('hr.pages.employees.status.terminated', 'Уволен')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="text-xs font-semibold text-muted-foreground whitespace-nowrap">
+                {t('hr.common.total')}: {visibleEmployees.length}
+                {employees && visibleEmployees.length !== employees.length ? ` / ${employees.length}` : ''}
+                {level && <span className="ml-2 font-mono uppercase text-[10px] bg-muted px-2 py-0.5 rounded-md">({level.replace('_', ' ')})</span>}
+              </div>
             </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="h-9 w-[160px] text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{t('hr.pages.employees.filters.allStatuses', 'Все статусы')}</SelectItem>
-                <SelectItem value="active">{t('hr.pages.employees.status.active')}</SelectItem>
-                <SelectItem value="inactive">{t('hr.pages.employees.status.inactive', 'Неактивен')}</SelectItem>
-                <SelectItem value="terminated">{t('hr.pages.employees.status.terminated', 'Уволен')}</SelectItem>
-              </SelectContent>
-            </Select>
-            <div className="text-xs text-muted-foreground whitespace-nowrap">
-              {t('hr.common.total')}: {visibleEmployees.length}
-              {employees && visibleEmployees.length !== employees.length ? ` / ${employees.length}` : ''}
-              {level && <span className="ml-2 uppercase tracking-wide">({level.replace('_', ' ')})</span>}
-            </div>
-          </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            {canCreateEmployee && (
-              <DialogTrigger asChild>
-                <Button onClick={startCreate} className="h-9 shrink-0">
-                  <UserPlus className="mr-2 h-4 w-4" />
-                  {t('hr.pages.employees.add')}
-                </Button>
-              </DialogTrigger>
-            )}
+
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              {canCreateEmployee && (
+                <DialogTrigger asChild>
+                  <Button onClick={startCreate} className="h-9 gap-2 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 font-semibold shadow-2xs shrink-0">
+                    <UserPlus className="h-4 w-4" />
+                    {t('hr.pages.employees.add', 'Добавить сотрудника')}
+                  </Button>
+                </DialogTrigger>
+              )}
             <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{editing ? t('hr.pages.employees.edit') : t('hr.pages.employees.new')}</DialogTitle>
@@ -860,8 +867,9 @@ const HREmployees = () => {
             </DialogContent>
           </Dialog>
         </div>
+        </div>
 
-        <div className="bg-card rounded-2xl border">
+        <div className="bg-card rounded-3xl border shadow-2xs overflow-hidden">
           <Table className="text-sm">
             <TableHeader>
               <TableRow>

@@ -73,7 +73,7 @@ function parseTyped(text: string): string {
  * упирается в него: маска дорисовывает разделитель обратно, значение не
  * меняется, и номер невозможно стереть.
  */
-function formatNsn(digits: string): string {
+export function formatNsn(digits: string): string {
     if (!digits) return '';
     let out = `(${digits.slice(0, 3)}`;
     if (digits.length > 3) out += `) ${digits.slice(3, 6)}`;

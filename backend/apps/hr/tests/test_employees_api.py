@@ -1003,11 +1003,14 @@ def test_me_card_t2_empty_without_any_card_permission(junior):
 
 
 @pytest.mark.django_db
-def test_me_card_t2_shows_certs_section_for_middle(middle):
+def test_me_card_t2_empty_for_middle(middle):
+    """После удаления секции certs у middle не остаётся ни одного hr.card.*
+    view-ключа НА Т-2 (groups — отдельный ресурс, не секция t2): тело пустое,
+    как и у junior, но эндпойнт по-прежнему 200."""
     _emp_, headers = middle
     resp = Client().get(f"{BASE}/me/card", **headers)
     assert resp.status_code == 200
-    assert set(resp.json()["t2"].keys()) == {"certs"}
+    assert resp.json()["t2"] == {}
 
 
 @pytest.mark.django_db
@@ -1083,7 +1086,7 @@ def test_id_card_admin_sees_all_t2_sections_and_pmos(admin_auth, hr_dep):
     resp = Client().get(f"{BASE}/{target.id}/card", **admin_auth)
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body["t2"].keys()) == {"financial", "personal", "certs"}
+    assert set(body["t2"].keys()) == {"financial", "personal"}
     assert [p["pmo_id"] for p in body["pmos"]] == [pmo.id]
 
 

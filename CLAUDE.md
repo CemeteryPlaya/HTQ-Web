@@ -71,7 +71,12 @@ cd backend
 ../.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
 ../.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
 ../.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
+../.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
 ```
+Mail-server credentials live in **two layers**: `MailServerConfig` (one DB row, edited at `/admin/mailboxes` → «Подключение») **over** the env vars, merged by `apps/mail/services/mail_config.py` with the rule *empty field in the DB = take it from env*. Never read `settings.IMAP_HOST` (or any other `MAILCOW_*`/`IMAP_*`/`SMTP_*`) directly from `apps/mail` — go through `mail_config.get_config()`, or UI-set values will be silently ignored.
+
+`mail_check` is the first thing to run when corporate mail misbehaves: it prints the resolved config (provisioner mode, domain, IMAP/SMTP targets), then checks each link **in dependency order** — port reachable → IMAP connect → login → folders (including whether `MAIL_SYNC_FOLDERS` actually exist on that server, the usual `Sent` vs `Sent Items` trap) → SMTP connect → SMTP login. The first failure stops the chain so you get the one real cause instead of derived errors, and every failure carries the concrete fix. Without `--mailbox` it needs no secrets at all (config + tunnel only); `--password` is optional for an already-provisioned mailbox (the stored one is decrypted from the DB). Passwords never appear in the output. Exits non-zero on any failure, so it works in scripts.
+
 `seed_tasks_demo` fills the whole five-level hierarchy (project → site → block → roadmap → task) plus volumes, resource requirements and dated daily reports; it needs `seed_hr_demo` to have run first (it reads departments/employees through `apps.hr.interface`). `--purge` removes only what it seeded, `--wipe` TRUNCATEs every table of the `tasks` app and re-seeds — including restoring the five system `TaskType` rows that migration `0002` had put there.
 
 **Reaching the dev database from the host**: `manage.py` defaults to `localhost:6432` (PgBouncer), whose credentials fail SASL from the host. Use the unpooled port instead — same server, dev database:

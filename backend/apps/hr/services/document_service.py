@@ -186,6 +186,36 @@ def create_document_from_upload(
     return serialize(doc)
 
 
+def patch_document(id: int, data) -> dict:
+    """Частичное редактирование карточки документа (сверх контракта порта).
+
+    Исходник правки документа не предусматривал вовсе — только create/get/
+    delete. Фронт (HR → Архив) при этом всегда рисовал диалог редактирования
+    и слал PUT, который упирался в 405. Добавляем ровно то, что можно
+    отредактировать безопасно: название, тип и описание. Сам файл не
+    трогаем — перезалить документ = загрузить новый (иначе пришлось бы
+    осиротить media-файл и разъехаться с file_size/mime_type).
+
+    ``description`` живёт в ``metadata`` (колонки под него нет — см.
+    ``create_document_from_upload``), поэтому обновляем ключ точечно,
+    сохраняя остальные (media_file_id, original_filename, …).
+    """
+    doc = get_document(id)
+    payload = data.model_dump(exclude_unset=True)
+
+    if "title" in payload and payload["title"] is not None:
+        doc.title = payload["title"]
+    if "doc_type" in payload and payload["doc_type"] is not None:
+        doc.doc_type = payload["doc_type"]
+    if "description" in payload:
+        metadata = dict(doc.metadata or {})
+        metadata["description"] = payload["description"] or ""
+        doc.metadata = metadata
+
+    doc.save()
+    return serialize(doc)
+
+
 def delete_document(id: int) -> None:
     doc = get_document(id)
     doc.delete()
@@ -213,106 +243,8 @@ def list_for_employee(employee_id: int) -> list[dict]:
     return [serialize(d) for d in qs]
 
 
-# ── ex-Mongo документы (EmployeeDocumentBlob, hr_employeedocumentblob) ─────
-
-def _blob_to_out(row: EmployeeDocumentBlob) -> dict:
-    """HRDocumentOut (schemas/mongo_document.py) — те же ключи, что исходник.
-
-    ``id`` — ``str(pk)`` (не ``ObjectId`` — та же СТРОКОВАЯ форма, которую
-    ожидает существующий wire-контракт ``HRDocumentOut.id: str``).
-    """
-    data = row.data or {}
-    return {
-        "id": str(row.id),
-        "sql_employee_id": row.employee_id,
-        "title": data.get("title", ""),
-        "doc_type": row.doc_type,
-        "content": data.get("content", ""),
-        "file_url": data.get("file_url"),
-        "file_size_bytes": data.get("file_size_bytes"),
-        "mime_type": data.get("mime_type", "application/octet-stream"),
-        "tags": data.get("tags", []),
-        "metadata": data.get("metadata", {}),
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": data.get("updated_at"),
-        "created_by_user_id": data.get("created_by_user_id"),
-    }
-
-
-def parse_blob_id(doc_id: str) -> int | None:
-    """``None`` — вызывающая вьюха отвечает 400 "Invalid document ID format"
-    (порт ``ObjectId(doc_id)`` / ``InvalidId`` исходника: там любой не-hex24
-    id -> 400; здесь любой не-integer id -> 400, тот же смысл — malformed
-    identifier)."""
-    try:
-        return int(doc_id)
-    except (TypeError, ValueError):
-        return None
-
-
-def list_mongo_documents(
-    *, employee_id: int | None = None, doc_type: str | None = None, page: int = 1, limit: int = 20,
-) -> list[dict]:
-    """Порт ``list_mongo_documents`` — БЕЗ пагинационного конверта (исходник
-    отдаёт голый ``list[HRDocumentOut]``, не ``PaginatedResponse``)."""
-    qs = EmployeeDocumentBlob.objects.all()
-    if employee_id is not None:
-        qs = qs.filter(employee_id=employee_id)
-    if doc_type:
-        qs = qs.filter(doc_type=doc_type)
-    qs = qs.order_by("-created_at")
-    offset = (page - 1) * limit
-    return [_blob_to_out(row) for row in qs[offset:offset + limit]]
-
-
-def get_mongo_document(doc_id: int) -> dict | None:
-    row = EmployeeDocumentBlob.objects.filter(pk=doc_id).first()
-    if row is None:
-        return None
-    return _blob_to_out(row)
-
-
-def create_mongo_document(data, *, created_by_user_id: int | None) -> dict:
-    now = timezone.now()
-    blob = {
-        "title": data.title,
-        "content": data.content,
-        "file_url": data.file_url,
-        "file_size_bytes": data.file_size_bytes,
-        "mime_type": data.mime_type,
-        "tags": list(data.tags),
-        "metadata": dict(data.metadata),
-        "updated_at": now.isoformat(),
-        "created_by_user_id": created_by_user_id,
-    }
-    row = EmployeeDocumentBlob.objects.create(
-        employee_id=data.sql_employee_id,
-        doc_type=data.doc_type.value,
-        data=blob,
-        created_at=now,
-    )
-    return _blob_to_out(row)
-
-
-def update_mongo_document(doc_id: int, data) -> dict | None:
-    row = EmployeeDocumentBlob.objects.filter(pk=doc_id).first()
-    if row is None:
-        return None
-
-    patch = data.model_dump(exclude_unset=True)
-    doc_type = patch.pop("doc_type", ...)  # ... = "ключ отсутствовал"
-    if doc_type not in (..., None):
-        row.doc_type = doc_type.value
-
-    blob = dict(row.data or {})
-    for key, value in patch.items():
-        blob[key] = value
-    blob["updated_at"] = timezone.now().isoformat()
-    row.data = blob
-    row.save(update_fields=["doc_type", "data"])
-    return _blob_to_out(row)
-
-
-def delete_mongo_document(doc_id: int) -> bool:
-    deleted, _ = EmployeeDocumentBlob.objects.filter(pk=doc_id).delete()
-    return deleted > 0
+# ── ex-Mongo документы (EmployeeDocumentBlob) — API снят ───────────────────
+# Функции list/get/create/update/delete_mongo_document удалены вместе с
+# маршрутами /mongo-documents/*: Mongo из платформы ушла, писать в таблицу
+# нечем, фронт её не звал. Модель осталась — в ней могут лежать блоба,
+# перенесённые разовым `manage.py etl_hr`; смотреть их можно в django-admin.

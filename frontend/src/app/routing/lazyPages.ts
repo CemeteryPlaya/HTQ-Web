@@ -16,6 +16,7 @@ export const lazyPages = {
   Login: React.lazy(() => import('@/pages/Login')),
   Register: React.lazy(() => import('@/pages/Register')),
   MyProfile: React.lazy(() => import('@/pages/MyProfile')),
+  MyEmployeeCard: React.lazy(() => import('@/pages/MyEmployeeCard')),
   Settings: React.lazy(() => import('@/pages/Settings')),
   Messenger: React.lazy(() => import('@/features/messenger/MessengerPage')),
   NotificationsHistory: React.lazy(() => import('@/pages/NotificationsHistory')),

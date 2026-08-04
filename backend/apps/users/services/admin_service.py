@@ -13,17 +13,15 @@ decisions Р2/Р3 — see the task 2.4 report for the full inventory):
   (``_archive_user_mailbox``, an ``httpx`` call to email-service) — Р3, no
   S2S. ``delete_user``'s LOCAL effect (``status=SUSPENDED``, strip elevated
   flags) is still performed below.
-* **Mailcow mailbox *provisioning*** in ``create_user``
-  (``_provision_mailbox``, also an S2S email-service call) — dropped for
-  the same Р3 reason. The ``create_mailbox``/``mailbox_local_part``/
-  ``mailbox_password``/``mailbox_quota_mb`` request fields ARE accepted by
-  this port's schema (``apps.users.schemas.AdminUserCreateRequest``), for
-  frontend/contract parity, but are otherwise inert: no mailbox is ever
-  provisioned. When ``create_mailbox`` is true, the view
-  (``apps.users.views._admin_create_user``) returns a non-null
-  ``mailbox_error`` explaining email-service isn't available yet (phase 7),
-  rather than silently doing nothing — see the task 2.4 report's review
-  fix-pass notes.
+* **Mailbox *provisioning*** in ``create_user`` (``_provision_mailbox``, an
+  S2S email-service call) — сам S2S-вызов отпал вместе с email-сервисом
+  (Р3), но ФУНКЦИЯ вернулась: ``apps.users.views._admin_create_user`` зовёт
+  ``apps.mail.interface.provision_mailbox`` — обычный вызов соседней аппки
+  через её единственную разрешённую дверь. Поля ``create_mailbox``/
+  ``mailbox_local_part``/``mailbox_password``/``mailbox_quota_mb`` больше не
+  инертны. Сам ``create_user`` о почте по-прежнему ничего не знает:
+  пользователь создаётся первым, ящик — отдельным шагом во вьюхе, чтобы
+  отказ почтового сервера не откатывал созданного пользователя.
 """
 
 from __future__ import annotations

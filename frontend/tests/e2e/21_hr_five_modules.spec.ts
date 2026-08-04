@@ -1187,18 +1187,20 @@ test.describe("Учёт времени", () => {
     expect(Array.isArray(root.items)).toBe(true);
   });
 
-  test("ПРОБЕЛ: страница ходит в маршруты, которых нет", async ({
+  test("устаревшие маршруты табеля по-прежнему отсутствуют", async ({
     request,
     adminTokens,
   }) => {
     const ctx = auth(adminTokens.access);
-    // HRTimeTracking.tsx — страница про отпуска и отсутствия: у неё
-    // leave_type, duration_days, approve/reject. Бэкенд же ведёт учёт
-    // отработанных часов (date/start_time/end_time/break_minutes) и таких
-    // маршрутов не предоставляет. Чтение «случайно» работает, запись — нет.
+    // Расхождение закрыто со стороны фронта: HRTimeTracking.tsx больше не
+    // про отпуска (leave_type/duration_days/approve/reject), а про
+    // отработанные часы — пишет в /time-tracking/entries/, как и умеет
+    // бэкенд. Одобрения у записей табеля нет и не было ни в этом домене,
+    // ни в FastAPI-исходнике.
     //
-    // Тест фиксирует РАЗМЕР расхождения, чтобы оно не потерялось: пока
-    // раздел не сведут, эти четыре пути отвечают 404/405.
+    // Тест остаётся сторожем: если кто-то снова начнёт слать запись на
+    // корень раздела или на /time-tracking/{id}/, ответ будет 404/405 —
+    // и это должно оставаться так, пока такие маршруты не заведут явно.
     const missing: Record<string, number> = {};
     for (const [method, path] of [
       ["POST", "/time-tracking/"],

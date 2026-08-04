@@ -226,15 +226,40 @@ def test_incremental_sync_account_inactive_account_is_a_noop(caplog):
 
 
 @pytest.mark.django_db
-def test_incremental_sync_account_active_account_runs_the_seam_and_releases_lock(caplog):
-    account = _corporate_account()
-    with caplog.at_level("INFO", logger="apps.mail.tasks"):
-        tasks.incremental_sync_account(account.id, hint_history_id="42")
-    assert any("sync_driver_not_ported" in r.getMessage() for r in caplog.records)
+def test_incremental_sync_account_runs_the_imap_driver_for_corporate_accounts(monkeypatch):
+    """Корпоративный ящик синхронизируется по-настоящему.
 
+    Раньше здесь был задокументированный no-op («драйвер не портирован»):
+    живого IMAP-подключения в репозитории не существовало. Теперь задача
+    зовёт ``imap_sync.sync_account_two_way`` — тест проверяет именно вызов,
+    сам драйвер покрыт в test_imap_sync.py."""
+    account = _corporate_account()
+    calls = []
+    monkeypatch.setattr(
+        tasks.imap_sync, "sync_account_two_way", lambda acc: calls.append(acc.id),
+    )
+
+    tasks.incremental_sync_account(account.id, hint_history_id="42")
     # Lock was released — a second call must be able to acquire it too (same
     # session is reentrant regardless, but this also proves no exception
     # left the lock held across the `finally`).
+    tasks.incremental_sync_account(account.id)
+
+    assert calls == [account.id, account.id]
+
+
+@pytest.mark.django_db
+def test_incremental_sync_account_still_a_seam_for_oauth_providers(caplog, monkeypatch):
+    """Gmail/Graph остаются непортированным seam'ом — их драйверы требуют
+    push-подписок и delta-link, к корпоративной почте отношения не имеют."""
+    account = _corporate_account()
+    account.provider = "google"
+    account.save(update_fields=["provider"])
+    monkeypatch.setattr(
+        tasks.imap_sync, "sync_account_two_way",
+        lambda acc: pytest.fail("OAuth-аккаунт не должен идти в IMAP-драйвер"),
+    )
+
     with caplog.at_level("INFO", logger="apps.mail.tasks"):
         tasks.incremental_sync_account(account.id)
     assert any("sync_driver_not_ported" in r.getMessage() for r in caplog.records)

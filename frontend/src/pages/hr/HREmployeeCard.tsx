@@ -38,7 +38,7 @@ const HREmployeeCard = () => {
   const { data: cardT2 } = useQuery({
     queryKey: ['hr-card-t2', employeeId],
     queryFn: () => fetchCardT2(Number(employeeId)),
-    enabled: !!employeeId && (hasPerm('hr.card.financial.view') || hasPerm('hr.card.personal.view') || hasPerm('hr.card.certs.view')),
+    enabled: !!employeeId && (hasPerm('hr.card.financial.view') || hasPerm('hr.card.personal.view')),
   });
 
   const title = data?.full_name || 'Карточка сотрудника';
@@ -129,13 +129,6 @@ const HREmployeeCard = () => {
             <div className="text-sm">Дата рождения: {cardT2.personal.birth_date ?? '—'}</div>
             <div className="text-sm">Место рождения: {cardT2.personal.birth_place ?? '—'}</div>
             <div className="text-sm">Гражданство: {cardT2.personal.citizenship ?? '—'}</div>
-          </section>
-        )}
-        {hasPerm('hr.card.certs.view') && cardT2?.certs && (
-          <section className="rounded-lg border p-4">
-            <h3 className="font-semibold mb-2">Сертификаты / СРО</h3>
-            <div className="text-sm">СРО №: {cardT2.certs.sro_permit_number ?? '—'} (до {cardT2.certs.sro_permit_expiry ?? '—'})</div>
-            <div className="text-sm">Охрана труда №: {cardT2.certs.safety_cert_number ?? '—'} (до {cardT2.certs.safety_cert_expiry ?? '—'})</div>
           </section>
         )}
       </HRLayout>

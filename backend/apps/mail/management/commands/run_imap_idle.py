@@ -6,33 +6,31 @@ right home for N permanently-open ``asyncio`` IMAP IDLE sessions), started
 in the source with ``python -m app.workers.imap_idle_supervisor``. Here the
 equivalent entry point is ``python manage.py run_imap_idle``.
 
-NOT implemented in this sub-task (webhooks+workers, PLAN.md §6.4) — scoped
-out deliberately, not an oversight:
+СТАТУС: заглушка, но причина уже другая, чем была.
 
-* The supervisor's core loop (``Supervisor.add``/``_idle_loop``) opens a real
-  ``aioimaplib`` IMAP connection per corporate (Mailcow) account and blocks
-  on IDLE, which needs a reachable Mailcow IMAP host — there is none in this
-  repo/CI (Р3: "mailcow/провайдеры — seam без живой сети").
-* Its add/drop signalling (``Supervisor.listen_for_changes``) is a Redis
-  pub/sub subscriber on channel ``email.account.changed`` — Redis pub/sub is
-  explicitly NOT portable to this Django monolith (Р2, same decision as
-  ``services/notify_publish.py`` and ``workers/user_events.py``, see
-  ``apps/mail/tasks.py``'s module docstring and ``apps/mail/interface.py``).
+Изначально команда не была реализована по двум причинам: (1) не существовало
+живого IMAP-подключения и достижимого почтового хоста, (2) сигнализация
+add/drop у исходника шла через Redis pub/sub, который в этот Django-монолит
+не переносится.
 
-Both blockers are exactly the ones the sub-task brief anticipated
-("ЕСЛИ слишком объёмно — оставь заглушку-команду с TODO и задокументируй
-(не блокируй домен)") — this command is that documented stub. A future
-sub-task that actually stands up a reachable Mailcow IMAP endpoint should
-port ``_resolve_account_creds``/``_idle_loop``/``Supervisor`` here, replacing
-the Redis-pub/sub add/drop mechanism with a plain DB re-poll (the same
-substitution already made for ``workers/user_events.py`` →
-``apps.mail.interface.archive_user_mailboxes``: a direct call/poll instead of
-pub/sub).
+Первая причина снята: ``apps/mail/services/imap_client.py`` даёт живое
+соединение, ``apps/mail/services/sync/imap_sync.py`` — полноценную
+двустороннюю синхронизацию, и корпоративная почта РАБОТАЕТ — через
+``apps.mail.tasks.imap_poll_fallback`` (опрос раз в 60 секунд, зарегистрирован
+периодической задачей в миграции ``0004_mail_periodic_tasks``). То есть письма
+приходят и уходят без этой команды; IDLE дал бы только меньшую задержку
+(секунды вместо ≤60) ценой N постоянно открытых соединений и отдельного
+процесса в docker-compose.
 
-Safe to invoke today: logs and returns immediately (does not busy-loop, does
-not raise) — same fail-safe shape as the source's own
-``main()`` when ``MAILCOW_API_URL`` is unset ("stays up without
-busy-restarting").
+Что осталось сделать, если задержка в минуту окажется неприемлемой: поднять
+здесь по потоку на активный корпоративный ``EmailAccount``, держать
+``IMAP IDLE`` и на каждое уведомление звать
+``imap_sync.sync_account_two_way``; вместо Redis-pub/sub add/drop —
+перечитывать список аккаунтов из БД раз в N секунд (та же замена, что уже
+сделана для ``workers/user_events.py`` → ``apps.mail.interface``).
+
+Безопасно вызывать сегодня: печатает пояснение и выходит (не крутит цикл, не
+падает).
 """
 from __future__ import annotations
 
@@ -43,18 +41,18 @@ from apps.core.services import require_service
 
 class Command(BaseCommand):
     help = (
-        "IMAP IDLE supervisor for corporate (Mailcow) mailboxes — NOT YET "
-        "IMPLEMENTED (documented stub, see module docstring for why). "
-        "Port target: services/email/app/workers/imap_idle_supervisor.py."
+        "IMAP IDLE supervisor for corporate mailboxes — NOT IMPLEMENTED "
+        "(documented stub). Corporate mail already works via the 60s poll "
+        "apps.mail.tasks.imap_poll_fallback; IDLE would only cut the latency. "
+        "See the module docstring."
     )
 
     def handle(self, *args, **options):
         require_service("mail")
         self.stdout.write(self.style.WARNING(
-            "run_imap_idle: stub — the IMAP IDLE supervisor is not ported "
-            "(needs a live Mailcow IMAP host + a Redis pub/sub add/drop "
-            "channel that this Django monolith doesn't carry forward, see "
-            "apps/mail/management/commands/run_imap_idle.py's module "
-            "docstring). Corporate mailboxes fall back to "
-            "apps.mail.tasks.imap_poll_fallback (60s poll) in the meantime."
+            "run_imap_idle: заглушка — супервизор IMAP IDLE не реализован.\n"
+            "Корпоративная почта при этом РАБОТАЕТ: синхронизацию выполняет "
+            "периодическая задача apps.mail.tasks.imap_poll_fallback (опрос "
+            "раз в 60 секунд, включена миграцией 0004). IDLE сократил бы "
+            "задержку до секунд — см. модульный докстринг этой команды."
         ))

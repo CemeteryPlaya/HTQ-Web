@@ -38,6 +38,7 @@ export const protectedRoutes: RouteConfig[] = [
 
   // ─── Personal / messenger / tasks (any logged-in user) ────────────────
   { path: '/myprofile', component: lazyPages.MyProfile, requiresAuth: true },
+  { path: '/employee/me', component: lazyPages.MyEmployeeCard, requiresAuth: true },
   { path: '/settings', component: lazyPages.Settings, requiresAuth: true },
   { path: '/messenger', component: lazyPages.Messenger, requiresAuth: true },
   { path: '/notifications', component: lazyPages.NotificationsHistory, requiresAuth: true },

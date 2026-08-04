@@ -589,6 +589,20 @@ class DocumentCreate(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class DocumentPatch(BaseModel):
+    """Тело ``PATCH /documents/{id}/`` — сверх контракта порта.
+
+    Исходник правку документа не поддерживал (только create/get/delete), но
+    фронт всегда показывал диалог редактирования. Редактируем метаданные
+    карточки, а не сам файл: ``description`` уезжает в JSONB ``metadata``
+    (колонки под него нет), ``title``/``doc_type`` — обычные колонки.
+    """
+
+    title: str | None = Field(default=None, max_length=255)
+    doc_type: str | None = Field(default=None, max_length=50)
+    description: str | None = None
+
+
 class DocumentListQuery(BaseModel):
     """Порт Query(page, limit) роутера ``GET /documents/``."""
 
@@ -596,59 +610,9 @@ class DocumentListQuery(BaseModel):
     limit: int = Field(default=20, ge=1, le=200)
 
 
-class HRDocType(str, Enum):
-    """Порт schemas/mongo_document.py::HRDocType — допустимые типы документа
-    в бывшей Mongo-коллекции ``hr_documents`` (теперь ``EmployeeDocumentBlob``,
-    решение D6)."""
-
-    CONTRACT = "contract"
-    ORDER = "order"
-    CERTIFICATE = "certificate"
-    POLICY = "policy"
-    MEMO = "memo"
-    PERFORMANCE_REVIEW = "performance_review"
-    DISCIPLINARY = "disciplinary"
-    TRAINING = "training"
-    OTHER = "other"
-
-
-class HRDocumentCreate(BaseModel):
-    """Порт schemas/mongo_document.py::HRDocumentCreate."""
-
-    sql_employee_id: int
-    title: str = Field(..., min_length=1, max_length=500)
-    doc_type: HRDocType
-    content: str = ""
-    file_url: str | None = None
-    file_size_bytes: int | None = Field(default=None, ge=0)
-    mime_type: str = "application/octet-stream"
-    tags: list[str] = Field(default_factory=list)
-    metadata: dict = Field(default_factory=dict)
-
-
-class HRDocumentUpdate(BaseModel):
-    """Порт schemas/mongo_document.py::HRDocumentUpdate — все поля опциональны,
-    патч применяется через ``exclude_unset`` (как и update_data роутера
-    исходника)."""
-
-    title: str | None = None
-    doc_type: HRDocType | None = None
-    content: str | None = None
-    file_url: str | None = None
-    file_size_bytes: int | None = None
-    mime_type: str | None = None
-    tags: list[str] | None = None
-    metadata: dict | None = None
-
-
-class MongoDocumentListQuery(BaseModel):
-    """Порт Query(employee_id, doc_type, page, limit) роутера
-    ``GET /mongo-documents/``."""
-
-    employee_id: int | None = None
-    doc_type: str | None = None
-    page: int = Field(default=1, ge=1)
-    limit: int = Field(default=20, ge=1, le=200)
+# Схемы ex-Mongo документов (HRDocType/HRDocumentCreate/HRDocumentUpdate/
+# MongoDocumentListQuery) удалены вместе с маршрутами /mongo-documents/* —
+# см. комментарий в views.py.
 
 
 # ── pmo — порт services/hr/app/api/v1/pmo.py (схемы были inline в роутере) ──
@@ -736,17 +700,9 @@ class CardPersonal(BaseModel):
     citizenship: str | None = None
 
 
-class CardCerts(BaseModel):
-    sro_permit_number: str | None = None
-    sro_permit_expiry: date | None = None
-    safety_cert_number: str | None = None
-    safety_cert_expiry: date | None = None
-
-
 class EmployeeCardT2Patch(BaseModel):
     financial: CardFinancial | None = None
     personal: CardPersonal | None = None
-    certs: CardCerts | None = None
 
 
 class EducationItem(BaseModel):

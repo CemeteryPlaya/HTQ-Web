@@ -611,10 +611,12 @@ class EmployeeCard(HrBase):
 
     Остальные поля — скалярные Т-2 секции (без дефолтов в исходнике, все
     nullable): financial (salary/bonus/bank_account), personal
-    (passport_data/inn/birth_date/birth_place/citizenship), certs
-    (sro_permit_number/sro_permit_expiry/safety_cert_number/
-    safety_cert_expiry). Полевой RBAC-гейтинг этих секций живёт в
+    (passport_data/inn/birth_date/birth_place/citizenship). Полевой
+    RBAC-гейтинг этих секций живёт в
     ``services/employee_card_t2_service.py``, не в модели.
+
+    Секции ``certs`` (СРО/охрана труда) здесь больше нет — она удалена
+    вместе с колонками sro_permit_*/safety_cert_* миграцией 0016.
     """
 
     employee = models.OneToOneField(
@@ -628,10 +630,6 @@ class EmployeeCard(HrBase):
     birth_date = models.DateField(null=True, blank=True)
     birth_place = models.CharField(max_length=255, null=True, blank=True)
     citizenship = models.CharField(max_length=100, null=True, blank=True)
-    sro_permit_number = models.CharField(max_length=100, null=True, blank=True)
-    sro_permit_expiry = models.DateField(null=True, blank=True)
-    safety_cert_number = models.CharField(max_length=100, null=True, blank=True)
-    safety_cert_expiry = models.DateField(null=True, blank=True)
 
     class Meta:
         verbose_name = "Карточка сотрудника"

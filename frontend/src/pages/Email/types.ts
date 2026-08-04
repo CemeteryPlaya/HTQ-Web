@@ -4,7 +4,9 @@
  */
 
 export type EmailAccountType = 'corporate' | 'personal';
-export type EmailAccountProvider = 'mailcow' | 'google' | 'microsoft';
+// 'imap' — ящик, подключённый пользователем по IMAP/SMTP (свой сервер).
+// Без него тип врал про то, что реально приходит с бэкенда.
+export type EmailAccountProvider = 'mailcow' | 'imap' | 'google' | 'microsoft';
 
 export type Folder = 'inbox' | 'sent' | 'drafts' | 'trash' | 'archive' | 'spam';
 

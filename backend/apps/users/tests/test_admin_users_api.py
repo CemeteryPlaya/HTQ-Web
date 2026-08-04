@@ -9,7 +9,7 @@ with real ``htqweb.authn.jwt.issue_token_pair`` (no mocking).
 """
 
 import pytest
-from django.test import Client
+from django.test import Client, override_settings
 
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
@@ -192,22 +192,72 @@ def test_create_user_short_password_422(superuser, db):
 
 
 @pytest.mark.django_db
-def test_create_user_mailbox_requested_returns_loud_error(superuser, db):
-    """Review finding: mailbox fields used to vanish silently (Pydantic
-    ``extra=ignore``) — 201, no mailbox, no feedback. Now they're accepted
-    and, when ``create_mailbox`` is true, the response carries a non-empty
-    ``mailbox_error`` (no mailbox is ever actually provisioned — Р3)."""
+def test_create_user_mailbox_requested_without_domain_returns_loud_error(superuser, db):
+    """Без настроенного домена корпоративной почты ящик завести невозможно —
+    ответ обязан сказать об этом прямо, а не промолчать (поля ``mailbox_*``
+    когда-то вообще исчезали из-за ``extra=ignore``). Сам пользователь при
+    этом создаётся: отказ почты не должен его откатывать."""
     resp = Client().post(f"{BASE}/admin/users/", data={
         "username": "mailboxer", "email": "mailboxer@htq.test", "password": "Passw0rd!",
         "create_mailbox": True, "mailbox_local_part": "m.boxer",
     }, content_type="application/json", **_auth(superuser))
     assert resp.status_code == 201
     body = resp.json()
-    assert body["mailbox_error"]
+    assert "Домен корпоративной почты не настроен" in body["mailbox_error"]
     assert body["mailbox"] is None
 
     user = User.objects.get(username="mailboxer")
     assert user is not None  # user creation itself still succeeds
+
+
+@pytest.mark.django_db
+def test_create_user_provisions_a_real_mailbox_when_mail_is_configured(superuser, db):
+    """Галочка «создать ящик» больше не инертна: ящик действительно
+    заводится через apps.mail.interface, а пароль показывается один раз."""
+    from apps.mail.models import EmailAccount, ProvisionedMailbox
+
+    with override_settings(
+        MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="none",
+    ):
+        resp = Client().post(f"{BASE}/admin/users/", data={
+            "username": "boxed", "email": "boxed@htq.test", "password": "Passw0rd!",
+            "first_name": "Иван", "last_name": "Иванов",
+            "create_mailbox": True,
+        }, content_type="application/json", **_auth(superuser))
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["mailbox_error"] is None
+    assert body["mailbox"]["address"] == "i.ivanov@htq.group"
+    assert len(body["mailbox"]["generated_password"]) >= 16
+
+    user = User.objects.get(username="boxed")
+    assert ProvisionedMailbox.objects.filter(user_id=user.id).exists()
+    # И ящик сразу виден пользователю в разделе «Почта».
+    assert EmailAccount.objects.filter(user_id=user.id, type="corporate").exists()
+
+
+@pytest.mark.django_db
+def test_create_user_mailbox_conflict_does_not_block_user_creation(superuser, db):
+    """Занятый адрес — повод сообщить об этом, но не повод не создать
+    сотрудника: ящик админ доведёт руками из раздела «Корпоративные ящики»."""
+    from apps.mail.models import ProvisionedMailbox
+
+    ProvisionedMailbox.objects.create(
+        local_part="i.ivanov", domain="htq.group", address="i.ivanov@htq.group",
+    )
+    with override_settings(
+        MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="imap", IMAP_HOST="mail-tunnel",
+    ):
+        resp = Client().post(f"{BASE}/admin/users/", data={
+            "username": "clash", "email": "clash@htq.test", "password": "Passw0rd!",
+            "create_mailbox": True, "mailbox_local_part": "i.ivanov",
+            "mailbox_password": "S3cret!",
+        }, content_type="application/json", **_auth(superuser))
+
+    assert resp.status_code == 201
+    assert "already exists" in resp.json()["mailbox_error"]
+    assert User.objects.filter(username="clash").exists()
 
 
 @pytest.mark.django_db

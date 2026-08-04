@@ -81,10 +81,6 @@ export interface Employee {
   bonus?: string | number | null;
   passport_data?: string | null;
   bank_account?: string | null;
-  sro_permit_number?: string | null;
-  sro_permit_expiry?: string | null;
-  safety_cert_number?: string | null;
-  safety_cert_expiry?: string | null;
   avatar_url?: string | null;
   created_at: string;
   updated_at: string;
@@ -165,25 +161,58 @@ export interface TimeRecord {
 
 export type DocType = 'contract' | 'amendment' | 'order' | 'certificate' | 'other';
 
+/**
+ * Документ так, как его отдаёт `GET /api/hr/v1/documents/`
+ * (`apps.hr.services.document_service.serialize`).
+ *
+ * Прежний тип описывал ответ старого Django-монолита: `employee_name`,
+ * `file`, `description`, `application*`, `uploaded_by_name`. Ничего этого
+ * бэкенд не отдаёт — имена разворачиваются по справочнику сотрудников,
+ * описание и ссылка на медиафайл лежат в `metadata`.
+ */
 export interface HRDocument {
   id: number;
-  employee: number;
-  employee_name: string;
-  application: number | null;
-  application_status: ApplicationStatus | null;
-  application_candidate_name: string | null;
+  employee_id: number;
   title: string;
   doc_type: DocType;
-  file: string;
-  description: string;
+  file_path: string;
+  file_size: number;
+  mime_type: string;
+  metadata?: {
+    media_file_id?: string;
+    original_filename?: string;
+    description?: string;
+    uploaded_by_user_id?: number;
+  } | null;
   uploaded_by: number | null;
-  uploaded_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Элемент `documents` в ответе `GET /applications/archive/` — урезанная
+ * проекция документа (`recruitment_service.archive()`). */
+export interface HRArchiveDocument {
+  id: number;
+  title: string;
+  doc_type: DocType;
+  employee_id: number;
+  created_at: string;
+}
+
+/** Элемент `applications` там же: id вакансии без названия, кандидат одной
+ * строкой, дата подачи (не обновления). */
+export interface HRArchiveApplication {
+  id: number;
+  vacancy_id: number;
+  candidate_name: string;
+  candidate_email: string | null;
+  status: ApplicationStatus;
   created_at: string;
 }
 
 export interface HRArchiveResponse {
-  applications: Application[];
-  documents: HRDocument[];
+  applications: HRArchiveApplication[];
+  documents: HRArchiveDocument[];
 }
 
 /* ---------- Action Logs ---------- */

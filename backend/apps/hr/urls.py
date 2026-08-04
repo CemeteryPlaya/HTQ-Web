@@ -275,17 +275,10 @@ urlpatterns = [
     path("documents/<int:id>/", views.document_detail),
     path("documents/<int:id>", views.document_detail),
 
-    # ── mongo-documents ──────────────────────────────────────────────────
-    # Порт services/hr/app/api/v1/mongo_documents.py (5 эндпойнтов,
-    # ex-Mongo -> EmployeeDocumentBlob JSONB, решение D6). ``<str:doc_id>``
-    # (не ``<int:...>``) — вьюха сама парсит id и отдаёт 400 "Invalid document
-    # ID format" на не-числовой ввод (тот же смысл, что ObjectId-парсинг
-    # исходника), а не молчаливый 404 от резолвера.
-    path("mongo-documents/", views.mongo_documents_collection),
-    path("mongo-documents", views.mongo_documents_collection),
-
-    path("mongo-documents/<str:doc_id>/", views.mongo_document_detail),
-    path("mongo-documents/<str:doc_id>", views.mongo_document_detail),
+    # ── mongo-documents: маршруты сняты ──────────────────────────────────
+    # Пять эндпойнтов над ex-Mongo коллекцией (решение D6) удалены вместе с
+    # вьюхами и схемами — см. комментарий в views.py. Модель
+    # EmployeeDocumentBlob осталась (данные cutover'а + django-admin).
 
     # ── pmo ───────────────────────────────────────────────────────────────
     # Порт services/hr/app/api/v1/pmo.py (10 эндпойнтов). Литеральный

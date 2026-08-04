@@ -389,62 +389,65 @@ const HRPositions = () => {
     </div>
   ) : (
     <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="text-sm text-muted-foreground">
-              {t('hr.common.total')}: {visiblePositions.length}
-              {positions.length !== visiblePositions.length ? ` / ${positions.length}` : ''}
+        <div className="rounded-3xl border bg-card p-4 shadow-2xs">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap items-center gap-3">
+              <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+                <SelectTrigger className="h-9 w-48 text-xs rounded-xl bg-muted/30">
+                  <SelectValue placeholder="Все отделы" />
+                </SelectTrigger>
+                <SelectContent className="rounded-2xl">
+                  <SelectItem value="all">Все отделы</SelectItem>
+                  {departments?.map((department) => (
+                    <SelectItem key={department.id} value={String(department.id)}>
+                      {department.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="text-xs font-semibold text-muted-foreground whitespace-nowrap">
+                {t('hr.common.total')}: {visiblePositions.length}
+                {positions.length !== visiblePositions.length ? ` / ${positions.length}` : ''}
+              </div>
             </div>
-            <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
-              <SelectTrigger className="h-9 w-48 text-sm">
-                <SelectValue placeholder="Все отделы" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Все отделы</SelectItem>
-                {departments?.map((department) => (
-                  <SelectItem key={department.id} value={String(department.id)}>
-                    {department.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
 
-          {isSenior && (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={() => rebalanceMutation.mutate(undefined)}
-                disabled={rebalanceMutation.isPending}
-              >
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Выровнять порядок
-              </Button>
-              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button onClick={startCreate}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    {t('hr.pages.positions.create')}
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle className="flex items-center gap-2">
-                      {editingPos ? t('hr.pages.positions.edit') : t('hr.pages.positions.new')}
-                      {editingIsSystem && (
-                        <Badge variant="secondary" className="gap-1">
-                          <Lock className="h-3 w-3" /> Системная
-                        </Badge>
-                      )}
-                    </DialogTitle>
-                  </DialogHeader>
-                  {editingIsSystem && (
-                    <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                      Системные должности — это базовая структура организации. Название и отдел изменить нельзя, но вы можете настроить вес, грейд и права.
-                    </p>
-                  )}
-                  <div className="grid gap-4">
-                    <label className="grid gap-2 text-sm">
+            {isSenior && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-xl h-9 text-xs"
+                  onClick={() => rebalanceMutation.mutate(undefined)}
+                  disabled={rebalanceMutation.isPending}
+                >
+                  <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                  Выровнять порядок
+                </Button>
+                <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button size="sm" onClick={startCreate} className="h-9 gap-2 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 font-semibold shadow-2xs">
+                      <Plus className="h-4 w-4" />
+                      {t('hr.pages.positions.create', 'Создать должность')}
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2">
+                        {editingPos ? t('hr.pages.positions.edit') : t('hr.pages.positions.new')}
+                        {editingIsSystem && (
+                          <Badge variant="secondary" className="gap-1">
+                            <Lock className="h-3 w-3" /> Системная
+                          </Badge>
+                        )}
+                      </DialogTitle>
+                    </DialogHeader>
+                    {editingIsSystem && (
+                      <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        Системные должности — это базовая структура организации. Название и отдел изменить нельзя, но вы можете настроить вес, грейд и права.
+                      </p>
+                    )}
+                    <div className="grid gap-4">
+                      <label className="grid gap-2 text-sm">
                       {t('hr.pages.positions.fields.title')}
                       <Input
                         value={form.title}
@@ -649,6 +652,7 @@ const HRPositions = () => {
               </Dialog>
             </div>
           )}
+        </div>
         </div>
 
         <div className="flex flex-wrap gap-2">

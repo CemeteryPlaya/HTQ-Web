@@ -69,9 +69,11 @@ from apps.mail.models import (
     ProvisionedMailbox,
     RecipientStatus,
 )
+from apps.mail.services import mail_config, reconcile_service
 from apps.mail.services.crypto import crypto_service
 from apps.mail.services.oauth_clients import get_oauth_client
 from apps.mail.services.sender.factory import get_sender
+from apps.mail.services.sync import imap_sync
 
 logger = logging.getLogger(__name__)
 
@@ -180,13 +182,14 @@ def incremental_sync_account(account_id: int, hint_history_id: str | None = None
     webhook pushes racing, or a push racing a poll) — the loser observes the
     lock held and exits cleanly instead of double-syncing the same mailbox.
 
-    What does NOT make the trip: the actual per-provider fetch
-    (``get_driver(account.provider).incremental(...)`` in the source) — no
-    ``SyncDriver`` was ported (see this module's docstring / ``apps/mail/
-    services/sync/base.py``), so past the lock/existence/active checks this
-    is a documented no-op seam, not a bug. The mapper + parsers it would feed
-    (``apps/mail/services/sync/{gmail,microsoft,mailcow_imap,mapper}.py``)
-    are already ported and unit-tested on recorded payloads.
+    Корпоративные ящики (``mailcow``/``imap``) синхронизируются по-настоящему
+    — ``services/sync/imap_sync.py`` тянет письма и толкает обратно флаг
+    ``\\Seen``. Раньше здесь был задокументированный no-op: живого
+    IMAP-подключения в репозитории не существовало.
+
+    Gmail/Graph по-прежнему seam: их драйверы (push-подписки, delta-link)
+    остаются непортированными — это отдельная работа по OAuth-провайдерам, и
+    к корпоративной почте она отношения не имеет.
     """
     require_service("mail")
 
@@ -203,9 +206,13 @@ def incremental_sync_account(account_id: int, hint_history_id: str | None = None
             logger.info("sync_skipped_inactive account=%s", account_id)
             return
 
+        if account.provider in imap_sync.IMAP_PROVIDERS:
+            imap_sync.sync_account_two_way(account)
+            return
+
         logger.info(
-            "sync_driver_not_ported account=%s hint_history_id=%s",
-            account_id, hint_history_id,
+            "sync_driver_not_ported account=%s provider=%s hint_history_id=%s",
+            account_id, account.provider, hint_history_id,
         )
     finally:
         _advisory_unlock(account_id)
@@ -299,18 +306,21 @@ def audit_log_compaction() -> int:
 def imap_poll_fallback() -> int:
     """Catch-all poll for corporate accounts the push subscription missed.
 
-    Port of ``scheduler.py::imap_poll_fallback``: picks Mailcow accounts
+    Port of ``scheduler.py::imap_poll_fallback``: picks corporate accounts
     whose ``last_sync_at`` is older than 2 minutes (or never synced) and
     enqueues ``incremental_sync_account`` for each — personal accounts are
-    skipped, Pub/Sub/Graph webhooks own their delta. The DB query + enqueue
-    is fully portable without live network; only the downstream sync task's
-    body is a documented seam (see ``incremental_sync_account`` above).
+    skipped, Pub/Sub/Graph webhooks own their delta.
+
+    Отбор расширен с ``provider="mailcow"`` на оба IMAP-провайдера: у
+    корпоративного сервера без Mailcow нет ни webhook'ов, ни push-подписок,
+    поэтому этот опрос — его ЕДИНСТВЕННЫЙ источник новых писем, а не
+    подстраховка.
     """
     require_service("mail")
 
     cutoff = timezone.now() - datetime.timedelta(minutes=2)
     ids = list(
-        EmailAccount.objects.filter(provider="mailcow", is_active=True)
+        EmailAccount.objects.filter(provider__in=imap_sync.IMAP_PROVIDERS, is_active=True)
         .filter(Q(last_sync_at__isnull=True) | Q(last_sync_at__lt=cutoff))
         .values_list("id", flat=True)
     )
@@ -320,6 +330,37 @@ def imap_poll_fallback() -> int:
         incremental_sync_account.delay(account_id)
     logger.info("imap_poll_fallback enqueued=%d", len(ids))
     return len(ids)
+
+
+# ─── reconcile_mailboxes (сверка платформы с почтовым сервером) ────────────
+
+
+@shared_task
+def reconcile_mailboxes() -> dict:
+    """Периодическая двусторонняя сверка ящиков.
+
+    По умолчанию (``MAIL_RECONCILE_AUTO_APPLY=false``) только СЧИТАЕТ
+    расхождения и пишет их в лог — чтобы фоновая задача не заводила и не
+    удаляла ящики без ведома админа. Применение делается руками из админки
+    (``POST /api/email/v1/mailboxes/reconcile/``) или включается флагом, если
+    команда осознанно хочет автосведение.
+    """
+    require_service("mail")
+
+    auto_apply = bool(mail_config.get_config().reconcile_auto_apply)
+    report = reconcile_service.reconcile(
+        apply=auto_apply, direction="both" if auto_apply else "report",
+    )
+    if report.differences:
+        logger.warning(
+            "mail_reconcile_differences mode=%s only_local=%d only_remote=%d mismatched=%d applied=%s",
+            report.mode,
+            sum(1 for d in report.differences if d.kind == "only_local"),
+            sum(1 for d in report.differences if d.kind == "only_remote"),
+            sum(1 for d in report.differences if d.kind == "mismatched"),
+            auto_apply,
+        )
+    return report.to_dict()
 
 
 # ─── oauth_token_refresh (port of scheduler.py, every 5 min) ───────────────

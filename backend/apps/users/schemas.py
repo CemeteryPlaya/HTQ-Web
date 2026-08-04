@@ -123,15 +123,17 @@ class AdminUserCreateRequest(BaseModel):
     """``POST admin/users/`` — manual user creation, bypassing self-registration.
 
     Ported from the FastAPI original's ``AdminUserCreateRequest``, including
-    the Mailcow mailbox-provisioning fields (``create_mailbox``,
-    ``mailbox_local_part``, ``mailbox_password``, ``mailbox_quota_mb``) for
-    request-shape parity with the frontend (``UserEditDialog.tsx`` always
-    sends them). The actual provisioning (an S2S call to email-service) is
-    dropped per decision Р3 ("no S2S") — see
-    ``apps.users.services.admin_service``'s module docstring and the task
-    2.4 report. These fields are accepted but INERT: when
-    ``create_mailbox`` is true, ``apps.users.views._admin_create_user``
-    returns a non-null ``mailbox_error`` instead of silently doing nothing.
+    the mailbox-provisioning fields (``create_mailbox``,
+    ``mailbox_local_part``, ``mailbox_password``, ``mailbox_quota_mb``) — the
+    frontend (``UserEditDialog.tsx``) всегда их шлёт.
+
+    Раньше поля были ИНЕРТНЫ: S2S-вызов в отдельный email-сервис отпал вместе
+    с самим сервисом (решение Р3 «без S2S»), и на любую галочку ответ
+    возвращал ``mailbox_error`` «провижининг недоступен». Теперь ящик
+    заводится по-настоящему — через ``apps.mail.interface.provision_mailbox``
+    (обычный вызов соседней аппки, а не сеть). ``mailbox_error`` остаётся
+    ровно для тех случаев, когда завести ящик не удалось: не настроен домен
+    корпоративной почты, адрес занят, почтовый сервер отказал.
     """
 
     username: str = Field(..., min_length=1, max_length=150)
@@ -165,10 +167,11 @@ class AdminUserCreatedResponse(AdminUserResponse):
     ``created.mailbox`` / ``created.mailbox_error`` branches
     (``UserEditDialog.tsx:181-197``) work unchanged.
 
-    ``mailbox`` is always ``None`` in this port — no provisioning ever
-    happens (see ``AdminUserCreateRequest`` docstring, decision Р3).
-    ``mailbox_error`` is set to an explanatory message when the admin asked
-    for a mailbox (``create_mailbox=True``); ``None`` otherwise.
+    ``mailbox`` — сериализованный ``ProvisionedMailbox`` (плюс
+    ``generated_password``, показывается один раз), если ящик создан;
+    ``None``, если его не просили или создать не удалось. ``mailbox_error``
+    — текст отказа; оба поля могут быть заполнены одновременно, когда строка
+    ящика создана, но почтовый сервер вернул ошибку.
     """
 
     mailbox: dict | None = None
