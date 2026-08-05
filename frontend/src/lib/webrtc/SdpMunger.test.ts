@@ -32,12 +32,21 @@ describe('SdpMunger', () => {
     expect(munged).toBe(SDP_SAMPLE);
   });
 
-  it('forces Opus studio profile params', () => {
+  it('forces Opus voice profile params (mono VBR, not studio stereo CBR)', () => {
     const munged = mungeOpusParams(SDP_SAMPLE);
-    expect(munged).toContain('maxaveragebitrate=192000');
-    expect(munged).toContain('stereo=1');
-    expect(munged).toContain('cbr=1');
+    expect(munged).toContain('maxaveragebitrate=64000');
+    expect(munged).toContain('stereo=0');
+    expect(munged).toContain('sprop-stereo=0');
+    expect(munged).toContain('cbr=0');
+    // FEC остаётся — потери на мобильной сети слышны сразу.
     expect(munged).toContain('useinbandfec=1');
+  });
+
+  it('перебивает уже проставленные параметры, а не дописывает второй набор', () => {
+    // В образце стоит useinbandfec=0 — munger обязан его заменить, иначе в
+    // fmtp окажутся оба значения и поведение будет зависеть от парсера.
+    const munged = mungeOpusParams(SDP_SAMPLE);
+    expect(munged).not.toContain('useinbandfec=0');
   });
 
   it('injects target video bitrate lines', () => {

@@ -21,10 +21,16 @@ import api from '@/api/client';
 import { apiPath } from '@/api/endpoints';
 
 /**
- * Local fallback registry. Every service defaults to enabled EXCEPT
- * `conference` — the SFU/webtransport stack is deliberately not wired up
- * yet (plan rev. 2, D10), so conference is treated as disabled unless the
- * backend explicitly says otherwise.
+ * Local fallback registry: чем пользуемся, пока ответ реестра не пришёл или
+ * запрос не удался. Все сервисы считаются включёнными.
+ *
+ * `conference` раньше был исключением («SFU/webtransport стек намеренно не
+ * задействован», plan rev. 2, D10) — стек поднят, флаг в реестре включён
+ * миграцией `core/0003_enable_conference`. С прежним `false` любая заминка
+ * с ответом (первый рендер, упавший dev-сервер, сетевой сбой) показывала
+ * «Функция временно отключена» на живом сервисе — то есть фронт врал о
+ * состоянии бэкенда. Выключение конференции по-прежнему работает: реестр
+ * пришлёт `false`, и он перекроет этот дефолт.
  */
 export const DEFAULT_SERVICE_STATUSES: Record<string, boolean> = {
   users: true,
@@ -35,7 +41,7 @@ export const DEFAULT_SERVICE_STATUSES: Record<string, boolean> = {
   media: true,
   mail: true,
   messenger: true,
-  conference: false,
+  conference: true,
 };
 
 interface ServiceStatusResponse {

@@ -54,7 +54,12 @@ services:
       # context, поэтому WebTransport из http://localhost:3000 работает;
       # с LAN-адреса (http://192.168.x.y:3000) браузер его не даст —
       # это не наш баг, нужен HTTPS.
-      CONFERENCE_WT_URL: ${CONFERENCE_WT_URL:-https://localhost:4433/sfu}
+      # Форма `${VAR-default}` (без двоеточия) подставляет дефолт только когда
+      # переменная НЕ ЗАДАНА. С `${VAR:-default}` пустое значение в .env тоже
+      # заменялось бы дефолтом, и выключить WebTransport было бы нечем — а он
+      # мешает, когда стенд открыт наружу: гость несколько секунд ждёт таймаут
+      # QUIC на localhost своей же машины, прежде чем откатиться на WebSocket.
+      CONFERENCE_WT_URL: ${CONFERENCE_WT_URL-https://localhost:4433/sfu}
     volumes:
       - ./backend:/app
 

@@ -448,6 +448,18 @@ services:
       WEBRTC_ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-}
       WEBRTC_SERVER_PORT: ${WEBRTC_SERVER_PORT:-44444}
       MEDIASOUP_WORKERS: ${MEDIASOUP_WORKERS:-1}
+      # ── Режим TCP-туннеля (scripts/start-public-test.ps1) ──
+      # Туннели (bore, ngrok) не умеют UDP, поэтому медиа приходится гнать
+      # ICE поверх TCP. Одного TCP_TUNNEL_MODE достаточно: он перетирает
+      # WEBRTC_ENABLE_*/PREFER_* внутри sfu/src/config.ts. ANNOUNCED_PORT
+      # нужен, когда внешний порт туннеля не совпадает с локальным.
+      # Пустые значения безвредны — SFU трактует их как «не задано».
+      TCP_TUNNEL_MODE: ${TCP_TUNNEL_MODE:-false}
+      WEBRTC_ANNOUNCED_PORT: ${WEBRTC_ANNOUNCED_PORT:-}
+      # TURN-релей: страховка для клиентов за строгим NAT.
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
     ports:
       - "4443:4443"
       - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/udp"

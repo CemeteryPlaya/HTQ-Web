@@ -11,7 +11,11 @@ describe("ServiceUnavailableDialog", () => {
 });
 
 describe("useServiceStatus defaults", () => {
-  it("конференция выключена по умолчанию (SFU не задействован)", () => {
-    expect(DEFAULT_SERVICE_STATUSES.conference).toBe(false);
+  it("до ответа реестра сервисы считаются включёнными, включая конференцию", () => {
+    // Раньше conference был выключен по умолчанию — пока SFU не был поднят.
+    // Теперь стек в строю (миграция core/0003), и прежний дефолт показывал
+    // «Функция временно отключена» на каждой заминке с ответом реестра.
+    expect(Object.values(DEFAULT_SERVICE_STATUSES).every(Boolean)).toBe(true);
+    expect(DEFAULT_SERVICE_STATUSES.conference).toBe(true);
   });
 });

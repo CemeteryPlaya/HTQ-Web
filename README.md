@@ -154,12 +154,14 @@ npm run dev
 
 ## Cloudflare + Bore Quick Start
 
-Free P2P tunnel mode — no credit card, no registration required.
+Expose the local stack so someone outside can test the conference — no
+account, no credit card. Cloudflare carries the signalling, bore carries the
+media (UDP never passes an HTTP tunnel).
 Full details: [docs/TUNNEL_SETUP.md](docs/TUNNEL_SETUP.md)
 
-1. Start backend + frontend
-2. Run tunnel: `.\scripts\start-sfu-tunnel.ps1`
-3. Update `frontend/.env` with the signaling URL
+1. Start the stack (`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`) and Vite
+2. Run `.\scripts\start-public-test.ps1 -GuestEmail guest@example.com`
+3. Send the printed link and credentials; Ctrl+C restores local mode
 
 ## Architecture
 Project structure and refactoring conventions are documented in:

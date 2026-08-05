@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { classifyVirtualNetwork } from './MediaEngine';
+import { MediaEngine, classifyVirtualNetwork } from './MediaEngine';
 
 // ═══════════════════════════════════════════════════════════
 // Unit tests: classifyVirtualNetwork
@@ -286,5 +286,283 @@ describe('DEFAULT_ICE_SERVERS DNS fallback', () => {
   it('MediaEngine exports are importable without errors', () => {
     // Smoke test: the module loads and classifyVirtualNetwork is callable
     expect(typeof classifyVirtualNetwork).toBe('function');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Регрессия: кодеки для produce должны совпадать с роутером
+// ═══════════════════════════════════════════════════════════
+//
+// mediasoup сопоставляет H264 по паре «профиль + packetization-mode» и на
+// первом же несовпадении роняет весь produce:
+//   unsupported codec [mimeType:video/H264, payloadType:115]
+// Браузер предлагает один профиль дважды (pm=1 и pm=0) разными payload
+// type, поэтому фильтр обязан отсекать чужой режим, а не только профиль.
+
+const ROUTER_CAPS = {
+  codecs: [
+    { kind: 'audio', mimeType: 'audio/opus', clockRate: 48000, channels: 2, parameters: {} },
+    { kind: 'video', mimeType: 'video/VP8', clockRate: 90000, parameters: {} },
+    {
+      kind: 'video',
+      mimeType: 'video/H264',
+      clockRate: 90000,
+      parameters: {
+        'packetization-mode': '1',
+        'profile-level-id': '42e01f',
+        'level-asymmetry-allowed': '1',
+      },
+    },
+  ],
+  headerExtensions: [],
+};
+
+// Урезанный, но реалистичный m=video из Chrome: VP8, «наш» H264 и три
+// варианта, которых у роутера нет.
+const CHROME_VIDEO_SDP = [
+  'v=0',
+  'm=video 9 UDP/TLS/RTP/SAVPF 96 106 115 108 45',
+  'a=rtpmap:96 VP8/90000',
+  'a=rtpmap:106 H264/90000',
+  'a=fmtp:106 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f',
+  'a=rtpmap:115 H264/90000',
+  'a=fmtp:115 level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f',
+  'a=rtpmap:108 H264/90000',
+  'a=fmtp:108 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f',
+  'a=rtpmap:45 AV1/90000',
+  '',
+].join('\r\n');
+
+function engineWithRouterCaps() {
+  const engine = new MediaEngine(
+    { signalingUrl: '', roomId: 'test-room', displayName: 'tester' },
+    {}
+  ) as any;
+  engine.updateRouterCodecWhitelist(ROUTER_CAPS);
+  return engine;
+}
+
+describe('extractCodecsFromSdp — совпадение с кодеками роутера', () => {
+  it('оставляет VP8 и H264 только с packetization-mode роутера', () => {
+    const codecs = engineWithRouterCaps().extractCodecsFromSdp(CHROME_VIDEO_SDP, 'video');
+    expect(codecs.map((codec: any) => codec.payloadType)).toEqual([96, 106]);
+  });
+
+  it('отсекает payloadType 115 — тот самый H264 с packetization-mode=0', () => {
+    const codecs = engineWithRouterCaps().extractCodecsFromSdp(CHROME_VIDEO_SDP, 'video');
+    expect(codecs.some((codec: any) => codec.payloadType === 115)).toBe(false);
+  });
+
+  it('отсекает чужой профиль H264 (42001f) и незнакомые кодеки (AV1)', () => {
+    const codecs = engineWithRouterCaps().extractCodecsFromSdp(CHROME_VIDEO_SDP, 'video');
+    const payloadTypes = codecs.map((codec: any) => codec.payloadType);
+    expect(payloadTypes).not.toContain(108);
+    expect(payloadTypes).not.toContain(45);
+  });
+
+  it('vp8-only оставляет только VP8', () => {
+    const engine = engineWithRouterCaps();
+    engine.videoCodecPolicy = 'vp8-only';
+    const codecs = engine.extractCodecsFromSdp(CHROME_VIDEO_SDP, 'video');
+    expect(codecs.map((codec: any) => codec.payloadType)).toEqual([96]);
+  });
+});
+
+describe('isPreferredVideoCodec — предпочтения сендера', () => {
+  it('не предпочитает H264 с чужим packetization-mode', () => {
+    const engine = engineWithRouterCaps();
+    expect(
+      engine.isPreferredVideoCodec({
+        mimeType: 'video/H264',
+        sdpFmtpLine: 'level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f',
+      })
+    ).toBe(false);
+  });
+
+  it('предпочитает H264, который роутер действительно объявил', () => {
+    const engine = engineWithRouterCaps();
+    expect(
+      engine.isPreferredVideoCodec({
+        mimeType: 'video/H264',
+        sdpFmtpLine: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f',
+      })
+    ).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Регрессия: synthetic answer не должен предлагать кодеки,
+// о которых SFU не знает
+// ═══════════════════════════════════════════════════════════
+//
+// Если в answer остаётся payload type, которого нет в produce, браузер может
+// закодировать поток именно им. mediasoup принимает пакеты по SSRC (счётчик
+// растёт), но разобрать кадры не может: keyframes у продюсера остаётся 0, а
+// видео-consumer вечно ждёт ключевой кадр и не отправляет ничего.
+
+describe('buildSendAnswerSdp — только согласованные payload type', () => {
+  const OFFER = [
+    'v=0',
+    'o=- 1 2 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'a=group:BUNDLE 0',
+    'm=video 9 UDP/TLS/RTP/SAVPF 96 106 115 108',
+    'a=mid:0',
+    'a=rtpmap:96 VP8/90000',
+    'a=rtpmap:106 H264/90000',
+    'a=fmtp:106 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f',
+    'a=rtpmap:115 H264/90000',
+    'a=fmtp:115 level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f',
+    'a=rtpmap:108 H264/90000',
+    'a=fmtp:108 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f',
+    '',
+  ].join('\r\n');
+
+  function answerFor(): string {
+    const engine = engineWithRouterCaps();
+    engine.sendTransportData = {
+      iceParameters: { usernameFragment: 'ufrag', password: 'pwd' },
+      dtlsParameters: { fingerprints: [{ algorithm: 'sha-256', value: 'AA:BB' }] },
+      iceCandidates: [],
+    };
+    return engine.buildSendAnswerSdp(OFFER);
+  }
+
+  it('в m=video остаются только VP8 и H264 роутера', () => {
+    const mLine = answerFor()
+      .split('\r\n')
+      .find((line) => line.startsWith('m=video'));
+    expect(mLine).toBe('m=video 9 UDP/TLS/RTP/SAVPF 96 106');
+  });
+
+  it('rtpmap/fmtp отфильтрованных payload type не попадают в answer', () => {
+    const answer = answerFor();
+    expect(answer).toContain('a=rtpmap:106 H264/90000');
+    expect(answer).not.toContain('a=rtpmap:115');
+    expect(answer).not.toContain('a=rtpmap:108');
+    expect(answer).not.toContain('packetization-mode=0');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Регрессия: produce обязан нести rtcpFeedback
+// ═══════════════════════════════════════════════════════════
+//
+// Без rtcpFeedback у producer'а mediasoup не может отправить отправителю ни
+// PLI, ни FIR: первый keyframe улетает до создания producer'а, новый никто
+// не запрашивает, и видео-consumer навсегда застревает в ожидании ключевого
+// кадра (статистика: producer 1 Мбит/с, keyframes 0, PLI 0; consumer 0 пакетов).
+
+const SDP_WITH_FEEDBACK = [
+  'v=0',
+  'm=video 9 UDP/TLS/RTP/SAVPF 96 106',
+  'a=rtpmap:96 VP8/90000',
+  'a=rtcp-fb:96 goog-remb',
+  'a=rtcp-fb:96 transport-cc',
+  'a=rtcp-fb:96 ccm fir',
+  'a=rtcp-fb:96 nack',
+  'a=rtcp-fb:96 nack pli',
+  'a=rtpmap:106 H264/90000',
+  'a=fmtp:106 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f',
+  'a=rtcp-fb:106 nack pli',
+  '',
+].join('\r\n');
+
+describe('extractCodecsFromSdp — rtcpFeedback', () => {
+  it('переносит PLI/FIR/NACK в параметры кодека', () => {
+    const codecs = engineWithRouterCaps().extractCodecsFromSdp(SDP_WITH_FEEDBACK, 'video');
+    const vp8 = codecs.find((codec: any) => codec.payloadType === 96);
+    expect(vp8.rtcpFeedback).toEqual([
+      { type: 'goog-remb' },
+      { type: 'ccm', parameter: 'fir' },
+      { type: 'nack' },
+      { type: 'nack', parameter: 'pli' },
+    ]);
+  });
+
+  it('выбрасывает transport-cc — роутер не сконфигурирован под TWCC', () => {
+    const codecs = engineWithRouterCaps().extractCodecsFromSdp(SDP_WITH_FEEDBACK, 'video');
+    const types = codecs.flatMap((codec: any) => codec.rtcpFeedback.map((fb: any) => fb.type));
+    expect(types).not.toContain('transport-cc');
+  });
+
+  it('у каждого кодека есть непустой rtcpFeedback', () => {
+    const codecs = engineWithRouterCaps().extractCodecsFromSdp(SDP_WITH_FEEDBACK, 'video');
+    expect(codecs.length).toBeGreaterThan(0);
+    for (const codec of codecs) {
+      expect(codec.rtcpFeedback.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// mediaState: состояние микрофона/камеры ходит сообщением
+// ═══════════════════════════════════════════════════════════
+//
+// Вывести его из потока нельзя: приглушая себя, браузер меняет только
+// локальный track.enabled — producer живой, RTP идёт. У получателя
+// track.muted означает совсем другое («пакеты ещё не пошли»), поэтому
+// индикаторы UI опираются на это сообщение, а не на состояние треков.
+
+function engineWithFakeSignaling() {
+  const sent: Array<{ method: string; data: unknown }> = [];
+  const handlers = new Map<string, (data: unknown) => void>();
+
+  const signaling = {
+    peerId: 'self',
+    connected: true,
+    connect: async () => ({ ok: true as const, value: undefined }),
+    disconnect: () => ({ ok: true as const, value: undefined }),
+    request: async () => ({ ok: true as const, value: {} }),
+    notify: (method: string, data: unknown) => {
+      sent.push({ method, data });
+      return { ok: true as const, value: undefined };
+    },
+    on: (event: string, handler: (data: unknown) => void) => {
+      handlers.set(event, handler);
+    },
+    off: () => undefined,
+  };
+
+  const received: unknown[] = [];
+  const engine = new MediaEngine(
+    {
+      signalingUrl: '',
+      roomId: 'test-room',
+      displayName: 'tester',
+      signalingFactory: () => signaling as never,
+    },
+    { onMediaState: (state) => received.push(state) }
+  ) as any;
+
+  // Подписки навешиваются приватным setupSignalingEvents — зовём напрямую,
+  // чтобы не поднимать весь join-пайплайн с PeerConnection'ами.
+  engine.setupSignalingEvents();
+
+  return { engine, sent, handlers, received };
+}
+
+describe('mediaState', () => {
+  it('sendMediaState отправляет оба флага', () => {
+    const { engine, sent } = engineWithFakeSignaling();
+    engine.sendMediaState({ micEnabled: false, camEnabled: true });
+    expect(sent).toContainEqual({
+      method: 'mediaState',
+      data: { micEnabled: false, camEnabled: true },
+    });
+  });
+
+  it('входящее сообщение превращается в событие onMediaState', () => {
+    const { handlers, received } = engineWithFakeSignaling();
+    handlers.get('mediaState')?.({ peerId: 'p1', micEnabled: false, camEnabled: true });
+    expect(received).toEqual([{ peerId: 'p1', micEnabled: false, camEnabled: true }]);
+  });
+
+  it('пропущенные флаги считаются включёнными, сообщение без peerId игнорируется', () => {
+    const { handlers, received } = engineWithFakeSignaling();
+    handlers.get('mediaState')?.({ peerId: 'p2' });
+    handlers.get('mediaState')?.({ micEnabled: false });
+    expect(received).toEqual([{ peerId: 'p2', micEnabled: true, camEnabled: true }]);
   });
 });

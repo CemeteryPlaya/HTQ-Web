@@ -42,6 +42,15 @@ interface PeerConnection {
   displayName: string;
   /** Claim'ы платформенного JWT; null только при SIGNALING_REQUIRE_AUTH=false. */
   identity: AccessTokenClaims | null;
+  /**
+   * Состояние микрофона и камеры, объявленное самим участником.
+   *
+   * Вывести его из медиапотока нельзя: приглушая себя, браузер выставляет
+   * `track.enabled = false` локально, producer остаётся живым и RTP
+   * продолжает идти. Поэтому состояние ходит отдельным сообщением, а SFU
+   * хранит последнее известное, чтобы отдать его тем, кто вошёл позже.
+   */
+  mediaState: PeerMediaState;
   rtpCapabilities: mediasoupTypes.RtpCapabilities | null;
   sendTransportId: string | null;
   recvTransportId: string | null;
@@ -61,6 +70,11 @@ interface SignalingMessage {
   error?: string;
 }
 
+interface PeerMediaState {
+  micEnabled: boolean;
+  camEnabled: boolean;
+}
+
 interface QualityReportPayload {
   packetLossRate: number;
   rttMs: number;
@@ -77,6 +91,8 @@ const peerConnections: Map<string, PeerConnection> = new Map();
 const roomMembers: Map<string, Set<string>> = new Map();
 let nextWorkerIdx = 0;
 const WS_HEARTBEAT_INTERVAL_MS = 15_000;
+/** Потолок длины сообщения чата — защита от заливки комнаты мегабайтом текста. */
+const CHAT_MESSAGE_MAX_LENGTH = 2000;
 
 function closeMediasoupResources(reason?: string): void {
   if (reason) {
@@ -241,7 +257,13 @@ async function getOrCreateRoom(roomId: string): Promise<Room> {
         roomId,
         {
           method: 'participantJoined',
-          data: { peerId, displayName },
+          data: {
+            peerId,
+            displayName,
+            mediaState:
+              peerConnections.get(peerId)?.mediaState ??
+              { micEnabled: true, camEnabled: true },
+          },
         },
         peerId
       );
@@ -717,7 +739,15 @@ async function handleMessage(
 
         respond({
           routerRtpCapabilities: room.rtpCapabilities,
-          participants: room.getParticipants(),
+          // Состояние микрофона/камеры живёт на соединении (peerConnections),
+          // а не в комнате, поэтому дополняем список здесь — иначе вошедший
+          // позже увидит у всех «включено», пока кто-нибудь не переключит.
+          participants: room.getParticipants().map((participant) => ({
+            ...participant,
+            mediaState:
+              peerConnections.get(participant.peerId)?.mediaState ??
+              { micEnabled: true, camEnabled: true },
+          })),
           turnConfig:
             config.turn.urls.length > 0
               ? {
@@ -898,6 +928,63 @@ async function handleMessage(
             method: signalMethod,
             data: msg.data,
             fromPeerId: peerId,
+          },
+          peerId
+        );
+        respond({});
+        break;
+      }
+
+      // ── Текстовый чат комнаты ──
+      // Сообщения нигде не хранятся: SFU только раздаёт их участникам той
+      // же комнаты. История живёт в памяти вкладки и умирает вместе с ней —
+      // это осознанно, постоянная переписка — задача мессенджера.
+      case 'chatMessage': {
+        if (!peerConn.roomId) return respondError('Not in a room');
+
+        const data = asRecord(msg.data);
+        const text = String(data.text || '').trim();
+        if (!text) return respondError('text is required');
+        if (text.length > CHAT_MESSAGE_MAX_LENGTH) {
+          return respondError(`text is too long (max ${CHAT_MESSAGE_MAX_LENGTH})`);
+        }
+
+        broadcastToRoom(
+          peerConn.roomId,
+          {
+            method: 'chatMessage',
+            data: {
+              text,
+              peerId,
+              displayName: peerConn.displayName || peerConn.identity?.username || 'Участник',
+              sentAt: new Date().toISOString(),
+            },
+          },
+          peerId
+        );
+        respond({});
+        break;
+      }
+
+      // ── Состояние микрофона и камеры участника ──
+      // Единственный достоверный источник: сам участник. У получателя
+      // `track.muted` означает лишь «пакеты ещё не пошли», а приглушённый
+      // микрофон вообще не отличим от включённого — producer живой,
+      // RTP идёт, меняется только локальный `track.enabled` отправителя.
+      case 'mediaState': {
+        if (!peerConn.roomId) return respondError('Not in a room');
+
+        const data = asRecord(msg.data);
+        peerConn.mediaState = {
+          micEnabled: data.micEnabled !== false,
+          camEnabled: data.camEnabled !== false,
+        };
+
+        broadcastToRoom(
+          peerConn.roomId,
+          {
+            method: 'mediaState',
+            data: { peerId, ...peerConn.mediaState },
           },
           peerId
         );
@@ -1087,6 +1174,7 @@ async function main(): Promise<void> {
       roomId: null,
       displayName: '',
       identity,
+      mediaState: { micEnabled: true, camEnabled: true },
       rtpCapabilities: null,
       sendTransportId: null,
       recvTransportId: null,

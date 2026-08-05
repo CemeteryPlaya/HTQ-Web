@@ -2,7 +2,7 @@
  * SDP Munger — safety profile:
  * - Strictly keep only VP8 + stable H264 baseline profiles (42e01f, 42001f) in m=video.
  * - Explicitly avoid HEVC/H265 and non-baseline H264 profiles.
- * - Audio: Opus 192 kbps stereo CBR + FEC.
+ * - Audio: Opus 64 kbps mono VBR + FEC (голосовой профиль, см. qualityProfile.ts).
  */
 
 import {
@@ -200,9 +200,20 @@ export async function forceEncoderBitrate(
       const withPreference = params as RTCRtpSendParameters & {
         degradationPreference?: RTCDegradationPreference;
       };
-      // Prefer balanced adaptation so browser can lower resolution first
-      // instead of collapsing to very low FPS on constrained links.
-      withPreference.degradationPreference = 'balanced';
+      // Держим разрешение, жертвуем кадрами.
+      //
+      // Раньше здесь стоял 'balanced' — ровно он и давал «мыло» у собеседника:
+      // при малейшей нехватке полосы или CPU Chrome первым делом роняет
+      // разрешение (1280x720 → 640x360 → 320x180), и удалённая сторона видит
+      // мягкую картинку, растянутую на всю плитку. Своё превью при этом
+      // остаётся резким — это сырой трек с камеры, он не проходит через
+      // кодировщик, поэтому проблему и не видно у себя.
+      //
+      // Для говорящих голов размен правильный в другую сторону: движения мало,
+      // и резкое лицо на 15 кадрах читается лучше, чем мыльное на 30. Риск
+      // 'maintain-resolution' — просадка до слайд-шоу на совсем плохом
+      // канале, но при потолке 1.5 Мбит/с на 720p до этого далеко.
+      withPreference.degradationPreference = 'maintain-resolution';
     }
 
     if (sender.track.kind === 'audio') {
