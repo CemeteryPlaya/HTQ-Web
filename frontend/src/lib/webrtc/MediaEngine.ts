@@ -60,12 +60,36 @@ export interface RemoteStream {
   stream: MediaStream;
 }
 
+/** Текстовое сообщение комнаты, разосланное SFU остальным участникам. */
+export interface ChatMessagePayload {
+  text: string;
+  peerId: string;
+  displayName: string;
+  sentAt: string;
+}
+
+/**
+ * Состояние микрофона и камеры участника, объявленное им самим.
+ *
+ * Из медиапотока его не вывести: приглушая себя, браузер меняет только
+ * локальный `track.enabled`, producer остаётся живым и RTP продолжает идти.
+ * У получателя `track.muted` говорит совсем о другом — «пакеты ещё не
+ * пошли», поэтому индикаторы в UI должны опираться на это сообщение.
+ */
+export interface PeerMediaState {
+  peerId: string;
+  micEnabled: boolean;
+  camEnabled: boolean;
+}
+
 export interface MediaEngineEvents {
   onRemoteStream: (stream: RemoteStream) => void;
   onRemoteStreamRemoved: (consumerId: string) => void;
   onActiveSpeakers: (speakers: Array<{ peerId: string; isPrimary: boolean }>) => void;
   onParticipantJoined: (peerId: string, displayName: string) => void;
   onParticipantLeft: (peerId: string) => void;
+  onChatMessage: (message: ChatMessagePayload) => void;
+  onMediaState: (state: PeerMediaState) => void;
   onQualityMetrics: (metrics: QualityMetrics) => void;
   onConnectionStateChange: (state: string) => void;
   onInfo: (message: string) => void;
@@ -270,6 +294,8 @@ export class MediaEngine {
   private routerAudioCodecs: Set<string> = new Set();
   private routerVideoCodecs: Set<string> = new Set();
   private routerH264Profiles: Set<string> = new Set();
+  /** `packetization-mode` H264-кодеков роутера («0», если параметр опущен). */
+  private routerH264PacketizationModes: Set<string> = new Set();
   private routerHeaderExtensionUris: Set<string> = new Set();
 
   // ── Receive transport state ──
@@ -733,6 +759,14 @@ export class MediaEngine {
         // but the UI already counts the local user separately (+1).
         if (participant.peerId === this.signaling.peerId) continue;
         this.events.onParticipantJoined?.(participant.peerId, participant.displayName);
+        // Состояние микрофона/камеры уже находившихся в комнате — иначе до
+        // первого их переключения UI показывал бы «всё включено».
+        const mediaState = (participant as any).mediaState;
+        this.events.onMediaState?.({
+          peerId: participant.peerId,
+          micEnabled: mediaState?.micEnabled !== false,
+          camEnabled: mediaState?.camEnabled !== false,
+        });
       }
 
       this.joined = true;
@@ -884,6 +918,26 @@ export class MediaEngine {
     this.localStream = null;
   }
 
+  /**
+   * Подсказать кодировщику, что важнее в этом треке.
+   *
+   * `detail` для видео просит Chrome беречь пространственную детализацию за
+   * счёт частоты кадров — то же направление, что и degradationPreference
+   * 'maintain-resolution' в SdpMunger, только уровнем ниже, на самом треке.
+   * Вдвоём они и убирают «мыло»: без contentHint браузер всё ещё вправе
+   * размывать кадр внутри выбранного разрешения.
+   *
+   * `speech` для аудио включает голосовой режим Opus вместо музыкального.
+   */
+  private applyContentHints(stream: MediaStream): void {
+    for (const track of stream.getVideoTracks()) {
+      track.contentHint = 'detail';
+    }
+    for (const track of stream.getAudioTracks()) {
+      track.contentHint = 'speech';
+    }
+  }
+
   private closePeerConnections(): void {
     this.sendPc?.close();
     this.recvPc?.close();
@@ -932,6 +986,35 @@ export class MediaEngine {
 
     audioTrack.enabled = enabled;
     return ok(undefined);
+  }
+
+  /**
+   * Отправить сообщение в чат комнаты. SFU разошлёт его остальным
+   * участникам (`broadcastToRoom`), отправителю эхо не возвращается —
+   * своё сообщение страница показывает сразу, не дожидаясь сервера.
+   */
+  sendChatMessage(text: string): Result<void, WebRTCError> {
+    const normalized = String(text || '').trim();
+    if (!normalized) {
+      return err(
+        createWebRTCError('SIGNALING_CONNECTION_FAILED', 'Chat message is empty', {
+          retriable: false,
+        })
+      );
+    }
+    return this.signaling.notify('chatMessage', { text: normalized });
+  }
+
+  /**
+   * Объявить своё состояние микрофона и камеры остальным участникам.
+   * Вызывается страницей при входе и при каждом переключении — SFU
+   * запоминает последнее значение и отдаёт его тем, кто войдёт позже.
+   */
+  sendMediaState(state: { micEnabled: boolean; camEnabled: boolean }): Result<void, WebRTCError> {
+    return this.signaling.notify('mediaState', {
+      micEnabled: state.micEnabled,
+      camEnabled: state.camEnabled,
+    });
   }
 
   setVideoEnabled(enabled: boolean): Result<void, WebRTCError> {
@@ -999,7 +1082,12 @@ export class MediaEngine {
     };
     const audioConstraints: MediaTrackConstraints = {
       // Keep these as "ideal" for better compatibility with varied microphones.
-      channelCount: { ideal: 2 },
+      //
+      // channelCount=1: речь моно. Стерео-захват не добавлял информации, зато
+      // заставлял Opus делить один и тот же бюджет на два канала — см. разбор
+      // в OPUS_REQUIRED_FMTP (qualityProfile.ts). Вдобавок на многих
+      // гарнитурах второй канал — это просто копия первого или тишина.
+      channelCount: { ideal: 1 },
       sampleRate: { ideal: 48000 },
       echoCancellation: true,
       noiseSuppression: true,
@@ -1008,17 +1096,22 @@ export class MediaEngine {
 
     try {
       const stream = await mediaDevices.getUserMedia({
-        video: false,
+        video: videoConstraints,
         audio: audioConstraints,
       });
+      this.applyContentHints(stream);
       return ok(stream);
     } catch (fullCaptureCause) {
-      // If camera capture fails, continue in audio-only mode.
+      // If camera capture fails, continue in audio-only mode. Именно ради
+      // этого случая ветка и существует: камеры может не быть, она может
+      // быть занята другим приложением или запрещена политикой — звонок
+      // при этом должен состояться со звуком.
       try {
         const audioOnlyStream = await mediaDevices.getUserMedia({
           video: false,
           audio: audioConstraints,
         });
+        this.applyContentHints(audioOnlyStream);
         this.events.onInfo?.(
           'Камера недоступна. Продолжаем в аудио-режиме.'
         );
@@ -2687,7 +2780,26 @@ export class MediaEngine {
     // Keep only the most stable H264 Baseline profiles:
     // - Constrained Baseline 42e01f
     // - Baseline 42001f
-    return profileLevelId === '42e01f' || profileLevelId === '42001f';
+    if (profileLevelId !== '42e01f' && profileLevelId !== '42001f') {
+      return false;
+    }
+
+    // Как только известны возможности роутера — сверяемся с ними, а не со
+    // статическим списком: предпочесть кодек, которого у роутера нет,
+    // означает, что браузер закодирует поток payload type'ом, который
+    // mediasoup не смапил, и RTP уйдёт «в никуда». Пара «профиль +
+    // packetization-mode» — ровно то, по чему mediasoup сопоставляет H264.
+    if (this.routerH264Profiles.size > 0 && !this.routerH264Profiles.has(profileLevelId.slice(0, 4))) {
+      return false;
+    }
+    if (this.routerH264PacketizationModes.size > 0) {
+      const packetizationMode = this.extractFmtpParam(fmtp, 'packetization-mode') || '0';
+      if (!this.routerH264PacketizationModes.has(packetizationMode)) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private isRetransmissionVideoCodec(codec: RTCRtpCodecCapability): boolean {
@@ -2953,6 +3065,34 @@ export class MediaEngine {
 
     this.signaling.on('participantJoined', (data: any) => {
       this.events.onParticipantJoined?.(data.peerId, data.displayName);
+      if (data?.peerId) {
+        this.events.onMediaState?.({
+          peerId: String(data.peerId),
+          micEnabled: data.mediaState?.micEnabled !== false,
+          camEnabled: data.mediaState?.camEnabled !== false,
+        });
+      }
+    });
+
+    this.signaling.on('mediaState', (data: any) => {
+      const peerId = String(data?.peerId || '');
+      if (!peerId) return;
+      this.events.onMediaState?.({
+        peerId,
+        micEnabled: data.micEnabled !== false,
+        camEnabled: data.camEnabled !== false,
+      });
+    });
+
+    this.signaling.on('chatMessage', (data: any) => {
+      const text = String(data?.text || '').trim();
+      if (!text) return;
+      this.events.onChatMessage?.({
+        text,
+        peerId: String(data.peerId || ''),
+        displayName: String(data.displayName || 'Участник'),
+        sentAt: String(data.sentAt || new Date().toISOString()),
+      });
     });
 
     this.signaling.on('participantLeft', (data: any) => {
@@ -4146,8 +4286,49 @@ export class MediaEngine {
 
     // ── Media sections ──
     for (const section of mediaSections) {
-      // m= line (keep same payload types as the offer)
-      sdp += section[0] + '\r\n';
+      // m= line: оставляем ТОЛЬКО те payload type, о которых мы рассказали
+      // SFU в `produce` (см. extractCodecsFromSdp).
+      //
+      // Раньше сюда копировалась строка offer'а целиком. Браузер видел в
+      // answer'е все свои варианты H264 — включая packetization-mode=0 и
+      // профиль 42001f, которых нет у роутера, — и мог закодировать поток
+      // любым из них. mediasoup принимал пакеты по SSRC (счётчик рос), но
+      // разобрать кадры не мог: в статистике продюсера keyframes оставался
+      // 0, а каждый видео-consumer вечно ждал ключевой кадр и не отправлял
+      // ни одного пакета. Именно так выглядела «картинки нет при живом
+      // мегабите трафика».
+      const sectionKind = section[0].startsWith('m=audio')
+        ? 'audio'
+        : section[0].startsWith('m=video')
+          ? 'video'
+          : null;
+      const allowedPayloadTypes = sectionKind
+        ? new Set(
+            this.extractCodecsFromSdp(offerSdp, sectionKind).map((codec) =>
+              String(codec.payloadType)
+            )
+          )
+        : null;
+
+      if (allowedPayloadTypes && allowedPayloadTypes.size > 0) {
+        const [mPrefix, ...offeredPts] = section[0].split(/\s+/).reduce<string[]>(
+          (parts, token, index) => {
+            // "m=video 9 UDP/TLS/RTP/SAVPF 96 106 115" — первые три токена
+            // это заголовок секции, дальше идут payload type.
+            if (index < 3) {
+              parts[0] = parts[0] ? `${parts[0]} ${token}` : token;
+            } else {
+              parts.push(token);
+            }
+            return parts;
+          },
+          ['']
+        );
+        const keptPts = offeredPts.filter((pt) => allowedPayloadTypes.has(pt));
+        sdp += `${mPrefix} ${(keptPts.length > 0 ? keptPts : offeredPts).join(' ')}\r\n`;
+      } else {
+        sdp += section[0] + '\r\n';
+      }
       sdp += 'c=IN IP4 0.0.0.0\r\n';
       sdp += 'a=rtcp:9 IN IP4 0.0.0.0\r\n';
 
@@ -4191,6 +4372,17 @@ export class MediaEngine {
           if (line.includes('transport-cc') || line.includes('transport-wide-cc')) {
             continue;
           }
+
+          // Строки кодеков фильтруем тем же списком, что и m=: иначе в
+          // answer'е останутся rtpmap/fmtp для payload type, которых нет в
+          // m-строке, и браузер может выбрать не тот вариант кодека.
+          if (allowedPayloadTypes && allowedPayloadTypes.size > 0) {
+            const ptMatch = line.match(/^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)\s/);
+            if (ptMatch && !allowedPayloadTypes.has(ptMatch[1])) {
+              continue;
+            }
+          }
+
           sdp += line + '\r\n';
         }
       }
@@ -4350,6 +4542,39 @@ export class MediaEngine {
     return extensions;
   }
 
+  /**
+   * `a=rtcp-fb:<pt> …` из локального SDP → `rtcpFeedback` для mediasoup.
+   *
+   * Без этого поля producer создаётся БЕЗ обратной связи, и mediasoup не
+   * может отправить отправителю ни PLI, ни FIR, ни NACK. Практический
+   * итог: первый keyframe улетает до создания producer'а, нового никто не
+   * запрашивает, и каждый видео-consumer навсегда застревает в ожидании
+   * ключевого кадра — в статистике это «1 Мбит/с приходит, keyframes: 0,
+   * PLI: 0, consumer отправил 0 пакетов».
+   *
+   * transport-cc отбрасываем по той же причине, что и в synthetic answer:
+   * роутер не сконфигурирован под TWCC (см. sfu/src/media-codecs.ts).
+   */
+  private extractRtcpFeedbackFromSdp(
+    sdp: string,
+    payloadType: number
+  ): Array<{ type: string; parameter?: string }> {
+    const feedback: Array<{ type: string; parameter?: string }> = [];
+    const regex = new RegExp(`^a=rtcp-fb:${payloadType}\\s+(.+)$`, 'gm');
+
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(sdp)) !== null) {
+      const [type, ...rest] = match[1].trim().split(/\s+/);
+      if (!type || type === 'transport-cc') {
+        continue;
+      }
+      const parameter = rest.join(' ');
+      feedback.push(parameter ? { type, parameter } : { type });
+    }
+
+    return feedback;
+  }
+
   private extractCodecsFromSdp(sdp: string, kind: 'audio' | 'video'): any[] {
     const dynamicWhitelist =
       kind === 'audio'
@@ -4420,6 +4645,19 @@ export class MediaEngine {
         ) {
           continue;
         }
+
+        // Тот же профиль браузер предлагает дважды — с packetization-mode 1
+        // и 0, разными payload type. mediasoup требует совпадения режима
+        // (отсутствующий = 0) и на несовпадении роняет весь produce с
+        // "unsupported codec", даже если рядом в списке есть подходящий
+        // вариант. Поэтому отсеиваем чужой режим здесь.
+        const packetizationMode = String(parameters['packetization-mode'] ?? '0');
+        if (
+          this.routerH264PacketizationModes.size > 0 &&
+          !this.routerH264PacketizationModes.has(packetizationMode)
+        ) {
+          continue;
+        }
       }
 
       codecs.push({
@@ -4428,6 +4666,7 @@ export class MediaEngine {
         channels: rtpMatch[3] ? parseInt(rtpMatch[3], 10) : kind === 'audio' ? 2 : undefined,
         payloadType: pt,
         parameters,
+        rtcpFeedback: this.extractRtcpFeedbackFromSdp(sdp, pt),
       });
     }
 
@@ -4580,6 +4819,7 @@ export class MediaEngine {
     this.routerAudioCodecs.clear();
     this.routerVideoCodecs.clear();
     this.routerH264Profiles.clear();
+    this.routerH264PacketizationModes.clear();
     this.routerHeaderExtensionUris.clear();
     for (const ext of routerRtpCapabilities?.headerExtensions || []) {
       if (ext?.uri) this.routerHeaderExtensionUris.add(String(ext.uri));
@@ -4620,6 +4860,14 @@ export class MediaEngine {
           if (plid.length >= 4) {
             this.routerH264Profiles.add(plid.slice(0, 4));
           }
+          // mediasoup сопоставляет H264 по паре «профиль + packetization-mode»
+          // и считает отсутствующий режим нулём. Браузер предлагает один и тот
+          // же профиль в двух вариантах (pm=1 и pm=0) разными payload type;
+          // отправить роутеру вариант с чужим режимом = получить
+          // "unsupported codec [mimeType:video/H264, payloadType:…]".
+          this.routerH264PacketizationModes.add(
+            String(codec.parameters?.['packetization-mode'] ?? '0')
+          );
         }
       }
     }

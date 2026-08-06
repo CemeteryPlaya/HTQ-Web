@@ -1,0 +1,158 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# HTQWeb — Development override (единый Django-backend)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Отличия от прод-стека:
+#   - frontend: Vite dev-сервер с HMR на :3000 (вместо одноразовой сборки);
+#     его прокси бьёт в ЕДИНЫЙ backend (/api → backend-web, /ws → backend-asgi).
+#   - backend-*: DEBUG-настройки (htqweb.settings.dev), исходники смонтированы
+#     как том (правки видны сразу), runserver/uvicorn --reload вместо gunicorn.
+#   - nginx: выключен (в dev маршрутизацию делает Vite-прокси).
+#   - MinIO: dev-инстанс + одноразовый bootstrap бакетов.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  # ─── nginx выключен в dev (маршрутизацию делает Vite) ───────────────────────
+  nginx:
+    profiles:
+      - production-only
+
+  # ─── Vite dev-сервер с HMR ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    entrypoint: []
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_DEV_HTTPS: "false"
+      VITE_DISABLE_HMR: "false"
+      # Единый Django-backend: /api → backend-web (WSGI), /ws → backend-asgi (ASGI).
+      VITE_BACKEND_TARGET: "http://backend-web:8000"
+      VITE_ASGI_TARGET: "http://backend-asgi:8000"   # SSE /api/requests/v1/stream
+      VITE_MESSENGER_WS_TARGET: "ws://backend-asgi:8000"
+      VITE_SFU_WS_TARGET: "ws://sfu:4443"
+    depends_on:
+      backend-web:
+        condition: service_healthy
+
+  # ─── Django backend (dev): DEBUG + автоперезагрузка + монтирование исходников ─
+  backend-web:
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    environment:
+      DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+      # QUIC-мост опубликован на хост как UDP :4433. localhost — secure
+      # context, поэтому WebTransport из http://localhost:3000 работает;
+      # с LAN-адреса (http://192.168.x.y:3000) браузер его не даст —
+      # это не наш баг, нужен HTTPS.
+      # Форма `${VAR-default}` (без двоеточия) подставляет дефолт только когда
+      # переменная НЕ ЗАДАНА. С `${VAR:-default}` пустое значение в .env тоже
+      # заменялось бы дефолтом, и выключить WebTransport было бы нечем — а он
+      # мешает, когда стенд открыт наружу: гость несколько секунд ждёт таймаут
+      # QUIC на localhost своей же машины, прежде чем откатиться на WebSocket.
+      CONFERENCE_WT_URL: ${CONFERENCE_WT_URL-https://localhost:4433/sfu}
+    volumes:
+      - ./backend:/app
+
+  backend-asgi:
+    command: ["uvicorn", "htqweb.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment:
+      DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+    volumes:
+      - ./backend:/app
+
+  backend-worker:
+    command: ["celery", "-A", "htqweb", "worker", "-l", "info"]
+    environment:
+      DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+    volumes:
+      - ./backend:/app
+
+  backend-beat:
+    environment:
+      DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+    volumes:
+      - ./backend:/app
+
+  # ─── SFU (dev) ──────────────────────────────────────────────────────────────
+  # Сигналинг браузер видит как ws://localhost:3000/ws/sfu/ — Vite-прокси
+  # (VITE_SFU_WS_TARGET выше) отправляет его в этот контейнер.
+  #
+  # WEBRTC_ANNOUNCED_IP=127.0.0.1 годится, пока браузер на той же машине:
+  # порт 44444 опубликован на хост. Для проверки с телефона/второго ноутбука
+  # поставьте LAN-IP хоста в корневом .env (WEBRTC_ANNOUNCED_IP=192.168.x.y),
+  # иначе ICE-кандидаты будут указывать на loopback второго устройства.
+  sfu:
+    environment:
+      WEBRTC_ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-127.0.0.1}
+
+  # ─── MinIO (dev) ────────────────────────────────────────────────────────────
+  # Консоль: http://localhost:9001 (minioadmin / minioadmin). В проде — остановить
+  # и указать S3_ENDPOINT в корневом .env на AWS S3 (или совместимое).
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      MINIO_PROMETHEUS_AUTH_TYPE: "public"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web-консоль
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # Одноразовое создание бакетов (идемпотентно, mb --ignore-existing).
+  #
+  # ВНИМАНИЕ: это подстраховка, а не единственный механизм. От этого job'а
+  # никто не зависит через depends_on, поэтому точечный запуск
+  # (`up -d backend-web`, `--no-deps`) его не поднимает — основную гарантию
+  # даёт `manage.py ensure_buckets` в backend/docker-entrypoint.sh.
+  #
+  # Бакетов два — ровно по потребителям htqweb.storage.get_storage():
+  # S3_BUCKET (снапшоты новостей cms + архив истории чатов) и MEDIA_S3_BUCKET
+  # (ВСЕ бинарные файлы — после схлопывания в монолит каждая аппка пишет
+  # через apps.media_files.interface.store_file()). Бакеты на сервис
+  # (htqweb-messenger / htqweb-conferences / htqweb-mail-attachments) умерли
+  # вместе с микросервисами — в backend/ они не упоминаются ни разу.
+  minio-bootstrap:
+    image: minio/mc:RELEASE.2025-01-17T23-25-50Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MC_HOST_local: http://${S3_ACCESS_KEY:-minioadmin}:${S3_SECRET_KEY:-minioadmin}@minio:9000
+    entrypoint: >
+      /bin/sh -c "
+        set -e;
+        for b in ${S3_BUCKET:-htqweb-cms} ${MEDIA_S3_BUCKET:-htqweb-media}; do
+          mc mb --ignore-existing local/$$b;
+        done;
+        echo placeholder | mc pipe local/${S3_BUCKET:-htqweb-cms}/news/.keep;
+        echo bootstrap-done;
+      "
+    restart: "no"
+
+volumes:
+  minio_data:
