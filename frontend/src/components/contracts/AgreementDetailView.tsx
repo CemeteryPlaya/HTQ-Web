@@ -255,6 +255,16 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                 {formatMoney(agreement.amount, agreement.currency)}
               </span>
             </Field>
+            <Field label="Предоплачено">
+              <span className="tabular-nums">
+                {formatMoney(agreement.advance_paid_amount, agreement.currency)}
+              </span>
+            </Field>
+            <Field label="Остаток по договору">
+              <span className="tabular-nums">
+                {formatMoney(agreement.remaining_amount, agreement.currency)}
+              </span>
+            </Field>
             <Field label="Тип оплаты">{paymentLabel(agreement.payment_type)}</Field>
             <Field label="Дата подписания">
               {formatDate(agreement.signed_date)}

@@ -55,7 +55,7 @@ const AdvancePaymentList = () => {
               <TableCell><Badge variant={row.approval_state === 'approved' ? 'default' : 'secondary'}>{approvalLabel[row.approval_state] ?? row.approval_state}</Badge></TableCell>
               <TableCell><Badge variant={row.status === 'closed' ? 'default' : 'secondary'}>{documentStatusLabel[row.status]}</Badge></TableCell>
               <TableCell>{row.payment_order_file_id ? <span className="inline-flex items-center gap-1 text-sm"><Paperclip className="h-3.5 w-3.5" />{row.posting_number}</span> : <span className="text-sm text-muted-foreground">—</span>}</TableCell>
-              <TableCell className="text-right"><SubmitForApproval subjectType="contracts.advance_payment" subjectId={row.id} state={row.approval_state} submit={contractsApi.submitAdvancePayment} invalidate={[["contracts", "advance-payments"]]} /></TableCell>
+              <TableCell className="text-right"><SubmitForApproval subjectType="contracts.advance_payment" subjectId={row.id} state={row.approval_state} submit={contractsApi.submitAdvancePayment} invalidate={[["contracts", "advance-payments"]]} showState={false} /></TableCell>
             </TableRow>)}</TableBody>
           </Table>}
       </div>

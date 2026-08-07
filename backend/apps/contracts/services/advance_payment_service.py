@@ -8,16 +8,21 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from django.db import transaction
+from django.db.models import Sum
 from django.http import Http404
 from django.utils import timezone
 
 from apps.contracts.models import AdvancePayment, AdvancePaymentStatus, Agreement
+from apps.contracts.services.reference_service import conflict_as
 from apps.media_files import interface as media
 from apps.signoff import interface as signoff
 
 
 ACCOUNT_PAYMENT_PERMISSION = "contracts.advance_payment.record_payment"
+ZERO = Decimal("0.00")
 
 
 ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -47,7 +52,8 @@ def get_advance_payment_or_404(payment_id: int) -> AdvancePayment:
 
 
 def _approved_agreement(agreement_id: int) -> Agreement:
-    agreement = Agreement.objects.select_related("counterparty").filter(pk=agreement_id).first()
+    agreement = (Agreement.objects.select_for_update().select_related("counterparty")
+                 .filter(pk=agreement_id).first())
     if agreement is None:
         raise Http404("Договор не найден")
     if not agreement.is_approved:
@@ -55,6 +61,22 @@ def _approved_agreement(agreement_id: int) -> Agreement:
             "Предоплату можно оформить только по согласованному договору"
         )
     return agreement
+
+
+def closed_amount_for_agreement(agreement_id: int) -> Decimal:
+    """Сумма фактически проведённой предоплаты по договору."""
+    return (AdvancePayment.objects
+            .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
+            .aggregate(total=Sum("amount"))["total"] or ZERO)
+
+
+def check_agreement_capacity(agreement: Agreement, amount) -> None:
+    remaining = agreement.amount - closed_amount_for_agreement(agreement.pk)
+    if amount > remaining:
+        raise AdvancePaymentRuleViolation(
+            f"Сумма предоплаты {amount} превышает остаток договора "
+            f"{agreement.number}: доступно {remaining}"
+        )
 
 
 def serialize_advance_payment(payment: AdvancePayment) -> dict:
@@ -92,10 +114,16 @@ def list_advance_payments(*, agreement_id: int | None = None,
 @transaction.atomic
 def create_advance_payment(*, agreement_id: int, amount, created_by: int | None = None):
     agreement = _approved_agreement(agreement_id)
-    return AdvancePayment.objects.create(
-        agreement=agreement, amount=amount, status=AdvancePaymentStatus.DRAFT,
-        created_by=created_by,
-    )
+    if AdvancePayment.objects.filter(agreement_id=agreement.pk).exists():
+        raise AdvancePaymentRuleViolation(
+            f"По договору {agreement.number} уже создана предоплата"
+        )
+    check_agreement_capacity(agreement, amount)
+    with conflict_as(f"По договору {agreement.number} уже создана предоплата"):
+        return AdvancePayment.objects.create(
+            agreement=agreement, amount=amount, status=AdvancePaymentStatus.DRAFT,
+            created_by=created_by,
+        )
 
 
 @transaction.atomic
@@ -142,6 +170,7 @@ def record_payment(payment_id: int, *, posting_number: str, data: bytes,
                    filename: str, mime: str, actor_id: int,
                    is_elevated: bool = False) -> AdvancePayment:
     payment = get_advance_payment_or_404(payment_id)
+    agreement = _approved_agreement(payment.agreement_id)
     if not payment.is_approved:
         raise AdvancePaymentRuleViolation(
             "Платёжное поручение добавляется только после согласования предоплаты"
@@ -150,6 +179,7 @@ def record_payment(payment_id: int, *, posting_number: str, data: bytes,
         raise AdvancePaymentRuleViolation(
             "Оформить платёж можно только для предоплаты, ожидающей бухгалтерию"
         )
+    check_agreement_capacity(agreement, payment.amount)
     if payment.payment_order_file_id or payment.posting_number:
         raise AdvancePaymentRuleViolation(
             "Предоплата уже проведена; исправление доступно администратору"

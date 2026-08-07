@@ -170,6 +170,10 @@ export interface Agreement {
   counterparty_bin_iin: string;
   payment_type: PaymentType;
   amount: string;
+  /** Закрытая предоплата; исходную сумму договора не меняет. */
+  advance_paid_amount: string;
+  /** Остаток по договору после закрытой предоплаты. */
+  remaining_amount: string;
   currency: string;
   file_id: string | null;
   signed_date: string | null;

@@ -60,6 +60,9 @@ interface Props {
    * согласование действительно идёт.)
    */
   showProcessLink?: boolean;
+  /** Показывать ли плашку состояния рядом с действием. В таблицах, где
+   * состояние уже вынесено в отдельную колонку, её дублировать не нужно. */
+  showState?: boolean;
 }
 
 export function SubmitForApproval({
@@ -70,6 +73,7 @@ export function SubmitForApproval({
   invalidate = [],
   size = 'sm',
   showProcessLink = false,
+  showState = true,
 }: Props) {
   const queryClient = useQueryClient();
   const [startedId, setStartedId] = useState<number | null>(null);
@@ -124,7 +128,7 @@ export function SubmitForApproval({
   if (state === 'pending' || decided) {
     return (
       <div className="flex items-center justify-end gap-2">
-        <ApprovalStateBadge state={state} />
+        {showState && <ApprovalStateBadge state={state} />}
         {/* Решать — там же: на карточке процесса есть и кнопки решения, и
             этот самый документ внутри. Здесь их нет намеренно. */}
         {activeProcessId !== null && (
@@ -140,7 +144,7 @@ export function SubmitForApproval({
 
   return (
     <div className="flex items-center justify-end gap-2">
-      {state === 'rework' && <ApprovalStateBadge state={state} />}
+      {state === 'rework' && showState && <ApprovalStateBadge state={state} />}
       <Button
         size={size}
         variant={state === 'rework' ? 'outline' : 'default'}

@@ -595,6 +595,10 @@ class AdvancePayment(signoff.Approvable, models.Model):
 
     class Meta:
         ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(fields=["agreement"],
+                                    name="uq_ctr_adv_payment_agreement"),
+        ]
         indexes = [
             models.Index(fields=["agreement", "approval_state"],
                          name="ix_ctr_adv_agr_state"),

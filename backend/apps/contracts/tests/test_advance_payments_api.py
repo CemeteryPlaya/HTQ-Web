@@ -47,6 +47,30 @@ def test_create_requires_an_agreement_approved_by_signoff():
     assert ok.json()["status"] == AdvancePaymentStatus.DRAFT
 
 
+def test_advance_payment_cannot_exceed_agreement_or_be_created_twice():
+    agreement = _approved_agreement()
+    agreement.amount = "100000.00"
+    agreement.save(update_fields=["amount"])
+    client = Client()
+
+    too_large = post_json(client, f"{BASE}/advance-payments", {
+        "agreement_id": agreement.pk, "amount": "100000.01",
+    }, **auth(token()))
+    assert too_large.status_code == 409, too_large.content
+    assert "превышает остаток договора" in too_large.json()["detail"]
+
+    created = post_json(client, f"{BASE}/advance-payments", {
+        "agreement_id": agreement.pk, "amount": "100000.00",
+    }, **auth(token()))
+    assert created.status_code == 201, created.content
+
+    duplicate = post_json(client, f"{BASE}/advance-payments", {
+        "agreement_id": agreement.pk, "amount": "1.00",
+    }, **auth(token()))
+    assert duplicate.status_code == 409, duplicate.content
+    assert "уже создана предоплата" in duplicate.json()["detail"]
+
+
 def test_payment_order_requires_approved_prepayment_and_accountant(monkeypatch):
     agreement = _approved_agreement()
     payment = make_advance_payment(agreement=agreement)
@@ -88,6 +112,11 @@ def test_payment_order_requires_approved_prepayment_and_accountant(monkeypatch):
     assert success.json()["payment_order_file_id"] == "payment-order-1"
     assert success.json()["paid_by"] == 7
     assert success.json()["status"] == AdvancePaymentStatus.CLOSED
+
+    agreement_view = client.get(f"{BASE}/agreements/{agreement.pk}", **auth(token()))
+    assert agreement_view.status_code == 200, agreement_view.content
+    assert agreement_view.json()["advance_paid_amount"] == "100000.00"
+    assert agreement_view.json()["remaining_amount"] == "300000.00"
 
 
 def test_payment_order_cannot_be_replaced_after_accounting():
