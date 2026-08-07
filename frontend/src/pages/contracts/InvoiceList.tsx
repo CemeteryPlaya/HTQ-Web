@@ -141,9 +141,8 @@ const InvoiceList = () => {
                       subjectId={row.id}
                       state={row.approval_state}
                       submit={contractsApi.submitInvoice}
-                      // Счёт бюджет не занимает — сбрасываем только списки
-                      // счетов, бюджетные ключи трогать незачем (в отличие
-                      // от договора).
+                      // На момент отправки счёт ещё не уменьшает остаток;
+                      // после решения карточка согласования обновит бюджет.
                       invalidate={[['contracts', 'invoices']]}
                     />
                   </TableCell>

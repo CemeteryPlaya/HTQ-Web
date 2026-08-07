@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Loader2, Paperclip, Receipt } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Loader2, Paperclip, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ContractsShell } from '@/components/contracts/ContractsShell';
@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/select';
 import { formatAmount } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
-import type { BudgetLineFlat, InvoiceStatus } from '@/types/contracts';
+import type { BudgetLineFlat } from '@/types/contracts';
 
 /**
  * Выписка счёта на оплату (без договора).
@@ -32,10 +32,9 @@ import type { BudgetLineFlat, InvoiceStatus } from '@/types/contracts';
  * - нет номера, типа оплаты и даты подписания;
  * - валюту не вводят — её снимает бэкенд со строки бюджета (показываем её
  *   рядом с суммой справочно);
- * - остаток строки показывается как контекст, но БЕЗ предупреждения о
- *   превышении: счёт бюджет не занимает, и бэкенд не проверяет лимит (первая
- *   фаза, см. модель Invoice). Поэтому сумму больше остатка форма не
- *   блокирует.
+ * - остаток строки показывается сразу; сумму больше доступного остатка форма
+ *   не даст отправить. Бэкенд повторяет эту проверку под блокировкой строки:
+ *   за время заполнения другой согласованный расход мог изменить остаток.
  *
  * Список строк НЕ фильтруется по согласованности (в отличие от договоров):
  * согласование бюджета — отдельный контур, и пока маршрутов нет, все бюджеты
@@ -46,9 +45,21 @@ import type { BudgetLineFlat, InvoiceStatus } from '@/types/contracts';
 
 const AMOUNT_RE = /^\d+([.,]\d{1,2})?$/;
 
+/** Сравнение денежных строк без float: в минимальных единицах валюты. */
+function toMinorUnits(value: string): bigint {
+  const [whole, fraction = '0'] = value.replace(',', '.').split('.');
+  return BigInt(whole || '0') * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+}
+
 type Errors = Record<string, string>;
 
 const InvoiceCreate = () => {
+  // React Compiler currently emits `useMemoCache` for this form. In the
+  // Vite lazy-route runtime that internal dispatcher can be null, producing
+  // a blank page before the component's regular hooks run. Keep this form on
+  // normal React hook semantics until the compiler/runtime interaction is
+  // resolved globally.
+  'use no memo';
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -60,11 +71,6 @@ const InvoiceCreate = () => {
     queryKey: ['contracts', 'counterparties', ''],
     queryFn: () => contractsApi.listCounterparties().then((r) => r.data),
   });
-  const { data: enums } = useQuery({
-    queryKey: ['contracts', 'enums'],
-    queryFn: () => contractsApi.getEnums().then((r) => r.data),
-  });
-
   const [administratorId, setAdministratorId] = useState<string>('');
   const [programId, setProgramId] = useState<string>('');
   const [lineId, setLineId] = useState<string>('');
@@ -72,7 +78,6 @@ const InvoiceCreate = () => {
   const [name, setName] = useState('');
   const [note, setNote] = useState('');
   const [amount, setAmount] = useState('');
-  const [status, setStatus] = useState<InvoiceStatus>('draft');
   const [file, setFile] = useState<File | null>(null);
   const [errors, setErrors] = useState<Errors>({});
 
@@ -109,6 +114,13 @@ const InvoiceCreate = () => {
   }, [lines, administratorId, programId]);
 
   const selectedLine = lines.find((row) => String(row.id) === lineId);
+  const remainingMinorUnits = selectedLine ? toMinorUnits(selectedLine.remaining) : null;
+  const amountMinorUnits =
+    amount.trim() && AMOUNT_RE.test(amount.trim()) ? toMinorUnits(amount.trim()) : null;
+  const overBudget =
+    remainingMinorUnits !== null
+    && amountMinorUnits !== null
+    && amountMinorUnits > remainingMinorUnits;
 
   const chooseAdministrator = (value: string) => {
     setAdministratorId(value);
@@ -140,6 +152,8 @@ const InvoiceCreate = () => {
       next.amount = 'Сумма — число, максимум два знака после запятой';
     } else if (amount.trim().replace(/[.,]/g, '').replace(/^0+/, '') === '') {
       next.amount = 'Сумма должна быть больше нуля';
+    } else if (overBudget) {
+      next.amount = 'Сумма превышает остаток выбранной программы';
     }
     // Скан обязателен: счёт без договора и есть тот документ, по которому
     // платят — заводить его без приложенного скана незачем.
@@ -156,7 +170,6 @@ const InvoiceCreate = () => {
           budget_line_id: Number(lineId),
           counterparty_id: Number(counterpartyId),
           amount: amount.trim().replace(',', '.'),
-          status,
         })
         .then((r) => r.data);
 
@@ -365,7 +378,7 @@ const InvoiceCreate = () => {
                   </div>
                   <div className="flex flex-wrap justify-between gap-2">
                     <span className="text-muted-foreground">
-                      Законтрактовано (договоры)
+                      Занято (договоры и согласованные счета)
                     </span>
                     <span className="tabular-nums">
                       {formatAmount(selectedLine.committed)}
@@ -378,8 +391,20 @@ const InvoiceCreate = () => {
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-2">
-                    Счёт без договора остаток не уменьшает — показан для справки.
+                    Сумма счёта не должна превышать остаток. Он уменьшится,
+                    когда счёт согласуют.
                   </p>
+                </div>
+              )}
+
+              {overBudget && selectedLine && (
+                <div className="flex gap-2 rounded-md border border-destructive/50 bg-destructive/5 p-3 text-sm">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />
+                  <div>
+                    Сумма превышает остаток выбранной программы (
+                    {formatAmount(selectedLine.remaining)} {selectedLine.currency}).
+                    Уменьшите сумму или выберите другую бюджетную строку.
+                  </div>
                 </div>
               )}
             </CardContent>
@@ -438,51 +463,24 @@ const InvoiceCreate = () => {
                 />
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <Label htmlFor="amount">Сумма счёта</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="amount"
-                      inputMode="decimal"
-                      value={amount}
-                      onChange={(event) => setAmount(event.target.value)}
-                      placeholder="400000.00"
-                      className={errors.amount ? 'border-destructive' : undefined}
-                    />
-                    {selectedLine && (
-                      <span className="text-sm text-muted-foreground">
-                        {selectedLine.currency}
-                      </span>
-                    )}
-                  </div>
-                  {fieldError('amount')}
+              <div>
+                <Label htmlFor="amount">Сумма счёта</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="amount"
+                    inputMode="decimal"
+                    value={amount}
+                    onChange={(event) => setAmount(event.target.value)}
+                    placeholder="400000.00"
+                    className={errors.amount ? 'border-destructive' : undefined}
+                  />
+                  {selectedLine && (
+                    <span className="text-sm text-muted-foreground">
+                      {selectedLine.currency}
+                    </span>
+                  )}
                 </div>
-
-                <div>
-                  <Label htmlFor="status">Статус</Label>
-                  <Select
-                    value={status}
-                    onValueChange={(value) => setStatus(value as InvoiceStatus)}
-                  >
-                    <SelectTrigger id="status">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {/* «Оплачен»/«Отменён» при создании не предлагаем — это
-                          состояния уже прожитого счёта. */}
-                      {(enums?.invoice_status ?? [])
-                        .filter(
-                          (option) => !['paid', 'cancelled'].includes(option.value),
-                        )
-                        .map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {fieldError('amount')}
               </div>
 
               <div>
@@ -511,7 +509,10 @@ const InvoiceCreate = () => {
           </Card>
 
           <div className="flex gap-3">
-            <Button type="submit" disabled={mutation.isPending || noBudgets}>
+            <Button
+              type="submit"
+              disabled={mutation.isPending || noBudgets || noCounterparties || overBudget}
+            >
               {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Выписать счёт
             </Button>

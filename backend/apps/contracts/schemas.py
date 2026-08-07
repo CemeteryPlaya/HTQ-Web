@@ -509,14 +509,14 @@ class AgreementRead(BaseModel):
 
 class InvoiceCreate(BaseModel):
     # Ссылка на СТРОКУ бюджета, не на бюджет: деньги выделены программе (как
-    # у договора). ``number`` у счёта нет, ``currency`` не принимается — она
-    # снимается со строки бюджета на сервере (см. докстринг модели Invoice).
+    # у договора). ``number`` и ``status`` у счёта не принимаются: он всегда
+    # создаётся черновиком, а жизненный цикл идёт только через /status.
+    # ``currency`` снимается со строки бюджета на сервере.
     name: str = Field(..., min_length=1, max_length=300)
     note: str = ""
     budget_line_id: int
     counterparty_id: int
     amount: Decimal = Field(..., gt=0)
-    status: Optional[InvoiceStatus] = None
 
 
 class InvoiceUpdate(BaseModel):

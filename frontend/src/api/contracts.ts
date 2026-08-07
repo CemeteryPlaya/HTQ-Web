@@ -204,7 +204,6 @@ export const contractsApi = {
     counterparty_id: number;
     amount: string;
     note?: string;
-    status?: InvoiceStatus;
   }) => api.post<Invoice>(path('invoices'), data),
   updateInvoice: (id: number, data: Record<string, unknown>) =>
     api.patch<Invoice>(path(`invoices/${id}`), data),

@@ -41,7 +41,7 @@ def test_route_crud(client):
     # человек, а не число.
     assert stage.json()["approvers"][0]["full_name"]
 
-    listed = client.get(f"{BASE}/routes", **auth(token()))
+    listed = client.get(f"{BASE}/routes", **admin)
     assert listed.status_code == 200
     assert len(listed.json()[0]["stages"]) == 1
 
@@ -155,10 +155,11 @@ def test_a_non_last_stage_can_be_deleted(client):
 
 # ── Права ───────────────────────────────────────────────────────────────
 
-def test_reading_routes_needs_only_a_token_writing_needs_admin(client):
+def test_reading_and_writing_routes_need_admin(client):
     make_route([(1, "Этап", Quorum.ALL, [make_user("a").pk])])
 
-    assert client.get(f"{BASE}/routes", **auth(token())).status_code == 200
+    assert client.get(f"{BASE}/routes", **auth(token())).status_code == 403
+    assert client.get(f"{BASE}/routes", **auth(admin_token())).status_code == 200
 
     forbidden = post_json(client, f"{BASE}/routes",
                           {"subject_type": SUBJECT, "name": "Ещё один"},

@@ -200,13 +200,11 @@ export type InvoiceStatus =
  *
  * Устроен как договор, но с тремя отличиями: номера нет (опознаётся
  * наименованием и поставщиком), `currency` снимается со строки бюджета на
- * сервере (в форме её не вводят), и счёт бюджет НЕ занимает — остаток строки
- * от него не меняется (первая фаза; см. докстринг модели). Поэтому здесь нет
- * ни `payment_type`, ни `signed_date`, ни `committed`-логики.
+ * сервере (в форме её не вводят), а согласованный счёт занимает бюджетную
+ * строку. Поэтому здесь нет ни `payment_type`, ни `signed_date`.
  *
- * `approval_state` есть (примесь `signoff.Approvable`), но пока инертен:
- * согласование счёта не подключено, и UI отправки на согласование у него —
- * в отличие от договора — нет.
+ * `approval_state` ведёт `signoff`: одобрение переводит счёт в `approved`,
+ * после чего его сумма включается в остаток бюджетной строки.
  */
 export interface Invoice {
   id: number;
@@ -234,7 +232,7 @@ export interface Invoice {
   /** «Скан счёта на оплату» — id файла в media_files. */
   file_id: string | null;
   status: InvoiceStatus;
-  /** Ось согласования — пока инертна (см. описание типа). */
+  /** Ось согласования: отдельна от доменного статуса счёта. */
   approval_state: ApprovalState;
   created_by: number | null;
   created_at: string;
@@ -253,7 +251,7 @@ export interface ContractsEnums {
   counterparty_status: EnumOption[];
   invoice_status: EnumOption[];
   payment_type: EnumOption[];
-  /** Из каких статусов договор занимает бюджет. Счёт бюджет пока не занимает. */
+  /** Из каких статусов договор занимает бюджет. */
   committing_statuses: AgreementStatus[];
   transitions: Record<AgreementStatus, AgreementStatus[]>;
   /** Таблица переходов счёта — отдельная от договорной (свой жизненный цикл). */

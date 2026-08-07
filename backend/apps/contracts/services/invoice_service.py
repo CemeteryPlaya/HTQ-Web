@@ -7,12 +7,11 @@
 - **валюта не приходит извне** — она снимается со строки бюджета при
   создании (``line.budget.currency``), поэтому сверять валюту, как это делает
   договор, здесь нечего;
-- **лимит бюджета НЕ проверяется** — в первой фазе счёт не занимает бюджет
-  (``budget_calc`` считает занятость только по договорам). Отсюда и
-  отсутствие ``SELECT … FOR UPDATE`` на строке: блокировать нечего, пока
-  никакой остаток от счёта не зависит. Когда счёт начнут учитывать в остатке,
-  сюда вернутся и блокировка строки, и ``check_capacity`` — ровно тем же
-  приёмом, что в ``agreement_service`` (см. докстринг модели ``Invoice``).
+- **лимит проверяется при создании и повторно перед одобрением**. Черновой
+  счёт не резервирует деньги, но не может быть больше текущего остатка;
+  согласованный/оплаченный счёт включается в расчёт остатка. Повторная
+  проверка под блокировкой строки не даёт двум параллельным согласованиям
+  превысить лимит.
 
 Статус и согласование при этом читаются с самого счёта; из строки бюджета
 берётся только контекст (администратор, программа, год) для карточки.
@@ -34,6 +33,7 @@ from apps.contracts.models import (
     Invoice,
     InvoiceStatus,
 )
+from apps.contracts.services import budget_calc
 from apps.contracts.services.counterparty_service import get_counterparty_or_404
 from apps.contracts.services.reference_service import ReferenceConflict, conflict_as
 # Единственные соседи, и только через interface — прямой импорт их
@@ -133,6 +133,21 @@ def _get_line_or_404(line_id: int) -> BudgetLine:
     return line
 
 
+def _lock_line(line_id: int) -> BudgetLine:
+    """Взять строку бюджета с блокировкой для проверки лимита.
+
+    Проверка и будущая запись статуса должны быть одной критической секцией:
+    иначе два счёта увидят один остаток и оба смогут его превысить.
+    """
+    line = (BudgetLine.objects.select_for_update(of=("self",))
+            .select_related("program", "budget", "budget__administrator",
+                            "budget__administrator__country")
+            .filter(pk=line_id).first())
+    if line is None:
+        raise Http404("Строка бюджета не найдена")
+    return line
+
+
 def list_invoices(*, budget_id: int | None = None, budget_line_id: int | None = None,
                   counterparty_id: int | None = None,
                   administrator_id: int | None = None, program_id: int | None = None,
@@ -199,22 +214,23 @@ def serialize_invoice(invoice: Invoice) -> dict:
 
 @transaction.atomic
 def create_invoice(*, name: str, budget_line_id: int, counterparty_id: int,
-                   amount, note: str = "", status: str | None = None,
-                   created_by: int | None = None) -> Invoice:
-    line = _get_line_or_404(budget_line_id)
+                   amount, note: str = "", created_by: int | None = None) -> Invoice:
+    line = _lock_line(budget_line_id)
     counterparty = get_counterparty_or_404(counterparty_id)
     _validate_context(line, counterparty)
 
-    status = status or InvoiceStatus.DRAFT
-    if status not in InvoiceStatus.values:
-        raise InvoiceRuleViolation(f"Неизвестный статус счёта: {status}")
+    # Создаётся только черновик. ``status`` меняется через change_status(),
+    # иначе POST позволил бы выдать оплаченный счёт без скана и согласования.
+    # Черновик ещё не уменьшает остаток, но сумма не может быть больше того,
+    # что программа имеет прямо сейчас.
+    budget_calc.check_capacity(line, amount)
 
     # Валюта — со строки бюджета, а не из тела запроса: счёт выписывается в
     # валюте того бюджета, из которого его оплачивают (см. докстринг модели).
     return Invoice.objects.create(
         name=name, note=note, budget_line=line, counterparty=counterparty,
         amount=amount, currency=line.budget.currency,
-        status=status, created_by=created_by,
+        status=InvoiceStatus.DRAFT, created_by=created_by,
     )
 
 
@@ -233,7 +249,7 @@ def update_invoice(invoice_id: int, **fields) -> Invoice:
 
     line_id = fields.get("budget_line_id") or invoice.budget_line_id
     budget_changed = line_id != invoice.budget_line_id
-    line = _get_line_or_404(line_id)
+    line = _lock_line(line_id)
 
     counterparty_id = fields.get("counterparty_id") or invoice.counterparty_id
     counterparty_changed = counterparty_id != invoice.counterparty_id
@@ -242,6 +258,10 @@ def update_invoice(invoice_id: int, **fields) -> Invoice:
     _validate_context(line, counterparty,
                       check_budget_status=budget_changed,
                       check_counterparty_status=counterparty_changed)
+
+    amount = fields.get("amount") if fields.get("amount") is not None else invoice.amount
+    if budget_changed or amount != invoice.amount:
+        budget_calc.check_capacity(line, amount)
 
     changed = [key for key, value in fields.items() if value is not None]
     for key in changed:
@@ -265,9 +285,9 @@ def submit_for_approval(invoice_id: int, *, actor_id: int | None = None) -> dict
     как у договора (``agreement_service.submit_for_approval``). Отличий от
     договора два, и оба — из устройства счёта:
 
-    * лимит бюджета не проверяется и строка НЕ блокируется: счёт бюджет не
-      занимает (см. докстринг модуля), блокировать нечего, и ни
-      ``check_capacity``, ни ``SELECT … FOR UPDATE`` здесь нет;
+    * счёт ещё не уменьшает остаток на стадии ``on_review``, однако лимит
+      проверяется под блокировкой строки до запуска процесса. Окончательная
+      проверка повторится в момент одобрения, когда счёт начнёт учитываться;
     * скан обязателен уже на отправке. Счёт без договора и ЕСТЬ тот документ,
       по которому платят, — согласующему без него нечего смотреть. Ту же
       проверку продублирует ``change_status`` при переходе в ``on_review``
@@ -293,8 +313,9 @@ def submit_for_approval(invoice_id: int, *, actor_id: int | None = None) -> dict
             "прежде чем отправлять на согласование"
         )
 
-    line = _get_line_or_404(invoice.budget_line_id)
+    line = _lock_line(invoice.budget_line_id)
     _validate_context(line, invoice.counterparty)
+    budget_calc.check_capacity(line, invoice.amount)
 
     # enrich=True: карточка уходит прямо в HTTP-ответ, и фронтенду после
     # отправки нужно показать «кто согласует», а не голые user_id.
@@ -331,8 +352,9 @@ def change_status(invoice_id: int, new_status: str, *, actor_id: int | None = No
     """Сдвинуть счёт по ``ALLOWED_TRANSITIONS``.
 
     ``enforce_approval_lock`` ставит HTTP-путь: под идущим согласованием
-    ручной перевод запрещён. Проверки лимита при смене статуса нет — счёт
-    бюджет не занимает (см. докстринг модуля)."""
+    ручной перевод запрещён. При входе в ``approved`` сумма повторно
+    проверяется под блокировкой строки, после чего этот счёт становится
+    частью вычисляемого остатка бюджета."""
     invoice = get_invoice_or_404(invoice_id)
     if enforce_approval_lock:
         _assert_not_pending_approval(invoice)
@@ -347,6 +369,13 @@ def change_status(invoice_id: int, new_status: str, *, actor_id: int | None = No
             f"Переход «{InvoiceStatus(current).label}» → "
             f"«{InvoiceStatus(new_status).label}» не разрешён"
         )
+
+    was_committing = current in budget_calc.INVOICE_COMMITTING_STATUSES
+    will_commit = new_status in budget_calc.INVOICE_COMMITTING_STATUSES
+    if will_commit and not was_committing:
+        line = _lock_line(invoice.budget_line_id)
+        budget_calc.check_capacity(line, invoice.amount,
+                                   exclude_invoice_id=invoice.pk)
 
     # Счёт без договора и ЕСТЬ тот документ, по которому платят: провести его
     # дальше черновика без приложенного скана нельзя. Проверяется на каждом

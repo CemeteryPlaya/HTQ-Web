@@ -101,8 +101,8 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
     queryFn: () => contractsApi.getEnums().then((r) => r.data),
   });
 
-  // Строка бюджета — ради остатка (контекст, а не лимит: счёт бюджет не
-  // занимает). Спрашивается именно СТРОКА — деньги выделены программе.
+  // Строка бюджета показывает остаток конкретной программы. Счёт уменьшит
+  // его после согласования, поэтому проверять нужно именно СТРОКУ.
   const { data: line } = useQuery({
     queryKey: ['contracts', 'budget-line', invoice?.budget_line_id],
     queryFn: () =>
@@ -199,8 +199,8 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
               subjectId={invoice.id}
               state={invoice.approval_state}
               submit={contractsApi.submitInvoice}
-              // Счёт бюджет не занимает — остаток строки отправка не трогает,
-              // сбрасывать бюджетные ключи незачем (в отличие от договора).
+              // На момент отправки счёт ещё не уменьшает остаток; это случится
+              // после одобрения, когда откроется карточка согласования.
               invalidate={[
                 ['contracts', 'invoices'],
                 ['contracts', 'invoice', invoiceId],
@@ -284,7 +284,8 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
-                  Счёт без договора остаток не уменьшает — показан для справки.
+                  Сумма проверяется по этому остатку, а уменьшится он после
+                  согласования счёта.
                 </p>
               </div>
             )}

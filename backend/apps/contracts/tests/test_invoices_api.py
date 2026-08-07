@@ -1,10 +1,10 @@
 """Контрактные тесты ``/api/contracts/v1/invoices/*`` — счёт на оплату без
 договора.
 
-Счёт устроен параллельно договору, но с тремя отличиями, за которыми и следят
+Счёт устроен параллельно договору, но с двумя отличиями, за которыми и следят
 эти тесты: номера нет, валюта снимается со строки бюджета (а не приходит в
-теле), и счёт бюджет НЕ занимает (в отличие от договора) — остаток по строке
-от него не меняется.
+теле). Сумма проверяется по остатку строки при создании, а согласованный счёт
+занимает бюджет через ``budget_calc``.
 """
 
 from decimal import Decimal
@@ -81,9 +81,9 @@ def test_currency_is_taken_from_the_budget_not_the_request():
 
 
 @pytest.mark.django_db
-def test_invoice_does_not_consume_the_budget():
-    """Ключевое отличие от договора: счёт бюджет НЕ занимает. Договор на 4 млн
-    уменьшил бы остаток, счёт той же суммы — нет."""
+def test_invoice_draft_does_not_consume_the_budget():
+    """Черновик ещё не занимает бюджет: уменьшение происходит после
+    положительного решения согласования."""
     line = make_line(amount="5000000.00")
     counterparty = make_counterparty(country=line.budget.administrator.country)
 
@@ -98,9 +98,8 @@ def test_invoice_does_not_consume_the_budget():
 
 
 @pytest.mark.django_db
-def test_invoice_over_budget_is_allowed():
-    """Раз счёт не занимает бюджет — и проверять лимит не должен: счёт на
-    сумму больше остатка проходит (в отличие от договора)."""
+def test_invoice_over_program_budget_is_rejected_at_creation():
+    """Сумма нового счёта не может быть больше остатка выбранной программы."""
     line = make_line(amount="100000.00")
     counterparty = make_counterparty(country=line.budget.administrator.country)
     make_agreement(line=line, counterparty=counterparty, number="Д-001",
@@ -109,7 +108,22 @@ def test_invoice_over_budget_is_allowed():
     resp = post_json(Client(), f"{BASE}/invoices",
                      _invoice_body(line, counterparty, amount="900000.00"),
                      **auth(token()))
+    assert resp.status_code == 409, resp.content
+    assert "превышает остаток" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_invoice_creation_always_starts_as_a_draft():
+    """Клиент не может выдать счёту ``paid`` или ``approved`` при POST.
+    Это сохраняет проверку скана и прохождение через signoff."""
+    line = make_line(amount="5000000.00")
+    counterparty = make_counterparty(country=line.budget.administrator.country)
+
+    resp = post_json(Client(), f"{BASE}/invoices",
+                     _invoice_body(line, counterparty, status=InvoiceStatus.PAID),
+                     **auth(token()))
     assert resp.status_code == 201, resp.content
+    assert resp.json()["status"] == InvoiceStatus.DRAFT
 
 
 def client_get_budget(budget_id: int) -> dict:

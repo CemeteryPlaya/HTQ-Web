@@ -29,6 +29,7 @@ from apps.signoff.tests.helpers import (
     post_json,
     stage_names,
     token,
+    user_token,
 )
 
 pytestmark = pytest.mark.django_db
@@ -368,7 +369,7 @@ def test_route_card_warns_about_options_without_a_branch(approvers):
     route = branching_route(approvers)
     client = Client()
 
-    response = client.get(f"{BASE}/routes/{route.pk}", **auth(token()))
+    response = client.get(f"{BASE}/routes/{route.pk}", **auth(admin_token()))
 
     assert response.status_code == 200
     gaps = response.json()["coverage_gaps"]
@@ -382,7 +383,7 @@ def test_no_warning_once_a_fallback_closes_the_group(approvers):
     route = branching_route(approvers, fallback=True)
     client = Client()
 
-    response = client.get(f"{BASE}/routes/{route.pk}", **auth(token()))
+    response = client.get(f"{BASE}/routes/{route.pk}", **auth(admin_token()))
 
     assert response.json()["coverage_gaps"] == []
 
@@ -393,7 +394,10 @@ def test_process_card_shows_the_facts_and_the_branch(approvers):
     process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
     client = Client()
 
-    response = client.get(f"{BASE}/processes/{process.pk}", **auth(token()))
+    response = client.get(
+        f"{BASE}/processes/{process.pk}",
+        **auth(user_token(approvers["checker"])),
+    )
 
     assert response.status_code == 200
     card = response.json()

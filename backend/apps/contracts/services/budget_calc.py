@@ -1,11 +1,12 @@
 """Расчёт занятости бюджета — единственное место, где считаются
-«законтрактовано» и «остаток».
+«занято» и «остаток».
 
-Остаток НЕ хранится в БД и не декрементируется при создании договора. Он
-всегда выводится из живых строк ``Agreement``:
+Остаток НЕ хранится в БД и не декрементируется отдельной операцией. Он
+всегда выводится из живых договоров и согласованных счетов:
 
     committed = SUM(agreement.amount) по договорам этой СТРОКИ бюджета
                 в статусах COMMITTING_STATUSES
+              + SUM(invoice.amount) по согласованным/оплаченным счетам
     remaining = line.amount − committed
 
 Единица счёта — ``BudgetLine``, а не ``Budget``: договор ссылается на
@@ -33,7 +34,13 @@ from decimal import Decimal
 
 from django.db.models import Sum
 
-from apps.contracts.models import Agreement, AgreementStatus, BudgetLine
+from apps.contracts.models import (
+    Agreement,
+    AgreementStatus,
+    BudgetLine,
+    Invoice,
+    InvoiceStatus,
+)
 
 # ⚠️ ОТКРЫТЫЙ ВОПРОС К ЗАКАЗЧИКУ (единственный, влияющий на цифры).
 #
@@ -52,24 +59,33 @@ COMMITTING_STATUSES = frozenset({
     AgreementStatus.EXECUTED,
 })
 
+# Счёт становится расходом только после положительного решения signoff.
+# ``paid`` остаётся в множестве, чтобы оплата не освободила уже потраченные
+# деньги. Черновики и счета на согласовании пока не уменьшают остаток.
+INVOICE_COMMITTING_STATUSES = frozenset({
+    InvoiceStatus.APPROVED,
+    InvoiceStatus.PAID,
+})
+
 ZERO = Decimal("0.00")
 
 
 class BudgetExceeded(Exception):
-    """Сумма договора не помещается в остаток строки бюджета."""
+    """Сумма расхода не помещается в остаток строки бюджета."""
 
     def __init__(self, budget_line_id: int, requested: Decimal, remaining: Decimal):
         self.budget_line_id = budget_line_id
         self.requested = requested
         self.remaining = remaining
         super().__init__(
-            f"Сумма договора {requested} превышает остаток бюджетной строки "
+            f"Сумма {requested} превышает остаток бюджетной строки "
             f"#{budget_line_id}: доступно {remaining}"
         )
 
 
-def committed_map(line_ids, *, exclude_agreement_id: int | None = None) -> dict[int, Decimal]:
-    """{budget_line_id: законтрактованная сумма} одним запросом для набора строк.
+def committed_map(line_ids, *, exclude_agreement_id: int | None = None,
+                  exclude_invoice_id: int | None = None) -> dict[int, Decimal]:
+    """{budget_line_id: занятая сумма} для набора строк двумя агрегатами.
 
     Строки без единого учитываемого договора в результат не попадают —
     вызывающий берёт их через ``.get(id, ZERO)``. Так сделано намеренно:
@@ -77,29 +93,41 @@ def committed_map(line_ids, *, exclude_agreement_id: int | None = None) -> dict[
     здесь значило бы платить лишним проходом по списку ради удобства,
     которое ``dict.get`` даёт бесплатно.
 
-    ``exclude_agreement_id`` исключает конкретный договор из агрегата —
-    нужно при РЕДАКТИРОВАНИИ договора, чтобы его собственная старая сумма
-    не считалась занятой при проверке новой (иначе увеличение суммы на 1 ₸
-    сравнивалось бы с остатком, из которого уже вычтена вся старая сумма).
+    ``exclude_agreement_id`` / ``exclude_invoice_id`` исключают собственный
+    расход из агрегата при проверке его новой суммы, чтобы старая сумма не
+    считалась чужой занятостью.
     """
     ids = list(line_ids)
     if not ids:
         return {}
 
-    query = Agreement.objects.filter(
+    agreement_query = Agreement.objects.filter(
         budget_line_id__in=ids, status__in=COMMITTING_STATUSES,
     )
     if exclude_agreement_id is not None:
-        query = query.exclude(pk=exclude_agreement_id)
+        agreement_query = agreement_query.exclude(pk=exclude_agreement_id)
 
-    rows = query.values("budget_line_id").annotate(total=Sum("amount"))
-    return {row["budget_line_id"]: row["total"] or ZERO for row in rows}
+    invoice_query = Invoice.objects.filter(
+        budget_line_id__in=ids, status__in=INVOICE_COMMITTING_STATUSES,
+    )
+    if exclude_invoice_id is not None:
+        invoice_query = invoice_query.exclude(pk=exclude_invoice_id)
+
+    totals: dict[int, Decimal] = {}
+    for query in (agreement_query, invoice_query):
+        rows = query.values("budget_line_id").annotate(total=Sum("amount"))
+        for row in rows:
+            line_id = row["budget_line_id"]
+            totals[line_id] = totals.get(line_id, ZERO) + (row["total"] or ZERO)
+    return totals
 
 
-def committed_for(budget_line_id: int, *, exclude_agreement_id: int | None = None) -> Decimal:
-    """Законтрактованная сумма одной строки бюджета."""
+def committed_for(budget_line_id: int, *, exclude_agreement_id: int | None = None,
+                  exclude_invoice_id: int | None = None) -> Decimal:
+    """Занятая сумма одной строки бюджета."""
     return committed_map([budget_line_id],
-                         exclude_agreement_id=exclude_agreement_id).get(budget_line_id, ZERO)
+                         exclude_agreement_id=exclude_agreement_id,
+                         exclude_invoice_id=exclude_invoice_id).get(budget_line_id, ZERO)
 
 
 def totals_for(line: BudgetLine, *, committed: Decimal | None = None) -> dict:
@@ -137,13 +165,16 @@ def totals_for_budget(lines, *, committed: dict[int, Decimal] | None = None) -> 
     return {"allocated": allocated, "committed": used, "remaining": allocated - used}
 
 
-def remaining_for(line: BudgetLine, *, exclude_agreement_id: int | None = None) -> Decimal:
+def remaining_for(line: BudgetLine, *, exclude_agreement_id: int | None = None,
+                  exclude_invoice_id: int | None = None) -> Decimal:
     return line.amount - committed_for(line.pk,
-                                       exclude_agreement_id=exclude_agreement_id)
+                                       exclude_agreement_id=exclude_agreement_id,
+                                       exclude_invoice_id=exclude_invoice_id)
 
 
 def check_capacity(line: BudgetLine, amount: Decimal, *,
-                   exclude_agreement_id: int | None = None) -> None:
+                   exclude_agreement_id: int | None = None,
+                   exclude_invoice_id: int | None = None) -> None:
     """Поднять ``BudgetExceeded``, если ``amount`` не помещается в остаток СТРОКИ.
 
     Лимит проверяется по строке, а не по бюджету целиком: деньги выделены
@@ -152,8 +183,9 @@ def check_capacity(line: BudgetLine, amount: Decimal, *,
     свободные 10 млн. Перебрасывать деньги между программами — это правка
     сумм строк, отдельное и видимое действие.
 
-    Вызывается только для договоров в занимающих бюджет статусах — черновик
-    лимит не проверяет (он его и не занимает, см. ``COMMITTING_STATUSES``).
+    Договор проверяется при входе в занимающий статус. Счёт дополнительно
+    проверяется при создании и повторно перед одобрением: до одобрения он не
+    уменьшает остаток, но заведомо не должен быть больше доступной суммы.
 
     ⚠️ Открытый вопрос: заказчик не сказал, должно ли превышение бюджета
     БЛОКИРОВАТЬ сохранение или лишь предупреждать. Здесь блокирует (жёстче
@@ -162,6 +194,7 @@ def check_capacity(line: BudgetLine, amount: Decimal, *,
     (``agreement_service``) с исключения на возврат флага, модель не
     затрагивается.
     """
-    remaining = remaining_for(line, exclude_agreement_id=exclude_agreement_id)
+    remaining = remaining_for(line, exclude_agreement_id=exclude_agreement_id,
+                              exclude_invoice_id=exclude_invoice_id)
     if amount > remaining:
         raise BudgetExceeded(line.pk, amount, remaining)

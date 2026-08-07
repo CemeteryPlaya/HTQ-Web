@@ -22,6 +22,7 @@ from apps.contracts.models import (
     Invoice,
     InvoiceStatus,
 )
+from apps.contracts.services import budget_calc
 from apps.contracts.tests.helpers import (
     BASE,
     admin_token,
@@ -739,11 +740,11 @@ def test_the_engine_can_still_move_the_agreement_it_locked(client):
 # ═══════════════════════════════════════════════════════════════════════
 #
 # Устроен как договор (те же колбэки on_started/approved/rejected/rework/
-# cancelled, тот же возврат в ``draft`` на отказе), но: (1) бюджет не
-# занимает — лимит на отправке не проверяется; (2) скан обязателен уже на
-# отправке, потому что счёт без договора и ЕСТЬ платёжный документ. Черновик
-# для отправки заводится СРАЗУ со сканом (``file_id``) — иначе submit
-# упрётся в гейт скана, который проверяется отдельным тестом.
+# cancelled, тот же возврат в ``draft`` на отказе), но счёт занимает бюджет
+# только после одобрения, а скан обязателен уже на отправке, потому что счёт
+# без договора и ЕСТЬ платёжный документ. Черновик для отправки заводится
+# СРАЗУ со сканом (``file_id``) — иначе submit упрётся в гейт скана, который
+# проверяется отдельным тестом.
 
 def _draft_invoice(**over) -> Invoice:
     line = make_line()
@@ -778,6 +779,21 @@ def test_approval_moves_the_invoice_to_approved(client):
     invoice.refresh_from_db()
     assert invoice.status == InvoiceStatus.APPROVED
     assert invoice.approval_state == ApprovalState.APPROVED
+
+
+def test_invoice_approval_reduces_the_program_remaining_budget(client):
+    approver = make_user()
+    line = make_line(amount="500000.00")
+    invoice = make_invoice(line=line, amount="200000.00", file_id="scan-invoice")
+    route_for(Invoice.SIGNOFF_SUBJECT_TYPE, approver.pk)
+
+    assert budget_calc.remaining_for(line) == 500000
+    process = invoice.submit_for_approval()
+    decide(process, approver, engine.APPROVE)
+
+    invoice.refresh_from_db()
+    assert invoice.status == InvoiceStatus.APPROVED
+    assert budget_calc.remaining_for(line) == 300000
 
 
 def test_rejection_returns_the_invoice_to_draft(client):

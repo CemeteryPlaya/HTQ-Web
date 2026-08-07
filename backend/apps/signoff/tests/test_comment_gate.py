@@ -177,5 +177,7 @@ def test_the_process_card_reports_the_comment_requirement(client):
     process = engine.start(subject_type=SUBJECT, subject_id=doc.pk,
                            initiator_id=a.pk)
 
-    card = client.get(f"{BASE}/processes/{process.pk}", **auth(token())).json()
+    card = client.get(
+        f"{BASE}/processes/{process.pk}", **auth(user_token(a)),
+    ).json()
     assert card["stages"][0]["requires_comment"] is True

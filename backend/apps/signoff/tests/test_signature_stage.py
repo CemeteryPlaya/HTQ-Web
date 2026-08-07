@@ -355,7 +355,9 @@ def test_the_process_card_shows_the_attached_document(client, stub_storage):
     task = task_for(process, author.pk)
     _attach(client, task.pk, user_token(author))
 
-    card = client.get(f"{BASE}/processes/{process.pk}", **auth(token())).json()
+    card = client.get(
+        f"{BASE}/processes/{process.pk}", **auth(user_token(author)),
+    ).json()
     stage = card["stages"][0]
     assert stage["approver_kind"] == ApproverKind.INITIATOR
     assert stage["requires_attachment"] is True
@@ -458,7 +460,7 @@ def test_a_signature_stage_that_is_not_last_is_flagged_in_the_editor(client):
                         (2, "И ещё этап", Quorum.ALL, [a.pk])])
 
     assert routes.initiator_stage_not_last(route) is True
-    card = client.get(f"{BASE}/routes/{route.pk}", **auth(token())).json()
+    card = client.get(f"{BASE}/routes/{route.pk}", **auth(admin_token())).json()
     assert card["initiator_stage_not_last"] is True
 
 
@@ -467,7 +469,7 @@ def test_a_signature_stage_placed_last_is_not_flagged(client):
     route = _signature_route(a.pk)
 
     assert routes.initiator_stage_not_last(route) is False
-    card = client.get(f"{BASE}/routes/{route.pk}", **auth(token())).json()
+    card = client.get(f"{BASE}/routes/{route.pk}", **auth(admin_token())).json()
     assert card["initiator_stage_not_last"] is False
 
 
