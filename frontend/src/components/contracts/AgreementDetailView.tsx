@@ -291,6 +291,14 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               )}
             </div>
           </section>
+          <div className="-mt-2 text-sm">
+            <Link
+              to={`/contracts/contract-payments?agreement_id=${agreement.id}`}
+              className="font-medium text-primary hover:underline underline-offset-2"
+            >
+              Оплаты по договору
+            </Link>
+          </div>
           <FieldGrid>
             <Field label="Тип оплаты">{paymentLabel(agreement.payment_type)}</Field>
             <Field label="Дата подписания">
