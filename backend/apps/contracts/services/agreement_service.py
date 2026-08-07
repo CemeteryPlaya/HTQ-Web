@@ -216,6 +216,10 @@ def get_agreement_or_404(agreement_id: int) -> Agreement:
 def serialize_agreement(agreement: Agreement) -> dict:
     line = agreement.budget_line
     budget = line.budget
+    advance_payment_id = (agreement.advance_payments
+                          .order_by("-created_at")
+                          .values_list("pk", flat=True)
+                          .first())
     advance_paid_amount = advance_payment_svc.closed_amount_for_agreement(agreement.pk)
     return {
         "id": agreement.pk,
@@ -241,6 +245,7 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "counterparty_bin_iin": agreement.counterparty.bin_iin,
         "payment_type": agreement.payment_type,
         "amount": agreement.amount,
+        "advance_payment_id": advance_payment_id,
         "advance_paid_amount": advance_paid_amount,
         "remaining_amount": agreement.amount - advance_paid_amount,
         "currency": agreement.currency,

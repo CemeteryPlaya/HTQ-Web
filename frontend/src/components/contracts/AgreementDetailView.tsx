@@ -248,23 +248,50 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Договор</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-6">
+          {/* Финансовая сводка намеренно не живёт в общей сетке реквизитов:
+              сумму договора читают вместе с её остатком, а не как три
+              независимых поля. */}
+          <section className="rounded-lg border bg-muted/30 p-4">
+            <div className="grid gap-5 sm:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] sm:items-end">
+              <div>
+                <p className="text-sm text-muted-foreground">Сумма договора</p>
+                <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
+                  {formatMoney(agreement.amount, agreement.currency)}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-4 border-t pt-4 sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
+                <div>
+                  <p className="text-xs text-muted-foreground">Предоплачено</p>
+                  <p className="mt-1 text-base tabular-nums">
+                    {formatMoney(agreement.advance_paid_amount, agreement.currency)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Остаток</p>
+                  <p className={`mt-1 text-base font-semibold tabular-nums ${remainingTone(
+                    agreement.remaining_amount,
+                    agreement.amount,
+                  )}`}>
+                    {formatMoney(agreement.remaining_amount, agreement.currency)}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 border-t pt-3 text-sm">
+              {agreement.advance_payment_id !== null ? (
+                <Link
+                  to={`/contracts/advance-payments/${agreement.advance_payment_id}`}
+                  className="font-medium text-primary hover:underline underline-offset-2"
+                >
+                  Открыть предоплату
+                </Link>
+              ) : (
+                <span className="text-muted-foreground">Предоплата не оформлена</span>
+              )}
+            </div>
+          </section>
           <FieldGrid>
-            <Field label="Сумма">
-              <span className="text-lg font-semibold tabular-nums">
-                {formatMoney(agreement.amount, agreement.currency)}
-              </span>
-            </Field>
-            <Field label="Предоплачено">
-              <span className="tabular-nums">
-                {formatMoney(agreement.advance_paid_amount, agreement.currency)}
-              </span>
-            </Field>
-            <Field label="Остаток по договору">
-              <span className="tabular-nums">
-                {formatMoney(agreement.remaining_amount, agreement.currency)}
-              </span>
-            </Field>
             <Field label="Тип оплаты">{paymentLabel(agreement.payment_type)}</Field>
             <Field label="Дата подписания">
               {formatDate(agreement.signed_date)}

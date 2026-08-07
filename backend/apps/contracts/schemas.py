@@ -496,6 +496,7 @@ class AgreementRead(BaseModel):
     counterparty_bin_iin: str
     payment_type: str
     amount: Decimal
+    advance_payment_id: Optional[int]
     advance_paid_amount: Decimal
     remaining_amount: Decimal
     currency: str

@@ -115,6 +115,7 @@ def test_payment_order_requires_approved_prepayment_and_accountant(monkeypatch):
 
     agreement_view = client.get(f"{BASE}/agreements/{agreement.pk}", **auth(token()))
     assert agreement_view.status_code == 200, agreement_view.content
+    assert agreement_view.json()["advance_payment_id"] == payment.pk
     assert agreement_view.json()["advance_paid_amount"] == "100000.00"
     assert agreement_view.json()["remaining_amount"] == "300000.00"
 
