@@ -221,6 +221,8 @@ def serialize_agreement(agreement: Agreement) -> dict:
                           .values_list("pk", flat=True)
                           .first())
     advance_paid_amount = advance_payment_svc.closed_amount_for_agreement(agreement.pk)
+    contract_paid_amount = (advance_payment_svc.total_paid_amount_for_agreement(agreement.pk)
+                            - advance_paid_amount)
     return {
         "id": agreement.pk,
         "number": agreement.number,
@@ -247,7 +249,8 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "amount": agreement.amount,
         "advance_payment_id": advance_payment_id,
         "advance_paid_amount": advance_paid_amount,
-        "remaining_amount": agreement.amount - advance_paid_amount,
+        "contract_paid_amount": contract_paid_amount,
+        "remaining_amount": agreement.amount - advance_paid_amount - contract_paid_amount,
         "currency": agreement.currency,
         "file_id": agreement.file_id,
         "signed_date": agreement.signed_date,

@@ -34,6 +34,8 @@ django-вьюха ``View``): ``dispatch`` разводит методы сам, 
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 from django.http import Http404, HttpResponse
 from django.utils.decorators import method_decorator
 
@@ -53,11 +55,13 @@ from .services import budget_service as budget_svc
 from .services import counterparty_service as cp_svc
 from .services import invoice_service as inv_svc
 from .services import advance_payment_service as adv_svc
+from .services import contract_payment_service as contract_payment_svc
 from .services import reference_service as ref_svc
 from .services.agreement_service import AgreementRuleViolation
 from .services.budget_calc import COMMITTING_STATUSES, BudgetExceeded
 from .services.invoice_service import InvoiceRuleViolation
 from .services.advance_payment_service import AdvancePaymentRuleViolation
+from .services.contract_payment_service import ContractPaymentRuleViolation
 from .services.reference_service import ReferenceConflict
 
 # Конфликты доменного уровня, которые вьюха переводит в 409. Собраны в один
@@ -70,6 +74,7 @@ from .services.reference_service import ReferenceConflict
 # нужен текст. Импортируется из signoff.interface (правило границ).
 CONFLICTS = (ReferenceConflict, AgreementRuleViolation, InvoiceRuleViolation,
              AdvancePaymentRuleViolation,
+             ContractPaymentRuleViolation,
              BudgetExceeded, signoff.SignoffError, signoff.UnknownSubject)
 
 
@@ -383,6 +388,13 @@ class AdvancePaymentSubmitView(SubmitView):
     def post(self, request, payment_id: int):
         return self.submitted(
             lambda **kw: adv_svc.submit_for_approval(payment_id, **kw))
+
+
+class ContractPaymentSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, payment_id: int):
+        return self.submitted(
+            lambda **kw: contract_payment_svc.submit_for_approval(payment_id, **kw))
 
 
 class BudgetAgreementsView(ContractsView):
@@ -875,6 +887,96 @@ class AdvancePaymentPaymentOrderUrlView(ContractsView):
 # ═══════════════════════════════════════════════════════════════════════
 # Служебное
 # ═══════════════════════════════════════════════════════════════════════
+
+class ContractPaymentCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = contract_payment_svc.list_contract_payments(
+            administrator_id=self.int_param("administrator_id"),
+            agreement_id=self.int_param("agreement_id"),
+            awaiting_payment=self.bool_param("awaiting_payment"),
+        )
+        return [schemas.ContractPaymentRead.model_validate(
+            contract_payment_svc.serialize_contract_payment(row)) for row in rows]
+
+    @write("POST", status=201, admin=False)
+    def post(self, request):
+        try:
+            administrator_id = int(request.POST.get("administrator_id") or "")
+            agreement_id = int(request.POST.get("agreement_id") or "")
+            amount = Decimal(request.POST.get("amount") or "")
+        except (TypeError, ValueError, InvalidOperation):
+            return json_error("Укажите администратора, договор и корректную сумму", 422)
+        if amount <= 0:
+            return json_error("Сумма должна быть больше нуля", 422)
+        invoice = request.FILES.get("invoice")
+        if invoice is None:
+            return json_error("Файл счёта не передан (ожидается поле «invoice»)", 422)
+        try:
+            payment = contract_payment_svc.create_contract_payment(
+                administrator_id=administrator_id, agreement_id=agreement_id, amount=amount,
+                invoice_data=invoice.read(), invoice_filename=invoice.name,
+                invoice_mime=invoice.content_type or "application/octet-stream",
+                created_by=request.token.user_id,
+            )
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.ContractPaymentRead.model_validate(
+            contract_payment_svc.serialize_contract_payment(payment))
+
+
+class ContractPaymentDetailView(ContractsView):
+    @read
+    def get(self, request, payment_id: int):
+        return schemas.ContractPaymentRead.model_validate(
+            contract_payment_svc.serialize_contract_payment(
+                contract_payment_svc.get_contract_payment_or_404(payment_id)))
+
+
+class ContractPaymentInvoiceUrlView(ContractsView):
+    @read
+    def get(self, request, payment_id: int):
+        url = contract_payment_svc.invoice_url(
+            contract_payment_svc.get_contract_payment_or_404(payment_id))
+        if url is None:
+            raise Http404("К оплате не приложен счёт")
+        return {"url": url}
+
+
+class ContractPaymentPaymentOrderView(ContractsView):
+    @write("POST", admin=False)
+    def post(self, request, payment_id: int):
+        posting_number = (request.POST.get("posting_number") or "").strip()
+        if not posting_number:
+            return json_error("Укажите номер проводки", 422)
+        if len(posting_number) > 100:
+            return json_error("Номер проводки не длиннее 100 символов", 422)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+        try:
+            payment = contract_payment_svc.record_payment(
+                payment_id, posting_number=posting_number, data=upload.read(),
+                filename=upload.name, mime=upload.content_type or "application/octet-stream",
+                actor_id=request.token.user_id, is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.ContractPaymentRead.model_validate(
+            contract_payment_svc.serialize_contract_payment(payment))
+
+
+class ContractPaymentPaymentOrderUrlView(ContractsView):
+    @read
+    def get(self, request, payment_id: int):
+        url = contract_payment_svc.payment_order_url(
+            contract_payment_svc.get_contract_payment_or_404(payment_id))
+        if url is None:
+            raise Http404("К оплате не приложено платёжное поручение")
+        return {"url": url}
+
 
 class EnumsView(ContractsView):
     """Справочник choice-полей для фронтенда — чтобы подписи статусов и типов

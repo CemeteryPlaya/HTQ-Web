@@ -498,6 +498,7 @@ class AgreementRead(BaseModel):
     amount: Decimal
     advance_payment_id: Optional[int]
     advance_paid_amount: Decimal
+    contract_paid_amount: Decimal
     remaining_amount: Decimal
     currency: str
     file_id: Optional[str]
@@ -583,6 +584,28 @@ class AdvancePaymentRead(BaseModel):
     counterparty_name: str
     amount: Decimal
     currency: str
+    status: str
+    approval_state: str
+    payment_order_file_id: Optional[str]
+    posting_number: str
+    paid_by: Optional[int]
+    paid_at: Optional[datetime]
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ContractPaymentRead(BaseModel):
+    id: int
+    administrator_id: int
+    administrator_name: str
+    agreement_id: int
+    agreement_number: str
+    agreement_name: str
+    counterparty_name: str
+    amount: Decimal
+    currency: str
+    invoice_file_id: Optional[str]
     status: str
     approval_state: str
     payment_order_file_id: Optional[str]

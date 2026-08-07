@@ -123,4 +123,18 @@ urlpatterns = [
     path("advance-payments/", views.AdvancePaymentCollectionView.as_view()),
     path("advance-payments/<int:payment_id>", views.AdvancePaymentDetailView.as_view()),
     path("advance-payments/<int:payment_id>/", views.AdvancePaymentDetailView.as_view()),
+
+    # ── Оплаты по договорам ───────────────────────────────────────────────
+    path("contract-payments/<int:payment_id>/submit", views.ContractPaymentSubmitView.as_view()),
+    path("contract-payments/<int:payment_id>/submit/", views.ContractPaymentSubmitView.as_view()),
+    path("contract-payments/<int:payment_id>/invoice-url", views.ContractPaymentInvoiceUrlView.as_view()),
+    path("contract-payments/<int:payment_id>/invoice-url/", views.ContractPaymentInvoiceUrlView.as_view()),
+    path("contract-payments/<int:payment_id>/payment-order", views.ContractPaymentPaymentOrderView.as_view()),
+    path("contract-payments/<int:payment_id>/payment-order/", views.ContractPaymentPaymentOrderView.as_view()),
+    path("contract-payments/<int:payment_id>/payment-order-url", views.ContractPaymentPaymentOrderUrlView.as_view()),
+    path("contract-payments/<int:payment_id>/payment-order-url/", views.ContractPaymentPaymentOrderUrlView.as_view()),
+    path("contract-payments", views.ContractPaymentCollectionView.as_view()),
+    path("contract-payments/", views.ContractPaymentCollectionView.as_view()),
+    path("contract-payments/<int:payment_id>", views.ContractPaymentDetailView.as_view()),
+    path("contract-payments/<int:payment_id>/", views.ContractPaymentDetailView.as_view()),
 ]

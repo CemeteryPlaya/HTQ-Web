@@ -24,6 +24,7 @@ import type {
   Invoice,
   InvoiceStatus,
   AdvancePayment,
+  ContractPayment,
   Program,
 } from '@/types/contracts';
 
@@ -236,4 +237,21 @@ export const contractsApi = {
   },
   getAdvancePaymentOrderUrl: (id: number) =>
     api.get<{ url: string }>(path(`advance-payments/${id}/payment-order-url`)),
+
+  listContractPayments: (params?: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean }) =>
+    api.get<ContractPayment[]>(path('contract-payments'), { params }),
+  getContractPayment: (id: number) => api.get<ContractPayment>(path(`contract-payments/${id}`)),
+  createContractPayment: (administratorId: number, agreementId: number, amount: string, invoice: File) => {
+    const form = new FormData();
+    form.append('administrator_id', String(administratorId)); form.append('agreement_id', String(agreementId));
+    form.append('amount', amount); form.append('invoice', invoice);
+    return api.post<ContractPayment>(path('contract-payments'), form);
+  },
+  submitContractPayment: (id: number) => api.post<ApprovalProcess>(path(`contract-payments/${id}/submit`)),
+  recordContractPayment: (id: number, postingNumber: string, file: File) => {
+    const form = new FormData(); form.append('posting_number', postingNumber); form.append('file', file);
+    return api.post<ContractPayment>(path(`contract-payments/${id}/payment-order`), form);
+  },
+  getContractPaymentInvoiceUrl: (id: number) => api.get<{ url: string }>(path(`contract-payments/${id}/invoice-url`)),
+  getContractPaymentOrderUrl: (id: number) => api.get<{ url: string }>(path(`contract-payments/${id}/payment-order-url`)),
 };

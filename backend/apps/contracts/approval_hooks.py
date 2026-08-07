@@ -55,6 +55,7 @@ from .models import (
     AgreementStatus,
     Budget,
     Counterparty,
+    ContractPayment,
     Country,
     Invoice,
     InvoiceStatus,
@@ -275,6 +276,65 @@ def _advance_payment_fact_fields() -> list[dict]:
         {"key": "amount", "label": "Сумма предоплаты", "type": "number"},
         {"key": "currency", "label": "Валюта", "type": "string"},
     ]
+
+
+def _contract_payment_to(subject_id: int, status: str) -> None:
+    from .services import contract_payment_service as payment_svc
+
+    payment = ContractPayment.objects.filter(pk=subject_id).first()
+    if payment is not None and payment.status != status:
+        payment_svc.change_status(subject_id, status)
+
+
+def _contract_payment_on_started(subject_id: int) -> None:
+    _contract_payment_to(subject_id, AdvancePaymentStatus.ON_REVIEW)
+
+
+def _contract_payment_on_approved(subject_id: int) -> None:
+    _contract_payment_to(subject_id, AdvancePaymentStatus.AWAITING_ACCOUNTING)
+
+
+def _contract_payment_on_rejected(subject_id: int) -> None:
+    _contract_payment_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _contract_payment_on_rework(subject_id: int) -> None:
+    _contract_payment_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _contract_payment_on_cancelled(subject_id: int) -> None:
+    _contract_payment_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _describe_contract_payment(subject_id: int) -> dict | None:
+    payment = (ContractPayment.objects.select_related("agreement", "agreement__counterparty")
+               .filter(pk=subject_id).first())
+    if payment is None:
+        return None
+    return {
+        "title": f"Оплата по договору {payment.agreement.number} ({payment.amount} {payment.agreement.currency})",
+        "url": f"/contracts/contract-payments/{payment.pk}",
+    }
+
+
+def _contract_payment_facts(subject_id: int) -> dict:
+    payment = (ContractPayment.objects
+               .select_related("agreement__budget_line__budget__administrator", "agreement__counterparty")
+               .filter(pk=subject_id).first())
+    if payment is None:
+        return {}
+    agreement = payment.agreement
+    return {
+        "admin_country_id": agreement.budget_line.budget.administrator.country_id,
+        "counterparty_country_id": agreement.counterparty.country_id,
+        "program_id": agreement.budget_line.program_id,
+        "amount": payment.amount,
+        "currency": agreement.currency,
+    }
+
+
+def _contract_payment_fact_fields() -> list[dict]:
+    return _advance_payment_fact_fields()
 
 
 def _invoice_facts(subject_id: int) -> dict:
@@ -540,4 +600,17 @@ def register() -> None:
         describe=_describe_advance_payment,
         facts=_advance_payment_facts,
         fact_fields=_advance_payment_fact_fields,
+    )
+    signoff.register_subject(
+        ContractPayment.SIGNOFF_SUBJECT_TYPE,
+        label="Оплата по договору",
+        model=ContractPayment,
+        on_started=_contract_payment_on_started,
+        on_approved=_contract_payment_on_approved,
+        on_rejected=_contract_payment_on_rejected,
+        on_rework=_contract_payment_on_rework,
+        on_cancelled=_contract_payment_on_cancelled,
+        describe=_describe_contract_payment,
+        facts=_contract_payment_facts,
+        fact_fields=_contract_payment_fact_fields,
     )

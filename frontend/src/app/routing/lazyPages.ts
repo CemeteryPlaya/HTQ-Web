@@ -40,6 +40,9 @@ export const lazyPages = {
   ContractsAdvancePaymentList: React.lazy(() => import('@/pages/contracts/AdvancePaymentList')),
   ContractsAdvancePaymentCreate: React.lazy(() => import('@/pages/contracts/AdvancePaymentCreate')),
   ContractsAdvancePaymentDetail: React.lazy(() => import('@/pages/contracts/AdvancePaymentDetail')),
+  ContractsContractPaymentList: React.lazy(() => import('@/pages/contracts/ContractPaymentList')),
+  ContractsContractPaymentCreate: React.lazy(() => import('@/pages/contracts/ContractPaymentCreate')),
+  ContractsContractPaymentDetail: React.lazy(() => import('@/pages/contracts/ContractPaymentDetail')),
 
   // Универсальное согласование (apps.signoff). Не путать с Requests* —
   // те страницы обслуживают apps.approvals, другой домен.

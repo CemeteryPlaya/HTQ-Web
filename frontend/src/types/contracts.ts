@@ -174,6 +174,7 @@ export interface Agreement {
   advance_payment_id: number | null;
   /** Закрытая предоплата; исходную сумму договора не меняет. */
   advance_paid_amount: string;
+  contract_paid_amount: string;
   /** Остаток по договору после закрытой предоплаты. */
   remaining_amount: string;
   currency: string;
@@ -255,6 +256,28 @@ export interface AdvancePayment {
   amount: string;
   currency: string;
   /** Стадия документа; отдельна от решения Signoff. */
+  status: 'draft' | 'on_review' | 'awaiting_accounting' | 'closed';
+  approval_state: ApprovalState;
+  payment_order_file_id: string | null;
+  posting_number: string;
+  paid_by: number | null;
+  paid_at: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractPayment {
+  id: number;
+  administrator_id: number;
+  administrator_name: string;
+  agreement_id: number;
+  agreement_number: string;
+  agreement_name: string;
+  counterparty_name: string;
+  amount: string;
+  currency: string;
+  invoice_file_id: string | null;
   status: 'draft' | 'on_review' | 'awaiting_accounting' | 'closed';
   approval_state: ApprovalState;
   payment_order_file_id: string | null;

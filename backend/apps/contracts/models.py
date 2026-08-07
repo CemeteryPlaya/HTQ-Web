@@ -560,6 +560,45 @@ class Invoice(signoff.Approvable, models.Model):
         return f"Счёт: {self.name} ({self.amount} {self.currency})"
 
 
+class ContractPayment(signoff.Approvable, models.Model):
+    """Оплата по договору: счёт, отдельное согласование и проведение бухгалтерией."""
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.contract_payment"
+
+    administrator = models.ForeignKey(Administrator, on_delete=models.PROTECT,
+                                      related_name="contract_payments")
+    agreement = models.ForeignKey(Agreement, on_delete=models.PROTECT,
+                                  related_name="contract_payments")
+    amount = models.DecimalField(max_digits=18, decimal_places=2,
+                                 verbose_name="Сумма оплаты")
+    invoice_file_id = models.CharField(max_length=64, null=True, blank=True,
+                                       verbose_name="Счёт")
+    status = models.CharField(max_length=24, choices=AdvancePaymentStatus.choices,
+                              default=AdvancePaymentStatus.DRAFT,
+                              db_default=AdvancePaymentStatus.DRAFT)
+    payment_order_file_id = models.CharField(max_length=64, null=True, blank=True,
+                                             verbose_name="Файл платёжного поручения")
+    posting_number = models.CharField(max_length=100, default="", blank=True,
+                                      db_default="", verbose_name="Номер проводки")
+    paid_by = models.IntegerField(null=True, blank=True, db_index=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["agreement", "status"], name="ix_ctr_pay_agr_status"),
+            models.Index(fields=["administrator", "approval_state"], name="ix_ctr_pay_adm_state"),
+        ]
+        verbose_name = "Оплата по договору"
+        verbose_name_plural = "Оплаты по договорам"
+
+    def __str__(self) -> str:
+        return f"Оплата по договору {self.agreement.number}: {self.amount}"
+
+
 class AdvancePayment(signoff.Approvable, models.Model):
     """Предоплата, запрашиваемая на основании уже согласованного договора.
 
