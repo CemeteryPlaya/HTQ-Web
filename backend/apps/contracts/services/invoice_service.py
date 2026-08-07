@@ -25,6 +25,7 @@ from django.db import transaction
 from django.http import Http404
 
 from apps.contracts.models import (
+    Agreement,
     Budget,
     BudgetLine,
     BudgetStatus,
@@ -114,6 +115,31 @@ def _validate_context(line: BudgetLine, counterparty, *,
                 f"Контрагент «{counterparty.name}» не согласован — "
                 "счёт по нему выписать нельзя"
             )
+
+
+def _assert_no_active_agreement(line: BudgetLine) -> None:
+    """Не смешивать два способа расхода одной программы.
+
+    Счёт — это закупка *без* договора. Как только у строки бюджета есть
+    договор в рабочем статусе, все расходы по ней должны оформляться по этому
+    договору, а не вторым, независимым счётом. Черновик договора ещё не
+    является таким обязательством и счёт не блокирует.
+
+    Проверка вызывается после блокировки ``BudgetLine``. Переход договора в
+    рабочий статус берёт ту же блокировку в ``agreement_service``, поэтому
+    параллельное создание счёта и запуск договора не пройдут эту проверку
+    одновременно.
+    """
+    agreement = (Agreement.objects
+                 .filter(budget_line_id=line.pk,
+                         status__in=budget_calc.COMMITTING_STATUSES)
+                 .only("number", "status")
+                 .first())
+    if agreement is not None:
+        raise InvoiceRuleViolation(
+            f"По выбранной программе уже есть активный договор «{agreement.number}». "
+            "Счёт без договора создать нельзя"
+        )
 
 
 def _get_line_or_404(line_id: int) -> BudgetLine:
@@ -218,6 +244,7 @@ def create_invoice(*, name: str, budget_line_id: int, counterparty_id: int,
     line = _lock_line(budget_line_id)
     counterparty = get_counterparty_or_404(counterparty_id)
     _validate_context(line, counterparty)
+    _assert_no_active_agreement(line)
 
     # Создаётся только черновик. ``status`` меняется через change_status(),
     # иначе POST позволил бы выдать оплаченный счёт без скана и согласования.
@@ -258,6 +285,8 @@ def update_invoice(invoice_id: int, **fields) -> Invoice:
     _validate_context(line, counterparty,
                       check_budget_status=budget_changed,
                       check_counterparty_status=counterparty_changed)
+    if budget_changed:
+        _assert_no_active_agreement(line)
 
     amount = fields.get("amount") if fields.get("amount") is not None else invoice.amount
     if budget_changed or amount != invoice.amount:
@@ -315,6 +344,7 @@ def submit_for_approval(invoice_id: int, *, actor_id: int | None = None) -> dict
 
     line = _lock_line(invoice.budget_line_id)
     _validate_context(line, invoice.counterparty)
+    _assert_no_active_agreement(line)
     budget_calc.check_capacity(line, invoice.amount)
 
     # enrich=True: карточка уходит прямо в HTTP-ответ, и фронтенду после
@@ -372,8 +402,14 @@ def change_status(invoice_id: int, new_status: str, *, actor_id: int | None = No
 
     was_committing = current in budget_calc.INVOICE_COMMITTING_STATUSES
     will_commit = new_status in budget_calc.INVOICE_COMMITTING_STATUSES
-    if will_commit and not was_committing:
+    moving_out_of_draft = new_status not in (InvoiceStatus.DRAFT,
+                                              InvoiceStatus.CANCELLED)
+    if moving_out_of_draft:
         line = _lock_line(invoice.budget_line_id)
+        _assert_no_active_agreement(line)
+    if will_commit and not was_committing:
+        # ``line`` уже заблокирована выше: счёт не может стать расходом между
+        # проверкой договора и проверкой остатка.
         budget_calc.check_capacity(line, invoice.amount,
                                    exclude_invoice_id=invoice.pk)
 

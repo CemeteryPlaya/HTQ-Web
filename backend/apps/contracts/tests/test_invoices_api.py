@@ -14,6 +14,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 
 from apps.contracts.models import (
+    AgreementStatus,
     BudgetStatus,
     CounterpartyStatus,
     Invoice,
@@ -102,14 +103,46 @@ def test_invoice_over_program_budget_is_rejected_at_creation():
     """Сумма нового счёта не может быть больше остатка выбранной программы."""
     line = make_line(amount="100000.00")
     counterparty = make_counterparty(country=line.budget.administrator.country)
-    make_agreement(line=line, counterparty=counterparty, number="Д-001",
-                   amount="100000.00", status="signed")  # остаток исчерпан договором
+    make_invoice(line=line, counterparty=counterparty, amount="100000.00",
+                 status=InvoiceStatus.APPROVED)  # остаток исчерпан счётом
 
     resp = post_json(Client(), f"{BASE}/invoices",
                      _invoice_body(line, counterparty, amount="900000.00"),
                      **auth(token()))
     assert resp.status_code == 409, resp.content
     assert "превышает остаток" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("status", [
+    AgreementStatus.ON_REVIEW,
+    AgreementStatus.APPROVED,
+    AgreementStatus.SIGNED,
+    AgreementStatus.EXECUTED,
+])
+def test_active_agreement_rejects_standalone_invoice(status):
+    """У программы с рабочим договором расход идёт только через договор."""
+    line = make_line(amount="5000000.00")
+    counterparty = make_counterparty(country=line.budget.administrator.country)
+    make_agreement(line=line, counterparty=counterparty, number=f"Д-{status}",
+                   amount="100000.00", status=status)
+
+    resp = post_json(Client(), f"{BASE}/invoices",
+                     _invoice_body(line, counterparty), **auth(token()))
+    assert resp.status_code == 409, resp.content
+    assert "уже есть активный договор" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_draft_agreement_does_not_block_standalone_invoice():
+    line = make_line(amount="5000000.00")
+    counterparty = make_counterparty(country=line.budget.administrator.country)
+    make_agreement(line=line, counterparty=counterparty, number="Д-черновик",
+                   amount="100000.00", status=AgreementStatus.DRAFT)
+
+    resp = post_json(Client(), f"{BASE}/invoices",
+                     _invoice_body(line, counterparty), **auth(token()))
+    assert resp.status_code == 201, resp.content
 
 
 @pytest.mark.django_db

@@ -44,6 +44,7 @@ import type { BudgetLineFlat } from '@/types/contracts';
  */
 
 const AMOUNT_RE = /^\d+([.,]\d{1,2})?$/;
+const ACTIVE_AGREEMENT_STATUSES = new Set(['on_review', 'approved', 'signed', 'executed']);
 
 /** Сравнение денежных строк без float: в минимальных единицах валюты. */
 function toMinorUnits(value: string): bigint {
@@ -80,6 +81,16 @@ const InvoiceCreate = () => {
   const [amount, setAmount] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [errors, setErrors] = useState<Errors>({});
+
+  // A direct invoice is allowed only while this program has no working
+  // agreement. Fetch after the budget line is selected; the backend performs
+  // the same check transactionally before it accepts the invoice.
+  const { data: lineAgreements = [], isLoading: agreementsLoading } = useQuery({
+    queryKey: ['contracts', 'agreements', { budget_line_id: lineId }],
+    queryFn: () =>
+      contractsApi.listAgreements({ budget_line_id: Number(lineId) }).then((r) => r.data),
+    enabled: Boolean(lineId),
+  });
 
   // Каскадные списки строятся из строк бюджета: выбирать можно только те
   // администратора и программу, под которые бюджет реально заведён.
@@ -121,6 +132,10 @@ const InvoiceCreate = () => {
     remainingMinorUnits !== null
     && amountMinorUnits !== null
     && amountMinorUnits > remainingMinorUnits;
+  const activeAgreement = lineAgreements.find((agreement) =>
+    ACTIVE_AGREEMENT_STATUSES.has(agreement.status),
+  );
+  const blockedByAgreement = Boolean(activeAgreement);
 
   const chooseAdministrator = (value: string) => {
     setAdministratorId(value);
@@ -145,6 +160,9 @@ const InvoiceCreate = () => {
     if (!administratorId) next.administrator = 'Выберите администратора бюджета';
     else if (!programId) next.program = 'Выберите программу';
     else if (!lineId) next.budget = 'Выберите бюджетный год';
+    else if (blockedByAgreement) {
+      next.budget = 'По выбранной программе уже есть активный договор; счёт без договора создать нельзя';
+    }
     if (!counterpartyId) next.counterparty = 'Выберите поставщика';
     if (!name.trim()) next.name = 'Укажите наименование';
     if (!amount.trim()) next.amount = 'Укажите сумму счёта';
@@ -407,6 +425,17 @@ const InvoiceCreate = () => {
                   </div>
                 </div>
               )}
+
+              {blockedByAgreement && selectedLine && (
+                <div className="flex gap-2 rounded-md border border-destructive/50 bg-destructive/5 p-3 text-sm">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />
+                  <div>
+                    По выбранной программе уже есть активный договор
+                    {activeAgreement?.number ? ` «${activeAgreement.number}»` : ''}. Счёт без
+                    договора создать нельзя.
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -511,7 +540,8 @@ const InvoiceCreate = () => {
           <div className="flex gap-3">
             <Button
               type="submit"
-              disabled={mutation.isPending || noBudgets || noCounterparties || overBudget}
+              disabled={mutation.isPending || noBudgets || noCounterparties || overBudget
+                || blockedByAgreement || (Boolean(lineId) && agreementsLoading)}
             >
               {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Выписать счёт
