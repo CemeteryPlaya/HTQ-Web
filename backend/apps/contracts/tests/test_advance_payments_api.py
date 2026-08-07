@@ -6,7 +6,7 @@ import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 
-from apps.contracts.models import AgreementStatus
+from apps.contracts.models import AdvancePaymentStatus, AgreementStatus
 from apps.contracts.services.advance_payment_service import ACCOUNT_PAYMENT_PERMISSION
 from apps.contracts.tests.helpers import (
     BASE, admin_token, auth, make_advance_payment, make_agreement, make_line,
@@ -44,6 +44,7 @@ def test_create_requires_an_agreement_approved_by_signoff():
     assert ok.status_code == 201, ok.content
     assert ok.json()["agreement_id"] == agreement.pk
     assert ok.json()["approval_state"] == ApprovalState.DRAFT
+    assert ok.json()["status"] == AdvancePaymentStatus.DRAFT
 
 
 def test_payment_order_requires_approved_prepayment_and_accountant(monkeypatch):
@@ -57,7 +58,8 @@ def test_payment_order_requires_approved_prepayment_and_accountant(monkeypatch):
     assert before_approval.status_code == 409, before_approval.content
 
     payment.approval_state = ApprovalState.APPROVED
-    payment.save(update_fields=["approval_state"])
+    payment.status = AdvancePaymentStatus.AWAITING_ACCOUNTING
+    payment.save(update_fields=["approval_state", "status"])
     forbidden = client.post(
         f"{BASE}/advance-payments/{payment.pk}/payment-order",
         {"posting_number": "ПР-1", "file": SimpleUploadedFile("order.pdf", b"PDF")}, **auth(token()),
@@ -85,11 +87,13 @@ def test_payment_order_requires_approved_prepayment_and_accountant(monkeypatch):
     assert success.json()["posting_number"] == "ПР-1"
     assert success.json()["payment_order_file_id"] == "payment-order-1"
     assert success.json()["paid_by"] == 7
+    assert success.json()["status"] == AdvancePaymentStatus.CLOSED
 
 
 def test_payment_order_cannot_be_replaced_after_accounting():
     payment = make_advance_payment(agreement=_approved_agreement(),
                                    approval_state=ApprovalState.APPROVED,
+                                   status=AdvancePaymentStatus.CLOSED,
                                    payment_order_file_id="old-file", posting_number="ПР-1")
     blocked = Client().post(
         f"{BASE}/advance-payments/{payment.pk}/payment-order",

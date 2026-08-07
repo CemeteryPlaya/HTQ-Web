@@ -50,6 +50,7 @@ from apps.signoff import interface as signoff
 
 from .models import (
     AdvancePayment,
+    AdvancePaymentStatus,
     Agreement,
     AgreementStatus,
     Budget,
@@ -181,6 +182,40 @@ def _invoice_on_rework(subject_id: int) -> None:
 
 def _invoice_on_cancelled(subject_id: int) -> None:
     _invoice_to(subject_id, InvoiceStatus.DRAFT)
+
+
+# ── Предоплата: согласование отдельно от закрытия бухгалтерией ─────────
+
+def _advance_payment_to(subject_id: int, status: str) -> None:
+    from .services import advance_payment_service as payment_svc
+
+    payment = AdvancePayment.objects.filter(pk=subject_id).first()
+    if payment is None:
+        logger.warning("signoff: предоплата %s не найдена, статус не менялся", subject_id)
+        return
+    if payment.status == status:
+        return
+    payment_svc.change_status(subject_id, status)
+
+
+def _advance_payment_on_started(subject_id: int) -> None:
+    _advance_payment_to(subject_id, AdvancePaymentStatus.ON_REVIEW)
+
+
+def _advance_payment_on_approved(subject_id: int) -> None:
+    _advance_payment_to(subject_id, AdvancePaymentStatus.AWAITING_ACCOUNTING)
+
+
+def _advance_payment_on_rejected(subject_id: int) -> None:
+    _advance_payment_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _advance_payment_on_rework(subject_id: int) -> None:
+    _advance_payment_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _advance_payment_on_cancelled(subject_id: int) -> None:
+    _advance_payment_to(subject_id, AdvancePaymentStatus.DRAFT)
 
 
 def _describe_invoice(subject_id: int) -> dict | None:
@@ -497,6 +532,11 @@ def register() -> None:
         AdvancePayment.SIGNOFF_SUBJECT_TYPE,
         label="Предоплата на основании договора",
         model=AdvancePayment,
+        on_started=_advance_payment_on_started,
+        on_approved=_advance_payment_on_approved,
+        on_rejected=_advance_payment_on_rejected,
+        on_rework=_advance_payment_on_rework,
+        on_cancelled=_advance_payment_on_cancelled,
         describe=_describe_advance_payment,
         facts=_advance_payment_facts,
         fact_fields=_advance_payment_fact_fields,

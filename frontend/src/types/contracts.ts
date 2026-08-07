@@ -248,6 +248,8 @@ export interface AdvancePayment {
   counterparty_name: string;
   amount: string;
   currency: string;
+  /** Стадия документа; отдельна от решения Signoff. */
+  status: 'draft' | 'on_review' | 'awaiting_accounting' | 'closed';
   approval_state: ApprovalState;
   payment_order_file_id: string | null;
   posting_number: string;

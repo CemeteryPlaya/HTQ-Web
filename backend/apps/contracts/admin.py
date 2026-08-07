@@ -162,9 +162,9 @@ class InvoiceAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 @admin.register(AdvancePayment)
 class AdvancePaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "agreement", "amount", "approval_state", "posting_number",
+    list_display = ("id", "agreement", "amount", "status", "approval_state", "posting_number",
                     "paid_by", "paid_at", "created_at")
-    list_filter = ("approval_state", "agreement__budget_line__budget__period_year")
+    list_filter = ("status", "approval_state", "agreement__budget_line__budget__period_year")
     search_fields = ("agreement__number", "agreement__name", "posting_number")
     readonly_fields = ("created_at", "updated_at", "approval_state", "paid_by", "paid_at")
     raw_id_fields = ("agreement",)

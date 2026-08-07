@@ -580,6 +580,7 @@ class AdvancePaymentRead(BaseModel):
     counterparty_name: str
     amount: Decimal
     currency: str
+    status: str
     approval_state: str
     payment_order_file_id: Optional[str]
     posting_number: str

@@ -108,6 +108,15 @@ class InvoiceStatus(models.TextChoices):
     CANCELLED = "cancelled", "Отменён"
 
 
+class AdvancePaymentStatus(models.TextChoices):
+    """Доменная стадия предоплаты, отдельная от решения signoff."""
+
+    DRAFT = "draft", "Черновик"
+    ON_REVIEW = "on_review", "На согласовании"
+    AWAITING_ACCOUNTING = "awaiting_accounting", "Ожидает оформления бухгалтерией"
+    CLOSED = "closed", "Закрыт"
+
+
 class Country(models.Model):
     """Страна. Используется и администратором бюджета, и контрагентом."""
 
@@ -555,10 +564,12 @@ class AdvancePayment(signoff.Approvable, models.Model):
     """Предоплата, запрашиваемая на основании уже согласованного договора.
 
     Согласование самой предоплаты и её фактическое проведение разделены.
-    ``approval_state`` ведёт signoff; платёжное поручение и номер проводки
-    появляются только после положительного решения и только через отдельное
-    действие бухгалтера. Они не являются ещё одним этапом согласования:
-    бухгалтер фиксирует исполнение платежа, а не принимает решение по нему.
+    ``approval_state`` ведёт signoff, а ``status`` — собственный жизненный
+    цикл документа. После положительного решения статус становится
+    ``awaiting_accounting``; файл платёжного поручения и номер проводки
+    появляются только отдельным действием бухгалтера, которое закрывает
+    документ. Это не ещё один этап согласования: бухгалтер фиксирует
+    исполнение платежа, а не принимает решение по нему.
     """
 
     SIGNOFF_SUBJECT_TYPE = "contracts.advance_payment"
@@ -567,6 +578,9 @@ class AdvancePayment(signoff.Approvable, models.Model):
                                   related_name="advance_payments")
     amount = models.DecimalField(max_digits=18, decimal_places=2,
                                  verbose_name="Сумма предоплаты")
+    status = models.CharField(max_length=24, choices=AdvancePaymentStatus.choices,
+                              default=AdvancePaymentStatus.DRAFT,
+                              db_default=AdvancePaymentStatus.DRAFT)
     payment_order_file_id = models.CharField(
         max_length=64, null=True, blank=True,
         verbose_name="Файл платёжного поручения",
