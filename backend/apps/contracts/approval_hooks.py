@@ -49,6 +49,7 @@ import logging
 from apps.signoff import interface as signoff
 
 from .models import (
+    AdvancePayment,
     Agreement,
     AgreementStatus,
     Budget,
@@ -195,6 +196,50 @@ def _describe_invoice(subject_id: int) -> dict | None:
                   f"{invoice.currency})"),
         "url": f"/contracts/invoices/{invoice.pk}",
     }
+
+
+def _describe_advance_payment(subject_id: int) -> dict | None:
+    payment = (AdvancePayment.objects.select_related("agreement", "agreement__counterparty")
+               .filter(pk=subject_id).first())
+    if payment is None:
+        return None
+    return {
+        "title": (f"Предоплата по договору {payment.agreement.number} "
+                  f"({payment.agreement.counterparty.name}, {payment.amount} "
+                  f"{payment.agreement.currency})"),
+        "url": f"/contracts/advance-payments/{payment.pk}",
+    }
+
+
+def _advance_payment_facts(subject_id: int) -> dict:
+    payment = (AdvancePayment.objects
+               .select_related("agreement__budget_line__budget__administrator",
+                               "agreement__counterparty")
+               .filter(pk=subject_id).first())
+    if payment is None:
+        return {}
+    agreement = payment.agreement
+    return {
+        "admin_country_id": agreement.budget_line.budget.administrator.country_id,
+        "counterparty_country_id": agreement.counterparty.country_id,
+        "program_id": agreement.budget_line.program_id,
+        "amount": payment.amount,
+        "currency": agreement.currency,
+    }
+
+
+def _advance_payment_fact_fields() -> list[dict]:
+    countries = _country_options()
+    return [
+        {"key": "admin_country_id", "label": "Страна администратора бюджета",
+         "type": "choice", "options": countries},
+        {"key": "counterparty_country_id", "label": "Страна контрагента",
+         "type": "choice", "options": countries},
+        {"key": "program_id", "label": "Программа",
+         "type": "choice", "options": _program_options()},
+        {"key": "amount", "label": "Сумма предоплаты", "type": "number"},
+        {"key": "currency", "label": "Валюта", "type": "string"},
+    ]
 
 
 def _invoice_facts(subject_id: int) -> dict:
@@ -447,4 +492,12 @@ def register() -> None:
         describe=_describe_invoice,
         facts=_invoice_facts,
         fact_fields=_invoice_fact_fields,
+    )
+    signoff.register_subject(
+        AdvancePayment.SIGNOFF_SUBJECT_TYPE,
+        label="Предоплата на основании договора",
+        model=AdvancePayment,
+        describe=_describe_advance_payment,
+        facts=_advance_payment_facts,
+        fact_fields=_advance_payment_fact_fields,
     )

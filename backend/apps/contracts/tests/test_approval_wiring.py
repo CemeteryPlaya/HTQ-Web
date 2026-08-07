@@ -95,7 +95,7 @@ def approve(subject) -> None:
 # Регистрация типов
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_all_four_models_are_registered_as_approvable(client):
+def test_all_contract_models_are_registered_as_approvable(client):
     listed = client.get("/api/signoff/v1/subjects", **auth(token())).json()
     by_type = {row["subject_type"]: row for row in listed}
 
@@ -103,6 +103,7 @@ def test_all_four_models_are_registered_as_approvable(client):
     assert by_type["contracts.counterparty"]["label"] == "Контрагент"
     assert by_type["contracts.agreement"]["label"] == "Договор"
     assert by_type["contracts.invoice"]["label"] == "Счёт на оплату"
+    assert by_type["contracts.advance_payment"]["label"] == "Предоплата на основании договора"
 
 
 def test_the_process_card_shows_a_human_readable_subject(client):

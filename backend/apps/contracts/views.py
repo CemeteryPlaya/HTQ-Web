@@ -52,10 +52,12 @@ from .services import agreement_service as agr_svc
 from .services import budget_service as budget_svc
 from .services import counterparty_service as cp_svc
 from .services import invoice_service as inv_svc
+from .services import advance_payment_service as adv_svc
 from .services import reference_service as ref_svc
 from .services.agreement_service import AgreementRuleViolation
 from .services.budget_calc import COMMITTING_STATUSES, BudgetExceeded
 from .services.invoice_service import InvoiceRuleViolation
+from .services.advance_payment_service import AdvancePaymentRuleViolation
 from .services.reference_service import ReferenceConflict
 
 # Конфликты доменного уровня, которые вьюха переводит в 409. Собраны в один
@@ -67,6 +69,7 @@ from .services.reference_service import ReferenceConflict
 # такие же конфликты состояния, и различать их для фронтенда незачем, ему
 # нужен текст. Импортируется из signoff.interface (правило границ).
 CONFLICTS = (ReferenceConflict, AgreementRuleViolation, InvoiceRuleViolation,
+             AdvancePaymentRuleViolation,
              BudgetExceeded, signoff.SignoffError, signoff.UnknownSubject)
 
 
@@ -373,6 +376,13 @@ class InvoiceSubmitView(SubmitView):
     def post(self, request, invoice_id: int):
         return self.submitted(
             lambda **kw: inv_svc.submit_for_approval(invoice_id, **kw))
+
+
+class AdvancePaymentSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, payment_id: int):
+        return self.submitted(
+            lambda **kw: adv_svc.submit_for_approval(payment_id, **kw))
 
 
 class BudgetAgreementsView(ContractsView):
@@ -785,6 +795,80 @@ class InvoiceFileUrlView(ContractsView):
         url = inv_svc.file_url(invoice)
         if url is None:
             raise Http404("К счёту не приложен файл")
+        return {"url": url}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Предоплаты на основании договоров
+# ═══════════════════════════════════════════════════════════════════════
+
+class AdvancePaymentCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = adv_svc.list_advance_payments(
+            agreement_id=self.int_param("agreement_id"),
+            awaiting_payment=self.bool_param("awaiting_payment"),
+        )
+        return [schemas.AdvancePaymentRead.model_validate(
+            adv_svc.serialize_advance_payment(row)) for row in rows]
+
+    @write("POST", body=schemas.AdvancePaymentCreate, status=201, admin=False)
+    def post(self, request, data: schemas.AdvancePaymentCreate):
+        try:
+            payment = adv_svc.create_advance_payment(
+                created_by=request.token.user_id, **data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AdvancePaymentRead.model_validate(
+            adv_svc.serialize_advance_payment(payment))
+
+
+class AdvancePaymentDetailView(ContractsView):
+    @read
+    def get(self, request, payment_id: int):
+        return schemas.AdvancePaymentRead.model_validate(
+            adv_svc.serialize_advance_payment(
+                adv_svc.get_advance_payment_or_404(payment_id)))
+
+
+class AdvancePaymentPaymentOrderView(ContractsView):
+    """Бухгалтерское проведение одобренной предоплаты, не этап signoff."""
+
+    @write("POST", admin=False)
+    def post(self, request, payment_id: int):
+        posting_number = (request.POST.get("posting_number") or "").strip()
+        if not posting_number:
+            return json_error("Укажите номер проводки", 422)
+        if len(posting_number) > 100:
+            return json_error("Номер проводки не длиннее 100 символов", 422)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+        try:
+            payment = adv_svc.record_payment(
+                payment_id,
+                posting_number=posting_number,
+                data=upload.read(),
+                filename=upload.name,
+                mime=upload.content_type or "application/octet-stream",
+                actor_id=request.token.user_id,
+                is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AdvancePaymentRead.model_validate(
+            adv_svc.serialize_advance_payment(payment))
+
+
+class AdvancePaymentPaymentOrderUrlView(ContractsView):
+    @read
+    def get(self, request, payment_id: int):
+        payment = adv_svc.get_advance_payment_or_404(payment_id)
+        url = adv_svc.payment_order_url(payment)
+        if url is None:
+            raise Http404("К предоплате не приложено платёжное поручение")
         return {"url": url}
 
 

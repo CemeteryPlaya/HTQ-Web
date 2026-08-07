@@ -239,6 +239,25 @@ export interface Invoice {
   updated_at: string;
 }
 
+/** Предоплата, оформляемая по уже согласованному договору. */
+export interface AdvancePayment {
+  id: number;
+  agreement_id: number;
+  agreement_number: string;
+  agreement_name: string;
+  counterparty_name: string;
+  amount: string;
+  currency: string;
+  approval_state: ApprovalState;
+  payment_order_file_id: string | null;
+  posting_number: string;
+  paid_by: number | null;
+  paid_at: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** Пара value/label из `GET /enums` — источник подписей для селектов. */
 export interface EnumOption {
   value: string;

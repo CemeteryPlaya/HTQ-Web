@@ -111,4 +111,16 @@ urlpatterns = [
     path("invoices/", views.InvoiceCollectionView.as_view()),
     path("invoices/<int:invoice_id>", views.InvoiceDetailView.as_view()),
     path("invoices/<int:invoice_id>/", views.InvoiceDetailView.as_view()),
+
+    # ── Предоплаты на основании договоров ───────────────────────────────
+    path("advance-payments/<int:payment_id>/submit", views.AdvancePaymentSubmitView.as_view()),
+    path("advance-payments/<int:payment_id>/submit/", views.AdvancePaymentSubmitView.as_view()),
+    path("advance-payments/<int:payment_id>/payment-order", views.AdvancePaymentPaymentOrderView.as_view()),
+    path("advance-payments/<int:payment_id>/payment-order/", views.AdvancePaymentPaymentOrderView.as_view()),
+    path("advance-payments/<int:payment_id>/payment-order-url", views.AdvancePaymentPaymentOrderUrlView.as_view()),
+    path("advance-payments/<int:payment_id>/payment-order-url/", views.AdvancePaymentPaymentOrderUrlView.as_view()),
+    path("advance-payments", views.AdvancePaymentCollectionView.as_view()),
+    path("advance-payments/", views.AdvancePaymentCollectionView.as_view()),
+    path("advance-payments/<int:payment_id>", views.AdvancePaymentDetailView.as_view()),
+    path("advance-payments/<int:payment_id>/", views.AdvancePaymentDetailView.as_view()),
 ]

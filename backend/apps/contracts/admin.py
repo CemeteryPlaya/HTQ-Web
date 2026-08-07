@@ -20,6 +20,7 @@ from htqweb.admin_gate import ServiceGatedAdminMixin
 
 from .models import (
     Administrator,
+    AdvancePayment,
     Agreement,
     Budget,
     BudgetLine,
@@ -157,3 +158,14 @@ class InvoiceAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     # `currency` read-only: она снимается со строки бюджета при создании, а не
     # задаётся руками (см. докстринг модели Invoice). `approval_state` тоже —
     # его единственный писатель — движок signoff.
+
+
+@admin.register(AdvancePayment)
+class AdvancePaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "agreement", "amount", "approval_state", "posting_number",
+                    "paid_by", "paid_at", "created_at")
+    list_filter = ("approval_state", "agreement__budget_line__budget__period_year")
+    search_fields = ("agreement__number", "agreement__name", "posting_number")
+    readonly_fields = ("created_at", "updated_at", "approval_state", "paid_by", "paid_at")
+    raw_id_fields = ("agreement",)
+    list_select_related = ("agreement", "agreement__counterparty")

@@ -23,6 +23,7 @@ import type {
   Country,
   Invoice,
   InvoiceStatus,
+  AdvancePayment,
   Program,
 } from '@/types/contracts';
 
@@ -217,4 +218,22 @@ export const contractsApi = {
   },
   getInvoiceFileUrl: (id: number) =>
     api.get<{ url: string }>(path(`invoices/${id}/file-url`)),
+
+  // ─── Предоплаты на основании договоров ────────────────────────────────
+  listAdvancePayments: (params?: { agreement_id?: number; awaiting_payment?: boolean }) =>
+    api.get<AdvancePayment[]>(path('advance-payments'), { params }),
+  getAdvancePayment: (id: number) =>
+    api.get<AdvancePayment>(path(`advance-payments/${id}`)),
+  createAdvancePayment: (data: { agreement_id: number; amount: string }) =>
+    api.post<AdvancePayment>(path('advance-payments'), data),
+  submitAdvancePayment: (id: number) =>
+    api.post<ApprovalProcess>(path(`advance-payments/${id}/submit`)),
+  recordAdvancePayment: (id: number, postingNumber: string, file: File) => {
+    const form = new FormData();
+    form.append('posting_number', postingNumber);
+    form.append('file', file);
+    return api.post<AdvancePayment>(path(`advance-payments/${id}/payment-order`), form);
+  },
+  getAdvancePaymentOrderUrl: (id: number) =>
+    api.get<{ url: string }>(path(`advance-payments/${id}/payment-order-url`)),
 };

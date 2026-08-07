@@ -15,6 +15,7 @@ from django.test import Client
 
 from apps.contracts.models import (
     Administrator,
+    AdvancePayment,
     Agreement,
     Budget,
     BudgetLine,
@@ -139,4 +140,10 @@ def make_invoice(*, line: BudgetLine, counterparty: Counterparty | None = None,
         name=name, budget_line=line,
         counterparty=counterparty or make_counterparty(country=budget.administrator.country),
         amount=Decimal(amount), currency=budget.currency, status=status, **over,
+    )
+
+
+def make_advance_payment(*, agreement: Agreement, amount="100000.00", **over) -> AdvancePayment:
+    return AdvancePayment.objects.create(
+        agreement=agreement, amount=Decimal(amount), **over,
     )

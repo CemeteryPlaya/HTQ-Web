@@ -54,6 +54,27 @@ def get_employee_brief(user_id: int) -> dict | None:
     }
 
 
+def user_has_permission(user_id: int, permission: str) -> bool:
+    """Есть ли у сотрудника явное право его должности.
+
+    Предметные аппки не должны угадывать роль по названию должности
+    («Бухгалтер») или импортировать ``Employee``/``Position`` напрямую.
+    Они спрашивают эту узкую функцию, а HR остаётся владельцем матрицы
+    ``Position.permissions``. Глобальный админ проверяется вызывающей
+    аппкой до этого вызова.
+    """
+    require_service("hr")
+    employee = (Employee.objects.filter(user_id=user_id, is_deleted=False)
+                .select_related("position").first())
+    if employee is None:
+        return False
+    raw = employee.position.permissions
+    if not isinstance(raw, dict):
+        return False
+    permissions = raw.get("permissions")
+    return isinstance(permissions, list) and permission in permissions
+
+
 def list_departments_brief(limit: int = 500) -> list[dict]:
     """Все отделы разом — для наполнения и админских выборок.
 

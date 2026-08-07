@@ -549,3 +549,44 @@ class Invoice(signoff.Approvable, models.Model):
 
     def __str__(self) -> str:
         return f"Счёт: {self.name} ({self.amount} {self.currency})"
+
+
+class AdvancePayment(signoff.Approvable, models.Model):
+    """Предоплата, запрашиваемая на основании уже согласованного договора.
+
+    Согласование самой предоплаты и её фактическое проведение разделены.
+    ``approval_state`` ведёт signoff; платёжное поручение и номер проводки
+    появляются только после положительного решения и только через отдельное
+    действие бухгалтера. Они не являются ещё одним этапом согласования:
+    бухгалтер фиксирует исполнение платежа, а не принимает решение по нему.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.advance_payment"
+
+    agreement = models.ForeignKey(Agreement, on_delete=models.PROTECT,
+                                  related_name="advance_payments")
+    amount = models.DecimalField(max_digits=18, decimal_places=2,
+                                 verbose_name="Сумма предоплаты")
+    payment_order_file_id = models.CharField(
+        max_length=64, null=True, blank=True,
+        verbose_name="Файл платёжного поручения",
+    )
+    posting_number = models.CharField(max_length=100, default="", blank=True,
+                                      db_default="", verbose_name="Номер проводки")
+    paid_by = models.IntegerField(null=True, blank=True, db_index=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["agreement", "approval_state"],
+                         name="ix_ctr_adv_agr_state"),
+        ]
+        verbose_name = "Предоплата на основании договора"
+        verbose_name_plural = "Предоплаты на основании договоров"
+
+    def __str__(self) -> str:
+        return f"Предоплата по договору {self.agreement.number}: {self.amount}"

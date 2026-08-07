@@ -51,6 +51,12 @@ const NAV: NavItem[] = [
     icon: Receipt,
     matchPrefix: '/contracts/invoices',
   },
+  {
+    to: '/contracts/advance-payments',
+    label: 'Предоплаты',
+    icon: Wallet,
+    matchPrefix: '/contracts/advance-payments',
+  },
 ];
 
 export function ContractsShell({ children }: { children: ReactNode }) {

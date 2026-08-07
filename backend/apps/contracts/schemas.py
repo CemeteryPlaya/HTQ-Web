@@ -28,6 +28,7 @@ from pydantic import (
 )
 
 from apps.contracts.models import (
+    AdvancePayment,
     AgreementStatus,
     BudgetStatus,
     CounterpartyStatus,
@@ -559,6 +560,31 @@ class InvoiceRead(BaseModel):
     file_id: Optional[str]
     status: str
     approval_state: str
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── Предоплата на основании договора ───────────────────────────────────
+
+class AdvancePaymentCreate(BaseModel):
+    agreement_id: int
+    amount: Decimal = Field(..., gt=0)
+
+
+class AdvancePaymentRead(BaseModel):
+    id: int
+    agreement_id: int
+    agreement_number: str
+    agreement_name: str
+    counterparty_name: str
+    amount: Decimal
+    currency: str
+    approval_state: str
+    payment_order_file_id: Optional[str]
+    posting_number: str
+    paid_by: Optional[int]
+    paid_at: Optional[datetime]
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
