@@ -216,7 +216,7 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Счёт</CardTitle>
+          <CardTitle className="text-base">Счёт без договора</CardTitle>
         </CardHeader>
         <CardContent>
           <FieldGrid>

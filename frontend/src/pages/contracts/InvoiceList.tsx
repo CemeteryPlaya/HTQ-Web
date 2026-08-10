@@ -59,7 +59,7 @@ const InvoiceList = () => {
       <div className="mb-6 flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <Receipt className="h-7 w-7 text-muted-foreground" />
-          <h1 className="text-3xl font-bold">Счета на оплату</h1>
+          <h1 className="text-3xl font-bold">Счета на оплату без договора</h1>
         </div>
         <Button asChild>
           <Link to="/contracts/invoices/new">

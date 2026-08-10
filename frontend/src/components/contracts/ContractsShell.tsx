@@ -47,7 +47,7 @@ const NAV: NavItem[] = [
   },
   {
     to: '/contracts/invoices',
-    label: 'Счета на оплату',
+    label: 'Счета без договора',
     icon: Receipt,
     matchPrefix: '/contracts/invoices',
   },
