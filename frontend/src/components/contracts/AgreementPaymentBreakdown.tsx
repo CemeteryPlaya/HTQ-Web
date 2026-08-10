@@ -75,7 +75,7 @@ export function AgreementPaymentBreakdown({ agreementId }: Props) {
   const count = advancePayments.length + contractPayments.length;
 
   return (
-    <Accordion type="single" collapsible className="border-t">
+    <Accordion type="single" collapsible className="mt-5 border-t">
       <AccordionItem value="payments" className="border-b-0">
         <AccordionTrigger className="py-3 text-sm hover:no-underline">
           <span>

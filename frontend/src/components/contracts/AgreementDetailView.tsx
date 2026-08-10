@@ -26,7 +26,7 @@
  * нужен, а смена статуса и так закрыта админской проверкой на бэкенде.
  */
 
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -54,13 +54,6 @@ import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasAnyRole } from '@/lib/auth/roles';
@@ -95,7 +88,6 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
   const myId = activeProfile?.id ? Number(activeProfile.id) : null;
   const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
 
-  const [nextStatus, setNextStatus] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
 
   const {
@@ -137,21 +129,6 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
     queryClient.invalidateQueries({ queryKey: ['signoff'] });
   };
 
-  const changeStatus = useMutation({
-    mutationFn: () =>
-      contractsApi
-        .changeAgreementStatus(agreementId, nextStatus as AgreementStatus)
-        .then((r) => r.data),
-    onSuccess: (row) => {
-      setNextStatus('');
-      toast.success(`Статус изменён: ${statusLabel(row.status)}`);
-      invalidateAll();
-    },
-    // 409 — переход запрещён таблицей или сумма не помещается в остаток
-    // (переход в занимающий бюджет статус лимит перепроверяет).
-    onError: (err) => reportApiError(err, 'Не удалось изменить статус'),
-  });
-
   const upload = useMutation({
     mutationFn: (file: File) =>
       contractsApi.uploadAgreementFile(agreementId, file).then((r) => r.data),
@@ -172,9 +149,6 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
     onError: (err) => reportApiError(err, 'Не удалось получить ссылку на файл'),
   });
 
-  const transitions = agreement
-    ? enums?.transitions?.[agreement.status] ?? []
-    : [];
   const canUpload =
     agreement !== undefined
     && (isAdmin || (agreement.created_by === myId && agreement.status === 'draft'));
@@ -379,112 +353,90 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
       </div>
 
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Скан договора</CardTitle>
+        <CardHeader className="pb-4">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Paperclip className="h-4 w-4" />
+            Скан договора
+          </CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-3">
-          {agreement.file_id ? (
-            <>
-              <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-                <Paperclip className="h-4 w-4" />
-                Файл приложен
-              </span>
-              <Button
-                variant="outline"
-                disabled={download.isPending}
-                onClick={() => download.mutate()}
-              >
-                {download.isPending ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="mr-1.5 h-4 w-4" />
-                )}
-                Открыть
-              </Button>
-            </>
-          ) : (
-            <span className="text-sm text-muted-foreground">Файл не приложен.</span>
-          )}
-
+        <CardContent>
           {canUpload && (
-            <>
-              <input
-                ref={fileInput}
-                type="file"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) upload.mutate(file);
-                  // Сброс — иначе повторный выбор ТОГО ЖЕ файла не даст
-                  // события change и загрузка молча не произойдёт.
-                  event.target.value = '';
-                }}
-              />
-              <Button
-                variant={agreement.file_id ? 'ghost' : 'default'}
-                disabled={upload.isPending}
-                onClick={() => fileInput.current?.click()}
-              >
-                {upload.isPending ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Upload className="mr-1.5 h-4 w-4" />
-                )}
-                {agreement.file_id ? 'Заменить' : 'Загрузить'}
-              </Button>
-              {agreement.file_id && (
-                <span className="text-xs text-muted-foreground">
-                  Замена вытеснит текущий файл из карточки.
-                </span>
-              )}
-            </>
+            <input
+              ref={fileInput}
+              type="file"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) upload.mutate(file);
+                // Сброс — иначе повторный выбор ТОГО ЖЕ файла не даст
+                // события change и загрузка молча не произойдёт.
+                event.target.value = '';
+              }}
+            />
           )}
+          <div className="rounded-lg border bg-muted/30 p-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground shadow-sm">
+                  <Paperclip className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-medium">
+                      {agreement.file_id ? 'Файл приложен' : 'Файл не приложен'}
+                    </p>
+                    <Badge variant={agreement.file_id ? 'secondary' : 'outline'}>
+                      {agreement.file_id ? 'Готово' : 'Нет файла'}
+                    </Badge>
+                  </div>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    {agreement.file_id
+                      ? 'Откройте скан или загрузите обновлённую версию.'
+                      : canUpload
+                        ? 'Загрузите скан договора, когда он будет готов.'
+                        : 'Скан ещё не был добавлен к договору.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex shrink-0 flex-wrap gap-2">
+                {agreement.file_id && (
+                  <Button
+                    disabled={download.isPending}
+                    onClick={() => download.mutate()}
+                  >
+                    {download.isPending ? (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Download className="mr-1.5 h-4 w-4" />
+                    )}
+                    Открыть
+                  </Button>
+                )}
+                {canUpload && (
+                  <Button
+                    variant={agreement.file_id ? 'outline' : 'default'}
+                    disabled={upload.isPending}
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    {upload.isPending ? (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Upload className="mr-1.5 h-4 w-4" />
+                    )}
+                    {agreement.file_id ? 'Заменить' : 'Загрузить'}
+                  </Button>
+                )}
+              </div>
+            </div>
+            {agreement.file_id && canUpload && (
+              <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">
+                Новый файл заменит текущий скан в карточке договора.
+              </p>
+            )}
+          </div>
         </CardContent>
       </Card>
-
-      {isAdmin && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Смена статуса</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {transitions.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Из статуса «{statusLabel(agreement.status)}» переходов нет — он
-                терминальный.
-              </p>
-            ) : (
-              <div className="flex flex-wrap items-center gap-3">
-                <Select value={nextStatus} onValueChange={setNextStatus}>
-                  <SelectTrigger className="w-56">
-                    <SelectValue placeholder="Новый статус" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {transitions.map((value) => (
-                      <SelectItem key={value} value={value}>
-                        {statusLabel(value)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  disabled={!nextStatus || changeStatus.isPending}
-                  onClick={() => changeStatus.mutate()}
-                >
-                  {changeStatus.isPending && (
-                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                  )}
-                  Применить
-                </Button>
-                <p className="w-full text-xs text-muted-foreground">
-                  Штатно статус двигает согласование. Руками — то, чего маршрут
-                  не покрывает: «подписан», «исполнен», «расторгнут».
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {!embedded && (
         <SubjectProcesses subjectType="contracts.agreement" subjectId={agreement.id} />
