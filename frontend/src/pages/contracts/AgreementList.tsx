@@ -3,6 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { FileText, Paperclip, Plus } from 'lucide-react';
 
 import { ContractsShell } from '@/components/contracts/ContractsShell';
+import {
+  CollectionPageHeader,
+  CollectionTable,
+} from '@/components/contracts/CollectionPage';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -13,7 +17,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Skeleton } from '@/components/ui/skeleton';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { formatAmount } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
@@ -58,39 +61,32 @@ const AgreementList = () => {
 
   return (
     <ContractsShell>
-      <div className="mb-6 flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3">
-          <FileText className="h-7 w-7 text-muted-foreground" />
-          <h1 className="text-3xl font-bold">Договоры</h1>
-        </div>
-        <Button asChild>
-          <Link to="/contracts/agreements/new">
-            <Plus className="mr-2 h-4 w-4" />
-            Новый договор
-          </Link>
-        </Button>
-      </div>
+      <CollectionPageHeader
+        icon={FileText}
+        title="Договоры"
+        actions={
+          <Button asChild>
+            <Link to="/contracts/agreements/new">
+              <Plus className="mr-2 h-4 w-4" />
+              Новый договор
+            </Link>
+          </Button>
+        }
+      />
 
-      <div className="bg-card rounded-lg border overflow-x-auto">
-        {isLoading ? (
-          <div className="p-6 space-y-3">
-            {[0, 1, 2].map((row) => (
-              <Skeleton key={row} className="h-10 w-full" />
-            ))}
-          </div>
-        ) : isError ? (
-          <p className="p-6 text-sm text-destructive">
-            Не удалось загрузить договоры.
-          </p>
-        ) : rows.length === 0 ? (
-          <div className="p-10 text-center">
-            <p className="text-muted-foreground mb-4">Договоров пока нет.</p>
-            <Button asChild variant="outline">
-              <Link to="/contracts/agreements/new">Оформить первый</Link>
-            </Button>
-          </div>
-        ) : (
-          <Table>
+      <CollectionTable
+        isLoading={isLoading}
+        isError={isError}
+        isEmpty={rows.length === 0}
+        errorMessage="Не удалось загрузить договоры."
+        emptyMessage="Договоров пока нет."
+        emptyAction={
+          <Button asChild variant="outline">
+            <Link to="/contracts/agreements/new">Оформить первый</Link>
+          </Button>
+        }
+      >
+        <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Номер</TableHead>
@@ -162,9 +158,8 @@ const AgreementList = () => {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
-        )}
-      </div>
+        </Table>
+      </CollectionTable>
     </ContractsShell>
   );
 };
