@@ -283,19 +283,35 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Бюджет</CardTitle>
+          <CardTitle className="text-base">Сведения о бюджете</CardTitle>
         </CardHeader>
-        <CardContent>
-          <FieldGrid>
-            <Field label="Администратор">{budget.administrator_name}</Field>
-            <Field label="Год">
-              <span className="tabular-nums">{budget.period_year}</span>
-            </Field>
-            <Field label="Валюта">{budget.currency}</Field>
-            <Field label="Примечание">{budget.note || '—'}</Field>
-            <Field label="Создан">{formatMoment(budget.created_at)}</Field>
-            <Field label="Изменён">{formatMoment(budget.updated_at)}</Field>
-          </FieldGrid>
+        <CardContent className="space-y-6">
+          <section>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Параметры
+            </p>
+            <div className="mt-3">
+              <FieldGrid>
+                <Field label="Администратор">{budget.administrator_name}</Field>
+                <Field label="Год">
+                  <span className="tabular-nums">{budget.period_year}</span>
+                </Field>
+                <Field label="Валюта">{budget.currency}</Field>
+                <Field label="Примечание" className="sm:col-span-2">
+                  {budget.note || '—'}
+                </Field>
+              </FieldGrid>
+            </div>
+          </section>
+          <section className="border-t pt-5">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Сведения о записи
+            </p>
+            <dl className="mt-3 grid gap-x-6 gap-y-4 sm:grid-cols-2">
+              <Field label="Создан">{formatMoment(budget.created_at)}</Field>
+              <Field label="Изменён">{formatMoment(budget.updated_at)}</Field>
+            </dl>
+          </section>
         </CardContent>
       </Card>
 

@@ -39,7 +39,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { DetailSkeleton, Field, FieldGrid } from '@/components/contracts/detail';
+import { DetailSkeleton, Field } from '@/components/contracts/detail';
 import { AgreementPaymentBreakdown } from '@/components/contracts/AgreementPaymentBreakdown';
 import {
   formatAmount,
@@ -248,9 +248,9 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                     {formatMoney(agreement.contract_paid_amount, agreement.currency)}
                   </p>
                 </div>
-                <div>
+                <div className="col-span-2 flex items-end justify-between gap-4 border-t pt-4">
                   <p className="text-xs text-muted-foreground">Остаток</p>
-                  <p className={`mt-1 text-base font-semibold tabular-nums ${remainingTone(
+                  <p className={`text-base font-semibold tabular-nums ${remainingTone(
                     agreement.remaining_amount,
                     agreement.amount,
                   )}`}>
@@ -261,26 +261,39 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
             </div>
             <AgreementPaymentBreakdown agreementId={agreement.id} />
           </section>
-          <FieldGrid>
-            <Field label="Тип оплаты">{paymentLabel(agreement.payment_type)}</Field>
-            <Field label="Дата подписания">
-              {formatDate(agreement.signed_date)}
-            </Field>
-            <Field label="Наименование" className="sm:col-span-2">
-              {agreement.name}
-            </Field>
-            <Field label="Автор">
-              {agreement.created_by !== null
-                ? `Пользователь #${agreement.created_by}`
-                : '—'}
-            </Field>
-            <Field label="Оформлен">{formatMoment(agreement.created_at)}</Field>
-            <Field label="Изменён">{formatMoment(agreement.updated_at)}</Field>
-          </FieldGrid>
+          <div className="grid gap-6 border-t pt-5 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
+            <section>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Условия договора
+              </p>
+              <dl className="mt-3 grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                <Field label="Тип оплаты">{paymentLabel(agreement.payment_type)}</Field>
+                <Field label="Дата подписания">
+                  {formatDate(agreement.signed_date)}
+                </Field>
+              </dl>
+            </section>
+            <section className="border-t pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Сведения о записи
+              </p>
+              <dl className="mt-3 space-y-4">
+                <Field label="Автор">
+                  {agreement.created_by !== null
+                    ? `Пользователь #${agreement.created_by}`
+                    : '—'}
+                </Field>
+                <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                  <Field label="Оформлен">{formatMoment(agreement.created_at)}</Field>
+                  <Field label="Изменён">{formatMoment(agreement.updated_at)}</Field>
+                </div>
+              </dl>
+            </section>
+          </div>
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.6fr)]">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Источник денег</CardTitle>
@@ -304,6 +317,9 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
             </dl>
             {line && (
               <div className="rounded-md border bg-muted/40 p-4 text-sm">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  По бюджетной строке
+                </p>
                 <div className="flex flex-wrap justify-between gap-2">
                   <span className="text-muted-foreground">Выделено</span>
                   <span className="tabular-nums">
@@ -353,7 +369,7 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
       </div>
 
       <Card>
-        <CardHeader className="pb-4">
+        <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
             <Paperclip className="h-4 w-4" />
             Скан договора
@@ -374,29 +390,19 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               }}
             />
           )}
-          <div className="rounded-lg border bg-muted/30 p-4">
+          <div>
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground shadow-sm">
-                  <Paperclip className="h-5 w-5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-medium">
-                      {agreement.file_id ? 'Файл приложен' : 'Файл не приложен'}
-                    </p>
-                    <Badge variant={agreement.file_id ? 'secondary' : 'outline'}>
-                      {agreement.file_id ? 'Готово' : 'Нет файла'}
-                    </Badge>
-                  </div>
-                  <p className="mt-0.5 text-sm text-muted-foreground">
-                    {agreement.file_id
-                      ? 'Откройте скан или загрузите обновлённую версию.'
-                      : canUpload
-                        ? 'Загрузите скан договора, когда он будет готов.'
-                        : 'Скан ещё не был добавлен к договору.'}
-                  </p>
-                </div>
+              <div className="min-w-0">
+                <p className="font-medium">
+                  {agreement.file_id ? 'Файл приложен' : 'Файл не приложен'}
+                </p>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  {agreement.file_id
+                    ? 'Откройте скан или загрузите обновлённую версию.'
+                    : canUpload
+                      ? 'Загрузите скан договора, когда он будет готов.'
+                      : 'Скан ещё не был добавлен к договору.'}
+                </p>
               </div>
 
               <div className="flex shrink-0 flex-wrap gap-2">
@@ -430,7 +436,7 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               </div>
             </div>
             {agreement.file_id && canUpload && (
-              <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">
+              <p className="mt-4 border-t pt-3 text-xs text-muted-foreground">
                 Новый файл заменит текущий скан в карточке договора.
               </p>
             )}

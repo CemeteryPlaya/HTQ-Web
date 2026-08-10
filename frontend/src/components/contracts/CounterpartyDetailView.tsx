@@ -15,7 +15,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Building2, Pencil } from 'lucide-react';
 
-import { DetailSkeleton, Field, FieldGrid } from '@/components/contracts/detail';
+import { DetailSkeleton, Field } from '@/components/contracts/detail';
 import { formatAmount, formatMoment } from '@/components/contracts/format';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
@@ -162,48 +162,66 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Реквизиты</CardTitle>
+          <CardTitle className="text-base">Сведения о контрагенте</CardTitle>
         </CardHeader>
-        <CardContent>
-          <FieldGrid>
-            <Field label="БИН / ИИН">
-              <span className="tabular-nums">{counterparty.bin_iin}</span>
-            </Field>
-            <Field label="Страна">{countryName}</Field>
-            <Field label="НДС">{counterparty.vat_label}</Field>
-            <Field label="Генеральный директор">
-              {counterparty.contact_name || '—'}
-            </Field>
-            <Field label="Телефон">
-              {counterparty.phone ? (
-                <a
-                  href={`tel:${counterparty.phone.replace(/[^\d+]/g, '')}`}
-                  className="hover:underline underline-offset-2"
-                >
-                  {counterparty.phone}
-                </a>
-              ) : (
-                '—'
-              )}
-            </Field>
-            <Field label="E-mail">
-              {counterparty.email ? (
-                <a
-                  href={`mailto:${counterparty.email}`}
-                  className="hover:underline underline-offset-2 break-all"
-                >
-                  {counterparty.email}
-                </a>
-              ) : (
-                '—'
-              )}
-            </Field>
-            <Field label="Адрес" className="sm:col-span-2">
-              {counterparty.address || '—'}
-            </Field>
+        <CardContent className="space-y-6">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]">
+            <section>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Реквизиты
+              </p>
+              <dl className="mt-3 grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                <Field label="БИН / ИИН">
+                  <span className="tabular-nums">{counterparty.bin_iin}</span>
+                </Field>
+                <Field label="Страна">{countryName}</Field>
+                <Field label="НДС">{counterparty.vat_label}</Field>
+              </dl>
+            </section>
+            <section className="border-t pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Контакты
+              </p>
+              <dl className="mt-3 space-y-4">
+                <Field label="Генеральный директор">
+                  {counterparty.contact_name || '—'}
+                </Field>
+                <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                  <Field label="Телефон">
+                    {counterparty.phone ? (
+                      <a
+                        href={`tel:${counterparty.phone.replace(/[^\d+]/g, '')}`}
+                        className="hover:underline underline-offset-2"
+                      >
+                        {counterparty.phone}
+                      </a>
+                    ) : (
+                      '—'
+                    )}
+                  </Field>
+                  <Field label="E-mail">
+                    {counterparty.email ? (
+                      <a
+                        href={`mailto:${counterparty.email}`}
+                        className="hover:underline underline-offset-2 break-all"
+                      >
+                        {counterparty.email}
+                      </a>
+                    ) : (
+                      '—'
+                    )}
+                  </Field>
+                </div>
+              </dl>
+            </section>
+          </div>
+          <dl className="border-t pt-5">
+            <Field label="Адрес">{counterparty.address || '—'}</Field>
+          </dl>
+          <dl className="grid gap-x-6 gap-y-4 border-t pt-5 sm:grid-cols-2">
             <Field label="Заведён">{formatMoment(counterparty.created_at)}</Field>
             <Field label="Изменён">{formatMoment(counterparty.updated_at)}</Field>
-          </FieldGrid>
+          </dl>
         </CardContent>
       </Card>
 

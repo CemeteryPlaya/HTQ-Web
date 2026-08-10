@@ -30,7 +30,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Loader2, Paperclip, Pencil, Receipt, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { DetailSkeleton, Field, FieldGrid } from '@/components/contracts/detail';
+import { DetailSkeleton, Field } from '@/components/contracts/detail';
 import {
   formatAmount,
   formatMoment,
@@ -218,30 +218,39 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Счёт без договора</CardTitle>
         </CardHeader>
-        <CardContent>
-          <FieldGrid>
-            <Field label="Сумма">
-              <span className="text-lg font-semibold tabular-nums">
-                {formatMoney(invoice.amount, invoice.currency)}
-              </span>
-            </Field>
-            <Field label="Автор">
-              {invoice.created_by !== null
-                ? `Пользователь #${invoice.created_by}`
-                : '—'}
-            </Field>
-            <Field label="Выписан">{formatMoment(invoice.created_at)}</Field>
-            {invoice.note && (
-              <Field label="Пояснение" className="sm:col-span-2">
-                <span className="whitespace-pre-wrap">{invoice.note}</span>
+        <CardContent className="space-y-6">
+          <section className="rounded-lg border bg-muted/30 p-4">
+            <p className="text-sm text-muted-foreground">Сумма счёта</p>
+            <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
+              {formatMoney(invoice.amount, invoice.currency)}
+            </p>
+          </section>
+          {invoice.note && (
+            <section className="border-t pt-5">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Пояснение
+              </p>
+              <p className="mt-3 whitespace-pre-wrap text-sm">{invoice.note}</p>
+            </section>
+          )}
+          <section className="border-t pt-5">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Сведения о записи
+            </p>
+            <dl className="mt-3 grid gap-x-6 gap-y-4 sm:grid-cols-3">
+              <Field label="Автор">
+                {invoice.created_by !== null
+                  ? `Пользователь #${invoice.created_by}`
+                  : '—'}
               </Field>
-            )}
-            <Field label="Изменён">{formatMoment(invoice.updated_at)}</Field>
-          </FieldGrid>
+              <Field label="Выписан">{formatMoment(invoice.created_at)}</Field>
+              <Field label="Изменён">{formatMoment(invoice.updated_at)}</Field>
+            </dl>
+          </section>
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.6fr)]">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Источник денег</CardTitle>
@@ -262,6 +271,9 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
             </dl>
             {line && (
               <div className="rounded-md border bg-muted/40 p-4 text-sm">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  По бюджетной строке
+                </p>
                 <div className="flex flex-wrap justify-between gap-2">
                   <span className="text-muted-foreground">Выделено</span>
                   <span className="tabular-nums">
@@ -315,65 +327,71 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
       </div>
 
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Скан счёта на оплату</CardTitle>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Paperclip className="h-4 w-4" />
+            Скан счёта на оплату
+          </CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-3">
-          {invoice.file_id ? (
-            <>
-              <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-                <Paperclip className="h-4 w-4" />
-                Файл приложен
-              </span>
-              <Button
-                variant="outline"
-                disabled={download.isPending}
-                onClick={() => download.mutate()}
-              >
-                {download.isPending ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="mr-1.5 h-4 w-4" />
-                )}
-                Открыть
-              </Button>
-            </>
-          ) : (
-            <span className="text-sm text-muted-foreground">Файл не приложен.</span>
-          )}
-
+        <CardContent>
           {canUpload && (
-            <>
-              <input
-                ref={fileInput}
-                type="file"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) upload.mutate(file);
-                  // Сброс — иначе повторный выбор ТОГО ЖЕ файла не даст события
-                  // change и загрузка молча не произойдёт.
-                  event.target.value = '';
-                }}
-              />
-              <Button
-                variant={invoice.file_id ? 'ghost' : 'default'}
-                disabled={upload.isPending}
-                onClick={() => fileInput.current?.click()}
-              >
-                {upload.isPending ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Upload className="mr-1.5 h-4 w-4" />
-                )}
-                {invoice.file_id ? 'Заменить' : 'Загрузить'}
-              </Button>
+            <input
+              ref={fileInput}
+              type="file"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) upload.mutate(file);
+                // Сброс — иначе повторный выбор ТОГО ЖЕ файла не даст события
+                // change и загрузка молча не произойдёт.
+                event.target.value = '';
+              }}
+            />
+          )}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <p className="font-medium">
+                {invoice.file_id ? 'Файл приложен' : 'Файл не приложен'}
+              </p>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                {invoice.file_id
+                  ? 'Откройте скан или загрузите обновлённую версию.'
+                  : canUpload
+                    ? 'Загрузите скан счёта, когда он будет готов.'
+                    : 'Скан ещё не был добавлен к счёту.'}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
               {invoice.file_id && (
-                <span className="text-xs text-muted-foreground">
-                  Замена вытеснит текущий файл из карточки.
-                </span>
+                <Button disabled={download.isPending} onClick={() => download.mutate()}>
+                  {download.isPending ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="mr-1.5 h-4 w-4" />
+                  )}
+                  Открыть
+                </Button>
               )}
-            </>
+              {canUpload && (
+                <Button
+                  variant={invoice.file_id ? 'outline' : 'default'}
+                  disabled={upload.isPending}
+                  onClick={() => fileInput.current?.click()}
+                >
+                  {upload.isPending ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="mr-1.5 h-4 w-4" />
+                  )}
+                  {invoice.file_id ? 'Заменить' : 'Загрузить'}
+                </Button>
+              )}
+            </div>
+          </div>
+          {invoice.file_id && canUpload && (
+            <p className="mt-4 border-t pt-3 text-xs text-muted-foreground">
+              Новый файл заменит текущий скан в карточке счёта.
+            </p>
           )}
         </CardContent>
       </Card>
