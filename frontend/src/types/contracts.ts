@@ -289,6 +289,28 @@ export interface ContractPayment {
   updated_at: string;
 }
 
+export interface CompletionAct {
+  id: number;
+  administrator_id: number;
+  administrator_name: string;
+  agreement_id: number;
+  agreement_number: string;
+  agreement_name: string;
+  counterparty_name: string;
+  amount: string;
+  currency: string;
+  act_file_id: string | null;
+  status: 'draft' | 'on_review' | 'awaiting_accounting' | 'closed';
+  approval_state: ApprovalState;
+  payment_order_file_id: string | null;
+  posting_number: string;
+  paid_by: number | null;
+  paid_at: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** Пара value/label из `GET /enums` — источник подписей для селектов. */
 export interface EnumOption {
   value: string;

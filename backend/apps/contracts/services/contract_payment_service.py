@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from apps.contracts.models import (
     Administrator, AdvancePayment, AdvancePaymentStatus, Agreement, AgreementStatus,
-    ContractPayment,
+    CompletionAct, ContractPayment,
 )
 from apps.media_files import interface as media
 from apps.signoff import interface as signoff
@@ -69,7 +69,10 @@ def paid_amount_for_agreement(agreement_id: int) -> Decimal:
     payments = (ContractPayment.objects
                 .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
                 .aggregate(total=Sum("amount"))["total"] or ZERO)
-    return advance + payments
+    acts = (CompletionAct.objects
+            .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
+            .aggregate(total=Sum("amount"))["total"] or ZERO)
+    return advance + payments + acts
 
 
 def check_agreement_capacity(agreement: Agreement, amount) -> None:

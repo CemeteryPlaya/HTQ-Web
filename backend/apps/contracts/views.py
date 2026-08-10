@@ -56,12 +56,14 @@ from .services import counterparty_service as cp_svc
 from .services import invoice_service as inv_svc
 from .services import advance_payment_service as adv_svc
 from .services import contract_payment_service as contract_payment_svc
+from .services import completion_act_service as completion_act_svc
 from .services import reference_service as ref_svc
 from .services.agreement_service import AgreementRuleViolation
 from .services.budget_calc import COMMITTING_STATUSES, BudgetExceeded
 from .services.invoice_service import InvoiceRuleViolation
 from .services.advance_payment_service import AdvancePaymentRuleViolation
 from .services.contract_payment_service import ContractPaymentRuleViolation
+from .services.completion_act_service import CompletionActRuleViolation
 from .services.reference_service import ReferenceConflict
 
 # Конфликты доменного уровня, которые вьюха переводит в 409. Собраны в один
@@ -75,6 +77,7 @@ from .services.reference_service import ReferenceConflict
 CONFLICTS = (ReferenceConflict, AgreementRuleViolation, InvoiceRuleViolation,
              AdvancePaymentRuleViolation,
              ContractPaymentRuleViolation,
+             CompletionActRuleViolation,
              BudgetExceeded, signoff.SignoffError, signoff.UnknownSubject)
 
 
@@ -395,6 +398,13 @@ class ContractPaymentSubmitView(SubmitView):
     def post(self, request, payment_id: int):
         return self.submitted(
             lambda **kw: contract_payment_svc.submit_for_approval(payment_id, **kw))
+
+
+class CompletionActSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, act_id: int):
+        return self.submitted(
+            lambda **kw: completion_act_svc.submit_for_approval(act_id, **kw))
 
 
 class BudgetAgreementsView(ContractsView):
@@ -975,6 +985,95 @@ class ContractPaymentPaymentOrderUrlView(ContractsView):
             contract_payment_svc.get_contract_payment_or_404(payment_id))
         if url is None:
             raise Http404("К оплате не приложено платёжное поручение")
+        return {"url": url}
+
+
+class CompletionActCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = completion_act_svc.list_completion_acts(
+            administrator_id=self.int_param("administrator_id"),
+            agreement_id=self.int_param("agreement_id"),
+            awaiting_payment=self.bool_param("awaiting_payment"),
+        )
+        return [schemas.CompletionActRead.model_validate(
+            completion_act_svc.serialize_completion_act(row)) for row in rows]
+
+    @write("POST", status=201, admin=False)
+    def post(self, request):
+        try:
+            administrator_id = int(request.POST.get("administrator_id") or "")
+            agreement_id = int(request.POST.get("agreement_id") or "")
+            amount = Decimal(request.POST.get("amount") or "")
+        except (TypeError, ValueError, InvalidOperation):
+            return json_error("Укажите администратора, договор и корректную сумму", 422)
+        if amount <= 0:
+            return json_error("Сумма должна быть больше нуля", 422)
+        act_file = request.FILES.get("act")
+        if act_file is None:
+            return json_error("Файл акта не передан (ожидается поле «act»)", 422)
+        try:
+            act = completion_act_svc.create_completion_act(
+                administrator_id=administrator_id, agreement_id=agreement_id, amount=amount,
+                act_data=act_file.read(), act_filename=act_file.name,
+                act_mime=act_file.content_type or "application/octet-stream",
+                created_by=request.token.user_id,
+            )
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.CompletionActRead.model_validate(
+            completion_act_svc.serialize_completion_act(act))
+
+
+class CompletionActDetailView(ContractsView):
+    @read
+    def get(self, request, act_id: int):
+        return schemas.CompletionActRead.model_validate(
+            completion_act_svc.serialize_completion_act(
+                completion_act_svc.get_completion_act_or_404(act_id)))
+
+
+class CompletionActActUrlView(ContractsView):
+    @read
+    def get(self, request, act_id: int):
+        url = completion_act_svc.act_url(completion_act_svc.get_completion_act_or_404(act_id))
+        if url is None:
+            raise Http404("К записи не приложен акт")
+        return {"url": url}
+
+
+class CompletionActPaymentOrderView(ContractsView):
+    @write("POST", admin=False)
+    def post(self, request, act_id: int):
+        posting_number = (request.POST.get("posting_number") or "").strip()
+        if not posting_number:
+            return json_error("Укажите номер проводки", 422)
+        if len(posting_number) > 100:
+            return json_error("Номер проводки не длиннее 100 символов", 422)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+        try:
+            act = completion_act_svc.record_payment(
+                act_id, posting_number=posting_number, data=upload.read(),
+                filename=upload.name, mime=upload.content_type or "application/octet-stream",
+                actor_id=request.token.user_id, is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.CompletionActRead.model_validate(
+            completion_act_svc.serialize_completion_act(act))
+
+
+class CompletionActPaymentOrderUrlView(ContractsView):
+    @read
+    def get(self, request, act_id: int):
+        url = completion_act_svc.payment_order_url(
+            completion_act_svc.get_completion_act_or_404(act_id))
+        if url is None:
+            raise Http404("К акту не приложено платёжное поручение")
         return {"url": url}
 
 

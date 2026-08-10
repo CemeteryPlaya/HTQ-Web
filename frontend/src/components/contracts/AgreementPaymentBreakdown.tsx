@@ -69,10 +69,20 @@ export function AgreementPaymentBreakdown({ agreementId }: Props) {
       contractsApi.listContractPayments({ agreement_id: agreementId }).then((response) => response.data),
     enabled,
   });
+  const {
+    data: completionActs = [],
+    isLoading: completionActsLoading,
+    isError: completionActsError,
+  } = useQuery({
+    queryKey: ['contracts', 'completion-acts', { agreementId }],
+    queryFn: () =>
+      contractsApi.listCompletionActs({ agreement_id: agreementId }).then((response) => response.data),
+    enabled,
+  });
 
-  const isLoading = advancePaymentsLoading || contractPaymentsLoading;
-  const isError = advancePaymentsError || contractPaymentsError;
-  const count = advancePayments.length + contractPayments.length;
+  const isLoading = advancePaymentsLoading || contractPaymentsLoading || completionActsLoading;
+  const isError = advancePaymentsError || contractPaymentsError || completionActsError;
+  const count = advancePayments.length + contractPayments.length + completionActs.length;
 
   return (
     <Accordion type="single" collapsible className="mt-5 border-t">
@@ -132,6 +142,25 @@ export function AgreementPaymentBreakdown({ agreementId }: Props) {
                         amount={payment.amount}
                         currency={payment.currency}
                         status={payment.status}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+              {completionActs.length > 0 && (
+                <section>
+                  <p className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Акты выполненных работ
+                  </p>
+                  <div className="space-y-1">
+                    {completionActs.map((act) => (
+                      <PaymentRow
+                        key={act.id}
+                        to={`/contracts/completion-acts/${act.id}`}
+                        title={`Акт #${act.id}`}
+                        amount={act.amount}
+                        currency={act.currency}
+                        status={act.status}
                       />
                     ))}
                   </div>

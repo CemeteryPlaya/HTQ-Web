@@ -55,6 +55,7 @@ from .models import (
     AgreementStatus,
     Budget,
     Counterparty,
+    CompletionAct,
     ContractPayment,
     Country,
     Invoice,
@@ -337,6 +338,66 @@ def _contract_payment_fact_fields() -> list[dict]:
     return _advance_payment_fact_fields()
 
 
+def _completion_act_to(subject_id: int, status: str) -> None:
+    from .services import completion_act_service as act_svc
+
+    act = CompletionAct.objects.filter(pk=subject_id).first()
+    if act is not None and act.status != status:
+        act_svc.change_status(subject_id, status)
+
+
+def _completion_act_on_started(subject_id: int) -> None:
+    _completion_act_to(subject_id, AdvancePaymentStatus.ON_REVIEW)
+
+
+def _completion_act_on_approved(subject_id: int) -> None:
+    _completion_act_to(subject_id, AdvancePaymentStatus.AWAITING_ACCOUNTING)
+
+
+def _completion_act_on_rejected(subject_id: int) -> None:
+    _completion_act_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _completion_act_on_rework(subject_id: int) -> None:
+    _completion_act_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _completion_act_on_cancelled(subject_id: int) -> None:
+    _completion_act_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _describe_completion_act(subject_id: int) -> dict | None:
+    act = (CompletionAct.objects.select_related("agreement", "agreement__counterparty")
+           .filter(pk=subject_id).first())
+    if act is None:
+        return None
+    return {
+        "title": f"Акт выполненных работ по договору {act.agreement.number} "
+                 f"({act.amount} {act.agreement.currency})",
+        "url": f"/contracts/completion-acts/{act.pk}",
+    }
+
+
+def _completion_act_facts(subject_id: int) -> dict:
+    act = (CompletionAct.objects
+           .select_related("agreement__budget_line__budget__administrator", "agreement__counterparty")
+           .filter(pk=subject_id).first())
+    if act is None:
+        return {}
+    agreement = act.agreement
+    return {
+        "admin_country_id": agreement.budget_line.budget.administrator.country_id,
+        "counterparty_country_id": agreement.counterparty.country_id,
+        "program_id": agreement.budget_line.program_id,
+        "amount": act.amount,
+        "currency": agreement.currency,
+    }
+
+
+def _completion_act_fact_fields() -> list[dict]:
+    return _advance_payment_fact_fields()
+
+
 def _invoice_facts(subject_id: int) -> dict:
     invoice = (Invoice.objects
                .select_related("budget_line__budget__administrator",
@@ -613,4 +674,17 @@ def register() -> None:
         describe=_describe_contract_payment,
         facts=_contract_payment_facts,
         fact_fields=_contract_payment_fact_fields,
+    )
+    signoff.register_subject(
+        CompletionAct.SIGNOFF_SUBJECT_TYPE,
+        label="Акт выполненных работ",
+        model=CompletionAct,
+        on_started=_completion_act_on_started,
+        on_approved=_completion_act_on_approved,
+        on_rejected=_completion_act_on_rejected,
+        on_rework=_completion_act_on_rework,
+        on_cancelled=_completion_act_on_cancelled,
+        describe=_describe_completion_act,
+        facts=_completion_act_facts,
+        fact_fields=_completion_act_fact_fields,
     )

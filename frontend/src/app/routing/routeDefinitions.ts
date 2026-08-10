@@ -105,6 +105,9 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/contracts/contract-payments', component: lazyPages.ContractsContractPaymentList, requiresAuth: true },
   { path: '/contracts/contract-payments/new', component: lazyPages.ContractsContractPaymentCreate, requiresAuth: true },
   { path: '/contracts/contract-payments/:id', component: lazyPages.ContractsContractPaymentDetail, requiresAuth: true },
+  { path: '/contracts/completion-acts', component: lazyPages.ContractsCompletionActList, requiresAuth: true },
+  { path: '/contracts/completion-acts/new', component: lazyPages.ContractsCompletionActCreate, requiresAuth: true },
+  { path: '/contracts/completion-acts/:id', component: lazyPages.ContractsCompletionActDetail, requiresAuth: true },
 
   // ─── Signoff (универсальное согласование, apps.signoff) ───────────────
   // Очередь и карточки открыты любому сотруднику: решает НАЗВАННЫЙ в

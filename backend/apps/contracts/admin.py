@@ -25,6 +25,7 @@ from .models import (
     Budget,
     BudgetLine,
     Counterparty,
+    CompletionAct,
     ContractPayment,
     Country,
     Invoice,
@@ -174,6 +175,17 @@ class AdvancePaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 @admin.register(ContractPayment)
 class ContractPaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "administrator", "agreement", "amount", "status",
+                    "approval_state", "posting_number", "paid_by", "paid_at")
+    list_filter = ("status", "approval_state", "administrator")
+    search_fields = ("agreement__number", "agreement__name", "posting_number")
+    readonly_fields = ("created_at", "updated_at", "approval_state", "paid_by", "paid_at")
+    raw_id_fields = ("administrator", "agreement")
+    list_select_related = ("administrator", "agreement", "agreement__counterparty")
+
+
+@admin.register(CompletionAct)
+class CompletionActAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "administrator", "agreement", "amount", "status",
                     "approval_state", "posting_number", "paid_by", "paid_at")
     list_filter = ("status", "approval_state", "administrator")

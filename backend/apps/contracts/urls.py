@@ -137,4 +137,18 @@ urlpatterns = [
     path("contract-payments/", views.ContractPaymentCollectionView.as_view()),
     path("contract-payments/<int:payment_id>", views.ContractPaymentDetailView.as_view()),
     path("contract-payments/<int:payment_id>/", views.ContractPaymentDetailView.as_view()),
+
+    # ── Акты выполненных работ (АВР) ──────────────────────────────────────
+    path("completion-acts/<int:act_id>/submit", views.CompletionActSubmitView.as_view()),
+    path("completion-acts/<int:act_id>/submit/", views.CompletionActSubmitView.as_view()),
+    path("completion-acts/<int:act_id>/act-url", views.CompletionActActUrlView.as_view()),
+    path("completion-acts/<int:act_id>/act-url/", views.CompletionActActUrlView.as_view()),
+    path("completion-acts/<int:act_id>/payment-order", views.CompletionActPaymentOrderView.as_view()),
+    path("completion-acts/<int:act_id>/payment-order/", views.CompletionActPaymentOrderView.as_view()),
+    path("completion-acts/<int:act_id>/payment-order-url", views.CompletionActPaymentOrderUrlView.as_view()),
+    path("completion-acts/<int:act_id>/payment-order-url/", views.CompletionActPaymentOrderUrlView.as_view()),
+    path("completion-acts", views.CompletionActCollectionView.as_view()),
+    path("completion-acts/", views.CompletionActCollectionView.as_view()),
+    path("completion-acts/<int:act_id>", views.CompletionActDetailView.as_view()),
+    path("completion-acts/<int:act_id>/", views.CompletionActDetailView.as_view()),
 ]

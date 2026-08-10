@@ -615,3 +615,25 @@ class ContractPaymentRead(BaseModel):
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
+
+
+class CompletionActRead(BaseModel):
+    id: int
+    administrator_id: int
+    administrator_name: str
+    agreement_id: int
+    agreement_number: str
+    agreement_name: str
+    counterparty_name: str
+    amount: Decimal
+    currency: str
+    act_file_id: Optional[str]
+    status: str
+    approval_state: str
+    payment_order_file_id: Optional[str]
+    posting_number: str
+    paid_by: Optional[int]
+    paid_at: Optional[datetime]
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime

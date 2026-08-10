@@ -47,4 +47,7 @@ export const SIGNOFF_SUBJECT_VIEWS: Record<string, SubjectView> = {
   'contracts.contract_payment': lazy(
     () => import('@/components/contracts/ContractPaymentDetailView'),
   ),
+  'contracts.completion_act': lazy(
+    () => import('@/components/contracts/CompletionActDetailView'),
+  ),
 };

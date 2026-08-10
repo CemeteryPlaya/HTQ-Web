@@ -24,6 +24,7 @@ import type {
   Invoice,
   InvoiceStatus,
   AdvancePayment,
+  CompletionAct,
   ContractPayment,
   Program,
 } from '@/types/contracts';
@@ -254,4 +255,21 @@ export const contractsApi = {
   },
   getContractPaymentInvoiceUrl: (id: number) => api.get<{ url: string }>(path(`contract-payments/${id}/invoice-url`)),
   getContractPaymentOrderUrl: (id: number) => api.get<{ url: string }>(path(`contract-payments/${id}/payment-order-url`)),
+
+  listCompletionActs: (params?: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean }) =>
+    api.get<CompletionAct[]>(path('completion-acts'), { params }),
+  getCompletionAct: (id: number) => api.get<CompletionAct>(path(`completion-acts/${id}`)),
+  createCompletionAct: (administratorId: number, agreementId: number, amount: string, act: File) => {
+    const form = new FormData();
+    form.append('administrator_id', String(administratorId)); form.append('agreement_id', String(agreementId));
+    form.append('amount', amount); form.append('act', act);
+    return api.post<CompletionAct>(path('completion-acts'), form);
+  },
+  submitCompletionAct: (id: number) => api.post<ApprovalProcess>(path(`completion-acts/${id}/submit`)),
+  recordCompletionAct: (id: number, postingNumber: string, file: File) => {
+    const form = new FormData(); form.append('posting_number', postingNumber); form.append('file', file);
+    return api.post<CompletionAct>(path(`completion-acts/${id}/payment-order`), form);
+  },
+  getCompletionActUrl: (id: number) => api.get<{ url: string }>(path(`completion-acts/${id}/act-url`)),
+  getCompletionActOrderUrl: (id: number) => api.get<{ url: string }>(path(`completion-acts/${id}/payment-order-url`)),
 };

@@ -16,7 +16,7 @@ from django.http import Http404
 from django.utils import timezone
 
 from apps.contracts.models import (
-    AdvancePayment, AdvancePaymentStatus, Agreement, AgreementStatus, ContractPayment,
+    AdvancePayment, AdvancePaymentStatus, Agreement, AgreementStatus, CompletionAct, ContractPayment,
 )
 from apps.contracts.services.reference_service import conflict_as
 from apps.media_files import interface as media
@@ -82,7 +82,10 @@ def total_paid_amount_for_agreement(agreement_id: int) -> Decimal:
     payments = (ContractPayment.objects
                 .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
                 .aggregate(total=Sum("amount"))["total"] or ZERO)
-    return advance + payments
+    acts = (CompletionAct.objects
+            .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
+            .aggregate(total=Sum("amount"))["total"] or ZERO)
+    return advance + payments + acts
 
 
 def check_agreement_capacity(agreement: Agreement, amount) -> None:
