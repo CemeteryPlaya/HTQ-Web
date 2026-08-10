@@ -103,6 +103,10 @@ const ContractsOverview = () => {
     queryKey: ['contracts', 'contract-payments'],
     queryFn: () => contractsApi.listContractPayments().then((response) => response.data),
   });
+  const { data: completionActs, isLoading: completionActsLoading } = useQuery({
+    queryKey: ['contracts', 'completion-acts'],
+    queryFn: () => contractsApi.listCompletionActs().then((response) => response.data),
+  });
 
   // Totals are only meaningful within one currency; the overview deliberately
   // refuses to merge different currencies into a misleading single figure.
@@ -114,8 +118,9 @@ const ContractsOverview = () => {
   const awaitingAccounting = [
     ...(advancePayments ?? []),
     ...(contractPayments ?? []),
+    ...(completionActs ?? []),
   ].filter((payment) => payment.status === 'awaiting_accounting').length;
-  const paymentsLoading = advancePaymentsLoading || contractPaymentsLoading;
+  const paymentsLoading = advancePaymentsLoading || contractPaymentsLoading || completionActsLoading;
 
   return (
     <ContractsShell>
@@ -227,10 +232,10 @@ const ContractsOverview = () => {
         <div className="mb-4">
           <h2 className="text-lg font-semibold">Договор и исполнение</h2>
           <p className="text-sm text-muted-foreground">
-            Оформите договор, затем отслеживайте авансы и отдельные оплаты по нему.
+            Оформите договор, затем отслеживайте авансы, оплаты и акты выполненных работ.
           </p>
         </div>
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-4">
           <ModuleCard
             icon={FileText}
             title="Договоры"
@@ -257,6 +262,15 @@ const ContractsOverview = () => {
             isLoading={contractPaymentsLoading}
             to="/contracts/contract-payments"
             primaryAction={{ to: '/contracts/contract-payments/new', label: 'Создать' }}
+          />
+          <ModuleCard
+            icon={FileText}
+            title="Акты выполненных работ"
+            description="АВР с согласованием и последующим проведением бухгалтерией."
+            count={completionActs?.length}
+            isLoading={completionActsLoading}
+            to="/contracts/completion-acts"
+            primaryAction={{ to: '/contracts/completion-acts/new', label: 'Создать' }}
           />
         </div>
       </section>
