@@ -55,6 +55,7 @@ from .services import budget_service as budget_svc
 from .services import counterparty_service as cp_svc
 from .services import invoice_service as inv_svc
 from .services import advance_payment_service as adv_svc
+from .services import accountable_funds_request_service as accountable_funds_svc
 from .services import contract_payment_service as contract_payment_svc
 from .services import completion_act_service as completion_act_svc
 from .services import reference_service as ref_svc
@@ -62,6 +63,7 @@ from .services.agreement_service import AgreementRuleViolation
 from .services.budget_calc import COMMITTING_STATUSES, BudgetExceeded
 from .services.invoice_service import InvoiceRuleViolation
 from .services.advance_payment_service import AdvancePaymentRuleViolation
+from .services.accountable_funds_request_service import AccountableFundsRequestRuleViolation
 from .services.contract_payment_service import ContractPaymentRuleViolation
 from .services.completion_act_service import CompletionActRuleViolation
 from .services.reference_service import ReferenceConflict
@@ -76,6 +78,7 @@ from .services.reference_service import ReferenceConflict
 # нужен текст. Импортируется из signoff.interface (правило границ).
 CONFLICTS = (ReferenceConflict, AgreementRuleViolation, InvoiceRuleViolation,
              AdvancePaymentRuleViolation,
+             AccountableFundsRequestRuleViolation,
              ContractPaymentRuleViolation,
              CompletionActRuleViolation,
              BudgetExceeded, signoff.SignoffError, signoff.UnknownSubject)
@@ -391,6 +394,13 @@ class AdvancePaymentSubmitView(SubmitView):
     def post(self, request, payment_id: int):
         return self.submitted(
             lambda **kw: adv_svc.submit_for_approval(payment_id, **kw))
+
+
+class AccountableFundsRequestSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, request_id: int):
+        return self.submitted(
+            lambda **kw: accountable_funds_svc.submit_for_approval(request_id, **kw))
 
 
 class ContractPaymentSubmitView(SubmitView):
@@ -892,6 +902,77 @@ class AdvancePaymentPaymentOrderUrlView(ContractsView):
         if url is None:
             raise Http404("К предоплате не приложено платёжное поручение")
         return {"url": url}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Заявки на подотчётные средства
+# ═══════════════════════════════════════════════════════════════════════
+
+class AccountableFundsRequestCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = accountable_funds_svc.list_requests(
+            administrator_id=self.int_param("administrator_id"),
+            program_id=self.int_param("program_id"),
+            accountable_user_id=self.int_param("accountable_user_id"),
+        )
+        return [schemas.AccountableFundsRequestRead.model_validate(
+            accountable_funds_svc.serialize_request(row)) for row in rows]
+
+    @write("POST", body=schemas.AccountableFundsRequestCreate, status=201, admin=False)
+    def post(self, request, data: schemas.AccountableFundsRequestCreate):
+        try:
+            row = accountable_funds_svc.create_request(
+                created_by=request.token.user_id, **data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AccountableFundsRequestRead.model_validate(
+            accountable_funds_svc.serialize_request(row))
+
+
+class AccountableFundsRequestDetailView(ContractsView):
+    @read
+    def get(self, request, request_id: int):
+        return schemas.AccountableFundsRequestRead.model_validate(
+            accountable_funds_svc.serialize_request(
+                accountable_funds_svc.get_request_or_404(request_id)))
+
+
+class AccountableFundsRequestBudgetLineAssignView(ContractsView):
+    @write("POST", body=schemas.AccountableFundsRequestBudgetLineAssign, admin=False)
+    def post(self, request, request_id: int, data: schemas.AccountableFundsRequestBudgetLineAssign):
+        try:
+            row = accountable_funds_svc.assign_budget_line(
+                request_id,
+                actor_id=request.token.user_id,
+                is_elevated=request.token.is_elevated,
+                **data.model_dump(),
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AccountableFundsRequestRead.model_validate(
+            accountable_funds_svc.serialize_request(row))
+
+
+class AccountableFundsRequestAccountingPaidView(ContractsView):
+    """Отдельное бухгалтерское действие после окончания Signoff."""
+
+    @write("POST", admin=False)
+    def post(self, request, request_id: int):
+        try:
+            row = accountable_funds_svc.mark_accounting_paid(
+                request_id,
+                actor_id=request.token.user_id,
+                is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AccountableFundsRequestRead.model_validate(
+            accountable_funds_svc.serialize_request(row))
 
 
 # ═══════════════════════════════════════════════════════════════════════

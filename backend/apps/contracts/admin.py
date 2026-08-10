@@ -19,6 +19,7 @@ from django.contrib import admin
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
 from .models import (
+    AccountableFundsRequest,
     Administrator,
     AdvancePayment,
     Agreement,
@@ -171,6 +172,18 @@ class AdvancePaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     readonly_fields = ("created_at", "updated_at", "approval_state", "paid_by", "paid_at")
     raw_id_fields = ("agreement",)
     list_select_related = ("agreement", "agreement__counterparty")
+
+
+@admin.register(AccountableFundsRequest)
+class AccountableFundsRequestAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "budget_line", "administrator", "program", "amount", "goal", "status",
+                    "approval_state", "accounting_paid", "accountable_user_id")
+    list_filter = ("status", "approval_state", "accounting_paid", "budget_line__budget__administrator", "budget_line__program")
+    search_fields = ("goal",)
+    readonly_fields = ("created_at", "updated_at", "approval_state", "accounting_paid_by",
+                       "accounting_paid_at", "accountable_user_id", "created_by", "administrator", "program")
+    raw_id_fields = ("budget_line",)
+    list_select_related = ("budget_line", "budget_line__budget__administrator", "budget_line__program", "administrator", "program")
 
 
 @admin.register(ContractPayment)

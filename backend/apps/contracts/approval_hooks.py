@@ -49,6 +49,8 @@ import logging
 from apps.signoff import interface as signoff
 
 from .models import (
+    AccountableFundsRequest,
+    AccountableFundsRequestStatus,
     AdvancePayment,
     AdvancePaymentStatus,
     Agreement,
@@ -336,6 +338,69 @@ def _contract_payment_facts(subject_id: int) -> dict:
 
 def _contract_payment_fact_fields() -> list[dict]:
     return _advance_payment_fact_fields()
+
+
+# ── Заявка на подотчётные средства ────────────────────────────────────────
+
+def _accountable_funds_request_to(subject_id: int, status: str) -> None:
+    from .services import accountable_funds_request_service as request_svc
+
+    request = AccountableFundsRequest.objects.filter(pk=subject_id).first()
+    if request is not None and request.status != status:
+        request_svc.change_status(subject_id, status)
+
+
+def _accountable_funds_request_on_started(subject_id: int) -> None:
+    _accountable_funds_request_to(subject_id, AccountableFundsRequestStatus.ON_REVIEW)
+
+
+def _accountable_funds_request_on_approved(subject_id: int) -> None:
+    _accountable_funds_request_to(subject_id, AccountableFundsRequestStatus.AWAITING_ACCOUNTING)
+
+
+def _accountable_funds_request_on_rejected(subject_id: int) -> None:
+    _accountable_funds_request_to(subject_id, AccountableFundsRequestStatus.DRAFT)
+
+
+def _accountable_funds_request_on_rework(subject_id: int) -> None:
+    _accountable_funds_request_to(subject_id, AccountableFundsRequestStatus.DRAFT)
+
+
+def _accountable_funds_request_on_cancelled(subject_id: int) -> None:
+    _accountable_funds_request_to(subject_id, AccountableFundsRequestStatus.DRAFT)
+
+
+def _describe_accountable_funds_request(subject_id: int) -> dict | None:
+    request = (AccountableFundsRequest.objects.select_related("budget_line__budget__administrator", "budget_line__program")
+               .filter(pk=subject_id).first())
+    if request is None:
+        return None
+    return {
+        "title": f"Заявка на подотчётные средства: {request.amount} ({request.budget_line.program.display_name})",
+        "url": f"/contracts/accountable-funds-requests/{request.pk}",
+    }
+
+
+def _accountable_funds_request_facts(subject_id: int) -> dict:
+    request = (AccountableFundsRequest.objects.select_related("budget_line__budget__administrator")
+               .filter(pk=subject_id).first())
+    if request is None:
+        return {}
+    return {
+        "admin_country_id": request.budget_line.budget.administrator.country_id,
+        "program_id": request.budget_line.program_id,
+        "amount": request.amount,
+    }
+
+
+def _accountable_funds_request_fact_fields() -> list[dict]:
+    return [
+        {"key": "admin_country_id", "label": "Страна администратора",
+         "type": "choice", "options": _country_options()},
+        {"key": "program_id", "label": "Программа",
+         "type": "choice", "options": _program_options()},
+        {"key": "amount", "label": "Сумма", "type": "number"},
+    ]
 
 
 def _completion_act_to(subject_id: int, status: str) -> None:
@@ -661,6 +726,19 @@ def register() -> None:
         describe=_describe_advance_payment,
         facts=_advance_payment_facts,
         fact_fields=_advance_payment_fact_fields,
+    )
+    signoff.register_subject(
+        AccountableFundsRequest.SIGNOFF_SUBJECT_TYPE,
+        label="Заявка на подотчётные средства",
+        model=AccountableFundsRequest,
+        on_started=_accountable_funds_request_on_started,
+        on_approved=_accountable_funds_request_on_approved,
+        on_rejected=_accountable_funds_request_on_rejected,
+        on_rework=_accountable_funds_request_on_rework,
+        on_cancelled=_accountable_funds_request_on_cancelled,
+        describe=_describe_accountable_funds_request,
+        facts=_accountable_funds_request_facts,
+        fact_fields=_accountable_funds_request_fact_fields,
     )
     signoff.register_subject(
         ContractPayment.SIGNOFF_SUBJECT_TYPE,

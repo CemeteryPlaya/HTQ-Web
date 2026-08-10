@@ -58,6 +58,12 @@ const NAV: NavItem[] = [
     matchPrefix: '/contracts/advance-payments',
   },
   {
+    to: '/contracts/accountable-funds-requests',
+    label: 'Подотчётные средства',
+    icon: Wallet,
+    matchPrefix: '/contracts/accountable-funds-requests',
+  },
+  {
     to: '/contracts/contract-payments',
     label: 'Оплаты по договорам',
     icon: Wallet,

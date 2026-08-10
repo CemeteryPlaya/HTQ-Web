@@ -117,6 +117,19 @@ class AdvancePaymentStatus(models.TextChoices):
     CLOSED = "closed", "Закрыт"
 
 
+class AccountableFundsRequestStatus(models.TextChoices):
+    """Жизненный цикл заявки на средства под отчёт.
+
+    После подтверждения бухгалтером заявка остаётся открытой за инициатором:
+    позднее к ней будут добавляться авансовые отчёты.
+    """
+
+    DRAFT = "draft", "Черновик"
+    ON_REVIEW = "on_review", "На согласовании"
+    AWAITING_ACCOUNTING = "awaiting_accounting", "Ожидает оплаты бухгалтерией"
+    AWAITING_ADVANCE_REPORT = "awaiting_advance_report", "Ожидает авансовый отчёт"
+
+
 class Country(models.Model):
     """Страна. Используется и администратором бюджета, и контрагентом."""
 
@@ -636,6 +649,62 @@ class CompletionAct(signoff.Approvable, models.Model):
 
     def __str__(self) -> str:
         return f"Акт выполненных работ по договору {self.agreement.number}: {self.amount}"
+
+
+class AccountableFundsRequest(signoff.Approvable, models.Model):
+    """Заявка на подотчётные средства.
+
+    Деньги закрепляются за пользователем, который завёл заявку
+    (``accountable_user_id``). Когда бухгалтер отмечает оплату, документ не
+    закрывается: он ждёт будущих авансовых отчётов этого пользователя.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.accountable_funds_request"
+
+    # Источник средств для новых заявок. Nullable только ради записей,
+    # созданных до миграции 0017: их старые administrator/program сохраняются,
+    # пока бухгалтер не назначит конкретную строку бюджета.
+    budget_line = models.ForeignKey(
+        BudgetLine, on_delete=models.PROTECT, related_name="accountable_funds_requests",
+        null=True, blank=True,
+    )
+    administrator = models.ForeignKey(
+        Administrator, on_delete=models.PROTECT, related_name="+", null=True, blank=True,
+        editable=False,
+    )
+    program = models.ForeignKey(
+        Program, on_delete=models.PROTECT, related_name="+", null=True, blank=True,
+        editable=False,
+    )
+    amount = models.DecimalField(max_digits=18, decimal_places=2, verbose_name="Сумма")
+    goal = models.TextField(verbose_name="Цель")
+    status = models.CharField(
+        max_length=32, choices=AccountableFundsRequestStatus.choices,
+        default=AccountableFundsRequestStatus.DRAFT,
+        db_default=AccountableFundsRequestStatus.DRAFT,
+    )
+    accounting_paid = models.BooleanField(
+        default=False, db_default=False, verbose_name="Бухгалтер оплатил",
+    )
+    accounting_paid_by = models.IntegerField(null=True, blank=True, db_index=True)
+    accounting_paid_at = models.DateTimeField(null=True, blank=True)
+    accountable_user_id = models.IntegerField(db_index=True)
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["budget_line", "approval_state"], name="ix_af_req_line_state"),
+            models.Index(fields=["accountable_user_id", "status"], name="ix_af_req_user_status"),
+        ]
+        verbose_name = "Заявка на подотчётные средства"
+        verbose_name_plural = "Заявки на подотчётные средства"
+
+    def __str__(self) -> str:
+        program = self.budget_line.program if self.budget_line_id else self.program
+        return f"Заявка на подотчётные средства: {self.amount} ({program.display_name})"
 
 
 class AdvancePayment(signoff.Approvable, models.Model):

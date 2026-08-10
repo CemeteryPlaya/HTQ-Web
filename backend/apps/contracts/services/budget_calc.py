@@ -37,6 +37,8 @@ from django.db.models import Sum
 from apps.contracts.models import (
     Agreement,
     AgreementStatus,
+    AccountableFundsRequest,
+    AccountableFundsRequestStatus,
     BudgetLine,
     Invoice,
     InvoiceStatus,
@@ -65,6 +67,14 @@ COMMITTING_STATUSES = frozenset({
 INVOICE_COMMITTING_STATUSES = frozenset({
     InvoiceStatus.APPROVED,
     InvoiceStatus.PAID,
+})
+
+# Подотчётная заявка начинает резервировать средства с отправки на
+# согласование. После выдачи она остаётся здесь до будущего авансового отчёта.
+ACCOUNTABLE_FUNDS_COMMITTING_STATUSES = frozenset({
+    AccountableFundsRequestStatus.ON_REVIEW,
+    AccountableFundsRequestStatus.AWAITING_ACCOUNTING,
+    AccountableFundsRequestStatus.AWAITING_ADVANCE_REPORT,
 })
 
 ZERO = Decimal("0.00")
@@ -114,7 +124,11 @@ def committed_map(line_ids, *, exclude_agreement_id: int | None = None,
         invoice_query = invoice_query.exclude(pk=exclude_invoice_id)
 
     totals: dict[int, Decimal] = {}
-    for query in (agreement_query, invoice_query):
+    accountable_query = AccountableFundsRequest.objects.filter(
+        budget_line_id__in=ids, status__in=ACCOUNTABLE_FUNDS_COMMITTING_STATUSES,
+    )
+
+    for query in (agreement_query, invoice_query, accountable_query):
         rows = query.values("budget_line_id").annotate(total=Sum("amount"))
         for row in rows:
             line_id = row["budget_line_id"]

@@ -124,6 +124,18 @@ urlpatterns = [
     path("advance-payments/<int:payment_id>", views.AdvancePaymentDetailView.as_view()),
     path("advance-payments/<int:payment_id>/", views.AdvancePaymentDetailView.as_view()),
 
+    # ── Заявки на подотчётные средства ───────────────────────────────────
+    path("accountable-funds-requests/<int:request_id>/submit", views.AccountableFundsRequestSubmitView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/submit/", views.AccountableFundsRequestSubmitView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/budget-line", views.AccountableFundsRequestBudgetLineAssignView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/budget-line/", views.AccountableFundsRequestBudgetLineAssignView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/accounting-paid", views.AccountableFundsRequestAccountingPaidView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/accounting-paid/", views.AccountableFundsRequestAccountingPaidView.as_view()),
+    path("accountable-funds-requests", views.AccountableFundsRequestCollectionView.as_view()),
+    path("accountable-funds-requests/", views.AccountableFundsRequestCollectionView.as_view()),
+    path("accountable-funds-requests/<int:request_id>", views.AccountableFundsRequestDetailView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/", views.AccountableFundsRequestDetailView.as_view()),
+
     # ── Оплаты по договорам ───────────────────────────────────────────────
     path("contract-payments/<int:payment_id>/submit", views.ContractPaymentSubmitView.as_view()),
     path("contract-payments/<int:payment_id>/submit/", views.ContractPaymentSubmitView.as_view()),

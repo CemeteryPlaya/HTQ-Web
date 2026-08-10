@@ -595,6 +595,41 @@ class AdvancePaymentRead(BaseModel):
     updated_at: datetime
 
 
+# ── Заявка на подотчётные средства ────────────────────────────────────────
+
+class AccountableFundsRequestCreate(BaseModel):
+    budget_line_id: int
+    amount: Decimal = Field(..., gt=0)
+    goal: str = Field(..., min_length=1, max_length=5000)
+
+
+class AccountableFundsRequestBudgetLineAssign(BaseModel):
+    budget_line_id: int
+
+
+class AccountableFundsRequestRead(BaseModel):
+    id: int
+    budget_line_id: Optional[int]
+    administrator_id: int
+    administrator_name: str
+    program_id: int
+    program_name: str
+    expense_item: str
+    period_year: Optional[int]
+    currency: str
+    amount: Decimal
+    goal: str
+    status: str
+    approval_state: str
+    accounting_paid: bool
+    accounting_paid_by: Optional[int]
+    accounting_paid_at: Optional[datetime]
+    accountable_user_id: int
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
 class ContractPaymentRead(BaseModel):
     id: int
     administrator_id: int

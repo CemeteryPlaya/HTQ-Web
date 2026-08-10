@@ -267,6 +267,36 @@ export interface AdvancePayment {
   updated_at: string;
 }
 
+export type AccountableFundsRequestStatus =
+  | 'draft'
+  | 'on_review'
+  | 'awaiting_accounting'
+  | 'awaiting_advance_report';
+
+export interface AccountableFundsRequest {
+  id: number;
+  budget_line_id: number | null;
+  administrator_id: number;
+  administrator_name: string;
+  program_id: number;
+  program_name: string;
+  expense_item: string;
+  period_year: number | null;
+  currency: string;
+  amount: string;
+  goal: string;
+  status: AccountableFundsRequestStatus;
+  approval_state: ApprovalState;
+  accounting_paid: boolean;
+  accounting_paid_by: number | null;
+  accounting_paid_at: string | null;
+  /** Пользователь, за которым закреплены выданные средства. */
+  accountable_user_id: number;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ContractPayment {
   id: number;
   administrator_id: number;

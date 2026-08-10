@@ -24,6 +24,7 @@ import type {
   Invoice,
   InvoiceStatus,
   AdvancePayment,
+  AccountableFundsRequest,
   CompletionAct,
   ContractPayment,
   Program,
@@ -238,6 +239,19 @@ export const contractsApi = {
   },
   getAdvancePaymentOrderUrl: (id: number) =>
     api.get<{ url: string }>(path(`advance-payments/${id}/payment-order-url`)),
+
+  listAccountableFundsRequests: (params?: { administrator_id?: number; program_id?: number; accountable_user_id?: number }) =>
+    api.get<AccountableFundsRequest[]>(path('accountable-funds-requests'), { params }),
+  getAccountableFundsRequest: (id: number) =>
+    api.get<AccountableFundsRequest>(path(`accountable-funds-requests/${id}`)),
+  createAccountableFundsRequest: (data: { budget_line_id: number; amount: string; goal: string }) =>
+    api.post<AccountableFundsRequest>(path('accountable-funds-requests'), data),
+  submitAccountableFundsRequest: (id: number) =>
+    api.post<ApprovalProcess>(path(`accountable-funds-requests/${id}/submit`)),
+  assignAccountableFundsRequestBudgetLine: (id: number, budgetLineId: number) =>
+    api.post<AccountableFundsRequest>(path(`accountable-funds-requests/${id}/budget-line`), { budget_line_id: budgetLineId }),
+  markAccountableFundsRequestPaid: (id: number) =>
+    api.post<AccountableFundsRequest>(path(`accountable-funds-requests/${id}/accounting-paid`)),
 
   listContractPayments: (params?: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean }) =>
     api.get<ContractPayment[]>(path('contract-payments'), { params }),
