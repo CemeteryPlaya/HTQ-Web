@@ -131,10 +131,20 @@ urlpatterns = [
     path("accountable-funds-requests/<int:request_id>/budget-line/", views.AccountableFundsRequestBudgetLineAssignView.as_view()),
     path("accountable-funds-requests/<int:request_id>/accounting-paid", views.AccountableFundsRequestAccountingPaidView.as_view()),
     path("accountable-funds-requests/<int:request_id>/accounting-paid/", views.AccountableFundsRequestAccountingPaidView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/advance-reports", views.AdvanceReportCollectionView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/advance-reports/", views.AdvanceReportCollectionView.as_view()),
     path("accountable-funds-requests", views.AccountableFundsRequestCollectionView.as_view()),
     path("accountable-funds-requests/", views.AccountableFundsRequestCollectionView.as_view()),
     path("accountable-funds-requests/<int:request_id>", views.AccountableFundsRequestDetailView.as_view()),
     path("accountable-funds-requests/<int:request_id>/", views.AccountableFundsRequestDetailView.as_view()),
+
+    # ── Авансовые отчёты ──
+    path("advance-reports/<int:report_id>/submit", views.AdvanceReportSubmitView.as_view()),
+    path("advance-reports/<int:report_id>/submit/", views.AdvanceReportSubmitView.as_view()),
+    path("advance-reports/<int:report_id>/file-url", views.AdvanceReportFileUrlView.as_view()),
+    path("advance-reports/<int:report_id>/file-url/", views.AdvanceReportFileUrlView.as_view()),
+    path("advance-reports/<int:report_id>", views.AdvanceReportDetailView.as_view()),
+    path("advance-reports/<int:report_id>/", views.AdvanceReportDetailView.as_view()),
 
     # ── Оплаты по договорам ───────────────────────────────────────────────
     path("contract-payments/<int:payment_id>/submit", views.ContractPaymentSubmitView.as_view()),

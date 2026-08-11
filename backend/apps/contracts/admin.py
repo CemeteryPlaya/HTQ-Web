@@ -20,6 +20,7 @@ from htqweb.admin_gate import ServiceGatedAdminMixin
 
 from .models import (
     AccountableFundsRequest,
+    AdvanceReport,
     Administrator,
     AdvancePayment,
     Agreement,
@@ -184,6 +185,17 @@ class AccountableFundsRequestAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
                        "accounting_paid_at", "accountable_user_id", "created_by", "administrator", "program")
     raw_id_fields = ("budget_line",)
     list_select_related = ("budget_line", "budget_line__budget__administrator", "budget_line__program", "administrator", "program")
+
+
+@admin.register(AdvanceReport)
+class AdvanceReportAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "accountable_funds_request", "expense_name", "amount",
+                    "approval_state", "created_by", "created_at")
+    list_filter = ("approval_state",)
+    search_fields = ("expense_name",)
+    readonly_fields = ("created_at", "updated_at", "approval_state", "created_by")
+    raw_id_fields = ("accountable_funds_request",)
+    list_select_related = ("accountable_funds_request",)
 
 
 @admin.register(ContractPayment)

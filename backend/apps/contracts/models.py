@@ -128,6 +128,7 @@ class AccountableFundsRequestStatus(models.TextChoices):
     ON_REVIEW = "on_review", "На согласовании"
     AWAITING_ACCOUNTING = "awaiting_accounting", "Ожидает оплаты бухгалтерией"
     AWAITING_ADVANCE_REPORT = "awaiting_advance_report", "Ожидает авансовый отчёт"
+    CLOSED = "closed", "Закрыта"
 
 
 class Country(models.Model):
@@ -705,6 +706,40 @@ class AccountableFundsRequest(signoff.Approvable, models.Model):
     def __str__(self) -> str:
         program = self.budget_line.program if self.budget_line_id else self.program
         return f"Заявка на подотчётные средства: {self.amount} ({program.display_name})"
+
+
+class AdvanceReport(signoff.Approvable, models.Model):
+    """Одна подтверждающая трата в рамках выданных подотчётных средств.
+
+    Сумма заявки не меняется. Её остаток вычисляется как сумма только
+    согласованных отчётов, поэтому отклонённый или возвращённый на доработку
+    отчёт не списывает средства и может быть отправлен повторно.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.advance_report"
+
+    accountable_funds_request = models.ForeignKey(
+        AccountableFundsRequest, on_delete=models.PROTECT,
+        related_name="advance_reports",
+    )
+    expense_name = models.CharField(max_length=500, verbose_name="Наименование затрат")
+    amount = models.DecimalField(max_digits=18, decimal_places=2, verbose_name="Сумма")
+    file_id = models.CharField(max_length=64, verbose_name="Файл авансового отчёта")
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["accountable_funds_request", "approval_state"],
+                         name="ix_adv_report_req_state"),
+        ]
+        verbose_name = "Авансовый отчёт"
+        verbose_name_plural = "Авансовые отчёты"
+
+    def __str__(self) -> str:
+        return f"Авансовый отчёт: {self.expense_name} ({self.amount})"
 
 
 class AdvancePayment(signoff.Approvable, models.Model):

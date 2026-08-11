@@ -51,6 +51,7 @@ from apps.signoff import interface as signoff
 from .models import (
     AccountableFundsRequest,
     AccountableFundsRequestStatus,
+    AdvanceReport,
     AdvancePayment,
     AdvancePaymentStatus,
     Agreement,
@@ -403,6 +404,47 @@ def _accountable_funds_request_fact_fields() -> list[dict]:
     ]
 
 
+# ── Авансовый отчёт ───────────────────────────────────────────────────────
+
+def _advance_report_on_approved(subject_id: int) -> None:
+    from .services import advance_report_service as report_svc
+
+    report_svc.close_parent_if_fully_reported(subject_id)
+
+
+def _describe_advance_report(subject_id: int) -> dict | None:
+    report = (AdvanceReport.objects
+              .select_related("accountable_funds_request")
+              .filter(pk=subject_id).first())
+    if report is None:
+        return None
+    return {
+        "title": f"Авансовый отчёт: {report.expense_name} ({report.amount})",
+        "url": f"/contracts/accountable-funds-requests/{report.accountable_funds_request_id}",
+    }
+
+
+def _advance_report_facts(subject_id: int) -> dict:
+    report = (AdvanceReport.objects
+              .select_related("accountable_funds_request__budget_line__budget__administrator",
+                              "accountable_funds_request__budget_line__program")
+              .filter(pk=subject_id).first())
+    if report is None:
+        return {}
+    request = report.accountable_funds_request
+    if request.budget_line_id is None:
+        return {"amount": report.amount}
+    return {
+        "admin_country_id": request.budget_line.budget.administrator.country_id,
+        "program_id": request.budget_line.program_id,
+        "amount": report.amount,
+    }
+
+
+def _advance_report_fact_fields() -> list[dict]:
+    return _accountable_funds_request_fact_fields()
+
+
 def _completion_act_to(subject_id: int, status: str) -> None:
     from .services import completion_act_service as act_svc
 
@@ -739,6 +781,15 @@ def register() -> None:
         describe=_describe_accountable_funds_request,
         facts=_accountable_funds_request_facts,
         fact_fields=_accountable_funds_request_fact_fields,
+    )
+    signoff.register_subject(
+        AdvanceReport.SIGNOFF_SUBJECT_TYPE,
+        label="Авансовый отчёт",
+        model=AdvanceReport,
+        on_approved=_advance_report_on_approved,
+        describe=_describe_advance_report,
+        facts=_advance_report_facts,
+        fact_fields=_advance_report_fact_fields,
     )
     signoff.register_subject(
         ContractPayment.SIGNOFF_SUBJECT_TYPE,

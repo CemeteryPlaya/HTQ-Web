@@ -28,7 +28,10 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
         AccountableFundsRequestStatus.DRAFT,
         AccountableFundsRequestStatus.AWAITING_ADVANCE_REPORT,
     }),
-    AccountableFundsRequestStatus.AWAITING_ADVANCE_REPORT: frozenset(),
+    AccountableFundsRequestStatus.AWAITING_ADVANCE_REPORT: frozenset({
+        AccountableFundsRequestStatus.CLOSED,
+    }),
+    AccountableFundsRequestStatus.CLOSED: frozenset(),
 }
 
 
@@ -54,9 +57,12 @@ def get_request_or_404(request_id: int, *, lock: bool = False) -> AccountableFun
 
 
 def serialize_request(request: AccountableFundsRequest) -> dict:
+    from apps.contracts.services import advance_report_service
+
     line = request.budget_line
     administrator = line.budget.administrator if line else request.administrator
     program = line.program if line else request.program
+    totals = advance_report_service.totals_for_request(request)
     return {
         "id": request.pk,
         "budget_line_id": request.budget_line_id,
@@ -68,6 +74,8 @@ def serialize_request(request: AccountableFundsRequest) -> dict:
         "period_year": line.budget.period_year if line else None,
         "currency": line.budget.currency if line else "",
         "amount": request.amount,
+        "advance_reported_amount": totals["reported_amount"],
+        "remaining_accountable_amount": totals["remaining_amount"],
         "goal": request.goal,
         "status": request.status,
         "approval_state": request.approval_state,

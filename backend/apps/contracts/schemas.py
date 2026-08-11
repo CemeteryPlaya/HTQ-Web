@@ -618,6 +618,8 @@ class AccountableFundsRequestRead(BaseModel):
     period_year: Optional[int]
     currency: str
     amount: Decimal
+    advance_reported_amount: Decimal
+    remaining_accountable_amount: Decimal
     goal: str
     status: str
     approval_state: str
@@ -625,6 +627,19 @@ class AccountableFundsRequestRead(BaseModel):
     accounting_paid_by: Optional[int]
     accounting_paid_at: Optional[datetime]
     accountable_user_id: int
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdvanceReportRead(BaseModel):
+    id: int
+    accountable_funds_request_id: int
+    expense_name: str
+    amount: Decimal
+    currency: str
+    file_id: str
+    approval_state: str
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime

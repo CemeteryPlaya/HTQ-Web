@@ -271,7 +271,8 @@ export type AccountableFundsRequestStatus =
   | 'draft'
   | 'on_review'
   | 'awaiting_accounting'
-  | 'awaiting_advance_report';
+  | 'awaiting_advance_report'
+  | 'closed';
 
 export interface AccountableFundsRequest {
   id: number;
@@ -284,6 +285,8 @@ export interface AccountableFundsRequest {
   period_year: number | null;
   currency: string;
   amount: string;
+  advance_reported_amount: string;
+  remaining_accountable_amount: string;
   goal: string;
   status: AccountableFundsRequestStatus;
   approval_state: ApprovalState;
@@ -292,6 +295,19 @@ export interface AccountableFundsRequest {
   accounting_paid_at: string | null;
   /** Пользователь, за которым закреплены выданные средства. */
   accountable_user_id: number;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdvanceReport {
+  id: number;
+  accountable_funds_request_id: number;
+  expense_name: string;
+  amount: string;
+  currency: string;
+  file_id: string;
+  approval_state: ApprovalState;
   created_by: number | null;
   created_at: string;
   updated_at: string;

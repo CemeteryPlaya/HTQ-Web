@@ -47,6 +47,9 @@ export const SIGNOFF_SUBJECT_VIEWS: Record<string, SubjectView> = {
   'contracts.accountable_funds_request': lazy(
     () => import('@/components/contracts/AccountableFundsRequestDetailView'),
   ),
+  'contracts.advance_report': lazy(
+    () => import('@/components/contracts/AdvanceReportDetailView'),
+  ),
   'contracts.contract_payment': lazy(
     () => import('@/components/contracts/ContractPaymentDetailView'),
   ),

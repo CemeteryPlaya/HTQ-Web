@@ -75,6 +75,9 @@ ACCOUNTABLE_FUNDS_COMMITTING_STATUSES = frozenset({
     AccountableFundsRequestStatus.ON_REVIEW,
     AccountableFundsRequestStatus.AWAITING_ACCOUNTING,
     AccountableFundsRequestStatus.AWAITING_ADVANCE_REPORT,
+    # Closing the accountability workflow does not return paid funds to the
+    # budget: they are evidenced by the approved advance reports instead.
+    AccountableFundsRequestStatus.CLOSED,
 })
 
 ZERO = Decimal("0.00")

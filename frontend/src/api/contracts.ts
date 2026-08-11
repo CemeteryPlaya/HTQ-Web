@@ -25,6 +25,7 @@ import type {
   InvoiceStatus,
   AdvancePayment,
   AccountableFundsRequest,
+  AdvanceReport,
   CompletionAct,
   ContractPayment,
   Program,
@@ -252,6 +253,16 @@ export const contractsApi = {
     api.post<AccountableFundsRequest>(path(`accountable-funds-requests/${id}/budget-line`), { budget_line_id: budgetLineId }),
   markAccountableFundsRequestPaid: (id: number) =>
     api.post<AccountableFundsRequest>(path(`accountable-funds-requests/${id}/accounting-paid`)),
+  listAdvanceReports: (requestId: number) =>
+    api.get<AdvanceReport[]>(path(`accountable-funds-requests/${requestId}/advance-reports`)),
+  createAdvanceReport: (requestId: number, expenseName: string, amount: string, file: File) => {
+    const form = new FormData();
+    form.append('expense_name', expenseName); form.append('amount', amount); form.append('file', file);
+    return api.post<AdvanceReport>(path(`accountable-funds-requests/${requestId}/advance-reports`), form);
+  },
+  submitAdvanceReport: (id: number) => api.post<ApprovalProcess>(path(`advance-reports/${id}/submit`)),
+  getAdvanceReportFileUrl: (id: number) => api.get<{ url: string }>(path(`advance-reports/${id}/file-url`)),
+  getAdvanceReport: (id: number) => api.get<AdvanceReport>(path(`advance-reports/${id}`)),
 
   listContractPayments: (params?: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean }) =>
     api.get<ContractPayment[]>(path('contract-payments'), { params }),

@@ -21,6 +21,7 @@ from apps.contracts.models import (
     Counterparty,
     Invoice,
     InvoiceStatus,
+    AdvanceReport,
 )
 from apps.contracts.services import budget_calc
 from apps.contracts.tests.helpers import (
@@ -104,6 +105,7 @@ def test_all_contract_models_are_registered_as_approvable(client):
     assert by_type["contracts.agreement"]["label"] == "Договор"
     assert by_type["contracts.invoice"]["label"] == "Счёт на оплату"
     assert by_type["contracts.advance_payment"]["label"] == "Предоплата на основании договора"
+    assert by_type["contracts.advance_report"]["label"] == "Авансовый отчёт"
     assert by_type["contracts.completion_act"]["label"] == "Акт выполненных работ"
 
 

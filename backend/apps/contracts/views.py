@@ -56,6 +56,7 @@ from .services import counterparty_service as cp_svc
 from .services import invoice_service as inv_svc
 from .services import advance_payment_service as adv_svc
 from .services import accountable_funds_request_service as accountable_funds_svc
+from .services import advance_report_service as advance_report_svc
 from .services import contract_payment_service as contract_payment_svc
 from .services import completion_act_service as completion_act_svc
 from .services import reference_service as ref_svc
@@ -64,6 +65,7 @@ from .services.budget_calc import COMMITTING_STATUSES, BudgetExceeded
 from .services.invoice_service import InvoiceRuleViolation
 from .services.advance_payment_service import AdvancePaymentRuleViolation
 from .services.accountable_funds_request_service import AccountableFundsRequestRuleViolation
+from .services.advance_report_service import AdvanceReportRuleViolation
 from .services.contract_payment_service import ContractPaymentRuleViolation
 from .services.completion_act_service import CompletionActRuleViolation
 from .services.reference_service import ReferenceConflict
@@ -79,6 +81,7 @@ from .services.reference_service import ReferenceConflict
 CONFLICTS = (ReferenceConflict, AgreementRuleViolation, InvoiceRuleViolation,
              AdvancePaymentRuleViolation,
              AccountableFundsRequestRuleViolation,
+             AdvanceReportRuleViolation,
              ContractPaymentRuleViolation,
              CompletionActRuleViolation,
              BudgetExceeded, signoff.SignoffError, signoff.UnknownSubject)
@@ -973,6 +976,73 @@ class AccountableFundsRequestAccountingPaidView(ContractsView):
             return self.conflict(exc)
         return schemas.AccountableFundsRequestRead.model_validate(
             accountable_funds_svc.serialize_request(row))
+
+
+class AdvanceReportCollectionView(ContractsView):
+    @read
+    def get(self, request, request_id: int):
+        accountable_funds_svc.get_request_or_404(request_id)
+        rows = advance_report_svc.list_advance_reports(request_id=request_id)
+        return [schemas.AdvanceReportRead.model_validate(
+            advance_report_svc.serialize_advance_report(row)) for row in rows]
+
+    @write("POST", status=201, admin=False)
+    def post(self, request, request_id: int):
+        expense_name = (request.POST.get("expense_name") or "").strip()
+        try:
+            amount = Decimal(request.POST.get("amount") or "")
+        except (TypeError, ValueError, InvalidOperation):
+            return json_error("Укажите корректную сумму", 422)
+        if not expense_name:
+            return json_error("Укажите наименование затрат", 422)
+        if len(expense_name) > 500:
+            return json_error("Наименование затрат не длиннее 500 символов", 422)
+        if amount <= 0:
+            return json_error("Сумма должна быть больше нуля", 422)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+        try:
+            report = advance_report_svc.create_advance_report(
+                request_id=request_id, expense_name=expense_name, amount=amount,
+                data=upload.read(), filename=upload.name,
+                mime=upload.content_type or "application/octet-stream",
+                actor_id=request.token.user_id,
+                is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AdvanceReportRead.model_validate(
+            advance_report_svc.serialize_advance_report(report))
+
+
+class AdvanceReportDetailView(ContractsView):
+    @read
+    def get(self, request, report_id: int):
+        return schemas.AdvanceReportRead.model_validate(
+            advance_report_svc.serialize_advance_report(
+                advance_report_svc.get_advance_report_or_404(report_id)))
+
+
+class AdvanceReportSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, report_id: int):
+        try:
+            return self.submitted(
+                lambda **kw: advance_report_svc.submit_for_approval(
+                    report_id, is_elevated=request.token.is_elevated, **kw))
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+
+
+class AdvanceReportFileUrlView(ContractsView):
+    @read
+    def get(self, request, report_id: int):
+        url = advance_report_svc.file_url(
+            advance_report_svc.get_advance_report_or_404(report_id))
+        return {"url": url}
 
 
 # ═══════════════════════════════════════════════════════════════════════
