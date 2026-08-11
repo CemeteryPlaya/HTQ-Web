@@ -33,38 +33,38 @@ export const ContactSection = () => {
             {/* Contact Info */}
             <div className="space-y-4">
               <div className="flex items-center gap-4 p-4 rounded-xl bg-primary-foreground/10 backdrop-blur">
-                <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center">
+                <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center shrink-0">
                   <MapPin className="text-secondary-foreground" size={20} />
                 </div>
-                <div>
-                  <p className="text-primary-foreground/60 text-sm">{t('contact.info.address')}</p>
-                  <p className="text-primary-foreground font-medium">{t('contact.info.location')}</p>
+                <div className="min-w-0">
+                  <p className="text-primary-foreground/60 text-xs sm:text-sm">{t('contact.info.address')}</p>
+                  <p className="text-primary-foreground font-medium text-sm sm:text-base truncate">{t('contact.info.location')}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-4 p-4 rounded-xl bg-primary-foreground/10 backdrop-blur">
-                <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center">
+              <a href="mailto:info@hi-techkz.com" className="flex items-center gap-4 p-4 rounded-xl bg-primary-foreground/10 backdrop-blur hover:bg-primary-foreground/20 transition-colors">
+                <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center shrink-0">
                   <Mail className="text-secondary-foreground" size={20} />
                 </div>
-                <div>
-                  <p className="text-primary-foreground/60 text-sm">{t('contact.info.email')}</p>
-                  <p className="text-primary-foreground font-medium">info@hi-techkz.com</p>
+                <div className="min-w-0">
+                  <p className="text-primary-foreground/60 text-xs sm:text-sm">{t('contact.info.email')}</p>
+                  <p className="text-primary-foreground font-medium text-sm sm:text-base truncate">info@hi-techkz.com</p>
                 </div>
-              </div>
-              <div className="flex items-center gap-4 p-4 rounded-xl bg-primary-foreground/10 backdrop-blur">
-                <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center">
+              </a>
+              <a href="tel:+77271234567" className="flex items-center gap-4 p-4 rounded-xl bg-primary-foreground/10 backdrop-blur hover:bg-primary-foreground/20 transition-colors">
+                <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center shrink-0">
                   <Phone className="text-secondary-foreground" size={20} />
                 </div>
-                <div>
-                  <p className="text-primary-foreground/60 text-sm">{t('contact.info.phone')}</p>
-                  <p className="text-primary-foreground font-medium">+7 (727) 123-4567</p>
+                <div className="min-w-0">
+                  <p className="text-primary-foreground/60 text-xs sm:text-sm">{t('contact.info.phone')}</p>
+                  <p className="text-primary-foreground font-medium text-sm sm:text-base truncate">+7 (727) 123-4567</p>
                 </div>
-              </div>
+              </a>
             </div>
           </div>
 
           {/* Right - Form Card */}
-          <div className="bg-card p-8 md:p-10 rounded-2xl shadow-elevated">
-            <h3 className="font-display text-2xl font-bold text-foreground mb-6">
+          <div className="bg-card p-5 sm:p-8 md:p-10 rounded-2xl shadow-elevated">
+            <h3 className="font-display text-xl sm:text-2xl font-bold text-foreground mb-6">
               {t('contact.form.title')}
             </h3>
             <FormFields />
@@ -118,50 +118,50 @@ const FormFields = () => {
   };
 
   return (
-    <form className="space-y-5" onSubmit={handleSubmit}>
-      <div className="grid md:grid-cols-2 gap-5">
+    <form className="space-y-4 sm:space-y-5" onSubmit={handleSubmit}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
         <div>
-          <label className="text-sm font-medium text-foreground mb-2 block">{t('contact.form.first_name')}</label>
+          <label className="text-sm font-medium text-foreground mb-1.5 block">{t('contact.form.first_name')}</label>
           <input
             value={firstName}
             onChange={(e) => setFirstName(e.target.value)}
             type="text"
             placeholder="John"
-            className="w-full px-4 py-3 rounded-lg bg-accent border border-border focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all"
+            className="w-full px-4 py-3 min-h-[44px] rounded-lg bg-accent border border-border focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all text-base sm:text-sm"
           />
         </div>
         <div>
-          <label className="text-sm font-medium text-foreground mb-2 block">{t('contact.form.last_name')}</label>
+          <label className="text-sm font-medium text-foreground mb-1.5 block">{t('contact.form.last_name')}</label>
           <input
             value={lastName}
             onChange={(e) => setLastName(e.target.value)}
             type="text"
             placeholder="Doe"
-            className="w-full px-4 py-3 rounded-lg bg-accent border border-border focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all"
+            className="w-full px-4 py-3 min-h-[44px] rounded-lg bg-accent border border-border focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all text-base sm:text-sm"
           />
         </div>
       </div>
       <div>
-        <label className="text-sm font-medium text-foreground mb-2 block">{t('contact.form.email')}</label>
+        <label className="text-sm font-medium text-foreground mb-1.5 block">{t('contact.form.email')}</label>
         <input
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           type="email"
           placeholder="john@example.com"
-          className="w-full px-4 py-3 rounded-lg bg-accent border border-border focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all"
+          className="w-full px-4 py-3 min-h-[44px] rounded-lg bg-accent border border-border focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all text-base sm:text-sm"
         />
       </div>
       <div>
-        <label className="text-sm font-medium text-foreground mb-2 block">{t('contact.form.message')}</label>
+        <label className="text-sm font-medium text-foreground mb-1.5 block">{t('contact.form.message')}</label>
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           rows={4}
           placeholder={t('contact.form.placeholder')}
-          className="w-full px-4 py-3 rounded-lg bg-accent border border-border focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all resize-none"
+          className="w-full px-4 py-3 rounded-lg bg-accent border border-border focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all resize-none text-base sm:text-sm"
         />
       </div>
-      <Button type="submit" className="w-full btn-secondary rounded-lg text-lg py-6 group" disabled={loading}>
+      <Button type="submit" className="w-full btn-secondary rounded-xl text-base sm:text-lg min-h-[48px] group font-semibold shadow-soft" disabled={loading}>
         {t('contact.form.send')}
         <ArrowRight size={18} className="ml-2 transition-transform group-hover:translate-x-1" />
       </Button>

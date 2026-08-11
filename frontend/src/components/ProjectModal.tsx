@@ -76,22 +76,26 @@ export const ProjectModal = ({ project, isOpen, onClose, onNext, onPrev }: Proje
 
             <div
                 ref={modalRef}
-                className="relative w-full max-w-4xl max-h-[90vh] overflow-y-auto bg-card rounded-3xl shadow-2xl border border-border animate-in zoom-in-95 duration-200"
+                className="relative w-[calc(100vw-1.5rem)] max-w-4xl max-h-[90vh] overflow-y-auto bg-card rounded-2xl sm:rounded-3xl shadow-2xl border border-border animate-in zoom-in-95 duration-200"
             >
                 {/* Navigation Buttons - Mobile (Overlay on Image) */}
                 <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 flex justify-between px-2 md:hidden z-20 pointer-events-none">
                     {onPrev && (
                         <button
+                            type="button"
                             onClick={(e) => { e.stopPropagation(); onPrev(); }}
-                            className="p-2 rounded-full bg-black/30 backdrop-blur-md text-white pointer-events-auto"
+                            aria-label="Previous project"
+                            className="p-2.5 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full bg-black/40 backdrop-blur-md text-white pointer-events-auto active:scale-95 transition-transform"
                         >
                             <ChevronLeft size={24} />
                         </button>
                     )}
                     {onNext && (
                         <button
+                            type="button"
                             onClick={(e) => { e.stopPropagation(); onNext(); }}
-                            className="p-2 rounded-full bg-black/30 backdrop-blur-md text-white pointer-events-auto"
+                            aria-label="Next project"
+                            className="p-2.5 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full bg-black/40 backdrop-blur-md text-white pointer-events-auto active:scale-95 transition-transform"
                         >
                             <ChevronRight size={24} />
                         </button>
@@ -100,8 +104,10 @@ export const ProjectModal = ({ project, isOpen, onClose, onNext, onPrev }: Proje
 
                 {/* Close Button */}
                 <button
+                    type="button"
                     onClick={onClose}
-                    className="absolute top-4 right-4 z-20 w-10 h-10 rounded-full bg-black/20 hover:bg-black/40 text-white flex items-center justify-center transition-colors backdrop-blur-sm"
+                    aria-label="Close modal"
+                    className="absolute top-3 right-3 sm:top-4 sm:right-4 z-20 min-h-[44px] min-w-[44px] p-2.5 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors backdrop-blur-sm active:scale-95"
                 >
                     <X size={20} />
                 </button>
