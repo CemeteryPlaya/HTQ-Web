@@ -34,6 +34,22 @@ import type {
 
 const path = (suffix: string) => apiPath('contracts', suffix);
 
+export interface PaginationParams {
+  page: number;
+  page_size: number;
+  search?: string;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  pagination: {
+    page: number;
+    page_size: number;
+    total: number;
+    total_pages: number;
+  };
+}
+
 export interface BudgetListParams {
   administrator_id?: number;
   period_year?: number;
@@ -90,6 +106,8 @@ export const contractsApi = {
   // ─── Бюджеты ───────────────────────────────────────────────────────────
   listBudgets: (params?: BudgetListParams) =>
     api.get<Budget[]>(path('budgets'), { params }),
+  listBudgetsPage: (params: BudgetListParams & PaginationParams) =>
+    api.get<PaginatedResponse<Budget>>(path('budgets'), { params }),
   getBudget: (id: number) => api.get<Budget>(path(`budgets/${id}`)),
   /**
    * Заявка на бюджет вместе со справочниками — одним запросом, одной
@@ -133,6 +151,8 @@ export const contractsApi = {
   // ─── Реестр контрагентов ───────────────────────────────────────────────
   listCounterparties: (params?: { search?: string; status?: string }) =>
     api.get<Counterparty[]>(path('counterparties'), { params }),
+  listCounterpartiesPage: (params: { search?: string; status?: string } & PaginationParams) =>
+    api.get<PaginatedResponse<Counterparty>>(path('counterparties'), { params }),
   getCounterparty: (id: number) =>
     api.get<Counterparty>(path(`counterparties/${id}`)),
   createCounterparty: (data: {
@@ -161,6 +181,8 @@ export const contractsApi = {
   // ─── Договоры ──────────────────────────────────────────────────────────
   listAgreements: (params?: AgreementListParams) =>
     api.get<Agreement[]>(path('agreements'), { params }),
+  listAgreementsPage: (params: AgreementListParams & PaginationParams) =>
+    api.get<PaginatedResponse<Agreement>>(path('agreements'), { params }),
   getAgreement: (id: number) => api.get<Agreement>(path(`agreements/${id}`)),
   createAgreement: (data: {
     number: string;
@@ -203,6 +225,8 @@ export const contractsApi = {
   // документ), и его отсутствие бэкенд отобьёт 409-м.
   listInvoices: (params?: InvoiceListParams) =>
     api.get<Invoice[]>(path('invoices'), { params }),
+  listInvoicesPage: (params: InvoiceListParams & PaginationParams) =>
+    api.get<PaginatedResponse<Invoice>>(path('invoices'), { params }),
   getInvoice: (id: number) => api.get<Invoice>(path(`invoices/${id}`)),
   submitInvoice: (id: number) =>
     api.post<ApprovalProcess>(path(`invoices/${id}/submit`)),
@@ -230,6 +254,8 @@ export const contractsApi = {
   // ─── Предоплаты на основании договоров ────────────────────────────────
   listAdvancePayments: (params?: { agreement_id?: number; awaiting_payment?: boolean }) =>
     api.get<AdvancePayment[]>(path('advance-payments'), { params }),
+  listAdvancePaymentsPage: (params: { agreement_id?: number; awaiting_payment?: boolean } & PaginationParams) =>
+    api.get<PaginatedResponse<AdvancePayment>>(path('advance-payments'), { params }),
   getAdvancePayment: (id: number) =>
     api.get<AdvancePayment>(path(`advance-payments/${id}`)),
   createAdvancePayment: (data: { agreement_id: number; amount: string }) =>
@@ -247,6 +273,8 @@ export const contractsApi = {
 
   listAccountableFundsRequests: (params?: { budget_id?: number; administrator_id?: number; program_id?: number; accountable_user_id?: number }) =>
     api.get<AccountableFundsRequest[]>(path('accountable-funds-requests'), { params }),
+  listAccountableFundsRequestsPage: (params: { budget_id?: number; administrator_id?: number; program_id?: number; accountable_user_id?: number } & PaginationParams) =>
+    api.get<PaginatedResponse<AccountableFundsRequest>>(path('accountable-funds-requests'), { params }),
   getAccountableFundsRequest: (id: number) =>
     api.get<AccountableFundsRequest>(path(`accountable-funds-requests/${id}`)),
   createAccountableFundsRequest: (data: { budget_line_id: number; amount: string; goal: string }) =>
@@ -270,6 +298,8 @@ export const contractsApi = {
 
   listContractPayments: (params?: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean }) =>
     api.get<ContractPayment[]>(path('contract-payments'), { params }),
+  listContractPaymentsPage: (params: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean } & PaginationParams) =>
+    api.get<PaginatedResponse<ContractPayment>>(path('contract-payments'), { params }),
   getContractPayment: (id: number) => api.get<ContractPayment>(path(`contract-payments/${id}`)),
   createContractPayment: (administratorId: number, agreementId: number, amount: string, invoice: File) => {
     const form = new FormData();
@@ -287,6 +317,8 @@ export const contractsApi = {
 
   listCompletionActs: (params?: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean }) =>
     api.get<CompletionAct[]>(path('completion-acts'), { params }),
+  listCompletionActsPage: (params: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean } & PaginationParams) =>
+    api.get<PaginatedResponse<CompletionAct>>(path('completion-acts'), { params }),
   getCompletionAct: (id: number) => api.get<CompletionAct>(path(`completion-acts/${id}`)),
   createCompletionAct: (administratorId: number, agreementId: number, amount: string, act: File) => {
     const form = new FormData();

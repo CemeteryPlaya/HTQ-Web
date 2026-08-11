@@ -6,6 +6,7 @@ import { Paperclip, Plus, Wallet } from 'lucide-react';
 import { contractsApi } from '@/api/contracts';
 import {
   CollectionPageHeader,
+  CollectionPagination,
   CollectionSearch,
   CollectionTable,
 } from '@/components/contracts/CollectionPage';
@@ -40,18 +41,16 @@ const documentStatusLabel: Record<string, string> = {
 
 const AdvancePaymentList = () => {
   const [search, setSearch] = useState('');
-  const { data: rows = [], isLoading, isError } = useQuery({
-    queryKey: ['contracts', 'advance-payments'],
-    queryFn: () => contractsApi.listAdvancePayments().then((r) => r.data),
+  const [page, setPage] = useState(1);
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['contracts', 'advance-payments', { page, search }],
+    queryFn: () => contractsApi.listAdvancePaymentsPage({
+      page, page_size: 25, search: search.trim() || undefined,
+    }).then((r) => r.data),
   });
-  const normalizedSearch = search.trim().toLowerCase();
-  const filteredRows = normalizedSearch
-    ? rows.filter((row) => [
-        row.agreement_number, row.agreement_name, row.counterparty_name,
-        approvalLabel[row.approval_state] ?? row.approval_state,
-        documentStatusLabel[row.status] ?? row.status, row.posting_number,
-      ].join(' ').toLowerCase().includes(normalizedSearch))
-    : rows;
+  const rows = data?.items ?? [];
+  const pagination = data?.pagination;
+  const hasSearch = search.trim().length > 0;
 
   return (
     <ContractsShell>
@@ -70,7 +69,7 @@ const AdvancePaymentList = () => {
       >
         <CollectionSearch
           value={search}
-          onValueChange={setSearch}
+          onValueChange={(value) => { setSearch(value); setPage(1); }}
           placeholder="Договор, контрагент, проведение или статус"
         />
       </CollectionPageHeader>
@@ -78,9 +77,9 @@ const AdvancePaymentList = () => {
       <CollectionTable
         isLoading={isLoading}
         isError={isError}
-        isEmpty={filteredRows.length === 0}
+        isEmpty={rows.length === 0}
         errorMessage="Не удалось загрузить предоплаты."
-        emptyMessage={normalizedSearch ? 'По запросу ничего не найдено.' : 'Предоплат пока нет.'}
+        emptyMessage={hasSearch ? 'По запросу ничего не найдено.' : 'Предоплат пока нет.'}
       >
         <Table>
           <TableHeader>
@@ -95,7 +94,7 @@ const AdvancePaymentList = () => {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredRows.map((row) => (
+            {rows.map((row) => (
               <TableRow key={row.id}>
                 <TableCell className="font-medium">
                   <Link
@@ -145,6 +144,7 @@ const AdvancePaymentList = () => {
           </TableBody>
         </Table>
       </CollectionTable>
+      <CollectionPagination pagination={pagination} onPageChange={setPage} isLoading={isLoading} />
     </ContractsShell>
   );
 };

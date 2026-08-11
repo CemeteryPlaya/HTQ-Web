@@ -35,6 +35,8 @@ django-вьюха ``View``): ``dispatch`` разводит методы сам, 
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+from math import ceil
+from typing import Callable, Iterable
 
 from django.http import Http404, HttpResponse
 from django.utils.decorators import method_decorator
@@ -122,6 +124,58 @@ class ContractsView(ApiView):
 
     def str_param(self, name: str) -> str | None:
         return self.request.GET.get(name) or None
+
+    def paginated(self, rows: Iterable, serialize: Callable) -> list | dict:
+        """Return a backwards-compatible list, or a page envelope on request.
+
+        Existing form and overview callers consume collection endpoints as plain
+        arrays. Lists opt into the envelope with ``page``/``page_size``; this
+        keeps those callers stable while allowing the registry UI to paginate.
+        """
+        if "page" not in self.request.GET and "page_size" not in self.request.GET:
+            return [serialize(row) for row in rows]
+
+        page = max(self.int_param("page") or 1, 1)
+        page_size = min(max(self.int_param("page_size") or 25, 1), 100)
+        search = (self.str_param("search") or "").casefold()
+
+        def as_json(item):
+            # ``api_view`` knows how to unwrap top-level Pydantic models in a
+            # list, while Django's JSON encoder receives nested page items
+            # directly. Convert those nested models explicitly.
+            return item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+
+        # Services currently return materialized lists. Serialize once before
+        # slicing when searching so the search spans the complete collection;
+        # without a search, slice first to avoid serializing off-page rows.
+        if search:
+            items = [serialize(row) for row in rows]
+            items = [item for item in items if search in str(item).casefold()]
+        else:
+            total = len(rows)
+            start = (page - 1) * page_size
+            items = [as_json(serialize(row)) for row in rows[start:start + page_size]]
+            return {
+                "items": items,
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "total_pages": max(ceil(total / page_size), 1),
+                },
+            }
+
+        total = len(items)
+        start = (page - 1) * page_size
+        return {
+            "items": [as_json(item) for item in items[start:start + page_size]],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": max(ceil(total / page_size), 1),
+            },
+        }
 
 
 # Декораторы читаются лучше короткими алиасами: они повторяются на каждом
@@ -299,7 +353,7 @@ class BudgetCollectionView(ContractsView):
             status=self.str_param("status"),
             approval_state=self.str_param("approval_state"),
         )
-        return [schemas.BudgetRead.model_validate(row) for row in rows]
+        return self.paginated(rows, schemas.BudgetRead.model_validate)
 
 
 class BudgetFullCreateView(ContractsView):
@@ -515,7 +569,7 @@ class CounterpartyCollectionView(ContractsView):
             country_id=self.int_param("country_id"),
             approval_state=self.str_param("approval_state"),
         )
-        return [schemas.CounterpartyRead.model_validate(row) for row in rows]
+        return self.paginated(rows, schemas.CounterpartyRead.model_validate)
 
     @write("POST", body=schemas.CounterpartyCreate, status=201, admin=False)
     def post(self, request, data: schemas.CounterpartyCreate):
@@ -582,8 +636,10 @@ class AgreementCollectionView(ContractsView):
             period_year=self.int_param("period_year"),
             status=self.str_param("status"),
         )
-        return [schemas.AgreementRead.model_validate(agr_svc.serialize_agreement(row))
-                for row in rows]
+        return self.paginated(
+            rows,
+            lambda row: schemas.AgreementRead.model_validate(agr_svc.serialize_agreement(row)),
+        )
 
     @write("POST", body=schemas.AgreementCreate, status=201, admin=False)
     def post(self, request, data: schemas.AgreementCreate):
@@ -726,8 +782,10 @@ class InvoiceCollectionView(ContractsView):
             period_year=self.int_param("period_year"),
             status=self.str_param("status"),
         )
-        return [schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(row))
-                for row in rows]
+        return self.paginated(
+            rows,
+            lambda row: schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(row)),
+        )
 
     @write("POST", body=schemas.InvoiceCreate, status=201, admin=False)
     def post(self, request, data: schemas.InvoiceCreate):
@@ -855,8 +913,10 @@ class AdvancePaymentCollectionView(ContractsView):
             agreement_id=self.int_param("agreement_id"),
             awaiting_payment=self.bool_param("awaiting_payment"),
         )
-        return [schemas.AdvancePaymentRead.model_validate(
-            adv_svc.serialize_advance_payment(row)) for row in rows]
+        return self.paginated(
+            rows,
+            lambda row: schemas.AdvancePaymentRead.model_validate(adv_svc.serialize_advance_payment(row)),
+        )
 
     @write("POST", body=schemas.AdvancePaymentCreate, status=201, admin=False)
     def post(self, request, data: schemas.AdvancePaymentCreate):
@@ -931,8 +991,11 @@ class AccountableFundsRequestCollectionView(ContractsView):
             program_id=self.int_param("program_id"),
             accountable_user_id=self.int_param("accountable_user_id"),
         )
-        return [schemas.AccountableFundsRequestRead.model_validate(
-            accountable_funds_svc.serialize_request(row)) for row in rows]
+        return self.paginated(
+            rows,
+            lambda row: schemas.AccountableFundsRequestRead.model_validate(
+                accountable_funds_svc.serialize_request(row)),
+        )
 
     @write("POST", body=schemas.AccountableFundsRequestCreate, status=201, admin=False)
     def post(self, request, data: schemas.AccountableFundsRequestCreate):
@@ -1069,8 +1132,11 @@ class ContractPaymentCollectionView(ContractsView):
             agreement_id=self.int_param("agreement_id"),
             awaiting_payment=self.bool_param("awaiting_payment"),
         )
-        return [schemas.ContractPaymentRead.model_validate(
-            contract_payment_svc.serialize_contract_payment(row)) for row in rows]
+        return self.paginated(
+            rows,
+            lambda row: schemas.ContractPaymentRead.model_validate(
+                contract_payment_svc.serialize_contract_payment(row)),
+        )
 
     @write("POST", status=201, admin=False)
     def post(self, request):
@@ -1159,8 +1225,11 @@ class CompletionActCollectionView(ContractsView):
             agreement_id=self.int_param("agreement_id"),
             awaiting_payment=self.bool_param("awaiting_payment"),
         )
-        return [schemas.CompletionActRead.model_validate(
-            completion_act_svc.serialize_completion_act(row)) for row in rows]
+        return self.paginated(
+            rows,
+            lambda row: schemas.CompletionActRead.model_validate(
+                completion_act_svc.serialize_completion_act(row)),
+        )
 
     @write("POST", status=201, admin=False)
     def post(self, request):

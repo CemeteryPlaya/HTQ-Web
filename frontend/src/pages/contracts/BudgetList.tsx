@@ -6,6 +6,7 @@ import { Plus, Wallet } from 'lucide-react';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import {
   CollectionPageHeader,
+  CollectionPagination,
   CollectionSearch,
   CollectionTable,
 } from '@/components/contracts/CollectionPage';
@@ -34,19 +35,16 @@ import { contractsApi } from '@/api/contracts';
 
 const BudgetList = () => {
   const [search, setSearch] = useState('');
-  const { data: budgets = [], isLoading, isError } = useQuery({
-    queryKey: ['contracts', 'budgets'],
-    queryFn: () => contractsApi.listBudgets().then((r) => r.data),
+  const [page, setPage] = useState(1);
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['contracts', 'budgets', { page, search }],
+    queryFn: () => contractsApi.listBudgetsPage({
+      page, page_size: 25, search: search.trim() || undefined,
+    }).then((r) => r.data),
   });
-  const normalizedSearch = search.trim().toLowerCase();
-  const filteredBudgets = normalizedSearch
-    ? budgets.filter((budget) => [
-        budget.administrator_name,
-        budget.period_year,
-        budget.status === 'active' ? 'активен' : 'закрыт',
-        ...budget.lines.flatMap((line) => [line.program_name, line.expense_item]),
-      ].join(' ').toLowerCase().includes(normalizedSearch))
-    : budgets;
+  const budgets = data?.items ?? [];
+  const pagination = data?.pagination;
+  const hasSearch = search.trim().length > 0;
 
   return (
     <ContractsShell>
@@ -64,7 +62,7 @@ const BudgetList = () => {
         >
           <CollectionSearch
             value={search}
-            onValueChange={setSearch}
+            onValueChange={(value) => { setSearch(value); setPage(1); }}
             placeholder="Администратор, программа, статья, год или статус"
           />
         </CollectionPageHeader>
@@ -72,11 +70,11 @@ const BudgetList = () => {
         <CollectionTable
           isLoading={isLoading}
           isError={isError}
-          isEmpty={filteredBudgets.length === 0}
+          isEmpty={budgets.length === 0}
           errorMessage="Не удалось загрузить бюджеты."
-          emptyMessage={normalizedSearch ? 'По запросу ничего не найдено.' : 'Бюджетов пока нет.'}
+          emptyMessage={hasSearch ? 'По запросу ничего не найдено.' : 'Бюджетов пока нет.'}
           emptyAction={
-            !normalizedSearch ? (
+            !hasSearch ? (
               <Button asChild variant="outline">
                 <Link to="/contracts/budgets/new">Создать первый</Link>
               </Button>
@@ -100,7 +98,7 @@ const BudgetList = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredBudgets.map((budget) => (
+                {budgets.map((budget) => (
                   <TableRow key={budget.id}>
                     <TableCell className="font-medium">
                       <Link
@@ -167,6 +165,7 @@ const BudgetList = () => {
               </TableBody>
           </Table>
         </CollectionTable>
+        <CollectionPagination pagination={pagination} onPageChange={setPage} isLoading={isLoading} />
     </ContractsShell>
   );
 };

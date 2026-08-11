@@ -4,6 +4,7 @@ import { Search } from 'lucide-react';
 
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 
 type CollectionPageHeaderProps = {
   icon: LucideIcon;
@@ -68,6 +69,57 @@ export function CollectionSearch({
         placeholder={placeholder}
         className="pl-9"
       />
+    </div>
+  );
+}
+
+export type Pagination = {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+};
+
+export function CollectionPagination({
+  pagination,
+  onPageChange,
+  isLoading = false,
+}: {
+  pagination?: Pagination;
+  onPageChange: (page: number) => void;
+  isLoading?: boolean;
+}) {
+  if (!pagination || pagination.total_pages <= 1) return null;
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+      <p className="text-muted-foreground">
+        Показано {(pagination.page - 1) * pagination.page_size + 1}–
+        {Math.min(pagination.page * pagination.page_size, pagination.total)} из {pagination.total}
+      </p>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={isLoading || pagination.page <= 1}
+          onClick={() => onPageChange(pagination.page - 1)}
+        >
+          Назад
+        </Button>
+        <span className="tabular-nums text-muted-foreground">
+          {pagination.page} / {pagination.total_pages}
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={isLoading || pagination.page >= pagination.total_pages}
+          onClick={() => onPageChange(pagination.page + 1)}
+        >
+          Вперёд
+        </Button>
+      </div>
     </div>
   );
 }

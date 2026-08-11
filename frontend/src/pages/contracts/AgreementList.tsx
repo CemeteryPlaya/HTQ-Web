@@ -6,6 +6,7 @@ import { FileText, Paperclip, Plus } from 'lucide-react';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import {
   CollectionPageHeader,
+  CollectionPagination,
   CollectionSearch,
   CollectionTable,
 } from '@/components/contracts/CollectionPage';
@@ -46,9 +47,12 @@ const STATUS_VARIANTS: Record<
 
 const AgreementList = () => {
   const [search, setSearch] = useState('');
-  const { data: rows = [], isLoading, isError } = useQuery({
-    queryKey: ['contracts', 'agreements'],
-    queryFn: () => contractsApi.listAgreements().then((r) => r.data),
+  const [page, setPage] = useState(1);
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['contracts', 'agreements', { page, search }],
+    queryFn: () => contractsApi.listAgreementsPage({
+      page, page_size: 25, search: search.trim() || undefined,
+    }).then((r) => r.data),
   });
   const { data: enums } = useQuery({
     queryKey: ['contracts', 'enums'],
@@ -61,14 +65,9 @@ const AgreementList = () => {
     enums?.agreement_status.find((option) => option.value === value)?.label ?? value;
   const paymentLabel = (value: string) =>
     enums?.payment_type.find((option) => option.value === value)?.label ?? value;
-  const normalizedSearch = search.trim().toLowerCase();
-  const filteredRows = normalizedSearch
-    ? rows.filter((row) => [
-        row.number, row.name, row.counterparty_name, row.counterparty_bin_iin,
-        row.program_name, row.administrator_name, row.period_year,
-        statusLabel(row.status), paymentLabel(row.payment_type),
-      ].join(' ').toLowerCase().includes(normalizedSearch))
-    : rows;
+  const rows = data?.items ?? [];
+  const pagination = data?.pagination;
+  const hasSearch = search.trim().length > 0;
 
   return (
     <ContractsShell>
@@ -86,7 +85,7 @@ const AgreementList = () => {
       >
         <CollectionSearch
           value={search}
-          onValueChange={setSearch}
+          onValueChange={(value) => { setSearch(value); setPage(1); }}
           placeholder="Номер, договор, контрагент, бюджет или статус"
         />
       </CollectionPageHeader>
@@ -94,11 +93,11 @@ const AgreementList = () => {
       <CollectionTable
         isLoading={isLoading}
         isError={isError}
-        isEmpty={filteredRows.length === 0}
+        isEmpty={rows.length === 0}
         errorMessage="Не удалось загрузить договоры."
-        emptyMessage={normalizedSearch ? 'По запросу ничего не найдено.' : 'Договоров пока нет.'}
+        emptyMessage={hasSearch ? 'По запросу ничего не найдено.' : 'Договоров пока нет.'}
         emptyAction={
-          !normalizedSearch ? (
+          !hasSearch ? (
             <Button asChild variant="outline">
               <Link to="/contracts/agreements/new">Оформить первый</Link>
             </Button>
@@ -123,7 +122,7 @@ const AgreementList = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredRows.map((row) => (
+              {rows.map((row) => (
                 <TableRow key={row.id}>
                   <TableCell className="font-medium whitespace-nowrap">
                     <span className="inline-flex items-center gap-1.5">
@@ -179,6 +178,7 @@ const AgreementList = () => {
             </TableBody>
         </Table>
       </CollectionTable>
+      <CollectionPagination pagination={pagination} onPageChange={setPage} isLoading={isLoading} />
     </ContractsShell>
   );
 };

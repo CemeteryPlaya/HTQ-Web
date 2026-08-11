@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { FileText, Plus } from 'lucide-react';
 
 import { contractsApi } from '@/api/contracts';
-import { CollectionPageHeader, CollectionSearch, CollectionTable } from '@/components/contracts/CollectionPage';
+import { CollectionPageHeader, CollectionPagination, CollectionSearch, CollectionTable } from '@/components/contracts/CollectionPage';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { formatAmount } from '@/components/contracts/format';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
@@ -23,20 +23,18 @@ const statusLabel: Record<string, string> = {
 
 export default function CompletionActList() {
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
   const [searchParams] = useSearchParams();
   const agreementId = Number(searchParams.get('agreement_id')) || undefined;
-  const { data: rows = [], isLoading, isError } = useQuery({
-    queryKey: ['contracts', 'completion-acts', agreementId],
-    queryFn: () => contractsApi.listCompletionActs({ agreement_id: agreementId }).then((r) => r.data),
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['contracts', 'completion-acts', { agreementId, page, search }],
+    queryFn: () => contractsApi.listCompletionActsPage({
+      agreement_id: agreementId, page, page_size: 25, search: search.trim() || undefined,
+    }).then((r) => r.data),
   });
-  const normalizedSearch = search.trim().toLowerCase();
-  const filteredRows = normalizedSearch
-    ? rows.filter((row) => [
-        row.administrator_name, row.agreement_number, row.agreement_name,
-        approvalLabel[row.approval_state] ?? row.approval_state,
-        statusLabel[row.status] ?? row.status,
-      ].join(' ').toLowerCase().includes(normalizedSearch))
-    : rows;
+  const rows = data?.items ?? [];
+  const pagination = data?.pagination;
+  const hasSearch = search.trim().length > 0;
 
   return (
     <ContractsShell>
@@ -46,13 +44,13 @@ export default function CompletionActList() {
         description={agreementId ? 'Акты по выбранному договору' : 'АВР, согласование и проведение'}
         actions={<Button asChild><Link to="/contracts/completion-acts/new"><Plus className="mr-2 h-4 w-4" />Новый акт</Link></Button>}
       >
-        <CollectionSearch value={search} onValueChange={setSearch} placeholder="Администратор, договор или статус" />
+        <CollectionSearch value={search} onValueChange={(value) => { setSearch(value); setPage(1); }} placeholder="Администратор, договор или статус" />
       </CollectionPageHeader>
-      <CollectionTable isLoading={isLoading} isError={isError} isEmpty={filteredRows.length === 0}
-        errorMessage="Не удалось загрузить акты." emptyMessage={normalizedSearch ? 'По запросу ничего не найдено.' : 'Актов выполненных работ пока нет.'}>
+      <CollectionTable isLoading={isLoading} isError={isError} isEmpty={rows.length === 0}
+        errorMessage="Не удалось загрузить акты." emptyMessage={hasSearch ? 'По запросу ничего не найдено.' : 'Актов выполненных работ пока нет.'}>
         <Table>
           <TableHeader><TableRow><TableHead>Администратор</TableHead><TableHead>Договор</TableHead><TableHead className="text-right">Сумма</TableHead><TableHead>Статус согласования</TableHead><TableHead>Статус оплаты</TableHead><TableHead className="text-right">Действия</TableHead></TableRow></TableHeader>
-          <TableBody>{filteredRows.map((row) => <TableRow key={row.id}>
+          <TableBody>{rows.map((row) => <TableRow key={row.id}>
             <TableCell>{row.administrator_name}</TableCell>
             <TableCell><Link className="hover:underline underline-offset-2" to={`/contracts/completion-acts/${row.id}`}>{row.agreement_number}</Link><div className="text-xs text-muted-foreground">{row.agreement_name}</div></TableCell>
             <TableCell className="text-right tabular-nums whitespace-nowrap">{formatAmount(row.amount)} {row.currency}</TableCell>
@@ -62,6 +60,7 @@ export default function CompletionActList() {
           </TableRow>)}</TableBody>
         </Table>
       </CollectionTable>
+      <CollectionPagination pagination={pagination} onPageChange={setPage} isLoading={isLoading} />
     </ContractsShell>
   );
 }

@@ -6,6 +6,7 @@ import { Building2, Plus, Search } from 'lucide-react';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import {
   CollectionPageHeader,
+  CollectionPagination,
   CollectionTable,
 } from '@/components/contracts/CollectionPage';
 import { Button } from '@/components/ui/button';
@@ -46,17 +47,20 @@ const STATUS_VARIANTS: Record<CounterpartyStatus, 'secondary' | 'outline' | 'des
 
 const CounterpartyList = () => {
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
   // Отдельное «применённое» значение: запрос уходит по Enter/кнопке, а не на
   // каждое нажатие клавиши — иначе поиск по БИН слал бы 12 запросов подряд.
   const [applied, setApplied] = useState('');
 
-  const { data: rows = [], isLoading, isError } = useQuery({
-    queryKey: ['contracts', 'counterparties', applied],
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['contracts', 'counterparties', { page, applied }],
     queryFn: () =>
       contractsApi
-        .listCounterparties(applied ? { search: applied } : undefined)
+        .listCounterpartiesPage({ page, page_size: 25, search: applied || undefined })
         .then((r) => r.data),
   });
+  const rows = data?.items ?? [];
+  const pagination = data?.pagination;
 
   return (
     <ContractsShell>
@@ -77,6 +81,7 @@ const CounterpartyList = () => {
             onSubmit={(event) => {
               event.preventDefault();
               setApplied(search.trim());
+              setPage(1);
             }}
           >
             <Input
@@ -162,6 +167,7 @@ const CounterpartyList = () => {
               </TableBody>
           </Table>
         </CollectionTable>
+        <CollectionPagination pagination={pagination} onPageChange={setPage} isLoading={isLoading} />
     </ContractsShell>
   );
 };

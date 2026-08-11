@@ -6,6 +6,7 @@ import { Plus, Wallet } from 'lucide-react';
 import { contractsApi } from '@/api/contracts';
 import {
   CollectionPageHeader,
+  CollectionPagination,
   CollectionSearch,
   CollectionTable,
 } from '@/components/contracts/CollectionPage';
@@ -40,21 +41,19 @@ const statusLabel: Record<string, string> = {
 
 export default function ContractPaymentList() {
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
   const [searchParams] = useSearchParams();
   const agreementId = Number(searchParams.get('agreement_id')) || undefined;
-  const { data: rows = [], isLoading, isError } = useQuery({
-    queryKey: ['contracts', 'contract-payments', agreementId],
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['contracts', 'contract-payments', { agreementId, page, search }],
     queryFn: () =>
-      contractsApi.listContractPayments({ agreement_id: agreementId }).then((r) => r.data),
+      contractsApi.listContractPaymentsPage({
+        agreement_id: agreementId, page, page_size: 25, search: search.trim() || undefined,
+      }).then((r) => r.data),
   });
-  const normalizedSearch = search.trim().toLowerCase();
-  const filteredRows = normalizedSearch
-    ? rows.filter((row) => [
-        row.administrator_name, row.agreement_number, row.agreement_name,
-        approvalLabel[row.approval_state] ?? row.approval_state,
-        statusLabel[row.status] ?? row.status,
-      ].join(' ').toLowerCase().includes(normalizedSearch))
-    : rows;
+  const rows = data?.items ?? [];
+  const pagination = data?.pagination;
+  const hasSearch = search.trim().length > 0;
 
   return (
     <ContractsShell>
@@ -77,7 +76,7 @@ export default function ContractPaymentList() {
       >
         <CollectionSearch
           value={search}
-          onValueChange={setSearch}
+          onValueChange={(value) => { setSearch(value); setPage(1); }}
           placeholder="Администратор, договор или статус"
         />
       </CollectionPageHeader>
@@ -85,9 +84,9 @@ export default function ContractPaymentList() {
       <CollectionTable
         isLoading={isLoading}
         isError={isError}
-        isEmpty={filteredRows.length === 0}
+        isEmpty={rows.length === 0}
         errorMessage="Не удалось загрузить оплаты."
-        emptyMessage={normalizedSearch ? 'По запросу ничего не найдено.' : 'Оплат по договорам пока нет.'}
+        emptyMessage={hasSearch ? 'По запросу ничего не найдено.' : 'Оплат по договорам пока нет.'}
       >
         <Table>
           <TableHeader>
@@ -101,7 +100,7 @@ export default function ContractPaymentList() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredRows.map((row) => (
+            {rows.map((row) => (
               <TableRow key={row.id}>
                 <TableCell>{row.administrator_name}</TableCell>
                 <TableCell>
@@ -139,6 +138,7 @@ export default function ContractPaymentList() {
           </TableBody>
         </Table>
       </CollectionTable>
+      <CollectionPagination pagination={pagination} onPageChange={setPage} isLoading={isLoading} />
     </ContractsShell>
   );
 }
