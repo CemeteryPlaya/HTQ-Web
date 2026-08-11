@@ -93,6 +93,18 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
     enabled,
   });
 
+  const { data: invoices = [] } = useQuery({
+    queryKey: ['contracts', 'invoices', { budgetId }],
+    queryFn: () => contractsApi.listInvoices({ budget_id: budgetId }).then((r) => r.data),
+    enabled,
+  });
+
+  const { data: accountableRequests = [] } = useQuery({
+    queryKey: ['contracts', 'accountable-funds-requests', { budgetId }],
+    queryFn: () => contractsApi.listAccountableFundsRequests({ budget_id: budgetId }).then((r) => r.data),
+    enabled,
+  });
+
   const { data: enums } = useQuery({
     queryKey: ['contracts', 'enums'],
     queryFn: () => contractsApi.getEnums().then((r) => r.data),
@@ -104,11 +116,15 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
     enums?.agreement_status.find((option) => option.value === value)?.label ?? value;
   const budgetStatusLabel = (value: string) =>
     enums?.budget_status.find((option) => option.value === value)?.label ?? value;
+  const invoiceStatusLabel = (value: string) =>
+    enums?.invoice_status.find((option) => option.value === value)?.label ?? value;
 
   /** Занимает ли договор бюджет — множество приходит с бэкенда
    *  (`budget_calc.COMMITTING_STATUSES`), здесь его копии нет. */
   const isCommitting = (status: AgreementStatus) =>
     enums?.committing_statuses.includes(status) ?? false;
+  const isInvoiceCommitting = (status: string) => status === 'approved' || status === 'paid';
+  const isAccountableCommitting = (status: string) => status !== 'draft';
 
   if (isLoading) return <DetailSkeleton />;
   if (isError || !budget) {
@@ -383,6 +399,38 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
               </Table>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">
+            Счета без договора
+            <span className="ml-2 font-normal text-muted-foreground">{invoices.length}</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="px-0 pb-0">
+          {invoices.length === 0 ? (
+            <p className="px-6 pb-6 text-sm text-muted-foreground">По этому бюджету счетов без договора пока нет.</p>
+          ) : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Наименование</TableHead><TableHead>Программа</TableHead><TableHead>Контрагент</TableHead><TableHead className="text-right">Сумма</TableHead><TableHead>Статус</TableHead></TableRow></TableHeader><TableBody>
+            {invoices.map((invoice) => <TableRow key={invoice.id}><TableCell className="font-medium"><Link to={`/contracts/invoices/${invoice.id}`} className="hover:underline underline-offset-2">{invoice.name}</Link></TableCell><TableCell>{invoice.program_name}</TableCell><TableCell>{invoice.counterparty_name}</TableCell><TableCell className="text-right tabular-nums whitespace-nowrap">{formatAmount(invoice.amount)} {!isInvoiceCommitting(invoice.status) && <span className="ml-1.5 text-xs text-muted-foreground" title="Счёт в этом статусе бюджет не занимает">вне остатка</span>}</TableCell><TableCell><Badge variant="outline">{invoiceStatusLabel(invoice.status)}</Badge></TableCell></TableRow>)}
+          </TableBody></Table></div>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">
+            Подотчётные средства
+            <span className="ml-2 font-normal text-muted-foreground">{accountableRequests.length}</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="px-0 pb-0">
+          {accountableRequests.length === 0 ? (
+            <p className="px-6 pb-6 text-sm text-muted-foreground">По этому бюджету заявок на подотчётные средства пока нет.</p>
+          ) : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Цель</TableHead><TableHead>Программа</TableHead><TableHead>Инициатор</TableHead><TableHead className="text-right">Сумма</TableHead><TableHead className="text-right">Подтверждено</TableHead><TableHead>Статус</TableHead></TableRow></TableHeader><TableBody>
+            {accountableRequests.map((request) => <TableRow key={request.id}><TableCell className="font-medium"><Link to={`/contracts/accountable-funds-requests/${request.id}`} className="hover:underline underline-offset-2">{request.goal}</Link></TableCell><TableCell>{request.program_name}</TableCell><TableCell>Пользователь #{request.accountable_user_id}</TableCell><TableCell className="text-right tabular-nums whitespace-nowrap">{formatAmount(request.amount)} {!isAccountableCommitting(request.status) && <span className="ml-1.5 text-xs text-muted-foreground" title="Черновик бюджет не занимает">вне остатка</span>}</TableCell><TableCell className="text-right tabular-nums whitespace-nowrap">{formatAmount(request.advance_reported_amount)}</TableCell><TableCell><Badge variant={request.status === 'closed' ? 'default' : 'outline'}>{request.status === 'draft' ? 'Черновик' : request.status === 'on_review' ? 'На согласовании' : request.status === 'awaiting_accounting' ? 'Ожидает оплаты' : request.status === 'awaiting_advance_report' ? 'Ожидает отчёт' : 'Закрыта'}</Badge></TableCell></TableRow>)}
+          </TableBody></Table></div>}
         </CardContent>
       </Card>
 

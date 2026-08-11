@@ -89,9 +89,11 @@ def serialize_request(request: AccountableFundsRequest) -> dict:
     }
 
 
-def list_requests(*, administrator_id: int | None = None, program_id: int | None = None,
+def list_requests(*, budget_id: int | None = None, administrator_id: int | None = None, program_id: int | None = None,
                   accountable_user_id: int | None = None):
     query = AccountableFundsRequest.objects.select_related(*_RELATED)
+    if budget_id is not None:
+        query = query.filter(budget_line__budget_id=budget_id)
     if administrator_id is not None:
         query = query.filter(Q(budget_line__budget__administrator_id=administrator_id) |
                              Q(budget_line__isnull=True, administrator_id=administrator_id))

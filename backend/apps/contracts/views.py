@@ -926,6 +926,7 @@ class AccountableFundsRequestCollectionView(ContractsView):
     @read
     def get(self, request):
         rows = accountable_funds_svc.list_requests(
+            budget_id=self.int_param("budget_id"),
             administrator_id=self.int_param("administrator_id"),
             program_id=self.int_param("program_id"),
             accountable_user_id=self.int_param("accountable_user_id"),

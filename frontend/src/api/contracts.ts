@@ -245,7 +245,7 @@ export const contractsApi = {
   getAdvancePaymentOrderUrl: (id: number) =>
     api.get<{ url: string }>(path(`advance-payments/${id}/payment-order-url`)),
 
-  listAccountableFundsRequests: (params?: { administrator_id?: number; program_id?: number; accountable_user_id?: number }) =>
+  listAccountableFundsRequests: (params?: { budget_id?: number; administrator_id?: number; program_id?: number; accountable_user_id?: number }) =>
     api.get<AccountableFundsRequest[]>(path('accountable-funds-requests'), { params }),
   getAccountableFundsRequest: (id: number) =>
     api.get<AccountableFundsRequest>(path(`accountable-funds-requests/${id}`)),
