@@ -32,7 +32,9 @@ export const MissionSection = () => {
       <div className="container-custom">
         <div className="grid lg:grid-cols-2 gap-8 sm:gap-12 lg:gap-20 items-center">
           {/* Image Side */}
-          <div className="relative order-2 lg:order-1">
+          {/* `min-w-0` — см. колонку с каруселью ниже: grid-элемент с min-width
+              auto не сжимается уже содержимого и утаскивает сетку за экран. */}
+          <div className="relative order-2 lg:order-1 min-w-0">
             <div className="rounded-2xl overflow-hidden shadow-elevated">
               <img
                 src={panels4}
@@ -53,7 +55,9 @@ export const MissionSection = () => {
           </div>
 
           {/* Content Side */}
-          <div className="order-1 lg:order-2">
+          {/* `min-w-0` обязателен: иначе max-content карусели (3 × 82vw) задаёт
+              ширину колонки, заголовок ложится в одну строку и обрезается. */}
+          <div className="order-1 lg:order-2 min-w-0">
             <span className="text-secondary font-semibold text-xs sm:text-sm uppercase tracking-wider">{t('mission.tag')}</span>
             <h2 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mt-2 mb-4 sm:mb-6">
               {t('mission.title')}

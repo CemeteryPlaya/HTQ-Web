@@ -28,20 +28,24 @@ export const AboutSection = () => {
   return (
     <section id="about" className="section-padding bg-accent">
       <div className="container-custom">
-        <div className="grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
+        <div className="grid lg:grid-cols-2 gap-8 sm:gap-12 lg:gap-20 items-center">
           {/* Image */}
-          <div className="relative">
+          {/* `min-w-0` обязателен: у grid-элемента min-width по умолчанию auto,
+              поэтому он не сжимается уже своего содержимого и распирает сетку
+              шире экрана — см. тот же комментарий у колонки с каруселью ниже. */}
+          <div className="relative min-w-0">
             <div className="rounded-2xl overflow-hidden shadow-elevated">
               <img
                 src={panels1}
                 alt="Solar Panels"
                 loading="lazy"
-                className="w-full h-[500px] object-cover"
+                className="w-full h-[280px] sm:h-[400px] lg:h-[500px] object-cover"
               />
             </div>
-            {/* Floating Card */}
-            <div className="bg-card p-6 rounded-xl shadow-card max-w-xs absolute -bottom-6 left-4 lg:left-auto lg:-right-6">
-              <div className="flex items-center gap-3 mb-3">
+            {/* Floating Card. На мобильном ложится под картинку обычным потоком:
+                поверх 280px-картинки она закрывала её почти целиком. */}
+            <div className="bg-card p-4 sm:p-6 rounded-xl shadow-card max-w-xs relative sm:absolute mt-4 sm:mt-0 sm:-bottom-6 sm:left-4 lg:left-auto lg:-right-6">
+              <div className="flex items-center gap-3 mb-2 sm:mb-3">
                 <div className="w-10 h-10 rounded-full bg-secondary/20 flex items-center justify-center">
                   <Leaf className="text-secondary" size={20} />
                 </div>
@@ -54,15 +58,18 @@ export const AboutSection = () => {
           </div>
 
           {/* Content */}
-          <div>
-            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('about.tag')}</span>
-            <h2 className="font-display text-4xl md:text-5xl font-bold text-foreground mt-2 mb-6">
+          {/* `min-w-0` держит колонку в ширине экрана: без него grid-элемент
+              растягивается до max-content вложенной карусели (3 × 82vw), из-за
+              чего заголовок раскладывается в одну строку и уезжает за экран. */}
+          <div className="min-w-0">
+            <span className="text-secondary font-semibold text-xs sm:text-sm uppercase tracking-wider">{t('about.tag')}</span>
+            <h2 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mt-2 mb-4 sm:mb-6">
               {t('about.title')}
             </h2>
-            <p className="text-muted-foreground text-lg leading-relaxed mb-6">
+            <p className="text-muted-foreground text-base sm:text-lg leading-relaxed mb-4 sm:mb-6">
               {t('about.p1')}
             </p>
-            <p className="text-muted-foreground text-lg leading-relaxed mb-8">
+            <p className="text-muted-foreground text-base sm:text-lg leading-relaxed mb-6 sm:mb-8">
               {t('about.p2')}
             </p>
 
@@ -84,7 +91,7 @@ export const AboutSection = () => {
               })}
             </div>
 
-            <Link to="/contacts" className="inline-flex items-center gap-2 btn-primary rounded-full group">
+            <Link to="/contacts" className="inline-flex min-h-[44px] w-full sm:w-auto items-center justify-center gap-2 btn-primary rounded-full group">
               {t('about.learn_more')}
               <ArrowRight size={18} className="transition-transform group-hover:translate-x-1" />
             </Link>

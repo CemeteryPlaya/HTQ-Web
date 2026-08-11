@@ -57,13 +57,13 @@ export const ProjectsSection = ({ limit = 10 }: ProjectsSectionProps) => {
         {/* Header */}
         <div className="grid lg:grid-cols-2 gap-8 lg:gap-16 mb-12">
           <div>
-            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('projects.tag')}</span>
-            <h2 className="font-display text-4xl md:text-5xl font-bold text-foreground mt-2">
+            <span className="text-secondary font-semibold text-xs sm:text-sm uppercase tracking-wider">{t('projects.tag')}</span>
+            <h2 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mt-2">
               {t('projects.title')}
             </h2>
           </div>
           <div className="flex items-end">
-            <p className="text-muted-foreground text-lg leading-relaxed">
+            <p className="text-muted-foreground text-base sm:text-lg leading-relaxed">
               {t('projects.desc')}
             </p>
           </div>

@@ -57,7 +57,7 @@ export const ServicesSection = () => {
         {/* Header */}
         <div className="text-center max-w-3xl mx-auto mb-12 sm:mb-16">
           <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('services.tag')}</span>
-          <h2 className="font-display text-4xl md:text-5xl font-bold text-foreground mt-2 mb-4">
+          <h2 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mt-2 mb-4">
             {t('services.title')}
           </h2>
           <p className="text-muted-foreground text-base sm:text-lg">
