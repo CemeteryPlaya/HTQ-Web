@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { ArrowRight, Leaf, Sun, Zap } from 'lucide-react';
 
 const panels1 = '/images/panels1.webp';
@@ -66,11 +67,11 @@ export const AboutSection = () => {
             </p>
 
             {/* Features */}
-            <div className="space-y-4 mb-8">
+            <div className="flex md:block overflow-x-auto snap-x snap-mandatory gap-3 scrollbar-none pb-2 md:pb-0 mb-8 space-y-0 md:space-y-4">
               {features.map((feature) => {
                 const Icon = feature.icon;
                 return (
-                  <div key={feature.title} className="flex items-start gap-4 p-4 rounded-xl bg-card hover:shadow-soft transition-all">
+                  <div key={feature.title} className="flex items-start gap-4 p-4 rounded-xl bg-card hover:shadow-soft transition-all shrink-0 w-[82vw] sm:w-[320px] md:w-auto snap-center">
                     <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
                       <Icon className="text-primary" size={24} />
                     </div>
@@ -83,10 +84,10 @@ export const AboutSection = () => {
               })}
             </div>
 
-            <button className="inline-flex items-center gap-2 btn-primary rounded-full group">
+            <Link to="/contacts" className="inline-flex items-center gap-2 btn-primary rounded-full group">
               {t('about.learn_more')}
               <ArrowRight size={18} className="transition-transform group-hover:translate-x-1" />
-            </button>
+            </Link>
           </div>
         </div>
       </div>
