@@ -83,6 +83,7 @@ export const protectedRoutes: RouteConfig[] = [
   // черновика. Роутером это не закрывается: право здесь зависит от строки, а
   // не от раздела.
   { path: '/contracts', component: lazyPages.ContractsOverview, requiresAuth: true },
+  { path: '/contracts/tasks', component: lazyPages.ContractsMyTasks, requiresAuth: true },
   { path: '/contracts/budgets', component: lazyPages.ContractsBudgetList, requiresAuth: true },
   { path: '/contracts/budgets/new', component: lazyPages.ContractsBudgetCreate, requiresAuth: true },
   { path: '/contracts/budgets/:id', component: lazyPages.ContractsBudgetDetail, requiresAuth: true },

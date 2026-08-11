@@ -21,6 +21,7 @@ export const lazyPages = {
   NotificationsHistory: React.lazy(() => import('@/pages/NotificationsHistory')),
 
   ContractsOverview: React.lazy(() => import('@/pages/contracts/ContractsOverview')),
+  ContractsMyTasks: React.lazy(() => import('@/pages/contracts/ContractsMyTasks')),
   ContractsBudgetList: React.lazy(() => import('@/pages/contracts/BudgetList')),
   ContractsBudgetCreate: React.lazy(() => import('@/pages/contracts/BudgetCreate')),
   ContractsBudgetDetail: React.lazy(() => import('@/pages/contracts/BudgetDetail')),

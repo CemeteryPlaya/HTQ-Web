@@ -357,6 +357,18 @@ export interface CompletionAct {
   updated_at: string;
 }
 
+/** A current action in the contracts-only personal queue. */
+export interface ContractsWorkItem {
+  document_type: string;
+  action: 'submit' | 'rework' | 'record_payment' | 'mark_paid' | 'submit_advance_report';
+  action_label: string;
+  title: string;
+  url: string;
+  amount: string | null;
+  currency: string;
+  created_at: string;
+}
+
 /** Пара value/label из `GET /enums` — источник подписей для селектов. */
 export interface EnumOption {
   value: string;

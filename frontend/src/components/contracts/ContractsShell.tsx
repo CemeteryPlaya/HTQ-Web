@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Building2, FileText, LayoutDashboard, Receipt, Wallet } from 'lucide-react';
+import { Building2, CheckSquare, FileText, LayoutDashboard, Receipt, Wallet } from 'lucide-react';
 
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
@@ -27,6 +27,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { to: '/contracts', label: 'Обзор', icon: LayoutDashboard },
+  { to: '/contracts/tasks', label: 'Ждёт меня', icon: CheckSquare },
   {
     to: '/contracts/budgets',
     label: 'Бюджеты',

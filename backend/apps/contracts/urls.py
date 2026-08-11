@@ -19,6 +19,10 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    # ── Персональная очередь действий в contracts (без решений signoff) ──
+    path("tasks/mine", views.WorkQueueView.as_view()),
+    path("tasks/mine/", views.WorkQueueView.as_view()),
+
     # ── Справочник choice-полей ──
     path("enums", views.EnumsView.as_view()),
     path("enums/", views.EnumsView.as_view()),

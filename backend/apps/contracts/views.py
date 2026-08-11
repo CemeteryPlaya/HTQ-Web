@@ -60,6 +60,7 @@ from .services import advance_report_service as advance_report_svc
 from .services import contract_payment_service as contract_payment_svc
 from .services import completion_act_service as completion_act_svc
 from .services import reference_service as ref_svc
+from .services import work_queue_service as work_queue_svc
 from .services.agreement_service import AgreementRuleViolation
 from .services.budget_calc import COMMITTING_STATUSES, BudgetExceeded
 from .services.invoice_service import InvoiceRuleViolation
@@ -133,6 +134,16 @@ def write(method: str, body=None, status: int = 200, admin: bool = True):
     где заявку подаёт сотрудник, а решение принимает согласование."""
     return method_decorator(api_view(methods=(method,), auth="jwt",
                                      body=body, status=status, admin=admin))
+
+
+class WorkQueueView(ContractsView):
+    """Contracts actions for the current user; signoff decisions stay in signoff."""
+
+    @read
+    def get(self, request):
+        return [schemas.WorkQueueItemRead.model_validate(row) for row in work_queue_svc.list_my_actions(
+            user_id=request.token.user_id, is_elevated=request.token.is_elevated,
+        )]
 
 
 # DELETE отдаёт 204 без тела — конвенция репозитория (apps/cms/views.py).

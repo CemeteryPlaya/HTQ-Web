@@ -27,6 +27,7 @@ import type {
   AccountableFundsRequest,
   AdvanceReport,
   CompletionAct,
+  ContractsWorkItem,
   ContractPayment,
   Program,
 } from '@/types/contracts';
@@ -66,6 +67,9 @@ export type InvoiceListParams = AgreementListParams;
  * Ответ — карточка ПРОЦЕССА (201), а не отправленного объекта.
  */
 export const contractsApi = {
+  /** Personal contracts actions; approval decisions remain in signoff. */
+  myTasks: () => api.get<ContractsWorkItem[]>(path('tasks/mine')),
+
   // ─── Справочники ───────────────────────────────────────────────────────
   getEnums: () => api.get<ContractsEnums>(path('enums')),
 

@@ -687,3 +687,18 @@ class CompletionActRead(BaseModel):
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
+
+
+# ── Personal action queue ────────────────────────────────────────────────
+
+class WorkQueueItemRead(BaseModel):
+    """An actionable contracts record for the authenticated user."""
+
+    document_type: str
+    action: str
+    action_label: str
+    title: str
+    url: str
+    amount: Optional[Decimal] = None
+    currency: str = ""
+    created_at: datetime
