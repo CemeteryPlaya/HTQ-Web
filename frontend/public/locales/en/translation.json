@@ -73,7 +73,10 @@
       "actionLogs": "Action logs",
       "registrations": "Registrations",
       "manageUsers": "Users",
-      "manageChats": "Chats"
+      "manageChats": "Chats",
+      "manageMailboxes": "Corporate mailboxes",
+      "infrastructure": "Infrastructure",
+      "monitoring": "Monitoring"
     },
     "errors": {
       "nameMin": "Name must be at least 2 characters",
@@ -82,13 +85,17 @@
     "about": {
       "checkConnection": "Check your connection",
       "placeholderMessage": "Tell us about yourself",
-      "description": "About me"
+      "description": "About me",
+      "title": "About"
     },
     "patronymicPlaceholder": "Enter patronymic",
     "firstName": "First Name",
     "patronymic": "Patronymic",
     "lastName": "Last Name",
-    "firstNamePlaceholder": "Enter first name"
+    "firstNamePlaceholder": "Enter first name",
+    "lastNamePlaceholder": "Enter last name",
+    "cropAvatar": "Crop your avatar",
+    "applyCrop": "Apply"
   },
   "header": {
     "about": "About Us",
@@ -101,6 +108,7 @@
     "login": "Login",
     "logout": "Logout",
     "requests": "Requests",
+    "profile": "Profile",
     "tagline": "Construction services in energy sector"
   },
   "hero": {
@@ -112,9 +120,8 @@
     "our_projects": "Our Projects",
     "learn_more": "Learn More",
     "stats": {
-      "power_value": "160 MW",
-      "power_desc": "HTQ participated in solar power plant construction projects with a total capacity of 160 MW",
-      "cycle_desc": "90 MW Solar Power Plants built in Kazakhstan on a full cycle basis",
+      "power_desc": "HTQ participated in solar power plant construction projects with a total capacity of {{power}}",
+      "cycle_desc": "{{power}} Solar Power Plants built in Kazakhstan on a full cycle basis",
       "method_desc": "Developed an effective methodology for successful project execution",
       "full_cycle": "Full Cycle",
       "own_method": "Own Methodology"
@@ -366,7 +373,14 @@
     "read_more": "Read more",
     "items": {
       "expansion_title": "Read more"
-    }
+    },
+    "empty": "No news has been published yet.",
+    "allCategories": "All",
+    "searchPlaceholder": "Search the news…",
+    "totalCount": "Total items: {{count}}",
+    "loadError": "Failed to load the news. Please try again later.",
+    "noResults": "Nothing found",
+    "noResultsHint": "Try changing the filters or the search query to find what you are looking for."
   },
   "contact": {
     "tag": "Get in Touch",
@@ -387,7 +401,9 @@
       "placeholder": "Tell us about your project...",
       "send": "Send Message",
       "sent": "Successfully sent",
-      "validation_email": "Invalid email"
+      "validation_email": "Invalid email",
+      "thanks": "Thank you! We will get back to you shortly.",
+      "send_failed": "Send failed"
     }
   },
   "mission": {
@@ -442,10 +458,12 @@
       "accounts": "Accounts",
       "logs": "Action Logs",
       "productionCalendar": "Work calendar",
-      "staffing": "Staffing"
+      "staffing": "Staffing",
+      "calendar": "Calendar"
     },
     "calendar": {
       "title": "Production Calendar",
+      "subtitle": "Work schedule, holidays and deadlines",
       "today": "Today",
       "view": {
         "grid": "Grid",
@@ -499,7 +517,31 @@
       "select": "Select",
       "noDepartment": "No department",
       "noPosition": "No position",
-      "search": "Search"
+      "search": "Search",
+      "accessDenied": "Insufficient permissions for the HR section",
+      "more": "More",
+      "noData": "No data"
+    },
+    "tasks": {
+      "title": "Tasks",
+      "navigation": "Navigation",
+      "nav": {
+        "tasks": "Tasks",
+        "roadmap": "Roadmap",
+        "reports": "Reports"
+      },
+      "fields": {
+        "summary": "Title",
+        "description": "Description",
+        "task_type": "Type",
+        "priority": "Priority",
+        "status": "Status",
+        "assignee": "Assignee",
+        "department": "Department",
+        "version": "Version",
+        "due_date": "Due date",
+        "start_date": "Start date"
+      }
     },
     "pages": {
       "recruitment": {
@@ -553,7 +595,12 @@
         "status": {
           "active": "Active",
           "onLeave": "On leave",
-          "dismissed": "Dismissed"
+          "dismissed": "Dismissed",
+          "inactive": "Inactive",
+          "pending": "Pending",
+          "rejected": "Rejected",
+          "suspended": "Suspended",
+          "terminated": "Terminated"
         },
         "table": {
           "name": "Name",
@@ -564,7 +611,33 @@
           "status": "Status",
           "hired": "Hired",
           "actions": "Actions",
-          "lastName": "Last Name"
+          "lastName": "Last Name",
+          "employee": "Employee"
+        },
+        "empty": "No employees match the selected filters",
+        "searchPlaceholder": "Search by name, email, phone or position…",
+        "filters": {
+          "allStatuses": "All statuses"
+        },
+        "openCard": "Open card",
+        "actions": {
+          "share": "Share"
+        },
+        "description": "Description",
+        "grade": "Grade",
+        "weight": "Weight",
+        "hrLevel": "HR access level",
+        "searchPosition": "Search positions…",
+        "noPositionFound": "Position not found",
+        "createPosition": "Create a new position",
+        "createPositionTitle": "New position",
+        "positionTitlePlaceholder": "For example, Senior Analyst",
+        "errors": {
+          "userRequired": "Select a user",
+          "departmentRequired": "Select a department",
+          "positionRequired": "Select a position",
+          "hireDateRequired": "Specify the hire date",
+          "fillRequired": "Fill in the required fields"
         }
       },
       "structure": {
@@ -844,13 +917,19 @@
           "document": "Document",
           "type": "Type",
           "uploadedBy": "Uploaded By",
+          "tasks": "Tasks",
+          "tasksList": "Tasks",
+          "roadmap": "Roadmap",
+          "reports": "Reports",
           "date": "Date",
           "actions": "Actions"
-        }
+        },
+        "fileHint": "PDF only, up to 25 MB"
       },
       "logs": {
         "title": "Action Logs",
         "subtitle": "Audit trail of all user actions.",
+        "error": "Error loading the action log",
         "allModules": "All modules",
         "modules": {
           "news": "News",
@@ -1156,7 +1235,9 @@
           "priority": "Priority",
           "assignee": "Assignee",
           "department": "Department",
-          "dueDate": "Due date"
+          "dueDate": "Due date",
+          "project": "Project",
+          "supervisor": "Supervisor"
         },
         "createDialog": {
           "title": "Create task",
@@ -1214,7 +1295,8 @@
           "blocked": "Blocked",
           "done": "Done",
           "cancelled": "Cancelled",
-          "closed": "Cancelled"
+          "closed": "Cancelled",
+          "title": "Status"
         },
         "priority": {
           "critical": "Critical",
@@ -1229,7 +1311,11 @@
           "story": "Story",
           "epic": "Epic",
           "subtask": "Subtask"
-        }
+        },
+        "summary": "Task",
+        "statusUpdated": "Status updated",
+        "statusError": "Failed to update the status",
+        "deleteConfirm": "Are you sure you want to delete the task?"
       },
       "detail": {
         "backToList": "Back to tasks list",
@@ -1268,7 +1354,21 @@
         "commentSuccess": "Comment added",
         "commentError": "Error adding comment",
         "attachSuccess": "File attached",
-        "attachError": "Error attaching file"
+        "attachError": "Error attaching file",
+        "project": "Project",
+        "noProject": "No project",
+        "noDescription": "No description",
+        "clickToEdit": "Click to edit",
+        "addSubtask": "Subtask",
+        "linkedTasks": "Linked tasks",
+        "addLink": "Add link",
+        "emptyLinks": "No linked tasks",
+        "linkSuccess": "Link added",
+        "linkDeleted": "Link removed",
+        "history": "Change history",
+        "emptyHistory": "No change history",
+        "changedField": "Changed",
+        "system": "System"
       },
       "reports": {
         "title": "Reports",
@@ -1488,7 +1588,9 @@
           "senior": "Will additionally see every task of their company on its sites."
         },
         "effective": "Performed by",
-        "inherited": "inherited"
+        "inherited": "inherited",
+        "saved": "Contractor saved",
+        "selectHint": "Select a contractor from the list on the left to view the details"
       },
       "roadmaps": {
         "title": "Roadmaps",
@@ -1647,7 +1749,11 @@
       "commentHint": "e.g. one forklift out of service",
       "pickType": "Pick a work type",
       "needQuantity": "Enter how much was done on this day",
-      "left": "left"
+      "left": "left",
+      "pageTitle": "Daily reports",
+      "pageSubtitle": "Quick submission of work reports for the shift",
+      "saved": "Report saved",
+      "volumeType": "Work type"
     },
     "planFact": {
       "title": "Plan vs actual",
@@ -1692,6 +1798,51 @@
       "emptyEditable": "No planned volume yet. Set it below to report actual units instead of just a completion percentage."
     }
   },
+  "settingsPage": {
+    "title": "Settings",
+    "save": "Save",
+    "contactTitle": "Contact details",
+    "contactDescription": "Phone number and secondary email for contact and account recovery.",
+    "contactSaved": "Contact details updated",
+    "contactSaveError": "Failed to save",
+    "phone": "Phone number",
+    "secondaryEmail": "Secondary email",
+    "secondaryEmailHint": "Used for notifications and password recovery. Does not replace the primary email.",
+    "passwordTitle": "Change password",
+    "passwordDescription": "At least 8 characters. Use a unique password that you do not reuse on other services.",
+    "currentPassword": "Current password",
+    "newPassword": "New password",
+    "confirmPassword": "Confirmation",
+    "changePassword": "Change password",
+    "passwordChanged": "Password changed",
+    "passwordChangeError": "Failed to change the password",
+    "accountTitle": "Account",
+    "accountDescription": "Primary email and signing out.",
+    "primaryEmail": "Primary email",
+    "logoutHint": "Ends the session on this device and clears local data.",
+    "loggingOut": "Signing out...",
+    "personalTitle": "Personal details",
+    "personalDescription": "First name, last name, patronymic and a short description shown in your profile and mail.",
+    "personalSaved": "Personal details updated",
+    "personalSaveError": "Failed to save",
+    "firstName": "First name",
+    "lastName": "Last name",
+    "patronymic": "Patronymic",
+    "displayName": "Display name",
+    "displayNameHint": "This is how colleagues see you in chat, tasks and mail.",
+    "bio": "About me",
+    "workTitle": "HR record",
+    "workDescription": "What HR or an administrator entered during onboarding. Changes are only possible through the HR section.",
+    "workEmpty": "The HR record has not been created yet. Contact HR.",
+    "department": "Department",
+    "position": "Position",
+    "hireDate": "Hire date",
+    "terminationDate": "Termination date",
+    "workEmail": "Work email",
+    "workPhone": "Work phone",
+    "status": "Status",
+    "workBio": "About the employee"
+  },
   "auth": {
     "register": "Register",
     "registering": "Registering...",
@@ -1715,6 +1866,8 @@
       "passwordMin": "Password must be at least 6 characters",
       "passwordMatch": "Passwords do not match"
     },
+    "accessDenied": "Access denied",
+    "noPermission": "You do not have permission to view this page.",
     "passwordChanged": "Password Changed",
     "passwordChangedSuccess": "Your password has been successfully updated.",
     "passwordChangeError": "Failed to change password",
@@ -1744,10 +1897,59 @@
     "users": {
       "username": "Username",
       "title": "Users",
+      "subtitle": "Create new users and edit existing ones. For direct access to the database tables — ",
       "status": "Status",
+      "statusLabel": "Status",
       "email": "Email",
       "joined": "Joined",
-      "role": "Role"
+      "role": "Role",
+      "active": "Active",
+      "inactive": "Inactive",
+      "admin": "Admin",
+      "user": "User",
+      "actions": "Actions",
+      "edit": "Edit",
+      "createBtn": "Create user",
+      "createTitle": "New user",
+      "createDescription": "Create an account manually, bypassing self-registration.",
+      "editTitle": "Edit user",
+      "editDescription": "Change the profile, status and role. The password is reset separately.",
+      "sectionIdentity": "Account",
+      "sectionProfile": "Profile",
+      "sectionAccess": "Access",
+      "sectionPasswordReset": "Password reset",
+      "password": "Password",
+      "passwordHint": "At least 8 characters. The user can be required to change it at first login.",
+      "passwordMin": "Password must be at least 8 characters",
+      "isStaffHint": "Elevated rights in the API (admin endpoints). Does NOT grant access to /django-admin/.",
+      "isSuperuserHint": "Full administrative access, including the /django-admin/ panel.",
+      "mustChangePassword": "Change password at login",
+      "mustChangePasswordHint": "At the next login the user will be required to set a new password.",
+      "passwordResetHint": "Set a temporary password. The user will be able to change it at login if the flag above is enabled.",
+      "newPasswordPlaceholder": "New password (min. 8 characters)",
+      "resetPasswordBtn": "Reset password",
+      "passwordReset": "Password reset",
+      "passwordResetError": "Failed to reset the password",
+      "requiredFields": "Fill in username, email and password",
+      "created": "User created",
+      "createError": "Failed to create the user",
+      "saved": "Changes saved",
+      "saveError": "Failed to save",
+      "firstName": "First name",
+      "lastName": "Last name",
+      "sectionMailbox": "Corporate mail",
+      "createMailbox": "Create a mailbox on the corporate domain",
+      "createMailboxHint": "Once the user is created, the email service provisions the mailbox in Mailcow.",
+      "mailboxLocalPart": "Login (before @domain)",
+      "mailboxAutogenHint": "Will be generated from the full name",
+      "mailboxPassword": "Mailbox password",
+      "mailboxPasswordHint": "Leave empty — a random one is generated and shown once after creation.",
+      "mailboxPasswordPlaceholder": "empty = auto-generated",
+      "mailboxPasswordOnce": "Password (shown once)",
+      "mailboxPasswordMin": "The mailbox password must be at least 8 characters",
+      "mailboxGenPassword": "Generate",
+      "mailboxCreated": "Mailbox created",
+      "mailboxError": "Failed to create the mailbox"
     },
     "chats": {
       "title": "Chat Management",
@@ -1766,7 +1968,9 @@
       "viewHistory": "View History",
       "untitled": "Untitled",
       "noChats": "No available chats",
-      "system": "System"
+      "system": "System",
+      "deleted": "Deleted",
+      "participantCount": "{{total}} members"
     },
     "contacts": {
       "title": "Contact Requests",
@@ -1905,6 +2109,7 @@
     "saving": "Saving...",
     "loading": "Loading...",
     "backToProfile": "Back to profile",
+    "back": "Back",
     "add": "Add",
     "actions": "Actions",
     "all": "All",
@@ -1913,7 +2118,16 @@
     "cancel": "Cancel",
     "clear": "Clear",
     "reset": "Reset",
-    "retry": "Retry"
+    "retry": "Retry",
+    "create": "Create",
+    "edit": "Edit",
+    "empty": "No data",
+    "next": "Next",
+    "prev": "Back",
+    "error": "Something went wrong",
+    "units": {
+      "mw": "MW"
+    }
   },
   "serviceUnavailable": {
     "title": "This feature is temporarily disabled",
@@ -1984,7 +2198,79 @@
       "passwordError": "The server rejected the password",
       "save": "Save",
       "syncFailed": "sync is failing",
-      "updatePassword": "Update password"
+      "updatePassword": "Update password",
+      "add": "Add account",
+      "connect": "Connect account",
+      "disconnect": "Disconnect",
+      "default": "primary",
+      "empty": "No connected accounts",
+      "personal": "Personal",
+      "switch": "Switch account",
+      "unifiedView": "All accounts",
+      "manageTitle": "Connected accounts",
+      "manageDescription": "The corporate mailbox is created by an administrator. Personal Gmail / Outlook accounts are connected here, and any other mail can be added over IMAP."
+    },
+    "sidebar": {
+      "label": "Mail"
+    },
+    "noSubject": "(no subject)",
+    "actions": {
+      "refresh": "Refresh"
+    },
+    "compose": {
+      "new": "New message",
+      "title": "New message",
+      "from": "From",
+      "to": "To",
+      "subject": "Subject",
+      "body": "Message",
+      "send": "Send",
+      "sending": "Sending…",
+      "cancel": "Cancel",
+      "selectSender": "Select a sender account",
+      "recipientsRequired": "Specify at least one recipient"
+    },
+    "list": {
+      "loading": "Loading…",
+      "empty": "This folder is empty"
+    },
+    "view": {
+      "loading": "Loading…",
+      "empty": "Select a message to read",
+      "back": "Back",
+      "from": "From",
+      "to": "To",
+      "cc": "Cc",
+      "attachments": "Attachments"
+    },
+    "errors": {
+      "connect": "Failed to start the connection",
+      "send": "Failed to send"
+    }
+  },
+  "contracts": {
+    "nav": {
+      "title": "Contracts"
+    }
+  },
+  "signoff": {
+    "nav": {
+      "title": "Approvals"
+    }
+  },
+  "messenger": {
+    "attachFile": "Attach file",
+    "dateToday": "Today",
+    "dateYesterday": "Yesterday",
+    "audio": {
+      "record": "Record audio",
+      "recording": "Recording",
+      "stop": "Stop recording",
+      "finish": "Done",
+      "cancel": "Cancel",
+      "error": "Audio recording error",
+      "permission": "No access to the microphone",
+      "unsupported": "Recording is not supported by this browser"
     }
   }
 }
