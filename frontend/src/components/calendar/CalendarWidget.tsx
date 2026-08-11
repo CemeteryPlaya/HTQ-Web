@@ -333,14 +333,16 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                 "flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-card/50 rounded-3xl border backdrop-blur-sm shadow-xl shadow-foreground/5 transition-all hover:shadow-primary/5",
                 compact ? "p-4" : "p-6"
             )}>
-                <div className="flex items-center gap-2 md:gap-4">
+                {/* flex-wrap: стрелки + название месяца + «Сегодня» в одну
+                    строку на 360px не помещаются и выталкивали кнопку за экран. */}
+                <div className="flex flex-wrap items-center gap-2 md:gap-4">
                     <Button variant="outline" size="icon" onClick={handlePrevMonth} aria-label="Previous month" className="rounded-xl md:rounded-2xl shadow-none hover:bg-primary/5 w-8 h-8 md:w-10 md:h-10">
                         <ChevronLeft className="h-4 w-4" />
                     </Button>
                     <div className="flex flex-col items-center">
                         <h2 className={cn(
                             "font-bold text-center capitalize tracking-tight",
-                            compact ? "text-lg min-w-[120px]" : "text-2xl min-w-[200px]"
+                            compact ? "text-lg min-w-[120px]" : "text-xl min-w-[140px] sm:text-2xl sm:min-w-[200px]"
                         )}>
                             {format(currentDate, 'LLLL yyyy', { locale: dateLocale })}
                         </h2>

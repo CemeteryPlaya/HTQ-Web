@@ -19,14 +19,17 @@ export const ContactSection = () => {
       </div>
 
       <div className="container-custom relative z-10">
-        <div className="grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
+        <div className="grid lg:grid-cols-2 gap-8 sm:gap-12 lg:gap-20 items-center">
           {/* Left Content */}
-          <div>
-            <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('contact.tag')}</span>
-            <h2 className="font-display text-4xl md:text-5xl lg:text-6xl font-bold text-primary-foreground mt-2 mb-6">
+          {/* `min-w-0`: без него grid-элемент растягивается до max-content строк
+              с контактами (иконка 48px + нередуцируемый текст), и весь столбец
+              вылезает за экран — `truncate` внутри при этом не срабатывает. */}
+          <div className="min-w-0">
+            <span className="text-secondary font-semibold text-xs sm:text-sm uppercase tracking-wider">{t('contact.tag')}</span>
+            <h2 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-primary-foreground mt-2 mb-4 sm:mb-6">
               {t('contact.title')}
             </h2>
-            <p className="text-primary-foreground/80 text-lg leading-relaxed mb-8">
+            <p className="text-primary-foreground/80 text-base sm:text-lg leading-relaxed mb-6 sm:mb-8">
               {t('contact.desc')}
             </p>
 
@@ -63,7 +66,7 @@ export const ContactSection = () => {
           </div>
 
           {/* Right - Form Card */}
-          <div className="bg-card p-5 sm:p-8 md:p-10 rounded-2xl shadow-elevated">
+          <div className="min-w-0 bg-card p-5 sm:p-8 md:p-10 rounded-2xl shadow-elevated">
             <h3 className="font-display text-xl sm:text-2xl font-bold text-foreground mb-6">
               {t('contact.form.title')}
             </h3>
