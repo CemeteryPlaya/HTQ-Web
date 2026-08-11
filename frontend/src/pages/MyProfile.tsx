@@ -152,30 +152,21 @@ const MyProfile = () => {
         <div className="min-h-screen bg-background flex flex-col">
             <Header />
 
-            <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+            <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-6 pb-24 sm:px-6 lg:px-8 lg:pb-8">
                 {/* Page Title Header */}
                 <div className="mb-6 flex items-center justify-between">
                     <div>
-                        <h1 className="text-3xl font-extrabold tracking-tight">{t('profile.title', 'Мой профиль')}</h1>
-                        <p className="text-xs text-muted-foreground mt-1">
+                        <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">{t('profile.title', 'Мой профиль')}</h1>
+                        <p className="text-xs text-muted-foreground mt-0.5">
                             Личные данные, настройки аккаунта и рабочая HR-информация
                         </p>
                     </div>
                 </div>
 
                 {profile && (
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                        {/* Sidebar */}
-                        <div className="lg:col-span-3">
-                            <ProfileSidebar
-                                roles={profile.roles}
-                                department={profile.department}
-                                position={profile.position}
-                            />
-                        </div>
-
-                        {/* Main Content Area */}
-                        <div className="lg:col-span-9 space-y-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                        {/* Main Content Area (renders FIRST on mobile) */}
+                        <div className="order-1 lg:order-2 lg:col-span-9 space-y-6">
                             {/* Profile Hero Header */}
                             <ProfileHeader
                                 profile={profile}
@@ -260,6 +251,15 @@ const MyProfile = () => {
                                     </div>
                                 </div>
                             )}
+                        </div>
+
+                        {/* Sidebar (renders SECOND below header on mobile, left column on desktop) */}
+                        <div className="order-2 lg:order-1 lg:col-span-3">
+                            <ProfileSidebar
+                                roles={profile.roles}
+                                department={profile.department}
+                                position={profile.position}
+                            />
                         </div>
                     </div>
                 )}

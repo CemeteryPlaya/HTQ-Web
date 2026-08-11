@@ -40,8 +40,8 @@ export const ProfileHeader: React.FC<ProfileHeaderProps> = ({ profile, onAvatarC
 
                     {/* User Info */}
                     <div className="text-center md:text-left flex-1 space-y-2 pb-1">
-                        <div className="flex flex-col md:flex-row md:items-center gap-2">
-                            <h2 className="text-2xl font-bold tracking-tight">{displayName}</h2>
+                        <div className="flex flex-col md:flex-row md:items-center justify-center md:justify-start gap-2">
+                            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground">{displayName}</h2>
                             {isStaff && (
                                 <Badge variant="default" className="w-fit mx-auto md:mx-0 gap-1 text-[11px] font-semibold bg-primary/90">
                                     <Shield className="h-3 w-3" />
@@ -54,17 +54,17 @@ export const ProfileHeader: React.FC<ProfileHeaderProps> = ({ profile, onAvatarC
 
                         {/* Department & Position if available */}
                         {(profile.department || profile.position) && (
-                            <div className="flex flex-wrap items-center justify-center md:justify-start gap-3 text-xs text-muted-foreground pt-1">
+                            <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 text-xs text-muted-foreground pt-1">
                                 {profile.department && (
                                     <span className="flex items-center gap-1.5 bg-muted/60 px-2.5 py-1 rounded-md font-medium">
-                                        <Building className="h-3.5 w-3.5 text-primary" />
-                                        {profile.department}
+                                        <Building className="h-3.5 w-3.5 text-primary shrink-0" />
+                                        <span>{profile.department}</span>
                                     </span>
                                 )}
                                 {profile.position && (
                                     <span className="flex items-center gap-1.5 bg-muted/60 px-2.5 py-1 rounded-md font-medium">
-                                        <Briefcase className="h-3.5 w-3.5 text-primary" />
-                                        {profile.position}
+                                        <Briefcase className="h-3.5 w-3.5 text-primary shrink-0" />
+                                        <span>{profile.position}</span>
                                     </span>
                                 )}
                             </div>
@@ -83,17 +83,17 @@ export const ProfileHeader: React.FC<ProfileHeaderProps> = ({ profile, onAvatarC
                     </div>
 
                     {/* Actions */}
-                    <div className="flex flex-row md:flex-col gap-2 w-full md:w-auto shrink-0 pt-2 md:pt-0">
-                        <Button asChild variant="outline" size="sm" className="flex-1 md:flex-initial gap-2 rounded-xl">
+                    <div className="flex flex-row md:flex-col gap-2.5 w-full md:w-auto shrink-0 pt-3 md:pt-0">
+                        <Button asChild variant="outline" size="sm" className="flex-1 md:flex-initial gap-2 rounded-xl h-10 active:scale-95 transition-all">
                             <Link to="/settings">
                                 <SettingsIcon className="h-4 w-4 text-muted-foreground" />
-                                {t('profile.sidebar.settings')}
+                                <span>{t('profile.sidebar.settings')}</span>
                             </Link>
                         </Button>
                         {onLogout && (
-                            <Button variant="ghost" size="sm" onClick={onLogout} className="flex-1 md:flex-initial gap-2 text-destructive hover:text-destructive hover:bg-destructive/10 rounded-xl">
+                            <Button variant="ghost" size="sm" onClick={onLogout} className="flex-1 md:flex-initial gap-2 text-destructive hover:text-destructive hover:bg-destructive/10 rounded-xl h-10 active:scale-95 transition-all">
                                 <LogOut className="h-4 w-4" />
-                                {t('profile.logout')}
+                                <span>{t('profile.logout')}</span>
                             </Button>
                         )}
                     </div>

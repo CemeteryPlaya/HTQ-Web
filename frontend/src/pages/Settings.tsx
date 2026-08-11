@@ -91,24 +91,17 @@ const Settings: React.FC = () => {
     return (
         <div className="min-h-screen bg-background flex flex-col">
             <Header />
-            <main className="flex-1 container mx-auto px-4 py-8">
+            <main className="flex-1 container mx-auto px-4 py-6 pb-24 sm:px-6 lg:px-8 lg:pb-8">
                 <div className="flex items-center gap-3 mb-6">
-                    <BackToProfile className="mb-0" />
-                    <h1 className="text-3xl font-bold">
+                    <BackToProfile className="mb-0 text-xs" />
+                    <h1 className="text-2xl sm:text-3xl font-bold">
                         {t('settingsPage.title', 'Настройки')}
                     </h1>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-                    <div className="lg:col-span-1">
-                        <ProfileSidebar
-                            roles={profile.roles}
-                            department={profile.department}
-                            position={profile.position}
-                        />
-                    </div>
-
-                    <div className="lg:col-span-3 space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 items-start">
+                    {/* Settings cards (renders FIRST on mobile) */}
+                    <div className="order-1 lg:order-2 lg:col-span-3 space-y-6">
                         <PersonalInfoCard profile={profile} />
                         <ContactInfoCard profile={profile} />
                         <WorkInfoCard />
@@ -128,6 +121,15 @@ const Settings: React.FC = () => {
                                 queryClient.clear();
                                 navigate('/login');
                             }}
+                        />
+                    </div>
+
+                    {/* Sidebar (renders SECOND on mobile) */}
+                    <div className="order-2 lg:order-1 lg:col-span-1">
+                        <ProfileSidebar
+                            roles={profile.roles}
+                            department={profile.department}
+                            position={profile.position}
                         />
                     </div>
                 </div>
