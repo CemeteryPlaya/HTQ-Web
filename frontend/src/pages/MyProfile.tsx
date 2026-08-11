@@ -152,7 +152,7 @@ const MyProfile = () => {
         <div className="min-h-screen bg-background flex flex-col">
             <Header />
 
-            <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-6 pb-24 sm:px-6 lg:px-8 lg:pb-8">
+            <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
                 {/* Page Title Header */}
                 <div className="mb-6 flex items-center justify-between">
                     <div>

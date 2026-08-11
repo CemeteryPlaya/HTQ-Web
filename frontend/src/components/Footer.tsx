@@ -36,7 +36,7 @@ export const Footer = () => {
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-12">
           {/* Brand */}
           <div className="lg:col-span-1">
-            <Link to="/" className="flex items-center gap-3 mb-6">
+            <Link to="/" className="flex min-h-[44px] min-w-[44px] items-center gap-3 mb-6">
               <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center overflow-hidden">
                 <img src={logo} alt="Logo" width={40} height={40} className="w-full h-full object-contain" />
               </div>
@@ -119,6 +119,10 @@ export const Footer = () => {
       </div>
 
       {/* Bottom Bar */}
+      {/* Отступ снизу нужен вдобавок к распорке из BottomNav: шеллы страниц
+          свёрстаны как `min-h-screen flex flex-col`, поэтому на коротком экране
+          футер прижат ровно к низу вьюпорта, а распорка уходит уже за него —
+          и нижняя панель накрывала последние ссылки футера. */}
       <div className="border-t border-background/10 pb-20 md:pb-0">
         <div className="container-custom py-6 flex flex-col md:flex-row justify-between items-center gap-4">
           <p className="text-background/40 text-sm text-center md:text-left">

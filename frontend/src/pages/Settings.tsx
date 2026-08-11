@@ -91,7 +91,7 @@ const Settings: React.FC = () => {
     return (
         <div className="min-h-screen bg-background flex flex-col">
             <Header />
-            <main className="flex-1 container mx-auto px-4 py-6 pb-24 sm:px-6 lg:px-8 lg:pb-8">
+            <main className="flex-1 container mx-auto px-4 py-6 sm:px-6 lg:px-8">
                 <div className="flex items-center gap-3 mb-6">
                     <BackToProfile className="mb-0 text-xs" />
                     <h1 className="text-2xl sm:text-3xl font-bold">

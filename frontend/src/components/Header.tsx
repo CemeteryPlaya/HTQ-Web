@@ -162,7 +162,7 @@ export const Header = () => {
               <span>{t('common.back', 'Назад')}</span>
             </button>
           )}
-          <a href="/" className="flex items-center gap-3 group">
+          <a href="/" className="flex min-h-[44px] min-w-[44px] items-center gap-3 group">
             <img
               src={logo}
               alt="Hi-Tech Group Logo"

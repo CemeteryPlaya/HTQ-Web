@@ -97,7 +97,18 @@ export const BottomNav = () => {
     }
 
     return (
-        <div className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around bg-background/95 px-1 py-1.5 pb-safe backdrop-blur-lg border-t border-border/60 shadow-[0_-4px_12px_rgba(0,0,0,0.08)] md:hidden">
+        <>
+            {/* Распорка в обычном потоке. BottomNav смонтирован в App.tsx сразу
+                после <AppRoutes/>, поэтому этот блок оказывается в самом конце
+                документа и резервирует место под фиксированную панель. Без него
+                каждая страница обязана была бы помнить про собственный pb-24 —
+                и любая забывшая прятала под панелью низ футера или кнопку. */}
+            <div
+                aria-hidden="true"
+                className="md:hidden"
+                style={{ height: 'calc(4.25rem + env(safe-area-inset-bottom, 0px))' }}
+            />
+            <div className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around bg-background/95 px-1 py-1.5 pb-safe backdrop-blur-lg border-t border-border/60 shadow-[0_-4px_12px_rgba(0,0,0,0.08)] md:hidden">
             {navItems.map((item) => {
                 const active = location.pathname.startsWith(item.to);
                 return (
@@ -115,6 +126,7 @@ export const BottomNav = () => {
                     </Link>
                 );
             })}
-        </div>
+            </div>
+        </>
     );
 };
