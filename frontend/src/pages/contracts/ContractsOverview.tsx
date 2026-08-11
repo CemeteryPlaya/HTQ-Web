@@ -79,7 +79,7 @@ function ModuleCard({
 }
 
 const ContractsOverview = () => {
-  const { data: budgets, isLoading: budgetsLoading } = useQuery({
+  const { data: budgets, isLoading: budgetsLoading, isError: budgetsError } = useQuery({
     queryKey: ['contracts', 'budgets'],
     queryFn: () => contractsApi.listBudgets().then((response) => response.data),
   });
@@ -87,7 +87,7 @@ const ContractsOverview = () => {
     queryKey: ['contracts', 'counterparties', ''],
     queryFn: () => contractsApi.listCounterparties().then((response) => response.data),
   });
-  const { data: agreements, isLoading: agreementsLoading } = useQuery({
+  const { data: agreements, isLoading: agreementsLoading, isError: agreementsError } = useQuery({
     queryKey: ['contracts', 'agreements'],
     queryFn: () => contractsApi.listAgreements().then((response) => response.data),
   });
@@ -95,15 +95,15 @@ const ContractsOverview = () => {
     queryKey: ['contracts', 'invoices'],
     queryFn: () => contractsApi.listInvoices().then((response) => response.data),
   });
-  const { data: advancePayments, isLoading: advancePaymentsLoading } = useQuery({
+  const { data: advancePayments, isLoading: advancePaymentsLoading, isError: advancePaymentsError } = useQuery({
     queryKey: ['contracts', 'advance-payments'],
     queryFn: () => contractsApi.listAdvancePayments().then((response) => response.data),
   });
-  const { data: contractPayments, isLoading: contractPaymentsLoading } = useQuery({
+  const { data: contractPayments, isLoading: contractPaymentsLoading, isError: contractPaymentsError } = useQuery({
     queryKey: ['contracts', 'contract-payments'],
     queryFn: () => contractsApi.listContractPayments().then((response) => response.data),
   });
-  const { data: completionActs, isLoading: completionActsLoading } = useQuery({
+  const { data: completionActs, isLoading: completionActsLoading, isError: completionActsError } = useQuery({
     queryKey: ['contracts', 'completion-acts'],
     queryFn: () => contractsApi.listCompletionActs().then((response) => response.data),
   });
@@ -121,6 +121,7 @@ const ContractsOverview = () => {
     ...(completionActs ?? []),
   ].filter((payment) => payment.status === 'awaiting_accounting').length;
   const paymentsLoading = advancePaymentsLoading || contractPaymentsLoading || completionActsLoading;
+  const paymentsError = advancePaymentsError || contractPaymentsError || completionActsError;
 
   return (
     <ContractsShell>
@@ -142,6 +143,8 @@ const ContractsOverview = () => {
           <CardContent>
             {budgetsLoading ? (
               <Skeleton className="h-8 w-32" />
+            ) : budgetsError ? (
+              <p className="text-sm text-destructive">Данные недоступны</p>
             ) : (
               <>
                 <p className="text-3xl font-bold tabular-nums">
@@ -167,6 +170,8 @@ const ContractsOverview = () => {
           <CardContent>
             {agreementsLoading ? (
               <Skeleton className="h-8 w-16" />
+            ) : agreementsError ? (
+              <p className="text-sm text-destructive">Данные недоступны</p>
             ) : (
               <p className="text-3xl font-bold tabular-nums">{agreements?.length ?? 0}</p>
             )}
@@ -183,6 +188,8 @@ const ContractsOverview = () => {
           <CardContent>
             {paymentsLoading ? (
               <Skeleton className="h-8 w-16" />
+            ) : paymentsError ? (
+              <p className="text-sm text-destructive">Данные недоступны</p>
             ) : (
               <p className="text-3xl font-bold tabular-nums">{awaitingAccounting}</p>
             )}

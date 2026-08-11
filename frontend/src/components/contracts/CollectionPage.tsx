@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
+import { Search } from 'lucide-react';
 
 import { Skeleton } from '@/components/ui/skeleton';
+import { Input } from '@/components/ui/input';
 
 type CollectionPageHeaderProps = {
   icon: LucideIcon;
@@ -35,6 +37,37 @@ export function CollectionPageHeader({
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
       {children}
+    </div>
+  );
+}
+
+type CollectionSearchProps = {
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder: string;
+  label?: string;
+};
+
+/** A consistent, immediately applied search control for registry pages. */
+export function CollectionSearch({
+  value,
+  onValueChange,
+  placeholder,
+  label = 'Поиск по списку',
+}: CollectionSearchProps) {
+  return (
+    <div className="relative max-w-md">
+      <Search
+        aria-hidden="true"
+        className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+      />
+      <Input
+        aria-label={label}
+        value={value}
+        onChange={(event) => onValueChange(event.target.value)}
+        placeholder={placeholder}
+        className="pl-9"
+      />
     </div>
   );
 }
@@ -74,7 +107,12 @@ export function CollectionTable({
           {emptyAction && <div className="mt-4">{emptyAction}</div>}
         </div>
       ) : (
-        <div className="overflow-x-auto">{children}</div>
+        <>
+          <div className="overflow-x-auto">{children}</div>
+          <p className="border-t px-4 py-2 text-xs text-muted-foreground md:hidden">
+            Проведите таблицу влево, чтобы увидеть остальные поля и действия.
+          </p>
+        </>
       )}
     </div>
   );

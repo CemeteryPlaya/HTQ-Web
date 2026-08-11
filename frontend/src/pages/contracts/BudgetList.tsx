@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, Wallet } from 'lucide-react';
@@ -5,6 +6,7 @@ import { Plus, Wallet } from 'lucide-react';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import {
   CollectionPageHeader,
+  CollectionSearch,
   CollectionTable,
 } from '@/components/contracts/CollectionPage';
 import { Button } from '@/components/ui/button';
@@ -31,10 +33,20 @@ import { contractsApi } from '@/api/contracts';
  */
 
 const BudgetList = () => {
+  const [search, setSearch] = useState('');
   const { data: budgets = [], isLoading, isError } = useQuery({
     queryKey: ['contracts', 'budgets'],
     queryFn: () => contractsApi.listBudgets().then((r) => r.data),
   });
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredBudgets = normalizedSearch
+    ? budgets.filter((budget) => [
+        budget.administrator_name,
+        budget.period_year,
+        budget.status === 'active' ? 'активен' : 'закрыт',
+        ...budget.lines.flatMap((line) => [line.program_name, line.expense_item]),
+      ].join(' ').toLowerCase().includes(normalizedSearch))
+    : budgets;
 
   return (
     <ContractsShell>
@@ -49,18 +61,26 @@ const BudgetList = () => {
               </Link>
             </Button>
           }
-        />
+        >
+          <CollectionSearch
+            value={search}
+            onValueChange={setSearch}
+            placeholder="Администратор, программа, статья, год или статус"
+          />
+        </CollectionPageHeader>
 
         <CollectionTable
           isLoading={isLoading}
           isError={isError}
-          isEmpty={budgets.length === 0}
+          isEmpty={filteredBudgets.length === 0}
           errorMessage="Не удалось загрузить бюджеты."
-          emptyMessage="Бюджетов пока нет."
+          emptyMessage={normalizedSearch ? 'По запросу ничего не найдено.' : 'Бюджетов пока нет.'}
           emptyAction={
-            <Button asChild variant="outline">
-              <Link to="/contracts/budgets/new">Создать первый</Link>
-            </Button>
+            !normalizedSearch ? (
+              <Button asChild variant="outline">
+                <Link to="/contracts/budgets/new">Создать первый</Link>
+              </Button>
+            ) : undefined
           }
         >
           <Table>
@@ -72,15 +92,15 @@ const BudgetList = () => {
                   <TableHead className="text-right">Выделено</TableHead>
                   <TableHead className="text-right">Законтрактовано</TableHead>
                   <TableHead className="text-right">Остаток</TableHead>
-                  <TableHead>Статус</TableHead>
+                  <TableHead>Статус бюджета</TableHead>
                   {/* Согласование — ОТДЕЛЬНАЯ ось от статуса: закрытый
                       бюджет и отклонённый бюджет — разные вещи, и колонка
                       у них поэтому тоже разная. */}
-                  <TableHead className="text-right">Согласование</TableHead>
+                  <TableHead className="text-right">Статус согласования</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {budgets.map((budget) => (
+                {filteredBudgets.map((budget) => (
                   <TableRow key={budget.id}>
                     <TableCell className="font-medium">
                       <Link
@@ -102,7 +122,10 @@ const BudgetList = () => {
                             ? 'программы'
                             : 'программ'}
                       </div>
-                      <div className="text-xs text-muted-foreground truncate max-w-xs">
+                      <div
+                        className="max-w-xs truncate text-xs text-muted-foreground"
+                        title={budget.lines.map((row) => row.program_name).join(', ')}
+                      >
                         {budget.lines.map((row) => row.program_name).join(', ') || '—'}
                       </div>
                     </TableCell>

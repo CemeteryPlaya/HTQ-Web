@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Paperclip, Plus, Receipt } from 'lucide-react';
@@ -5,6 +6,7 @@ import { Paperclip, Plus, Receipt } from 'lucide-react';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import {
   CollectionPageHeader,
+  CollectionSearch,
   CollectionTable,
 } from '@/components/contracts/CollectionPage';
 import { Button } from '@/components/ui/button';
@@ -43,6 +45,7 @@ const STATUS_VARIANTS: Record<
 };
 
 const InvoiceList = () => {
+  const [search, setSearch] = useState('');
   const { data: rows = [], isLoading, isError } = useQuery({
     queryKey: ['contracts', 'invoices'],
     queryFn: () => contractsApi.listInvoices().then((r) => r.data),
@@ -56,6 +59,13 @@ const InvoiceList = () => {
   // показывал сырой код.
   const statusLabel = (value: InvoiceStatus) =>
     enums?.invoice_status.find((option) => option.value === value)?.label ?? value;
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredRows = normalizedSearch
+    ? rows.filter((row) => [
+        row.name, row.counterparty_name, row.counterparty_bin_iin,
+        row.program_name, row.administrator_name, row.period_year, statusLabel(row.status),
+      ].join(' ').toLowerCase().includes(normalizedSearch))
+    : rows;
 
   return (
     <ContractsShell>
@@ -70,18 +80,26 @@ const InvoiceList = () => {
             </Link>
           </Button>
         }
-      />
+      >
+        <CollectionSearch
+          value={search}
+          onValueChange={setSearch}
+          placeholder="Счёт, контрагент, бюджет или статус"
+        />
+      </CollectionPageHeader>
 
       <CollectionTable
         isLoading={isLoading}
         isError={isError}
-        isEmpty={rows.length === 0}
+        isEmpty={filteredRows.length === 0}
         errorMessage="Не удалось загрузить счета."
-        emptyMessage="Счетов пока нет."
+        emptyMessage={normalizedSearch ? 'По запросу ничего не найдено.' : 'Счетов пока нет.'}
         emptyAction={
-          <Button asChild variant="outline">
-            <Link to="/contracts/invoices/new">Выписать первый</Link>
-          </Button>
+          !normalizedSearch ? (
+            <Button asChild variant="outline">
+              <Link to="/contracts/invoices/new">Выписать первый</Link>
+            </Button>
+          ) : undefined
         }
       >
         <Table>
@@ -91,12 +109,12 @@ const InvoiceList = () => {
                 <TableHead>Контрагент</TableHead>
                 <TableHead>Бюджет</TableHead>
                 <TableHead className="text-right">Сумма</TableHead>
-                <TableHead>Статус</TableHead>
-                <TableHead className="text-right">Согласование</TableHead>
+                <TableHead>Статус счёта</TableHead>
+                <TableHead className="text-right">Статус согласования</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => (
+              {filteredRows.map((row) => (
                 <TableRow key={row.id}>
                   <TableCell className="font-medium">
                     <span className="inline-flex items-center gap-1.5">

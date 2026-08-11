@@ -126,6 +126,17 @@ export function SubmitForApproval({
   // карточку появляется, только если её есть за что показать (см.
   // `showProcessLink`); без неё остаётся одна плашка.
   if (state === 'pending' || decided) {
+    // Tables that already render approval state in a separate column pass
+    // `showState={false}`. Do not leave their action cell visually empty
+    // while a process link is unavailable (or intentionally suppressed).
+    if (!showState && activeProcessId === null) {
+      return (
+        <span className="text-sm text-muted-foreground">
+          {state === 'pending' ? 'Согласуется' : '—'}
+        </span>
+      );
+    }
+
     return (
       <div className="flex items-center justify-end gap-2">
         {showState && <ApprovalStateBadge state={state} />}

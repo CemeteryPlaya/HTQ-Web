@@ -80,7 +80,7 @@ export function ContractsShell({ children }: { children: ReactNode }) {
             <nav className="flex flex-row gap-3 overflow-x-auto md:flex-col md:gap-5 md:overflow-visible">
               {NAV_SECTIONS.map((section) => (
                 <section key={section.label ?? section.items[0].to} className="flex shrink-0 flex-row gap-1 md:flex-col">
-                  {section.label && <p className="hidden px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground md:block">
+                  {section.label && <p className="flex shrink-0 items-center whitespace-nowrap px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground md:block">
                     {section.label}
                   </p>}
                   {section.items.map((item) => {

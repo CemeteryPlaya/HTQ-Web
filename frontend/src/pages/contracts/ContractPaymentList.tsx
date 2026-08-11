@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, Wallet } from 'lucide-react';
@@ -5,6 +6,7 @@ import { Plus, Wallet } from 'lucide-react';
 import { contractsApi } from '@/api/contracts';
 import {
   CollectionPageHeader,
+  CollectionSearch,
   CollectionTable,
 } from '@/components/contracts/CollectionPage';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
@@ -37,6 +39,7 @@ const statusLabel: Record<string, string> = {
 };
 
 export default function ContractPaymentList() {
+  const [search, setSearch] = useState('');
   const [searchParams] = useSearchParams();
   const agreementId = Number(searchParams.get('agreement_id')) || undefined;
   const { data: rows = [], isLoading, isError } = useQuery({
@@ -44,6 +47,14 @@ export default function ContractPaymentList() {
     queryFn: () =>
       contractsApi.listContractPayments({ agreement_id: agreementId }).then((r) => r.data),
   });
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredRows = normalizedSearch
+    ? rows.filter((row) => [
+        row.administrator_name, row.agreement_number, row.agreement_name,
+        approvalLabel[row.approval_state] ?? row.approval_state,
+        statusLabel[row.status] ?? row.status,
+      ].join(' ').toLowerCase().includes(normalizedSearch))
+    : rows;
 
   return (
     <ContractsShell>
@@ -63,14 +74,20 @@ export default function ContractPaymentList() {
             </Link>
           </Button>
         }
-      />
+      >
+        <CollectionSearch
+          value={search}
+          onValueChange={setSearch}
+          placeholder="Администратор, договор или статус"
+        />
+      </CollectionPageHeader>
 
       <CollectionTable
         isLoading={isLoading}
         isError={isError}
-        isEmpty={rows.length === 0}
+        isEmpty={filteredRows.length === 0}
         errorMessage="Не удалось загрузить оплаты."
-        emptyMessage="Оплат по договорам пока нет."
+        emptyMessage={normalizedSearch ? 'По запросу ничего не найдено.' : 'Оплат по договорам пока нет.'}
       >
         <Table>
           <TableHeader>
@@ -78,13 +95,13 @@ export default function ContractPaymentList() {
               <TableHead>Администратор</TableHead>
               <TableHead>Договор</TableHead>
               <TableHead className="text-right">Сумма</TableHead>
-              <TableHead>Согласование</TableHead>
-              <TableHead>Статус</TableHead>
-              <TableHead />
+              <TableHead>Статус согласования</TableHead>
+              <TableHead>Статус оплаты</TableHead>
+              <TableHead className="text-right">Действия</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((row) => (
+            {filteredRows.map((row) => (
               <TableRow key={row.id}>
                 <TableCell>{row.administrator_name}</TableCell>
                 <TableCell>

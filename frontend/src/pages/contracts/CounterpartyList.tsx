@@ -111,10 +111,10 @@ const CounterpartyList = () => {
                   <TableHead>БИН / ИИН</TableHead>
                   <TableHead>НДС</TableHead>
                   <TableHead>Адрес</TableHead>
-                  <TableHead>Статус</TableHead>
+                  <TableHead>Статус контрагента</TableHead>
                   {/* Ось согласования — отдельная от статуса: «заблокирован»
                       и «отклонён» говорят о разном. */}
-                  <TableHead className="text-right">Согласование</TableHead>
+                  <TableHead className="text-right">Статус согласования</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -140,7 +140,7 @@ const CounterpartyList = () => {
                     <TableCell className="text-sm text-muted-foreground">
                       {row.vat_label}
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
+                    <TableCell className="max-w-xs truncate text-sm text-muted-foreground" title={row.address || '—'}>
                       {row.address || '—'}
                     </TableCell>
                     <TableCell>

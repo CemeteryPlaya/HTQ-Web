@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Paperclip, Plus, Wallet } from 'lucide-react';
@@ -5,6 +6,7 @@ import { Paperclip, Plus, Wallet } from 'lucide-react';
 import { contractsApi } from '@/api/contracts';
 import {
   CollectionPageHeader,
+  CollectionSearch,
   CollectionTable,
 } from '@/components/contracts/CollectionPage';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
@@ -37,10 +39,19 @@ const documentStatusLabel: Record<string, string> = {
 };
 
 const AdvancePaymentList = () => {
+  const [search, setSearch] = useState('');
   const { data: rows = [], isLoading, isError } = useQuery({
     queryKey: ['contracts', 'advance-payments'],
     queryFn: () => contractsApi.listAdvancePayments().then((r) => r.data),
   });
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredRows = normalizedSearch
+    ? rows.filter((row) => [
+        row.agreement_number, row.agreement_name, row.counterparty_name,
+        approvalLabel[row.approval_state] ?? row.approval_state,
+        documentStatusLabel[row.status] ?? row.status, row.posting_number,
+      ].join(' ').toLowerCase().includes(normalizedSearch))
+    : rows;
 
   return (
     <ContractsShell>
@@ -56,14 +67,20 @@ const AdvancePaymentList = () => {
             </Link>
           </Button>
         }
-      />
+      >
+        <CollectionSearch
+          value={search}
+          onValueChange={setSearch}
+          placeholder="Договор, контрагент, проведение или статус"
+        />
+      </CollectionPageHeader>
 
       <CollectionTable
         isLoading={isLoading}
         isError={isError}
-        isEmpty={rows.length === 0}
+        isEmpty={filteredRows.length === 0}
         errorMessage="Не удалось загрузить предоплаты."
-        emptyMessage="Предоплат пока нет."
+        emptyMessage={normalizedSearch ? 'По запросу ничего не найдено.' : 'Предоплат пока нет.'}
       >
         <Table>
           <TableHeader>
@@ -71,14 +88,14 @@ const AdvancePaymentList = () => {
               <TableHead>Договор</TableHead>
               <TableHead>Контрагент</TableHead>
               <TableHead className="text-right">Сумма</TableHead>
-              <TableHead>Согласование</TableHead>
-              <TableHead>Статус документа</TableHead>
-              <TableHead>Проведение</TableHead>
+              <TableHead>Статус согласования</TableHead>
+              <TableHead>Статус оплаты</TableHead>
+              <TableHead>Реквизиты проведения</TableHead>
               <TableHead className="text-right">Действие</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((row) => (
+            {filteredRows.map((row) => (
               <TableRow key={row.id}>
                 <TableCell className="font-medium">
                   <Link

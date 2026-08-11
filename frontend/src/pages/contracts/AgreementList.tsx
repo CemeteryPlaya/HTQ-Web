@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { FileText, Paperclip, Plus } from 'lucide-react';
@@ -5,6 +6,7 @@ import { FileText, Paperclip, Plus } from 'lucide-react';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import {
   CollectionPageHeader,
+  CollectionSearch,
   CollectionTable,
 } from '@/components/contracts/CollectionPage';
 import { Button } from '@/components/ui/button';
@@ -43,6 +45,7 @@ const STATUS_VARIANTS: Record<
 };
 
 const AgreementList = () => {
+  const [search, setSearch] = useState('');
   const { data: rows = [], isLoading, isError } = useQuery({
     queryKey: ['contracts', 'agreements'],
     queryFn: () => contractsApi.listAgreements().then((r) => r.data),
@@ -58,6 +61,14 @@ const AgreementList = () => {
     enums?.agreement_status.find((option) => option.value === value)?.label ?? value;
   const paymentLabel = (value: string) =>
     enums?.payment_type.find((option) => option.value === value)?.label ?? value;
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredRows = normalizedSearch
+    ? rows.filter((row) => [
+        row.number, row.name, row.counterparty_name, row.counterparty_bin_iin,
+        row.program_name, row.administrator_name, row.period_year,
+        statusLabel(row.status), paymentLabel(row.payment_type),
+      ].join(' ').toLowerCase().includes(normalizedSearch))
+    : rows;
 
   return (
     <ContractsShell>
@@ -72,18 +83,26 @@ const AgreementList = () => {
             </Link>
           </Button>
         }
-      />
+      >
+        <CollectionSearch
+          value={search}
+          onValueChange={setSearch}
+          placeholder="Номер, договор, контрагент, бюджет или статус"
+        />
+      </CollectionPageHeader>
 
       <CollectionTable
         isLoading={isLoading}
         isError={isError}
-        isEmpty={rows.length === 0}
+        isEmpty={filteredRows.length === 0}
         errorMessage="Не удалось загрузить договоры."
-        emptyMessage="Договоров пока нет."
+        emptyMessage={normalizedSearch ? 'По запросу ничего не найдено.' : 'Договоров пока нет.'}
         emptyAction={
-          <Button asChild variant="outline">
-            <Link to="/contracts/agreements/new">Оформить первый</Link>
-          </Button>
+          !normalizedSearch ? (
+            <Button asChild variant="outline">
+              <Link to="/contracts/agreements/new">Оформить первый</Link>
+            </Button>
+          ) : undefined
         }
       >
         <Table>
@@ -95,16 +114,16 @@ const AgreementList = () => {
                 <TableHead>Бюджет</TableHead>
                 <TableHead className="text-right">Сумма</TableHead>
                 <TableHead>Оплата</TableHead>
-                <TableHead>Статус</TableHead>
+                <TableHead>Статус договора</TableHead>
                 {/* Из трёх согласуемых типов только у договора согласование
                     имеет доменное последствие — оно двигает его же `status`.
                     Оси всё равно разные: согласованный по маршруту договор
                     бывает расторгнут по существу. */}
-                <TableHead className="text-right">Согласование</TableHead>
+                <TableHead className="text-right">Статус согласования</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => (
+              {filteredRows.map((row) => (
                 <TableRow key={row.id}>
                   <TableCell className="font-medium whitespace-nowrap">
                     <span className="inline-flex items-center gap-1.5">
