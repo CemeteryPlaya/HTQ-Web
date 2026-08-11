@@ -504,6 +504,7 @@ URL-флоу приватных файлов: API возвращает стаб�
 | Шлюз/маршрутизация | `infra/nginx/default.conf` (прод) / `frontend/vite.config.ts` (dev) |
 | Compose / порты / переменные | `docker-compose.yml` (+ `docker-compose.dev.yml` dev, `docker-compose.test.yml` тесты) |
 | Перелить legacy-данные (cutover) | `manage.py etl_<domain>` — см. `apps/core/etl.py` за общими хелперами |
+| Праздники РК (производственный календарь) | `apps/core/kz_holidays.py` — **единственный** источник для `apps.tasks` и `apps.hr`. Фиксированные даты + правило переноса с выходного считаются на любой год; плавающий Курбан-айт и разовые решения правительства — в `KZ_YEAR_OVERRIDES` (одна строка на год). Таблицы `tasks_productionday`/`hr_calendarday` — только ручные переопределения ПОВЕРХ этого |
 
 ---
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
+from apps.core import kz_holidays
 from apps.hr.models import (
     CalendarDay,
     EmployeeDayOverride,
@@ -83,6 +84,27 @@ def _override_dict(o: CalendarDay) -> dict:
     return {"type": o.day_type, "hours": float(o.norm_hours), "note": o.note}
 
 
+def _national(d: date) -> dict | None:
+    """Национальный день: ручной оверрайд БД, иначе праздник РК из
+    ``apps.core.kz_holidays``.
+
+    Раньше здесь стоял голый ``_override``, то есть единственным источником
+    праздников была таблица ``CalendarDay`` — а она наполняется только ручным
+    ``POST /calendar/import``, и на живой базе пуста. Из-за этого 1 января
+    считалось обычным рабочим днём с полной нормой часов. Общий движок
+    праздников убирает это молчаливое «календаря нет»; импортированная строка
+    по-прежнему главнее — правительство может дать день, которого нет в
+    правилах, и наоборот.
+    """
+    o = _override(d)
+    if o is not None:
+        return _override_dict(o)
+    name = kz_holidays.holiday_note(d)
+    if name is not None:
+        return {"type": "holiday", "hours": 0.0, "note": name}
+    return None
+
+
 def _employee_override(employee_id: int, d: date) -> EmployeeDayOverride | None:
     return EmployeeDayOverride.objects.filter(employee_id=employee_id, day=d).first()
 
@@ -94,9 +116,11 @@ def _employee_shift(employee_id: int) -> EmployeeShiftAssignment | None:
 # ── resolution ──
 
 def day_info(d: date) -> dict:
-    o = _override(d)
-    if o is not None:
-        return _override_dict(o)
+    # Праздник обязан бить недельный шаблон: шаблон говорит «пн рабочий», но
+    # 1 января рабочим не становится.
+    nat = _national(d)
+    if nat is not None:
+        return nat
     tmpl = _default_template()
     if tmpl is not None:
         r = _from_template(tmpl, d)
@@ -115,14 +139,14 @@ def employee_day_info(employee_id: int, d: date) -> dict:
     if shift is not None:
         pattern = ShiftPattern.objects.filter(id=shift.shift_pattern_id).first()
         if pattern is not None:
-            nat = _override(d)
+            nat = _national(d)
             if pattern.holidays_off and nat is not None:
-                return _override_dict(nat)
+                return nat
             return _from_shift(pattern, shift.anchor_date, d)
     # 3. B3a: национальный оверрайд -> недельный шаблон сотрудника/дефолтный -> fallback
-    o = _override(d)
-    if o is not None:
-        return _override_dict(o)
+    nat = _national(d)
+    if nat is not None:
+        return nat
     tmpl = _employee_template(employee_id)
     if tmpl is None:
         tmpl = _default_template()
