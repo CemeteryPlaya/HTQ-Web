@@ -9,11 +9,13 @@ statement raised ``TransactionManagementError`` instead of the real cause.
 These tests pin the behaviour the fix relies on.
 """
 
+import datetime
+
 import pytest
 from django.db import IntegrityError, transaction
 from django.db.transaction import TransactionManagementError
 
-from apps.tasks.models import Task, TaskSequence
+from apps.tasks.models import ProductionDay, Task, TaskSequence
 from apps.tasks.services import sequence_service
 
 
@@ -83,3 +85,55 @@ def test_counter_survives_a_concurrent_style_interleave():
     TaskSequence.objects.create(name="TASK", current_value=41)
     assert sequence_service.next_task_key() == "TASK-42"
     assert sequence_service.next_task_key() == "TASK-43"
+
+
+# ── дедлайн по рабочим дням ─────────────────────────────────────────────
+
+@pytest.mark.django_db
+def test_due_date_is_computed_without_any_stored_calendar_row():
+    """Регрессия: функция читала ``working_days_since_epoch`` из
+    ``ProductionDay``, а это таблица переопределений — на обычной базе она
+    пуста, и ``estimated_working_days`` при создании задачи молча терялся."""
+    assert ProductionDay.objects.count() == 0
+    # 5 января 2026 — понедельник, первый рабочий день года, и он же первый из
+    # пяти. Дальше 6-е, Рождество 7-го мимо, 8-е, 9-е — пятый выпадает на
+    # понедельник 12 января.
+    due = sequence_service.due_date_from_working_days(datetime.date(2026, 1, 5), 5)
+    assert due == datetime.date(2026, 1, 12)
+
+
+@pytest.mark.django_db
+def test_due_date_skips_weekends_and_holidays():
+    # От четверга 1 января (праздник): рабочие — 5, 6, 8 (7-е Рождество), 9.
+    due = sequence_service.due_date_from_working_days(datetime.date(2026, 1, 1), 4)
+    assert due == datetime.date(2026, 1, 9)
+
+
+@pytest.mark.django_db
+def test_due_date_crosses_the_new_year():
+    """Счётчик ``working_days_since_epoch`` сбрасывается 1 января, поэтому
+    прежняя реализация на таком отрезке не работала в принципе."""
+    due = sequence_service.due_date_from_working_days(datetime.date(2026, 12, 28), 5)
+    assert due == datetime.date(2027, 1, 5)
+
+
+@pytest.mark.django_db
+def test_stored_override_wins_over_the_generated_day():
+    ProductionDay.objects.create(date=datetime.date(2026, 1, 6),
+                                 day_type="holiday", working_days_since_epoch=0)
+    due = sequence_service.due_date_from_working_days(datetime.date(2026, 1, 5), 2)
+    assert due == datetime.date(2026, 1, 8)
+
+
+@pytest.mark.django_db
+def test_non_positive_working_days_has_no_deadline():
+    assert sequence_service.due_date_from_working_days(datetime.date(2026, 1, 5), 0) is None
+    assert sequence_service.due_date_from_working_days(datetime.date(2026, 1, 5), None) is None
+
+
+@pytest.mark.django_db
+def test_absurd_working_days_is_rejected_before_the_scan():
+    """``estimated_working_days`` в схеме — голый ``int``, а обход идёт по
+    дням: без потолка запрос уронил бы воркер переполнением ``date``."""
+    assert sequence_service.due_date_from_working_days(
+        datetime.date(2026, 1, 5), 10_000_000) is None

@@ -680,7 +680,9 @@ const HRPositions = () => {
               const threshold = thresholds?.find((item) => item.level_number === level);
               const items = groups.get(level) ?? [];
               return (
-                <section key={level} className="rounded-lg border bg-card">
+                // `min-w-0`: у grid-элемента min-width по умолчанию auto, и
+                // карточки должностей внутри распирали колонку шире экрана.
+                <section key={level} className="min-w-0 rounded-lg border bg-card">
                   <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">

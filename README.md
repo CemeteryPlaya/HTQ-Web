@@ -259,6 +259,49 @@ pytest-django гоняется против **настоящего Postgres**, �
 `:5432` занят нативным Windows-PostgreSQL, а через `:6432`/PgBouncer (transaction-пул)
 не проходит `CREATE DATABASE`. Порт поднимается один раз:
 
+```powershell
+$env:SFU_HOST="0.0.0.0"
+$env:SFU_PORT="4443"
+$env:SIGNALING_REQUIRE_TLS="true"
+$env:TLS_CERT="D:\HTQWeb1\certs\cert.pem"
+$env:TLS_KEY="D:\HTQWeb1\certs\key.pem"
+```
+
+Run:
+
+```powershell
+cd .\sfu
+npm run dev
+```
+
+## Cloudflare + Bore Quick Start
+
+Expose the local stack so someone outside can test the conference — no
+account, no credit card. Cloudflare carries the signalling, bore carries the
+media (UDP never passes an HTTP tunnel).
+Full details: [docs/TUNNEL_SETUP.md](docs/TUNNEL_SETUP.md)
+
+1. Start the stack (`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`) and Vite
+2. Run `.\scripts\start-public-test.ps1 -GuestEmail guest@example.com`
+3. Send the printed link and credentials; Ctrl+C restores local mode
+
+## Architecture
+Project structure and refactoring conventions are documented in:
+- `docs/architecture.md`
+
+## 🔧 WebRTC Video/Audio Troubleshooting
+
+Если у вас проблемы с видео/аудио потоками между клиентами, начните отсюда:
+
+### ⚡ Быстрое исправление (5 минут)
+Прочитайте [QUICK_FIX.md](./QUICK_FIX.md) - пошаговое руководство по настройке
+
+### 📖 Детальная диагностика
+Прочитайте [WEBRTC_TROUBLESHOOTING.md](./WEBRTC_TROUBLESHOOTING.md) - полное руководство
+
+### 🛠️ Инструменты диагностики
+
+**1. Проверка конфигурации SFU:**
 ```bash
 docker compose -f docker-compose.test-local.yml up -d db   # публикует db на :55432
 cd backend

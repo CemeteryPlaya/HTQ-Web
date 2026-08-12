@@ -137,7 +137,7 @@ export const HRLayout: React.FC<Props> = ({ title, subtitle, children }) => {
                   key={item.to}
                   to={item.to}
                   className={cn(
-                    'flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold whitespace-nowrap transition-all',
+                    'flex min-h-[44px] items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold whitespace-nowrap transition-all',
                     active
                       ? 'bg-primary text-primary-foreground shadow-2xs'
                       : 'text-muted-foreground hover:bg-muted hover:text-foreground'

@@ -4,6 +4,7 @@ import { Building2, FileText, LayoutDashboard, Wallet } from 'lucide-react';
 
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
+import { BackToProfile } from '@/components/BackToProfile';
 import { cn } from '@/lib/utils';
 
 /**
@@ -57,6 +58,7 @@ export function ContractsShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-background flex flex-col">
       <Header />
       <div className="flex-1 container mx-auto px-4 py-8">
+        <BackToProfile className="mb-6" />
         <div className="flex flex-col gap-6 md:flex-row md:gap-8">
           <aside className="md:w-56 shrink-0">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3 px-3">

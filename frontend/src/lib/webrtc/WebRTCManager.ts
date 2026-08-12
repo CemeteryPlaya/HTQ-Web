@@ -1,5 +1,7 @@
 import {
+  ChatMessagePayload,
   ConferenceOptions,
+  PeerMediaState,
   MediaEngine,
   MediaEngineEvents,
   RemoteStream,
@@ -17,6 +19,8 @@ export interface WebRTCManagerEvents {
   onActiveSpeakers?: (speakers: Array<{ peerId: string; isPrimary: boolean }>) => void;
   onParticipantJoined?: (peerId: string, displayName: string) => void;
   onParticipantLeft?: (peerId: string) => void;
+  onChatMessage?: (message: ChatMessagePayload) => void;
+  onMediaState?: (state: PeerMediaState) => void;
   onQualityMetrics?: (metrics: QualityMetrics) => void;
   onConnectionStateChange?: (state: string) => void;
   onError?: (error: WebRTCError) => void;
@@ -127,6 +131,30 @@ export class WebRTCManager {
     }
 
     return fallbackResult;
+  }
+
+  /** Объявить своё состояние микрофона и камеры остальным участникам. */
+  sendMediaState(state: { micEnabled: boolean; camEnabled: boolean }): Result<void, WebRTCError> {
+    if (!this.engine) {
+      return err(
+        createWebRTCError('TRANSPORT_SETUP_FAILURE', 'Media engine is not initialized', {
+          retriable: true,
+        })
+      );
+    }
+    return this.engine.sendMediaState(state);
+  }
+
+  /** Отправить сообщение в чат комнаты (релей через SFU). */
+  sendChatMessage(text: string): Result<void, WebRTCError> {
+    if (!this.engine) {
+      return err(
+        createWebRTCError('TRANSPORT_SETUP_FAILURE', 'Media engine is not initialized', {
+          retriable: true,
+        })
+      );
+    }
+    return this.engine.sendChatMessage(text);
   }
 
   async leave(): Promise<Result<void, WebRTCError>> {
@@ -255,6 +283,8 @@ export class WebRTCManager {
       onParticipantJoined: (peerId, displayName) =>
         this.events.onParticipantJoined?.(peerId, displayName),
       onParticipantLeft: (peerId) => this.events.onParticipantLeft?.(peerId),
+      onChatMessage: (message) => this.events.onChatMessage?.(message),
+      onMediaState: (state) => this.events.onMediaState?.(state),
       onQualityMetrics: (metrics) => this.events.onQualityMetrics?.(metrics),
       onConnectionStateChange: (state) =>
         this.events.onConnectionStateChange?.(state),

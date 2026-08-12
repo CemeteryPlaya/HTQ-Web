@@ -1,0 +1,28 @@
+{
+  /*
+   * Типизация тестов. Основной `tsconfig.json` ссылается только на
+   * `tsconfig.app.json` (include: ["src"]) и `tsconfig.node.json`
+   * (include: ["vite.config.ts"]), поэтому папка `tests/` не проверялась
+   * вообще — и обращение к несуществующей переменной в спеке спокойно доживало
+   * до падения прогона. Этот проект закрывает дыру: `npm run typecheck:tests`.
+   */
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitAny": false,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["tests", "playwright.config.ts", "playwright.mobile.config.ts"]
+}

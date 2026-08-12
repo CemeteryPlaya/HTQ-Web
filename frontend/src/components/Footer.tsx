@@ -1,5 +1,8 @@
 import { useTranslation } from 'react-i18next';
-import { Leaf, Mail, MapPin, Phone } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Mail, MapPin, Phone } from 'lucide-react';
+import { legalLinks, socialLinks } from '@/data/company';
+import { services } from '@/data/services';
 
 const logo = '/images/logo.webp';
 
@@ -7,18 +10,23 @@ export const Footer = () => {
   const { t } = useTranslation();
 
   const footerLinks = {
+    // Футер рендерится на всех страницах, поэтому якоря главной пишем как
+    // ``/#...`` — голый ``#about`` за пределами ``/`` никуда не ведёт.
     company: [
-      { label: t('header.about'), href: '#about' },
+      { label: t('header.about'), href: '/#about' },
       { label: t('header.projects'), href: '/projects' },
       { label: t('header.services'), href: '/services' },
-      { label: t('header.news'), href: '#news' },
+      { label: t('header.news'), href: '/#news' },
     ],
-    services: [
-      { label: t('services.items.owners_engineer.title'), href: '#' },
-      { label: t('services.items.pot.title'), href: '#' },
-      { label: t('services.items.construction.title'), href: '#' },
-      { label: t('services.items.maintenance.title'), href: '#' },
-    ],
+    // Ссылки ведут к соответствующим карточкам на странице услуг (якоря
+    // ``id="service-N"`` объявлены в ``pages/Services.tsx``).
+    services: services
+      .filter((service) => service.featuredOnMain)
+      .slice(0, 4)
+      .map((service) => ({
+        label: t(service.titleKey),
+        href: `/services#service-${service.id}`,
+      })),
   };
 
   return (
@@ -28,29 +36,33 @@ export const Footer = () => {
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-12">
           {/* Brand */}
           <div className="lg:col-span-1">
-            {/* Brand */}<a href="#" className="flex items-center gap-3 mb-6">
+            <Link to="/" className="flex min-h-[44px] min-w-[44px] items-center gap-3 mb-6">
               <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center overflow-hidden">
                 <img src={logo} alt="Logo" width={40} height={40} className="w-full h-full object-contain" />
               </div>
               <div>
                 <span className="font-display font-bold text-xl text-background">Hi-Tech Group</span>
               </div>
-              {/* Brand */}</a>
+            </Link>
             <p className="text-background/60 text-sm leading-relaxed mb-6">
               {t('footer.tagline')}
             </p>
-            <div className="flex gap-4">
-              {['linkedin', 'twitter', 'facebook'].map((social) => (
-                <a
-                  key={social}
-                  href="#"
-                  className="w-10 h-10 rounded-full bg-background/10 flex items-center justify-center hover:bg-secondary transition-colors"
-                >
-                  <span className="sr-only">{social}</span>
-                  <div className="w-4 h-4 bg-background/60 rounded-sm" />
-                </a>
-              ))}
-            </div>
+            {socialLinks.length > 0 && (
+              <div className="flex gap-4">
+                {socialLinks.map((social) => (
+                  <a
+                    key={social.href}
+                    href={social.href}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="w-10 h-10 rounded-full bg-background/10 flex items-center justify-center hover:bg-secondary transition-colors text-background/60 text-sm font-semibold"
+                  >
+                    <span className="sr-only">{social.name}</span>
+                    <span aria-hidden="true">{social.name.charAt(0).toUpperCase()}</span>
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Company Links */}
@@ -107,19 +119,28 @@ export const Footer = () => {
       </div>
 
       {/* Bottom Bar */}
-      <div className="border-t border-background/10">
+      {/* Отступ снизу нужен вдобавок к распорке из BottomNav: шеллы страниц
+          свёрстаны как `min-h-screen flex flex-col`, поэтому на коротком экране
+          футер прижат ровно к низу вьюпорта, а распорка уходит уже за него —
+          и нижняя панель накрывала последние ссылки футера. */}
+      <div className="border-t border-background/10 pb-20 md:pb-0">
         <div className="container-custom py-6 flex flex-col md:flex-row justify-between items-center gap-4">
-          <p className="text-background/40 text-sm">
-            © 2026 Hi-Tech Group. {t('footer.rights')}
+          <p className="text-background/40 text-sm text-center md:text-left">
+            © {new Date().getFullYear()} Hi-Tech Group. {t('footer.rights')}
           </p>
-          <div className="flex gap-6">
-            <a href="#" className="text-background/40 hover:text-background/80 transition-colors text-sm">
-              {t('footer.privacy')}
-            </a>
-            <a href="#" className="text-background/40 hover:text-background/80 transition-colors text-sm">
-              {t('footer.terms')}
-            </a>
-          </div>
+          {legalLinks.length > 0 && (
+            <div className="flex flex-wrap justify-center gap-4 sm:gap-6">
+              {legalLinks.map((link) => (
+                <a
+                  key={link.href}
+                  href={link.href}
+                  className="text-background/40 hover:text-background/80 transition-colors text-sm py-1.5 px-2 rounded-lg"
+                >
+                  {t(link.labelKey)}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </footer>

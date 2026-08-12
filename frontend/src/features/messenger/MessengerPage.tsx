@@ -1836,11 +1836,11 @@ const MessengerPage: React.FC = () => {
     return (
         <div className="min-h-screen bg-background flex flex-col">
             <Header />
-            <main className="flex-1 container mx-auto px-0 sm:px-4 py-4 sm:py-6 max-w-6xl flex flex-col">
-                <div className="mb-4 px-4 sm:px-0">
-                    <BackToProfile />
+            <main className="flex-1 container mx-auto px-0 sm:px-4 py-2 sm:py-6 pb-24 sm:pb-6 max-w-6xl flex flex-col">
+                <div className="mb-3 px-4 sm:px-0">
+                    <BackToProfile className="mb-0 text-xs" />
                 </div>
-                <div className="bg-card rounded-xl border shadow-sm overflow-hidden flex" style={{ height: 'calc(100vh - 200px)', minHeight: '500px' }}>
+                <div className="bg-card rounded-xl border shadow-sm overflow-hidden flex" style={{ height: 'calc(100dvh - 170px)', minHeight: '420px' }}>
 
                     {/* ===== LEFT PANEL: Chat List ===== */}
                     <div className={`w-full sm:w-80 lg:w-96 border-r flex flex-col ${mobileShowChat ? 'hidden sm:flex' : 'flex'}`}>

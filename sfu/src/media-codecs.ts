@@ -14,13 +14,20 @@ export const mediaCodecs: mediasoupTypes.RtpCodecCapability[] = [
     preferredPayloadType: 111,
     clockRate: 48000,
     channels: 2,
+    // Голосовой профиль: моно + VBR, 64 кбит/с. Раньше здесь стоял
+    // «студийный» набор (192 кбит/с, stereo, CBR), из-за которого Opus делил
+    // бюджет на два канала при том же реальном потолке отправителя.
+    // Разбор — в frontend/src/lib/webrtc/qualityProfile.ts; значения должны
+    // совпадать с клиентскими, иначе роутер объявляет одно, а клиент шлёт
+    // другое. `channels: 2` остаётся: это формат RTP-полезной нагрузки opus,
+    // он всегда /48000/2, моно задаётся именно параметром stereo=0.
     parameters: {
-      maxaveragebitrate: 192000,
-      stereo: 1,
-      cbr: 1,
+      maxaveragebitrate: 64000,
+      stereo: 0,
+      cbr: 0,
       useinbandfec: 1,
       usedtx: 0,
-      'sprop-stereo': 1,
+      'sprop-stereo': 0,
       minptime: 10,
       maxptime: 40,
     },

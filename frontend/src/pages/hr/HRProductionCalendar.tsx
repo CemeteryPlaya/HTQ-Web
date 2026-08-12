@@ -9,7 +9,7 @@ import { fetchWeekTemplates, setDefaultTemplate, fetchCalendarYear, fetchShiftPa
 const HRProductionCalendar = () => {
   const { hasPerm } = useHRLevel();
   const qc = useQueryClient();
-  const [year] = useState(new Date().getFullYear());
+  const [year, setYear] = useState(new Date().getFullYear());
   const canManage = hasPerm('hr.calendar.manage');
 
   const { data: templates } = useQuery({ queryKey: ['week-templates'], queryFn: fetchWeekTemplates, enabled: hasPerm('hr.calendar.view') });
@@ -40,7 +40,16 @@ const HRProductionCalendar = () => {
       </section>
       <ShiftPatternsSection canManage={canManage} />
       <section>
-        <h3 className="font-semibold mb-2">Исключения года ({overrides.length})</h3>
+        <div className="mb-2 flex items-center gap-3">
+          <h3 className="font-semibold">Исключения года ({overrides.length})</h3>
+          {/* Год листается вручную: праздники считаются на любой год, поэтому
+              смотреть можно и прошлый, и следующий. */}
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="outline" onClick={() => setYear((y) => y - 1)} aria-label="Предыдущий год">←</Button>
+            <span className="min-w-[3.5rem] text-center font-mono text-sm">{year}</span>
+            <Button size="sm" variant="outline" onClick={() => setYear((y) => y + 1)} aria-label="Следующий год">→</Button>
+          </div>
+        </div>
         <div className="space-y-1 text-sm">
           {overrides.map((d) => (
             <div key={d.day} className="flex gap-3"><span className="font-mono">{d.day}</span><span>{d.type}</span><span>{d.note ?? ''}</span></div>

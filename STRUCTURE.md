@@ -412,7 +412,7 @@ GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,
 | **Конфиг конференции** | `apps.cms.services.conference_service` ([backend/apps/cms/services/conference_service.py](backend/apps/cms/services/conference_service.py)), `GET /api/cms/v1/conference/config` | ICE/SFU-конфиг из `htqweb/settings/base.py` (`CONFERENCE_SFU_URL`/`_PATH`/`ICE_SERVERS` + `CONFERENCE_WT_*`) — порт `services/cms/app/data/conference.yaml`. `CONFERENCE_SFU_URL` пуст по умолчанию: фронт берёт сигналинг с того же origin (`/ws/sfu/`). Плюс `enabled` (сервис `conference` в реестре — включён миграцией `core/0003_enable_conference`) и адрес QUIC-моста с отпечатками его сертификата. |
 | **Аутентификация сигналинга** | [sfu/src/auth.ts](./sfu/src/auth.ts) | Проверка платформенного JWT (HS256, тот же `JWT_SECRET`, что у Django) на WS-upgrade: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=`. Без токена — 401. Выключается только `SIGNALING_REQUIRE_AUTH=false`. |
 
-Туннели/HTTPS для LAN: [docs/TUNNEL_SETUP.md](./docs/TUNNEL_SETUP.md), скрипты — [scripts/start-sfu-tunnel.ps1](./scripts/start-sfu-tunnel.ps1).
+Открыть стенд наружу (Cloudflare для сигналинга + bore для медиа): [docs/TUNNEL_SETUP.md](./docs/TUNNEL_SETUP.md), оркестратор — [scripts/start-public-test.ps1](./scripts/start-public-test.ps1). Старый [scripts/start-sfu-tunnel.ps1](./scripts/start-sfu-tunnel.ps1) остался для SFU, запущенного на хосте без Docker.
 
 ---
 
@@ -503,6 +503,7 @@ URL-флоу приватных файлов: API возвращает стаб�
 | Шлюз/маршрутизация | `infra/nginx/default.conf` (прод) / `frontend/vite.config.ts` (dev) |
 | Compose / порты / переменные | `docker-compose.yml` (прод), `docker-compose.test-local.yml` (локальная БД), `docker-compose.test-env.yml` (БД из .env) |
 | Перелить legacy-данные (cutover) | `manage.py etl_<domain>` — см. `apps/core/etl.py` за общими хелперами |
+| Праздники РК (производственный календарь) | `apps/core/kz_holidays.py` — **единственный** источник для `apps.tasks` и `apps.hr`. Фиксированные даты + правило переноса с выходного считаются на любой год; плавающий Курбан-айт и разовые решения правительства — в `KZ_YEAR_OVERRIDES` (одна строка на год). Таблицы `tasks_productionday`/`hr_calendarday` — только ручные переопределения ПОВЕРХ этого |
 
 ---
 

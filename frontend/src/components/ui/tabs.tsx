@@ -12,7 +12,11 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      "inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground",
+      // На мобильном набор вкладок в строку не влезает (4 вкладки с иконками и
+      // русскими подписями — это уже ~480px), поэтому лента скроллится вбок, а
+      // не выталкивает содержимое за экран. `max-w-full` нужен, чтобы
+      // inline-flex считал ширину от родителя, иначе overflow не сработает.
+      "inline-flex h-auto min-h-[52px] max-w-full items-center justify-start overflow-x-auto scrollbar-none rounded-md bg-muted p-1 text-muted-foreground sm:h-10 sm:min-h-0 sm:justify-center",
       className,
     )}
     {...props}
@@ -27,7 +31,7 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background transition-all data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+      "inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background transition-all sm:min-h-0 sm:min-w-0 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
       className,
     )}
     {...props}

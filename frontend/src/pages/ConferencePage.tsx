@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { WebRTCManager, RemoteStream, QualityMetrics, WebRTCError } from '@/lib/webrtc';
+import type { ChatMessagePayload, PeerMediaState } from '@/lib/webrtc/MediaEngine';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -243,9 +244,12 @@ function isCodecCompatibilityError(error: WebRTCError): boolean {
 }
 
 function useAudioActivity(
-  stream: MediaStream | null, 
+  stream: MediaStream | null,
   ringRef: React.RefObject<HTMLDivElement | null>,
-  onLevelChange?: (level: number) => void
+  onLevelChange?: (level: number) => void,
+  /** Счётчик событий треков: без него анализатор не стартует, потому что
+   *  удалённый трек в момент монтирования ещё `muted` (см. VideoTile). */
+  trackEpoch = 0
 ) {
   useEffect(() => {
     if (!stream) {
@@ -318,7 +322,7 @@ function useAudioActivity(
       }
       onLevelChange?.(0);
     };
-  }, [stream, ringRef, onLevelChange]);
+  }, [stream, ringRef, onLevelChange, trackEpoch]);
 }
 
 /**
@@ -331,6 +335,8 @@ const VideoTile = ({
   isPrimary = false,
   isSpotlighted = false,
   isHost = false,
+  micEnabled = true,
+  camEnabled = true,
   onSpotlightToggle
 }: { 
   stream: MediaStream | null; 
@@ -339,6 +345,8 @@ const VideoTile = ({
   isPrimary?: boolean;
   isSpotlighted?: boolean;
   isHost?: boolean;
+  micEnabled?: boolean;
+  camEnabled?: boolean;
   onSpotlightToggle?: () => void;
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -347,8 +355,17 @@ const VideoTile = ({
   const [volume, setVolume] = useState([100]);
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
+  // «Кадры пошли» берём у самого элемента, а не из `track.muted`: у
+  // удалённого трека этот флаг снимается ровно один раз и легко
+  // разъезжается с рендером, а `playing`/`emptied` приходят всегда.
+  const [videoPlaying, setVideoPlaying] = useState(false);
 
-  useAudioActivity(stream, ringRef, setAudioLevel);
+  // Удалённый трек до первого RTP-пакета всегда `muted`, а consumer'ы SFU
+  // приходят на паузе — то есть в момент первого рендера плитки условия
+  // ниже заведомо ложны. Пересчитываем их не «когда-нибудь при следующем
+  // ререндере», а по событиям самих треков: `trackEpoch` инкрементится в
+  // обработчиках mute/unmute/ended (эффект ниже) и входит в зависимости.
+  const [trackEpoch, setTrackEpoch] = useState(0);
 
   const hasPlayableTracks =
     !!stream && stream.getTracks().some((track) => track.readyState === 'live');
@@ -359,6 +376,51 @@ const VideoTile = ({
       .some((track) => track.readyState === 'live' && !track.muted && track.enabled);
   const hasLiveAudio =
     !!stream && stream.getAudioTracks().some((track) => track.readyState === 'live' && !track.muted && track.enabled);
+
+  useAudioActivity(stream, ringRef, setAudioLevel, trackEpoch);
+
+  useEffect(() => {
+    if (!stream) return;
+
+    const bump = () => setTrackEpoch((value) => value + 1);
+    // Снимок треков: отписываемся ровно от тех, на кого подписались, —
+    // состав потока к моменту cleanup уже может смениться.
+    const tracks = stream.getTracks();
+    tracks.forEach((track) => {
+      track.addEventListener('unmute', bump);
+      track.addEventListener('mute', bump);
+      track.addEventListener('ended', bump);
+    });
+    // Новый трек в потоке — тоже повод пересобрать подписки.
+    stream.addEventListener('addtrack', bump);
+    stream.addEventListener('removetrack', bump);
+
+    return () => {
+      tracks.forEach((track) => {
+        track.removeEventListener('unmute', bump);
+        track.removeEventListener('mute', bump);
+        track.removeEventListener('ended', bump);
+      });
+      stream.removeEventListener('addtrack', bump);
+      stream.removeEventListener('removetrack', bump);
+    };
+  }, [stream, trackEpoch]);
+
+  // Привязка потока НЕ должна зависеть от `track.muted`: у удалённого трека
+  // он снимается только с первым RTP-пакетом, а до того элемента могло не
+  // быть в DOM вовсе — тогда поток так и оставался неподключённым, пока
+  // что-нибудь не перемонтирует плитку (например, кнопка «Фокус»).
+  // Поэтому привязываем по наличию живого трека нужного вида, а `muted`
+  // оставляем только для заглушки «камера отключена».
+  const hasVideoTrack =
+    !!stream && stream.getVideoTracks().some((track) => track.readyState === 'live');
+  const hasAudioTrack =
+    !!stream && stream.getAudioTracks().some((track) => track.readyState === 'live');
+
+  // Картинку показываем, когда камера включена ПО ЗАЯВЛЕНИЮ участника и
+  // элемент реально проигрывает кадры. Для локальной плитки события
+  // `playing` достаточно — своё состояние камеры мы знаем точно.
+  const showVideo = !!stream && hasVideoTrack && camEnabled && (videoPlaying || hasLiveVideo);
 
   useEffect(() => {
     const videoEl = videoRef.current;
@@ -376,25 +438,25 @@ const VideoTile = ({
     }
 
     const syncMedia = () => {
-      if (hasLiveVideo && videoEl && videoEl.srcObject !== stream) {
+      if (hasVideoTrack && videoEl && videoEl.srcObject !== stream) {
         videoEl.srcObject = stream;
       }
-      if (!hasLiveVideo && videoEl) {
+      if (!hasVideoTrack && videoEl) {
         videoEl.srcObject = null;
       }
 
-      if (!isLocal && hasLiveAudio && audioEl && audioEl.srcObject !== stream) {
+      if (!isLocal && hasAudioTrack && audioEl && audioEl.srcObject !== stream) {
         audioEl.srcObject = stream;
       }
-      if ((!hasLiveAudio || isLocal) && audioEl) {
+      if ((!hasAudioTrack || isLocal) && audioEl) {
         audioEl.srcObject = null;
         setAudioPlaybackBlocked(false);
       }
 
-      if (hasLiveVideo && videoEl) {
+      if (hasVideoTrack && videoEl) {
         videoEl.play().catch(() => {});
       }
-      if (!isLocal && hasLiveAudio && audioEl) {
+      if (!isLocal && hasAudioTrack && audioEl) {
         const playAttempt = audioEl.play();
         playAttempt
           .then(() => setAudioPlaybackBlocked(false))
@@ -411,7 +473,7 @@ const VideoTile = ({
       stream.removeEventListener('addtrack', syncMedia);
       stream.removeEventListener('removetrack', syncMedia);
     };
-  }, [hasLiveAudio, hasLiveVideo, hasPlayableTracks, isLocal, stream]);
+  }, [hasAudioTrack, hasVideoTrack, hasPlayableTracks, isLocal, stream, trackEpoch]);
 
   useEffect(() => {
     if (audioRef.current && !isLocal) {
@@ -420,7 +482,7 @@ const VideoTile = ({
   }, [volume, isLocal, stream]);
 
   const handleUnlockAudio = () => {
-    if (isLocal || !stream || !hasLiveAudio || !audioRef.current) return;
+    if (isLocal || !stream || !hasAudioTrack || !audioRef.current) return;
     if (audioRef.current.srcObject !== stream) {
       audioRef.current.srcObject = stream;
     }
@@ -442,15 +504,25 @@ const VideoTile = ({
       <div className="absolute inset-0 pointer-events-none rounded-2xl shadow-[inset_0_0_30px_rgba(0,0,0,0.5)] z-10" />
       <div ref={ringRef} className="absolute inset-0 pointer-events-none rounded-2xl border-2 border-transparent transition-all duration-200 z-20" />
 
-      {stream && hasLiveVideo ? (
+      {/* Элемент рендерим по наличию трека, а не по `muted`: иначе он
+          появляется в DOM только после первого кадра, и привязывать поток
+          в этот момент уже некому. Заглушка ниже по-прежнему решает по
+          `hasLiveVideo` — она про «камера выключена», а не про привязку. */}
+      {stream && hasVideoTrack && (
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          className={`w-full h-full object-cover ${isLocal ? 'scale-x-[-1]' : ''}`}
+          onPlaying={() => setVideoPlaying(true)}
+          onEmptied={() => setVideoPlaying(false)}
+          onPause={() => setVideoPlaying(false)}
+          className={`w-full h-full object-cover ${isLocal ? 'scale-x-[-1]' : ''} ${
+            showVideo ? '' : 'hidden'
+          }`}
         />
-      ) : (
+      )}
+      {!showVideo && (
         <div className="flex w-full h-full flex-col items-center justify-center bg-gradient-to-br from-zinc-800 via-zinc-900 to-zinc-950 relative overflow-hidden">
           {audioLevel > 5 && (
             <div 
@@ -464,15 +536,17 @@ const VideoTile = ({
               {displayName.charAt(0) || 'U'}
             </span>
           </div>
-          <span className="text-xs text-zinc-400 font-medium">Камера отключена</span>
+          <span className="text-xs text-zinc-400 font-medium">
+            {camEnabled ? 'Подключение видео…' : 'Камера отключена'}
+          </span>
         </div>
       )}
 
-      {!isLocal && stream && hasLiveAudio && (
+      {!isLocal && stream && hasAudioTrack && (
         <audio ref={audioRef} autoPlay playsInline className="hidden" />
       )}
 
-      {!isLocal && stream && hasLiveAudio && audioPlaybackBlocked && (
+      {!isLocal && stream && hasAudioTrack && audioPlaybackBlocked && (
         <Button
           variant="secondary"
           size="sm"
@@ -502,7 +576,9 @@ const VideoTile = ({
 
       <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between z-30 pointer-events-none">
         <div className="bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-xl text-xs font-medium text-white shadow-md border border-white/10 flex items-center gap-2 pointer-events-auto">
-          {!hasLiveAudio ? (
+          {/* Строго по объявленному состоянию участника: `hasLiveAudio`
+              здесь врал — у получателя он говорит лишь «пакеты пошли». */}
+          {!micEnabled ? (
             <span className="p-1 rounded bg-rose-500/20 text-rose-400">
               <MicOff className="w-3 h-3" />
             </span>
@@ -521,7 +597,11 @@ const VideoTile = ({
           </span>
         </div>
 
-        {!isLocal && hasLiveAudio && (
+        {/* Регулятор громкости привязан к наличию аудио-трека, а не к
+            `hasLiveAudio`: иначе он появлялся только после первых пакетов
+            и пропадал у приглушённого собеседника, которого хочется
+            заранее сделать потише. */}
+        {!isLocal && hasAudioTrack && (
           <div className="pointer-events-auto">
             <Popover>
               <PopoverTrigger asChild>
@@ -588,6 +668,11 @@ export const ConferencePage = () => {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<RemoteStream[]>([]);
   const [participants, setParticipants] = useState<Map<string, string>>(new Map());
+  // Микрофон/камера остальных участников — по их собственным объявлениям
+  // (сообщение `mediaState`). До первого объявления считаем включёнными.
+  const [peerMediaState, setPeerMediaState] = useState<
+    Map<string, { micEnabled: boolean; camEnabled: boolean }>
+  >(new Map());
   const [metrics, setMetrics] = useState<QualityMetrics | null>(null);
   const [joinRoomInput, setJoinRoomInput] = useState('');
   const [enteredPasswordInput, setEnteredPasswordInput] = useState('');
@@ -916,6 +1001,36 @@ export const ConferencePage = () => {
           return next;
         });
         setRemoteStreams(prev => prev.filter(s => s.peerId !== peerId));
+        setPeerMediaState((prev) => {
+          const next = new Map(prev);
+          next.delete(peerId);
+          return next;
+        });
+      },
+      onMediaState: (state: PeerMediaState) => {
+        setPeerMediaState((prev) => {
+          const next = new Map(prev);
+          next.set(state.peerId, {
+            micEnabled: state.micEnabled,
+            camEnabled: state.camEnabled,
+          });
+          return next;
+        });
+      },
+      onChatMessage: (message: ChatMessagePayload) => {
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: `${message.peerId}-${message.sentAt}-${prev.length}`,
+            sender: message.displayName,
+            text: message.text,
+            timestamp: new Date(message.sentAt).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+            isSelf: false,
+          },
+        ]);
       },
       onQualityMetrics: (newMetrics: QualityMetrics) => {
         setMetrics(newMetrics);
@@ -993,6 +1108,14 @@ export const ConferencePage = () => {
     setCamEnabled(initialCamState);
     setJoinedRoomId(activeRoomId);
 
+    // Объявляем своё состояние комнате: остальные не могут вывести его из
+    // потока (при мьюте трек остаётся живым), а вошедшим позже SFU отдаст
+    // последнее объявленное значение.
+    activeManager.sendMediaState({
+      micEnabled: initialMicState,
+      camEnabled: initialCamState,
+    });
+
     if (roomSettings.muteOnEntry && !isHost) {
       toast({ description: 'Организатор включил выключение микрофона при входе' });
     }
@@ -1007,6 +1130,7 @@ export const ConferencePage = () => {
     setLocalStream(null);
     setRemoteStreams([]);
     setParticipants(new Map());
+    setPeerMediaState(new Map());
     setJoinedRoomId(null);
     setMicEnabled(true);
     setCamEnabled(true);
@@ -1024,6 +1148,7 @@ export const ConferencePage = () => {
         return;
       }
       setMicEnabled(nextValue);
+      manager.sendMediaState({ micEnabled: nextValue, camEnabled });
     }
   };
 
@@ -1048,6 +1173,7 @@ export const ConferencePage = () => {
         return;
       }
       setCamEnabled(nextValue);
+      manager.sendMediaState({ micEnabled, camEnabled: nextValue });
     }
   };
 
@@ -1096,8 +1222,18 @@ export const ConferencePage = () => {
       isSelf: true,
     };
 
+    // Своё сообщение показываем сразу, эхо от сервера не ждём: SFU рассылает
+    // его остальным участникам и отправителю обратно не возвращает.
     setChatMessages((prev) => [...prev, newMsg]);
     setChatInput('');
+
+    const sendResult = manager?.sendChatMessage(newMsg.text);
+    if (sendResult && !sendResult.ok) {
+      toast({
+        variant: 'destructive',
+        description: 'Сообщение не ушло — нет связи с комнатой',
+      });
+    }
   };
 
   const peers = useMemo(() => {
@@ -1282,6 +1418,8 @@ export const ConferencePage = () => {
                         stream={localStream}
                         isLocal={true}
                         displayName={localDisplayName}
+                        micEnabled={micEnabled}
+                        camEnabled={camEnabled}
                         isSpotlighted={true}
                         isHost={isHost}
                         onSpotlightToggle={() => setSpotlightPeerId(null)}
@@ -1293,6 +1431,8 @@ export const ConferencePage = () => {
                           <VideoTile
                             stream={peer.stream}
                             displayName={peer.displayName}
+                            micEnabled={peerMediaState.get(peer.peerId)?.micEnabled ?? true}
+                            camEnabled={peerMediaState.get(peer.peerId)?.camEnabled ?? true}
                             isSpotlighted={true}
                             onSpotlightToggle={() => setSpotlightPeerId(null)}
                           />
@@ -1304,14 +1444,26 @@ export const ConferencePage = () => {
                   <div className="h-28 flex gap-3 overflow-x-auto p-1 scrollbar-thin">
                     {spotlightPeerId !== 'local' && (
                       <div className="w-44 shrink-0 h-full cursor-pointer" onClick={() => setSpotlightPeerId('local')}>
-                        <VideoTile stream={localStream} isLocal={true} displayName={localDisplayName} isHost={isHost} />
+                        <VideoTile
+                          stream={localStream}
+                          isLocal={true}
+                          displayName={localDisplayName}
+                          isHost={isHost}
+                          micEnabled={micEnabled}
+                          camEnabled={camEnabled}
+                        />
                       </div>
                     )}
                     {peers
                       .filter((p) => p.peerId !== spotlightPeerId)
                       .map((peer) => (
                         <div key={peer.peerId} className="w-44 shrink-0 h-full cursor-pointer" onClick={() => setSpotlightPeerId(peer.peerId)}>
-                          <VideoTile stream={peer.stream} displayName={peer.displayName} />
+                          <VideoTile
+                            stream={peer.stream}
+                            displayName={peer.displayName}
+                            micEnabled={peerMediaState.get(peer.peerId)?.micEnabled ?? true}
+                            camEnabled={peerMediaState.get(peer.peerId)?.camEnabled ?? true}
+                          />
                         </div>
                       ))}
                   </div>
@@ -1332,6 +1484,8 @@ export const ConferencePage = () => {
                     isLocal={true}
                     displayName={localDisplayName}
                     isHost={isHost}
+                    micEnabled={micEnabled}
+                    camEnabled={camEnabled}
                     onSpotlightToggle={() => {
                       setSpotlightPeerId('local');
                       setLayoutMode('spotlight');
@@ -1342,6 +1496,8 @@ export const ConferencePage = () => {
                       key={peer.peerId}
                       stream={peer.stream}
                       displayName={peer.displayName}
+                      micEnabled={peerMediaState.get(peer.peerId)?.micEnabled ?? true}
+                      camEnabled={peerMediaState.get(peer.peerId)?.camEnabled ?? true}
                       onSpotlightToggle={() => {
                         setSpotlightPeerId(peer.peerId);
                         setLayoutMode('spotlight');
@@ -1483,7 +1639,11 @@ export const ConferencePage = () => {
                           <span className="text-xs font-medium text-gray-300 truncate">{name}</span>
                         </div>
                         <div className="flex items-center gap-1">
-                          <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                          {peerMediaState.get(peerId)?.micEnabled === false ? (
+                            <MicOff className="w-3.5 h-3.5 text-rose-400" />
+                          ) : (
+                            <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                          )}
                           {isHost && (
                             <Popover>
                               <PopoverTrigger asChild>
