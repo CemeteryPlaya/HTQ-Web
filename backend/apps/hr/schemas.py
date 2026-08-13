@@ -566,9 +566,13 @@ class CalendarWorkingDaysQuery(BaseModel):
 
 
 class CalendarYearQuery(BaseModel):
-    """Порт Query(year) роутера ``GET /calendar/``."""
+    """Порт Query(year) роутера ``GET /calendar/``.
 
-    year: int
+    Границы как у ``TimeMonthlyReportQuery.year``: ответ — 365 строк на год, и
+    ``year=0``/``year=999999`` роняли бы ``date(year, 1, 1)`` вместо 422.
+    """
+
+    year: int = Field(..., ge=2000, le=2100)
 
 
 class EmployeeCalendarQuery(BaseModel):

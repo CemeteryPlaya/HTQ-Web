@@ -132,7 +132,7 @@ export const TasksLayout: React.FC<Props> = ({ title, subtitle, children }) => {
                   key={item.to}
                   to={item.to}
                   className={cn(
-                    'flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-semibold whitespace-nowrap transition-all duration-200 border shadow-2xs',
+                    'flex min-h-[44px] items-center gap-2 px-4 py-2 rounded-2xl text-xs font-semibold whitespace-nowrap transition-all duration-200 border shadow-2xs',
                     active
                       ? 'bg-primary text-primary-foreground border-primary shadow-sm'
                       : 'bg-card text-muted-foreground hover:bg-muted/80 hover:text-foreground border-border/50'

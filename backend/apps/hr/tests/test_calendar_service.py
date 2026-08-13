@@ -60,6 +60,56 @@ def test_hard_fallback_without_default():
     assert sat["type"] == "weekend" and sat["hours"] == 0
 
 
+# ── национальные праздники (общий движок apps.core.kz_holidays) ──────────────
+
+@pytest.mark.django_db
+def test_national_holiday_beats_the_week_template_without_any_import():
+    """Регрессия: единственным источником праздников была таблица CalendarDay,
+    которую наполняет только ручной POST /calendar/import, — на живой базе она
+    пуста, и 1 января выходило рабочим днём с полной нормой часов."""
+    _default_5_2()
+    ny = svc.day_info(datetime.date(2026, 1, 1))   # четверг
+    assert ny["type"] == "holiday" and ny["hours"] == 0
+    assert ny["note"] == "Новый год"
+
+
+@pytest.mark.django_db
+def test_national_holidays_are_not_limited_to_2026():
+    for year in (2027, 2031):
+        info = svc.day_info(datetime.date(year, 12, 16))
+        assert info["type"] == "holiday", year
+
+
+@pytest.mark.django_db
+def test_imported_day_still_wins_over_the_generated_holiday():
+    """Постановление правительства может сделать праздничный день рабочим —
+    строка в CalendarDay обязана остаться главнее движка."""
+    _default_5_2()
+    svc.upsert_day(datetime.date(2026, 1, 1), "working", 8, "Отработка")
+    info = svc.day_info(datetime.date(2026, 1, 1))
+    assert info["type"] == "working" and info["hours"] == 8
+
+
+@pytest.mark.django_db
+def test_working_days_between_skips_national_holidays():
+    _default_5_2()
+    # 1-9 января 2026: 1 (чт), 2 (пт) и 7 (ср) — праздники, 3-4 — выходные,
+    # значит рабочих остаётся четыре: 5, 6, 8, 9.
+    res = svc.working_days_between(datetime.date(2026, 1, 1), datetime.date(2026, 1, 9))
+    assert res["working_days"] == 4 and float(res["norm_hours"]) == 32.0
+
+
+@pytest.mark.django_db
+def test_shift_with_holidays_off_respects_a_generated_holiday():
+    pattern = svc.create_shift_pattern(
+        "1/0", [{"type": "work", "hours": 8}], holidays_off=True,
+    )
+    e = _employee(email="shift-ny@b.c")
+    svc.assign_shift(e.id, pattern.id, datetime.date(2026, 1, 1))
+    info = svc.employee_day_info(e.id, datetime.date(2026, 1, 1))
+    assert info["type"] == "holiday" and info["hours"] == 0
+
+
 @pytest.mark.django_db
 def test_set_default_moves_flag():
     t1 = _default_5_2()

@@ -305,6 +305,27 @@ export class Room {
 
     peer.producers.set(producer.id, producer);
 
+    // Чем именно объявлен producer и что в его первой кодировке. Если поток
+    // приходит (packetCount растёт), а keyframes остаются нулевыми, ответ
+    // почти всегда здесь: браузер кодирует не тем payload type/профилем,
+    // который мы объявили, и парсер кадров mediasoup не может его разобрать.
+    const declaredCodecs = (producer.rtpParameters.codecs || [])
+      .map((codec) => {
+        const params = codec.parameters || {};
+        const details = [
+          params['packetization-mode'] !== undefined ? `pm=${params['packetization-mode']}` : '',
+          params['profile-level-id'] ? `profile=${params['profile-level-id']}` : '',
+        ].filter(Boolean).join(' ');
+        return `${codec.mimeType}(PT=${codec.payloadType}${details ? ` ${details}` : ''})`;
+      })
+      .join(', ');
+    const firstEncoding = (producer.rtpParameters.encodings || [])[0] as any;
+    console.log(
+      `[Room ${this.id}] Producer ${producer.id} [${kind}] создан: ${declaredCodecs} | ` +
+      `SSRC=${firstEncoding?.ssrc ?? 'none'} rtxSSRC=${firstEncoding?.rtx?.ssrc ?? 'none'} ` +
+      `mid=${producer.rtpParameters.mid ?? 'none'}`
+    );
+
     // Для видео-producer'ов мы больше не ограничиваем битрейт искусственно до 12Mbps —
     // позволяем стандартному GCC управлению перегрузкой работать через TCP.
     if (kind === 'video') {
@@ -457,6 +478,22 @@ export class Room {
       throw new Error(`Consumer ${consumerId} уже закрыт (транспорт завершён)`);
     }
     await consumer.resume();
+
+    // Видео-consumer после resume дропает всё, пока не увидит keyframe.
+    // mediasoup запрашивает его сам, но запрос теряется, если отправитель
+    // в этот момент ещё не закончил свою сторону согласования, — и тогда
+    // consumer молчит бесконечно (в статистике: 0 пакетов при paused=false).
+    // Повторный явный запрос стоит одного RTCP-пакета и снимает эту гонку.
+    if (consumer.kind === 'video') {
+      try {
+        await consumer.requestKeyFrame();
+      } catch (error) {
+        console.warn(
+          `[Room ${this.id}] Не удалось запросить keyframe для consumer ${consumerId}:`,
+          error
+        );
+      }
+    }
   }
 
   async pauseConsumer(peerId: string, consumerId: string): Promise<void> {
@@ -686,14 +723,25 @@ export class Room {
             const stats = await prod.getStats();
             const s = stats[0] as any;
             if (s) {
-              console.log(`  Prod [${prod.kind}] ${prodId} | получено: ${(s.bitrate || 0)/1000} kbps | байты: ${s.byteCount || 0} | пакеты: ${s.packetCount || 0} | потеряно: ${s.packetsLost || 0}`);
+              // keyFrames/pli/fir — единственный способ увидеть, почему
+              // видео-consumer молчит: mediasoup дропает пакеты, пока не
+              // получит keyframe, и запрашивает его через PLI. Растущий
+              // pliCount при нулевом keyFrameCount = отправитель не отвечает
+              // на запросы (RTCP до него не доходит либо игнорируется).
+              const keyFrames = prod.kind === 'video'
+                ? ` | keyframes: ${s.keyFrameCount ?? 0} | PLI: ${s.pliCount ?? 0} | FIR: ${s.firCount ?? 0}`
+                : '';
+              console.log(`  Prod [${prod.kind}] ${prodId} | получено: ${(s.bitrate || 0)/1000} kbps | байты: ${s.byteCount || 0} | пакеты: ${s.packetCount || 0} | потеряно: ${s.packetsLost || 0}${keyFrames} | на паузе: ${prod.paused}`);
             }
           }
           for (const [consId, cons] of peer.consumers) {
             const stats = await cons.getStats();
             const s = stats[0] as any;
             if (s) {
-              console.log(`  Cons [${cons.kind}] ${consId} | отправлено: ${(s.bitrate || 0)/1000} kbps | байты: ${s.byteCount || 0} | пакеты: ${s.packetCount || 0} | на паузе: ${cons.paused}`);
+              const keyFrames = cons.kind === 'video'
+                ? ` | keyframes: ${s.keyFrameCount ?? 0} | PLI: ${s.pliCount ?? 0}`
+                : '';
+              console.log(`  Cons [${cons.kind}] ${consId} | отправлено: ${(s.bitrate || 0)/1000} kbps | байты: ${s.byteCount || 0} | пакеты: ${s.packetCount || 0}${keyFrames} | на паузе: ${cons.paused} | продюсер на паузе: ${cons.producerPaused} | score: ${JSON.stringify(cons.score)}`);
             }
           }
         }

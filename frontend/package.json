@@ -13,7 +13,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "test:mobile": "playwright test --config=playwright.mobile.config.ts",
+    "test:mobile:probe": "playwright test --config=playwright.mobile.config.ts 00_probe --project=android-360",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",

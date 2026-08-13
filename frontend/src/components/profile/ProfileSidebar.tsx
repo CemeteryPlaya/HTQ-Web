@@ -92,7 +92,7 @@ type ItemProps = ItemConfig & {
 const SidebarItem: React.FC<ItemProps> = ({ to, icon: Icon, label, badge, external, onClick }) => {
     const linkClasses = ({ isActive }: { isActive: boolean }) =>
         cn(
-            'group relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150',
+            'group relative flex min-h-[44px] items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150 sm:min-h-0',
             'text-muted-foreground hover:bg-accent/80 hover:text-foreground',
             isActive && 'bg-primary/10 text-primary font-semibold border-l-2 border-primary pl-2.5 shadow-2xs',
         );
@@ -145,7 +145,7 @@ const SidebarSection: React.FC<SectionProps> = ({ title, children, count, defaul
             <button
                 type="button"
                 onClick={() => setIsOpen(prev => !prev)}
-                className="flex w-full items-center justify-between px-2.5 py-1.5 text-xs font-bold uppercase tracking-wider text-muted-foreground/80 hover:text-foreground transition-colors rounded-md hover:bg-accent/40"
+                className="flex min-h-[44px] w-full items-center justify-between px-2.5 py-1.5 text-xs font-bold uppercase sm:min-h-0 tracking-wider text-muted-foreground/80 hover:text-foreground transition-colors rounded-md hover:bg-accent/40"
             >
                 <span className="truncate">{title}</span>
                 <div className="flex items-center gap-1.5 shrink-0">

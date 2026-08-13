@@ -5,12 +5,12 @@
     "clockRate": 48000,
     "channels": 2,
     "parameters": {
-      "maxaveragebitrate": 192000,
-      "stereo": 1,
-      "cbr": 1,
+      "maxaveragebitrate": 64000,
+      "stereo": 0,
+      "cbr": 0,
       "useinbandfec": 1,
       "usedtx": 0,
-      "sprop-stereo": 1,
+      "sprop-stereo": 0,
       "minptime": 10,
       "maxptime": 40
     }

@@ -330,6 +330,20 @@ def test_production_calendar_generates_the_kz_baseline():
 
 
 @pytest.mark.django_db
+def test_production_calendar_has_holidays_beyond_2026():
+    """Регрессия: праздники были захардкожены одним словарём на 2026 год, и
+    начиная с 2027-го календарь приезжал голой сеткой пн-пт/сб-вс."""
+    resp = Client().get(f"{PROD}/?date__gte=2027-03-20&date__lte=2027-03-25",
+                        **auth())
+    by_date = {row["date"]: row for row in resp.json()}
+    assert by_date["2027-03-22"]["day_type"] == "holiday"
+    assert by_date["2027-03-22"]["note"] == "Наурыз мейрамы"
+    # 21 марта 2027 — воскресенье, значит перенос на первый свободный будний.
+    assert by_date["2027-03-24"]["day_type"] == "holiday"
+    assert by_date["2027-03-24"]["note"] == "Наурыз мейрамы (перенос)"
+
+
+@pytest.mark.django_db
 def test_working_day_counter_only_advances_on_working_days():
     resp = Client().get(f"{PROD}/?date__gte=2026-01-01&date__lte=2026-01-09",
                         **auth())

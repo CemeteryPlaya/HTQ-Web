@@ -32,12 +32,12 @@ export const BackToProfile: React.FC<Props> = ({ className }) => {
         <Link
             to="/myprofile"
             className={cn(
-                'group mb-8 inline-flex w-fit items-center gap-2 rounded-full bg-muted/50 px-4 py-2 text-sm font-medium text-muted-foreground backdrop-blur-sm transition-all hover:bg-primary/10 hover:text-primary',
+                'group mb-8 inline-flex w-fit items-center gap-2 rounded-full bg-muted/70 px-4 py-2 text-sm font-medium text-muted-foreground backdrop-blur-sm transition-all hover:bg-primary/10 hover:text-primary active:scale-95 touch-target shadow-2xs border border-border/40',
                 className,
             )}
         >
-            <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-1" />
-            {t('common.backToProfile', 'Назад в профиль')}
+            <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-1 text-primary shrink-0" />
+            <span>{t('common.backToProfile', 'Назад в профиль')}</span>
         </Link>
     );
 };

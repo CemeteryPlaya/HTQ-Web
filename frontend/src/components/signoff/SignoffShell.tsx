@@ -15,6 +15,7 @@ import { GitBranch, Inbox, ListChecks } from 'lucide-react';
 
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
+import { BackToProfile } from '@/components/BackToProfile';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasAnyRole } from '@/lib/auth/roles';
 import { cn } from '@/lib/utils';
@@ -61,6 +62,7 @@ export function SignoffShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-background flex flex-col">
       <Header />
       <div className="flex-1 container mx-auto px-4 py-8">
+        <BackToProfile className="mb-6" />
         <div className="flex flex-col gap-6 md:flex-row md:gap-8">
           <aside className="md:w-56 shrink-0">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3 px-3">

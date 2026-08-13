@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import { companyStats } from '@/data/company';
 import { useHomeSection } from '@/hooks/useHomeContent';
 
 const useCountUp = (end: number, duration: number = 2000) => {
@@ -42,18 +44,47 @@ const useCountUp = (end: number, duration: number = 2000) => {
   return { count, ref };
 };
 
+interface StatCardProps {
+  value: number;
+  suffix: string;
+  label: string;
+}
+
+/**
+ * Отдельный компонент, потому что ``useCountUp`` — хук: вызывать его в теле
+ * ``.map`` нельзя (react-hooks/rules-of-hooks), порядок хуков поехал бы, как
+ * только число карточек перестанет быть константой.
+ */
+const StatCard = ({ value, suffix, label }: StatCardProps) => {
+  const { count, ref } = useCountUp(value);
+
+  return (
+    <div
+      ref={ref}
+      className="text-center p-8 rounded-2xl bg-primary-foreground/5 backdrop-blur border border-primary-foreground/10"
+    >
+      <div className="stat-number text-secondary">
+        {count}
+        <span className="text-4xl">{suffix}</span>
+      </div>
+      <p className="text-primary-foreground/80 font-medium mt-2">{label}</p>
+    </div>
+  );
+};
+
 export const StatsSection = () => {
   const { t } = useTranslation();
   const home = useHomeSection('stats');
 
-  // Цифры из БД, если редактор их завёл; иначе прежние статические.
+  // Цифры из БД, если редактор их завёл; иначе из единого источника
+  // companyStats, чтобы не расходиться с Hero и карточкой миссии.
+  const fallbackStats = [
+    { value: companyStats.years, suffix: '+', label: t('stats.items.years') },
+    { value: companyStats.projects, suffix: '+', label: t('stats.items.projects') },
+    { value: companyStats.totalMw, suffix: '', label: t('stats.items.megawatts') },
+  ];
   // `value` в базе — строка («722», «10+»), поэтому разбираем её на число и
   // суффикс: анимация счётчика умеет считать только до числа.
-  const fallbackStats = [
-    { value: 10, suffix: '+', label: t('stats.items.years') },
-    { value: 15, suffix: '+', label: t('stats.items.projects') },
-    { value: 722, suffix: '', label: t('stats.items.megawatts') },
-  ];
   const stats = home.items.length
     ? home.items.map((item) => {
       const match = /^(\d+)(.*)$/.exec(item.value.trim());
@@ -84,22 +115,9 @@ export const StatsSection = () => {
 
         {/* Stats Grid */}
         <div className="grid md:grid-cols-3 gap-8 lg:gap-12">
-          {stats.map((stat) => {
-            const { count, ref } = useCountUp(stat.value);
-            return (
-              <div
-                key={stat.label}
-                ref={ref}
-                className="text-center p-8 rounded-2xl bg-primary-foreground/5 backdrop-blur border border-primary-foreground/10"
-              >
-                <div className="stat-number text-secondary">
-                  {count}
-                  <span className="text-4xl">{stat.suffix}</span>
-                </div>
-                <p className="text-primary-foreground/80 font-medium mt-2">{stat.label}</p>
-              </div>
-            );
-          })}
+          {stats.map((stat) => (
+            <StatCard key={stat.label} value={stat.value} suffix={stat.suffix} label={stat.label} />
+          ))}
         </div>
       </div>
     </section>
