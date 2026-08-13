@@ -43,6 +43,10 @@ CALENDAR_VIEW = "hr.calendar.view"
 CALENDAR_MANAGE = "hr.calendar.manage"
 STAFFING_VIEW = "hr.staffing.view"
 STAFFING_MANAGE = "hr.staffing.manage"
+# Права предметных аппок живут рядом с HR-матрицей: должность «Бухгалтер»
+# получает это право в своём ``Position.permissions`` и contracts проверяет
+# его только через ``apps.hr.interface``.
+CONTRACTS_ADVANCE_PAYMENT_RECORD_PAYMENT = "contracts.advance_payment.record_payment"
 
 ALL_KEYS: frozenset[str] = frozenset({
     EMPLOYEES_VIEW, EMPLOYEES_VIEW_ALL, EMPLOYEES_CREATE, EMPLOYEES_EDIT,
@@ -53,6 +57,7 @@ ALL_KEYS: frozenset[str] = frozenset({
     CARD_GROUPS_VIEW, CARD_GROUPS_EDIT,
     CALENDAR_VIEW, CALENDAR_MANAGE,
     STAFFING_VIEW, STAFFING_MANAGE,
+    CONTRACTS_ADVANCE_PAYMENT_RECORD_PAYMENT,
 })
 
 _JUNIOR = frozenset({EMPLOYEES_VIEW, DEPARTMENTS_VIEW, POSITIONS_VIEW, DOCUMENTS_VIEW, CALENDAR_VIEW})

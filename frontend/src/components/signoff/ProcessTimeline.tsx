@@ -29,6 +29,7 @@ import {
   Circle,
   CircleDot,
   FileText,
+  MessageSquare,
   MinusCircle,
   PenLine,
   Split,
@@ -206,6 +207,12 @@ export function ProcessTimeline({
                     <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                       <PenLine className="h-3.5 w-3.5 shrink-0" />
                       согласование только с приложенным PDF
+                    </p>
+                  )}
+                  {stage.requires_comment && (
+                    <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                      согласование только с пояснением
                     </p>
                   )}
                   {stage.matched_by !== 'always' && (

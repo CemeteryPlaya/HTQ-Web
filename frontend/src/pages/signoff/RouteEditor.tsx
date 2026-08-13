@@ -34,6 +34,7 @@ import {
   ArrowLeft,
   GitBranch,
   Loader2,
+  MessageSquare,
   Paperclip,
   Pencil,
   PenLine,
@@ -100,6 +101,7 @@ interface StageDraft {
   isFallback: boolean;
   approverKind: ApproverKind;
   requiresAttachment: boolean;
+  requiresComment: boolean;
 }
 
 const emptyDraft = (order: number): StageDraft => ({
@@ -112,6 +114,7 @@ const emptyDraft = (order: number): StageDraft => ({
   isFallback: false,
   approverKind: 'named',
   requiresAttachment: false,
+  requiresComment: false,
 });
 
 /** Этапы по группам `order`, группы — по возрастанию. */
@@ -197,6 +200,7 @@ const RouteEditor = () => {
         is_fallback: stage.isFallback,
         approver_kind: stage.approverKind,
         requires_attachment: stage.requiresAttachment,
+        requires_comment: stage.requiresComment,
       };
       return stage.id === null
         ? signoffApi.addStage(routeId, payload).then((r) => r.data)
@@ -230,6 +234,7 @@ const RouteEditor = () => {
       isFallback: stage.is_fallback,
       approverKind: stage.approver_kind,
       requiresAttachment: stage.requires_attachment,
+      requiresComment: stage.requires_comment,
     });
 
   const knownNames = useMemo(() => {
@@ -454,6 +459,12 @@ const RouteEditor = () => {
                               <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                                 <Paperclip className="h-3.5 w-3.5 shrink-0" />
                                 только с приложенным PDF
+                              </p>
+                            )}
+                            {stage.requires_comment && (
+                              <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                                только с пояснением
                               </p>
                             )}
                             {(stage.condition.length > 0 || stage.is_fallback) && (
@@ -682,6 +693,26 @@ const RouteEditor = () => {
                       checked={draft.requiresAttachment}
                       onCheckedChange={(checked) =>
                         setDraft({ ...draft, requiresAttachment: checked })
+                      }
+                    />
+                  </div>
+
+                  <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                    <div className="min-w-0">
+                      <Label htmlFor="stage-comment" className="text-sm">
+                        Требуется пояснение
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Согласовать этап будет можно только с непустым
+                        комментарием. На отказ и возврат на доработку не влияет:
+                        там пояснение и так по смыслу обязательно.
+                      </p>
+                    </div>
+                    <Switch
+                      id="stage-comment"
+                      checked={draft.requiresComment}
+                      onCheckedChange={(checked) =>
+                        setDraft({ ...draft, requiresComment: checked })
                       }
                     />
                   </div>

@@ -370,11 +370,14 @@ class ApprovalRouteStage(models.Model):
     намеренно — ветка и есть группа по ``order``, а условие лишь решает,
     кто из группы участвует. Подробности — ``services/conditions.py``.
 
-    ``approver_kind``/``requires_attachment`` вместе описывают «этап
-    подписи»: решение принимает инициатор и только вместе с приложенным
-    PDF. Два независимых поля, а не один флаг «подпись», потому что каждое
-    осмысленно и по отдельности — документ можно требовать и от финконтроля,
-    а инициатор может подтверждать без файла.
+    ``approver_kind``/``requires_attachment``/``requires_comment`` вместе
+    описывают «этап подписи»: решение принимает инициатор и только вместе с
+    приложенным PDF и пояснением. Три независимых поля, а не один флаг
+    «подпись», потому что каждое осмысленно и по отдельности — документ можно
+    требовать и от финконтроля, пояснение — от любого названного согласующего,
+    а инициатор может подтверждать без того и другого. То же правило, что
+    развело ``approver_kind`` и ``requires_attachment``: бандл-флаг «подпись»
+    склеил бы вещи, которые в жизни встречаются порознь.
     """
 
     route = models.ForeignKey(ApprovalRoute, on_delete=models.CASCADE,
@@ -416,6 +419,11 @@ class ApprovalRouteStage(models.Model):
         default=False, db_default=False,
         verbose_name="Требуется документ",
         help_text="Согласовать этап можно только приложив PDF",
+    )
+    requires_comment = models.BooleanField(
+        default=False, db_default=False,
+        verbose_name="Требуется пояснение",
+        help_text="Согласовать этап можно только с непустым комментарием",
     )
 
     class Meta:
@@ -600,10 +608,11 @@ class ApprovalProcessStage(models.Model):
     approver_kind = models.CharField(max_length=16, choices=ApproverKind.choices,
                                      default=ApproverKind.NAMED,
                                      db_default=ApproverKind.NAMED)
-    # А это в снимке РАБОЧЕЕ поле: его читает ``engine.act`` на каждом
+    # А это в снимке РАБОЧИЕ поля: их читает ``engine.act`` на каждом
     # решении. Снять галочку в маршруте посреди идущего согласования не
-    # должно избавлять от документа тех, кто ещё не решил.
+    # должно избавлять от документа (или пояснения) тех, кто ещё не решил.
     requires_attachment = models.BooleanField(default=False, db_default=False)
+    requires_comment = models.BooleanField(default=False, db_default=False)
     decided_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

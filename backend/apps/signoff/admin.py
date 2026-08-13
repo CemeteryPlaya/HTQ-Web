@@ -53,9 +53,10 @@ class ApprovalRouteStageAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     """
 
     list_display = ("id", "route", "order", "name", "quorum", "branch",
-                    "approver_kind", "requires_attachment", "approver_count")
+                    "approver_kind", "requires_attachment", "requires_comment",
+                    "approver_count")
     list_filter = ("route", "quorum", "is_fallback", "approver_kind",
-                   "requires_attachment")
+                   "requires_attachment", "requires_comment")
     search_fields = ("name",)
     inlines = [ApproverInline]
 
@@ -82,7 +83,7 @@ class StageInline(admin.TabularInline):
     model = ApprovalRouteStage
     extra = 1
     fields = ("order", "name", "quorum", "condition", "is_fallback",
-              "approver_kind", "requires_attachment")
+              "approver_kind", "requires_attachment", "requires_comment")
     show_change_link = True  # отсюда — в карточку этапа за согласующими
     verbose_name = "Этап"
     verbose_name_plural = "Этапы (одинаковая очередь = параллельно)"
@@ -127,7 +128,8 @@ class ProcessStageInline(admin.TabularInline):
     model = ApprovalProcessStage
     extra = 0
     fields = ("order", "name", "quorum", "state", "matched_by",
-              "approver_kind", "requires_attachment", "decided_at")
+              "approver_kind", "requires_attachment", "requires_comment",
+              "decided_at")
     readonly_fields = fields
     can_delete = False
     show_change_link = True
@@ -171,9 +173,9 @@ class TaskInline(admin.TabularInline):
 class ApprovalProcessStageAdmin(ReadOnlyAdmin):
     list_display = ("id", "process", "order", "name", "quorum", "state",
                     "matched_by", "approver_kind", "requires_attachment",
-                    "decided_at")
+                    "requires_comment", "decided_at")
     list_filter = ("state", "quorum", "matched_by", "approver_kind",
-                   "requires_attachment")
+                   "requires_attachment", "requires_comment")
     inlines = [TaskInline]
 
 

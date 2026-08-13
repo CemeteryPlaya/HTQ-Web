@@ -590,7 +590,7 @@ const AgreementCreate = () => {
           </Card>
 
           <div className="flex gap-3">
-            <Button type="submit" disabled={mutation.isPending || noBudgets}>
+            <Button type="submit" disabled={mutation.isPending || noBudgets || noCounterparties}>
               {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Оформить договор
             </Button>

@@ -117,7 +117,8 @@ def add_stage(route_id: int, *, order: int, name: str, quorum: str,
               approver_ids: list[int], condition=None,
               is_fallback: bool = False,
               approver_kind: str = ApproverKind.NAMED,
-              requires_attachment: bool = False) -> ApprovalRouteStage:
+              requires_attachment: bool = False,
+              requires_comment: bool = False) -> ApprovalRouteStage:
     route = get_route_or_404(route_id)
     _check_approver_kind(approver_kind, approver_ids, stage_name=name)
     if approver_kind == ApproverKind.NAMED:
@@ -133,7 +134,8 @@ def add_stage(route_id: int, *, order: int, name: str, quorum: str,
     stage = ApprovalRouteStage.objects.create(
         route=route, order=order, name=name, quorum=quorum,
         condition=condition, is_fallback=is_fallback,
-        approver_kind=approver_kind, requires_attachment=requires_attachment)
+        approver_kind=approver_kind, requires_attachment=requires_attachment,
+        requires_comment=requires_comment)
     _set_approvers(stage, approver_ids)
     return stage
 
@@ -374,6 +376,7 @@ def serialize_stage(stage: ApprovalRouteStage, *,
         "is_fallback": stage.is_fallback,
         "approver_kind": stage.approver_kind,
         "requires_attachment": stage.requires_attachment,
+        "requires_comment": stage.requires_comment,
         "approvers": [
             {
                 "user_id": user_id,

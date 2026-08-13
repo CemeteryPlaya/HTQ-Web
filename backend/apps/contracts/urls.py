@@ -19,6 +19,10 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    # ── Персональная очередь действий в contracts (без решений signoff) ──
+    path("tasks/mine", views.WorkQueueView.as_view()),
+    path("tasks/mine/", views.WorkQueueView.as_view()),
+
     # ── Справочник choice-полей ──
     path("enums", views.EnumsView.as_view()),
     path("enums/", views.EnumsView.as_view()),
@@ -95,4 +99,82 @@ urlpatterns = [
     path("agreements/", views.AgreementCollectionView.as_view()),
     path("agreements/<int:agreement_id>", views.AgreementDetailView.as_view()),
     path("agreements/<int:agreement_id>/", views.AgreementDetailView.as_view()),
+
+    # ── Счета на оплату (без договора) ──
+    # submit/status/file/file-url — до `<int:invoice_id>`, иначе более общий
+    # путь перехватил бы их (как у договоров).
+    path("invoices/<int:invoice_id>/submit", views.InvoiceSubmitView.as_view()),
+    path("invoices/<int:invoice_id>/submit/", views.InvoiceSubmitView.as_view()),
+    path("invoices/<int:invoice_id>/status", views.InvoiceStatusView.as_view()),
+    path("invoices/<int:invoice_id>/status/", views.InvoiceStatusView.as_view()),
+    path("invoices/<int:invoice_id>/file", views.InvoiceFileView.as_view()),
+    path("invoices/<int:invoice_id>/file/", views.InvoiceFileView.as_view()),
+    path("invoices/<int:invoice_id>/file-url", views.InvoiceFileUrlView.as_view()),
+    path("invoices/<int:invoice_id>/file-url/", views.InvoiceFileUrlView.as_view()),
+    path("invoices", views.InvoiceCollectionView.as_view()),
+    path("invoices/", views.InvoiceCollectionView.as_view()),
+    path("invoices/<int:invoice_id>", views.InvoiceDetailView.as_view()),
+    path("invoices/<int:invoice_id>/", views.InvoiceDetailView.as_view()),
+
+    # ── Предоплаты на основании договоров ───────────────────────────────
+    path("advance-payments/<int:payment_id>/submit", views.AdvancePaymentSubmitView.as_view()),
+    path("advance-payments/<int:payment_id>/submit/", views.AdvancePaymentSubmitView.as_view()),
+    path("advance-payments/<int:payment_id>/payment-order", views.AdvancePaymentPaymentOrderView.as_view()),
+    path("advance-payments/<int:payment_id>/payment-order/", views.AdvancePaymentPaymentOrderView.as_view()),
+    path("advance-payments/<int:payment_id>/payment-order-url", views.AdvancePaymentPaymentOrderUrlView.as_view()),
+    path("advance-payments/<int:payment_id>/payment-order-url/", views.AdvancePaymentPaymentOrderUrlView.as_view()),
+    path("advance-payments", views.AdvancePaymentCollectionView.as_view()),
+    path("advance-payments/", views.AdvancePaymentCollectionView.as_view()),
+    path("advance-payments/<int:payment_id>", views.AdvancePaymentDetailView.as_view()),
+    path("advance-payments/<int:payment_id>/", views.AdvancePaymentDetailView.as_view()),
+
+    # ── Заявки на подотчётные средства ───────────────────────────────────
+    path("accountable-funds-requests/<int:request_id>/submit", views.AccountableFundsRequestSubmitView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/submit/", views.AccountableFundsRequestSubmitView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/budget-line", views.AccountableFundsRequestBudgetLineAssignView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/budget-line/", views.AccountableFundsRequestBudgetLineAssignView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/accounting-paid", views.AccountableFundsRequestAccountingPaidView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/accounting-paid/", views.AccountableFundsRequestAccountingPaidView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/advance-reports", views.AdvanceReportCollectionView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/advance-reports/", views.AdvanceReportCollectionView.as_view()),
+    path("accountable-funds-requests", views.AccountableFundsRequestCollectionView.as_view()),
+    path("accountable-funds-requests/", views.AccountableFundsRequestCollectionView.as_view()),
+    path("accountable-funds-requests/<int:request_id>", views.AccountableFundsRequestDetailView.as_view()),
+    path("accountable-funds-requests/<int:request_id>/", views.AccountableFundsRequestDetailView.as_view()),
+
+    # ── Авансовые отчёты ──
+    path("advance-reports/<int:report_id>/submit", views.AdvanceReportSubmitView.as_view()),
+    path("advance-reports/<int:report_id>/submit/", views.AdvanceReportSubmitView.as_view()),
+    path("advance-reports/<int:report_id>/file-url", views.AdvanceReportFileUrlView.as_view()),
+    path("advance-reports/<int:report_id>/file-url/", views.AdvanceReportFileUrlView.as_view()),
+    path("advance-reports/<int:report_id>", views.AdvanceReportDetailView.as_view()),
+    path("advance-reports/<int:report_id>/", views.AdvanceReportDetailView.as_view()),
+
+    # ── Оплаты по договорам ───────────────────────────────────────────────
+    path("contract-payments/<int:payment_id>/submit", views.ContractPaymentSubmitView.as_view()),
+    path("contract-payments/<int:payment_id>/submit/", views.ContractPaymentSubmitView.as_view()),
+    path("contract-payments/<int:payment_id>/invoice-url", views.ContractPaymentInvoiceUrlView.as_view()),
+    path("contract-payments/<int:payment_id>/invoice-url/", views.ContractPaymentInvoiceUrlView.as_view()),
+    path("contract-payments/<int:payment_id>/payment-order", views.ContractPaymentPaymentOrderView.as_view()),
+    path("contract-payments/<int:payment_id>/payment-order/", views.ContractPaymentPaymentOrderView.as_view()),
+    path("contract-payments/<int:payment_id>/payment-order-url", views.ContractPaymentPaymentOrderUrlView.as_view()),
+    path("contract-payments/<int:payment_id>/payment-order-url/", views.ContractPaymentPaymentOrderUrlView.as_view()),
+    path("contract-payments", views.ContractPaymentCollectionView.as_view()),
+    path("contract-payments/", views.ContractPaymentCollectionView.as_view()),
+    path("contract-payments/<int:payment_id>", views.ContractPaymentDetailView.as_view()),
+    path("contract-payments/<int:payment_id>/", views.ContractPaymentDetailView.as_view()),
+
+    # ── Акты выполненных работ (АВР) ──────────────────────────────────────
+    path("completion-acts/<int:act_id>/submit", views.CompletionActSubmitView.as_view()),
+    path("completion-acts/<int:act_id>/submit/", views.CompletionActSubmitView.as_view()),
+    path("completion-acts/<int:act_id>/act-url", views.CompletionActActUrlView.as_view()),
+    path("completion-acts/<int:act_id>/act-url/", views.CompletionActActUrlView.as_view()),
+    path("completion-acts/<int:act_id>/payment-order", views.CompletionActPaymentOrderView.as_view()),
+    path("completion-acts/<int:act_id>/payment-order/", views.CompletionActPaymentOrderView.as_view()),
+    path("completion-acts/<int:act_id>/payment-order-url", views.CompletionActPaymentOrderUrlView.as_view()),
+    path("completion-acts/<int:act_id>/payment-order-url/", views.CompletionActPaymentOrderUrlView.as_view()),
+    path("completion-acts", views.CompletionActCollectionView.as_view()),
+    path("completion-acts/", views.CompletionActCollectionView.as_view()),
+    path("completion-acts/<int:act_id>", views.CompletionActDetailView.as_view()),
+    path("completion-acts/<int:act_id>/", views.CompletionActDetailView.as_view()),
 ]

@@ -26,7 +26,7 @@
  * нужен, а смена статуса и так закрыта админской проверкой на бэкенде.
  */
 
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -34,11 +34,13 @@ import {
   FileText,
   Loader2,
   Paperclip,
+  Pencil,
   Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { DetailSkeleton, Field, FieldGrid } from '@/components/contracts/detail';
+import { DetailSkeleton, Field } from '@/components/contracts/detail';
+import { AgreementPaymentBreakdown } from '@/components/contracts/AgreementPaymentBreakdown';
 import {
   formatAmount,
   formatDate,
@@ -52,17 +54,11 @@ import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasAnyRole } from '@/lib/auth/roles';
 import type { AgreementStatus } from '@/types/contracts';
+import { isEditableState } from '@/types/signoff';
 
 const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
@@ -92,7 +88,6 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
   const myId = activeProfile?.id ? Number(activeProfile.id) : null;
   const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
 
-  const [nextStatus, setNextStatus] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
 
   const {
@@ -134,21 +129,6 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
     queryClient.invalidateQueries({ queryKey: ['signoff'] });
   };
 
-  const changeStatus = useMutation({
-    mutationFn: () =>
-      contractsApi
-        .changeAgreementStatus(agreementId, nextStatus as AgreementStatus)
-        .then((r) => r.data),
-    onSuccess: (row) => {
-      setNextStatus('');
-      toast.success(`Статус изменён: ${statusLabel(row.status)}`);
-      invalidateAll();
-    },
-    // 409 — переход запрещён таблицей или сумма не помещается в остаток
-    // (переход в занимающий бюджет статус лимит перепроверяет).
-    onError: (err) => reportApiError(err, 'Не удалось изменить статус'),
-  });
-
   const upload = useMutation({
     mutationFn: (file: File) =>
       contractsApi.uploadAgreementFile(agreementId, file).then((r) => r.data),
@@ -169,12 +149,18 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
     onError: (err) => reportApiError(err, 'Не удалось получить ссылку на файл'),
   });
 
-  const transitions = agreement
-    ? enums?.transitions?.[agreement.status] ?? []
-    : [];
   const canUpload =
     agreement !== undefined
     && (isAdmin || (agreement.created_by === myId && agreement.status === 'draft'));
+  // Правка чисто админская (`AgreementDetailView.patch` — admin=True). Плюс две
+  // блокировки, которые всё равно наложит бэкенд: пока договор заперт по оси
+  // согласования (`assert_editable`) и когда он терминальный по своей машине
+  // статусов (`executed`/`terminated`). Гасим кнопку заранее, а не ловим 409.
+  const canEdit =
+    agreement !== undefined
+    && isAdmin
+    && isEditableState(agreement.approval_state)
+    && !['executed', 'terminated'].includes(agreement.status);
 
   if (isLoading) return <DetailSkeleton />;
   if (isError || !agreement) {
@@ -200,26 +186,36 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
         </div>
 
         {!embedded && (
-          <SubmitForApproval
-            subjectType="contracts.agreement"
-            subjectId={agreement.id}
-            state={agreement.approval_state}
-            submit={contractsApi.submitAgreement}
-            // Отправка переводит договор в on_review, а он уже занимает
-            // бюджет — остаток строки меняется тем же действием.
-            invalidate={[
-              ['contracts', 'agreements'],
-              ['contracts', 'agreement', agreementId],
-              ['contracts', 'budgets'],
-              ['contracts', 'budget', agreement.budget_id],
-              ['contracts', 'budget-line', agreement.budget_line_id],
-            ]}
-            size="default"
-            // Карточка объекта — единственное место, где ссылка на
-            // согласование нужна и у решённого объекта: там кнопка
-            // «Вернуть на доработку», без которой он заперт навсегда.
-            showProcessLink
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            {canEdit && (
+              <Button asChild variant="outline">
+                <Link to={`/contracts/agreements/${agreement.id}/edit`}>
+                  <Pencil className="mr-1.5 h-4 w-4" />
+                  Редактировать
+                </Link>
+              </Button>
+            )}
+            <SubmitForApproval
+              subjectType="contracts.agreement"
+              subjectId={agreement.id}
+              state={agreement.approval_state}
+              submit={contractsApi.submitAgreement}
+              // Отправка переводит договор в on_review, а он уже занимает
+              // бюджет — остаток строки меняется тем же действием.
+              invalidate={[
+                ['contracts', 'agreements'],
+                ['contracts', 'agreement', agreementId],
+                ['contracts', 'budgets'],
+                ['contracts', 'budget', agreement.budget_id],
+                ['contracts', 'budget-line', agreement.budget_line_id],
+              ]}
+              size="default"
+              // Карточка объекта — единственное место, где ссылка на
+              // согласование нужна и у решённого объекта: там кнопка
+              // «Вернуть на доработку», без которой он заперт навсегда.
+              showProcessLink
+            />
+          </div>
         )}
       </div>
 
@@ -227,32 +223,77 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Договор</CardTitle>
         </CardHeader>
-        <CardContent>
-          <FieldGrid>
-            <Field label="Сумма">
-              <span className="text-lg font-semibold tabular-nums">
-                {formatMoney(agreement.amount, agreement.currency)}
-              </span>
-            </Field>
-            <Field label="Тип оплаты">{paymentLabel(agreement.payment_type)}</Field>
-            <Field label="Дата подписания">
-              {formatDate(agreement.signed_date)}
-            </Field>
-            <Field label="Наименование" className="sm:col-span-2">
-              {agreement.name}
-            </Field>
-            <Field label="Автор">
-              {agreement.created_by !== null
-                ? `Пользователь #${agreement.created_by}`
-                : '—'}
-            </Field>
-            <Field label="Оформлен">{formatMoment(agreement.created_at)}</Field>
-            <Field label="Изменён">{formatMoment(agreement.updated_at)}</Field>
-          </FieldGrid>
+        <CardContent className="space-y-6">
+          {/* Финансовая сводка намеренно не живёт в общей сетке реквизитов:
+              сумму договора, оплаты и остаток читают вместе, а не как
+              независимые поля. */}
+          <section className="rounded-lg border bg-muted/30 p-4">
+            <div className="grid gap-5 sm:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] sm:items-start">
+              <div>
+                <p className="text-sm text-muted-foreground">Сумма договора</p>
+                <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
+                  {formatMoney(agreement.amount, agreement.currency)}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-4 border-t pt-4 sm:border-l sm:border-t-0 sm:pl-8 sm:pt-0">
+                <div>
+                  <p className="text-xs text-muted-foreground">Предоплачено</p>
+                  <p className="mt-1 text-base tabular-nums">
+                    {formatMoney(agreement.advance_paid_amount, agreement.currency)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Оплачено по договору</p>
+                  <p className="mt-1 text-base tabular-nums">
+                    {formatMoney(agreement.contract_paid_amount, agreement.currency)}
+                  </p>
+                </div>
+                <div className="col-span-2 flex items-end justify-between gap-4 border-t pt-4">
+                  <p className="text-xs text-muted-foreground">Остаток</p>
+                  <p className={`text-base font-semibold tabular-nums ${remainingTone(
+                    agreement.remaining_amount,
+                    agreement.amount,
+                  )}`}>
+                    {formatMoney(agreement.remaining_amount, agreement.currency)}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <AgreementPaymentBreakdown agreementId={agreement.id} />
+          </section>
+          <div className="grid gap-6 border-t pt-5 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
+            <section>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Условия договора
+              </p>
+              <dl className="mt-3 grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                <Field label="Тип оплаты">{paymentLabel(agreement.payment_type)}</Field>
+                <Field label="Дата подписания">
+                  {formatDate(agreement.signed_date)}
+                </Field>
+              </dl>
+            </section>
+            <section className="border-t pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Сведения о записи
+              </p>
+              <dl className="mt-3 space-y-4">
+                <Field label="Автор">
+                  {agreement.created_by !== null
+                    ? `Пользователь #${agreement.created_by}`
+                    : '—'}
+                </Field>
+                <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                  <Field label="Оформлен">{formatMoment(agreement.created_at)}</Field>
+                  <Field label="Изменён">{formatMoment(agreement.updated_at)}</Field>
+                </div>
+              </dl>
+            </section>
+          </div>
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.6fr)]">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Источник денег</CardTitle>
@@ -276,6 +317,9 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
             </dl>
             {line && (
               <div className="rounded-md border bg-muted/40 p-4 text-sm">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  По бюджетной строке
+                </p>
                 <div className="flex flex-wrap justify-between gap-2">
                   <span className="text-muted-foreground">Выделено</span>
                   <span className="tabular-nums">
@@ -325,112 +369,80 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
       </div>
 
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Скан договора</CardTitle>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Paperclip className="h-4 w-4" />
+            Скан договора
+          </CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-3">
-          {agreement.file_id ? (
-            <>
-              <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-                <Paperclip className="h-4 w-4" />
-                Файл приложен
-              </span>
-              <Button
-                variant="outline"
-                disabled={download.isPending}
-                onClick={() => download.mutate()}
-              >
-                {download.isPending ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="mr-1.5 h-4 w-4" />
-                )}
-                Открыть
-              </Button>
-            </>
-          ) : (
-            <span className="text-sm text-muted-foreground">Файл не приложен.</span>
-          )}
-
+        <CardContent>
           {canUpload && (
-            <>
-              <input
-                ref={fileInput}
-                type="file"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) upload.mutate(file);
-                  // Сброс — иначе повторный выбор ТОГО ЖЕ файла не даст
-                  // события change и загрузка молча не произойдёт.
-                  event.target.value = '';
-                }}
-              />
-              <Button
-                variant={agreement.file_id ? 'ghost' : 'default'}
-                disabled={upload.isPending}
-                onClick={() => fileInput.current?.click()}
-              >
-                {upload.isPending ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Upload className="mr-1.5 h-4 w-4" />
-                )}
-                {agreement.file_id ? 'Заменить' : 'Загрузить'}
-              </Button>
-              {agreement.file_id && (
-                <span className="text-xs text-muted-foreground">
-                  Замена вытеснит текущий файл из карточки.
-                </span>
-              )}
-            </>
+            <input
+              ref={fileInput}
+              type="file"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) upload.mutate(file);
+                // Сброс — иначе повторный выбор ТОГО ЖЕ файла не даст
+                // события change и загрузка молча не произойдёт.
+                event.target.value = '';
+              }}
+            />
           )}
-        </CardContent>
-      </Card>
-
-      {isAdmin && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Смена статуса</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {transitions.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Из статуса «{statusLabel(agreement.status)}» переходов нет — он
-                терминальный.
-              </p>
-            ) : (
-              <div className="flex flex-wrap items-center gap-3">
-                <Select value={nextStatus} onValueChange={setNextStatus}>
-                  <SelectTrigger className="w-56">
-                    <SelectValue placeholder="Новый статус" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {transitions.map((value) => (
-                      <SelectItem key={value} value={value}>
-                        {statusLabel(value)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  disabled={!nextStatus || changeStatus.isPending}
-                  onClick={() => changeStatus.mutate()}
-                >
-                  {changeStatus.isPending && (
-                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                  )}
-                  Применить
-                </Button>
-                <p className="w-full text-xs text-muted-foreground">
-                  Штатно статус двигает согласование. Руками — то, чего маршрут
-                  не покрывает: «подписан», «исполнен», «расторгнут».
+          <div>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="font-medium">
+                  {agreement.file_id ? 'Файл приложен' : 'Файл не приложен'}
+                </p>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  {agreement.file_id
+                    ? 'Откройте скан или загрузите обновлённую версию.'
+                    : canUpload
+                      ? 'Загрузите скан договора, когда он будет готов.'
+                      : 'Скан ещё не был добавлен к договору.'}
                 </p>
               </div>
+
+              <div className="flex shrink-0 flex-wrap gap-2">
+                {agreement.file_id && (
+                  <Button
+                    disabled={download.isPending}
+                    onClick={() => download.mutate()}
+                  >
+                    {download.isPending ? (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Download className="mr-1.5 h-4 w-4" />
+                    )}
+                    Открыть
+                  </Button>
+                )}
+                {canUpload && (
+                  <Button
+                    variant={agreement.file_id ? 'outline' : 'default'}
+                    disabled={upload.isPending}
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    {upload.isPending ? (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Upload className="mr-1.5 h-4 w-4" />
+                    )}
+                    {agreement.file_id ? 'Заменить' : 'Загрузить'}
+                  </Button>
+                )}
+              </div>
+            </div>
+            {agreement.file_id && canUpload && (
+              <p className="mt-4 border-t pt-3 text-xs text-muted-foreground">
+                Новый файл заменит текущий скан в карточке договора.
+              </p>
             )}
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        </CardContent>
+      </Card>
 
       {!embedded && (
         <SubjectProcesses subjectType="contracts.agreement" subjectId={agreement.id} />

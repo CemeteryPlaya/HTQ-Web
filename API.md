@@ -675,6 +675,17 @@ Every path is registered in **both** the slashed and bare spelling
 | `/api/contracts/v1/agreements/{id}/status`       | POST   | Manual status change — validates the transition. Approval drives the same machine automatically |
 | `/api/contracts/v1/agreements/{id}/file`         | POST   | multipart, field `file` → stored via `apps.media_files.interface.store_file` |
 | `/api/contracts/v1/agreements/{id}/file-url`     | GET    | Signed URL for the stored scan |
+| `/api/contracts/v1/advance-payments`             | GET, POST | Предоплата по договору; создание разрешено только когда `agreement.approval_state=approved` |
+| `/api/contracts/v1/advance-payments/{id}`        | GET    | Карточка предоплаты |
+| `/api/contracts/v1/advance-payments/{id}/submit` | POST   | **→ approval.** Возвращает карточку процесса (201) |
+| `/api/contracts/v1/advance-payments/{id}/payment-order` | POST multipart | После одобрения предоплаты: «Файл платёжного поручения» + `posting_number`; нужен permission `contracts.advance_payment.record_payment` (или admin) |
+| `/api/contracts/v1/advance-payments/{id}/payment-order-url` | GET | Signed URL платёжного поручения |
+| `/api/contracts/v1/contract-payments` | GET, POST multipart | Оплата по договору: `administrator_id`, `agreement_id`, `amount`, файл `invoice`; администратор обязан совпадать с администратором бюджета договора |
+| `/api/contracts/v1/contract-payments/{id}` | GET | Карточка оплаты |
+| `/api/contracts/v1/contract-payments/{id}/submit` | POST | **→ approval.** После одобрения документ ожидает бухгалтерию |
+| `/api/contracts/v1/contract-payments/{id}/invoice-url` | GET | Signed URL приложенного счёта |
+| `/api/contracts/v1/contract-payments/{id}/payment-order` | POST multipart | После одобрения: `posting_number` + файл `file`; нужен permission `contracts.contract_payment.record_payment` (или admin) |
+| `/api/contracts/v1/contract-payments/{id}/payment-order-url` | GET | Signed URL платёжного поручения |
 
 ### Approval fields and the two axes
 

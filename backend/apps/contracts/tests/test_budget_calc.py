@@ -9,11 +9,11 @@ from decimal import Decimal
 
 import pytest
 
-from apps.contracts.models import AgreementStatus
+from apps.contracts.models import AgreementStatus, InvoiceStatus
 from apps.contracts.services import budget_calc
 from apps.contracts.services.budget_calc import BudgetExceeded
 
-from .helpers import make_agreement, make_line, make_counterparty
+from .helpers import make_agreement, make_invoice, make_line, make_counterparty
 
 
 @pytest.mark.django_db
@@ -33,6 +33,20 @@ def test_signed_agreement_reduces_remaining():
     totals = budget_calc.totals_for(line)
     assert totals["committed"] == Decimal("400000.00")
     assert totals["remaining"] == Decimal("4600000.00")
+
+
+@pytest.mark.django_db
+def test_approved_invoice_reduces_remaining_but_draft_does_not():
+    line = make_line(amount="1000000.00")
+    counterparty = make_counterparty(country=line.budget.administrator.country)
+    make_invoice(line=line, counterparty=counterparty, amount="200000.00",
+                 status=InvoiceStatus.DRAFT)
+    make_invoice(line=line, counterparty=counterparty, amount="300000.00",
+                 status=InvoiceStatus.APPROVED)
+
+    totals = budget_calc.totals_for(line)
+    assert totals["committed"] == Decimal("300000.00")
+    assert totals["remaining"] == Decimal("700000.00")
 
 
 @pytest.mark.django_db
@@ -59,9 +73,8 @@ def test_terminated_agreement_releases_budget():
 
 @pytest.mark.django_db
 def test_committed_map_batches_and_omits_empty_budgets():
-    """Список бюджетов не должен делать запрос на строку: занятость всех
-    строк приходит одним агрегатом, а строки без договоров в него не
-    попадают (вызывающий берёт их через .get(id, ZERO))."""
+    """Занятость всех строк приходит агрегатами, а строки без расходов в
+    результат не попадают (вызывающий берёт их через .get(id, ZERO))."""
     used = make_line(amount="1000000.00")
     unused = make_line(administrator=used.budget.administrator,
                        program=used.program, period_year=2027,

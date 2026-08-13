@@ -170,6 +170,13 @@ export interface Agreement {
   counterparty_bin_iin: string;
   payment_type: PaymentType;
   amount: string;
+  /** Единственная предоплата по договору, если она создана. */
+  advance_payment_id: number | null;
+  /** Закрытая предоплата; исходную сумму договора не меняет. */
+  advance_paid_amount: string;
+  contract_paid_amount: string;
+  /** Остаток по договору после закрытой предоплаты. */
+  remaining_amount: string;
   currency: string;
   file_id: string | null;
   signed_date: string | null;
@@ -187,6 +194,181 @@ export interface Agreement {
   updated_at: string;
 }
 
+export type InvoiceStatus =
+  | 'draft'
+  | 'on_review'
+  | 'approved'
+  | 'paid'
+  | 'cancelled';
+
+/**
+ * Счёт на оплату БЕЗ договора — прямая закупка, за которой не стоит договор
+ * (backend: `apps.contracts.models.Invoice`).
+ *
+ * Устроен как договор, но с тремя отличиями: номера нет (опознаётся
+ * наименованием и поставщиком), `currency` снимается со строки бюджета на
+ * сервере (в форме её не вводят), а согласованный счёт занимает бюджетную
+ * строку. Поэтому здесь нет ни `payment_type`, ни `signed_date`.
+ *
+ * `approval_state` ведёт `signoff`: одобрение переводит счёт в `approved`,
+ * после чего его сумма включается в остаток бюджетной строки.
+ */
+export interface Invoice {
+  id: number;
+  /** «Наименование» — что купить. */
+  name: string;
+  /** «Пояснение». */
+  note: string;
+  /** На что счёт ссылается — на СТРОКУ бюджета (деньги выделены программе). */
+  budget_line_id: number;
+  /** Родительский бюджет строки — для ссылки на его карточку. */
+  budget_id: number;
+  /** Разворачивается из строки бюджета — на счёте такой колонки нет. */
+  administrator_id: number;
+  administrator_name: string;
+  program_id: number;
+  program_name: string;
+  expense_item: string;
+  period_year: number;
+  counterparty_id: number;
+  counterparty_name: string;
+  counterparty_bin_iin: string;
+  amount: string;
+  /** Снята со строки бюджета на сервере; в форме не задаётся. */
+  currency: string;
+  /** «Скан счёта на оплату» — id файла в media_files. */
+  file_id: string | null;
+  status: InvoiceStatus;
+  /** Ось согласования: отдельна от доменного статуса счёта. */
+  approval_state: ApprovalState;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Предоплата, оформляемая по уже согласованному договору. */
+export interface AdvancePayment {
+  id: number;
+  agreement_id: number;
+  agreement_number: string;
+  agreement_name: string;
+  counterparty_name: string;
+  amount: string;
+  currency: string;
+  /** Стадия документа; отдельна от решения Signoff. */
+  status: 'draft' | 'on_review' | 'awaiting_accounting' | 'closed';
+  approval_state: ApprovalState;
+  payment_order_file_id: string | null;
+  posting_number: string;
+  paid_by: number | null;
+  paid_at: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AccountableFundsRequestStatus =
+  | 'draft'
+  | 'on_review'
+  | 'awaiting_accounting'
+  | 'awaiting_advance_report'
+  | 'closed';
+
+export interface AccountableFundsRequest {
+  id: number;
+  budget_line_id: number | null;
+  administrator_id: number;
+  administrator_name: string;
+  program_id: number;
+  program_name: string;
+  expense_item: string;
+  period_year: number | null;
+  currency: string;
+  amount: string;
+  advance_reported_amount: string;
+  remaining_accountable_amount: string;
+  goal: string;
+  status: AccountableFundsRequestStatus;
+  approval_state: ApprovalState;
+  accounting_paid: boolean;
+  accounting_paid_by: number | null;
+  accounting_paid_at: string | null;
+  /** Пользователь, за которым закреплены выданные средства. */
+  accountable_user_id: number;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdvanceReport {
+  id: number;
+  accountable_funds_request_id: number;
+  expense_name: string;
+  amount: string;
+  currency: string;
+  file_id: string;
+  approval_state: ApprovalState;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractPayment {
+  id: number;
+  administrator_id: number;
+  administrator_name: string;
+  agreement_id: number;
+  agreement_number: string;
+  agreement_name: string;
+  counterparty_name: string;
+  amount: string;
+  currency: string;
+  invoice_file_id: string | null;
+  status: 'draft' | 'on_review' | 'awaiting_accounting' | 'closed';
+  approval_state: ApprovalState;
+  payment_order_file_id: string | null;
+  posting_number: string;
+  paid_by: number | null;
+  paid_at: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CompletionAct {
+  id: number;
+  administrator_id: number;
+  administrator_name: string;
+  agreement_id: number;
+  agreement_number: string;
+  agreement_name: string;
+  counterparty_name: string;
+  amount: string;
+  currency: string;
+  act_file_id: string | null;
+  status: 'draft' | 'on_review' | 'awaiting_accounting' | 'closed';
+  approval_state: ApprovalState;
+  payment_order_file_id: string | null;
+  posting_number: string;
+  paid_by: number | null;
+  paid_at: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A current action in the contracts-only personal queue. */
+export interface ContractsWorkItem {
+  document_type: string;
+  action: 'submit' | 'rework' | 'record_payment' | 'mark_paid' | 'submit_advance_report';
+  action_label: string;
+  title: string;
+  url: string;
+  amount: string | null;
+  currency: string;
+  created_at: string;
+}
+
 /** Пара value/label из `GET /enums` — источник подписей для селектов. */
 export interface EnumOption {
   value: string;
@@ -197,10 +379,13 @@ export interface ContractsEnums {
   agreement_status: EnumOption[];
   budget_status: EnumOption[];
   counterparty_status: EnumOption[];
+  invoice_status: EnumOption[];
   payment_type: EnumOption[];
   /** Из каких статусов договор занимает бюджет. */
   committing_statuses: AgreementStatus[];
   transitions: Record<AgreementStatus, AgreementStatus[]>;
+  /** Таблица переходов счёта — отдельная от договорной (свой жизненный цикл). */
+  invoice_transitions: Record<InvoiceStatus, InvoiceStatus[]>;
 }
 
 // ─── Составная заявка на бюджет ──────────────────────────────────────────

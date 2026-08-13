@@ -96,6 +96,41 @@ class AgreementStatus(models.TextChoices):
     TERMINATED = "terminated", "Расторгнут"
 
 
+class InvoiceStatus(models.TextChoices):
+    # У счёта нет «подписан»: договор подписывают две стороны, счёт же просто
+    # оплачивают. Поэтому вместо ``signed → executed`` здесь один терминальный
+    # ``paid``. ``cancelled`` — второй терминал, аналог ``terminated`` у
+    # договора: счёт отозвали, не оплатив.
+    DRAFT = "draft", "Черновик"
+    ON_REVIEW = "on_review", "На согласовании"
+    APPROVED = "approved", "Согласован"
+    PAID = "paid", "Оплачен"
+    CANCELLED = "cancelled", "Отменён"
+
+
+class AdvancePaymentStatus(models.TextChoices):
+    """Доменная стадия предоплаты, отдельная от решения signoff."""
+
+    DRAFT = "draft", "Черновик"
+    ON_REVIEW = "on_review", "На согласовании"
+    AWAITING_ACCOUNTING = "awaiting_accounting", "Ожидает оформления бухгалтерией"
+    CLOSED = "closed", "Закрыт"
+
+
+class AccountableFundsRequestStatus(models.TextChoices):
+    """Жизненный цикл заявки на средства под отчёт.
+
+    После подтверждения бухгалтером заявка остаётся открытой за инициатором:
+    позднее к ней будут добавляться авансовые отчёты.
+    """
+
+    DRAFT = "draft", "Черновик"
+    ON_REVIEW = "on_review", "На согласовании"
+    AWAITING_ACCOUNTING = "awaiting_accounting", "Ожидает оплаты бухгалтерией"
+    AWAITING_ADVANCE_REPORT = "awaiting_advance_report", "Ожидает авансовый отчёт"
+    CLOSED = "closed", "Закрыта"
+
+
 class Country(models.Model):
     """Страна. Используется и администратором бюджета, и контрагентом."""
 
@@ -456,3 +491,302 @@ class Agreement(signoff.Approvable, models.Model):
 
     def __str__(self) -> str:
         return f"{self.number} — {self.name}"
+
+
+class Invoice(signoff.Approvable, models.Model):
+    """Счёт на оплату БЕЗ договора — прямая закупка, за которой не стоит
+    ``Agreement``.
+
+    Это второй, помимо договора, канал расхода бюджета: покупку оформляют
+    одним счётом, без заключения договора. Поэтому по устройству счёт —
+    брат ``Agreement``: та же ссылка на ОДНУ строку бюджета (деньги выделены
+    программе), тот же контрагент-поставщик, та же приложенная к записи
+    сумма и скан.
+
+    Отличий от договора три, и все намеренные:
+
+    1. **Номера нет.** У договора ``number`` — уникальный ключ, по которому
+       на него ссылаются. Счёт без договора так не адресуют: он опознаётся
+       наименованием закупки и поставщиком. Номер поставщика, если понадобится
+       его хранить, — отдельное необязательное поле рядом, а не возврат к
+       уникальному ключу, которого у этой записи по смыслу нет.
+
+    2. **Валюта не приходит из формы — она снимается со строки бюджета**
+       (``budget_line.budget.currency``) при создании. У договора валюта в
+       теле запроса и сверяется с бюджетом; здесь сверять нечего — счёт
+       выписывается в валюте того бюджета, из которого его оплачивают, и
+       принимать её отдельным полем значило бы завести возможность
+       рассогласования на ровном месте. Колонка всё же есть (снимок на момент
+       создания), чтобы карточка и списки не лезли за валютой в бюджет.
+
+    3. **Счёт занимает бюджет после согласования.** ``budget_calc`` включает
+       в остаток счета в статусах ``approved`` и ``paid``. При создании сумма
+       уже проверяется относительно остатка, а при одобрении проверяется
+       повторно под блокировкой строки: черновик и счёт на согласовании не
+       резервируют деньги, но согласовать сверх доступной суммы нельзя.
+
+    ``file_id`` — «Скан счёта на оплату» в ``apps.media_files``, тем же
+    путём ``interface.store_file()``, что и скан договора (свой бакет модуль
+    не заводит — инвариант №10, backend/README.md).
+
+    ``Approvable`` подмешан сразу, хотя маршрут согласования счёта в первой
+    фазе не подключён: колонка ``approval_state`` появляется в таблице сейчас
+    (иначе её ввод потребовал бы отдельной миграции), а её ведёт signoff,
+    когда счёт зарегистрируют согласуемым типом. До тех пор она инертна
+    (``draft``), маршрута нет, гейт молчит. ``status`` и ``approval_state`` —
+    те же две разные оси, что и у договора (см. докстринг модуля).
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.invoice"
+
+    name = models.CharField(max_length=300, verbose_name="Наименование")
+    note = models.TextField(default="", blank=True, db_default="",
+                            verbose_name="Пояснение")
+    budget_line = models.ForeignKey(BudgetLine, on_delete=models.PROTECT,
+                                    related_name="invoices")
+    counterparty = models.ForeignKey(Counterparty, on_delete=models.PROTECT,
+                                     related_name="invoices")
+    amount = models.DecimalField(max_digits=18, decimal_places=2,
+                                 verbose_name="Сумма счёта")
+    currency = models.CharField(max_length=3, default="KZT", db_default="KZT")
+    file_id = models.CharField(max_length=64, null=True, blank=True,
+                               verbose_name="Скан счёта на оплату")
+    status = models.CharField(max_length=20, choices=InvoiceStatus.choices,
+                              default=InvoiceStatus.DRAFT,
+                              db_default=InvoiceStatus.DRAFT)
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            # Тот же профиль, что у договора: «счета этой строки бюджета в
+            # таком-то статусе» — то, что понадобится, когда счета начнут
+            # учитываться в остатке (см. докстринг, пункт 3).
+            models.Index(fields=["budget_line", "status"],
+                         name="ix_contracts_inv_line_st"),
+        ]
+        verbose_name = "Счёт на оплату"
+        verbose_name_plural = "Счета на оплату"
+
+    def __str__(self) -> str:
+        return f"Счёт: {self.name} ({self.amount} {self.currency})"
+
+
+class ContractPayment(signoff.Approvable, models.Model):
+    """Оплата по договору: счёт, отдельное согласование и проведение бухгалтерией."""
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.contract_payment"
+
+    administrator = models.ForeignKey(Administrator, on_delete=models.PROTECT,
+                                      related_name="contract_payments")
+    agreement = models.ForeignKey(Agreement, on_delete=models.PROTECT,
+                                  related_name="contract_payments")
+    amount = models.DecimalField(max_digits=18, decimal_places=2,
+                                 verbose_name="Сумма оплаты")
+    invoice_file_id = models.CharField(max_length=64, null=True, blank=True,
+                                       verbose_name="Счёт")
+    status = models.CharField(max_length=24, choices=AdvancePaymentStatus.choices,
+                              default=AdvancePaymentStatus.DRAFT,
+                              db_default=AdvancePaymentStatus.DRAFT)
+    payment_order_file_id = models.CharField(max_length=64, null=True, blank=True,
+                                             verbose_name="Файл платёжного поручения")
+    posting_number = models.CharField(max_length=100, default="", blank=True,
+                                      db_default="", verbose_name="Номер проводки")
+    paid_by = models.IntegerField(null=True, blank=True, db_index=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["agreement", "status"], name="ix_ctr_pay_agr_status"),
+            models.Index(fields=["administrator", "approval_state"], name="ix_ctr_pay_adm_state"),
+        ]
+        verbose_name = "Оплата по договору"
+        verbose_name_plural = "Оплаты по договорам"
+
+    def __str__(self) -> str:
+        return f"Оплата по договору {self.agreement.number}: {self.amount}"
+
+
+class CompletionAct(signoff.Approvable, models.Model):
+    """Акт выполненных работ (АВР) с отдельным согласованием и проведением."""
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.completion_act"
+
+    administrator = models.ForeignKey(Administrator, on_delete=models.PROTECT,
+                                      related_name="completion_acts")
+    agreement = models.ForeignKey(Agreement, on_delete=models.PROTECT,
+                                  related_name="completion_acts")
+    amount = models.DecimalField(max_digits=18, decimal_places=2,
+                                 verbose_name="Сумма по акту")
+    act_file_id = models.CharField(max_length=64, null=True, blank=True,
+                                   verbose_name="Акт выполненных работ")
+    status = models.CharField(max_length=24, choices=AdvancePaymentStatus.choices,
+                              default=AdvancePaymentStatus.DRAFT,
+                              db_default=AdvancePaymentStatus.DRAFT)
+    payment_order_file_id = models.CharField(max_length=64, null=True, blank=True,
+                                             verbose_name="Файл платёжного поручения")
+    posting_number = models.CharField(max_length=100, default="", blank=True,
+                                      db_default="", verbose_name="Номер проводки")
+    paid_by = models.IntegerField(null=True, blank=True, db_index=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["agreement", "status"], name="ix_act_agr_status"),
+            models.Index(fields=["administrator", "approval_state"], name="ix_act_adm_state"),
+        ]
+        verbose_name = "Акт выполненных работ"
+        verbose_name_plural = "Акты выполненных работ"
+
+    def __str__(self) -> str:
+        return f"Акт выполненных работ по договору {self.agreement.number}: {self.amount}"
+
+
+class AccountableFundsRequest(signoff.Approvable, models.Model):
+    """Заявка на подотчётные средства.
+
+    Деньги закрепляются за пользователем, который завёл заявку
+    (``accountable_user_id``). Когда бухгалтер отмечает оплату, документ не
+    закрывается: он ждёт будущих авансовых отчётов этого пользователя.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.accountable_funds_request"
+
+    # Источник средств для новых заявок. Nullable только ради записей,
+    # созданных до миграции 0017: их старые administrator/program сохраняются,
+    # пока бухгалтер не назначит конкретную строку бюджета.
+    budget_line = models.ForeignKey(
+        BudgetLine, on_delete=models.PROTECT, related_name="accountable_funds_requests",
+        null=True, blank=True,
+    )
+    administrator = models.ForeignKey(
+        Administrator, on_delete=models.PROTECT, related_name="+", null=True, blank=True,
+        editable=False,
+    )
+    program = models.ForeignKey(
+        Program, on_delete=models.PROTECT, related_name="+", null=True, blank=True,
+        editable=False,
+    )
+    amount = models.DecimalField(max_digits=18, decimal_places=2, verbose_name="Сумма")
+    goal = models.TextField(verbose_name="Цель")
+    status = models.CharField(
+        max_length=32, choices=AccountableFundsRequestStatus.choices,
+        default=AccountableFundsRequestStatus.DRAFT,
+        db_default=AccountableFundsRequestStatus.DRAFT,
+    )
+    accounting_paid = models.BooleanField(
+        default=False, db_default=False, verbose_name="Бухгалтер оплатил",
+    )
+    accounting_paid_by = models.IntegerField(null=True, blank=True, db_index=True)
+    accounting_paid_at = models.DateTimeField(null=True, blank=True)
+    accountable_user_id = models.IntegerField(db_index=True)
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["budget_line", "approval_state"], name="ix_af_req_line_state"),
+            models.Index(fields=["accountable_user_id", "status"], name="ix_af_req_user_status"),
+        ]
+        verbose_name = "Заявка на подотчётные средства"
+        verbose_name_plural = "Заявки на подотчётные средства"
+
+    def __str__(self) -> str:
+        program = self.budget_line.program if self.budget_line_id else self.program
+        return f"Заявка на подотчётные средства: {self.amount} ({program.display_name})"
+
+
+class AdvanceReport(signoff.Approvable, models.Model):
+    """Одна подтверждающая трата в рамках выданных подотчётных средств.
+
+    Сумма заявки не меняется. Её остаток вычисляется как сумма только
+    согласованных отчётов, поэтому отклонённый или возвращённый на доработку
+    отчёт не списывает средства и может быть отправлен повторно.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.advance_report"
+
+    accountable_funds_request = models.ForeignKey(
+        AccountableFundsRequest, on_delete=models.PROTECT,
+        related_name="advance_reports",
+    )
+    expense_name = models.CharField(max_length=500, verbose_name="Наименование затрат")
+    amount = models.DecimalField(max_digits=18, decimal_places=2, verbose_name="Сумма")
+    file_id = models.CharField(max_length=64, verbose_name="Файл авансового отчёта")
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["accountable_funds_request", "approval_state"],
+                         name="ix_adv_report_req_state"),
+        ]
+        verbose_name = "Авансовый отчёт"
+        verbose_name_plural = "Авансовые отчёты"
+
+    def __str__(self) -> str:
+        return f"Авансовый отчёт: {self.expense_name} ({self.amount})"
+
+
+class AdvancePayment(signoff.Approvable, models.Model):
+    """Предоплата, запрашиваемая на основании уже согласованного договора.
+
+    Согласование самой предоплаты и её фактическое проведение разделены.
+    ``approval_state`` ведёт signoff, а ``status`` — собственный жизненный
+    цикл документа. После положительного решения статус становится
+    ``awaiting_accounting``; файл платёжного поручения и номер проводки
+    появляются только отдельным действием бухгалтера, которое закрывает
+    документ. Это не ещё один этап согласования: бухгалтер фиксирует
+    исполнение платежа, а не принимает решение по нему.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "contracts.advance_payment"
+
+    agreement = models.ForeignKey(Agreement, on_delete=models.PROTECT,
+                                  related_name="advance_payments")
+    amount = models.DecimalField(max_digits=18, decimal_places=2,
+                                 verbose_name="Сумма предоплаты")
+    status = models.CharField(max_length=24, choices=AdvancePaymentStatus.choices,
+                              default=AdvancePaymentStatus.DRAFT,
+                              db_default=AdvancePaymentStatus.DRAFT)
+    payment_order_file_id = models.CharField(
+        max_length=64, null=True, blank=True,
+        verbose_name="Файл платёжного поручения",
+    )
+    posting_number = models.CharField(max_length=100, default="", blank=True,
+                                      db_default="", verbose_name="Номер проводки")
+    paid_by = models.IntegerField(null=True, blank=True, db_index=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.IntegerField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(fields=["agreement"],
+                                    name="uq_ctr_adv_payment_agreement"),
+        ]
+        indexes = [
+            models.Index(fields=["agreement", "approval_state"],
+                         name="ix_ctr_adv_agr_state"),
+        ]
+        verbose_name = "Предоплата на основании договора"
+        verbose_name_plural = "Предоплаты на основании договоров"
+
+    def __str__(self) -> str:
+        return f"Предоплата по договору {self.agreement.number}: {self.amount}"
