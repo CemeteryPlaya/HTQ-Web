@@ -54,6 +54,12 @@ RBAC из `htqweb.authn`; группы и права Django не нужны. М�
 берёт подпись поля `USERNAME_FIELD`; без неё на русской странице стояло
 «Username:» рядом с «Пароль:».
 
+![Вход в django-admin](../images/django-admin-login.png)
+
+*Обе подписи по-русски — это и есть результат `verbose_name` на `username`.
+Заголовок «HTQWeb — администрирование» даёт свой `HTQAdminSite`, поднятый
+вместо стандартного `django.contrib.admin` через `htqweb.apps.HTQAdminConfig`.*
+
 ---
 
 ## 3. Публичный контракт `interface.py`

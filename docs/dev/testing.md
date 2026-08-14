@@ -135,6 +135,26 @@ npm run test:e2e
 ⚠️ Chromium в окружении **не установлен**. Запускайте с
 `{ channel: 'msedge' }` — Edge есть на Windows-хосте.
 
+### Засада: элементы django-admin не проходят проверку «actionable»
+
+Проверено при съёмке скриншотов для этой документации. На странице входа
+`/django-admin/login/` разметка обычная (`<input type="submit">`, поля с
+`id_username` / `id_password`), элементы видны, но `page.click`,
+`page.press` и `page.fill` **виснут до таймаута**: Playwright ждёт, пока
+элемент «стабилизируется», и не дожидается.
+
+Обход — работать с формой напрямую из DOM, минуя проверку:
+
+```js
+await page.evaluate(() => {
+  document.getElementById('id_username').value = 'admin';
+  document.getElementById('id_password').value = 'admin12345';
+  document.getElementById('login-form').submit();
+});
+```
+
+Рабочий пример целиком — `frontend/scripts/capture-docs-screenshots.mjs`.
+
 ---
 
 ## 5. Известные падения
