@@ -5,7 +5,7 @@
 `webtransport` (мост QUIC).
 
 Смежное: [domains/cms.md](../domains/cms.md) — откуда берётся конфиг;
-`infra-ops.md` (пишется) — как это поднимается.
+[infra-ops.md](../infra-ops.md) — как это поднимается.
 
 ---
 
