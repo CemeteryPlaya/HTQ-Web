@@ -141,7 +141,8 @@ npm run test:e2e
 
 Их стоит знать, чтобы не искать несуществующую регрессию.
 
-**`test_board_defaults_to_today`** (`apps/tasks/tests/test_daily_reports_api.py`)
+**`test_board_defaults_to_today`**
+(`backend/apps/tasks/tests/test_daily_reports_api.py`)
 падает **ночью**. Тест пишет отчёт на `dt.date.today()` — локальную дату
 машины, а эндпоинт при `TIME_ZONE = "UTC"` берёт `timezone.localdate()`, то
 есть дату по UTC. В Алматы (UTC+5) с полуночи до пяти утра это разные даты, и
