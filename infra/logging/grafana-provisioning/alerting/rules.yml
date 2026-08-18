@@ -1,22 +1,495 @@
 # Grafana alerting rules (provisioned).
 #
-# Datasource: Loki (the only observability backend currently provisioned —
-# Prometheus + node/redis/postgres exporters are not installed; system-level
-# alerts that need those (Postgres disk %, Redis memory %) are deferred and
-# tracked in Phase 7.3.c follow-up).
+# Две группы, и разделение не косметическое:
 #
-# Apply: provisioned automatically by grafana on startup via the bind-mount
-# `infra/logging/grafana-provisioning:/etc/grafana/provisioning`.
+#   htqweb-prometheus — числовые метрики. Ловят состояние: кончается диск,
+#     таргет не отвечает, очередь растёт. Раньше группы не было вовсе —
+#     шапка этого файла утверждала, что «Prometheus + exporters are not
+#     installed», хотя экспортеры стояли уже давно.
+#
+#   htqweb-loki — логи. Ловят то, что в метрики не попадает: текст ошибки,
+#     стектрейс, ошибка соединения без смены кода ответа.
+#
+# Лейбл `service` промтейл берёт из имени compose-сервиса
+# (infra/logging/promtail-config.yml), поэтому в запросах фигурируют
+# backend-web / backend-worker / nginx. Прежнее правило искало
+# service="user-service" — имя из снесённого FastAPI-поколения, то есть не
+# срабатывало никогда.
+#
+# Доставка — infra/logging/grafana-provisioning/alerting/contact_points.yml:
+# всё в Telegram, critical дополнительно на почту.
 
 apiVersion: 1
 
 groups:
+  # ═══════════════════════════════════════════════════════════════════════
+  - orgId: 1
+    name: htqweb-prometheus
+    folder: HTQWeb
+    interval: 1m
+    rules:
+      # ── Таргет не отвечает ───────────────────────────────────────────────
+      - uid: htqweb-target-down
+        title: "Сервис не отвечает на скрейп"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              # nginx-exporter живёт только в профиле production — вне его
+              # таргет отсутствует, а не «падает», поэтому исключений тут нет.
+              expr: 'up'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [1], type: lt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: NoData
+        execErrState: Alerting
+        for: 3m
+        annotations:
+          summary: "Таргет {{ $labels.job }} ({{ $labels.instance }}) недоступен"
+          description: |
+            Prometheus не может снять метрики дольше 3 минут. Проверить:
+            docker compose ps {{ $labels.job }} и логи контейнера.
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Диск ─────────────────────────────────────────────────────────────
+      - uid: htqweb-disk-space-low
+        title: "Мало места на диске (< 15%)"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: |
+                min(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}
+                    / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}) * 100
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [15], type: lt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Свободного места меньше 15%"
+          description: |
+            Переполнение диска роняет Postgres, Loki и Prometheus разом и
+            почти всегда необратимо для незакоммиченных данных. Кандидаты на
+            чистку: docker system prune, ретенция Loki, старые образы.
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Память хоста ─────────────────────────────────────────────────────
+      - uid: htqweb-host-memory-high
+        title: "Память хоста > 92%"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [92], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: NoData
+        execErrState: Alerting
+        for: 10m
+        annotations:
+          summary: "Свободной памяти почти не осталось"
+          description: |
+            Следующий шаг — OOM-killer, и убьёт он тот процесс, который
+            попросит память следующим, а не виновника. Посмотреть по
+            контейнерам: дашборд «Хост и контейнеры».
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Перезапуски контейнеров ──────────────────────────────────────────
+      - uid: htqweb-container-restarts
+        title: "Контейнер перезапускается"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum by (name) (changes(container_start_time_seconds{name!=""}[1h]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [3], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "{{ $labels.name }} перезапустился больше 3 раз за час"
+          description: |
+            Обычно это падение на старте или OOM. Контейнер при этом
+            «работает» по docker compose ps, поэтому иначе не заметно.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Приложение: 5xx ──────────────────────────────────────────────────
+      - uid: htqweb-http-5xx-rate
+        title: "Доля 5xx у приложения > 5%"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: |
+                sum(rate(django_http_responses_total_by_status_total{status=~"5.."}[5m]))
+                / clamp_min(sum(rate(django_http_responses_total_by_status_total[5m])), 0.001)
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0.05], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: Alerting
+        for: 3m
+        annotations:
+          summary: "Каждый двадцатый запрос падает с 5xx"
+          description: |
+            Разбор: дашборд «Django (приложение)» → панель «5xx по вьюхам»
+            показывает, какая именно вьюха отдаёт ошибки.
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Приложение: латентность ──────────────────────────────────────────
+      - uid: htqweb-http-latency-p95
+        title: "p95 ответа приложения > 3 c"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: |
+                histogram_quantile(0.95, sum by (le) (
+                  rate(django_http_requests_latency_seconds_by_view_method_bucket[5m])))
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [3], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          summary: "Каждый двадцатый запрос обрабатывается дольше 3 секунд"
+          description: |
+            Смотреть «Топ-10 медленных вьюх» и панель запросов к БД: чаще
+            всего причина в запросе, а не в самой Python-части.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Celery: воркеры ──────────────────────────────────────────────────
+      - uid: htqweb-celery-no-workers
+        title: "Нет живых воркеров Celery"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum(flower_worker_online) OR on() vector(0)'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [1], type: lt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "Фоновые задачи не выполняются"
+          description: |
+            Без воркера встают синхронизация почты, рассылки и пересчёт
+            бизнес-метрик. Внешне платформа при этом полностью исправна —
+            именно поэтому нужен алерт.
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Celery: очередь ──────────────────────────────────────────────────
+      - uid: htqweb-celery-queue-growing
+        title: "Очередь Celery > 500 задач"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'max(redis_key_size{key="celery"})'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [500], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          summary: "Воркеры не успевают разгребать очередь"
+          description: |
+            Длина списка `celery` в Redis держится выше 500 десять минут.
+            Либо задачи стали медленнее, либо воркеров не хватает.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Почта ────────────────────────────────────────────────────────────
+      - uid: htqweb-mail-sync-stalled
+        title: "Почта не синхронизируется больше часа"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_mail_sync_lag_seconds'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [3600], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        # NoData здесь ОК: метрика не экспортируется, пока не было ни одной
+        # синхронизации (пустой стенд), и это не авария.
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          summary: "Ни один ящик не синхронизировался больше часа"
+          description: |
+            Почта ломается тихо: контейнеры зелёные, письма не приходят.
+            Диагностика — manage.py mail_check.
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Postgres ─────────────────────────────────────────────────────────
+      - uid: htqweb-postgres-connections
+        title: "Соединений с Postgres > 80% лимита"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: |
+                sum(pg_stat_database_numbackends)
+                / clamp_min(sum(pg_settings_max_connections), 1) * 100
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [80], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          summary: "Пул соединений Postgres близок к исчерпанию"
+          description: |
+            На исчерпании новые запросы получают отказ на подключении, а не
+            замедление — платформа падает целиком и сразу.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Подмены (fallback) ───────────────────────────────────────────────
+      # Единственное правило, которое ловит НЕ отказ, а успешно скрытый отказ:
+      # подмена по определению не видна ни в кодах ответа, ни в латентности —
+      # запрос отработал, просто на выдуманных данных.
+      #
+      # expected="false" в фильтре обязателен: предусмотренные деградации
+      # (камеры нет, доступа к домену нет) считаются той же метрикой, и без
+      # фильтра настоящие подмены утонули бы в их фоне.
+      #
+      # Порог — любое ненулевое значение дольше 10 минут. Не «больше N в
+      # секунду»: одна подмена в минуту на проде — это уже вопрос, а редкость
+      # события как раз и делает его заметным, а не шумным.
+      - uid: htqweb-fallback-active
+        title: "Значения подменяются (fallback) дольше 10 минут"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              # Одним селектором по имени, а не суммой двух выражений: у
+              # бэкенда и SFU метрика называется по-разному, но означает одно
+              # и то же, и складывать их через `or` пришлось бы с оговорками.
+              expr: |
+                sum by (site) (
+                  rate({__name__=~"htqweb_fallback_total|sfu_fallback_total",
+                        expected="false"}[5m])
+                )
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          summary: "Подмена значения в {{ $labels.site }} не прекращается"
+          description: |
+            В этом месте кода вместо настоящего значения отдаётся запасное.
+            Снаружи всё выглядит рабочим, поэтому иначе это не обнаруживается.
+            Подробности — в логах: Explore → Loki → {service=~"backend.*"}
+            |= "FALLBACK site={{ $labels.site }}".
+            Celery-воркеры в эту метрику не попадают (у них нет /metrics) —
+            их закрывает правило htqweb-fallback-worker-logs.
+        labels:
+          severity: warning
+          team: platform
+
+  # ═══════════════════════════════════════════════════════════════════════
   - orgId: 1
     name: htqweb-loki
     folder: HTQWeb
     interval: 1m
     rules:
-      # ── Error rate per service ────────────────────────────────────────────
+      # ── Ошибки в логах по сервисам ───────────────────────────────────────
       - uid: htqweb-error-rate-5m
         title: "ERROR log rate per service > 10/5m"
         condition: B
@@ -54,7 +527,10 @@ groups:
           severity: warning
           team: platform
 
-      # ── nginx gateway 5xx ratio ──────────────────────────────────────────
+      # ── 5xx на шлюзе ─────────────────────────────────────────────────────
+      # Дублирует htqweb-http-5xx-rate не зря: то правило видит только то,
+      # что дошло до Django, а это — ещё и отказы самого шлюза (upstream
+      # недоступен, таймаут), когда приложение не отвечает вовсе.
       - uid: htqweb-gateway-5xx-1m
         title: "Nginx gateway 5xx burst (>5% in 1m)"
         condition: B
@@ -65,9 +541,6 @@ groups:
             model:
               datasource: { type: loki, uid: loki }
               editorMode: code
-              # Promtail scrapes nginx with `service=nginx`. We approximate the
-              # 5xx ratio as: (5xx count) / (all count). 5xx tagged by the
-              # `status` extracted in promtail-config (or grep here).
               expr: |
                 (sum(rate({service="nginx"} |~ " 5\\d\\d " [1m]))
                  /
@@ -99,7 +572,7 @@ groups:
           severity: critical
           team: platform
 
-      # ── Postgres / pgbouncer connectivity errors ─────────────────────────
+      # ── Ошибки соединения с БД ───────────────────────────────────────────
       - uid: htqweb-db-connection-errors
         title: "Postgres connection errors (>3 in 5m)"
         condition: B
@@ -141,7 +614,10 @@ groups:
           severity: critical
           team: platform
 
-      # ── Frontend client-error spike ──────────────────────────────────────
+      # ── Всплеск клиентских ошибок SPA ────────────────────────────────────
+      # Лейбл был service="user-service" — имя из снесённого FastAPI-
+      # поколения, правило не срабатывало ни разу. Клиентские ошибки
+      # принимает POST /api/users/v1/client-errors, то есть backend-web.
       - uid: htqweb-frontend-errors
         title: "Frontend client error spike (>20 in 5m)"
         condition: B
@@ -152,7 +628,7 @@ groups:
             model:
               datasource: { type: loki, uid: loki }
               editorMode: code
-              expr: 'sum(count_over_time({service="user-service"} |= "frontend_client_error" [5m]))'
+              expr: 'sum(count_over_time({service="backend-web"} |= "frontend_client_error" [5m]))'
               queryType: instant
               refId: A
           - refId: B
@@ -174,9 +650,58 @@ groups:
           summary: "SPA reported >20 client errors in last 5m"
           description: |
             telemetry.installGlobalErrorHandlers() forwards uncaught errors
-            from browsers via POST /api/users/v1/client-errors → user-service
-            structlog. A spike means a regression hit users. Inspect via
-            {service="user-service"} |= "frontend_client_error".
+            from browsers via POST /api/users/v1/client-errors. A spike means
+            a regression hit users. Inspect via
+            {service="backend-web"} |= "frontend_client_error".
         labels:
           severity: warning
           team: frontend
+
+      # ── Подмены в Celery-воркерах ────────────────────────────────────────
+      # Не дублирует htqweb-fallback-active, а закрывает его слепое пятно:
+      # backend-worker и backend-beat не публикуют /metrics (Prometheus видит
+      # Celery через Flower), поэтому htqweb_fallback_total из задач не
+      # приходит вовсе. А именно там живут периодические сборщики, у которых
+      # тихая подмена дороже всего: их результат смотрят на дашборде.
+      #
+      # Порог 0 и окно 10 минут — как у метричного правила, по той же логике:
+      # подмена редка по построению, и одного срабатывания достаточно.
+      - uid: htqweb-fallback-worker-logs
+        title: "Подмены (fallback) в Celery-воркерах"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: loki
+            model:
+              datasource: { type: loki, uid: loki }
+              editorMode: code
+              expr: |
+                sum(count_over_time(
+                  {service=~"backend-worker|backend-beat"} |= "FALLBACK site=" [10m]
+                ))
+              queryType: instant
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          summary: "В фоновых задачах подменяются значения"
+          description: |
+            Explore → Loki → {service=~"backend-worker|backend-beat"}
+            |= "FALLBACK site=" — в строке указаны место (site) и причина.
+        labels:
+          severity: warning
+          team: platform

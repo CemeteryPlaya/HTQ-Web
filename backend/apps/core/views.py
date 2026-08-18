@@ -5,15 +5,19 @@
 "" — у неё нет API_PREFIX, см. htqweb/urls.py), поэтому здесь соседствуют
 ``/health/``, ``/api/core/v1/...`` и ``/api/admin/v1/...``.
 """
+import os
 from datetime import datetime, timezone
 
 from django.db import connection
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
+from prometheus_client import CollectorRegistry, exposition, multiprocess
+from prometheus_client.registry import REGISTRY
 from pydantic import BaseModel, Field
 
 from htqweb.http import api_view, json_error
 
 from apps.core import infrastructure
+from apps.core import metrics as business_metrics
 from apps.core.models import KNOWN_SERVICES
 from apps.core.services import service_enabled
 
@@ -35,6 +39,50 @@ def ready(request):
 def services_status(request):
     return JsonResponse(
         {"services": {name: service_enabled(name) for name in KNOWN_SERVICES}})
+
+
+def metrics(request):
+    """Экспозиция метрик для Prometheus.
+
+    Своя вьюха вместо ``django_prometheus.exports.ExportToDjangoView``, и
+    ровно по одной причине: ``backend-web`` — это ``gunicorn --workers 4``.
+    Каждый воркер держит СВОЙ реестр в памяти, а скрейп попадает в случайный
+    из четырёх, поэтому без общего хранилища графики пилили бы вчетверо.
+    ``prometheus_client`` решает это мультипроцессным режимом: воркеры пишут
+    в файлы каталога ``PROMETHEUS_MULTIPROC_DIR``, а собирает их
+    ``MultiProcessCollector`` — вот он здесь и подключается.
+
+    Без переменной (dev-``runserver``, ``backend-asgi``, тесты) отдаём
+    обычный глобальный ``REGISTRY``: там процесс один, и городить каталог
+    незачем.
+
+    Аутентификации намеренно нет — эндпоинт не публикуется наружу: nginx
+    его не проксирует, а порты бэкенда в проде не издаются на хост
+    (docker-compose.yml). Prometheus ходит сюда по внутренней сети.
+    """
+    # Читаем бизнес-снимок ДО сбора и вне его. Внутри collect() обращаться к
+    # кэшу нельзя: он обёрнут django-prometheus и сам инкрементит метрику,
+    # то есть менял бы реестр во время его обхода — процесс вставал намертво
+    # (воспроизводилось на ASGI; на WSGI маскировалось мультипроцессным
+    # реестром, который пишет в файлы).
+    business_metrics.refresh()
+
+    if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        # Бизнес-метрики читаются из общего кэша, а не из памяти процесса,
+        # поэтому их коллектор кладётся на реестр отдельно: MultiProcessCollector
+        # знает только про файлы воркеров и такую метрику не увидел бы.
+        registry.register(business_metrics.BusinessMetricsCollector())
+    else:
+        registry = REGISTRY
+        business_metrics.register(REGISTRY)
+
+    # Prometheus сам просит нужный формат заголовком Accept (текст или
+    # protobuf) — отдаём то, что он запросил, а не гадаем.
+    encoder, content_type = exposition.choose_encoder(
+        request.META.get("HTTP_ACCEPT", ""))
+    return HttpResponse(encoder(registry), content_type=content_type)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

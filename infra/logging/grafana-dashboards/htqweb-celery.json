@@ -1,9 +1,9 @@
 {
-  "uid": "htqweb-prometheus",
-  "title": "HTQWeb · Обзор платформы",
+  "uid": "htqweb-celery",
+  "title": "HTQWeb · Celery (фоновые задачи)",
   "tags": [
     "htqweb",
-    "overview"
+    "celery"
   ],
   "editable": true,
   "graphTooltip": 1,
@@ -24,7 +24,7 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Сервисы недоступны",
+      "title": "Воркеров онлайн",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -32,7 +32,7 @@
       "gridPos": {
         "x": 0,
         "y": 0,
-        "w": 4,
+        "w": 6,
         "h": 5
       },
       "fieldConfig": {
@@ -46,6 +46,10 @@
               },
               {
                 "color": "red",
+                "value": 0
+              },
+              {
+                "color": "green",
                 "value": 1
               }
             ]
@@ -71,196 +75,24 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "count(up == 0) OR on() vector(0)",
+          "expr": "sum(flower_worker_online)",
           "refId": "A"
         }
       ],
-      "description": "Таргеты Prometheus в состоянии DOWN. В норме 0.",
+      "description": "0 — фоновые задачи не выполняются вообще: почта не синхронизируется, бизнес-метрики не пересчитываются.",
       "id": 1
     },
     {
       "type": "stat",
-      "title": "RPS приложения",
+      "title": "Очередь",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 0,
-        "w": 4,
-        "h": 5
-      },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(rate(django_http_responses_total_by_status_total[$__rate_interval]))",
-          "refId": "A"
-        }
-      ],
-      "id": 2
-    },
-    {
-      "type": "stat",
-      "title": "Ошибки 5xx / с",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 0,
-        "w": 4,
-        "h": 5
-      },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.1
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(rate(django_http_responses_total_by_status_total{status=~\"5..\"}[$__rate_interval]))",
-          "refId": "A"
-        }
-      ],
-      "id": 3
-    },
-    {
-      "type": "stat",
-      "title": "p95 ответа",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 4,
-        "h": 5
-      },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 3
-              }
-            ]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(django_http_requests_latency_seconds_by_view_method_bucket[$__rate_interval])))",
-          "refId": "A"
-        }
-      ],
-      "id": 4
-    },
-    {
-      "type": "stat",
-      "title": "Очередь Celery",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 0,
-        "w": 4,
+        "w": 6,
         "h": 5
       },
       "fieldConfig": {
@@ -307,20 +139,20 @@
           "refId": "A"
         }
       ],
-      "description": "Длина списка `celery` в Redis. Растёт — воркеры не успевают.",
-      "id": 5
+      "description": "Длина списка `celery` в Redis (redis-exporter, CHECK_KEYS).",
+      "id": 2
     },
     {
       "type": "stat",
-      "title": "Свободно на диске",
+      "title": "Задач выполняется",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 20,
+        "x": 12,
         "y": 0,
-        "w": 4,
+        "w": 6,
         "h": 5
       },
       "fieldConfig": {
@@ -331,22 +163,9 @@
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "red",
-                "value": 0
-              },
-              {
-                "color": "orange",
-                "value": 15
-              },
-              {
-                "color": "green",
-                "value": 25
               }
             ]
-          },
-          "unit": "percent"
+          }
         },
         "overrides": []
       },
@@ -368,16 +187,74 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "min(node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay|squashfs\"} / node_filesystem_size_bytes{fstype!~\"tmpfs|overlay|squashfs\"}) * 100",
+          "expr": "sum(flower_worker_number_of_currently_executing_tasks)",
           "refId": "A"
         }
       ],
-      "description": "Худшая файловая система хоста.",
-      "id": 6
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Падений за час",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(flower_events_total{type=\"task-failed\"}[1h])) OR on() vector(0)",
+          "refId": "A"
+        }
+      ],
+      "id": 4
     },
     {
       "type": "timeseries",
-      "title": "Состояние таргетов",
+      "title": "Темп задач",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -397,8 +274,7 @@
             "showPoints": "never",
             "spanNulls": true
           },
-          "max": 1,
-          "min": 0
+          "unit": "ops"
         },
         "overrides": []
       },
@@ -418,17 +294,16 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "up",
+          "expr": "sum by (type) (rate(flower_events_total{type=~\"task-(succeeded|failed|retried)\"}[$__rate_interval]))",
           "refId": "A",
-          "legendFormat": "{{job}} · {{instance}}"
+          "legendFormat": "{{type}}"
         }
       ],
-      "description": "1 — Prometheus снимает метрики, 0 — таргет не отвечает.",
-      "id": 7
+      "id": 5
     },
     {
       "type": "timeseries",
-      "title": "Коды ответов приложения",
+      "title": "Длина очереди",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -436,59 +311,6 @@
       "gridPos": {
         "x": 12,
         "y": 5,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 40,
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (status) (rate(django_http_responses_total_by_status_total[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "id": 8
-    },
-    {
-      "type": "timeseries",
-      "title": "Ошибки в логах (Loki)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 13,
         "w": 12,
         "h": 8
       },
@@ -517,26 +339,26 @@
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
+          "expr": "redis_key_size{key=\"celery\"}",
           "refId": "A",
-          "expr": "sum by (service) (count_over_time({level=\"ERROR\"}[$__interval]))",
-          "legendFormat": "{{service}}"
+          "legendFormat": "celery"
         }
       ],
-      "description": "Дополняет метрики: не всякая ошибка меняет код ответа.",
-      "id": 9
+      "description": "Устойчивый рост означает, что воркеры не успевают за потоком задач.",
+      "id": 6
     },
     {
       "type": "timeseries",
-      "title": "CPU и память хоста",
+      "title": "Время выполнения задач (p95)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
+        "x": 0,
         "y": 13,
         "w": 12,
         "h": 8
@@ -550,9 +372,7 @@
             "showPoints": "never",
             "spanNulls": true
           },
-          "unit": "percent",
-          "max": 100,
-          "min": 0
+          "unit": "s"
         },
         "overrides": []
       },
@@ -572,22 +392,62 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])) * 100)",
+          "expr": "histogram_quantile(0.95, sum by (le, task) (rate(flower_task_runtime_seconds_bucket[$__rate_interval])))",
           "refId": "A",
-          "legendFormat": "CPU %"
+          "legendFormat": "{{task}}"
+        }
+      ],
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "Задачи по именам",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "ops"
         },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
+          "expr": "topk(10, sum by (task) (rate(flower_events_total{type=\"task-succeeded\"}[$__rate_interval])))",
           "refId": "A",
-          "legendFormat": "RAM %"
+          "legendFormat": "{{task}}"
         }
       ],
-      "id": 10
+      "id": 8
     }
   ],
-  "description": "Домашний дашборд: одна страница на вопрос «всё ли в порядке»."
+  "description": "Источник — /metrics самого Flower (нужен флаг -E у воркера). Длина очереди приходит от redis-exporter: Flower её не знает."
 }

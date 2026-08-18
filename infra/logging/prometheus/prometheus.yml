@@ -1,6 +1,10 @@
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+  external_labels:
+    # Попадает в каждую серию. Нужен, чтобы данные разных стендов не
+    # смешивались, если их когда-нибудь сведут в одно хранилище.
+    env: "${PROMETHEUS_ENV}"
 
 scrape_configs:
   # Prometheus self-monitoring
@@ -12,16 +16,37 @@ scrape_configs:
           app_name: "prometheus"
 
   # ─── Django backend ────────────────────────────────────────────
-  # Девять FastAPI-сервисов схлопнуты в единый Django-backend (миграция, фаза 11).
-  # Раскомментировать, КОГДA у бэкенда появится /metrics: поставить
-  # django-prometheus, добавить в INSTALLED_APPS + middleware (Prometheus{Before,
-  # After}Middleware) и роут /metrics. До тех пор эндпойнта нет — не скрейпим,
-  # чтобы не плодить down-таргеты.
-  # - job_name: "django-backend"
-  #   metrics_path: /metrics
-  #   static_configs:
-  #     - targets: ["backend-web:8000"]
-  #       labels: { app_name: "django-backend" }
+  # Два процесса одного кода, но разные рабочие нагрузки, и мерить их надо
+  # порознь: WSGI держит весь /api/*, ASGI — SSE-поток и WebSocket'ы
+  # мессенджера, у них принципиально разная форма латентности.
+  #
+  # backend-web бежит под gunicorn --workers 4, поэтому метрики собираются
+  # в мультипроцессном режиме (PROMETHEUS_MULTIPROC_DIR + htqweb/
+  # gunicorn_conf.py) — иначе скрейп попадал бы в случайный воркер.
+  - job_name: "django-backend"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend-web:8000"]
+        labels: { app_name: "django-backend", process: "wsgi" }
+
+  - job_name: "django-asgi"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend-asgi:8000"]
+        labels: { app_name: "django-backend", process: "asgi" }
+
+  # ─── Celery ────────────────────────────────────────────────────
+  # Через уже стоящий Flower: с версии 1.0 он сам отдаёт /metrics, поэтому
+  # отдельный celery-exporter не нужен. Требует `-E` у воркера (см. его
+  # команду в docker-compose.yml) — без событий Flower видит только самого
+  # воркера, но не то, что он выполняет.
+  #
+  # Длина очереди приходит НЕ отсюда, а от redis-exporter'а
+  # (REDIS_EXPORTER_CHECK_KEYS=9=celery → redis_key_size): Flower её не знает.
+  - job_name: "celery"
+    static_configs:
+      - targets: ["flower:5555"]
+        labels: { component: "celery" }
 
   # ─── Database Exporters ────────────────────────────────────────
   - job_name: "postgres"
@@ -33,6 +58,36 @@ scrape_configs:
     static_configs:
       - targets: ["redis-exporter:9121"]
         labels: { component: "redis" }
+
+  # ─── Хост и контейнеры ─────────────────────────────────────────
+  # Ради диска в первую очередь: «кончилось место» роняет прод чаще всего,
+  # а никакой другой таргет этого не видит.
+  - job_name: "node"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels: { component: "host" }
+
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels: { component: "containers" }
+
+  # ─── Шлюз ──────────────────────────────────────────────────────
+  # Только в профиле production: nginx и его экспортер вне прода не
+  # поднимаются (в dev фронт отдаёт Vite), и вне его таргет будет DOWN —
+  # это ожидаемо.
+  - job_name: "nginx"
+    static_configs:
+      - targets: ["nginx-exporter:9113"]
+        labels: { component: "gateway" }
+
+  # ─── Конференция ───────────────────────────────────────────────
+  # Экспорт живёт в самом SFU (sfu/src/metrics.ts): штатного /metrics у
+  # mediasoup нет.
+  - job_name: "sfu"
+    static_configs:
+      - targets: ["sfu:4443"]
+        labels: { component: "sfu" }
 
   # ─── MinIO Built-in Metrics ────────────────────────────────────
   # Requires MINIO_PROMETHEUS_AUTH_TYPE=public on the minio container,

@@ -1,9 +1,10 @@
 {
-  "uid": "htqweb-prometheus",
-  "title": "HTQWeb · Обзор платформы",
+  "uid": "htqweb-gateway-sfu",
+  "title": "HTQWeb · Шлюз и конференция",
   "tags": [
     "htqweb",
-    "overview"
+    "nginx",
+    "sfu"
   ],
   "editable": true,
   "graphTooltip": 1,
@@ -24,7 +25,7 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Сервисы недоступны",
+      "title": "Активные соединения nginx",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -32,7 +33,7 @@
       "gridPos": {
         "x": 0,
         "y": 0,
-        "w": 4,
+        "w": 6,
         "h": 5
       },
       "fieldConfig": {
@@ -43,10 +44,6 @@
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
               }
             ]
           }
@@ -71,24 +68,23 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "count(up == 0) OR on() vector(0)",
+          "expr": "nginx_connections_active",
           "refId": "A"
         }
       ],
-      "description": "Таргеты Prometheus в состоянии DOWN. В норме 0.",
       "id": 1
     },
     {
       "type": "stat",
-      "title": "RPS приложения",
+      "title": "Запросов в секунду",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 0,
-        "w": 4,
+        "w": 6,
         "h": 5
       },
       "fieldConfig": {
@@ -124,7 +120,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(django_http_responses_total_by_status_total[$__rate_interval]))",
+          "expr": "rate(nginx_http_requests_total[$__rate_interval])",
           "refId": "A"
         }
       ],
@@ -132,67 +128,7 @@
     },
     {
       "type": "stat",
-      "title": "Ошибки 5xx / с",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 0,
-        "w": 4,
-        "h": 5
-      },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.1
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(rate(django_http_responses_total_by_status_total{status=~\"5..\"}[$__rate_interval]))",
-          "refId": "A"
-        }
-      ],
-      "id": 3
-    },
-    {
-      "type": "stat",
-      "title": "p95 ответа",
+      "title": "Комнат в конференции",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -200,7 +136,7 @@
       "gridPos": {
         "x": 12,
         "y": 0,
-        "w": 4,
+        "w": 6,
         "h": 5
       },
       "fieldConfig": {
@@ -211,74 +147,6 @@
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 3
-              }
-            ]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(django_http_requests_latency_seconds_by_view_method_bucket[$__rate_interval])))",
-          "refId": "A"
-        }
-      ],
-      "id": 4
-    },
-    {
-      "type": "stat",
-      "title": "Очередь Celery",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 0,
-        "w": 4,
-        "h": 5
-      },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 100
-              },
-              {
-                "color": "red",
-                "value": 1000
               }
             ]
           }
@@ -303,24 +171,23 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(redis_key_size{key=\"celery\"})",
+          "expr": "sfu_rooms",
           "refId": "A"
         }
       ],
-      "description": "Длина списка `celery` в Redis. Растёт — воркеры не успевают.",
-      "id": 5
+      "id": 3
     },
     {
       "type": "stat",
-      "title": "Свободно на диске",
+      "title": "Участников",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 20,
+        "x": 18,
         "y": 0,
-        "w": 4,
+        "w": 6,
         "h": 5
       },
       "fieldConfig": {
@@ -331,22 +198,9 @@
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "red",
-                "value": 0
-              },
-              {
-                "color": "orange",
-                "value": 15
-              },
-              {
-                "color": "green",
-                "value": 25
               }
             ]
-          },
-          "unit": "percent"
+          }
         },
         "overrides": []
       },
@@ -368,16 +222,15 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "min(node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay|squashfs\"} / node_filesystem_size_bytes{fstype!~\"tmpfs|overlay|squashfs\"}) * 100",
+          "expr": "sfu_peers",
           "refId": "A"
         }
       ],
-      "description": "Худшая файловая система хоста.",
-      "id": 6
+      "id": 4
     },
     {
       "type": "timeseries",
-      "title": "Состояние таргетов",
+      "title": "Запросы через шлюз",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -397,61 +250,6 @@
             "showPoints": "never",
             "spanNulls": true
           },
-          "max": 1,
-          "min": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "up",
-          "refId": "A",
-          "legendFormat": "{{job}} · {{instance}}"
-        }
-      ],
-      "description": "1 — Prometheus снимает метрики, 0 — таргет не отвечает.",
-      "id": 7
-    },
-    {
-      "type": "timeseries",
-      "title": "Коды ответов приложения",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 5,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 40,
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
-          },
           "unit": "reqps"
         },
         "overrides": []
@@ -472,16 +270,91 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (status) (rate(django_http_responses_total_by_status_total[$__rate_interval]))",
+          "expr": "rate(nginx_http_requests_total[$__rate_interval])",
           "refId": "A",
-          "legendFormat": "{{status}}"
+          "legendFormat": "запросы/с"
         }
       ],
-      "id": 8
+      "id": 5
     },
     {
       "type": "timeseries",
-      "title": "Ошибки в логах (Loki)",
+      "title": "Соединения nginx",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nginx_connections_active",
+          "refId": "A",
+          "legendFormat": "активные"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nginx_connections_waiting",
+          "refId": "B",
+          "legendFormat": "ожидают"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nginx_connections_reading",
+          "refId": "C",
+          "legendFormat": "чтение"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nginx_connections_writing",
+          "refId": "D",
+          "legendFormat": "запись"
+        }
+      ],
+      "id": 6
+    },
+    {
+      "type": "timeseries",
+      "title": "5xx на шлюзе (по логам)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -521,16 +394,16 @@
             "uid": "loki"
           },
           "refId": "A",
-          "expr": "sum by (service) (count_over_time({level=\"ERROR\"}[$__interval]))",
-          "legendFormat": "{{service}}"
+          "expr": "sum(count_over_time({service=\"nginx\"} |~ \" 5\\\\d\\\\d \" [$__interval]))",
+          "legendFormat": "5xx"
         }
       ],
-      "description": "Дополняет метрики: не всякая ошибка меняет код ответа.",
-      "id": 9
+      "description": "stub_status кодов ответов не даёт — они берутся из логов Loki.",
+      "id": 7
     },
     {
       "type": "timeseries",
-      "title": "CPU и память хоста",
+      "title": "Конференция: потоки",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -549,10 +422,7 @@
             "fillOpacity": 12,
             "showPoints": "never",
             "spanNulls": true
-          },
-          "unit": "percent",
-          "max": 100,
-          "min": 0
+          }
         },
         "overrides": []
       },
@@ -572,22 +442,147 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])) * 100)",
+          "expr": "sfu_producers",
           "refId": "A",
-          "legendFormat": "CPU %"
+          "legendFormat": "producers (исходящие)"
         },
         {
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
-          "refId": "A",
-          "legendFormat": "RAM %"
+          "expr": "sfu_consumers",
+          "refId": "B",
+          "legendFormat": "consumers (входящие)"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sfu_transports",
+          "refId": "C",
+          "legendFormat": "транспорты"
         }
       ],
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Комнаты и соединения сигналинга",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sfu_rooms",
+          "refId": "A",
+          "legendFormat": "комнаты"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sfu_signaling_connections",
+          "refId": "B",
+          "legendFormat": "WebSocket-соединения"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sfu_peers",
+          "refId": "C",
+          "legendFormat": "участники"
+        }
+      ],
+      "id": 9
+    },
+    {
+      "type": "timeseries",
+      "title": "Event-loop lag SFU",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 21,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sfu_process_nodejs_eventloop_lag_seconds",
+          "refId": "A",
+          "legendFormat": "лаг"
+        }
+      ],
+      "description": "Node однопоточный: растущий лаг объясняет рассыпающийся звук раньше, чем любые прикладные счётчики.",
       "id": 10
     }
   ],
-  "description": "Домашний дашборд: одна страница на вопрос «всё ли в порядке»."
+  "description": "nginx-exporter поднимается только в профиле production; вне его панели шлюза пусты — это ожидаемо."
 }

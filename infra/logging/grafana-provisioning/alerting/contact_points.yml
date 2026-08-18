@@ -1,34 +1,85 @@
-# Grafana alerting — contact points + notification policies (provisioned).
+# Grafana alerting — точки доставки и политика маршрутизации (provisioned).
 #
-# Default contact point routes to Grafana's built-in `grafana-default-email`,
-# which is a no-op until SMTP env vars (GF_SMTP_*) are configured. For now
-# this keeps alerts visible inside the Grafana UI (Alerting → State); add a
-# real Slack/email/webhook contact point when the environment is ready.
+# Раньше здесь стояла заглушка: email на oncall@htqweb.local при
+# ненастроенном SMTP, то есть уведомления не уходили НИКУДА, а алерты жили
+# только на экране, куда во время аварии никто не смотрит.
+#
+# Теперь два канала:
+#   • Telegram — основной. Доходит мгновенно и не зависит от почты, которая
+#     работает на этой же платформе и в момент аварии может лежать сама.
+#   • Email — дополнительно и ТОЛЬКО на critical, как второй независимый
+#     путь на случай, когда недоступен Telegram.
+#
+# Секреты берутся из окружения Grafana (см. .env.example):
+#   GF_TELEGRAM_BOT_TOKEN, GF_TELEGRAM_CHAT_ID — бот и чат;
+#   GF_SMTP_* — почтовый сервер (без них email-канал молча не отправляет).
+# Синтаксис $__env{...} — штатная подстановка окружения в провижининге
+# Grafana; класть токен бота в репозиторий нельзя.
 
 apiVersion: 1
 
 contactPoints:
   - orgId: 1
-    name: htqweb-default
+    name: htqweb-telegram
     receivers:
-      - uid: htqweb-default-receiver
-        type: email
-        # Falls back to the no-op email integration if SMTP isn't configured.
-        # Replace with slack/webhook/PagerDuty when an integration is wired.
+      - uid: htqweb-telegram-receiver
+        type: telegram
         settings:
-          addresses: oncall@htqweb.local
+          # Токен — секрет, поэтому только из окружения.
+          bottoken: $__env{GF_TELEGRAM_BOT_TOKEN}
+          # ⚠️ Chat id задаётся ЗДЕСЬ ЛИТЕРАЛОМ, а не через $__env{}, и это
+          # не небрежность. Grafana 10.4 переопределяет тип значения ПОСЛЕ
+          # подстановки окружения, поэтому числовой id (а Telegram выдаёт
+          # именно числовой, у групп ещё и отрицательный) приезжает в
+          # настройки как JSON-число и старт падает целиком:
+          #   «cannot unmarshal number into Go struct field Config.chatid
+          #    of type string».
+          # Ни кавычки, ни тег !!str этого не лечат — проверено. Литерал в
+          # кавычках подстановку не проходит и остаётся строкой.
+          # Chat id не секрет (секрет — токен выше), так что держать его в
+          # конфиге допустимо. ЗАМЕНИТЬ на свой: @userinfobot для личного
+          # чата, для группы — отрицательный id вида -1001234567890.
+          chatid: "REPLACE-WITH-YOUR-TELEGRAM-CHAT-ID"
+          # Ссылка на дашборд и на саму панель — чтобы из уведомления
+          # можно было провалиться в графики, а не искать их руками.
+          message: |
+            {{ if eq .Status "firing" }}🔴{{ else }}✅{{ end }} {{ .Status | toUpper }} — {{ .CommonLabels.alertname }}
+
+            {{ range .Alerts }}{{ .Annotations.summary }}
+            {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
+            {{ if .DashboardURL }}Дашборд: {{ .DashboardURL }}{{ end }}
+            {{ end }}
+          disable_notification: false
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: htqweb-email
+    receivers:
+      - uid: htqweb-email-receiver
+        type: email
+        settings:
+          addresses: $__env{ALERT_EMAIL_TO}
           singleEmail: false
         disableResolveMessage: false
 
 policies:
   - orgId: 1
-    receiver: htqweb-default
+    receiver: htqweb-telegram
     group_by: [grafana_folder, alertname]
     group_wait: 30s
     group_interval: 5m
     repeat_interval: 12h
     routes:
-      - receiver: htqweb-default
+      # critical дублируется на почту вторым независимым каналом.
+      # continue: true обязателен — без него маршрут поглотил бы алерт и в
+      # Telegram он бы не ушёл.
+      - receiver: htqweb-email
+        matchers:
+          - severity = critical
+        group_wait: 0s
+        repeat_interval: 1h
+        continue: true
+      - receiver: htqweb-telegram
         matchers:
           - severity = critical
         group_wait: 0s

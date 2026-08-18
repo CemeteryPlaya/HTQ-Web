@@ -15,6 +15,33 @@ DEBUG = False
 ALLOWED_HOSTS = ["*"]           # локальный запуск; деплой — вне скоупа
 APPEND_SLASH = False            # пути повторяют API.md буквально, без редиректов
 
+# ── Среда и политика fallback'ов ───────────────────────────────────────────
+# Одна ось на три рантайма: тот же HTQ_ENV читают фронт (VITE_HTQ_ENV) и SFU.
+#
+#   production  — прод;
+#   staging     — тестовая среда, код ведёт себя РОВНО как на проде;
+#   development — машина разработчика и pytest.
+#
+# Из неё выводится режим подмен (htqweb/fallback.py): на проде и стейдже
+# fallback срабатывает молча для пользователя, но громко в лог и метрику;
+# у разработчика он запрещён и вместо подмены летит исключение.
+#
+# Явная FALLBACK_MODE перебивает вывод из среды — чтобы включить strict на
+# стейдже на час, не пересобирая среду, и наоборот: разово ослабить его
+# локально, когда чинишь что-то другое.
+HTQ_ENV = env("HTQ_ENV", "production")
+
+
+def fallback_mode_for(environment: str) -> str:
+    """``"log"`` | ``"strict"`` для среды. Переопределяется FALLBACK_MODE."""
+    override = env("FALLBACK_MODE")
+    if override:
+        return override
+    return "strict" if environment == "development" else "log"
+
+
+FALLBACK_MODE = fallback_mode_for(HTQ_ENV)
+
 INSTALLED_APPS = [
     # Вместо "django.contrib.admin" — свой AdminConfig: он поднимает
     # htqweb.admin_site.HTQAdminSite (брендинг + порядок разделов) как
@@ -28,6 +55,10 @@ INSTALLED_APPS = [
     "django_celery_results",
     "django_celery_beat",
     "django_json_widget",
+    # Наблюдаемость: HTTP-метрики + движки-обёртки для БД и кэша.
+    # Сам по себе роут не заводит — /metrics отдаёт apps.core.views.metrics,
+    # потому что под gunicorn'ом нужен multiprocess-реестр (см. там же).
+    "django_prometheus",
     "apps.core",
     "apps.users",
     "apps.cms",
@@ -45,6 +76,10 @@ INSTALLED_APPS = [
     # Домен, появившийся уже после обратной миграции (не из FastAPI-поколения):
     # бюджеты, реестр контрагентов, договоры. /api/contracts/v1/
     "apps.contracts",
+    # Журнал видеоконференций: встречи, записи, протокол. /api/conference/v1/
+    # Имя `conference` уже было в KNOWN_SERVICES — оно резервировалось под
+    # SFU-стек, у которого не было своей Django-аппки. Теперь есть.
+    "apps.conference",
     # Универсальный движок согласования. /api/signoff/v1/
     # НЕ путать с apps.approvals (/api/requests/v1/): та аппка — конструктор
     # динамических форм, её единица согласования — собственная заявка с JSON
@@ -57,6 +92,10 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —
+    # последней. Иначе замеряется не полное время запроса, а только то, что
+    # осталось внутри их «скобок», и латентность систематически занижается.
+    "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "htqweb.middleware.request_id.RequestIDMiddleware",
     "htqweb.middleware.service_gate.ServiceGateMiddleware",
     "django.middleware.security.SecurityMiddleware",
@@ -73,6 +112,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    "django_prometheus.middleware.PrometheusAfterMiddleware",
 ]
 
 ROOT_URLCONF = "htqweb.urls"
@@ -98,7 +138,11 @@ TEMPLATES = [{
 # в transaction-режиме обязательны две строки ниже.
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
+        # Обёртка django-prometheus над штатным postgresql-бэкендом: тонкий
+        # подкласс, поведение и SQL не меняет, но считает запросы, ошибки и
+        # время соединений (django_db_*). Подменять строку на штатную
+        # безопасно — метрики БД просто исчезнут.
+        "ENGINE": "django_prometheus.db.backends.postgresql",
         "NAME": env("DB_NAME", "htqweb"),
         "USER": env("DB_USER", "htqweb"),
         "PASSWORD": env("DB_PASSWORD", "change-me"),
@@ -119,7 +163,11 @@ DJANGO_REDIS_IGNORE_EXCEPTIONS = True
 
 CACHES = {
     "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
+        # Обёртка django-prometheus над django_redis: даёт попадания/промахи
+        # (django_cache_get_hits_total / _misses_total). Подкласс того же
+        # RedisCache, поэтому IGNORE_EXCEPTIONS и всё остальное работает как
+        # раньше.
+        "BACKEND": "django_prometheus.cache.backends.redis.RedisCache",
         "LOCATION": env("REDIS_URL", "redis://localhost:6379/8"),
         "OPTIONS": {"IGNORE_EXCEPTIONS": True},
     }
@@ -135,6 +183,20 @@ CELERY_CACHE_BACKEND = "default"
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 300
+# Обработка записей конференций уходит в СВОЮ очередь и к своему воркеру
+# (backend-media-worker, образ backend/Dockerfile.media с ffmpeg и Whisper).
+# Два повода развести: сборка часового видео и распознавание занимают десятки
+# минут — в общей очереди они задержали бы отправку почты и пересчёт метрик;
+# и наоборот, ставить ffmpeg с ctranslate2 в общий образ значит утяжелить все
+# пять backend-контейнеров ради задач, которые выполняет один.
+#
+# Общий backend-worker запущен без -Q (docker-compose.yml), то есть слушает
+# только очередь celery и этих задач не увидит — что и требуется.
+CONFERENCE_MEDIA_QUEUE = "conference_media"
+CELERY_TASK_ROUTES = {
+    "apps.conference.tasks.process_session_recording": {"queue": CONFERENCE_MEDIA_QUEUE},
+    "apps.conference.tasks.transcribe_session": {"queue": CONFERENCE_MEDIA_QUEUE},
+}
 
 # ── JWT-контракт платформы (API.md §Authentication) ─────────────────────────
 JWT_SECRET = env("JWT_SECRET", "change-me")
@@ -186,6 +248,10 @@ LOGGING = {
         "django.db.backends": {"level": "WARNING"},
         "apps": {"level": env("APP_LOG_LEVEL", "INFO")},
         "htqweb": {"level": env("APP_LOG_LEVEL", "INFO")},
+        # Fallback'и — свой уровень, отдельно от остальных htqweb.*: строки
+        # «FALLBACK …» приглушают или, наоборот, опускают до INFO (штатные
+        # деградации) независимо от того, насколько разговорчив остальной код.
+        "htqweb.fallback": {"level": env("FALLBACK_LOG_LEVEL", "INFO")},
     },
 }
 
@@ -234,6 +300,18 @@ MINIO_CONSOLE_URL = env("MINIO_CONSOLE_URL", "http://localhost:9001")
 # ws://sfu:4443 — имя внутри docker-сети, из браузера оно не резолвится.
 # Задавайте явно только если SFU живёт на отдельном хосте/порту.
 CONFERENCE_SFU_URL = env("CONFERENCE_SFU_URL", "")
+
+# ── Приглашения в конференцию ──────────────────────────────────────────────
+# Время жизни ГОСТЕВОГО токена (htqweb/authn/jwt.py::issue_guest_token) —
+# сколько внешний участник может находиться в звонке после входа по ссылке.
+# 4 часа: дольше любого совещания, но не бессрочно; сама ссылка живёт своим
+# сроком (CONFERENCE_INVITE_TTL_HOURS) и может быть отозвана.
+CONFERENCE_GUEST_TOKEN_TTL_MIN = int(env("CONFERENCE_GUEST_TOKEN_TTL_MIN", "240"))
+# Срок жизни ссылки-приглашения по умолчанию.
+CONFERENCE_INVITE_TTL_HOURS = int(env("CONFERENCE_INVITE_TTL_HOURS", "168"))
+# Публичный адрес платформы для сборки ссылок в письмах и сообщениях: там,
+# в отличие от браузера, origin взять неоткуда.
+PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "")
 CONFERENCE_SFU_PATH = env("CONFERENCE_SFU_PATH", "/ws/sfu/")
 CONFERENCE_ICE_SERVERS = [
     {"urls": "stun:stun.l.google.com:19302"},
@@ -254,6 +332,39 @@ CONFERENCE_ICE_SERVERS = [
 CONFERENCE_WT_URL = env("CONFERENCE_WT_URL", "")
 CONFERENCE_WT_CERT_HASHES = env("CONFERENCE_WT_CERT_HASHES", "")
 CONFERENCE_WT_CERT_HASH_FILE = env("CONFERENCE_WT_CERT_HASH_FILE", "")
+
+# ── Запись конференций, история и протокол (apps.conference) ────────────────
+# Запись ведётся ПОУЧАСТНИКОВО: SFU вешает PlainTransport на каждого
+# producer'а и ремуксит поток в файл через ffmpeg (-c copy, без
+# перекодирования). Сведение в одно видео и распознавание речи идут потом, в
+# отдельном Celery-воркере, и на живой звонок не влияют.
+CONFERENCE_RECORDING_ENABLED = env("CONFERENCE_RECORDING_ENABLED", "true").lower() in (
+    "1", "true", "yes")
+# Сколько живёт МЕДИА встречи. Строка истории и текстовый протокол переживают
+# этот срок — стирается только видео/аудио (решение заказчика).
+CONFERENCE_RETENTION_DAYS = int(env("CONFERENCE_RETENTION_DAYS", "25"))
+# Общий секрет для канала SFU → Django (/api/conference/v1/internal/*).
+# JWT здесь не годится: у SFU нет пользователя, от чьего имени ходить.
+CONFERENCE_INTERNAL_TOKEN = env("CONFERENCE_INTERNAL_TOKEN", "")
+# Том с сырыми дорожками, общий у контейнеров sfu и backend-media-worker.
+CONFERENCE_RAW_DIR = env("CONFERENCE_RAW_DIR", "/recordings")
+# Пусто = класть записи в MEDIA_S3_BUCKET под префиксом conference/.
+# Третий бакет намеренно не заводим (см. ensure_buckets.py), но отдельное имя
+# можно задать переменной, если прод захочет развести их по политикам жизни.
+CONFERENCE_S3_BUCKET = env("CONFERENCE_S3_BUCKET", "") or MEDIA_S3_BUCKET
+# Через сколько часов молчания считать незакрытую сессию осиротевшей (SFU
+# упал, не прислав finish) и закрыть её принудительно.
+CONFERENCE_ORPHAN_HOURS = int(env("CONFERENCE_ORPHAN_HOURS", "6"))
+# Сколько плиток помещается в сведённое видео. Дорожки сверх этого числа в
+# картинку не попадают, но в протоколе и в аудиомиксе участвуют полностью.
+CONFERENCE_MAX_TILES = int(env("CONFERENCE_MAX_TILES", "9"))
+# Модель распознавания. medium — компромисс: русский держит уверенно, часовая
+# встреча на CPU считается 20–40 минут фоном. int8 обязателен на CPU, иначе
+# ctranslate2 съедает памяти втрое.
+WHISPER_MODEL = env("WHISPER_MODEL", "medium")
+WHISPER_DEVICE = env("WHISPER_DEVICE", "cpu")
+WHISPER_COMPUTE_TYPE = env("WHISPER_COMPUTE_TYPE", "int8")
+WHISPER_LANGUAGE = env("WHISPER_LANGUAGE", "ru")
 
 # ── cms background tasks (apps/cms/tasks.py) — ported defaults from
 # services/cms/app/core/settings.py + .env.example, byte-for-byte, so both

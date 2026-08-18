@@ -16,6 +16,12 @@ urlpatterns = [
     path("health/ready/", views.ready),
     path("api/core/v1/services/", views.services_status),
 
+    # Метрики для Prometheus. В корне, а не под /api/<домен>/: это не часть
+    # публичного API, и ServiceGateMiddleware гейтит только api-префиксы —
+    # выключение любого домена не должно гасить наблюдаемость.
+    path("metrics", views.metrics),
+    path("metrics/", views.metrics),
+
     # ── /api/admin/v1/infrastructure/* — порт снесённого admin-сервиса ─────
     # Литеральные под-пути идут ДО общего <str:resource_id>, иначе
     # "credentials", "audit", "health-check" и "health-history" совпали бы
