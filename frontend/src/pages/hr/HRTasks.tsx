@@ -289,7 +289,7 @@ const HRTasks: React.FC = () => {
 
             <Select value={contractorFilter} onValueChange={setContractorFilter}>
               <SelectTrigger className="h-9 text-xs rounded-xl bg-muted/30">
-                <SelectValue placeholder={t('tasks.pages.contractors.one', 'Подрядчик')} />
+                <SelectValue placeholder={t('tasks.pages.contractors.one', 'Партнёр')} />
               </SelectTrigger>
               <SelectContent className="rounded-2xl">
                 <SelectItem value="all">{t('tasks.pages.contractors.allPerformers', 'Все исполнители')}</SelectItem>

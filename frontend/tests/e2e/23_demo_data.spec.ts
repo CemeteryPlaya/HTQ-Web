@@ -93,7 +93,7 @@ test.describe("Демо-данные: домен задач наполнен с�
     ]);
   });
 
-  test("подрядчики: три уровня людей и привлечения по объектам", async ({
+  test("партнёры: три уровня людей и привлечения по объектам", async ({
     request,
     adminTokens,
   }) => {
@@ -110,10 +110,10 @@ test.describe("Демо-данные: домен задач наполнен с�
     }
 
     // Уровень — свойство человека, и все три должны быть в наличии:
-    // на них держится будущая матрица прав подрядчиков.
+    // на них держится будущая матрица прав партнёров.
     expect([...levels].sort()).toEqual(["junior", "middle", "senior"]);
 
-    // Привлечения лежат отдельной коллекцией, не под подрядчиком.
+    // Привлечения лежат отдельной коллекцией, не под партнёром.
     const engagements = await (
       await request.get(`${API}/contractor-engagements/`, ctx)
     ).json();
@@ -124,7 +124,7 @@ test.describe("Демо-данные: домен задач наполнен с�
       .toBe(true);
   });
 
-  test("техника подрядчика всегда называет владельца", async ({
+  test("техника партнёра всегда называет владельца", async ({
     request,
     adminTokens,
   }) => {
@@ -186,7 +186,7 @@ test.describe("Демо-данные в браузере", () => {
     await expect(page.getByText("★ Алга").first()).toBeVisible();
   });
 
-  test("подрядчики и их люди видны на своей странице", async ({ page }) => {
+  test("партнёры и их люди видны на своей странице", async ({ page }) => {
     await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await page.goto("/tasks/contractors");
     await expect(page.getByText("ТОО «Алга-Строй-Монтаж»")).toBeVisible({

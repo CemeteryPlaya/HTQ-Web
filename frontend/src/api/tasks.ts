@@ -12,6 +12,7 @@ import type {
   BlockProgress, TaskVolume, ResourceRequirement, ReferenceRow,
   WorkVolumeType, WorkVolumeUnit, EquipmentUsage,
   DailyReport, DailyReportBoardRow, DailyReportRevision, PlanFactNode,
+  ProjectStaffBoard, ProjectStaffReport, ProjectStaffRevision,
 } from '@/types/tasks';
 
 const BASE = `${API_ENDPOINTS.tasks}/`;
@@ -354,6 +355,84 @@ export const fetchDailyReportRevisions = async (
   return unwrap<DailyReportRevision>(res.data);
 };
 
+/* ---------- Отчёты по персоналу проекта ---------- */
+
+/**
+ * Проекты, по которым вызывающему разрешено вести численность.
+ *
+ * Не `fetchProjects()`: роут-гейт фронта (`requiresRole: 'hr'`) шире
+ * серверного правила — в токене нет ролей вида `hr_manager`, только
+ * `is_staff`/`is_superuser`. Сузить список может лишь сервер, иначе
+ * селектор предлагал бы проекты, дающие 403.
+ */
+export const fetchStaffReportProjects = async (): Promise<Project[]> => {
+  const res = await api.get(`${BASE}staff-reports/projects/`);
+  return unwrap<Project>(res.data);
+};
+
+/**
+ * Доска численности проекта на дату: блок × (факт, план, ежедневка).
+ *
+ * Один запрос вместо «блоки + отчёт каждого + план каждого»: план и сверка
+ * с ежедневкой лежат в других таблицах, и страница на 12 блоков стоила бы
+ * два десятка обращений.
+ */
+export const fetchProjectStaffBoard = async (
+  projectId: number, date?: string,
+): Promise<ProjectStaffBoard> => {
+  const res = await api.get(`${BASE}projects/${projectId}/staff-board/`,
+                            { params: date ? { date } : undefined });
+  return res.data;
+};
+
+/**
+ * Отчёт целиком — со строками. Доска отдаёт по блоку только свёртку
+ * «план против факта», и восстанавливать из неё строки нельзя: роль с
+ * нулём людей неотличима там от роли, которая есть только в плане.
+ */
+export const fetchProjectStaffReport = async (
+  reportId: number,
+): Promise<ProjectStaffReport> => {
+  const res = await api.get(`${BASE}staff-reports/${reportId}/`);
+  return res.data;
+};
+
+export const createProjectStaffReport = async (
+  projectId: number,
+  data: {
+    site_block_id: number; work_date: string; comment?: string;
+    lines: { work_role_id: number; headcount: number }[];
+  },
+): Promise<ProjectStaffReport> => {
+  const res = await api.post(`${BASE}projects/${projectId}/staff-reports/`,
+                             data);
+  return res.data;
+};
+
+export const updateProjectStaffReport = async (
+  reportId: number,
+  data: {
+    work_date?: string; comment?: string;
+    lines?: { work_role_id: number; headcount: number }[];
+  },
+): Promise<ProjectStaffReport> => {
+  const res = await api.patch(`${BASE}staff-reports/${reportId}/`, data);
+  return res.data;
+};
+
+export const deleteProjectStaffReport = async (
+  reportId: number,
+): Promise<void> => {
+  await api.delete(`${BASE}staff-reports/${reportId}/`);
+};
+
+export const fetchProjectStaffRevisions = async (
+  reportId: number,
+): Promise<ProjectStaffRevision[]> => {
+  const res = await api.get(`${BASE}staff-reports/${reportId}/revisions/`);
+  return unwrap<ProjectStaffRevision>(res.data);
+};
+
 /* ---------- План/факт ---------- */
 
 /** `date` — отчётная дата; по умолчанию сервер берёт сегодня. */
@@ -457,7 +536,7 @@ export const createVolumeType = async (
   return res.data;
 };
 
-/* ---------- Contractors (субподрядчики) ---------- */
+/* ---------- Contractors (партнёры) ---------- */
 export const fetchContractors = async (params?: {
   status?: string;
   search?: string;

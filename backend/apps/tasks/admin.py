@@ -42,6 +42,9 @@ from .models import (
     DailyReport,
     DailyReportRevision,
     ProjectSite,
+    ProjectStaffReport,
+    ProjectStaffReportLine,
+    ProjectStaffReportRevision,
     ResourceAllocation,
     ResourceRequirement,
     Roadmap,
@@ -254,7 +257,7 @@ class EquipmentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 class ContractorWorkerInline(admin.TabularInline):
-    """Представители подрядчика. Инлайн: человек вне своей организации не
+    """Представители партнёра. Инлайн: человек вне своей организации не
     значит ничего, а ``user_id`` тут только читается — привязка аккаунта
     появится вместе с механизмом входа."""
 
@@ -277,7 +280,7 @@ class ContractorAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 class ContractorEngagementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     """Отдельным разделом, а не инлайном: привлечение осмысленно само по
     себе (договор, сроки, объект) и его ищут по проекту и по объекту, а не
-    только по подрядчику."""
+    только по партнёру."""
 
     list_display = ("id", "contractor", "project", "site", "roadmap",
                     "contract_no", "start_date", "end_date", "is_active")
@@ -347,6 +350,60 @@ class DailyReportAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     date_hierarchy = "work_date"
     list_select_related = ("task", "volume_type")
     inlines = (DailyReportRevisionInline,)
+
+
+class ProjectStaffReportLineInline(admin.TabularInline):
+    """Строки «роль — сколько людей». Редактируемые, в отличие от ревизий:
+    это текущее состояние отчёта, а не снимок случившегося."""
+
+    model = ProjectStaffReportLine
+    extra = 0
+    autocomplete_fields = ("work_role",)
+
+
+class ProjectStaffReportRevisionInline(admin.TabularInline):
+    """Лента версий — только чтение, по той же причине, что у
+    ``DailyReportRevisionInline``. ``lines`` показывается сырым JSON:
+    снимок неизменяем, и разбирать его в виджет незачем."""
+
+    model = ProjectStaffReportRevision
+    extra = 0
+    can_delete = False
+    readonly_fields = ("revision_no", "work_date", "total_headcount", "lines",
+                       "comment", "edited_by_id", "edited_at")
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ProjectStaffReport)
+class ProjectStaffReportAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    """Численность проекта по дням и блокам.
+
+    ``work_date`` — дата ВЫХОДА людей, по ней всё и считается;
+    ``created_at`` (дата заполнения) служебная и стоит в конце — то же
+    расположение и по той же причине, что у ``DailyReportAdmin``.
+    """
+
+    list_display = ("id", "project", "site_block", "work_date",
+                    "total_headcount", "author_id", "current_revision",
+                    "is_deleted", "created_at")
+    list_filter = ("is_deleted", "work_date", "project")
+    search_fields = ("project__name", "site_block__name", "comment")
+    raw_id_fields = ("project", "site_block")
+    readonly_fields = ("current_revision", "created_at", "updated_at")
+    date_hierarchy = "work_date"
+    list_select_related = ("project", "site_block")
+    inlines = (ProjectStaffReportLineInline, ProjectStaffReportRevisionInline)
+
+    @admin.display(description="Всего людей")
+    def total_headcount(self, obj) -> int:
+        return sum(line.headcount for line in obj.lines.all())
+
+    def get_queryset(self, request):
+        # Итог в списке считается по строкам — без prefetch это N+1 на
+        # каждую страницу админки.
+        return super().get_queryset(request).prefetch_related("lines")
 
 
 @admin.register(TaskLink)

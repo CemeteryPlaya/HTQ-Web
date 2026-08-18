@@ -151,7 +151,7 @@ const HRContractors: React.FC = () => {
       invalidate();
       setContractorDialog(false);
       if (!editingContractor) setSelectedId(saved.id);
-      toast.success(t('tasks.pages.contractors.saved', 'Подрядчик сохранён'));
+      toast.success(t('tasks.pages.contractors.saved', 'Партнёр сохранён'));
     },
     onError: fail('tasks.pages.contractors.saveError', 'Не удалось сохранить'),
   });
@@ -161,7 +161,7 @@ const HRContractors: React.FC = () => {
     onSuccess: () => {
       if (selectedId === editingContractor?.id) setSelectedId(null);
       invalidate();
-      toast.success(t('tasks.pages.contractors.deleted', 'Подрядчик удалён'));
+      toast.success(t('tasks.pages.contractors.deleted', 'Партнёр удалён'));
     },
     onError: fail('tasks.pages.contractors.deleteError', 'Не удалось удалить'),
   });
@@ -271,16 +271,16 @@ const HRContractors: React.FC = () => {
 
   return (
     <TasksLayout
-      title={t('tasks.pages.contractors.title', 'Субподрядчики')}
-      subtitle={t('tasks.pages.contractors.subtitle', 'Реестр субподрядных организаций, сотрудников и договоров')}
+      title={t('tasks.pages.contractors.title', 'Партнёры')}
+      subtitle={t('tasks.pages.contractors.subtitle', 'Реестр партнёрских организаций, сотрудников и договоров')}
     >
       <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)] items-start">
-        {/* ── Левая колонка: Список Подрядчиков ── */}
+        {/* ── Левая колонка: Список Партнёров ── */}
         <div className="rounded-3xl border bg-card p-4 shadow-2xs space-y-4 lg:sticky lg:top-24">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
               <HardHat className="h-4 w-4 text-primary" />
-              {t('tasks.pages.contractors.title', 'Субподрядчики')} ({contractors.length})
+              {t('tasks.pages.contractors.title', 'Партнёры')} ({contractors.length})
             </h2>
             <Button
               size="sm"
@@ -296,7 +296,7 @@ const HRContractors: React.FC = () => {
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
               <Input
-                placeholder={t('tasks.pages.contractors.search', 'Поиск подрядчика…')}
+                placeholder={t('tasks.pages.contractors.search', 'Поиск партнёра…')}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-8 h-8 text-xs rounded-xl bg-muted/30"
@@ -324,7 +324,7 @@ const HRContractors: React.FC = () => {
             </p>
           ) : contractors.length === 0 ? (
             <p className="text-xs text-muted-foreground py-6 text-center">
-              {t('tasks.pages.contractors.empty', 'Подрядчики не найдены')}
+              {t('tasks.pages.contractors.empty', 'Партнёры не найдены')}
             </p>
           ) : (
             <div className="space-y-2 max-h-[calc(100vh-280px)] overflow-y-auto pr-1">
@@ -360,16 +360,16 @@ const HRContractors: React.FC = () => {
           )}
         </div>
 
-        {/* ── Правая колонка: Детали Подрядчика ── */}
+        {/* ── Правая колонка: Детали Партнёра ── */}
         <div className="space-y-6">
           {!selected ? (
             <div className="rounded-3xl border bg-card p-12 text-center text-muted-foreground text-xs space-y-2">
               <HardHat className="h-8 w-8 mx-auto text-muted-foreground/60" />
-              <p>{t('tasks.pages.contractors.selectHint', 'Выберите подрядчика из списка слева для просмотра подробностей')}</p>
+              <p>{t('tasks.pages.contractors.selectHint', 'Выберите партнёра из списка слева для просмотра подробностей')}</p>
             </div>
           ) : (
             <>
-              {/* Карточка подряда */}
+              {/* Карточка партнёра */}
               <div className="rounded-3xl border bg-card p-5 shadow-2xs space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4">
                   <div>
@@ -399,7 +399,7 @@ const HRContractors: React.FC = () => {
                       variant="ghost"
                       className="h-8 w-8 p-0 text-destructive hover:text-destructive rounded-xl"
                       onClick={() => {
-                        if (confirm(t('tasks.pages.contractors.deleteConfirm', 'Удалить подрядчика?'))) {
+                        if (confirm(t('tasks.pages.contractors.deleteConfirm', 'Удалить партнёра?'))) {
                           deleteContractorMutation.mutate(selected.id);
                         }
                       }}
@@ -467,7 +467,7 @@ const HRContractors: React.FC = () => {
                 </div>
 
                 {engagements.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-6">Подрядчик не привлечён ни к одному объекту</p>
+                  <p className="text-xs text-muted-foreground text-center py-6">Партнёр не привлечён ни к одному объекту</p>
                 ) : (
                   <div className="overflow-x-auto">
                     <Table className="text-xs">
@@ -509,12 +509,12 @@ const HRContractors: React.FC = () => {
                 )}
               </div>
 
-              {/* Персонал подрядчика */}
+              {/* Персонал партнёра */}
               <div className="rounded-3xl border bg-card p-5 shadow-2xs space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                     <Users className="h-4 w-4 text-primary" />
-                    Сотрудники подрядчика ({workers.length})
+                    Сотрудники партнёра ({workers.length})
                   </h3>
                   <Button
                     size="sm"
@@ -600,12 +600,12 @@ const HRContractors: React.FC = () => {
         </div>
       </div>
 
-      {/* Модальное окно создания / редактирования Подрядчика */}
+      {/* Модальное окно создания / редактирования Партнёра */}
       <Dialog open={contractorDialog} onOpenChange={setContractorDialog}>
         <DialogContent className="max-w-lg rounded-3xl">
           <DialogHeader>
             <DialogTitle>
-              {editingContractor ? 'Редактирование подрядчика' : 'Новый подрядчик'}
+              {editingContractor ? 'Редактирование партнёра' : 'Новый партнёр'}
             </DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 text-xs">
@@ -719,7 +719,7 @@ const HRContractors: React.FC = () => {
       <Dialog open={engagementDialog} onOpenChange={setEngagementDialog}>
         <DialogContent className="max-w-md rounded-3xl">
           <DialogHeader>
-            <DialogTitle>Назначение подрядчика на объект</DialogTitle>
+            <DialogTitle>Назначение партнёра на объект</DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 text-xs">
             <div>
@@ -806,12 +806,12 @@ const HRContractors: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Модальное окно Сотрудник подрядчика */}
+      {/* Модальное окно Сотрудник партнёра */}
       <Dialog open={workerDialog} onOpenChange={setWorkerDialog}>
         <DialogContent className="max-w-md rounded-3xl">
           <DialogHeader>
             <DialogTitle>
-              {editingWorker ? 'Редактирование сотрудника' : 'Новый сотрудник подрядчика'}
+              {editingWorker ? 'Редактирование сотрудника' : 'Новый сотрудник партнёра'}
             </DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 text-xs">

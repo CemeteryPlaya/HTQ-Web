@@ -77,7 +77,7 @@ const HREquipment: React.FC = () => {
         inventory_no: payload.inventory_no,
         category: payload.category,
         ownership: payload.ownership,
-        // Подрядчик имеет смысл только для его же техники: у собственной и
+        // Партнёр имеет смысл только для его же техники: у собственной и
         // арендованной он всегда пуст, иначе CHECK на бэкенде отвергнет.
         contractor_id: payload.ownership === 'contractor' && payload.contractor_id
           ? Number(payload.contractor_id)
@@ -319,7 +319,7 @@ const HREquipment: React.FC = () => {
                     ...form,
                     ownership: v as EquipmentOwnership,
                     // Смена владельца на собственную или аренду очищает
-                    // подрядчика: иначе форма отправит противоречивую пару.
+                    // партнёра: иначе форма отправит противоречивую пару.
                     contractor_id: v === 'contractor' ? form.contractor_id : '',
                   })}
                 >
@@ -333,7 +333,7 @@ const HREquipment: React.FC = () => {
               </div>
               {form.ownership === 'contractor' && (
                 <div>
-                  <Label>{t('tasks.pages.contractors.one', 'Подрядчик')} *</Label>
+                  <Label>{t('tasks.pages.contractors.one', 'Партнёр')} *</Label>
                   <Select
                     value={form.contractor_id}
                     onValueChange={(v) => setForm({ ...form, contractor_id: v })}
