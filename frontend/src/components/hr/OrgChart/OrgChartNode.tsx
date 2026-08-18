@@ -18,6 +18,9 @@ export type OrgNodeData = {
   weight?: number | null;
   direction?: 'TB' | 'LR';
   meta?: Record<string, unknown>;
+  /** Ручная правка включена — хендлы для drag&drop-переподчинения крупнее
+   * и заметнее (см. OrgChart/index.tsx::editable). */
+  editable?: boolean;
 };
 
 const UNIT_LABELS: Record<string, string> = {
@@ -118,7 +121,7 @@ function resolveContent(data: OrgNodeData): {
       primary: data.label,
       secondary:
         getMetaString(meta, 'position_title') ??
-        getMetaString(meta, 'department') ??
+        getMetaString(meta, 'department_name') ??
         'Сотрудник',
       avatarUrl: getMetaString(meta, 'avatar_url'),
       icon: UserRound,
@@ -174,13 +177,16 @@ export const OrgChartNode = memo(({ data }: NodeProps) => {
   const isHorizontal = d.direction === 'LR';
   const targetPosition = isHorizontal ? Position.Left : Position.Top;
   const sourcePosition = isHorizontal ? Position.Right : Position.Bottom;
+  const handleClassName = d.editable
+    ? '!h-3.5 !w-3.5 !bg-sky-500 !opacity-100 !border-2 !border-white dark:!border-neutral-900'
+    : '!h-2 !w-2 !bg-slate-400 !opacity-70';
 
   return (
     <div
       style={levelColor ? { borderColor: levelColor } : undefined}
       className={`relative h-[168px] w-[210px] rounded-md border px-3 py-3 shadow-sm ${cardTone(d)}`}
     >
-      <Handle type="target" position={targetPosition} className="!h-2 !w-2 !bg-slate-400 !opacity-70" />
+      <Handle type="target" position={targetPosition} className={handleClassName} />
 
       {content.extraCount > 0 && (
         <span className="absolute right-2 top-2 rounded-full bg-white/90 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 ring-1 ring-slate-200 dark:bg-neutral-900/90 dark:text-slate-200 dark:ring-slate-700">
@@ -216,7 +222,7 @@ export const OrgChartNode = memo(({ data }: NodeProps) => {
         )}
       </div>
 
-      <Handle type="source" position={sourcePosition} className="!h-2 !w-2 !bg-slate-400 !opacity-70" />
+      <Handle type="source" position={sourcePosition} className={handleClassName} />
     </div>
   );
 });

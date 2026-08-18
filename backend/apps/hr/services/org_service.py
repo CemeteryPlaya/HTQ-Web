@@ -41,9 +41,20 @@ from typing import Literal
 
 import httpx
 from django.conf import settings
+from django.db import transaction
+from django.db.models import Q
 from django.http import Http404
 
-from apps.hr.models import Department, Employee, LevelThreshold, OrgSettings, Position, ReportingRelation
+from apps.hr.models import (
+    Department,
+    Employee,
+    EmployeeReportingOverride,
+    LevelThreshold,
+    OrgSettings,
+    Position,
+    ReportingRelation,
+)
+from apps.hr.services import audit_service
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +89,106 @@ class RelationNotFound(Exception):
     """404: связь не найдена."""
 
     detail = "Relation not found"
+
+    def __init__(self) -> None:
+        super().__init__(self.detail)
+
+
+class RelationCycle(Exception):
+    """409: связь замкнула бы цепочку подчинения в кольцо.
+
+    Обход циклов — забота сервиса, не БД: транзитивный цикл в Postgres
+    выражается только рекурсивным CTE/триггером, а тут достаточно графового
+    обхода на запись (см. ``_position_cycle_exists``/``_employee_cycle_exists``).
+    """
+
+    detail = "Эта связь замкнёт цепочку подчинения в кольцо"
+
+    def __init__(self) -> None:
+        super().__init__(self.detail)
+
+
+class PositionNotFound(Exception):
+    """404: должность (superior или subordinate) не существует.
+
+    Не порт — исходная ``add_relation`` полагалась на FK и роняла голый 500
+    на несуществующий id. Ручку теперь дёргает UI напрямую, 500 недопустим.
+    """
+
+    detail = "Position not found"
+
+    def __init__(self) -> None:
+        super().__init__(self.detail)
+
+
+# ── исключения employee-relations (не порт, ново для персональных связей) ──
+
+class EmployeeRelationSelfReferential(Exception):
+    """422: сотрудник не может подчиняться сам себе."""
+
+    detail = "Сотрудник не может подчиняться сам себе"
+
+    def __init__(self) -> None:
+        super().__init__(self.detail)
+
+
+class EmployeeRelationDuplicate(Exception):
+    """409: такая персональная связь (superior, subordinate, relation_type) уже есть."""
+
+    detail = "Такая связь подчинения уже существует"
+
+    def __init__(self) -> None:
+        super().__init__(self.detail)
+
+
+class EmployeeRelationNotFound(Exception):
+    """404: персональная связь не найдена."""
+
+    detail = "Связь подчинения не найдена"
+
+    def __init__(self) -> None:
+        super().__init__(self.detail)
+
+
+class EmployeeAlreadyHasSuperior(Exception):
+    """409: у сотрудника уже есть ПРЯМОЙ руководитель (частичный unique-констрейнт
+    ``ux_employee_override_one_direct_superior`` допускает ровно одного).
+
+    Несёт имя текущего руководителя и id существующей связи, чтобы UI мог
+    предложить «заменить» вместо голого отказа.
+    """
+
+    def __init__(self, superior_name: str, relation_id: int) -> None:
+        self.detail = f"У сотрудника уже есть прямой руководитель: {superior_name}"
+        self.relation_id = relation_id
+        super().__init__(self.detail)
+
+
+class EmployeeNotFoundForRelation(Exception):
+    """404: employee_id из тела запроса не существует или мягко удалён."""
+
+    detail = "Employee not found"
+
+    def __init__(self) -> None:
+        super().__init__(self.detail)
+
+
+class EmployeeNotActiveForRelation(Exception):
+    """422: сотрудник не в статусе active — не годится ни в руководители,
+    ни в подчинённые (иначе воспроизводим находку разведки: manager_id в
+    БД есть, а в дереве узел молча становится null, потому что get_org_tree
+    фильтрует managers/holders по status="active")."""
+
+    detail = "Нельзя назначить неактивного или удалённого сотрудника"
+
+    def __init__(self) -> None:
+        super().__init__(self.detail)
+
+
+class OrgDepartmentNotFound(Exception):
+    """404: отдел не найден — для /org/departments/{id}/manager."""
+
+    detail = "Department not found"
 
     def __init__(self) -> None:
         super().__init__(self.detail)
@@ -118,6 +229,38 @@ def set_deletion_strategy(strategy: DeletionStrategy) -> None:
 
 # ── reporting relations ─────────────────────────────────────────────────────
 
+def _position_cycle_exists(superior_id: int, subordinate_id: int) -> bool:
+    """DFS вверх от superior_id по УЖЕ существующим связям всех типов.
+
+    Кросс-типовая проверка (не только внутри relation_type новой связи) —
+    осознанный выбор: "A направляет B напрямую, B направляет A
+    функционально" — тоже кольцо подчинения, просто разными словами, и
+    путать пользователя такой "матричной" лазейкой не стоит.
+
+    seen защищает и от уже существующих в данных циклов (их обход сам по
+    себе не должен зациклиться), хотя после этой проверки новых таких
+    появиться не должно.
+    """
+    parents: dict[int, list[int]] = {}
+    for sub, sup in ReportingRelation.objects.values_list(
+        "subordinate_position_id", "superior_position_id",
+    ):
+        parents.setdefault(sub, []).append(sup)
+
+    stack = [superior_id]
+    seen: set[int] = set()
+    while stack:
+        node = stack.pop()
+        if node == subordinate_id:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(parents.get(node, ()))
+    return False
+
+
+@transaction.atomic
 def add_relation(
     *,
     superior_id: int,
@@ -128,6 +271,11 @@ def add_relation(
 ) -> ReportingRelation:
     if superior_id == subordinate_id:
         raise RelationSelfReferential()
+    known_ids = set(
+        Position.objects.filter(id__in=(superior_id, subordinate_id)).values_list("id", flat=True)
+    )
+    if {superior_id, subordinate_id} - known_ids:
+        raise PositionNotFound()
     exists = ReportingRelation.objects.filter(
         superior_position_id=superior_id,
         subordinate_position_id=subordinate_id,
@@ -135,6 +283,8 @@ def add_relation(
     ).exists()
     if exists:
         raise RelationDuplicate()
+    if _position_cycle_exists(superior_id, subordinate_id):
+        raise RelationCycle()
     rel = ReportingRelation.objects.create(
         superior_position_id=superior_id,
         subordinate_position_id=subordinate_id,
@@ -150,6 +300,260 @@ def remove_relation(relation_id: int) -> None:
     if rel is None:
         raise RelationNotFound()
     rel.delete()
+
+
+# ── employee reporting overrides (не порт, ручная правка орг-связей) ────────
+#
+# Персональный слой поверх ReportingRelation: сотрудник X подчиняется
+# сотруднику Y независимо от связей их должностей. Приоритет разрешения —
+# см. get_org_tree ниже: override -> ReportingRelation -> Department.manager
+# -> эвристика по названию/пути.
+
+def serialize_employee_relation(rel: EmployeeReportingOverride) -> dict:
+    return {
+        "id": rel.id,
+        "superior_employee_id": rel.superior_id,
+        "subordinate_employee_id": rel.subordinate_id,
+        "superior_name": f"{rel.superior.first_name} {rel.superior.last_name}".strip(),
+        "subordinate_name": f"{rel.subordinate.first_name} {rel.subordinate.last_name}".strip(),
+        "relation_type": rel.relation_type,
+        "note": rel.note,
+        "created_at": rel.created_at.isoformat() if rel.created_at else None,
+    }
+
+
+def list_employee_relations(
+    *, employee_id: int | None = None, department_id: int | None = None,
+) -> list[dict]:
+    qs = EmployeeReportingOverride.objects.select_related("superior", "subordinate")
+    if employee_id is not None:
+        qs = qs.filter(Q(superior_id=employee_id) | Q(subordinate_id=employee_id))
+    if department_id is not None:
+        qs = qs.filter(
+            Q(superior__department_id=department_id) | Q(subordinate__department_id=department_id)
+        )
+    return [serialize_employee_relation(r) for r in qs.order_by("id")]
+
+
+def _build_effective_employee_superiors() -> dict[int, int]:
+    """Один руководитель на активного сотрудника — по ТОЙ ЖЕ лестнице
+    приоритетов, что рисует get_org_tree:
+
+    1) явный direct-override этого сотрудника;
+    2) держатель вышестоящей должности (direct ReportingRelation, иначе
+       любая) для должности сотрудника;
+    3) Department.manager его отдела;
+    4) Department.manager ближайшего отдела-предка по пути (path).
+
+    Используется ТОЛЬКО для проверки циклов при добавлении override —
+    отдельно от get_org_tree, чтобы не тащить сюда department-узлы/уровни/
+    holders, которые для этой задачи не нужны.
+    """
+    employees = list(
+        Employee.objects.filter(status="active", is_deleted=False)
+        .values("id", "position_id", "department_id")
+    )
+    emp_ids = {e["id"] for e in employees}
+
+    direct_override_superior: dict[int, int] = {}
+    for sub, sup in EmployeeReportingOverride.objects.filter(
+        relation_type="direct", subordinate_id__in=emp_ids,
+    ).values_list("subordinate_id", "superior_id"):
+        direct_override_superior.setdefault(sub, sup)
+
+    superior_position: dict[int, int] = {}
+    for sub_pos, sup_pos, rel_type in ReportingRelation.objects.order_by("id").values_list(
+        "subordinate_position_id", "superior_position_id", "relation_type",
+    ):
+        existing = superior_position.get(sub_pos)
+        if existing is None or rel_type == "direct":
+            superior_position[sub_pos] = sup_pos
+
+    # Первый активный держатель на должность — так же, как holders_by_pos
+    # в get_org_tree выбирает primary = holders[0].
+    holder_of_position: dict[int, int] = {}
+    for e in sorted(employees, key=lambda e: e["id"]):
+        holder_of_position.setdefault(e["position_id"], e["id"])
+
+    dept_manager: dict[int, int] = dict(
+        Department.objects.filter(manager_id__isnull=False, is_active=True)
+        .values_list("id", "manager_id")
+    )
+    dept_path: dict[int, str] = dict(Department.objects.values_list("id", "path"))
+    dept_by_path = {path: dept_id for dept_id, path in dept_path.items()}
+
+    def nearest_ancestor_manager(department_id):
+        current = department_id
+        while current is not None:
+            manager = dept_manager.get(current)
+            if manager is not None and manager in emp_ids:
+                return manager
+            path = dept_path.get(current)
+            if not path or "." not in path:
+                return None
+            current = dept_by_path.get(path.rsplit(".", 1)[0])
+        return None
+
+    effective: dict[int, int] = {}
+    for e in employees:
+        emp_id = e["id"]
+        override_sup = direct_override_superior.get(emp_id)
+        if override_sup is not None and override_sup in emp_ids:
+            effective[emp_id] = override_sup
+            continue
+        sup_pos = superior_position.get(e["position_id"])
+        holder = holder_of_position.get(sup_pos) if sup_pos is not None else None
+        if holder is not None and holder != emp_id:
+            effective[emp_id] = holder
+            continue
+        own_manager = dept_manager.get(e["department_id"])
+        if own_manager is not None and own_manager in emp_ids and own_manager != emp_id:
+            effective[emp_id] = own_manager
+            continue
+        ancestor_manager = nearest_ancestor_manager(e["department_id"])
+        if ancestor_manager is not None and ancestor_manager != emp_id:
+            effective[emp_id] = ancestor_manager
+    return effective
+
+
+def _employee_cycle_exists(superior_id: int, subordinate_id: int) -> bool:
+    """Как _position_cycle_exists, но обходит ЭФФЕКТИВНОЕ дерево (override
+    и то, что из него выведено), а не только явные override-строки —
+    иначе пропустим смешанный цикл (A выведен из должностей как начальник
+    B, пользователь добавляет override B -> A)."""
+    effective = _build_effective_employee_superiors()
+    node = superior_id
+    seen: set[int] = set()
+    while node is not None:
+        if node == subordinate_id:
+            return True
+        if node in seen:
+            return False
+        seen.add(node)
+        node = effective.get(node)
+    return False
+
+
+@transaction.atomic
+def add_employee_relation(
+    *,
+    superior_id: int,
+    subordinate_id: int,
+    relation_type: RelationType = "direct",
+    note: str | None = None,
+    created_by: int | None = None,
+) -> EmployeeReportingOverride:
+    if superior_id == subordinate_id:
+        raise EmployeeRelationSelfReferential()
+
+    employees = {
+        e.id: e for e in Employee.objects.filter(
+            id__in=(superior_id, subordinate_id), is_deleted=False,
+        )
+    }
+    if superior_id not in employees or subordinate_id not in employees:
+        raise EmployeeNotFoundForRelation()
+    if any(e.status != "active" for e in employees.values()):
+        raise EmployeeNotActiveForRelation()
+
+    if EmployeeReportingOverride.objects.filter(
+        superior_id=superior_id, subordinate_id=subordinate_id, relation_type=relation_type,
+    ).exists():
+        raise EmployeeRelationDuplicate()
+
+    if relation_type == "direct":
+        current = (
+            EmployeeReportingOverride.objects.select_related("superior")
+            .filter(subordinate_id=subordinate_id, relation_type="direct")
+            .first()
+        )
+        if current is not None:
+            name = f"{current.superior.first_name} {current.superior.last_name}".strip()
+            raise EmployeeAlreadyHasSuperior(name, current.id)
+
+    if _employee_cycle_exists(superior_id, subordinate_id):
+        raise RelationCycle()
+
+    rel = EmployeeReportingOverride.objects.create(
+        superior_id=superior_id,
+        subordinate_id=subordinate_id,
+        relation_type=relation_type,
+        note=note,
+        created_by=created_by,
+    )
+    audit_service.log(
+        entity_type="employee_reporting_override",
+        entity_id=rel.id,
+        action="create",
+        new_values={
+            "superior_id": str(superior_id), "subordinate_id": str(subordinate_id),
+            "relation_type": relation_type,
+        },
+        changed_by=created_by or 0,
+    )
+    return rel
+
+
+def remove_employee_relation(relation_id: int, *, changed_by_id: int | None = None) -> None:
+    rel = EmployeeReportingOverride.objects.filter(id=relation_id).first()
+    if rel is None:
+        raise EmployeeRelationNotFound()
+    old_values = {
+        "superior_id": str(rel.superior_id), "subordinate_id": str(rel.subordinate_id),
+        "relation_type": rel.relation_type,
+    }
+    rel.delete()
+    audit_service.log(
+        entity_type="employee_reporting_override",
+        entity_id=relation_id,
+        action="delete",
+        old_values=old_values,
+        changed_by=changed_by_id or 0,
+    )
+
+
+# -- руководитель отдела (не порт, закрывает дыру: DepartmentUpdate.manager_id
+# нельзя сбросить в null из-за exclude_none-семантики PATCH) -----------------
+
+@transaction.atomic
+def set_department_manager(
+    department_id: int, employee_id: int | None, *, changed_by_id: int | None = None,
+) -> dict:
+    dept = Department.objects.filter(id=department_id).first()
+    if dept is None:
+        raise OrgDepartmentNotFound()
+
+    old_manager_id = dept.manager_id
+    if employee_id is None:
+        dept.manager = None
+    else:
+        employee = Employee.objects.filter(id=employee_id, is_deleted=False).first()
+        if employee is None:
+            raise EmployeeNotFoundForRelation()
+        if employee.status != "active":
+            raise EmployeeNotActiveForRelation()
+        dept.manager_id = employee_id
+    dept.save(update_fields=["manager", "updated_at"])
+
+    audit_service.log(
+        entity_type="department",
+        entity_id=dept.id,
+        action="update",
+        old_values={"manager_id": str(old_manager_id)},
+        new_values={"manager_id": str(employee_id)},
+        changed_by=changed_by_id or 0,
+    )
+
+    manager = dept.manager if dept.manager_id else None
+    return {
+        "department_id": dept.id,
+        "manager_id": manager.id if manager else None,
+        "manager_name": (
+            f"{manager.first_name} {manager.last_name}".strip() if manager else None
+        ),
+        "manager_position_id": manager.position_id if manager else None,
+        "manager_avatar_url": manager.avatar_url if manager else None,
+    }
 
 
 # ── subordination matrix ────────────────────────────────────────────────────
@@ -193,6 +597,35 @@ def get_subordination_matrix(*, unit_id: int | None = None) -> dict:
 
 # ── org tree (Фича 3) ───────────────────────────────────────────────────────
 
+def _edge(
+    source: str,
+    target: str,
+    relation_type: str,
+    *,
+    relation_id: int | None = None,
+    origin: str,
+) -> dict:
+    """Единая форма ребра дерева (не порт — добавлено для ручной правки
+    оргструктуры).
+
+    relation_id — pk строки БД, по которой связь можно удалить; заполнен
+    только когда origin — "employee" (EmployeeReportingOverride) или
+    "position" (ReportingRelation), то есть ровно там, где есть что стирать.
+    origin — откуда взялась связь: "employee"/"position" — явные данные;
+    "department" — явный Department.manager; "inferred" — эвристика
+    (choose_department_lead/fallback_parent_pos_id); "structural"/
+    "membership"/"employment" — служебные edges дерева отделов, к
+    подчинению отношения не имеют.
+    """
+    return {
+        "source": source,
+        "target": target,
+        "relation_type": relation_type,
+        "relation_id": relation_id,
+        "origin": origin,
+    }
+
+
 def get_org_tree(
     *,
     root_id: int | None,
@@ -200,7 +633,28 @@ def get_org_tree(
     mode: Literal["positions", "employees", "both"],
     lang: OrgLanguage = "ru",
 ) -> dict:
-    """Строит граф узлов/рёбер для React Flow — буквальный порт."""
+    """Строит граф узлов/рёбер для React Flow — буквальный порт с
+    аддитивными правками ручной правки оргструктуры:
+
+    * рёбра несут relation_id/origin (см. _edge);
+    * dept-узлы с явным Department.manager несут
+      meta["manager_source"] = "explicit" (эвристическая ветка по-прежнему
+      ставит "inferred" — было и раньше);
+    * mode="employees" резолвит рёбра сотрудник->сотрудник через
+      EmployeeReportingOverride -> позиционную ReportingRelation -> явный
+      Department.manager собственного отдела, и только если ничего не
+      нашлось — падает на старый edge от отдела/должности ("employment").
+      Эвристика по названию должности (choose_department_lead) и подъём по
+      цепочке отделов-предков в резолве РЁБЕР для этого режима не участвуют
+      (они — про должности, не про людей); более полный обход с этой
+      цепочкой используется только для защиты от циклов при записи, см.
+      _build_effective_employee_superiors.
+
+    Намеренно НЕ трогаем: path__startswith без разделителя "." (root "it"
+    матчит и "itx"), truthy-проверки if root_id:, недостижимую ветку
+    mode == "both" внутри блока mode == "employees" — все три
+    задокументированы как дефекты порта в докстринге модуля.
+    """
     dept_qs = Department.objects.filter(is_active=True).order_by("path")
 
     root = None
@@ -228,7 +682,7 @@ def get_org_tree(
         managers_by_id = {
             m.id: m for m in Employee.objects.filter(
                 id__in=manager_ids, status="active", is_deleted=False,
-            )
+            ).select_related("position")
         }
     manager_position_to_dept: dict[int, int] = {}
     for dept in departments:
@@ -263,6 +717,10 @@ def get_org_tree(
                     ),
                     "manager_avatar_url": manager.avatar_url if manager else None,
                     "manager_position_id": manager.position_id if manager else None,
+                    "manager_position_title": (
+                        manager.position.title if manager and manager.position_id else None
+                    ),
+                    "manager_source": "explicit" if manager else None,
                 },
             }
             nodes.append(dept_node)
@@ -272,11 +730,10 @@ def get_org_tree(
                 parent_path = ".".join(parts[:-1])
                 parent = next((d for d in departments if d.path == parent_path), None)
                 if parent:
-                    edges.append({
-                        "source": f"dept_{parent.id}",
-                        "target": f"dept_{dept.id}",
-                        "relation_type": "structural",
-                    })
+                    edges.append(_edge(
+                        f"dept_{parent.id}", f"dept_{dept.id}", "structural",
+                        origin="structural",
+                    ))
 
     if mode in ("positions", "both"):
         dept_ids = [d.id for d in departments]
@@ -315,7 +772,9 @@ def get_org_tree(
         }
         visible_pos_ids = set(pos_ids) - merged_manager_pos_ids
         if pos_ids:
-            for rel in ReportingRelation.objects.filter(subordinate_position_id__in=pos_ids):
+            for rel in ReportingRelation.objects.filter(
+                subordinate_position_id__in=pos_ids
+            ).order_by("id"):
                 existing = superior_by_pos.get(rel.subordinate_position_id)
                 if existing is None or (
                     rel.relation_type == "direct" and existing.relation_type != "direct"
@@ -495,39 +954,35 @@ def get_org_tree(
                     superior_id = fallback_parent_pos_id(pos)
                     relation_type = "direct"
                 if superior_id is not None and superior_id != pos.id:
-                    edges.append({
-                        "source": f"pos_{superior_id}",
-                        "target": f"pos_{pos.id}",
-                        "relation_type": relation_type,
-                    })
+                    edges.append(_edge(
+                        f"pos_{superior_id}", f"pos_{pos.id}", relation_type,
+                        relation_id=rel.id if rel is not None else None,
+                        origin="position" if rel is not None else "inferred",
+                    ))
                 # else: top of the tree — no incoming edge.
             else:  # mode == "both" — keep dept boxes for context
                 if rel is not None:
                     manager_dept_id = manager_position_to_dept.get(rel.superior_position_id)
                     if manager_dept_id is not None:
-                        edges.append({
-                            "source": f"dept_{manager_dept_id}",
-                            "target": f"pos_{pos.id}",
-                            "relation_type": rel.relation_type,
-                        })
+                        edges.append(_edge(
+                            f"dept_{manager_dept_id}", f"pos_{pos.id}", rel.relation_type,
+                            relation_id=rel.id, origin="position",
+                        ))
                     elif rel.superior_position_id in visible_pos_ids:
-                        edges.append({
-                            "source": f"pos_{rel.superior_position_id}",
-                            "target": f"pos_{pos.id}",
-                            "relation_type": rel.relation_type,
-                        })
+                        edges.append(_edge(
+                            f"pos_{rel.superior_position_id}", f"pos_{pos.id}", rel.relation_type,
+                            relation_id=rel.id, origin="position",
+                        ))
                     else:
-                        edges.append({
-                            "source": f"dept_{pos.department_id}",
-                            "target": f"pos_{pos.id}",
-                            "relation_type": "membership",
-                        })
+                        edges.append(_edge(
+                            f"dept_{pos.department_id}", f"pos_{pos.id}", "membership",
+                            origin="membership",
+                        ))
                 else:
-                    edges.append({
-                        "source": f"dept_{pos.department_id}",
-                        "target": f"pos_{pos.id}",
-                        "relation_type": "membership",
-                    })
+                    edges.append(_edge(
+                        f"dept_{pos.department_id}", f"pos_{pos.id}", "membership",
+                        origin="membership",
+                    ))
 
     if mode == "employees":
         dept_ids = [d.id for d in departments]
@@ -536,6 +991,47 @@ def get_org_tree(
                 department_id__in=dept_ids, status="active", is_deleted=False,
             ).order_by("last_name", "first_name")
         )
+        emp_id_set = {e.id for e in employees}
+        dept_name_by_id = {d.id: d.name for d in departments}
+
+        emp_position_ids = [e.position_id for e in employees if e.position_id]
+        position_title_by_id: dict[int, str] = {}
+        if emp_position_ids:
+            position_title_by_id = dict(
+                Position.objects.filter(id__in=emp_position_ids).values_list("id", "title")
+            )
+
+        # Явные персональные связи — приоритетный слой (см. докстринг).
+        overrides_by_subordinate: dict[int, list[EmployeeReportingOverride]] = {}
+        if employees:
+            for row in EmployeeReportingOverride.objects.filter(
+                subordinate_id__in=[e.id for e in employees],
+            ).order_by("id"):
+                overrides_by_subordinate.setdefault(row.subordinate_id, []).append(row)
+
+        # Резолв руководителя должности (direct приоритетнее) — та же
+        # логика, что superior_by_pos выше, но вычислена независимо: этот
+        # блок достижим и без positions/both в query-параметрах.
+        superior_position_of: dict[int, int] = {}
+        if emp_position_ids:
+            for sub_pos, sup_pos, rel_type in ReportingRelation.objects.filter(
+                subordinate_position_id__in=emp_position_ids,
+            ).order_by("id").values_list(
+                "subordinate_position_id", "superior_position_id", "relation_type",
+            ):
+                existing = superior_position_of.get(sub_pos)
+                if existing is None or rel_type == "direct":
+                    superior_position_of[sub_pos] = sup_pos
+
+        # Первый (employees уже отсортирован по last_name/first_name)
+        # активный держатель должности.
+        holder_of_position: dict[int, int] = {}
+        for e in employees:
+            if e.position_id:
+                holder_of_position.setdefault(e.position_id, e.id)
+
+        dept_manager_of = {d.id: d.manager_id for d in departments if d.manager_id}
+
         for emp in employees:
             nodes.append({
                 "id": f"emp_{emp.id}",
@@ -547,15 +1043,51 @@ def get_org_tree(
                 "meta": {
                     "avatar_url": emp.avatar_url,
                     "department_id": emp.department_id,
+                    "department_name": dept_name_by_id.get(emp.department_id),
                     "position_id": emp.position_id,
+                    "position_title": (
+                        position_title_by_id.get(emp.position_id) if emp.position_id else None
+                    ),
                 },
             })
+
+            rows = overrides_by_subordinate.get(emp.id, [])
+            for row in rows:
+                if row.superior_id in emp_id_set and row.superior_id != emp.id:
+                    edges.append(_edge(
+                        f"emp_{row.superior_id}", f"emp_{emp.id}", row.relation_type,
+                        relation_id=row.id, origin="employee",
+                    ))
+            if rows:
+                # Явная связь есть — на дефолтный edge от отдела/должности
+                # не откатываемся, даже если ни одна строка не прошла фильтр
+                # emp_id_set (руководитель вне текущего scope root_id/depth).
+                continue
+
+            derived_superior_id: int | None = None
+            derived_origin = "department"
+            sup_pos = superior_position_of.get(emp.position_id) if emp.position_id else None
+            holder = holder_of_position.get(sup_pos) if sup_pos is not None else None
+            if holder is not None and holder != emp.id and holder in emp_id_set:
+                derived_superior_id = holder
+                derived_origin = "position"
+            else:
+                manager_id = dept_manager_of.get(emp.department_id)
+                if manager_id is not None and manager_id != emp.id and manager_id in emp_id_set:
+                    derived_superior_id = manager_id
+                    derived_origin = "department"
+
+            if derived_superior_id is not None:
+                edges.append(_edge(
+                    f"emp_{derived_superior_id}", f"emp_{emp.id}", "direct",
+                    origin=derived_origin,
+                ))
+                continue
+
+            # ↓ нетронутый литерал порта (включая недостижимую ветку
+            # mode == "both", задокументированную как дефект исходника)
             parent = f"pos_{emp.position_id}" if mode == "both" and emp.position_id else f"dept_{emp.department_id}"
-            edges.append({
-                "source": parent,
-                "target": f"emp_{emp.id}",
-                "relation_type": "employment",
-            })
+            edges.append(_edge(parent, f"emp_{emp.id}", "employment", origin="employment"))
 
     tree = {"nodes": nodes, "edges": edges}
     if lang == "en":

@@ -13,33 +13,30 @@ import {
   useReactFlow,
   ConnectionLineType,
   Position,
+  type Connection,
   type Node,
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { toPng, toSvg } from 'html-to-image';
 
+import type { OrgEdge, OrgEdgeOrigin, OrgNode } from '@/api/hr';
 import { OrgChartNode } from './OrgChartNode';
+import { isValidOrgConnection } from './orgEdit';
 import { applyDagreLayout } from './useOrgLayout';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const nodeTypes = { orgNode: OrgChartNode };
 
-type RawNode = {
-  id: string;
-  label: string;
-  type: string;
-  unit_type?: string | null;
-  level?: number | null;
-  weight?: number | null;
-  meta?: Record<string, unknown>;
-};
+type RawNode = OrgNode;
 
-type RawEdge = {
-  source: string;
-  target: string;
-  relation_type: string;
+// PMO's /pmo/{id}/org-chart edges carry only {source,target,relation_type} —
+// no relation_id/origin (those are org/tree-specific). Widened here so the
+// same component serves both without either caller lying about the shape.
+type RawEdge = Omit<OrgEdge, 'relation_id' | 'origin'> & {
+  relation_id?: number | null;
+  origin?: OrgEdgeOrigin;
 };
 
 type Direction = 'TB' | 'LR';
@@ -54,6 +51,12 @@ interface OrgChartProps {
   compact?: boolean;
   showMiniMap?: boolean;
   onNodeClick?: (node: RawNode) => void;
+  /** Ручная правка руководителей/подчинённых — выключено по умолчанию, так
+   * что PublicOrgView и HRPMO остаются read-only без единой правки. */
+  editable?: boolean;
+  /** source = будущий руководитель, target = будущий подчинённый — вызывается
+   * после успешной проверки isValidOrgConnection, когда editable=true. */
+  onConnectNodes?: (sourceId: string, targetId: string) => void;
 }
 
 export type { RawNode as OrgRawNode };
@@ -67,11 +70,16 @@ const EDGE_STYLE: Record<string, { stroke: string; strokeDasharray?: string }> =
   employment: { stroke: '#cbd5e1' },
 };
 
+// Приглушённый пунктир поверх relation_type-цвета — сигнал "это догадка,
+// не явные данные", отдельно от direct/functional/project штриховки.
+const INFERRED_EDGE_STYLE = { strokeDasharray: '2 4', opacity: 0.55 };
+
 function buildFlowElements(
   rawNodes: RawNode[],
   rawEdges: RawEdge[],
   levelFilter: number | null,
   direction: Direction,
+  editable: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
   const visibleIds = new Set(
     rawNodes
@@ -95,24 +103,30 @@ function buildFlowElements(
         weight: n.weight,
         direction,
         meta: n.meta,
+        editable,
       },
     }));
 
   const edges: Edge[] = rawEdges
     .filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
-    .map((e) => ({
-      id: `${e.source}->${e.target}-${e.relation_type}`,
-      source: e.source,
-      target: e.target,
-      type: 'step',
-      style: {
-        ...(EDGE_STYLE[e.relation_type] ?? EDGE_STYLE.structural),
-        strokeWidth: 2,
-      },
-      animated: false,
-      focusable: false,
-      interactionWidth: 16,
-    }));
+    .map((e) => {
+      const isInferred = e.origin === 'inferred';
+      return {
+        id: `${e.source}->${e.target}-${e.relation_type}-${e.relation_id ?? 'x'}`,
+        source: e.source,
+        target: e.target,
+        type: 'step',
+        style: {
+          ...(EDGE_STYLE[e.relation_type] ?? EDGE_STYLE.structural),
+          ...(isInferred ? INFERRED_EDGE_STYLE : null),
+          strokeWidth: 2,
+        },
+        data: { relationId: e.relation_id ?? null, origin: e.origin ?? null },
+        animated: false,
+        focusable: editable,
+        interactionWidth: 16,
+      };
+    });
 
   return applyDagreLayout(nodes, edges, direction);
 }
@@ -126,6 +140,8 @@ export function OrgChart({
   compact = false,
   showMiniMap = true,
   onNodeClick,
+  editable = false,
+  onConnectNodes,
 }: OrgChartProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -146,12 +162,30 @@ export function OrgChart({
   }, [maxLevelFilter]);
 
   useEffect(() => {
-    const { nodes: n, edges: e } = buildFlowElements(rawNodes, rawEdges, levelFilter, direction);
+    const { nodes: n, edges: e } = buildFlowElements(rawNodes, rawEdges, levelFilter, direction, editable);
     setNodes(n);
     setEdges(e);
     // fit after layout settles
     setTimeout(() => fitView({ padding: 0.15, duration: 300 }), 50);
-  }, [rawNodes, rawEdges, levelFilter, direction, fitView]);
+  }, [rawNodes, rawEdges, levelFilter, direction, editable, fitView]);
+
+  // Drag&drop через соединение хендлов, а не перетаскивание карточек:
+  // dagre пересчитывает x/y на каждое изменение rawNodes/rawEdges (эффект
+  // выше), так что перетащенная карточка немедленно отскочит на своё
+  // место — nodesDraggable здесь бесполезен по конструкции. onConnect даёт
+  // точную пару (source, target) без геометрии, а хендлы уже отрисованы.
+  const handleConnect = useCallback((connection: Connection) => {
+    if (!onConnectNodes) return;
+    const check = isValidOrgConnection(rawNodes, connection.source, connection.target);
+    if (!check.ok) return;
+    onConnectNodes(connection.source as string, connection.target as string);
+  }, [onConnectNodes, rawNodes]);
+
+  const isValidConnection = useCallback((connection: Connection | Edge) => {
+    const source = 'source' in connection ? connection.source : null;
+    const target = 'target' in connection ? connection.target : null;
+    return isValidOrgConnection(rawNodes, source, target).ok;
+  }, [rawNodes]);
 
   const exportPng = useCallback(async () => {
     if (!containerRef.current) return;
@@ -224,6 +258,9 @@ export function OrgChart({
           <span className="flex items-center gap-1">
             <span className="inline-block w-6 h-0.5 border-t-2 border-dotted border-amber-400" /> проектное
           </span>
+          <span className="flex items-center gap-1 opacity-55">
+            <span className="inline-block w-6 h-0.5 border-t-2 border-dashed border-slate-400" /> выведено автоматически
+          </span>
         </div>
       </div>
       )}
@@ -247,6 +284,8 @@ export function OrgChart({
               const raw = rawNodes.find((r) => r.id === n.id);
               if (raw) onNodeClick(raw);
             } : undefined}
+            onConnect={editable ? handleConnect : undefined}
+            isValidConnection={editable ? isValidConnection : undefined}
             nodeTypes={nodeTypes}
             connectionLineType={ConnectionLineType.Step}
             defaultEdgeOptions={{ type: 'step' }}
@@ -255,6 +294,7 @@ export function OrgChart({
             maxZoom={2}
             proOptions={{ hideAttribution: true }}
             nodesDraggable={false}
+            nodesConnectable={editable}
           >
             <Controls position="bottom-right" />
             {showMiniMap && <MiniMap zoomable pannable className={compact ? 'hidden md:block' : undefined} />}

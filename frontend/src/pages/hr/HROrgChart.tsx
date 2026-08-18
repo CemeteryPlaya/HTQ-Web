@@ -1,16 +1,21 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ReactFlowProvider } from '@xyflow/react';
-import { Share2 } from 'lucide-react';
+import { Pencil, Share2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 import api from '@/api/client';
+import { fetchOrgTree, type OrgTree } from '@/api/hr';
 import HRLayout from '@/components/hr/HRLayout';
 import { EmployeeDetailDrawer } from '@/components/hr/EmployeeDetailDrawer';
 import { OrgChart, type OrgRawNode } from '@/components/hr/OrgChart';
+import { OrgEditPanel } from '@/components/hr/OrgChart/OrgEditPanel';
+import { useOrgEditMutations } from '@/components/hr/OrgChart/useOrgEditMutations';
 import { ShareOrgDialog } from '@/components/hr/ShareOrgDialog';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useQuery as useDeptQuery } from '@tanstack/react-query';
+import { Switch } from '@/components/ui/switch';
+import { useHRLevel } from '@/hooks/useHRLevel';
 
 type Mode = 'positions' | 'employees' | 'both';
 type OrgLanguage = 'ru' | 'en';
@@ -24,8 +29,23 @@ const HROrgChart = () => {
   const [language, setLanguage] = useState<OrgLanguage>('ru');
   const [selected, setSelected] = useState<OrgRawNode | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [editMode, setEditMode] = useState(false);
 
-  const { data: departments } = useDeptQuery({
+  const { isSeniorOrAbove, isLoading: levelLoading } = useHRLevel();
+  const canEdit = isSeniorOrAbove && !levelLoading;
+  // Дерево в mode="both" содержит dept->pos рёбра "membership"/структурные,
+  // которые нечем редактировать — переподчинение на схеме там бессмысленно.
+  const editable = editMode && canEdit && mode !== 'both';
+
+  useEffect(() => {
+    if (editMode && mode === 'both') {
+      toast.info('Редактирование доступно в режимах «Должности» и «Сотрудники»');
+    }
+  }, [editMode, mode]);
+
+  const queryClient = useQueryClient();
+
+  const { data: departments } = useQuery({
     queryKey: ['hr-departments'],
     queryFn: async () => {
       const res = await api.get<Department[]>('hr/v1/departments/');
@@ -33,15 +53,28 @@ const HROrgChart = () => {
     },
   });
 
+  const treeKey = useMemo(
+    () => ['org-tree', mode, rootId, depth, language] as const,
+    [mode, rootId, depth, language],
+  );
+
   const { data: treeData, isLoading, error } = useQuery({
-    queryKey: ['org-tree', mode, rootId, depth, language],
-    queryFn: async () => {
-      const params = new URLSearchParams({ mode, depth: String(depth), lang: language });
-      if (rootId !== 'all') params.append('root_id', rootId);
-      const res = await api.get(`hr/v1/org/tree?${params}`);
-      return res.data as { nodes: any[]; edges: any[] };
-    },
+    queryKey: treeKey,
+    queryFn: () => fetchOrgTree({ mode, depth, lang: language, rootId }),
   });
+
+  const mutations = useOrgEditMutations(treeKey);
+
+  const handleConnectNodes = (sourceId: string, targetId: string) => {
+    mutations.connectSuperior(sourceId, targetId, 'direct');
+  };
+
+  // При клике по узлу открываем актуальную версию из кэша (панель правки
+  // держит только id — не хочет протухший meta после соседней мутации).
+  const currentTree = queryClient.getQueryData<OrgTree>(treeKey) ?? treeData;
+  const selectedLive = selected
+    ? (currentTree?.nodes.find((n) => n.id === selected.id) as OrgRawNode | undefined) ?? selected
+    : null;
 
   return (
     <HRLayout
@@ -106,6 +139,14 @@ const HROrgChart = () => {
           </Select>
         </div>
 
+        {canEdit && (
+          <div className="flex items-center gap-1.5 text-sm">
+            <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-muted-foreground">Редактировать:</span>
+            <Switch checked={editMode} onCheckedChange={setEditMode} />
+          </div>
+        )}
+
         <Button
           size="sm"
           variant="default"
@@ -130,15 +171,26 @@ const HROrgChart = () => {
             rawEdges={treeData?.edges ?? []}
             isLoading={isLoading}
             onNodeClick={setSelected}
+            editable={editable}
+            onConnectNodes={handleConnectNodes}
           />
         </ReactFlowProvider>
       </div>
 
-      <EmployeeDetailDrawer
-        node={selected}
-        mode="auth"
-        onClose={() => setSelected(null)}
-      />
+      {editable ? (
+        <OrgEditPanel
+          node={selectedLive}
+          tree={currentTree}
+          onClose={() => setSelected(null)}
+          mutations={mutations}
+        />
+      ) : (
+        <EmployeeDetailDrawer
+          node={selected}
+          mode="auth"
+          onClose={() => setSelected(null)}
+        />
+      )}
       <ShareOrgDialog
         open={shareOpen}
         onClose={() => setShareOpen(false)}

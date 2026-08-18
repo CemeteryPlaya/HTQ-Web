@@ -23,6 +23,7 @@ from .models import (
     EmployeeDayOverride,
     EmployeeDocumentBlob,
     EmployeeGroups,
+    EmployeeReportingOverride,
     EmployeeShiftAssignment,
     EmployeeWeekTemplate,
     LevelThreshold,
@@ -84,6 +85,14 @@ class ReportingRelationAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
                     "effective_from", "effective_to")
     list_filter = ("relation_type",)
     autocomplete_fields = ("superior_position", "subordinate_position")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(EmployeeReportingOverride)
+class EmployeeReportingOverrideAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "superior", "subordinate", "relation_type", "created_by")
+    list_filter = ("relation_type",)
+    autocomplete_fields = ("superior", "subordinate")
     readonly_fields = ("created_at", "updated_at")
 
 

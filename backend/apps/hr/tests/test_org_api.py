@@ -1,4 +1,6 @@
-"""Контракт /api/hr/v1/org/* — паритет с services/hr/app/api/v1/org.py.
+"""Контракт /api/hr/v1/org/* — паритет с services/hr/app/api/v1/org.py +
+ручная правка руководителей/подчинённых (не порт, см. план «Ручная
+корректировка Руководителей и прямых подчинённых через Оргструктура»).
 
 Провенанс: app/services/org_service.py (get_org_tree/get_subordination_matrix/
 add_relation/remove_relation/get_deletion_strategy/set_deletion_strategy) +
@@ -7,19 +9,30 @@ app/services/translation_service.py (build_translated_org_tree — перено�
 исходника НЕ переносится — мёртвый код (departments-роутер ходит в
 ``apps.hr.services.department_service``, не в org).
 
-Авторизация (docs/plans/2026-07-20-hr-domain.md, под-модуль org): reads —
-обычный jwt; writes (``POST /relations``, ``DELETE /relations/{id}``,
-``PUT /settings/deletion-strategy``) — ``admin=True`` (require_hr_write
-исходника = is_elevated), ровно как у positions/*.
+Авторизация — writes на ``POST/DELETE /relations`` ИЗМЕНЕНА относительно
+исходного порта: было ``admin=True`` (require_hr_write исходника =
+is_elevated), стало — ключ прав ``hr.org.edit`` через ``_require_permission``
+(доступен HR senior/lead, см. ``apps.hr.permissions``/``apps.hr.access``).
+``admin_auth`` (is_staff=True) доступ сохраняет — ``resolve_hr_access``
+коротит elevated-токены в ``HRAccess(permissions={"*"})``. Персональные связи
+сотрудников (``/org/employee-relations``) и руководитель отдела
+(``/org/departments/{id}/manager``) — новые ручки, см.
+``test_org_employee_relations_api.py``/``test_org_department_manager_api.py``.
+``PUT /org/settings/deletion-strategy`` НАМЕРЕННО остался ``admin=True`` —
+эту задачу не переносили.
 
 Зафиксированные ловушки паритета:
-  * add_relation: 422 self-reference, 409 duplicate (superior, subordinate,
-    relation_type);
+  * add_relation: 422 self-reference, 404 неизвестная должность (НОВОЕ —
+    раньше это был голый 500 от IntegrityError), 409 duplicate
+    (superior, subordinate, relation_type), 409 цикл (НОВОЕ);
   * remove_relation: 404 detail == "Relation not found";
   * settings PUT возвращает {"deletion_strategy": <val>}, дефолт GET — "block";
   * матрица — форма {superiors, subordinates, cells}, пустая при отсутствии связей;
   * дерево (mode=positions) без явной связи фолбэкается на голову отдела/родителя;
-  * lang="en" без настроенного провайдера — no-op (исходное ru-дерево, без сети).
+  * lang="en" без настроенного провайдера — no-op (исходное ru-дерево, без сети);
+  * рёбра дерева несут relation_id/origin (НОВОЕ) — сравнение через
+    ``_has_edge`` (подмножество), а не полное равенство словаря: контракт
+    ответа расширился аддитивно, а не заморожен на исходных трёх ключах.
 
 План: docs/plans/2026-07-20-hr-domain.md
 """
@@ -67,6 +80,47 @@ def admin_auth(db):
     return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
 
 
+@pytest.fixture
+def hr_dep(db):
+    """Отдельный HR-отдел для auth-фикстур ниже — не путать с ``dep``
+    (тестовые данные оргструктуры), чтобы Employee-профили для авторизации
+    не путались с должностями/сотрудниками, которые тесты проверяют."""
+    return Department.objects.create(name="HR", path="hr-dept")
+
+
+@pytest.fixture
+def middle_auth(db, hr_dep):
+    """middle level (LEVEL_PRESETS._MIDDLE) НЕ включает hr.org.edit —
+    появляется только с senior (apps/hr/permissions.py::_SENIOR)."""
+    pos = _pos("HR Manager", hr_dep, weight=920)
+    user = User.objects.create(
+        username="org-middle", email="org-middle@htq.test", password="x", status=UserStatus.ACTIVE,
+    )
+    user.set_password("S3cret!Pass1")
+    user.save()
+    Employee.objects.create(
+        first_name="И", last_name="И", email="org-middle@htq.test",
+        department=hr_dep, position=pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
+    )
+    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+
+
+@pytest.fixture
+def senior_auth(db, hr_dep):
+    """senior level -> LEVEL_PRESETS._SENIOR включает hr.org.edit."""
+    pos = _pos("Senior HR Manager", hr_dep, weight=921)
+    user = User.objects.create(
+        username="org-senior", email="org-senior@htq.test", password="x", status=UserStatus.ACTIVE,
+    )
+    user.set_password("S3cret!Pass1")
+    user.save()
+    Employee.objects.create(
+        first_name="И", last_name="И", email="org-senior@htq.test",
+        department=hr_dep, position=pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
+    )
+    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+
+
 def _pos(title, dep, weight, **kw):
     return Position.objects.create(title=title, department=dep, weight=weight, **kw)
 
@@ -83,6 +137,13 @@ def _rel(superior, subordinate, relation_type="direct", **kw):
         superior_position=superior, subordinate_position=subordinate,
         relation_type=relation_type, effective_from=datetime.date(2024, 1, 1), **kw,
     )
+
+
+def _has_edge(edges: list[dict], **expected) -> bool:
+    """Подмножественное сравнение — рёбра теперь несут relation_id/origin
+    в дополнение к source/target/relation_type; полное равенство словаря
+    сломалось бы на первом же новом ключе."""
+    return any(all(edge.get(k) == v for k, v in expected.items()) for edge in edges)
 
 
 # ── модель ReportingRelation — сверка индексов/констрейнтов ────────────────
@@ -169,6 +230,8 @@ def test_add_relation_requires_jwt_at_all():
 
 @pytest.mark.django_db
 def test_add_relation_forbidden_for_non_admin_jwt_user(auth, dep):
+    """Пользователь без Employee-профиля вообще -> HRAccess() пустой,
+    permissions={} -> 403 с точным detail _require_permission."""
     a = _pos("A", dep, weight=10)
     b = _pos("B", dep, weight=20)
     resp = Client().post(
@@ -177,6 +240,37 @@ def test_add_relation_forbidden_for_non_admin_jwt_user(auth, dep):
         content_type="application/json", **auth,
     )
     assert resp.status_code == 403
+    assert resp.json()["detail"] == "Missing permission: hr.org.edit"
+
+
+@pytest.mark.django_db
+def test_add_relation_forbidden_for_middle_hr(middle_auth, dep):
+    """middle HR (LEVEL_PRESETS._MIDDLE) не включает hr.org.edit — только
+    senior/lead. Ключевая проверка решения пользователя: HR senior/lead,
+    а не просто «любой HR»."""
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    resp = Client().post(
+        f"{BASE}/relations",
+        data={"superior_position_id": a.id, "subordinate_position_id": b.id},
+        content_type="application/json", **middle_auth,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Missing permission: hr.org.edit"
+
+
+@pytest.mark.django_db
+def test_add_relation_allowed_for_senior_hr_without_admin(senior_auth, dep):
+    """Ключевая проверка смены гейта с admin=True на hr.org.edit: senior HR
+    (is_staff=False) может создавать связи без платформенных прав админа."""
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    resp = Client().post(
+        f"{BASE}/relations",
+        data={"superior_position_id": a.id, "subordinate_position_id": b.id},
+        content_type="application/json", **senior_auth,
+    )
+    assert resp.status_code == 201
 
 
 @pytest.mark.django_db
@@ -186,6 +280,16 @@ def test_remove_relation_forbidden_for_non_admin(auth, dep):
     rel = _rel(a, b)
     resp = Client().delete(f"{BASE}/relations/{rel.id}", **auth)
     assert resp.status_code == 403
+    assert resp.json()["detail"] == "Missing permission: hr.org.edit"
+
+
+@pytest.mark.django_db
+def test_remove_relation_allowed_for_senior_hr(senior_auth, dep):
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    rel = _rel(a, b)
+    resp = Client().delete(f"{BASE}/relations/{rel.id}", **senior_auth)
+    assert resp.status_code == 204
 
 
 @pytest.mark.django_db
@@ -193,6 +297,18 @@ def test_deletion_strategy_put_forbidden_for_non_admin(auth):
     resp = Client().put(
         f"{BASE}/settings/deletion-strategy", data={"deletion_strategy": "cascade"},
         content_type="application/json", **auth,
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_deletion_strategy_put_still_forbidden_for_senior_hr(senior_auth):
+    """Пин: PUT /org/settings/deletion-strategy НЕ переносили на
+    hr.org.edit — это глобальная политика удаления отделов, остаётся
+    admin=True (require_admin), а не HRAccess."""
+    resp = Client().put(
+        f"{BASE}/settings/deletion-strategy", data={"deletion_strategy": "cascade"},
+        content_type="application/json", **senior_auth,
     )
     assert resp.status_code == 403
 
@@ -296,6 +412,69 @@ def test_remove_relation_404(admin_auth):
     assert resp.json()["detail"] == "Relation not found"
 
 
+@pytest.mark.django_db
+def test_add_relation_unknown_position_404(admin_auth, dep):
+    """Раньше — голый 500 от IntegrityError на несуществующий FK; ручку
+    теперь дёргает UI напрямую, поэтому это 404, не сбой сервера."""
+    a = _pos("A", dep, weight=10)
+    resp = Client().post(
+        f"{BASE}/relations",
+        data={"superior_position_id": a.id, "subordinate_position_id": 999999},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Position not found"
+
+
+@pytest.mark.django_db
+def test_add_relation_direct_cycle_409(admin_auth, dep):
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    _rel(a, b, "direct")
+
+    resp = Client().post(
+        f"{BASE}/relations",
+        data={"superior_position_id": b.id, "subordinate_position_id": a.id, "relation_type": "direct"},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Эта связь замкнёт цепочку подчинения в кольцо"
+
+
+@pytest.mark.django_db
+def test_add_relation_transitive_cycle_409(admin_auth, dep):
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    c = _pos("C", dep, weight=30)
+    _rel(a, b, "direct")
+    _rel(b, c, "direct")
+
+    resp = Client().post(
+        f"{BASE}/relations",
+        data={"superior_position_id": c.id, "subordinate_position_id": a.id, "relation_type": "direct"},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Эта связь замкнёт цепочку подчинения в кольцо"
+
+
+@pytest.mark.django_db
+def test_add_relation_cross_type_cycle_409(admin_auth, dep):
+    """_position_cycle_exists обходит связи ВСЕХ типов, не только тип новой
+    связи — "A направляет B напрямую, B направляет A функционально" тоже
+    кольцо подчинения."""
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    _rel(a, b, "direct")
+
+    resp = Client().post(
+        f"{BASE}/relations",
+        data={"superior_position_id": b.id, "subordinate_position_id": a.id, "relation_type": "functional"},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409
+
+
 # ── /org/subordination-matrix ────────────────────────────────────────────────
 
 @pytest.mark.django_db
@@ -389,9 +568,12 @@ def test_tree_positions_mode_uses_explicit_relation_as_edge(auth, dep):
     assert f"pos_{report.id}" in node_ids
     # dept-узлов быть не должно — режим по умолчанию "positions"
     assert not any(n["type"] == "department" for n in body["nodes"])
-    assert {
-        "source": f"pos_{boss.id}", "target": f"pos_{report.id}", "relation_type": "direct",
-    } in body["edges"]
+    assert _has_edge(
+        body["edges"], source=f"pos_{boss.id}", target=f"pos_{report.id}",
+        relation_type="direct", origin="position",
+    )
+    edge = next(e for e in body["edges"] if e["source"] == f"pos_{boss.id}" and e["target"] == f"pos_{report.id}")
+    assert edge["relation_id"] is not None
 
 
 @pytest.mark.django_db
@@ -404,9 +586,10 @@ def test_tree_positions_mode_falls_back_to_dept_head_without_explicit_relation(a
     _emp(dep, member, "member@htq.test")
 
     body = Client().get(f"{BASE}/tree", **auth).json()
-    assert {
-        "source": f"pos_{head.id}", "target": f"pos_{member.id}", "relation_type": "direct",
-    } in body["edges"]
+    assert _has_edge(
+        body["edges"], source=f"pos_{head.id}", target=f"pos_{member.id}",
+        relation_type="direct", origin="inferred", relation_id=None,
+    )
 
 
 @pytest.mark.django_db
@@ -418,9 +601,10 @@ def test_tree_employees_mode_returns_employee_nodes(auth, dep):
     emp_nodes = [n for n in body["nodes"] if n["type"] == "employee"]
     assert len(emp_nodes) == 1
     assert emp_nodes[0]["id"] == f"emp_{emp.id}"
-    assert {
-        "source": f"dept_{dep.id}", "target": f"emp_{emp.id}", "relation_type": "employment",
-    } in body["edges"]
+    assert _has_edge(
+        body["edges"], source=f"dept_{dep.id}", target=f"emp_{emp.id}",
+        relation_type="employment", origin="employment", relation_id=None,
+    )
 
 
 @pytest.mark.django_db
@@ -430,6 +614,34 @@ def test_tree_both_mode_includes_department_and_position_nodes(auth, dep):
 
     body = Client().get(f"{BASE}/tree?mode=both", **auth).json()
     assert any(n["type"] == "department" and n["id"] == f"dept_{dep.id}" for n in body["nodes"])
+
+
+@pytest.mark.django_db
+def test_tree_both_mode_explicit_department_manager_marks_manager_source_explicit(auth, dep):
+    pos = _pos("Директор", dep, weight=10)
+    manager = _emp(dep, pos, "director@htq.test")
+    dep.manager = manager
+    dep.save(update_fields=["manager"])
+
+    body = Client().get(f"{BASE}/tree?mode=both", **auth).json()
+    dept_node = next(n for n in body["nodes"] if n["id"] == f"dept_{dep.id}")
+    assert dept_node["meta"]["manager_source"] == "explicit"
+    assert dept_node["meta"]["manager_id"] == manager.id
+    assert dept_node["meta"]["manager_position_title"] == "Директор"
+
+
+@pytest.mark.django_db
+def test_tree_both_mode_inferred_department_manager_marks_manager_source_inferred(auth, dep):
+    """Без явного Department.manager — эвристика choose_department_lead
+    по-прежнему находит руководителя по названию должности, и это
+    по-прежнему помечается "inferred" (было и раньше, тест закрепляет,
+    что новая "explicit"-ветка не сломала старую)."""
+    lead_pos = _pos("Руководитель отдела", dep, weight=10)
+    _emp(dep, lead_pos, "lead@htq.test")
+
+    body = Client().get(f"{BASE}/tree?mode=both", **auth).json()
+    dept_node = next(n for n in body["nodes"] if n["id"] == f"dept_{dep.id}")
+    assert dept_node["meta"]["manager_source"] == "inferred"
 
 
 @pytest.mark.django_db

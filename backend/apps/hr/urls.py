@@ -155,6 +155,18 @@ urlpatterns = [
     path("org/relations/<int:relation_id>", views.remove_reporting_relation),
     path("org/relations/<int:relation_id>/", views.remove_reporting_relation),
 
+    # ── org/employee-relations, org/departments/{id}/manager — не порт,
+    # ручная правка руководителей/подчинённых на уровне сотрудников. Тот же
+    # порядок: литералы (``employee-relations``) до ``<int:...>``.
+    path("org/employee-relations", views.org_employee_relations_collection),
+    path("org/employee-relations/", views.org_employee_relations_collection),
+
+    path("org/employee-relations/<int:relation_id>", views.remove_employee_relation),
+    path("org/employee-relations/<int:relation_id>/", views.remove_employee_relation),
+
+    path("org/departments/<int:department_id>/manager", views.org_department_manager),
+    path("org/departments/<int:department_id>/manager/", views.org_department_manager),
+
     path("org/settings/deletion-strategy", views.org_deletion_strategy),
     path("org/settings/deletion-strategy/", views.org_deletion_strategy),
 

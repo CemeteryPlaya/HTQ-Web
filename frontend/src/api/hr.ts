@@ -359,3 +359,105 @@ export const fetchStaffingLines = async (): Promise<StaffingLine[]> => (await ap
 export const fetchStaffingSummary = async (): Promise<StaffingSummary> => (await api.get(`${HR}staffing/summary`)).data;
 export const deleteStaffingLine = async (id: number): Promise<void> => { await api.delete(`${HR}staffing/${id}`); };
 
+/* ---------- Org chart — ручная правка руководителей/подчинённых ---------- */
+/**
+ * Не порт: /org/tree — единственный org-запрос, который эта страница делала
+ * раньше (inline axios в HROrgChart.tsx). relation_id/origin на рёбрах и
+ * manager_source в meta dept-узлов — новые поля бэкенда (org_service.get_org_tree),
+ * см. backend/apps/hr/services/org_service.py.
+ */
+export type OrgEdgeOrigin =
+  | 'employee' | 'position' | 'department' | 'inferred'
+  | 'structural' | 'membership' | 'employment';
+
+export interface OrgNode {
+  id: string;
+  label: string;
+  type: string;
+  unit_type?: string | null;
+  level?: number | null;
+  weight?: number | null;
+  meta?: Record<string, unknown>;
+}
+
+export interface OrgEdge {
+  source: string;
+  target: string;
+  relation_type: string;
+  relation_id: number | null;
+  origin: OrgEdgeOrigin;
+}
+
+export interface OrgTree {
+  nodes: OrgNode[];
+  edges: OrgEdge[];
+}
+
+export interface EmployeeRelation {
+  id: number;
+  superior_employee_id: number;
+  subordinate_employee_id: number;
+  superior_name: string;
+  subordinate_name: string;
+  relation_type: string;
+  note: string | null;
+  created_at: string | null;
+}
+
+export interface DepartmentManagerResult {
+  department_id: number;
+  manager_id: number | null;
+  manager_name: string | null;
+  manager_position_id: number | null;
+  manager_avatar_url: string | null;
+}
+
+export const fetchOrgTree = async (params: {
+  mode: 'positions' | 'employees' | 'both';
+  depth: number;
+  lang: 'ru' | 'en';
+  rootId?: string;
+}): Promise<OrgTree> => {
+  const query = new URLSearchParams({
+    mode: params.mode, depth: String(params.depth), lang: params.lang,
+  });
+  if (params.rootId && params.rootId !== 'all') query.append('root_id', params.rootId);
+  return (await api.get<OrgTree>(`${HR}org/tree?${query}`)).data;
+};
+
+export const createPositionRelation = async (data: {
+  superior_position_id: number;
+  subordinate_position_id: number;
+  relation_type?: 'direct' | 'functional' | 'project';
+}) => (await api.post(`${HR}org/relations`, data)).data;
+
+export const deletePositionRelation = async (relationId: number): Promise<void> => {
+  await api.delete(`${HR}org/relations/${relationId}`);
+};
+
+export const fetchEmployeeRelations = async (params: {
+  employeeId?: number;
+  departmentId?: number;
+}): Promise<EmployeeRelation[]> => {
+  const query: Record<string, string> = {};
+  if (params.employeeId != null) query.employee_id = String(params.employeeId);
+  if (params.departmentId != null) query.department_id = String(params.departmentId);
+  return (await api.get<EmployeeRelation[]>(`${HR}org/employee-relations`, { params: query })).data;
+};
+
+export const createEmployeeRelation = async (data: {
+  superior_employee_id: number;
+  subordinate_employee_id: number;
+  relation_type?: 'direct' | 'functional' | 'project';
+  note?: string | null;
+}): Promise<EmployeeRelation> => (await api.post(`${HR}org/employee-relations`, data)).data;
+
+export const deleteEmployeeRelation = async (relationId: number): Promise<void> => {
+  await api.delete(`${HR}org/employee-relations/${relationId}`);
+};
+
+export const setDepartmentManager = async (
+  departmentId: number, employeeId: number | null,
+): Promise<DepartmentManagerResult> =>
+  (await api.put(`${HR}org/departments/${departmentId}/manager`, { employee_id: employeeId })).data;
+
