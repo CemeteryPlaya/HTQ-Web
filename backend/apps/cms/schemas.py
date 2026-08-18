@@ -243,3 +243,78 @@ class NewsListQuery(BaseModel):
     q: Optional[str] = Field(None, max_length=200)
     page: int = Field(1, ge=1)
     page_size: int = Field(12, ge=1, le=100)
+
+
+# ── Приглашения в конференцию ──────────────────────────────────────────────
+
+class ConferenceInviteCreate(BaseModel):
+    room_id: str = Field(..., min_length=1, max_length=64)
+    title: str = Field("", max_length=255)
+    #: Пускать ли по ссылке людей без учётки. Выключается, когда зовут только
+    #: коллег: тогда ссылка просто ведёт в комнату через обычный вход.
+    allow_guests: bool = True
+    ttl_hours: Optional[int] = Field(None, ge=1, le=24 * 90)
+    #: 0 — без ограничения на число входов.
+    max_uses: int = Field(0, ge=0, le=1000)
+
+
+class ConferenceInviteRead(BaseModel):
+    id: int
+    room_id: str
+    title: str
+    #: Готовый адрес — им пользуются письма и сообщения. Браузеру он не
+    #: указ: фронт собирает ссылку от собственного origin (см. ниже про
+    #: token), потому что за прокси Host бэкенда может быть каким угодно.
+    url: str
+    token: str
+    allow_guests: bool
+    expires_at: datetime
+    revoked: bool
+    max_uses: int
+    uses: int
+    created_at: datetime
+
+
+class ConferenceInvitePublic(BaseModel):
+    """То, что видит человек по ссылке ДО входа.
+
+    ``room_id`` заполняется ТОЛЬКО для сотрудника с действующим токеном: ему
+    представляться незачем, он входит под собой. Анонимному посетителю
+    комната не отдаётся — пока он не назвался, он не участник встречи.
+    """
+
+    title: str
+    allow_guests: bool
+    expires_at: datetime
+    room_id: Optional[str] = None
+
+
+class ConferenceGuestRequest(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=80)
+
+
+class ConferenceGuestToken(BaseModel):
+    access_token: str
+    expires_in: int
+    room_id: str
+    display_name: str
+    title: str
+    #: Рантайм-конфиг конференции отдаётся вместе с токеном намеренно:
+    #: /conference/config закрыт платформенным JWT, которого у гостя нет, а
+    #: открывать его наружу ради адреса сигналинга — лишняя дырка.
+    conference: ConferenceConfig
+
+
+class ConferenceInviteSend(BaseModel):
+    """Кому отправить ссылку. Каналы независимы: можно указать только один."""
+
+    emails: list[EmailStr] = Field(default_factory=list, max_length=50)
+    user_ids: list[int] = Field(default_factory=list, max_length=200)
+
+
+class ConferenceInviteSendResult(BaseModel):
+    emails_sent: int
+    notified: int
+    #: Отказ одного канала не отменяет другой — организатор должен видеть,
+    #: что именно не дошло, а не гадать по молчанию.
+    errors: list[str] = Field(default_factory=list)

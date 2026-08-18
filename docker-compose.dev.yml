@@ -25,6 +25,11 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
+      args:
+        # Dockerfile.dev ничего не собирает (Vite поднимается в рантайме), но
+        # аргумент приезжает из базового compose — выравниваем, чтобы
+        # `docker compose config` не показывал dev-стенд «продакшеном».
+        VITE_HTQ_ENV: development
     entrypoint: []
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
     restart: unless-stopped
@@ -36,6 +41,18 @@ services:
     environment:
       VITE_DEV_HTTPS: "false"
       VITE_DISABLE_HMR: "false"
+      # Слежение за файлами опросом. Без него inotify внутри контейнера не
+      # видит правок на смонтированном диске Windows: Vite молчит, HMR не
+      # срабатывает, и браузер продолжает получать модуль, собранный при
+      # старте. Выглядит как «правку не применили», а на деле она есть и на
+      # диске, и в контейнере — лечилось только рестартом контейнера.
+      VITE_USE_POLLING: "true"
+      # Строгий режим подмен: fallback не подставляет значение, а кидает
+      # FallbackNotAllowedError — Vite показывает оверлей с настоящей причиной.
+      # Здесь это переменная контейнера, а не аргумент сборки: dev-сервер читает
+      # окружение на лету (в проде значение вшивается в бандл, см. Dockerfile).
+      VITE_HTQ_ENV: "development"
+      VITE_FALLBACK_MODE: ${FALLBACK_MODE:-}
       # Единый Django-backend: /api → backend-web (WSGI), /ws → backend-asgi (ASGI).
       VITE_BACKEND_TARGET: "http://backend-web:8000"
       VITE_ASGI_TARGET: "http://backend-asgi:8000"   # SSE /api/requests/v1/stream
@@ -50,6 +67,15 @@ services:
     command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
     environment:
       DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+      # Обязательно рядом с настройками: x-django-env в базовом compose уже
+      # положил HTQ_ENV=production, и без этой строки dev-контейнер работал бы
+      # в прод-режиме подмен, несмотря на settings.dev.
+      HTQ_ENV: development
+      # Адрес, по которому платформу видит браузер. Нужен для ссылок в
+      # письмах и сообщениях: сам бэкенд его не знает — Vite-прокси ставит в
+      # Host внутреннее имя контейнера (backend-web:8000), и приглашение с
+      # таким хостом не открывается ни у кого.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
       # QUIC-мост опубликован на хост как UDP :4433. localhost — secure
       # context, поэтому WebTransport из http://localhost:3000 работает;
       # с LAN-адреса (http://192.168.x.y:3000) браузер его не даст —
@@ -67,6 +93,10 @@ services:
     command: ["uvicorn", "htqweb.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     environment:
       DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+      # Обязательно рядом с настройками: x-django-env в базовом compose уже
+      # положил HTQ_ENV=production, и без этой строки dev-контейнер работал бы
+      # в прод-режиме подмен, несмотря на settings.dev.
+      HTQ_ENV: development
     volumes:
       - ./backend:/app
 
@@ -74,12 +104,36 @@ services:
     command: ["celery", "-A", "htqweb", "worker", "-l", "info"]
     environment:
       DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+      # Обязательно рядом с настройками: x-django-env в базовом compose уже
+      # положил HTQ_ENV=production, и без этой строки dev-контейнер работал бы
+      # в прод-режиме подмен, несмотря на settings.dev.
+      HTQ_ENV: development
     volumes:
       - ./backend:/app
+
+  backend-media-worker:
+    environment:
+      DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+      # Обязательно рядом с настройками: x-django-env в базовом compose уже
+      # положил HTQ_ENV=production, и без этой строки dev-контейнер работал бы
+      # в прод-режиме подмен, несмотря на settings.dev.
+      HTQ_ENV: development
+      # У разработчика — самая лёгкая модель: medium на ноутбуке считает
+      # получасовую встречу дольше, чем длилась сама встреча, и отладка
+      # протокола превращается в ожидание. Точность здесь не проверяют.
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+    volumes:
+      - ./backend:/app
+      - conference_raw:/recordings
+      - whisper_models:/models
 
   backend-beat:
     environment:
       DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+      # Обязательно рядом с настройками: x-django-env в базовом compose уже
+      # положил HTQ_ENV=production, и без этой строки dev-контейнер работал бы
+      # в прод-режиме подмен, несмотря на settings.dev.
+      HTQ_ENV: development
     volumes:
       - ./backend:/app
 
@@ -94,6 +148,8 @@ services:
   sfu:
     environment:
       WEBRTC_ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-127.0.0.1}
+      # Как и у backend-*: базовый compose уже положил production, перебиваем.
+      HTQ_ENV: development
 
   # ─── MinIO (dev) ────────────────────────────────────────────────────────────
   # Консоль: http://localhost:9001 (minioadmin / minioadmin). В проде — остановить
@@ -153,6 +209,58 @@ services:
         echo bootstrap-done;
       "
     restart: "no"
+
+  # ─── Наблюдаемость: порты наружу ТОЛЬКО в dev ──────────────────────────
+  #
+  # В базовом compose (= прод) публикации нет намеренно. У Prometheus,
+  # Loki и Flower своей аутентификации не существует вовсе: открытые
+  # наружу, они отдают любому желающему внутреннюю топологию, содержимое
+  # логов и имена задач. Наружу в проде смотрит только Grafana — и то через
+  # nginx, где на /grafana/ уже стоит JWT SSO платформы.
+  #
+  # Локально всё это удобно дёргать напрямую (особенно :9090/prometheus/targets
+  # при отладке скрейпа), поэтому порты возвращаются здесь.
+  prometheus:
+    ports:
+      - "9090:9090"
+
+  # Порт вынесен в переменную: 3001 — то, что по умолчанию ждёт Vite-прокси
+  # (frontend/vite.config.ts, VITE_GRAFANA_TARGET), но на машине он бывает
+  # занят соседним проектом. Тогда: GRAFANA_DEV_PORT=3011 в корневом .env И
+  # VITE_GRAFANA_TARGET=http://127.0.0.1:3011 во frontend/.env — иначе
+  # /grafana/ уедет в чужой контейнер.
+  grafana:
+    ports:
+      - "${GRAFANA_DEV_PORT:-3001}:3000"
+
+  loki:
+    ports:
+      - "3100:3100"
+
+  flower:
+    ports:
+      - "5555:5555"
+    # Flower поднимает то же Django-приложение (`celery -A htqweb`), поэтому и
+    # настройки, и метку среды берёт те же, что backend-*.
+    environment:
+      DJANGO_SETTINGS_MODULE: htqweb.settings.dev
+      HTQ_ENV: development
+
+  postgres-exporter:
+    ports:
+      - "9187:9187"
+
+  redis-exporter:
+    ports:
+      - "9121:9121"
+
+  node-exporter:
+    ports:
+      - "9100:9100"
+
+  cadvisor:
+    ports:
+      - "8081:8080"
 
 volumes:
   minio_data:

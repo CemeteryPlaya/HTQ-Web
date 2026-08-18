@@ -27,6 +27,18 @@ urlpatterns = [
     # never redirects a stray trailing slash on its own.
     path("conference/config", views.conference_config),
     path("conference/config/", views.conference_config),
+    # Приглашения. Первые два маршрута — для организатора (нужен JWT),
+    # последние два публичные: по ним приходит человек без учётки.
+    path("conference/invites", views.conference_invites),
+    path("conference/invites/", views.conference_invites),
+    path("conference/invites/<int:invite_id>/send", views.conference_invite_send),
+    path("conference/invites/<int:invite_id>/send/", views.conference_invite_send),
+    path("conference/invites/<int:invite_id>", views.conference_invite_revoke),
+    path("conference/invites/<int:invite_id>/", views.conference_invite_revoke),
+    path("conference/join/<str:token>", views.conference_invite_public),
+    path("conference/join/<str:token>/", views.conference_invite_public),
+    path("conference/join/<str:token>/guest", views.conference_invite_guest_token),
+    path("conference/join/<str:token>/guest/", views.conference_invite_guest_token),
     # News — frontend call sites (frontend/src/api/cms.ts): 'news/' (list,
     # create), 'news/{id}' with NO trailing slash (get/patch/delete),
     # 'news/by-slug/{slug}' with no trailing slash. Trailing-slash aliases on

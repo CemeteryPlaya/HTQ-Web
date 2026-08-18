@@ -168,3 +168,52 @@ class AuditLog(models.Model):
     class Meta:
         verbose_name = "Запись аудита"
         verbose_name_plural = "Журнал аудита"
+
+
+class ConferenceInvite(models.Model):
+    """Ссылка-приглашение в комнату видеоконференции.
+
+    Зачем отдельная сущность, а не просто адрес ``/room/<id>``. Комнату
+    создаёт браузер, её идентификатор — случайная строка, и до сих пор
+    единственным способом позвать человека было переслать этот id. Для
+    сотрудника это работало (он всё равно входит под своей учёткой), а для
+    внешнего участника — нет: маршрут комнаты требует авторизации, и SFU
+    пускает только по платформенному токену.
+
+    Приглашение — это то, что превращает ссылку в право войти:
+
+    * ``token`` в адресе, а не ``room_id``: по нему нельзя догадаться о
+      других комнатах, его можно отозвать, не трогая саму встречу, и он
+      живёт своим сроком;
+    * ``allow_guests`` разделяет «позвать коллег» и «позвать наружу» —
+      второе выдаёт гостевой JWT человеку без учётки, и включать это надо
+      осознанно, а не по умолчанию;
+    * счётчик входов и ``revoked_at`` дают ответ на вопрос «кто и когда
+      заходил по этой ссылке» и возможность её закрыть.
+
+    FK на пользователя нет намеренно: ``cms`` не владеет таблицей людей
+    (правило изоляции аппок), поэтому автор хранится числом.
+    """
+
+    room_id = models.CharField(max_length=64, db_index=True)
+    token = models.CharField(max_length=64, unique=True)
+    #: Название встречи — показывается на странице входа, чтобы человек
+    #: понимал, куда его позвали, ещё до включения камеры.
+    title = models.CharField(max_length=255, default="", blank=True, db_default="")
+    created_by_id = models.IntegerField(null=True, blank=True, db_index=True)
+    allow_guests = models.BooleanField(default=True, db_default=True)
+    expires_at = models.DateTimeField(db_index=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    #: 0 — без ограничения. Иначе ссылка перестаёт работать после N входов.
+    max_uses = models.PositiveIntegerField(default=0, db_default=0)
+    uses = models.PositiveIntegerField(default=0, db_default=0)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Приглашение в конференцию"
+        verbose_name_plural = "Приглашения в конференцию"
+        ordering = ("-created_at",)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<ConferenceInvite room={self.room_id!r} token={self.token[:8]}…>"

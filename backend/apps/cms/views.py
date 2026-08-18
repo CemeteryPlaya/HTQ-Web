@@ -19,15 +19,18 @@ from __future__ import annotations
 import json
 import logging
 
+from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
 
 from htqweb.http import _authenticate_jwt, api_view, json_error
 
+from .models import ConferenceInvite
 from . import schemas
 from . import tasks
 from .services import audit
+from .services import conference_invite_service
 from .services import conference_service
 from .services import contact_requests_service as svc
 from .services import news_service as news_svc
@@ -503,3 +506,142 @@ def tag_detail(request, tag_id: int, *args, **kwargs):
     if request.method == "DELETE":
         return _delete_tag(request, tag_id, *args, **kwargs)
     return json_error("Method Not Allowed", 405)
+
+
+# ── Приглашения в конференцию ──────────────────────────────────────────────
+#
+# Два публичных маршрута из трёх — и это осознанно: человек, которого позвали
+# ссылкой, учётки не имеет, значит проверить его нечем, кроме самого токена
+# приглашения. Гостевой JWT, который он получает, не открывает ничего, кроме
+# входа в ОДНУ комнату (см. htqweb/authn/jwt.py::issue_guest_token).
+
+def _origin(request) -> str:
+    """Адрес платформы так, как её видит БРАУЗЕР, а не бэкенд.
+
+    Порядок источников выстрадан: ``request.get_host()`` наивно возвращал
+    ``backend-web:8000`` — имя контейнера, которое прокси Vite ставит в
+    ``Host`` (``changeOrigin: true``). Ссылка с таким хостом не открывается
+    ни у кого: DNS_PROBE_FINISHED_NXDOMAIN.
+
+    1. ``PUBLIC_BASE_URL`` — если задан, он и есть правда о публичном
+       адресе; в письмах и сообщениях нужен именно он.
+    2. Заголовок ``Origin`` — его ставит сам браузер на fetch/XHR, подделать
+       его со стороны страницы нельзя. Покрывает dev, туннель и любой стенд,
+       где переменную не выставляли.
+    3. ``get_host()`` — последнее средство: лучше кривой хост, чем пустая
+       ссылка, и в проде за nginx он как раз верный.
+    """
+    configured = (settings.PUBLIC_BASE_URL or "").strip()
+    if configured:
+        return configured.rstrip("/")
+
+    origin = (request.headers.get("Origin") or "").strip()
+    if origin.startswith("http://") or origin.startswith("https://"):
+        return origin.rstrip("/")
+
+    return f"{request.scheme}://{request.get_host()}"
+
+@api_view(methods=("POST",), body=schemas.ConferenceInviteCreate, status=201)
+def _create_conference_invite(request, data: schemas.ConferenceInviteCreate):
+    try:
+        invite = conference_invite_service.create_invite(
+            room_id=data.room_id, created_by_id=request.token.user_id,
+            title=data.title, allow_guests=data.allow_guests,
+            ttl_hours=data.ttl_hours, max_uses=data.max_uses,
+        )
+    except conference_invite_service.InviteInvalid as exc:
+        return json_error(exc.detail, 422)
+    return schemas.ConferenceInviteRead.model_validate(
+        conference_invite_service.serialize(invite, base_url=_origin(request)))
+
+
+@api_view(methods=("GET",))
+def _list_conference_invites(request):
+    room_id = request.GET.get("room_id", "")
+    if not room_id:
+        return json_error("room_id is required", 422)
+    return [
+        schemas.ConferenceInviteRead.model_validate(
+            conference_invite_service.serialize(inv, base_url=_origin(request)))
+        for inv in conference_invite_service.list_for_room(room_id)
+    ]
+
+
+def conference_invites(request):
+    if request.method == "GET":
+        return _list_conference_invites(request)
+    if request.method == "POST":
+        return _create_conference_invite(request)
+    return json_error("Method not allowed", 405)
+
+
+@api_view(methods=("DELETE",), status=204)
+def conference_invite_revoke(request, invite_id: int):
+    try:
+        conference_invite_service.revoke(invite_id)
+    except conference_invite_service.InviteInvalid as exc:
+        return json_error(exc.detail, 404)
+    return HttpResponse(status=204)
+
+
+@api_view(methods=("GET",), auth=None)
+def conference_invite_public(request, token: str):
+    """Что за встреча и можно ли войти гостем. Без авторизации — по эту
+    ссылку человек приходит именно потому, что учётки у него нет.
+
+    Сотруднику, открывшему ту же ссылку, дополнительно отдаётся комната: ему
+    представляться незачем, он войдёт под собой и сразу. Анонимный
+    посетитель идентификатор встречи не получает — до ввода имени он не
+    участник.
+    """
+    try:
+        invite = conference_invite_service.resolve(token)
+    except conference_invite_service.InviteInvalid as exc:
+        return json_error(exc.detail, 404)
+    payload = {
+        "title": invite.title,
+        "allow_guests": invite.allow_guests,
+        "expires_at": invite.expires_at,
+        "room_id": invite.room_id if _authenticate_jwt(request) else None,
+    }
+    return schemas.ConferenceInvitePublic.model_validate(payload)
+
+
+@api_view(methods=("POST",), auth=None, body=schemas.ConferenceGuestRequest)
+def conference_invite_guest_token(request, token: str,
+                                  data: schemas.ConferenceGuestRequest):
+    """Выдать гостю токен на комнату этого приглашения.
+
+    Отдельным шагом от проверки ссылки: предпросмотр в мессенджере или
+    антивирус в почте открывают URL сами, и если бы токен выдавался на
+    просмотре, лимит входов выжигался бы без единого живого участника.
+    """
+    try:
+        invite = conference_invite_service.resolve(token)
+        payload = conference_invite_service.issue_guest_access(
+            invite, display_name=data.display_name)
+    except conference_invite_service.InviteInvalid as exc:
+        status = 404 if exc.code in ("not_found",) else 403
+        return json_error(exc.detail, status)
+    # Конфиг конференции кладём сюда же: у гостя нет платформенного токена,
+    # а /conference/config за ним и остаётся — открывать его наружу ради
+    # адреса сигналинга значило бы расширить публичную поверхность впустую.
+    payload["conference"] = conference_service.get_conference_config(request)
+    return schemas.ConferenceGuestToken.model_validate(payload)
+
+
+@api_view(methods=("POST",), body=schemas.ConferenceInviteSend)
+def conference_invite_send(request, invite_id: int, data: schemas.ConferenceInviteSend):
+    """Отправить ссылку почтой и/или уведомлением в мессенджер."""
+    invite = ConferenceInvite.objects.filter(pk=invite_id).first()
+    if invite is None:
+        return json_error("Приглашение не найдено", 404)
+    if not data.emails and not data.user_ids:
+        return json_error("Некому отправлять: укажите адреса или сотрудников", 422)
+
+    sender = request.token.username or ""
+    report = conference_invite_service.send_invite(
+        invite, emails=[str(value) for value in data.emails],
+        user_ids=data.user_ids, sender_name=sender, base_url=_origin(request),
+    )
+    return schemas.ConferenceInviteSendResult.model_validate(report)

@@ -327,18 +327,25 @@ export const config = {
       ...parseWebRtcTransportProtocols(_tcpTunnelMode),
       initialAvailableOutgoingBitrate: envInt(
         'WEBRTC_INITIAL_AVAILABLE_OUTGOING_BITRATE',
-        envInt('VIDEO_BITRATE_BPS', 1_500_000)
+        envInt('VIDEO_BITRATE_BPS', 5_000_000)
       ),
       maxIncomingBitrate: envInt(
         'WEBRTC_MAX_INCOMING_BITRATE',
-        Math.floor(envInt('VIDEO_BITRATE_BPS', 1_500_000) * 1.25)
+        Math.floor(envInt('VIDEO_BITRATE_BPS', 5_000_000) * 1.25)
       ),
     },
   },
 
   // ── Целевой битрейт ──
+  // 5 Мбит/с — верхняя граница, которую отправителю разрешено занять, а не
+  // постоянный расход: на статичной сцене кодек отдаёт свои 300–800 кбит/с
+  // независимо от потолка. Значение обязано совпадать с
+  // VIDEO_TARGET_BITRATE_BPS во frontend/src/lib/webrtc/qualityProfile.ts —
+  // клиент выставляет по нему maxBitrate энкодера и b=AS в SDP, и если он
+  // запросит больше, чем принимает транспорт (maxIncomingBitrate = ×1.25),
+  // лишнее срежется молча.
   bitrate: {
-    videoBps: envInt('VIDEO_BITRATE_BPS', 1_500_000),
+    videoBps: envInt('VIDEO_BITRATE_BPS', 5_000_000),
     audioBps: envInt('AUDIO_BITRATE_BPS', 64_000),
   },
 
@@ -377,6 +384,32 @@ export const config = {
     jwtSecret: envStr('JWT_SECRET', ''),
     jwtIssuer: envStrNonEmpty('JWT_ISSUER', 'htqweb-auth'),
     clockToleranceSec: envInt('JWT_CLOCK_TOLERANCE_SEC', 30),
+  },
+
+  // ── Запись конференций ──────────────────────────────────────────────
+  // Пишем ПОУЧАСТНИКОВО: на каждого producer'а вешается PlainTransport, и
+  // ffmpeg ремуксит поток в файл (-c copy, без перекодирования — CPU почти
+  // не тратится). Сведение в одно видео и распознавание речи делает потом
+  // Django-воркер; SFU только производит сырьё и рассказывает бэкенду, что
+  // происходило в комнате.
+  recording: {
+    enabled: envBool('CONFERENCE_RECORDING_ENABLED', true),
+    // Куда пишутся дорожки. Тот же том смонтирован в backend-media-worker.
+    rawDir: envStrNonEmpty('CONFERENCE_RAW_DIR', '/recordings'),
+    // База внутреннего API Django. Пустая = запись выключена целиком:
+    // писать файлы, о которых некому рассказать, значит забивать диск
+    // сиротами.
+    backendUrl: envStrNonEmpty('CONFERENCE_BACKEND_URL', ''),
+    internalToken: envStr('CONFERENCE_INTERNAL_TOKEN', ''),
+    // Таймаут запросов к бэкенду. Короткий намеренно: сигналинг не должен
+    // ждать Django — звонок важнее журнала.
+    backendTimeoutMs: envInt('CONFERENCE_BACKEND_TIMEOUT_MS', 4000),
+    // Диапазон UDP-портов под RTP-приём ffmpeg'ом. По два порта на дорожку
+    // (rtp + rtcp), поэтому запас берём с большим отрывом от числа
+    // одновременных участников.
+    rtpPortMin: envInt('RECORDER_RTP_PORT_MIN', 45000),
+    rtpPortMax: envInt('RECORDER_RTP_PORT_MAX', 45999),
+    ffmpegPath: envStrNonEmpty('FFMPEG_PATH', 'ffmpeg'),
   },
 } as const;
 

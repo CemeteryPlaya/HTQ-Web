@@ -1,0 +1,81 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# HTQWeb — Staging override (тестовая среда, ведёт себя как продакшен)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Запуск (API на :8000, шлюза нет):
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d --build
+#
+# Запуск со шлюзом — то есть с nginx, который отдаёт SPA и маршрутизирует
+# /api, ровно как в проде:
+#   docker compose --profile production \
+#       -f docker-compose.yml -f docker-compose.staging.yml up -d --build
+# Флаг обязателен: nginx, certbot и nginx-exporter лежат в профиле
+# `production` и без него не стартуют — ни здесь, ни на самом проде. Без
+# шлюза стенд остаётся рабочим для проверок по API (backend-web публикует
+# :8000), но интерфейс отдавать некому: `frontend` только складывает сборку
+# в том frontend_dist.
+#
+# ⚠️ Бакеты MinIO на стенде не создаются: одноразовый `minio-bootstrap` живёт
+# в docker-compose.dev.yml. На свежем томе minio_data загрузка файлов упадёт
+# с NoSuchBucket — либо поднимите стенд поверх dev-тома, либо создайте
+# htqweb-cms и htqweb-media руками (консоль :9001).
+#
+# Зачем отдельный overlay, если базовый compose и так прод. Затем, что «как
+# прод» надо уметь проверить ДО прода, и при этом отличать одно от другого в
+# логах, метриках и алертах. Здесь ровно одно отличие от прод-запуска — метка
+# среды: HTQ_ENV=staging.
+#
+# Что это меняет по существу — НИЧЕГО в поведении кода:
+#   - подмены (htqweb/fallback.py) работают в том же режиме `log`, что и на
+#     проде: пользователь их не замечает, но строка FALLBACK и счётчик
+#     htqweb_fallback_total на месте;
+#   - настройки те же (htqweb.settings.base), gunicorn тот же, исходники НЕ
+#     смонтированы, автоперезагрузки нет — в отличие от docker-compose.dev.yml.
+#
+# Что меняет метка: PROMETHEUS_ENV попадает в external_labels каждой серии, а
+# SERVICE_ENV — в админку инфраструктуры. Стенд и прод перестают сливаться на
+# общих графиках.
+#
+# Строгий режим на стенде включается без правки файлов:
+#   FALLBACK_MODE=strict docker compose -f docker-compose.yml \
+#       -f docker-compose.staging.yml up -d
+# (fallback начнёт кидать исключения — так ловят подмены перед выкаткой).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+x-staging-env: &staging-env
+  HTQ_ENV: staging
+  SERVICE_ENV: staging
+
+services:
+  backend-web:
+    environment: *staging-env
+
+  backend-asgi:
+    environment: *staging-env
+
+  backend-worker:
+    environment: *staging-env
+
+  backend-beat:
+    environment: *staging-env
+
+  # Flower тоже поднимает Django-приложение (`celery -A htqweb`), поэтому
+  # метка среды нужна и ему — иначе он один остался бы «продом» на стенде.
+  flower:
+    environment: *staging-env
+
+  sfu:
+    environment:
+      HTQ_ENV: staging
+
+  frontend:
+    build:
+      args:
+        # Значение вшивается в бандл на сборке (Vite подставляет
+        # import.meta.env.* статически) — поэтому именно build.args, а не
+        # environment. Стенд надо пересобирать, а не перезапускать.
+        VITE_HTQ_ENV: staging
+
+  prometheus:
+    environment:
+      PROMETHEUS_ENV: ${PROMETHEUS_ENV:-staging}

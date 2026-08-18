@@ -20,6 +20,14 @@ x-django-env: &django-env
   DJANGO_SETTINGS_MODULE: htqweb.settings.base
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
   JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
+  # Среда и политика подмен (htqweb/fallback.py). production и staging ведут
+  # себя одинаково: fallback срабатывает молча для пользователя, но пишет
+  # строку FALLBACK и растит htqweb_fallback_total. Строгий режим (подмен нет,
+  # летит исключение) — у разработчика: docker-compose.dev.yml.
+  # Пустая FALLBACK_MODE = «выведи из среды»; strict|log перебивают.
+  HTQ_ENV: ${HTQ_ENV:-production}
+  FALLBACK_MODE: ${FALLBACK_MODE:-}
+  FALLBACK_LOG_LEVEL: ${FALLBACK_LOG_LEVEL:-INFO}
   # Django (psycopg, sync) идёт НАПРЯМУЮ в Postgres: CONN_MAX_AGE пулит на уровне
   # приложения, а PgBouncer transaction-mode рвал бы DDL/prepared-statements.
   # Контейнер pgbouncer (:6432) остаётся для хостовых утилит/совместимости.
@@ -48,6 +56,24 @@ x-django-env: &django-env
   # Отпечаток самоподписанного сертификата моста (том wt_certs). С
   # сертификатом от настоящего CA файла нет — и он не нужен.
   CONFERENCE_WT_CERT_HASH_FILE: ${CONFERENCE_WT_CERT_HASH_FILE:-/app/wt-certs/cert.sha256}
+  # ── Запись, история и протокол конференций (apps/conference) ──
+  # Запись серверная и включена всегда: SFU пишет по дорожке на участника
+  # (ffmpeg -c copy), backend-media-worker сводит их в одно видео и
+  # распознаёт речь. Через CONFERENCE_RETENTION_DAYS медиа стирается
+  # полностью; история встречи и текстовый протокол остаются.
+  CONFERENCE_RECORDING_ENABLED: ${CONFERENCE_RECORDING_ENABLED:-true}
+  CONFERENCE_RETENTION_DAYS: ${CONFERENCE_RETENTION_DAYS:-25}
+  # Общий секрет канала SFU → Django (/api/conference/v1/internal/*). Пустой
+  # ЗАКРЫВАЕТ приём наглухо, а не открывает всем — см. internal_auth.py.
+  CONFERENCE_INTERNAL_TOKEN: ${CONFERENCE_INTERNAL_TOKEN:-}
+  CONFERENCE_RAW_DIR: /recordings
+  CONFERENCE_S3_BUCKET: ${CONFERENCE_S3_BUCKET:-}
+  CONFERENCE_ORPHAN_HOURS: ${CONFERENCE_ORPHAN_HOURS:-6}
+  CONFERENCE_MAX_TILES: ${CONFERENCE_MAX_TILES:-9}
+  WHISPER_MODEL: ${WHISPER_MODEL:-medium}
+  WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+  WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+  WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ru}
   # ── Корпоративная почта (apps/mail) ──
   # Пусто = почтовый сервер не подключён: ящики заводятся только локальной
   # строкой, сверка сообщает "сервер недоступен". Подробности и рецепты —
@@ -189,11 +215,56 @@ services:
     restart: unless-stopped
     environment:
       DATA_SOURCE_NAME: postgresql://${DB_USER:-htqweb}:${DB_PASSWORD:-change-me}@db:5432/${DB_NAME:-htqweb}?sslmode=disable
-    ports:
-      - "9187:9187"
     depends_on:
       db:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ─── Метрики хоста: CPU, память, ДИСК, сеть ────────────────────────────
+  # Диск — главная причина, по которой сервис вообще заведён: «кончилось
+  # место» роняет прод чаще всего, а до этого не ловилось ничем.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    # pid: host нужен, чтобы видеть процессы хоста, а не только свои.
+    pid: host
+    command:
+      - "--path.rootfs=/host"
+      # Служебные ФС докера только зашумляют метрики файловых систем.
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|rootfs/var/lib/docker)($$|/)"
+    volumes:
+      # Без `rslave` намеренно: Docker Desktop/WSL2 отказывается монтировать
+      # `/` с propagation («path / is mounted on / but it is not a shared or
+      # slave mount»), и сервис не стартует на машинах разработчиков.
+      # Плата — файловые системы, примонтированные ПОСЛЕ старта контейнера,
+      # в метриках не появятся; на фиксированном прод-хосте это не случай.
+      - /:/host:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ─── Метрики контейнеров: ресурсы, рестарты, OOM ───────────────────────
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    restart: unless-stopped
+    # Доступ к cgroups и сокету докера — иначе метрик контейнеров не собрать.
+    # Это расширение прав; если на боевом хосте так нельзя, сервис можно
+    # снять — метрики хоста (node-exporter) от этого не пострадают.
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
     logging:
       driver: json-file
       options:
@@ -205,8 +276,11 @@ services:
     restart: unless-stopped
     environment:
       REDIS_ADDR: redis://redis:6379
-    ports:
-      - "9121:9121"
+      # Длина очереди Celery. Очередь — обычный Redis-список `celery` в
+      # логической БД /9 (CELERY_BROKER_URL в settings/base.py; /8 занят
+      # кэшем). Отдаётся метрикой redis_key_size — отдельный celery-exporter
+      # ради одного числа заводить незачем, Flower его тоже не показывает.
+      REDIS_EXPORTER_CHECK_KEYS: "9=celery"
     depends_on:
       redis:
         condition: service_healthy
@@ -306,9 +380,16 @@ services:
       # collectstatic + бакеты хранилища + сид админа — к схеме БД отношения
       # не имеют и нужны при каждом старте, поэтому НЕ зависят от флага выше.
       RUN_BOOTSTRAP: ${RUN_BOOTSTRAP:-1}
-    command: ["gunicorn", "htqweb.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "60"]
+      # Мультипроцессные метрики: 4 воркера пишут счётчики в общий каталог,
+      # иначе скрейп попадал бы в случайный воркер (см. htqweb/gunicorn_conf.py).
+      PROMETHEUS_MULTIPROC_DIR: /run/prometheus
+    command: ["gunicorn", "htqweb.wsgi:application", "-c", "python:htqweb.gunicorn_conf", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "60"]
     ports:
       - "8000:8000"
+    # Каталог метрик — в памяти: файлы перезаписываются на каждый запрос,
+    # переживать рестарт не должны (мастер их и так чистит) и диску не нужны.
+    tmpfs:
+      - /run/prometheus
     volumes:
       # Только чтобы прочитать cert.sha256 QUIC-моста и отдать его фронту
       # в conference/config (dev-сценарий с самоподписанным сертификатом).
@@ -360,7 +441,47 @@ services:
     restart: unless-stopped
     environment:
       <<: *django-env
-    command: ["celery", "-A", "htqweb", "worker", "-l", "info"]
+    # -E включает отправку событий задач. Без него Flower (а значит и
+    # Prometheus, который скрейпит его /metrics) видит только самого воркера,
+    # но не то, что он выполняет.
+    command: ["celery", "-A", "htqweb", "worker", "-l", "info", "-E"]
+    depends_on:
+      backend-web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Celery worker обработки записей конференций ────────────────────────
+  # Отдельный воркер и отдельный образ (с ffmpeg и faster-whisper), потому что
+  # сведение часовой встречи и распознавание речи занимают десятки минут: в
+  # общей очереди они задержали бы отправку почты и пересчёт метрик. Слушает
+  # ТОЛЬКО conference_media — очередь, в которую задачи кладёт
+  # CELERY_TASK_ROUTES (htqweb/settings/base.py). Общий backend-worker
+  # запущен без -Q, то есть в эту очередь не заглядывает.
+  backend-media-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.media
+    restart: unless-stopped
+    environment:
+      <<: *django-env
+      # Миграции и bootstrap — работа backend-web (единственного, у кого
+      # RUN_MIGRATIONS=1). Второй мигрирующий процесс — это гонка.
+      RUN_MIGRATIONS: "0"
+      RUN_BOOTSTRAP: "0"
+    command: ["celery", "-A", "htqweb", "worker", "-l", "info", "-E",
+              "-Q", "conference_media", "-c", "1"]
+    volumes:
+      # Сырые дорожки пишет sfu, читает этот воркер — том общий.
+      - conference_raw:/recordings
+      # Веса Whisper (~1.5 ГБ для medium): без тома они скачивались бы заново
+      # при каждой пересборке образа.
+      - whisper_models:/models
     depends_on:
       backend-web:
         condition: service_started
@@ -401,8 +522,6 @@ services:
     environment:
       <<: *django-env
     command: ["celery", "-A", "htqweb", "flower", "--port=5555"]
-    ports:
-      - "5555:5555"
     depends_on:
       redis:
         condition: service_healthy
@@ -437,6 +556,9 @@ services:
     environment:
       SFU_HOST: 0.0.0.0
       SFU_PORT: "4443"
+      # Та же ось среды и та же политика подмен, что у Django (sfu/src/fallback.ts).
+      HTQ_ENV: ${HTQ_ENV:-production}
+      FALLBACK_MODE: ${FALLBACK_MODE:-}
       # JWT: тот же секрет и issuer, что у Django (htqweb/authn/jwt.py).
       JWT_SECRET: ${JWT_SECRET}
       JWT_ISSUER: ${JWT_ISSUER:-htqweb-auth}
@@ -460,6 +582,22 @@ services:
       TURN_URLS: ${TURN_URLS:-}
       TURN_USERNAME: ${TURN_USERNAME:-}
       TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
+      # ── Запись конференций (sfu/src/recording.ts) ──
+      # SFU вешает PlainTransport на каждую дорожку и ремуксит её ffmpeg'ом
+      # в /recordings/<session_id>/. Сведением и распознаванием занимается
+      # backend-media-worker, которому смонтирован тот же том.
+      CONFERENCE_RECORDING_ENABLED: ${CONFERENCE_RECORDING_ENABLED:-true}
+      CONFERENCE_RAW_DIR: /recordings
+      # Куда рассказывать о встрече. Внутреннее имя сервиса: канал не выходит
+      # за пределы docker-сети и наружу не публикуется.
+      CONFERENCE_BACKEND_URL: ${CONFERENCE_BACKEND_URL:-http://backend-web:8000}
+      # Тот же секрет, что у Django. Пустой = SFU не пишет и не журналирует
+      # (файлы, о которых некому рассказать, — это просто мусор на диске).
+      CONFERENCE_INTERNAL_TOKEN: ${CONFERENCE_INTERNAL_TOKEN:-}
+      RECORDER_RTP_PORT_MIN: ${RECORDER_RTP_PORT_MIN:-45000}
+      RECORDER_RTP_PORT_MAX: ${RECORDER_RTP_PORT_MAX:-45999}
+    volumes:
+      - conference_raw:/recordings
     ports:
       - "4443:4443"
       - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/udp"
@@ -486,6 +624,11 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # Vite подставляет import.meta.env.* на сборке, поэтому среда приходит
+        # аргументом сборки, а не переменной контейнера (см. frontend/Dockerfile).
+        VITE_HTQ_ENV: ${HTQ_ENV:-production}
+        VITE_FALLBACK_MODE: ${FALLBACK_MODE:-}
     volumes:
       - frontend_dist:/html
     restart: "no"
@@ -525,6 +668,24 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+
+  # ─── Метрики шлюза ──────────────────────────────
+  # В том же профиле, что и nginx: без него скрейпить нечего, и вне
+  # production сервис молча висел бы с down-таргетом.
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.3.0
+    restart: unless-stopped
+    profiles:
+      - production
+    command:
+      - "--nginx.scrape-uri=http://nginx:80/stub_status"
+    depends_on:
+      - nginx
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
 
   # ─── Certbot (Let's Encrypt SSL) ────────────────
   # Run once to obtain certificate, then renews automatically.
@@ -597,8 +758,11 @@ services:
       context: ./infra/logging/prometheus
       dockerfile: Dockerfile
     restart: unless-stopped
-    ports:
-      - "9090:9090"
+    environment:
+      # Уезжает в external_labels каждой серии (--enable-feature=
+      # expand-external-labels). Разделяет данные стендов, если их когда-
+      # нибудь сведут в одно хранилище.
+      PROMETHEUS_ENV: ${PROMETHEUS_ENV:-production}
     volumes:
       - prometheus_data:/prometheus
     healthcheck:
@@ -618,8 +782,6 @@ services:
     image: grafana/loki:2.9.10
     restart: unless-stopped
     command: -config.file=/etc/loki/loki-config.yml
-    ports:
-      - "3100:3100"
     volumes:
       - ./infra/logging/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki_data:/loki
@@ -668,7 +830,13 @@ services:
         exec /run.sh
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Без значения по умолчанию намеренно: `admin/admin` на панели, куда
+      # стекаются все метрики платформы, — это открытая дверь. Пустая
+      # переменная валит старт Grafana, и это правильное поведение: лучше
+      # не подняться, чем подняться с общеизвестным паролем. Задаётся в .env
+      # (см. .env.example). Платформенные учётки входят и так — по JWT SSO,
+      # локальный admin нужен только на случай, когда SSO сломан.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD не задан в .env}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       # Served behind the edge under /grafana/ (nginx in prod, Vite in dev).
@@ -692,8 +860,24 @@ services:
       GF_AUTH_JWT_ROLE_ATTRIBUTE_STRICT: "true"
       # Land admins straight on the service-metrics dashboard after login.
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/htqweb-prometheus-services.json
-    ports:
-      - "3001:3000"
+      # ─── Доставка алертов ───────────────────────────────────────────────
+      # Подставляются в contact_points.yml через $__env{...}: токен бота в
+      # репозитории лежать не должен. Пустые значения = канал молчит.
+      # Плейсхолдеры, а НЕ пустые строки: Grafana валидирует контактные
+      # точки при старте и с пустым bot token отказывается подниматься
+      # целиком («could not find Bot Token in settings»). Ронять всю панель
+      # из-за ненастроенного канала — хуже, чем подняться с нерабочим
+      # каналом: ошибка доставки видна в Alerting → Notification history и
+      # в логах, то есть не молчит.
+      GF_TELEGRAM_BOT_TOKEN: ${GF_TELEGRAM_BOT_TOKEN:-000000:PLACEHOLDER-set-in-dotenv}
+      GF_TELEGRAM_CHAT_ID: ${GF_TELEGRAM_CHAT_ID:-0}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      GF_SMTP_ENABLED: ${GF_SMTP_ENABLED:-false}
+      GF_SMTP_HOST: ${GF_SMTP_HOST:-}
+      GF_SMTP_USER: ${GF_SMTP_USER:-}
+      GF_SMTP_PASSWORD: ${GF_SMTP_PASSWORD:-}
+      GF_SMTP_FROM_ADDRESS: ${GF_SMTP_FROM_ADDRESS:-}
+      GF_SMTP_SKIP_VERIFY: ${GF_SMTP_SKIP_VERIFY:-false}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./infra/logging/grafana-provisioning:/etc/grafana/provisioning:ro
@@ -712,6 +896,12 @@ volumes:
   static_files:
   media_files:
   wt_certs:
+  # Сырые дорожки конференций: пишет sfu, читает и подчищает
+  # backend-media-worker. Живут часы — от конца встречи до готового mp4.
+  conference_raw:
+  # Веса Whisper. Отдельным томом, чтобы пересборка образа не заставляла
+  # качать полтора гигабайта заново.
+  whisper_models:
   frontend_dist:
   certbot_conf:
   certbot_webroot:

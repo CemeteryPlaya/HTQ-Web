@@ -28,8 +28,15 @@ import { Room, ActiveSpeakerInfo } from './room.js';
 import {
   AccessTokenClaims,
   describeClaims,
+  guestMayJoin,
   verifyAccessToken,
 } from './auth.js';
+import {
+  bindSnapshotSource,
+  renderMetrics,
+  type SfuSnapshot,
+} from './metrics.js';
+import * as recording from './recording.js';
 
 // ═══════════════════════════════════════════════════════════
 // Types
@@ -388,6 +395,29 @@ function broadcastToRoom(
   }
 }
 
+/**
+ * Пускать ли это соединение в эту комнату.
+ *
+ * Сотруднику платформы — да: его токен и так подтверждает, что он свой.
+ * Гостю — только в комнату, на которую выписано приглашение. Проверка стоит
+ * здесь, а не в момент авторизации, по простой причине: авторизация проходит
+ * на upgrade WebSocket, когда комната ещё неизвестна — её называет первое
+ * сигнальное сообщение. Оба входа (`join_room` и `joinRoom`) спрашивают
+ * именно эту функцию, чтобы правило не разъехалось между ними.
+ */
+function mayEnterRoom(peerConn: PeerConnection, roomId: string): boolean {
+  const claims = peerConn.identity;
+  if (!claims) return true;   // режим без авторизации (SFU_REQUIRE_AUTH=false)
+  if (!guestMayJoin(claims, roomId)) {
+    console.warn(
+      `[Auth] Гость ${describeClaims(claims)} пытался войти в чужую комнату: ` +
+        `токен на "${claims.room_id}", запрошена "${roomId}"`
+    );
+    return false;
+  }
+  return true;
+}
+
 function attachPeerToRoom(peerId: string, roomId: string): void {
   const peerConn = peerConnections.get(peerId);
   if (!peerConn) return;
@@ -434,6 +464,24 @@ function removePeerFromConference(peerId: string): void {
     const room = rooms.get(roomId);
     if (room) {
       room.removePeer(peerId);
+
+      // Журнал встречи. Порядок важен: сначала отмечаем выход участника,
+      // и только когда комната опустела — закрываем сессию. Иначе finish
+      // ушёл бы в Django раньше, чем сообщение о последнем ушедшем, и тот
+      // остался бы в истории «до сих пор на встрече».
+      void (async () => {
+        await recording.reportParticipant(roomId, {
+          peerId,
+          displayName: peerConn.displayName,
+          userId: peerConn.identity?.user_id ?? null,
+          isGuest: peerConn.identity?.token_type === 'guest',
+          action: 'leave',
+        });
+        if (room.peerCount === 0) {
+          await recording.closeSession(roomId);
+        }
+      })();
+
       if (room.peerCount === 0) {
         room.close();
         rooms.delete(roomId);
@@ -706,6 +754,9 @@ async function handleMessage(
         const data = asRecord(msg.data);
         const roomId = String(msg.roomId || data.roomId || '').trim();
         if (!roomId) return respondError('roomId is required');
+        if (!mayEnterRoom(peerConn, roomId)) {
+          return respondError('guest token is not valid for this room');
+        }
 
         attachPeerToRoom(peerId, roomId);
         respond({ roomId });
@@ -720,6 +771,9 @@ async function handleMessage(
           data.displayName || peerConn.identity?.username || 'Guest'
         );
         if (!roomId) return respondError('roomId is required');
+        if (!mayEnterRoom(peerConn, roomId)) {
+          return respondError('guest token is not valid for this room');
+        }
 
         // If peer moves from another room, clean old media and room bindings.
         if (peerConn.roomId && peerConn.roomId !== roomId) {
@@ -736,6 +790,27 @@ async function handleMessage(
         if (!alreadyInRoom) {
           room.addPeer(peerId, displayName);
         }
+
+        // Журнал встречи (apps.conference). Намеренно БЕЗ await: ответ на
+        // joinRoom не должен ждать похода в Django — звонок важнее записи, а
+        // сама запись начнётся с первого же producer'а, который появится
+        // заметно позже (клиенту ещё создавать транспорты и захватывать
+        // камеру). Ошибки внутри не всплывают, см. recording-api.ts.
+        void (async () => {
+          const session = await recording.ensureSession({
+            roomId,
+            createdById: peerConn.identity?.user_id ?? null,
+            createdByName: peerConn.identity?.username ?? displayName,
+          });
+          if (!session) return;
+          await recording.reportParticipant(roomId, {
+            peerId,
+            displayName,
+            userId: peerConn.identity?.user_id ?? null,
+            isGuest: peerConn.identity?.token_type === 'guest',
+            action: 'join',
+          });
+        })();
 
         respond({
           routerRtpCapabilities: room.rtpCapabilities,
@@ -834,6 +909,16 @@ async function handleMessage(
           data.kind,
           data.rtpParameters
         );
+
+        // Ставим дорожку на запись. Без await: подъём ffmpeg занимает
+        // десятки миллисекунд, и заставлять клиента ждать их ради журнала
+        // незачем — consumer внутри создаётся приостановленным, так что
+        // начало потока не потеряется.
+        const producer = room.getProducer(peerId, producerId);
+        if (producer) {
+          void recording.attachProducer(room, peerId, producer);
+        }
+
         await syncExistingConsumersForPeer(peerId);
         respond({ producerId });
         break;
@@ -962,6 +1047,19 @@ async function handleMessage(
           },
           peerId
         );
+
+        // В журнал встречи чат попадает, хотя между участниками он и
+        // остаётся эфемерным: в протоколе ссылка, брошенная в чат, часто
+        // и есть итог обсуждения.
+        void recording.reportEvent(peerConn.roomId, {
+          kind: 'chat',
+          peerId,
+          payload: {
+            text,
+            display_name: peerConn.displayName || peerConn.identity?.username || '',
+          },
+        });
+
         respond({});
         break;
       }
@@ -975,10 +1073,21 @@ async function handleMessage(
         if (!peerConn.roomId) return respondError('Not in a room');
 
         const data = asRecord(msg.data);
+        const previousCam = peerConn.mediaState.camEnabled;
         peerConn.mediaState = {
           micEnabled: data.micEnabled !== false,
           camEnabled: data.camEnabled !== false,
         };
+
+        // В журнал пишем только ПЕРЕХОД камеры, а не каждое сообщение:
+        // клиент шлёт mediaState и просто так, при переподключении, и лента
+        // событий утонула бы в повторах.
+        if (previousCam !== peerConn.mediaState.camEnabled) {
+          void recording.reportEvent(peerConn.roomId, {
+            kind: peerConn.mediaState.camEnabled ? 'camera_on' : 'camera_off',
+            peerId,
+          });
+        }
 
         broadcastToRoom(
           peerConn.roomId,
@@ -1015,6 +1124,10 @@ async function main(): Promise<void> {
   console.log('='.repeat(60));
   console.log('  HTQWeb SFU Server — VP8 + H264 Baseline / 1080p@60');
   console.log('='.repeat(60));
+
+  // 0. Метрики: подключаем источник до того, как появятся комнаты, — иначе
+  //    первый скрейп застал бы gauge'и без данных и отдал нули.
+  bindSnapshotSource(collectSfuSnapshot);
 
   // 1. Create Mediasoup workers
   await createWorkers();
@@ -1291,11 +1404,61 @@ function parseQualityReport(input: unknown): QualityReportPayload | null {
   };
 }
 
+/**
+ * Снимок состояния для Prometheus. Считается на скрейпе — конференция
+ * меняется ежесекундно, и кэшированные числа врали бы ровно тогда, когда
+ * на них смотрят.
+ */
+function collectSfuSnapshot(): SfuSnapshot {
+  let peers = 0;
+  let transports = 0;
+  let producers = 0;
+  let consumers = 0;
+
+  for (const room of rooms.values()) {
+    const snapshot = room.metricsSnapshot();
+    peers += snapshot.peers;
+    transports += snapshot.transports;
+    producers += snapshot.producers;
+    consumers += snapshot.consumers;
+  }
+
+  return {
+    rooms: rooms.size,
+    connections: peerConnections.size,
+    peers,
+    transports,
+    producers,
+    consumers,
+  };
+}
+
 function handleHttpRequest(
   req: IncomingMessage,
   res: import('http').ServerResponse
 ): void {
   const requestPath = getRequestPath(req);
+
+  // Метрики. Без авторизации намеренно: порт SFU наружу не публикуется, а
+  // Prometheus ходит сюда по внутренней сети compose. Токен здесь требовать
+  // нельзя — скрейперу его негде взять.
+  if (requestPath === '/metrics') {
+    renderMetrics()
+      .then(({ body, contentType }) => {
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Cache-Control': 'no-store',
+          'Content-Length': Buffer.byteLength(body),
+        });
+        res.end(body);
+      })
+      .catch((err) => {
+        console.error('[Metrics] Не удалось собрать метрики:', err);
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('metrics collection failed');
+      });
+    return;
+  }
 
   if (requestPath === '/' || requestPath === '/healthz' || requestPath === '/health') {
     const payload = JSON.stringify({
