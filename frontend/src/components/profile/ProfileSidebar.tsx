@@ -195,6 +195,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     const communicationItems: ItemConfig[] = useMemo(() => [
         { id: 'messenger', to: '/messenger', icon: MessageSquare, label: t('profile.sidebar.messenger', 'Мессенджер') },
         { id: 'conference', to: '/conference', icon: Video, label: t('profile.sidebar.conference', 'Видеоконференция'), onClick: gateService('conference') },
+        { id: 'conference-history', to: '/conference/history', icon: History, label: t('profile.sidebar.conferenceHistory', 'История конференций'), onClick: gateService('conference') },
         { id: 'email', to: '/email', icon: Mail, label: t('profile.sidebar.email', 'Почта') },
     ], [t]);
 

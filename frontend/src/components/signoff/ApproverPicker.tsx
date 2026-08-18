@@ -71,7 +71,13 @@ export function ApproverPicker({ value, onChange, knownNames = {}, disabled }: P
 
   return (
     <div className="space-y-2">
-      <Popover open={open} onOpenChange={setOpen}>
+      {/* modal обязателен: этот выбор используется внутри диалога, а тот на
+    время открытия блокирует прокрутку документа и пропускает события
+    только внутри своего поддерева. Содержимое поповера рендерится
+    порталом в body, то есть снаружи, — и список согласующих переставал
+    прокручиваться колесом, оставаясь прокручиваемым технически.
+    С modal поповер ставит собственную блокировку. */}
+      <Popover modal open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
             type="button"

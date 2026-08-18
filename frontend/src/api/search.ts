@@ -12,6 +12,7 @@ import { fetchTasks } from '@/api/tasks';
 import { fetchEmployees } from '@/api/hr';
 import { searchFiles } from '@/api/fileManager';
 import { cmsApi } from '@/api/cms';
+import { fallback } from '@/lib/fallback';
 
 export type SearchCategory = 'task' | 'employee' | 'news' | 'file';
 
@@ -31,8 +32,23 @@ const PER_CATEGORY = 5;
 function settled<T>(label: string, p: Promise<T[]>): Promise<T[]> {
   return p.catch((err) => {
     // One source failing (auth, network) must not break the whole search.
-    if (import.meta.env.DEV) console.warn(`[globalSearch] ${label} failed`, err);
-    return [] as T[];
+    //
+    // Но «нет доступа» и «домен лежит» выглядят для пользователя одинаково —
+    // категория просто отсутствует в выдаче. Первое штатно (у половины
+    // сотрудников нет доступа к HR), второе — авария, о которой иначе никто
+    // не узнает: искали-то не то, чего не хватает. Различаем по коду ответа.
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    const denied = status === 401 || status === 403;
+    // `site` шаблонный, но набор значений замкнут четырьмя литералами ниже —
+    // это не данные, и кардинальность не разъедется.
+    return fallback(`search.global.${label}_unavailable`, [] as T[], {
+      reason: denied
+        ? 'нет доступа к домену — категория выпала из выдачи'
+        : 'источник поиска не ответил — категория выпала из выдачи',
+      expected: denied,
+      cause: err,
+      context: { status },
+    });
   });
 }
 

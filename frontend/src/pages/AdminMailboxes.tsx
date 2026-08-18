@@ -67,7 +67,7 @@ type MailboxStatus = {
 };
 
 type ReconcileDiff = {
-    kind: 'only_local' | 'only_remote' | 'mismatched';
+    kind: 'only_local' | 'only_remote' | 'mismatched' | 'unlinked';
     address: string;
     mailbox_id: number | null;
     user_id: number | null;
@@ -93,7 +93,8 @@ type ReconcileReport = {
     checked_local: number;
     checked_remote: number;
     in_sync: number;
-    counts: { only_local: number; only_remote: number; mismatched: number };
+    counts: { only_local: number; only_remote: number; mismatched: number;
+              unlinked: number; linked: number };
     differences: ReconcileDiff[];
     errors: string[];
     finished_at: string;
@@ -586,6 +587,7 @@ const DIFF_VARIANT: Record<ReconcileDiff['kind'], 'default' | 'destructive' | 'o
     only_local: 'destructive',
     only_remote: 'secondary',
     mismatched: 'outline',
+    unlinked: 'default',
 };
 
 const ReconcileTab: React.FC<{ status?: MailboxStatus }> = ({ status }) => {
@@ -597,6 +599,7 @@ const ReconcileTab: React.FC<{ status?: MailboxStatus }> = ({ status }) => {
         only_local: t('admin.mailboxes.diffOnlyLocal', 'Только в платформе'),
         only_remote: t('admin.mailboxes.diffOnlyRemote', 'Только на сервере'),
         mismatched: t('admin.mailboxes.diffMismatched', 'Расходятся'),
+        unlinked: t('admin.mailboxes.diffUnlinked', 'Нашёлся владелец'),
     };
 
     const runMutation = useMutation({
@@ -628,7 +631,7 @@ const ReconcileTab: React.FC<{ status?: MailboxStatus }> = ({ status }) => {
                 <div className="flex items-start gap-2 text-sm text-muted-foreground">
                     <Info className="h-4 w-4 mt-0.5 shrink-0" />
                     <p>
-                        {t('admin.mailboxes.reconcileHelp', 'Сверка сравнивает ящики платформы с ящиками почтового сервера в обе стороны. Сначала посмотрите отчёт — он ничего не меняет, — и только потом применяйте выбранное направление.')}
+                        {t('admin.mailboxes.reconcileHelp', 'Сверка сравнивает ящики платформы с ящиками почтового сервера в обе стороны. Сначала посмотрите отчёт — он ничего не меняет, — и только потом применяйте выбранное направление. Заодно сверка ищет владельцев: если адрес ящика совпадает с email сотрудника, при применении ящик привяжется к нему сам и появится у него в почте.')}
                     </p>
                 </div>
 
@@ -679,6 +682,16 @@ const ReconcileTab: React.FC<{ status?: MailboxStatus }> = ({ status }) => {
                             {t('admin.mailboxes.reconcileInSync', 'Совпадают')}:{' '}
                             <span className="font-medium text-foreground">{report.in_sync}</span>
                         </span>
+                        {report.counts.unlinked > 0 && (
+                            <span className="text-muted-foreground">
+                                {report.applied
+                                    ? t('admin.mailboxes.reconcileLinked', 'Привязано к сотрудникам')
+                                    : t('admin.mailboxes.reconcileToLink', 'Найдены владельцы')}:{' '}
+                                <span className="font-medium text-foreground">
+                                    {report.applied ? report.counts.linked : report.counts.unlinked}
+                                </span>
+                            </span>
+                        )}
                     </div>
 
                     {report.mode === 'probe' && (

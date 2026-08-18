@@ -49,6 +49,7 @@ export const employeePages: PageCase[] = [
   { path: '/email', name: 'Почта' },
   { path: '/tasks', name: 'Задачи' },
   { path: '/tasks/daily', name: 'Ежедневные отчёты' },
+  { path: '/tasks/project-daily', name: 'Ежедневные отчёты проекта' },
   { path: '/requests', name: 'Заявки' },
   { path: '/requests/my-stats', name: 'Моя статистика по заявкам' },
   { path: '/contracts', name: 'Контракты — обзор' },

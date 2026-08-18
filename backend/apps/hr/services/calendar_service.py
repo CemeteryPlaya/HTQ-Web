@@ -40,6 +40,11 @@ class ShiftPatternNotFound(Exception):
 # ── resolution helpers (buквально _fallback/_from_template/_from_shift) ────
 
 def _fallback(d: date) -> dict:
+    # Через htqweb.fallback НЕ проходит намеренно: это не подмена вместо
+    # сломанного источника, а последняя ступень штатной лестницы разрешения
+    # (оверрайд → шаблон → 5/2). У большинства сотрудников шаблона нет вовсе,
+    # так что ветка срабатывает на каждый день каждого календаря — счётчик и
+    # лог здесь дали бы только шум, в котором утонут настоящие подмены.
     wd = d.weekday()
     if wd < 5:
         return {"type": "working", "hours": 8.0, "note": None}

@@ -18,6 +18,7 @@ import {
   VIDEO_TARGET_HEIGHT,
   VIDEO_TARGET_WIDTH,
 } from './qualityProfile';
+import { fallback } from '@/lib/fallback';
 import { Result, err, ok } from './result';
 import {
   WebRTCError,
@@ -1115,7 +1116,16 @@ export class MediaEngine {
         this.events.onInfo?.(
           'Камера недоступна. Продолжаем в аудио-режиме.'
         );
-        return ok(audioOnlyStream);
+        // expected: ветка ровно для этого и существует, участнику про неё
+        // сказано, и строгий режим не должен запирать разработчика без
+        // веб-камеры. Но в телеметрию событие уходит: «камеры пропали разом
+        // у всех» — это уже не отсутствие камеры, а сломанный HTTPS или
+        // политика браузера, и заметить это надо по всплеску.
+        return ok(fallback('conference.media.audio_only', audioOnlyStream, {
+          reason: 'захват камеры не удался — звонок идёт только со звуком',
+          expected: true,
+          cause: fullCaptureCause,
+        }));
       } catch (audioOnlyCause) {
         const domException =
           typeof DOMException !== 'undefined' && audioOnlyCause instanceof DOMException

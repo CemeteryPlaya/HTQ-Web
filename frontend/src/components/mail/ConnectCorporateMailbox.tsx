@@ -81,13 +81,28 @@ export const ConnectCorporateMailbox: React.FC<{ className?: string }> = ({ clas
         onError: (e: ApiError) => toast.error(e?.response?.data?.detail || 'Error'),
     });
 
-    // Режим выключен админом — показывать нечего.
-    if (!info?.allowed) return null;
+    // Режим выключен админом — карточку показывать нечего.
+    //
+    // Раньше здесь стоял ранний `return null`, уносивший ВЕСЬ поддеревом,
+    // включая диалог. Стоило запросу `connect-corporate` отдать ошибку или
+    // `allowed: false` (а он перезапрашивается сразу после подключения, и
+    // `retry: false` — то есть один сетевой сбой обнуляет `info`), как
+    // открытый диалог исчезал не закрывшись. Radix снимает свою блокировку
+    // `body { pointer-events: none }` в обработчике ЗАКРЫТИЯ; при резком
+    // размонтировании снимать её некому — и вся страница переставала
+    // принимать клики. Ровно то, на что жалуются: «после этого окна кнопки
+    // не нажимаются».
+    //
+    // Поэтому карточка скрывается, а диалог остаётся смонтированным, пока он
+    // открыт: закрыть его должен Radix, а не React-условие.
+    const canConnect = Boolean(info?.allowed);
+    const mailbox = info?.mailbox;
 
-    const mailbox = info.mailbox;
+    if (!canConnect && !open) return null;
 
     return (
         <div className={className}>
+            {canConnect && (
             <div className="rounded-lg border bg-card p-4">
                 <div className="flex items-start justify-between gap-4 flex-wrap">
                     <div className="space-y-1">
@@ -107,7 +122,7 @@ export const ConnectCorporateMailbox: React.FC<{ className?: string }> = ({ clas
                             </p>
                         ) : (
                             <p className="text-sm text-muted-foreground">
-                                {t('mail.connect.subtitle', 'Подключите свой рабочий ящик @{{domain}}, чтобы читать и отправлять почту здесь.', { domain: info.domain })}
+                                {t('mail.connect.subtitle', 'Подключите свой рабочий ящик @{{domain}}, чтобы читать и отправлять почту здесь.', { domain: info?.domain })}
                             </p>
                         )}
                     </div>
@@ -133,6 +148,11 @@ export const ConnectCorporateMailbox: React.FC<{ className?: string }> = ({ clas
                 </div>
             </div>
 
+            )}
+
+            {/* Вне условия выше намеренно: см. комментарий про
+                pointer-events — открытый диалог нельзя снимать с
+                монтирования, его должен закрыть Radix. */}
             <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setPassword(''); }}>
                 <DialogContent>
                     <DialogHeader>

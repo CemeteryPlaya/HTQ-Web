@@ -19,6 +19,7 @@ import {
   MapPin,
   Truck,
   Search,
+  Users,
   X,
   ChevronRight,
   type LucideIcon,
@@ -36,6 +37,7 @@ const taskNavItems: TaskNavItem[] = [
   // ── Оперативные работы
   { to: '/tasks', icon: CheckSquare, labelKey: 'tasks.nav.tasks', elevatedOnly: false, category: 'ops' },
   { to: '/tasks/daily', icon: ClipboardList, labelKey: 'tasks.nav.daily', elevatedOnly: false, category: 'ops' },
+  { to: '/tasks/project-daily', icon: Users, labelKey: 'tasks.nav.projectDaily', elevatedOnly: true, category: 'ops' },
 
   // ── Планирование
   { to: '/tasks/roadmap', icon: Map, labelKey: 'tasks.nav.roadmap', elevatedOnly: true, category: 'planning' },

@@ -35,13 +35,17 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 # rebuild + recreate one process after code changes:
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --no-deps backend-web
 ```
-Prod stack is plain `docker compose up -d` (adds nginx/certbot under the `production` profile).
+Prod stack needs the profile flag — `docker compose --profile production up -d`. Without it nginx, certbot and nginx-exporter **do not start** (they sit in the `production` profile), so there is no gateway: the SPA never gets served and `/api` is reachable only through the ports `backend-web`/`backend-asgi` publish directly. Plain `docker compose up -d` brings up everything else.
 
 **Конференция (SFU) поднята и в dev, и в проде.** `sfu` (mediasoup, сигналинг `:4443`, медиа `:44444/udp+tcp`) и `webtransport` (QUIC-мост `:4433/udp`) больше не под профилем `production` — стартуют вместе со стеком. Что важно знать:
 - **Сигналинг требует платформенный JWT.** SFU валидирует токен на WS-upgrade тем же `JWT_SECRET`/HS256, что и Django (`sfu/src/auth.ts`); браузер передаёт его подпротоколом `['htqweb.jwt', <token>]`, WebTransport-мост — параметром `?token=`. Без токена — 401 на upgrade. Отключается только для локальной отладки: `SFU_REQUIRE_AUTH=false`.
 - **`WEBRTC_ANNOUNCED_IP` обязателен.** С wildcard listenIp и пустым announced SFU падает на старте намеренно (иначе — чёрное видео). В dev подставляется `127.0.0.1` (браузер на той же машине); для проверки с другого устройства поставьте LAN-IP хоста в корневом `.env`, в проде — публичный IP.
 - **Транспорт сигналинга:** фронт сначала пробует WebTransport (QUIC), при неудаче сам откатывается на WebSocket (`WebRTCManager.buildSignalingAttempts`). Адрес моста и отпечаток его самоподписанного сертификата приезжают в `GET /api/cms/v1/conference/config` (`wt_signaling_url` / `wt_certificate_hashes`).
 - Флаг сервиса в реестре включён миграцией `core/0003_enable_conference`; на боевой БД с `RUN_MIGRATIONS=0` её нужно применить руками (`manage.py migrate core`) либо флипнуть `manage.py service conference --on`.
+- **Приглашения по ссылке и внешние участники.** `ConferenceInvite` (`apps.cms`, миграция `cms/0005_conference_invites`) + `/api/cms/v1/conference/invites*`. Ссылка вида `/join/<token>` ведёт на публичную страницу: сотрудника она сразу отправляет в комнату, гостю предлагает назваться и выдаёт **гостевой JWT** (`htqweb/authn/jwt.py::issue_guest_token`). Тот подписан общим `JWT_SECRET` — иначе SFU его не примет, — но `token_type="guest"` закрывает ему всё API платформы (`htqweb.http._authenticate_jwt` пускает только `access`), а claim `room_id` привязывает к ОДНОЙ комнате: `sfu/src/auth.ts::guestMayJoin` + `mayEnterRoom` в `server.ts` проверяют это на обоих входах (`join_room`, `joinRoom`). Гостевой токен намеренно не несёт `user_id` — вторая линия обороны: `TokenPayload` без него не собирается. Отправка ссылки — `POST invites/<id>/send` (почта через `django.core.mail`, уведомление через `apps.messenger.interface`, каналы независимы), встреча в календаре создаётся фронтом обычным `event_type="conference"` + `conference_room_id`.
+- **Запись, история и протокол.** Аппка **`apps.conference`** (`/api/conference/v1/*`) — имя `conference` в `KNOWN_SERVICES` перестало быть «зарезервированным без аппки». Запись **автоматическая на каждой встрече** и ведётся **поучастниково**: `sfu/src/recording.ts` вешает `PlainTransport` на каждый producer, ffmpeg ремуксит поток в `.mkv` (`-c copy`, без перекодирования — CPU почти не тратится) на общий том `conference_raw`. `.mkv`, а не `.webm`: комната поддерживает и H264, который webm при `-c copy` не принимает. Из подорожечной записи **бесплатно следует протокол** — аудио каждого лежит отдельным файлом, поэтому «кто говорит» известно из имени файла и диаризация не нужна вовсе. Сведение в одно mp4 и распознавание (faster-whisper, `WHISPER_MODEL=medium`, аудио не покидает периметр) делает **отдельный контейнер `backend-media-worker`** (`backend/Dockerfile.media`, очередь `conference_media` через `CELERY_TASK_ROUTES`) — общий `backend-worker` запущен без `-Q` и этих задач не видит, а ffmpeg с ctranslate2 не утяжеляют остальные пять backend-образов. **Ретенция 25 дней** (`CONFERENCE_RETENTION_DAYS`): `purge_expired` стирает медиа из S3 и ставит `recording_state="purged"`, но история встречи, участники, события и текстовый протокол остаются НАВСЕГДА. Отдельное состояние вместо удаления строки — чтобы интерфейс отличал «не писали» от «записали и вычистили по сроку».
+- **Канал SFU → Django обязателен к настройке.** `CONFERENCE_INTERNAL_TOKEN` (заголовок `X-HTQ-Internal-Token`, не JWT — у SFU нет пользователя). **Пустой секрет ЗАКРЫВАЕТ приём, а не открывает всем**, поэтому без него не будет ни истории, ни записей. Связь односторонняя и необязательная: недоступный Django не ломает звонок (всё через `sfu/src/fallback.ts`, `expected=false`). Все `internal/*`-ручки идемпотентны — сеть между контейнерами теряет ответы, и повтор не должен ни раздваивать встречу, ни запускать вторую сборку.
+- **Плеер записи ходит по подписи, а не по JWT.** `<video src>` не отправляет `Authorization`, поэтому `GET /sessions/<id>/recording` объявлен `auth=None` и проверяет `?sig=&exp=` (`apps/conference/services/signing.py`, общая схема с `htqweb/storage/signed_url.py`); ссылку выдаёт карточка встречи, где права уже проверены. Отдаётся **302 на presigned-адрес**, а не байты через Django: иначе теряется `Range`, то есть перемотка по часовому видео. ⚠️ При правке этих вьюх помните, что `api_view(auth=None)` НЕ разбирает токен — `request.token` заполняется вручную в `_authorize_media`, иначе «вторая дверь» по JWT только нарисована.
 
 **Frontend** (`cd frontend`):
 ```bash
@@ -77,7 +81,7 @@ Mail-server credentials live in **two layers**: `MailServerConfig` (one DB row, 
 
 `mail_check` is the first thing to run when corporate mail misbehaves: it prints the resolved config (provisioner mode, domain, IMAP/SMTP targets), then checks each link **in dependency order** — port reachable → IMAP connect → login → folders (including whether `MAIL_SYNC_FOLDERS` actually exist on that server, the usual `Sent` vs `Sent Items` trap) → SMTP connect → SMTP login. The first failure stops the chain so you get the one real cause instead of derived errors, and every failure carries the concrete fix. Without `--mailbox` it needs no secrets at all (config + tunnel only); `--password` is optional for an already-provisioned mailbox (the stored one is decrypted from the DB). Passwords never appear in the output. Exits non-zero on any failure, so it works in scripts.
 
-`seed_tasks_demo` fills the whole five-level hierarchy (project → site → block → roadmap → task) plus volumes, resource requirements and dated daily reports; it needs `seed_hr_demo` to have run first (it reads departments/employees through `apps.hr.interface`). `--purge` removes only what it seeded, `--wipe` TRUNCATEs every table of the `tasks` app and re-seeds — including restoring the five system `TaskType` rows that migration `0002` had put there.
+`seed_tasks_demo` fills the whole five-level hierarchy (project → site → block → roadmap → task) plus volumes, resource requirements, dated daily reports and per-block **staff reports** (`ProjectStaffReport` — headcount by work role, deliberately seeded above/below/at the `ResourceRequirement` plan, with one stopped site so the board shows a real shortfall); it needs `seed_hr_demo` to have run first (it reads departments/employees through `apps.hr.interface`). `--purge` removes only what it seeded, `--wipe` TRUNCATEs every table of the `tasks` app and re-seeds — including restoring the five system `TaskType` rows that migration `0002` had put there.
 
 **Reaching the dev database from the host**: `manage.py` defaults to `localhost:6432` (PgBouncer), whose credentials fail SASL from the host. Use the unpooled port instead — same server, dev database:
 ```bash
@@ -105,6 +109,40 @@ DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
 - **History (no longer applies — here so old scars make sense if you trip over them):** the FastAPI generation put every service behind PgBouncer in transaction-pooling mode, which silently drops `search_path`, so all 8 Python services (except `user`→schema `auth`) actually lived in schema `public` with a table-name-prefix convention (`hr_*`, `task_*`, `request_*`, `cms_*`, `email_*`), and Alembic needed a fresh-thread-per-migration dance to survive the pooler. None of that applies to Django: one schema (`public`), natural table names (`<app>_<model>`), `managed=True`, plain `makemigrations`/`migrate`.
 - **Tests need a real, unpooled Postgres** — `CREATE DATABASE`/`DROP DATABASE test_htqweb` cannot pass through PgBouncer's transaction pool. That's what host port `:55432` (`docker-compose.test.yml`) is for; see [backend/README-tests.md](backend/README-tests.md).
 
+## Среды и политика fallback'ов
+
+**Fallback** здесь — место, где вместо настоящего значения подставляется запасное и выполнение продолжается. Такие места молчаливы по своей природе: снаружи подмена выглядит как нормальная работа. Поэтому все они проходят через один примитив, а среды разведены так, чтобы у разработчика подмен не было вовсе.
+
+Ось одна на три рантайма — `HTQ_ENV` (для фронта `VITE_HTQ_ENV`, вшивается в бандл на сборке):
+
+| Среда | `HTQ_ENV` | `DJANGO_SETTINGS_MODULE` | Режим | Как запускается |
+|---|---|---|---|---|
+| Прод | `production` | `htqweb.settings.base` | `log` | `docker compose up -d` |
+| Тестовая (как прод) | `staging` | `htqweb.settings.base` | `log` | `docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d` |
+| Разработчик | `development` | `htqweb.settings.dev` | **`strict`** | `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d` |
+| pytest | — | `htqweb.settings.test` | **`strict`** | `pytest` |
+
+- `log` — подмена происходит, **пользователю не видно ничего** (ни в теле ответа, ни в UI): строка `FALLBACK site=… reason=…` в лог + `htqweb_fallback_total{site,expected}`.
+- `strict` — подмены **нет**: летит `FallbackNotAllowed` (на фронте `FallbackNotAllowedError` в оверлей Vite), `raise … from exc` сохраняет исходный traceback.
+- `FALLBACK_MODE=strict|log` перебивает вывод из среды в обе стороны (включить строгий режим на стенде перед выкаткой; разово ослабить локально). `FALLBACK_LOG_LEVEL` крутит уровень отдельного логгера `htqweb.fallback`.
+
+**Новый fallback пишется только так** — `htqweb/fallback.py`, `frontend/src/lib/fallback.ts`, `sfu/src/fallback.ts` (одинаковый API):
+
+```python
+try:
+    values = module.collect()
+except Exception as exc:
+    fallback("core.metrics.app_collect_failed", None,
+             reason="сбор метрик аппки упал", exc=exc, app=label)
+    continue
+```
+
+`site` — статический литерал `<аппка>.<модуль>.<что>`: он уходит в метку метрики, данные туда подставлять нельзя. `expected=True` помечает предусмотренную деградацию (камеры нет, плана нет) — strict её не роняет, лог тише, серия в счётчике отдельная; алерт смотрит только на `expected="false"`.
+
+**Что через него НЕ проходит** (иначе механизм утонет в шуме, и на слово FALLBACK перестанут смотреть): дефолты конфигов из env; штатные лестницы разрешения, срабатывающие на каждый вызов (`apps/hr/services/calendar_service.py::_fallback`, `image_service.detect_mime`); визуальные заглушки на фронте (`|| '—'`, `?? []` во время загрузки); `is_fallback` в `apps.signoff` (предметное понятие «запасной этап маршрута»); `AvatarFallback` из shadcn. Отдельный случай — коллектор `BusinessMetricsCollector.collect()` и `htqweb/gunicorn_conf.py`: там нельзя трогать реестр Prometheus и нет настроек Django соответственно, и в обоих файлах написано почему.
+
+⚠️ **Celery-процессы `/metrics` не отдают** (Prometheus снимает их через Flower), поэтому подмены из задач в метрику не попадают — их закрывает Loki-правило `htqweb-fallback-worker-logs` по подстроке `FALLBACK`.
+
 ## Host / Windows environment notes
 
 - Shell is PowerShell 5.1; a Bash tool (Git Bash) is also available. **PowerShell mangles `$`, inner quotes, and JSON** in `docker exec`/`psql` args — route anything with `$`, quotes, or JSON bodies through the Bash tool.
@@ -113,4 +151,12 @@ DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
 
 ## Observability
 
-Prometheus (`:9090/prometheus`) currently scrapes itself + `postgres-exporter`, `redis-exporter`, MinIO, and Loki/Grafana (6 targets total, `infra/logging/prometheus/prometheus.yml`) — **the Django backend does not expose `/metrics` yet**: the old `htqweb_metrics` lib was deleted with the FastAPI services, and a `django-backend` scrape job is pre-written in that file but left commented out pending a `django-prometheus` install. Grafana (`:3001`, or `/grafana/` via the edge) keeps its JWT SSO: platform accounts sign in with their access token (superuser→Admin, staff→Editor); dashboards live in the **HTQWeb** folder. Config in `infra/logging/`. `scripts/generate-monitoring-traffic.sh` predates the cutover and still hardcodes the old per-service ports (`:8005`-`:8012`) — it needs a rewrite before it'll generate any real traffic against this backend.
+Prometheus (`infra/logging/prometheus/prometheus.yml`) scrapes **13 jobs**: `django-backend` (WSGI) and `django-asgi`, `celery` (via Flower), `postgres`, `redis`, `node` + `cadvisor` (host and containers), `nginx` (production profile only), `sfu`, `minio`, `loki`, `grafana`, and itself. Retention is 30d **or** 10GB, whichever comes first (`infra/logging/prometheus/Dockerfile`). `PROMETHEUS_ENV` lands in `external_labels` on every series.
+
+**Access is closed in prod, open in dev.** Only Grafana faces the outside, via nginx `/grafana/` with the JWT SSO it already had (superuser→Admin, staff→Editor; dashboards in the **HTQWeb** folder). Prometheus, Loki, Flower and every exporter publish **no host ports** in `docker-compose.yml` — their `ports:` live in `docker-compose.dev.yml`, so `:9090`, `:3001`, `:3100`, `:5555` work locally and nowhere else. nginx no longer proxies `/prometheus/` at all (it used to, with no auth whatsoever, and Prometheus has none of its own). `GRAFANA_ADMIN_PASSWORD` has no default — Grafana refuses to start without it.
+
+**The backend exposes `/metrics`** (`apps/core/views.py::metrics`, registered in `apps/core/urls.py` next to `/health/`, deliberately outside `/api/` so `ServiceGateMiddleware` can't gate it). `django-prometheus` supplies HTTP/DB/cache metrics; `DATABASES.ENGINE` and `CACHES.BACKEND` are its wrapper subclasses. ⚠️ `backend-web` runs `gunicorn --workers 4`, so metrics use **multiprocess mode**: `PROMETHEUS_MULTIPROC_DIR` (tmpfs) + `htqweb/gunicorn_conf.py` (clears the dir on boot, marks dead workers on `child_exit`). Without that, a scrape hits one random worker of four.
+
+**Business metrics** are per-app: `apps/<domain>/metrics.py` defines `collect()` over its own models, `apps/core/metrics.py` discovers and merges them (same convention as `API_PREFIX` autodiscovery — no cross-app imports, so `test_app_isolation` stays green). They're computed by Celery-beat every 60s into the cache (`apps.core.tasks.collect_business_metrics`), not on scrape, and exported under the `htqweb_*` prefix. An empty cache exports **nothing** rather than zeros — "the collector died" and "zero tasks" must not look alike.
+
+Alerting stays in Grafana (no Alertmanager): 11 Prometheus rules + 5 Loki rules in `infra/logging/grafana-provisioning/alerting/`. Delivery is Telegram for everything, plus email as a second independent channel on `severity=critical` — secrets via `GF_TELEGRAM_*` / `GF_SMTP_*` (see `.env.example`). `scripts/generate-monitoring-traffic.sh` targets the Django backend and works as-is.

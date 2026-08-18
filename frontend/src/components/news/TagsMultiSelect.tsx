@@ -86,7 +86,13 @@ export function TagsMultiSelect({ value, onChange }: Props) {
           </Badge>
         ))}
       </div>
-      <Popover open={open} onOpenChange={setOpen}>
+      {/* modal обязателен: этот выбор используется внутри диалога, а тот на
+    время открытия блокирует прокрутку документа и пропускает события
+    только внутри своего поддерева. Содержимое поповера рендерится
+    порталом в body, то есть снаружи, — и список тегов новости переставал
+    прокручиваться колесом, оставаясь прокручиваемым технически.
+    С modal поповер ставит собственную блокировку. */}
+      <Popover modal open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button type="button" variant="outline" size="sm" className="w-fit">
             <Plus className="mr-1 h-3.5 w-3.5" /> Добавить тег

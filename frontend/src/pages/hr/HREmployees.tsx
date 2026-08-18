@@ -648,7 +648,16 @@ const HREmployees = () => {
                   ) : (
                     <label className="grid gap-2 text-sm">
                       {t('hr.pages.employees.fields.user')}
-                      <Popover open={userPopoverOpen} onOpenChange={setUserPopoverOpen}>
+                      {/* modal — не косметика: без него список сотрудников не
+                          прокручивается колесом. Диалог на время открытия
+                          блокирует прокрутку документа (react-remove-scroll) и
+                          пропускает события только внутри своего поддерева, а
+                          содержимое поповера рендерится порталом в body, то
+                          есть снаружи. Список при этом технически
+                          прокручиваемый — отсюда ощущение сломанного колеса.
+                          С modal поповер ставит собственную блокировку и
+                          разрешает прокрутку у себя. */}
+                      <Popover modal open={userPopoverOpen} onOpenChange={setUserPopoverOpen}>
                         <PopoverTrigger asChild>
                           <Button
                             variant="outline"
@@ -730,7 +739,10 @@ const HREmployees = () => {
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="grid gap-2 text-sm">
                     {t('hr.pages.employees.fields.position')}
-                    <Popover open={positionPopoverOpen} onOpenChange={setPositionPopoverOpen}>
+                    {/* modal — по той же причине, что у списка пользователей
+                        выше: этот поповер тоже живёт внутри диалога, и без
+                        него список должностей не прокручивается колесом. */}
+                    <Popover modal open={positionPopoverOpen} onOpenChange={setPositionPopoverOpen}>
                       <PopoverTrigger asChild>
                         <Button
                           variant="outline"
@@ -960,7 +972,12 @@ const HREmployees = () => {
                         >
                           <IdCard className="h-4 w-4" />
                         </Button>
-                        <DropdownMenu>
+                        {/* modal={false} — меню открывает диалоги. Модальное меню и диалог
+                            оба ставят на body `pointer-events: none` и снимают каждый в
+                            своём обработчике; меню закрывается раньше, порядок снятия
+                            ломается, и блокировка остаётся навсегда — страница перестаёт
+                            принимать клики до перезагрузки. */}
+                        <DropdownMenu modal={false}>
                           <DropdownMenuTrigger asChild>
                             <Button
                               size="sm"

@@ -244,13 +244,13 @@ if (mediaCodecsExists) {
 // 8. Проверка битрейта
 console.log('\n📊 Проверка битрейта:');
 
-const videoBitrate = parseInt(sfuEnv.VIDEO_BITRATE_BPS || '1500000', 10);
+const videoBitrate = parseInt(sfuEnv.VIDEO_BITRATE_BPS || '5000000', 10);
 const audioBitrate = parseInt(sfuEnv.AUDIO_BITRATE_BPS || '64000', 10);
 
 check(
   `VIDEO_BITRATE_BPS=${videoBitrate} (${(videoBitrate / 1000000).toFixed(1)} Mbps)`,
   videoBitrate >= 500000 && videoBitrate <= 8000000,
-  'Установите VIDEO_BITRATE_BPS между 500000 (0.5 Mbps) и 8000000 (8 Mbps). Рекомендуемо: 1500000 (1.5 Mbps)'
+  'Установите VIDEO_BITRATE_BPS между 500000 (0.5 Mbps) и 8000000 (8 Mbps). Рекомендуемо: 5000000 (5 Mbps)'
 );
 
 check(

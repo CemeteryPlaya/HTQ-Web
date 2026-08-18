@@ -22,6 +22,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from htqweb.fallback import fallback
+
 from apps.core.services import ServiceDisabled, require_service
 from apps.mail.models import AccountType, EmailAccount, ProvisionedMailbox
 from apps.mail.services import mailbox_service as mbx_svc
@@ -135,7 +137,14 @@ def provision_mailbox(
         payload_out = mbx_svc.serialize(exc.mailbox) if exc.mailbox is not None else None
         return payload_out, exc.detail
     except Exception as exc:  # noqa: BLE001 — создание пользователя важнее
-        log.exception("provision_mailbox_failed user_id=%s", user_id)
+        # Все ОЖИДАЕМЫЕ отказы разобраны ветками выше и возвращают внятный
+        # текст. Сюда попадает то, чего мы не предвидели, — и именно поэтому
+        # подмена громкая: пользователь создан, ящика нет, а причина известна
+        # одному этому логу.
+        fallback("mail.provision.unexpected_failure", None,
+                 reason="создание почтового ящика упало непредвиденно; "
+                        "пользователь всё равно создан",
+                 exc=exc, user_id=user_id)
         return None, f"Не удалось создать ящик: {exc}"
 
     return {**mbx_svc.serialize(mb), "generated_password": generated_password}, None

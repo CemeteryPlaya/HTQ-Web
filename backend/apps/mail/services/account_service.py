@@ -23,6 +23,8 @@ import logging
 from django.db import transaction
 from django.db.models import Count, Q
 
+from htqweb.fallback import fallback
+
 from apps.mail.models import AccountType, EmailAccount, OAuthToken
 from apps.mail.services.crypto import crypto_service
 from apps.mail.services.oauth_clients import get_oauth_client
@@ -118,8 +120,14 @@ def trigger_sync(user_id: int, account_id: int) -> dict:
     try:
         incremental_sync_account.delay(account.id)
     except Exception as exc:  # noqa: BLE001 — брокер недоступен
-        log.warning("sync_enqueue_failed account=%s: %s", account.id, exc)
-        status = "deferred"
+        # Пользователь увидит "deferred" и решит, что так и задумано: письма
+        # действительно приедут периодическим опросом. Но недоступный брокер —
+        # это авария всей очереди, а не особенность синхронизации почты, и
+        # заметить её надо здесь, а не по накопившемуся хвосту задач.
+        status = fallback("mail.sync.broker_unavailable", "deferred",
+                          reason="задача синхронизации не встала в очередь; "
+                                 "ждём периодического опроса",
+                          exc=exc, account=account.id)
 
     return {
         "account_id": account.id,

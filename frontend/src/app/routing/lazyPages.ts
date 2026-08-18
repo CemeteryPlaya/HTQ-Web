@@ -62,6 +62,7 @@ export const lazyPages = {
   HRRoadmap: React.lazy(() => import('@/pages/hr/HRRoadmap')),
   HRRoadmapDetail: React.lazy(() => import('@/pages/hr/HRRoadmapDetail')),
   HRDailyReports: React.lazy(() => import('@/pages/hr/HRDailyReports')),
+  HRProjectStaffReports: React.lazy(() => import('@/pages/hr/HRProjectStaffReports')),
   HRProjectPlanFact: React.lazy(() => import('@/pages/hr/HRProjectPlanFact')),
   HRReports: React.lazy(() => import('@/pages/hr/HRReports')),
   HRResourceSchedule: React.lazy(() => import('@/pages/hr/HRResourceSchedule')),
@@ -86,6 +87,11 @@ export const lazyPages = {
   HRStaffing: React.lazy(() => import('@/pages/hr/HRStaffing')),
   DepartmentFiles: React.lazy(() => import('@/pages/DepartmentFiles')),
   ConferencePage: React.lazy(() => import('@/pages/ConferencePage')),
+  ConferenceJoin: React.lazy(() => import('@/pages/ConferenceJoin')),
+  ConferenceHistory: React.lazy(() => import('@/pages/conference/ConferenceHistory')),
+  ConferenceSessionDetail: React.lazy(
+    () => import('@/pages/conference/ConferenceSessionDetail'),
+  ),
 
   TaskRouter: React.lazy(() => import('@/components/tasks/TaskRouter').then((module) => ({ default: module.TaskRouter }))),
   TaskDetailRouter: React.lazy(() => import('@/components/tasks/TaskDetailRouter').then((module) => ({ default: module.TaskDetailRouter }))),

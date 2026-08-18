@@ -123,6 +123,7 @@ same backend.
 | `/api/cms/v1/*`                     | `backend` (WSGI)   | News, categories/tags, contact-requests, ConferenceConfig |
 | `/api/contracts/v1/*`               | `backend` (WSGI)   | Budgets, counterparty registry, agreements   |
 | `/api/signoff/v1/*`                 | `backend` (WSGI)   | Approval routes + running approvals — **not** `apps.approvals` (`/api/requests/v1`) |
+| `/api/conference/v1/*`              | `backend` (WSGI)   | История видеоконференций, записи, протокол — **не** `/api/cms/v1/conference/*` (там конфиг SFU и приглашения) |
 | `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
 | `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django. JWT обязателен: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=` (иначе 401 на upgrade) |
 | `:4433/udp` (в обход nginx)         | `webtransport`     | QUIC-сигналинг того же SFU: браузер ходит прямо на UDP-порт, nginx его не проксирует. Токен — в `?token=` |
@@ -353,6 +354,11 @@ business logic).
 | `/api/tasks/v1/daily-reports/{id}/`               | GET, PATCH, DELETE | PATCH поднимает `current_revision` и пишет снимок; DELETE мягкий |
 | `/api/tasks/v1/daily-reports/{id}/revisions/`     | GET    | Лента версий отчёта — «аналог Git» |
 | `/api/tasks/v1/roadmaps/{id}/daily-reports/`      | GET    | Отчёты всего пакета; `?date_from=&date_to=` |
+| `/api/tasks/v1/staff-reports/projects/`           | GET    | Проекты, по которым вызывающему разрешено вести численность. Питает селектор страницы: роут-гейт фронта шире серверного правила (в токене нет ролей вида `hr_manager`), и сузить список может только сервер |
+| `/api/tasks/v1/projects/{id}/staff-board/`        | GET    | Доска численности на `?date=`: блок × (факт, план из `ResourceRequirement(kind=human)`, сверка с `Σ DailyReport.headcount`). Строка есть у каждого блока, даже пустая |
+| `/api/tasks/v1/projects/{id}/staff-reports/`      | GET, POST | Отчёт по ПЕРСОНАЛУ: сколько людей и каких ролей стояло на блоке. Один блок × одна дата = один отчёт (`UNIQUE` есть, в отличие от ежедневки: численность — состояние, а не сумма смен) |
+| `/api/tasks/v1/staff-reports/{id}/`               | GET, PATCH, DELETE | PATCH заменяет строки целиком и пишет снимок; смена проекта/блока → 422; DELETE мягкий |
+| `/api/tasks/v1/staff-reports/{id}/revisions/`     | GET    | Лента версий со снимком строк (имя роли внутри снимка) |
 | `/api/tasks/v1/plan-fact/project/{id}/`           | GET    | Дерево проект → площадки → блоки → роудмапы: SPI, прогноз, отставание, S-кривая. `?date=` — отчётная дата |
 | `/api/tasks/v1/plan-fact/roadmap/{id}/`           | GET    | То же + задачи пакета и его серии по дням |
 | `/api/tasks/v1/equipment-usage/`                  | GET    | Что задействовано на дату D + история интервалов. Узел задаётся ровно одним из `project_id`/`site_id`/`block_id`/`roadmap_id`/`task_id` |
@@ -531,7 +537,7 @@ not the FastAPI original.
 | `/api/email/v1/accounts/connect-imap/`               | GET, POST | **Non-admin.** Connect any mailbox over IMAP/SMTP — the third way to add mail, next to OAuth and the corporate mailbox. GET (`?address=`) returns suggested server settings (known providers verbatim, otherwise `imap.<domain>` flagged `guessed`); POST verifies the credentials with a live IMAP login **before** writing anything. No domain restriction — this is the user's own mailbox, not a platform resource |
 | `/api/email/v1/accounts/{id}/imap-password/`         | POST   | **Non-admin.** Update the stored password after changing it on the server; the new one is verified by logging in, so sync cannot silently stall |
 | `/api/email/v1/accounts/connect-corporate/`          | GET, POST, DELETE | **Non-admin.** Self-service: an employee connects their own corporate mailbox (`{address, password}` verified by a live IMAP login before anything is written). GET reports `allowed`/`domain`/current mailbox; DELETE detaches it from the platform without touching the mail server. Requires `allow_self_service`; the address domain must match the corporate one, and a mailbox already owned by someone else is a `409` |
-| `/api/email/v1/mailboxes/reconcile/`                 | GET, POST | Two-way platform ↔ mail-server reconciliation. GET = report only. POST body `{apply, direction}`, `direction` = `report`\|`pull`\|`push`\|`both` |
+| `/api/email/v1/mailboxes/reconcile/`                 | GET, POST | Two-way platform ↔ mail-server reconciliation. GET = report only. POST body `{apply, direction}`, `direction` = `report`\|`pull`\|`push`\|`both`. Also links ownerless mailboxes whose address equals a user's email (`kind="unlinked"` → `action="linked"`, plus an `EmailAccount` for that user) |
 | `/api/email/v1/mailboxes/{id}/`                      | GET, PATCH |                                 |
 | `/api/email/v1/mailboxes/{id}/reset-password/`       | POST   | `502` when the mail server rejects the change — the stored password is left untouched |
 | `/api/email/v1/mailboxes/{id}/archive/` / `/restore/`| POST   | Also disables/enables the mailbox on the server |
@@ -614,6 +620,11 @@ profile (`infra/mail-tunnel/`) forwards IMAP and SMTP; point `IMAP_HOST`/
 | `/api/cms/v1/contact-requests/{id}`              | GET, PATCH, DELETE |                          |
 | `/api/cms/v1/contact-requests/{id}/reply`        | POST   |                                    |
 | `/api/cms/v1/conference/config`                  | GET    | Static SFU/ICE config (no DB) — `apps.cms.services.conference_service` |
+| `/api/cms/v1/conference/invites`                     | GET, POST | Invite links for a room. GET `?room_id=`, POST `{room_id, title, allow_guests, ttl_hours, max_uses}` → `{url, …}` |
+| `/api/cms/v1/conference/invites/{id}`                 | DELETE | Revoke an invite |
+| `/api/cms/v1/conference/invites/{id}/send`            | POST | Send the link: `{emails[], user_ids[]}` → email + messenger notification, per-channel best effort |
+| `/api/cms/v1/conference/join/{token}`                 | GET | **Public.** What the meeting is; `room_id` only for an authenticated employee |
+| `/api/cms/v1/conference/join/{token}/guest`           | POST | **Public.** `{display_name}` → guest JWT (`token_type=guest`, bound to one `room_id`) + conference runtime config |
 
 `conference/config` отдаёт: `sfu_signaling_url` (пустой = фронт берёт
 `ws(s)://<origin>/ws/sfu/`), `sfu_signaling_path`, `ice_servers`, `enabled`
@@ -622,6 +633,60 @@ profile (`infra/mail-tunnel/`) forwards IMAP and SMTP; point `IMAP_HOST`/
 анонсирован, работаем по WebSocket) и `wt_certificate_hashes` (DER SHA-256
 самоподписанного сертификата моста для dev; с сертификатом от настоящего CA
 список пуст).
+
+## Conference history — `/api/conference/v1/*`
+
+Аппка `apps.conference`: кто собрал встречу, когда, кто был, запись и
+протокол. Не путать с `/api/cms/v1/conference/*` выше — там рантайм-конфиг
+SFU и ссылки-приглашения; здесь то, что от встречи ОСТАЛОСЬ.
+
+**Доступ:** участники встречи + `is_staff`/`is_superuser`. Чужому сотруднику
+отвечаем **404, а не 403** — иначе перебором id можно узнать, что встреча
+была, кто её собирал и как называлась. Гостевой JWT отбивается на уровне
+`api_view` (`token_type="guest"` ≠ `access`).
+
+| Endpoint | Method | Notes |
+|---|---|---|
+| `/api/conference/v1/sessions/` | GET | История: `?page=&limit=&q=&from=&to=&mine=1`. Конверт `{items,total,page,pages,limit,recorded_total,active_total}` — семь ключей намеренно, см. ниже |
+| `/api/conference/v1/sessions/{id}` | GET | Карточка: участники, состояния, **подписанные** `recording_url`/`download_url`/`poster_url` |
+| `/api/conference/v1/sessions/{id}/transcript` | GET | `?format=json` (по умолчанию) `\|txt\|md`; txt/md отдаются вложением |
+| `/api/conference/v1/sessions/{id}/events` | GET | Журнал: вход/выход, камера, чат |
+| `/api/conference/v1/sessions/{id}/recording` | GET | **302** на временную ссылку хранилища; `?download=1` — как вложение |
+| `/api/conference/v1/sessions/{id}/poster` | GET | 302 на кадр-заставку |
+| `/api/conference/v1/internal/sessions` | POST | **Только для SFU.** `{room_id, created_by_id, created_by_name}` → `{session_id, recording_enabled, …}` |
+| `/api/conference/v1/internal/sessions/{id}/participants` | POST | `{peer_id, display_name, user_id, is_guest, action: join\|leave}` |
+| `/api/conference/v1/internal/sessions/{id}/events` | POST | `{kind, peer_id, at_ms, payload}` |
+| `/api/conference/v1/internal/sessions/{id}/artifacts` | POST | Сырые дорожки на общем томе |
+| `/api/conference/v1/internal/sessions/{id}/finish` | POST | Комната опустела; ставит сборку в очередь |
+
+**`recording` и `poster` объявлены `auth=None`, и это не дыра.** Тег
+`<video src>` не отправляет заголовок `Authorization` — по обычному JWT плеер
+до записи просто не достучался бы. Поэтому карточка встречи (там JWT есть и
+права проверены) выдаёт ссылку с подписью `?sig=&exp=`, а эндпоинт проверяет
+подпись вместо токена; обычный API-клиент по-прежнему может прийти с
+`Bearer`. Схема подписи — общая с `htqweb/storage/signed_url.py`, привязана к
+конкретной встрече: подпись от одной записи не откроет другую. Отдаётся
+именно **302 на presigned-адрес**, а не байты через Django, — только так у
+плеера остаётся `Range`, то есть перемотка.
+
+**Внутренний канал закрыт общим секретом** `CONFERENCE_INTERNAL_TOKEN`
+(заголовок `X-HTQ-Internal-Token`), а не JWT: у SFU нет пользователя, от чьего
+имени ходить. Пустой секрет **закрывает** приём, а не открывает всем. Все
+пять ручек идемпотентны — сеть между контейнерами теряет ответы, и повтор не
+должен ни раздваивать встречу, ни запускать вторую сборку видео.
+
+**Про семь ключей в конверте списка.** `unwrapPaginatedEnvelope`
+(`frontend/src/api/client.ts`) разворачивает ответ в голый массив ровно
+тогда, когда ключей пять — `{items,total,page,pages,limit}`. Лишние
+`recorded_total`/`active_total` и оставляют конверт целым, так что пагинация
+на странице истории работает (тот же приём, что у истории уведомлений с её
+`unread_total`).
+
+**Ретенция.** `expires_at = started_at + CONFERENCE_RETENTION_DAYS` (25 дней).
+Celery-beat раз в сутки стирает медиа из хранилища и переводит встречу в
+`recording_state="purged"`; строка истории, участники, события и текстовый
+протокол сохраняются навсегда. Запрос записи у вычищенной встречи — 404 с
+человеческим объяснением, а не пустой ответ.
 
 ---
 

@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { WebRTCManager, RemoteStream, QualityMetrics, WebRTCError } from '@/lib/webrtc';
+import { usePreviewMedia } from '@/lib/webrtc/usePreviewMedia';
 import type { ChatMessagePayload, PeerMediaState } from '@/lib/webrtc/MediaEngine';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -15,7 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
   Video, VideoOff, Mic, MicOff, PhoneOff, 
-  MonitorPlay, Settings, Activity, Copy, Plus, LogIn,
+  MonitorPlay, Settings, Activity, Copy, Plus, LogIn, Link2,
   Volume2, VolumeX, Users, Shield, Zap, Sparkles, Check,
   Maximize2, Minimize2, Pin, MessageSquare, Send, Share2,
   LayoutGrid, Grid, MonitorUp, Radio, CheckCircle2, Info,
@@ -30,6 +31,8 @@ import { Slider } from '@/components/ui/slider';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getAccessToken } from '@/lib/auth/profileStorage';
+import { readGuestSession } from '@/lib/conference/guestSession';
+import { InviteDialog } from '@/components/conference/InviteDialog';
 
 type ConferenceRuntimeConfig = {
   sfu_signaling_url: string;
@@ -640,17 +643,33 @@ export const ConferencePage = () => {
   const isRoomSelected = activeRoomId.length > 0;
 
   // Authentication & Profile
+  //
+  // В комнате могут оказаться двое разных людей: сотрудник платформы и
+  // гость, вошедший по ссылке-приглашению. У второго нет ни учётки, ни
+  // профиля, ни доступа к /conference/config — всё, что у него есть, это
+  // токен на ОДНУ комнату и конфиг, приехавший вместе с ним.
   const token = getAccessToken();
+  const guest = useMemo(() => {
+    const session = readGuestSession();
+    if (!session) return null;
+    // Гостевой токен действителен ровно для своей комнаты — открытая
+    // вручную чужая ссылка не должна выглядеть как «сейчас войдём».
+    return session.roomId === (roomIdFromUrl || '').trim() ? session : null;
+  }, [roomIdFromUrl]);
+  const isGuest = Boolean(guest) && !token;
+  const signalingToken = () => (isGuest ? guest!.token : getAccessToken());
   const { data: userProfile } = useQuery({
     queryKey: ['profile'],
     queryFn: async () => {
       const res = await api.get<UserProfile>('users/v1/profile/me');
       return res.data;
     },
+    // У гостя профиля нет: запрос вернул бы 401 и увёл его на страницу
+    // входа прямо из звонка.
     enabled: !!token,
   });
 
-  const { data: conferenceConfig } = useQuery({
+  const { data: fetchedConfig } = useQuery({
     queryKey: ['conference-config'],
     queryFn: async () => {
       const res = await api.get<ConferenceRuntimeConfig>('cms/v1/conference/config');
@@ -659,6 +678,12 @@ export const ConferencePage = () => {
     enabled: !!token,
     staleTime: 5 * 60 * 1000,
   });
+  // Гостю конфиг приезжает вместе с гостевым токеном: сам эндпоинт закрыт
+  // платформенным JWT, и открывать его наружу ради адреса сигналинга —
+  // лишняя публичная поверхность.
+  const conferenceConfig = (isGuest
+    ? (guest!.conference as ConferenceRuntimeConfig | undefined)
+    : fetchedConfig);
   
   const user = userProfile || null;
   
@@ -698,14 +723,55 @@ export const ConferencePage = () => {
   const [chatInput, setChatInput] = useState('');
 
   // Pre-join Media Stream
-  const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
   const [previewCamEnabled, setPreviewCamEnabled] = useState(true);
   const [previewMicEnabled, setPreviewMicEnabled] = useState(true);
   const [previewAudioLevel, setPreviewAudioLevel] = useState(0);
+  // Предпросмотр включается ТОЛЬКО по явному действию. Раньше камера и
+  // микрофон захватывались на входе в комнату — человек ещё не решил,
+  // заходить ли в разговор, а лампочка камеры уже горела.
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [previewActive, setPreviewActive] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const previewRingRef = useRef<HTMLDivElement>(null);
 
+  const handlePreviewFailure = useCallback((err: unknown) => {
+    console.warn('Pre-call media preview request failed:', err);
+    setPreviewActive(false);
+    setPreviewError(
+      'Не удалось получить доступ к камере или микрофону. '
+      + 'Проверьте разрешения в браузере.'
+    );
+  }, []);
+
+  // Захват и — что важнее — освобождение устройств живут в хуке
+  // (lib/webrtc/usePreviewMedia.ts): там же лежат тесты на «камера отпущена
+  // при уходе со страницы», которые на этой странице не написать.
+  const {
+    stream: previewStream,
+    stop: stopPreviewStream,
+  } = usePreviewMedia({
+    // isRoomSelected здесь не для красоты: карточка предпросмотра рисуется
+    // только на экране комнаты, а эффект захвата разметке не подчиняется —
+    // раньше на /conference без комнаты камера включалась молча, вообще без
+    // видимого предпросмотра. Условие захвата обязано совпадать с условием
+    // показа, иначе они снова разъедутся.
+    active: previewActive && isRoomSelected && !connected,
+    cam: previewCamEnabled,
+    mic: previewMicEnabled,
+    onFailure: handlePreviewFailure,
+  });
+
   useAudioActivity(previewStream, previewRingRef, setPreviewAudioLevel);
+
+  // Маршрут комнаты открыт без обязательной авторизации — иначе гость с
+  // токеном в sessionStorage до неё бы не добрался. Право находиться здесь
+  // проверяется тут: либо рабочая сессия, либо гостевая на ЭТУ комнату.
+  // Случайный посетитель отправляется на вход, как и раньше.
+  useEffect(() => {
+    if (token || isGuest) return;
+    navigate('/login', { replace: true, state: { from: location.pathname } });
+  }, [token, isGuest, navigate]);
 
   // Load / Sync Room Settings from localStorage
   useEffect(() => {
@@ -765,48 +831,12 @@ export const ConferencePage = () => {
     saveRoomSettings(updated);
   };
 
-  // Pre-call Media Preview setup & teardown
-  useEffect(() => {
-    if (connected) {
-      if (previewStream) {
-        previewStream.getTracks().forEach((track) => track.stop());
-        setPreviewStream(null);
-      }
-      return;
-    }
-
-    let isMounted = true;
-
-    async function initPreviewMedia() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
-        });
-        if (!isMounted) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        setPreviewStream(stream);
-      } catch (err) {
-        console.warn('Pre-call media preview request failed:', err);
-      }
-    }
-
-    void initPreviewMedia();
-
-    return () => {
-      isMounted = false;
-      if (previewStream) {
-        previewStream.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, [connected]);
 
   useEffect(() => {
-    if (previewVideoRef.current && previewStream) {
-      previewVideoRef.current.srcObject = previewStream;
-    }
+    if (!previewVideoRef.current) return;
+    // Снимаем ссылку вместе с потоком: элемент, оставленный с остановленным
+    // MediaStream, держит его в памяти и показывает застывший кадр.
+    previewVideoRef.current.srcObject = previewStream;
   }, [previewStream, previewCamEnabled]);
 
   useEffect(() => {
@@ -894,21 +924,12 @@ export const ConferencePage = () => {
     }
   };
 
-  const togglePreviewCam = () => {
-    if (previewStream) {
-      const videoTrack = previewStream.getVideoTracks()[0];
-      if (videoTrack) videoTrack.enabled = !previewCamEnabled;
-    }
-    setPreviewCamEnabled(!previewCamEnabled);
-  };
-
-  const togglePreviewMic = () => {
-    if (previewStream) {
-      const audioTrack = previewStream.getAudioTracks()[0];
-      if (audioTrack) audioTrack.enabled = !previewMicEnabled;
-    }
-    setPreviewMicEnabled(!previewMicEnabled);
-  };
+  // Переключатели только меняют намерение — открыть или отпустить устройство
+  // решает эффект предпросмотра выше. Он же переживает случай «выключили
+  // камеру, оставили микрофон»: поток пересобирается, камера отпускается
+  // по-настоящему.
+  const togglePreviewCam = () => setPreviewCamEnabled((on) => !on);
+  const togglePreviewMic = () => setPreviewMicEnabled((on) => !on);
 
   const handleJoin = async () => {
     if (!isRoomSelected) {
@@ -916,7 +937,9 @@ export const ConferencePage = () => {
       return;
     }
 
-    if (!user) {
+    // Гостю профиль не нужен: он представился на странице приглашения, и
+    // его имя лежит в гостевой сессии.
+    if (!user && !isGuest) {
       toast({ variant: 'destructive', description: 'Пользователь не авторизован' });
       return;
     }
@@ -949,10 +972,10 @@ export const ConferencePage = () => {
       return;
     }
 
-    if (previewStream) {
-      previewStream.getTracks().forEach((track) => track.stop());
-      setPreviewStream(null);
-    }
+    // Устройства предпросмотра отпускаются ДО того, как их запросит
+    // MediaEngine: иначе камера окажется занята собственной же вкладкой.
+    setPreviewActive(false);
+    stopPreviewStream();
 
     const signalingUrlResolution = resolveSignalingUrl(conferenceConfig);
     const signalingUrl = signalingUrlResolution.url;
@@ -1059,10 +1082,12 @@ export const ConferencePage = () => {
     const createManager = (policy: 'balanced' | 'vp8-only') =>
       new WebRTCManager({
         signalingUrl,
-        authToken: () => getAccessToken(),
+        authToken: signalingToken,
         webTransport: webTransportConfig,
         roomId: activeRoomId,
-        displayName: user.firstName ? `${user.firstName} ${user.lastName || ''}` : user.email,
+        displayName: user
+          ? (user.firstName ? `${user.firstName} ${user.lastName || ''}` : user.email)
+          : (guest?.displayName || 'Гость'),
         iceServers: runtimeIceServers,
         initialVideoCodecPolicy: policy,
         autoVp8Fallback: false,
@@ -1296,6 +1321,19 @@ export const ConferencePage = () => {
                   <Crown className="w-3 h-3" /> Вы — Организатор
                 </Badge>
               )}
+
+              {/* Запись ведётся автоматически на каждой встрече, и участники
+                  обязаны это видеть — молча писать людей нельзя. Индикатор
+                  постоянный: включать/выключать запись из интерфейса нельзя,
+                  поэтому и состояния «не пишем» здесь не бывает. */}
+              <Badge
+                variant="outline"
+                title="Встреча записывается. Запись и протокол доступны участникам в истории конференций"
+                className="gap-1.5 py-1 px-2.5 bg-rose-500/10 text-rose-300 border-rose-500/30 text-xs font-semibold rounded-full"
+              >
+                <div className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                Идёт запись
+              </Badge>
 
               {activeRoomId && (
                 <button
@@ -2121,7 +2159,7 @@ export const ConferencePage = () => {
                     <div className="relative aspect-video bg-zinc-900 rounded-2xl overflow-hidden ring-1 ring-white/10 shadow-lg flex items-center justify-center">
                       <div ref={previewRingRef} className="absolute inset-0 pointer-events-none rounded-2xl border-2 border-transparent transition-all z-20" />
                       
-                      {previewCamEnabled ? (
+                      {previewActive && previewCamEnabled ? (
                         <video
                           ref={previewVideoRef}
                           autoPlay
@@ -2130,11 +2168,44 @@ export const ConferencePage = () => {
                           className="w-full h-full object-cover scale-x-[-1]"
                         />
                       ) : (
-                        <div className="flex flex-col items-center justify-center p-6 text-center">
+                        // pb-20 — запас под плавающую панель с микрофоном и
+                        // камерой: она приклеена к низу этого же контейнера и
+                        // без отступа накрывает кнопку.
+                        <div className="flex flex-col items-center justify-center px-6 pt-6 pb-20 text-center">
                           <div className="w-20 h-20 rounded-full bg-emerald-700/40 ring-4 ring-emerald-500/20 flex items-center justify-center text-white text-3xl font-bold font-display mb-3">
                             {user?.firstName?.charAt(0) || 'Y'}
                           </div>
-                          <span className="text-xs text-gray-400">Камера отключена</span>
+                          {previewActive ? (
+                            <span className="text-xs text-gray-400">Камера отключена</span>
+                          ) : (
+                            <>
+                              {/* Не «камера выключена»: иконки на панели ниже
+                                  в этот момент горят зелёным (они про то, с
+                                  чем войти в звонок), и две надписи спорили бы
+                                  друг с другом. Здесь речь именно о
+                                  предпросмотре. */}
+                              <span className="text-xs text-gray-400 mb-4 max-w-xs">
+                                Предпросмотр выключен — устройства не
+                                захватываются
+                              </span>
+                              <Button
+                                size="sm"
+                                className="rounded-xl bg-emerald-600 text-white hover:bg-emerald-700"
+                                onClick={() => {
+                                  setPreviewError(null);
+                                  setPreviewActive(true);
+                                }}
+                              >
+                                <Video className="w-4 h-4 mr-2" />
+                                Проверить камеру и звук
+                              </Button>
+                              {previewError && (
+                                <span className="mt-3 max-w-xs text-xs text-rose-400">
+                                  {previewError}
+                                </span>
+                              )}
+                            </>
+                          )}
                         </div>
                       )}
 
@@ -2143,6 +2214,9 @@ export const ConferencePage = () => {
                           variant="ghost"
                           size="icon"
                           onClick={togglePreviewMic}
+                          title={previewActive
+                            ? (previewMicEnabled ? 'Выключить микрофон' : 'Включить микрофон')
+                            : (previewMicEnabled ? 'Войти с включённым микрофоном' : 'Войти с выключенным микрофоном')}
                           className={`h-10 w-10 rounded-xl transition-colors ${
                             !previewMicEnabled ? 'bg-rose-600 text-white hover:bg-rose-700' : 'bg-white/10 text-white hover:bg-white/20'
                           }`}
@@ -2154,6 +2228,9 @@ export const ConferencePage = () => {
                           variant="ghost"
                           size="icon"
                           onClick={togglePreviewCam}
+                          title={previewActive
+                            ? (previewCamEnabled ? 'Выключить камеру' : 'Включить камеру')
+                            : (previewCamEnabled ? 'Войти с включённой камерой' : 'Войти с выключенной камерой')}
                           className={`h-10 w-10 rounded-xl transition-colors ${
                             !previewCamEnabled ? 'bg-rose-600 text-white hover:bg-rose-700' : 'bg-white/10 text-white hover:bg-white/20'
                           }`}
@@ -2226,6 +2303,16 @@ export const ConferencePage = () => {
                           <Copy className="h-4 w-4" />
                         </Button>
                       </div>
+                      {/* Диктовать идентификатор больше не нужно — и, главное,
+                          внешнего участника иначе не позвать вовсе. */}
+                      <Button
+                        variant="secondary"
+                        className="rounded-xl"
+                        onClick={() => setInviteOpen(true)}
+                      >
+                        <Link2 className="mr-2 h-4 w-4" />
+                        Пригласить по ссылке
+                      </Button>
                     </div>
 
                     {/* Room Active Settings Pills Box */}
@@ -2503,6 +2590,10 @@ export const ConferencePage = () => {
         </div>
       </main>
       </div>
+      {isRoomSelected && (
+        <InviteDialog roomId={activeRoomId} open={inviteOpen} onOpenChange={setInviteOpen} />
+      )}
+
       </TooltipProvider>
     );
 };
