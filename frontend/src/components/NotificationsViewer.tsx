@@ -22,8 +22,10 @@ import {
     notificationSourceLabel,
     notificationTargetUrl,
 } from '@/api/tasks';
-import type { Notification } from '@/types/tasks';
 import { MessengerToast } from '@/components/MessengerToast';
+import { playNotificationSound } from '@/lib/sound/soundService';
+import { SoundSettingsModal } from '@/components/sound/SoundSettingsModal';
+import { Volume2 } from 'lucide-react';
 
 /** Icon to show on the left side of each notification, picked from the
  *  source type. Calendar / Task / HR / fallback. */
@@ -135,6 +137,8 @@ export const NotificationsViewer: React.FC = () => {
             const body = formatNotificationText(n);
             const title = n.actor_name ? `${n.actor_name} ${body}` : body;
             const url = notificationTargetUrl(n);
+            // Play corresponding pleasant sound (debounced internally)
+            playNotificationSound(n);
 
             // Messenger gets a rich layout (avatar + 2-line clamp + time).
             // Other types stay on the default sonner text toast — they read
@@ -250,6 +254,21 @@ export const NotificationsViewer: React.FC = () => {
                     </div>
                 )}
 
+                <DropdownMenuSeparator />
+                <div className="px-2 py-1 flex items-center justify-between">
+                    <SoundSettingsModal
+                        trigger={
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5 w-full justify-start font-normal"
+                            >
+                                <Volume2 className="h-3.5 w-3.5" />
+                                <span>Настройки звуков</span>
+                            </Button>
+                        }
+                    />
+                </div>
                 <DropdownMenuSeparator />
                 <Link
                     to="/notifications"

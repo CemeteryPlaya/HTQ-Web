@@ -8,7 +8,7 @@
  *   socket.emitTyping(true);
  */
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -17,6 +17,8 @@ import {
     type MessageReadPayload,
     type UserTypingPayload,
 } from '../api/socket';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { playMessengerChime, playMessengerPop } from '@/lib/sound/soundService';
 
 /** Shared presence cache: `['messenger-presence']` → Record<userId, …>.
  *  Seeded by the REST bulk query in MessengerPage, patched live by the
@@ -30,6 +32,13 @@ interface MessengerSocketApi {
 
 export function useMessengerSocket(activeRoomId: number | null): MessengerSocketApi {
     const queryClient = useQueryClient();
+    const { activeProfile } = useActiveProfile();
+
+    const activeRoomIdRef = useRef(activeRoomId);
+    activeRoomIdRef.current = activeRoomId;
+
+    const activeProfileRef = useRef(activeProfile);
+    activeProfileRef.current = activeProfile;
 
     useEffect(() => {
         const socket = getMessengerSocket();
@@ -37,6 +46,19 @@ export function useMessengerSocket(activeRoomId: number | null): MessengerSocket
         const handleNewMessage = (payload: MessageNewPayload) => {
             queryClient.invalidateQueries({ queryKey: ['messenger-messages', payload.room_id] });
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
+
+            // Play sound if message was sent by another participant
+            const msg = payload?.message as Record<string, any> | undefined;
+            const senderId = msg?.sender_id ?? msg?.sender?.id ?? msg?.user_id ?? msg?.sender?.user_id;
+            const myId = activeProfileRef.current?.id ?? (activeProfileRef.current as any)?.user_id;
+
+            if (!senderId || !myId || Number(senderId) !== Number(myId)) {
+                if (activeRoomIdRef.current && payload.room_id === activeRoomIdRef.current) {
+                    playMessengerPop();
+                } else {
+                    playMessengerChime();
+                }
+            }
         };
         const handleMessageRead = (payload: MessageReadPayload) => {
             // Two query keys are affected by a read receipt:
