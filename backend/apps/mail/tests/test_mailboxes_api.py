@@ -145,6 +145,9 @@ def test_list_row_shape(admin_auth):
     assert set(row) == {
         "id", "user_id", "local_part", "domain", "address", "status", "quota_mb",
         "display_name", "last_error", "created_at", "updated_at", "archived_at", "deleted_at",
+        # Подключён, но пароля нет — почта не пойдёт, пока сотрудник его не
+        # введёт (mailbox_service.awaits_password).
+        "awaiting_password",
     }
 
 

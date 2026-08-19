@@ -370,9 +370,12 @@ def _link_orphans(report: ReconcileReport, *, apply: bool) -> None:
     может. Ящики, под которые пользователя нет (общие ``info@``, ``sales@``),
     так и остаются без владельца: гадать по ним нечем и не нужно.
 
-    Привязка — это две вещи, а не одна: проставить ``user_id`` и завести
-    ``EmailAccount``. Без второго ящик остаётся «мёртвой» строкой в админке —
-    список писем, синхронизация и отправка ходят именно через аккаунт.
+    Привязка — это три вещи, а не одна: проставить ``user_id``, завести
+    ``EmailAccount`` и добыть ящику пароль. Без аккаунта ящик остаётся
+    «мёртвой» строкой в админке (список писем, синхронизация и отправка ходят
+    именно через него), а без пароля аккаунт есть, но пустой. Всё три делает
+    ``mailbox_service.attach_existing`` + ``ensure_credentials`` — та же пара,
+    которой пользуется заведение ящика со сверкой.
 
     Без ``apply`` ничего не меняется: найденные пары попадают в отчёт как
     ``kind="unlinked"``, и админ видит, кому что достанется, до того как
@@ -419,9 +422,11 @@ def _link_orphans(report: ReconcileReport, *, apply: bool) -> None:
 
         if apply:
             try:
-                mb.user_id = user_id
-                mb.save(update_fields=["user_id", "updated_at"])
-                mbx_svc.ensure_account(mb)
+                mb = mbx_svc.attach_existing(address=mb.address, user_id=user_id, verify=False)
+                # Проставить user_id мало: без сохранённого пароля ящик
+                # подключён только на бумаге — ни синхронизации, ни отправки.
+                # Там, где сервер умеет выдать app-password, забираем его тут.
+                mbx_svc.ensure_credentials(mb)
             except Exception as exc:  # noqa: BLE001 — одна привязка не роняет прогон
                 diff.action, diff.error = "link_failed", str(exc)
                 report.differences.append(diff)

@@ -646,7 +646,8 @@
         "subtitle": "Departments and positions in a unified tree.",
         "positionsCount": "pos.",
         "noPositions": "No positions yet.",
-        "addPosition": "Add position"
+        "addPosition": "Add position",
+        "togglePositions": "Positions of {{name}}"
       },
       "departments": {
         "title": "Departments",
@@ -1986,6 +1987,7 @@
       "mailboxPasswordOnce": "Password (shown once)",
       "mailboxPasswordMin": "The mailbox password must be at least 8 characters",
       "mailboxGenPassword": "Generate",
+      "mailboxAttached": "Existing mailbox connected",
       "mailboxCreated": "Mailbox created",
       "mailboxError": "Failed to create the mailbox"
     },
@@ -2059,6 +2061,9 @@
       "createDesc": "The address is optional — it is derived from the first and last name (Ivan Ivanov -> i.ivanov). An empty password means auto-generation.",
       "createDescImap": "The mailbox must already exist on the mail server. Enter its address and password — the platform will verify the credentials over IMAP and link the mailbox.",
       "createError": "Could not create the mailbox",
+      "attachBtn": "Connect",
+      "attached": "Existing mailbox connected",
+      "lookupChecking": "Checking the address…",
       "created": "Mailbox created",
       "deleteConfirmBtn": "Delete forever",
       "deleted": "Mailbox permanently deleted",
@@ -2195,8 +2200,14 @@
       "disconnect": "Disconnect",
       "disconnected": "Mailbox disconnected from the platform",
       "error": "Could not connect the mailbox",
+      "failed": "Could not connect the mailbox",
       "hint": "Enter the address and password of your work mailbox — the same ones you use in your mail client. The platform verifies them against the mail server and stores them encrypted.",
       "password": "Mailbox password",
+      "pendingHint": "The mailbox is already assigned to you on the mail server. Enter the password you sign in with — the platform will verify it and start showing your mail here.",
+      "pendingTitle": "Enter your mailbox password",
+      "promptAction": "Enter password",
+      "promptBody": "Your work mailbox {{address}} was found on the mail server, but the platform cannot open it without a password. Enter it and your mail will show up here.",
+      "promptDismiss": "Dismiss",
       "security": "The password is stored encrypted and is used only to fetch and send your mail.",
       "subtitle": "Connect your work mailbox @{{domain}} to read and send mail here.",
       "title": "Corporate mail",

@@ -127,6 +127,10 @@ urlpatterns = [
     path("mailboxes/status/", views.mailbox_status),
     path("mailboxes/status", views.mailbox_status),
 
+    # Сверка адреса перед созданием («такой ящик уже есть?»).
+    path("mailboxes/lookup/", views.mailbox_lookup),
+    path("mailboxes/lookup", views.mailbox_lookup),
+
     # Реквизиты почтового сервера из интерфейса. ``settings/test/`` — ДО
     # ``settings/``, иначе более общий путь перехватил бы его.
     path("mailboxes/settings/test/", views.test_mail_connection),

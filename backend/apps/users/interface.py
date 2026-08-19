@@ -259,4 +259,12 @@ def create_user(*, email: str, first_name: str = "", last_name: str = "",
     except admin_service.DuplicateUsername:
         raise DuplicateUsername() from None
 
+    # Сотрудника заводят по его рабочему адресу — если корпоративный ящик с
+    # этим адресом уже существует, подключаем его сразу. Ящик НЕ создаётся:
+    # HR-форма его не заказывала. Вызов ничего не бросает и ничего не значит,
+    # когда подключать нечего (личная почта, ящика нет, занят другим).
+    from apps.mail import interface as mail_interface
+
+    mail_interface.attach_mailbox_by_email(user_id=user.id, email=email_norm)
+
     return _option_from_user(user)

@@ -33,6 +33,14 @@ import {
 } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MailConnectionSettings } from '@/components/mail/MailConnectionSettings';
+import { MailboxLookupNotice } from '@/components/mail/MailboxLookupNotice';
+import {
+    fetchMailboxLookup,
+    lookupIsAnswerable,
+    lookupSubmitsAttach,
+    lookupVerdict,
+    useDebounced,
+} from '@/components/mail/mailboxLookup';
 
 // Backend contract — services/email/app/api/v1/mailboxes.py
 type Mailbox = {
@@ -365,13 +373,42 @@ const CreateMailboxDialog: React.FC<{
         }
     }, [open]);
 
+    // Сверка: тот же вопрос, который бэкенд задаст себе при создании, только
+    // задаётся заранее — чтобы админ увидел «ящик уже есть» до нажатия кнопки,
+    // а не после. Debounce, иначе запрос уходит на каждую букву.
+    const dLocalPart = useDebounced(localPart, 400);
+    const dFirstName = useDebounced(firstName, 400);
+    const dLastName = useDebounced(lastName, 400);
+    const dUserId = useDebounced(userId, 400);
+    const lookupArgs = {
+        localPart: dLocalPart,
+        firstName: dFirstName,
+        lastName: dLastName,
+        userId: dUserId ? Number(dUserId) : null,
+    };
+    const { data: lookup, isFetching: lookupLoading } = useQuery({
+        queryKey: ['mailbox-lookup', dLocalPart, dFirstName, dLastName, dUserId],
+        queryFn: () => fetchMailboxLookup(lookupArgs),
+        enabled: open && lookupIsAnswerable(lookupArgs),
+        staleTime: 15_000,
+        retry: false,
+    });
+
     // На сервере без админ-API ящик уже существует — платформа обязана
-    // проверить его логином, поэтому пароль там не опционален.
-    const passwordRequired = status ? !status.can_create_remotely && status.provisioner !== 'none' : false;
+    // проверить его логином, поэтому пароль там не опционален. Сверка может
+    // потребовать пароль и отдельно: найденный ящик подключается только
+    // проверенной учёткой.
+    const passwordRequired = (status ? !status.can_create_remotely && status.provisioner !== 'none' : false)
+        || lookupVerdict(lookup) === 'needs-password';
+    const willAttach = lookupSubmitsAttach(lookup);
 
     const mutation = useMutation({
         mutationFn: async () => {
-            const res = await api.post<Mailbox & { generated_password?: string | null }>(
+            const res = await api.post<Mailbox & {
+                generated_password?: string | null;
+                attached?: boolean;
+                detail?: string | null;
+            }>(
                 'email/v1/mailboxes/',
                 {
                     local_part: localPart.trim(),
@@ -386,7 +423,14 @@ const CreateMailboxDialog: React.FC<{
         },
         onSuccess: (data) => {
             const pwd = data.generated_password;
-            if (pwd) {
+            if (data.attached) {
+                // Пароля здесь нет и быть не должно: ящик существовал до нас,
+                // сотрудник входит в него тем паролем, что у него уже есть.
+                toast.success(
+                    `${t('admin.mailboxes.attached', 'Подключён существующий ящик')}: ${data.address}`,
+                    { duration: 15_000 },
+                );
+            } else if (pwd) {
                 toast.success(
                     `${t('admin.mailboxes.created', 'Ящик создан')}: ${data.address}\n${t('admin.mailboxes.passwordOnce', 'Пароль (показывается один раз)')}: ${pwd}`,
                     { duration: 30_000 },
@@ -440,6 +484,7 @@ const CreateMailboxDialog: React.FC<{
                                 @{status?.domain || '…'}
                             </span>
                         </div>
+                        <MailboxLookupNotice lookup={lookup} loading={lookupLoading} />
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
@@ -503,7 +548,9 @@ const CreateMailboxDialog: React.FC<{
                     <Button onClick={() => mutation.mutate()} disabled={!canSubmit}>
                         {mutation.isPending
                             ? t('common.saving', 'Сохранение...')
-                            : t('admin.users.createBtn', 'Создать')}
+                            : willAttach
+                                ? t('admin.mailboxes.attachBtn', 'Подключить')
+                                : t('admin.users.createBtn', 'Создать')}
                     </Button>
                 </DialogFooter>
             </DialogContent>

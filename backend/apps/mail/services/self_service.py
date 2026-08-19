@@ -9,7 +9,10 @@
 непривилегированный пользователь заводит строки. Ограничения:
 
 * режим должен быть включён админом (``allow_self_service``) — по умолчанию
-  выключен;
+  выключен. ЕДИНСТВЕННОЕ исключение: ящик уже назначен этому сотруднику
+  платформой и помечен «ждёт пароль» (``mailbox_service.awaits_password``) —
+  тогда ввод пароля разрешён всегда, иначе получилось бы «ящик ваш, но
+  пользоваться им нельзя»;
 * домен адреса обязан совпадать с корпоративным: подключить ``@gmail.com``
   под видом корпоративного ящика нельзя (для личной почты есть OAuth);
 * если ящик уже привязан к ДРУГОМУ пользователю — отказ. Иначе знание пароля
@@ -21,8 +24,6 @@
 from __future__ import annotations
 
 import logging
-
-from django.db import transaction
 
 from apps.mail.models import ProvisionedMailbox
 from apps.mail.services import mailbox_service as mbx_svc
@@ -67,17 +68,28 @@ def connect_own_mailbox(*, user_id: int, address: str, password: str) -> dict:
     затем пользуются синхронизация писем и отправка.
     """
     cfg = get_config()
-    if not cfg.allow_self_service:
-        raise SelfServiceDisabled
 
     address = (address or "").strip().lower()
     domain = (address.rsplit("@", 1)[-1] if "@" in address else "")
     if not cfg.domain or domain != cfg.domain.lower():
         raise WrongDomain(cfg.domain or "?")
 
-    existing = ProvisionedMailbox.objects.filter(address=address).first()
+    existing = ProvisionedMailbox.objects.filter(address__iexact=address).first()
     if existing is not None and existing.user_id not in (None, user_id):
         raise MailboxTakenByAnotherUser
+
+    # ``allow_self_service`` запрещает сотруднику подключать ящики ПО СВОЕЙ
+    # инициативе. Ввод пароля к ящику, который платформа уже назначила ему
+    # сама и который без пароля не работает, — не та же самая свобода:
+    # подключение начато не сотрудником, адрес выбран не им, и запрет здесь
+    # означал бы «ящик ваш, но пользоваться им нельзя».
+    finishing_pending = (
+        existing is not None
+        and existing.user_id == user_id
+        and mbx_svc.awaits_password(existing)
+    )
+    if not cfg.allow_self_service and not finishing_pending:
+        raise SelfServiceDisabled
 
     # Проверяем ДО записи: нерабочая привязка хуже её отсутствия — она молча
     # ломает и синхронизацию, и отправку.
@@ -87,36 +99,14 @@ def connect_own_mailbox(*, user_id: int, address: str, password: str) -> dict:
             f"Почтовый сервер не принял эту пару адрес/пароль: {error}"
         )
 
-    with transaction.atomic():
-        if existing is None:
-            local_part = address.split("@", 1)[0]
-            existing = ProvisionedMailbox.objects.create(
-                user_id=user_id,
-                local_part=local_part,
-                domain=cfg.domain,
-                address=address,
-                status="active",
-                quota_mb=cfg.mailcow_default_quota_mb,
-            )
-        else:
-            fields = []
-            if existing.user_id != user_id:
-                existing.user_id = user_id
-                fields.append("user_id")
-            if existing.status != "active":
-                existing.status, existing.archived_at = "active", None
-                fields += ["status", "archived_at"]
-            if existing.last_error:
-                existing.last_error = None
-                fields.append("last_error")
-            if fields:
-                existing.save(update_fields=[*fields, "updated_at"])
-
-        mbx_svc.store_password(existing, password)
-        mbx_svc.ensure_account(existing)
+    # verify=False — проверка уже сделана строкой выше, и повторять её значило
+    # бы ходить на почтовый сервер дважды за один запрос.
+    mailbox = mbx_svc.attach_existing(
+        address=address, user_id=user_id, password=password, verify=False,
+    )
 
     log.info("mailbox_self_connected user_id=%s address=%s", user_id, address)
-    return mbx_svc.serialize(existing)
+    return mbx_svc.serialize(mailbox)
 
 
 def disconnect_own_mailbox(*, user_id: int) -> bool:

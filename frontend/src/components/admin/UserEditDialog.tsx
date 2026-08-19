@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 
@@ -26,6 +26,12 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
+import { MailboxLookupNotice } from '@/components/mail/MailboxLookupNotice';
+import {
+    fetchMailboxLookup,
+    lookupIsAnswerable,
+    useDebounced,
+} from '@/components/mail/mailboxLookup';
 
 // Backend contract — services/user/app/api/v1/admin.py.
 // POST  /api/users/v1/admin/users/                 — create
@@ -163,10 +169,42 @@ export const UserEditDialog: React.FC<Props> = ({ open, onOpenChange, mode, user
     const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
         setForm((prev) => ({ ...prev, [key]: value }));
 
+    // Сверка адреса: тот же вопрос, который бэкенд задаст себе при создании
+    // («такой корпоративный ящик уже есть?»), задаётся заранее — чтобы админ
+    // узнал о существующем ящике до нажатия кнопки, а не из тоста после.
+    // Debounce — иначе запрос уходит на каждую букву фамилии.
+    const dLocalPart = useDebounced(form.mailbox_local_part, 400);
+    const dEmail = useDebounced(form.email, 400);
+    const dFirstName = useDebounced(form.first_name, 400);
+    const dLastName = useDebounced(form.last_name, 400);
+    const lookupArgs = {
+        localPart: dLocalPart,
+        email: dEmail,
+        firstName: dFirstName,
+        lastName: dLastName,
+    };
+    // Сверка идёт БЕЗ оглядки на галку «создать ящик»: корпоративный ящик с
+    // адресом пользователя подключается сам, галка нужна только чтобы ЗАВЕСТИ
+    // новый. Админ должен увидеть «ящик уже есть» и тогда, когда ничего не
+    // заказывал, — иначе поставит галку и получит дубль.
+    const lookupEnabled = open && mode === 'create' && lookupIsAnswerable(lookupArgs);
+    const { data: mailboxLookup, isFetching: mailboxLookupLoading } = useQuery({
+        queryKey: ['mailbox-lookup', dLocalPart, dEmail, dFirstName, dLastName],
+        queryFn: () => fetchMailboxLookup(lookupArgs),
+        enabled: lookupEnabled,
+        staleTime: 15_000,
+        retry: false,
+    });
+
     const createMutation = useMutation({
         mutationFn: async (payload: FormState) => {
             const res = await api.post<AdminUser & {
-                mailbox?: { id: number; address: string; status: string; generated_password?: string | null };
+                mailbox?: {
+                    id: number; address: string; status: string;
+                    generated_password?: string | null;
+                    // true = ящик уже существовал и был подключён, а не создан
+                    attached?: boolean;
+                };
                 mailbox_error?: string | null;
             }>('users/v1/admin/users/', payload);
             return res.data;
@@ -181,7 +219,14 @@ export const UserEditDialog: React.FC<Props> = ({ open, onOpenChange, mode, user
             // and show errors loudly so the admin can retry from /admin/mailboxes.
             if (created.mailbox) {
                 const pwd = created.mailbox.generated_password;
-                if (pwd) {
+                if (created.mailbox.attached) {
+                    // Пароля нет и быть не должно: ящик существовал до нас,
+                    // сотрудник входит в него своим прежним паролем.
+                    toast.success(
+                        `${t('admin.users.mailboxAttached', 'Подключён существующий ящик')}: ${created.mailbox.address}`,
+                        { duration: 15_000 },
+                    );
+                } else if (pwd) {
                     toast.success(
                         `${t('admin.users.mailboxCreated', 'Ящик создан')}: ${created.mailbox.address}\n${t('admin.users.mailboxPasswordOnce', 'Пароль (показывается один раз)')}: ${pwd}`,
                         { duration: 30_000 },
@@ -440,6 +485,10 @@ export const UserEditDialog: React.FC<Props> = ({ open, onOpenChange, mode, user
                                                 autoComplete="off"
                                             />
                                         </Field>
+                                        <MailboxLookupNotice
+                                            lookup={mailboxLookup}
+                                            loading={mailboxLookupLoading}
+                                        />
                                         <Field
                                             label={t('admin.users.mailboxPassword', 'Пароль ящика')}
                                             hint={t('admin.users.mailboxPasswordHint', 'Оставьте пустым — сгенерируется случайный, пароль покажется один раз после создания.')}

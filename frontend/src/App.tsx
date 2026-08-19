@@ -1,4 +1,4 @@
-import { Suspense, type ReactNode, useEffect, useState } from 'react';
+import { Suspense, lazy, type ReactNode, useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -18,6 +18,11 @@ import { ServiceUnavailableListener } from '@/components/ServiceUnavailableListe
 registerRoutePrefetch();
 
 const queryClient = new QueryClient();
+const MailboxPasswordPrompt = lazy(() =>
+  import('@/components/mail/MailboxPasswordPrompt')
+    .then((m) => ({ default: m.MailboxPasswordPrompt })),
+);
+
 const DeferredToaster = lazyPages.Toaster;
 const DeferredSonner = lazyPages.Sonner;
 
@@ -103,6 +108,10 @@ const App = () => {
             <Suspense fallback={null}>
               <BottomNav />
               <ConferenceNotifier />
+              {/* Найденный корпоративный ящик, который платформа не смогла
+                  открыть сама, ждёт пароля от сотрудника. Молчит, пока
+                  ждать нечего. */}
+              <MailboxPasswordPrompt variant="banner" />
             </Suspense>
           )}
         </BrowserRouter>
