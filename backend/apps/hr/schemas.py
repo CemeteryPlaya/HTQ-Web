@@ -257,6 +257,29 @@ class EmployeeRelationQuery(BaseModel):
     department_id: int | None = None
 
 
+class SuperiorSet(BaseModel):
+    """PUT /org/relations/superior и /org/employee-relations/superior.
+
+    Идемпотентное «у подчинённого ровно один руководитель данного типа».
+    Заменяет пару DELETE+POST, которую фронт делал двумя запросами: упавший
+    второй оставлял узел вообще без руководителя.
+
+    ``superior_id=None`` (явный null ИЛИ отсутствие поля) — снять
+    руководителя этого типа и нового не назначать.
+    """
+
+    subordinate_id: int
+    superior_id: int | None = None
+    relation_type: RelationTypeLiteral = "direct"
+
+
+class RelationTypeUpdate(BaseModel):
+    """PATCH /org/relations/{id} и /org/employee-relations/{id} — смена типа
+    существующей связи без пересоздания строки."""
+
+    relation_type: RelationTypeLiteral
+
+
 class DepartmentManagerSet(BaseModel):
     """PUT /org/departments/{id}/manager.
 

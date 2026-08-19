@@ -366,6 +366,9 @@ export const deleteStaffingLine = async (id: number): Promise<void> => { await a
  * manager_source в meta dept-узлов — новые поля бэкенда (org_service.get_org_tree),
  * см. backend/apps/hr/services/org_service.py.
  */
+/** Тип связи подчинения — совпадает с RelationType на бэкенде. */
+export type RelationType = 'direct' | 'functional' | 'project';
+
 export type OrgEdgeOrigin =
   | 'employee' | 'position' | 'department' | 'inferred'
   | 'structural' | 'membership' | 'employment';
@@ -435,6 +438,21 @@ export const deletePositionRelation = async (relationId: number): Promise<void> 
   await api.delete(`${HR}org/relations/${relationId}`);
 };
 
+/**
+ * Атомарно: у должности ровно один руководитель данного типа.
+ * Заменяет пару DELETE+POST — упавший второй запрос раньше оставлял узел
+ * вообще без руководителя. `superior_id: null` — снять и не назначать.
+ */
+export const setPositionSuperior = async (data: {
+  subordinate_id: number;
+  superior_id: number | null;
+  relation_type?: RelationType;
+}) => (await api.put(`${HR}org/relations/superior`, data)).data;
+
+export const changePositionRelationType = async (
+  relationId: number, relation_type: RelationType,
+) => (await api.patch(`${HR}org/relations/${relationId}`, { relation_type })).data;
+
 export const fetchEmployeeRelations = async (params: {
   employeeId?: number;
   departmentId?: number;
@@ -455,6 +473,22 @@ export const createEmployeeRelation = async (data: {
 export const deleteEmployeeRelation = async (relationId: number): Promise<void> => {
   await api.delete(`${HR}org/employee-relations/${relationId}`);
 };
+
+/**
+ * Персональный аналог `setPositionSuperior`. Для `direct` другого пути нет:
+ * частичный unique допускает ровно одного прямого руководителя, поэтому
+ * «создать новую, потом удалить старую» невозможно в принципе.
+ */
+export const setEmployeeSuperior = async (data: {
+  subordinate_id: number;
+  superior_id: number | null;
+  relation_type?: RelationType;
+}) => (await api.put(`${HR}org/employee-relations/superior`, data)).data;
+
+export const changeEmployeeRelationType = async (
+  relationId: number, relation_type: RelationType,
+): Promise<EmployeeRelation> =>
+  (await api.patch(`${HR}org/employee-relations/${relationId}`, { relation_type })).data;
 
 export const setDepartmentManager = async (
   departmentId: number, employeeId: number | null,

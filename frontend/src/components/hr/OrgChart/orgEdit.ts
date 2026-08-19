@@ -5,7 +5,7 @@
  * layout/pointer geometry — see OrgChart/index.tsx for why drag&drop uses
  * onConnect, not node dragging).
  */
-import type { OrgEdge, OrgEdgeOrigin, OrgNode, OrgTree } from '@/api/hr';
+import type { OrgEdge, OrgEdgeOrigin, OrgNode, OrgTree, RelationType } from '@/api/hr';
 
 /** Human labels for the "how was this decided" badge in the edit panel. */
 export const ORIGIN_LABELS: Record<OrgEdgeOrigin, string> = {
@@ -23,7 +23,12 @@ export const ORIGIN_LABELS: Record<OrgEdgeOrigin, string> = {
 const EDITABLE_ORIGINS: ReadonlySet<OrgEdgeOrigin> = new Set(['employee', 'position']);
 
 export function isEditableEdge(edge: Pick<OrgEdge, 'origin' | 'relation_id'>): boolean {
-  return EDITABLE_ORIGINS.has(edge.origin) && edge.relation_id != null;
+  // relation_id > 0, а не просто != null: у ещё не подтверждённого сервером
+  // ребра стоит OPTIMISTIC_RELATION_ID = -1, и действия над ним ушли бы на
+  // бэкенд как DELETE .../relations/-1.
+  return EDITABLE_ORIGINS.has(edge.origin)
+    && edge.relation_id != null
+    && edge.relation_id > 0;
 }
 
 /**
@@ -119,7 +124,175 @@ export function applySuperiorChange(
   return { ...tree, edges };
 }
 
+/**
+ * Оптимистичный редьюсер для пакетного добавления подчинённых к parentId.
+ */
+export function applyBatchSuperiorChange(
+  tree: OrgTree,
+  parentId: string,
+  childIds: string[],
+  relationType: string,
+  origin: OrgEdgeOrigin,
+): OrgTree {
+  const childSet = new Set(childIds);
+  const edges = tree.edges.filter((e) => !(
+    childSet.has(e.target) && e.relation_type === relationType && isEditableEdge(e)
+  ));
+  for (const childId of childIds) {
+    edges.push({
+      source: parentId,
+      target: childId,
+      relation_type: relationType,
+      relation_id: OPTIMISTIC_RELATION_ID,
+      origin,
+    });
+  }
+  return { ...tree, edges };
+}
+
+/**
+ * Оптимистичный редьюсер: изменение типа связи существующего ребра.
+ */
+export function applyRelationTypeChange(
+  tree: OrgTree,
+  relationId: number,
+  newRelationType: RelationType,
+): OrgTree {
+  return {
+    ...tree,
+    edges: tree.edges.map((e) =>
+      e.relation_id === relationId
+        ? { ...e, relation_type: newRelationType }
+        : e
+    ),
+  };
+}
+
 /** Убрать ребро по relation_id (после успешного/оптимистичного DELETE). */
 export function removeEdgeByRelationId(tree: OrgTree, relationId: number): OrgTree {
   return { ...tree, edges: tree.edges.filter((e) => e.relation_id !== relationId) };
+}
+
+/**
+ * Оптимистично проставить руководителя отдела в meta dept-узла.
+ * Полное имя тут взять неоткуда (в дереве лежат только id), поэтому имя
+ * очищаем — его принесёт ближайший рефетч. Главное, что снятие руководителя
+ * видно сразу, а не после round-trip.
+ */
+export function applyDepartmentManagerChange(
+  tree: OrgTree,
+  departmentId: number,
+  employeeId: number | null,
+): OrgTree {
+  const nodeId = `dept_${departmentId}`;
+  return {
+    ...tree,
+    nodes: tree.nodes.map((n) => (
+      n.id === nodeId
+        ? {
+          ...n,
+          meta: {
+            ...(n.meta ?? {}),
+            manager_id: employeeId,
+            manager_name: null,
+            manager_source: employeeId == null ? null : 'explicit',
+          },
+        }
+        : n
+    )),
+  };
+}
+
+/**
+ * Вычисляет цепочку руководителей снизу вверх до корня
+ * Возвращает массив [rootNodeId, ..., parentNodeId, nodeId].
+ */
+export function resolveHierarchyChain(edges: OrgEdge[], nodeId: string, maxDepth = 15): string[] {
+  const chain: string[] = [nodeId];
+  const visited = new Set<string>([nodeId]);
+  let curr = nodeId;
+
+  while (chain.length < maxDepth) {
+    const supEdge = resolveSuperiorEdge(edges, curr);
+    if (!supEdge || !supEdge.source || visited.has(supEdge.source)) {
+      break;
+    }
+    visited.add(supEdge.source);
+    chain.unshift(supEdge.source);
+    curr = supEdge.source;
+  }
+
+  return chain;
+}
+
+/**
+ * Проверяет, является ли candidateId потомком targetId (чтобы избежать циклов).
+ */
+export function isNodeDescendant(edges: OrgEdge[], targetId: string, candidateId: string, maxDepth = 20): boolean {
+  if (targetId === candidateId) return true;
+  const queue = [targetId];
+  const visited = new Set<string>([targetId]);
+  let steps = 0;
+
+  while (queue.length > 0 && steps < maxDepth * 10) {
+    steps++;
+    const curr = queue.shift()!;
+    const reports = resolveDirectReports(edges, curr);
+    for (const r of reports) {
+      if (r.target === candidateId) return true;
+      if (!visited.has(r.target)) {
+        visited.add(r.target);
+        queue.push(r.target);
+      }
+    }
+  }
+
+  return false;
+}
+
+
+/**
+ * Ветка ответственности узла: он сам, ВСЕ его подчинённые вниз по дереву и
+ * цепочка руководителей вверх до самого корня.
+ *
+ * Зачем и то и другое: «зона ответственности» читается только вместе с
+ * контекстом — кому этот руководитель сам подчиняется. Поэтому вверх идём
+ * до корня, а вниз забираем всё поддерево целиком.
+ *
+ * Граф может содержать кольца (данные грязные или связи разных типов
+ * замыкают цикл), поэтому оба обхода идут с множеством посещённых — иначе
+ * подсветка зациклилась бы и подвесила вкладку.
+ */
+export function collectBranch(
+  edges: Pick<OrgEdge, 'source' | 'target'>[],
+  nodeId: string,
+): Set<string> {
+  const childrenOf = new Map<string, string[]>();
+  const parentsOf = new Map<string, string[]>();
+  for (const e of edges) {
+    const kids = childrenOf.get(e.source);
+    if (kids) kids.push(e.target); else childrenOf.set(e.source, [e.target]);
+    const dads = parentsOf.get(e.target);
+    if (dads) dads.push(e.source); else parentsOf.set(e.target, [e.source]);
+  }
+
+  const branch = new Set<string>([nodeId]);
+
+  const walk = (from: string, adjacency: Map<string, string[]>) => {
+    const stack = [from];
+    const seen = new Set<string>([from]);
+    while (stack.length) {
+      const current = stack.pop() as string;
+      for (const next of adjacency.get(current) ?? []) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        branch.add(next);
+        stack.push(next);
+      }
+    }
+  };
+
+  walk(nodeId, childrenOf);  // вниз: все подчинённые
+  walk(nodeId, parentsOf);   // вверх: цепочка руководителей до корня
+  return branch;
 }

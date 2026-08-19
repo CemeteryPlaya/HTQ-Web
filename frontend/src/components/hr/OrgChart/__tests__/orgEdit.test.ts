@@ -2,13 +2,19 @@ import { describe, expect, it } from 'vitest';
 
 import type { OrgEdge, OrgNode, OrgTree } from '@/api/hr';
 import {
+  applyBatchSuperiorChange,
+  applyDepartmentManagerChange,
+  collectBranch,
+  applyRelationTypeChange,
   applySuperiorChange,
   isEditableEdge,
+  isNodeDescendant,
   isValidOrgConnection,
   numericIdFromNodeId,
   OPTIMISTIC_RELATION_ID,
   removeEdgeByRelationId,
   resolveDirectReports,
+  resolveHierarchyChain,
   resolveSuperiorEdge,
 } from '../orgEdit';
 
@@ -62,6 +68,32 @@ describe('isEditableEdge', () => {
     expect(isEditableEdge({ origin: 'inferred', relation_id: null })).toBe(false);
     expect(isEditableEdge({ origin: 'position', relation_id: null })).toBe(false);
     expect(isEditableEdge({ origin: 'department', relation_id: null })).toBe(false);
+  });
+
+  it('отвергает ещё не подтверждённое сервером ребро (sentinel -1)', () => {
+    expect(isEditableEdge({ origin: 'position', relation_id: OPTIMISTIC_RELATION_ID })).toBe(false);
+    expect(isEditableEdge({ origin: 'employee', relation_id: 0 })).toBe(false);
+  });
+});
+
+describe('applyDepartmentManagerChange', () => {
+  const tree: OrgTree = {
+    nodes: [
+      { id: 'dept_7', label: 'ИТ', type: 'department', meta: { manager_id: 1, manager_name: 'Иван', manager_source: 'explicit' } },
+      { id: 'dept_8', label: 'Финансы', type: 'department', meta: { manager_id: 2 } },
+    ],
+    edges: [],
+  };
+
+  it('снятие руководителя видно сразу и не трогает соседний отдел', () => {
+    const next = applyDepartmentManagerChange(tree, 7, null);
+    expect(next.nodes[0].meta).toMatchObject({ manager_id: null, manager_source: null });
+    expect(next.nodes[1].meta).toMatchObject({ manager_id: 2 });
+  });
+
+  it('назначение проставляет explicit', () => {
+    const next = applyDepartmentManagerChange(tree, 7, 42);
+    expect(next.nodes[0].meta).toMatchObject({ manager_id: 42, manager_source: 'explicit' });
   });
 });
 
@@ -117,14 +149,13 @@ describe('applySuperiorChange', () => {
     };
     const next = applySuperiorChange(tree, 'pos_3', 'pos_1', 'direct', 'position');
 
-    // old direct edge (10) replaced, functional edge (11) untouched
     expect(next.edges.some((e) => e.relation_id === 10)).toBe(false);
     expect(next.edges.some((e) => e.relation_id === 11)).toBe(true);
     const added = next.edges.find((e) => e.source === 'pos_3' && e.target === 'pos_1');
     expect(added).toMatchObject({ relation_type: 'direct', origin: 'position', relation_id: OPTIMISTIC_RELATION_ID });
   });
 
-  it('leaves an inferred edge on the child alone (nothing to delete server-side)', () => {
+  it('leaves an inferred edge on the child alone', () => {
     const tree: OrgTree = {
       nodes: [],
       edges: [edge({ source: 'pos_2', target: 'pos_1', relation_type: 'direct', origin: 'inferred', relation_id: null })],
@@ -132,6 +163,58 @@ describe('applySuperiorChange', () => {
     const next = applySuperiorChange(tree, 'pos_3', 'pos_1', 'direct', 'position');
     expect(next.edges).toHaveLength(2);
     expect(next.edges.some((e) => e.origin === 'inferred')).toBe(true);
+  });
+});
+
+describe('applyBatchSuperiorChange', () => {
+  it('attaches multiple child nodes to the parent node', () => {
+    const tree: OrgTree = {
+      nodes: [],
+      edges: [
+        edge({ source: 'pos_1', target: 'pos_2', relation_type: 'direct', origin: 'position', relation_id: 1 }),
+      ],
+    };
+    const next = applyBatchSuperiorChange(tree, 'pos_9', ['pos_2', 'pos_3', 'pos_4'], 'direct', 'position');
+    expect(next.edges.filter((e) => e.source === 'pos_9')).toHaveLength(3);
+    expect(next.edges.some((e) => e.relation_id === 1)).toBe(false);
+  });
+});
+
+describe('applyRelationTypeChange', () => {
+  it('updates relation_type for the targeted edge', () => {
+    const tree: OrgTree = {
+      nodes: [],
+      edges: [
+        edge({ source: 'pos_1', target: 'pos_2', relation_type: 'direct', relation_id: 100 }),
+        edge({ source: 'pos_1', target: 'pos_3', relation_type: 'direct', relation_id: 101 }),
+      ],
+    };
+    const next = applyRelationTypeChange(tree, 100, 'functional');
+    expect(next.edges.find((e) => e.relation_id === 100)?.relation_type).toBe('functional');
+    expect(next.edges.find((e) => e.relation_id === 101)?.relation_type).toBe('direct');
+  });
+});
+
+describe('resolveHierarchyChain', () => {
+  it('constructs chain from root to target node', () => {
+    const edges = [
+      edge({ source: 'pos_ceo', target: 'pos_cto', relation_type: 'direct' }),
+      edge({ source: 'pos_cto', target: 'pos_lead', relation_type: 'direct' }),
+      edge({ source: 'pos_lead', target: 'pos_dev', relation_type: 'direct' }),
+    ];
+    const chain = resolveHierarchyChain(edges, 'pos_dev');
+    expect(chain).toEqual(['pos_ceo', 'pos_cto', 'pos_lead', 'pos_dev']);
+  });
+});
+
+describe('isNodeDescendant', () => {
+  it('identifies descendant relationship in tree', () => {
+    const edges = [
+      edge({ source: 'pos_ceo', target: 'pos_cto' }),
+      edge({ source: 'pos_cto', target: 'pos_dev' }),
+    ];
+    expect(isNodeDescendant(edges, 'pos_ceo', 'pos_dev')).toBe(true);
+    expect(isNodeDescendant(edges, 'pos_dev', 'pos_ceo')).toBe(false);
   });
 });
 
@@ -146,5 +229,45 @@ describe('removeEdgeByRelationId', () => {
     };
     const next = removeEdgeByRelationId(tree, 1);
     expect(next.edges.map((e) => e.relation_id)).toEqual([2]);
+  });
+});
+
+describe('collectBranch', () => {
+  //        root
+  //        /  \
+  //      a      b
+  //     / \
+  //   a1   a2
+  const edges = [
+    { source: 'pos_root', target: 'pos_a' },
+    { source: 'pos_root', target: 'pos_b' },
+    { source: 'pos_a', target: 'pos_a1' },
+    { source: 'pos_a', target: 'pos_a2' },
+  ] as never[];
+
+  it('берёт сам узел, всех потомков и цепочку вверх до корня', () => {
+    const branch = collectBranch(edges, 'pos_a');
+    expect([...branch].sort()).toEqual(['pos_a', 'pos_a1', 'pos_a2', 'pos_root']);
+  });
+
+  it('не затягивает соседнюю ветку', () => {
+    expect(collectBranch(edges, 'pos_a').has('pos_b')).toBe(false);
+  });
+
+  it('у листа — он сам и предки', () => {
+    expect([...collectBranch(edges, 'pos_a1')].sort()).toEqual(['pos_a', 'pos_a1', 'pos_root']);
+  });
+
+  it('у корня — всё дерево', () => {
+    expect(collectBranch(edges, 'pos_root').size).toBe(5);
+  });
+
+  it('кольцо в данных не подвешивает обход', () => {
+    const cyclic = [
+      { source: 'pos_1', target: 'pos_2' },
+      { source: 'pos_2', target: 'pos_3' },
+      { source: 'pos_3', target: 'pos_1' },
+    ] as never[];
+    expect(collectBranch(cyclic, 'pos_1').size).toBe(3);
   });
 });

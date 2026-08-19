@@ -302,6 +302,85 @@ def remove_relation(relation_id: int) -> None:
     rel.delete()
 
 
+@transaction.atomic
+def set_position_superior(
+    *,
+    subordinate_id: int,
+    superior_id: int | None,
+    relation_type: RelationType = "direct",
+) -> ReportingRelation | None:
+    """Идемпотентно: у должности ровно один руководитель данного типа.
+
+    Заменяет цепочку "удалить старую связь -> создать новую", которую фронт
+    раньше делал двумя запросами: если второй падал, должность оставалась
+    ВООБЩЕ без руководителя. Здесь обе операции в одной транзакции, поэтому
+    промежуточного состояния снаружи не видно.
+
+    ``superior_id=None`` — снять руководителя данного типа и не назначать
+    нового. Возвращает созданную связь либо None, если сняли.
+    """
+    if superior_id is not None and superior_id == subordinate_id:
+        raise RelationSelfReferential()
+
+    ids = [subordinate_id] + ([superior_id] if superior_id is not None else [])
+    known = set(Position.objects.filter(id__in=ids).values_list("id", flat=True))
+    if set(ids) - known:
+        raise PositionNotFound()
+
+    existing = ReportingRelation.objects.filter(
+        subordinate_position_id=subordinate_id, relation_type=relation_type,
+    ).first()
+
+    # Уже стоит ровно то, что просят — ничего не делаем и не трогаем
+    # effective_from, иначе повторный вызов (например, из отмены) сдвигал бы
+    # дату задним числом.
+    if existing is not None and existing.superior_position_id == superior_id:
+        return existing
+
+    if existing is not None:
+        existing.delete()
+
+    if superior_id is None:
+        return None
+
+    # Проверяем цикл ПОСЛЕ снятия старой связи: старая связь могла быть тем
+    # самым ребром, из-за которого новая выглядела бы циклом.
+    if _position_cycle_exists(superior_id, subordinate_id):
+        raise RelationCycle()
+
+    return ReportingRelation.objects.create(
+        superior_position_id=superior_id,
+        subordinate_position_id=subordinate_id,
+        relation_type=relation_type,
+        effective_from=date.today(),
+    )
+
+
+@transaction.atomic
+def change_relation_type(relation_id: int, relation_type: RelationType) -> ReportingRelation:
+    """Сменить тип связи должностей, не пересоздавая строку.
+
+    Цикл появиться не может: ``_position_cycle_exists`` обходит связи ВСЕХ
+    типов, так что смена типа не добавляет и не убирает рёбер графа. Из
+    проверок нужна только уникальность тройки.
+    """
+    rel = ReportingRelation.objects.filter(id=relation_id).first()
+    if rel is None:
+        raise RelationNotFound()
+    if rel.relation_type == relation_type:
+        return rel
+    clash = ReportingRelation.objects.filter(
+        superior_position_id=rel.superior_position_id,
+        subordinate_position_id=rel.subordinate_position_id,
+        relation_type=relation_type,
+    ).exists()
+    if clash:
+        raise RelationDuplicate()
+    rel.relation_type = relation_type
+    rel.save(update_fields=["relation_type", "updated_at"])
+    return rel
+
+
 # ── employee reporting overrides (не порт, ручная правка орг-связей) ────────
 #
 # Персональный слой поверх ReportingRelation: сотрудник X подчиняется
@@ -490,6 +569,146 @@ def add_employee_relation(
             "relation_type": relation_type,
         },
         changed_by=created_by or 0,
+    )
+    return rel
+
+
+@transaction.atomic
+def set_employee_superior(
+    *,
+    subordinate_id: int,
+    superior_id: int | None,
+    relation_type: RelationType = "direct",
+    created_by: int | None = None,
+) -> EmployeeReportingOverride | None:
+    """Персональный аналог ``set_position_superior`` — та же атомарность.
+
+    Отдельно важен для ``direct``: частичный unique
+    ``ux_employee_override_one_direct_superior`` допускает ровно одного
+    прямого руководителя, поэтому "создать новую, потом удалить старую" тут
+    невозможно в принципе — только снять и поставить, и только в одной
+    транзакции.
+    """
+    if superior_id is not None and superior_id == subordinate_id:
+        raise EmployeeRelationSelfReferential()
+
+    ids = [subordinate_id] + ([superior_id] if superior_id is not None else [])
+    employees = {
+        e.id: e for e in Employee.objects.filter(id__in=ids, is_deleted=False)
+    }
+    if set(ids) - set(employees):
+        raise EmployeeNotFoundForRelation()
+    if any(e.status != "active" for e in employees.values()):
+        raise EmployeeNotActiveForRelation()
+
+    existing = EmployeeReportingOverride.objects.filter(
+        subordinate_id=subordinate_id, relation_type=relation_type,
+    ).first()
+
+    if existing is not None and existing.superior_id == superior_id:
+        return existing
+
+    # id и superior снимаем ДО delete(): Django обнуляет pk у удалённого
+    # объекта, и в аудит ушёл бы entity_id=NULL (колонка NOT NULL).
+    old_superior_id = existing.superior_id if existing else None
+    old_relation_id = existing.id if existing else None
+    if existing is not None:
+        existing.delete()
+
+    if superior_id is None:
+        if old_relation_id is not None:
+            audit_service.log(
+                entity_type="employee_reporting_override",
+                entity_id=old_relation_id,
+                action="delete",
+                old_values={
+                    "superior_id": str(old_superior_id),
+                    "subordinate_id": str(subordinate_id),
+                    "relation_type": relation_type,
+                },
+                changed_by=created_by or 0,
+            )
+        return None
+
+    if _employee_cycle_exists(superior_id, subordinate_id):
+        raise RelationCycle()
+
+    rel = EmployeeReportingOverride.objects.create(
+        superior_id=superior_id,
+        subordinate_id=subordinate_id,
+        relation_type=relation_type,
+        created_by=created_by,
+    )
+    audit_service.log(
+        entity_type="employee_reporting_override",
+        entity_id=rel.id,
+        action="update" if existing is not None else "create",
+        old_values=(
+            {"superior_id": str(old_superior_id)} if existing is not None else None
+        ),
+        new_values={
+            "superior_id": str(superior_id), "subordinate_id": str(subordinate_id),
+            "relation_type": relation_type,
+        },
+        changed_by=created_by or 0,
+    )
+    return rel
+
+
+@transaction.atomic
+def change_employee_relation_type(
+    relation_id: int, relation_type: RelationType, *, changed_by_id: int | None = None,
+) -> EmployeeReportingOverride:
+    """Сменить тип персональной связи.
+
+    В отличие от должностей здесь смена типа МЕНЯЕТ граф: эффективное дерево
+    (``_build_effective_employee_superiors``) учитывает только ``direct``.
+    Поэтому перевод в ``direct`` требует и проверки на второго прямого
+    руководителя, и проверки цикла.
+    """
+    rel = (
+        EmployeeReportingOverride.objects.select_related("superior")
+        .filter(id=relation_id).first()
+    )
+    if rel is None:
+        raise EmployeeRelationNotFound()
+    if rel.relation_type == relation_type:
+        return rel
+
+    clash = EmployeeReportingOverride.objects.filter(
+        superior_id=rel.superior_id,
+        subordinate_id=rel.subordinate_id,
+        relation_type=relation_type,
+    ).exists()
+    if clash:
+        raise EmployeeRelationDuplicate()
+
+    if relation_type == "direct":
+        current = (
+            EmployeeReportingOverride.objects.select_related("superior")
+            .filter(subordinate_id=rel.subordinate_id, relation_type="direct")
+            .exclude(id=rel.id)
+            .first()
+        )
+        if current is not None:
+            name = f"{current.superior.first_name} {current.superior.last_name}".strip()
+            raise EmployeeAlreadyHasSuperior(name, current.id)
+        # Цикл проверяем как будто связь уже прямая: снимаем текущую строку из
+        # расчёта нельзя (она functional и в дерево не входит), поэтому просто
+        # спрашиваем, достижим ли subordinate от superior по direct-рёбрам.
+        if _employee_cycle_exists(rel.superior_id, rel.subordinate_id):
+            raise RelationCycle()
+
+    old_type = rel.relation_type
+    rel.relation_type = relation_type
+    rel.save(update_fields=["relation_type", "updated_at"])
+    audit_service.log(
+        entity_type="employee_reporting_override",
+        entity_id=rel.id,
+        action="update",
+        old_values={"relation_type": old_type},
+        new_values={"relation_type": relation_type},
+        changed_by=changed_by_id or 0,
     )
     return rel
 

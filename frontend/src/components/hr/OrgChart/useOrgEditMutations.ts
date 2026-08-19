@@ -13,17 +13,24 @@ import { useQueryClient, useMutation, type QueryKey } from '@tanstack/react-quer
 import { toast } from 'sonner';
 
 import {
+  changeEmployeeRelationType,
+  changePositionRelationType,
   createEmployeeRelation,
-  createPositionRelation,
   deleteEmployeeRelation,
   deletePositionRelation,
   setDepartmentManager,
+  setEmployeeSuperior,
+  setPositionSuperior,
   type OrgEdge,
   type OrgEdgeOrigin,
   type OrgTree,
+  type RelationType,
 } from '@/api/hr';
 import { reportApiError } from '@/lib/apiError';
 import {
+  applyBatchSuperiorChange,
+  applyDepartmentManagerChange,
+  applyRelationTypeChange,
   applySuperiorChange,
   isEditableEdge,
   numericIdFromNodeId,
@@ -41,22 +48,50 @@ export function useOrgEditMutations(treeKey: QueryKey) {
   const queryClient = useQueryClient();
 
   const connectMutation = useMutation({
-    mutationFn: async (input: { parentId: string; childId: string; relationType: string }) => {
+    mutationFn: async (input: {
+      parentId: string;
+      childId: string;
+      relationType: string;
+      note?: string;
+    }) => {
       const parentNum = numericIdFromNodeId(input.parentId);
       const childNum = numericIdFromNodeId(input.childId);
       if (parentNum == null || childNum == null) throw new Error('Некорректный узел');
-      const kind = nodeKind(input.childId);
-      if (kind === 'pos') {
-        return createPositionRelation({
-          superior_position_id: parentNum,
-          subordinate_position_id: childNum,
-          relation_type: input.relationType as 'direct' | 'functional' | 'project',
+
+      const isPos = nodeKind(input.childId) === 'pos';
+
+      // For employees, if there is a note or non-direct type, createEmployeeRelation can be used
+      // For standard direct replacement, setEmployeeSuperior / setPositionSuperior is ideal
+      if (isPos) {
+        return setPositionSuperior({
+          subordinate_id: childNum,
+          superior_id: parentNum,
+          relation_type: input.relationType as RelationType,
         });
       }
-      return createEmployeeRelation({
-        superior_employee_id: parentNum,
-        subordinate_employee_id: childNum,
-        relation_type: input.relationType as 'direct' | 'functional' | 'project',
+
+      // If note is provided for employee relation, we can call createEmployeeRelation or setEmployeeSuperior
+      if (input.note) {
+        try {
+          return await setEmployeeSuperior({
+            subordinate_id: childNum,
+            superior_id: parentNum,
+            relation_type: input.relationType as RelationType,
+          });
+        } catch {
+          return await createEmployeeRelation({
+            superior_employee_id: parentNum,
+            subordinate_employee_id: childNum,
+            relation_type: input.relationType as RelationType,
+            note: input.note,
+          });
+        }
+      }
+
+      return setEmployeeSuperior({
+        subordinate_id: childNum,
+        superior_id: parentNum,
+        relation_type: input.relationType as RelationType,
       });
     },
     onMutate: async (input) => {
@@ -73,6 +108,132 @@ export function useOrgEditMutations(treeKey: QueryKey) {
       reportApiError(err, 'Не удалось изменить подчинение');
     },
     onSuccess: () => toast.success('Связь сохранена'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
+  });
+
+  const changeTypeMutation = useMutation({
+    mutationFn: async (input: { edge: OrgEdge; newType: RelationType }) => {
+      const relationId = input.edge.relation_id;
+      if (relationId == null) throw new Error('Невозможно изменить неявную связь');
+      const kind = nodeKind(input.edge.target);
+      if (kind === 'pos') {
+        return changePositionRelationType(relationId, input.newType);
+      }
+      return changeEmployeeRelationType(relationId, input.newType);
+    },
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: treeKey });
+      const previous = queryClient.getQueryData<OrgTree>(treeKey);
+      if (input.edge.relation_id != null) {
+        const relationId = input.edge.relation_id;
+        queryClient.setQueryData<OrgTree>(treeKey, (old) => (
+          old ? applyRelationTypeChange(old, relationId, input.newType) : old
+        ));
+      }
+      return { previous };
+    },
+    onError: (err, _input, context) => {
+      if (context?.previous) queryClient.setQueryData(treeKey, context.previous);
+      reportApiError(err, 'Не удалось изменить тип связи');
+    },
+    onSuccess: () => toast.success('Тип связи обновлён'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
+  });
+
+  const batchAddReportsMutation = useMutation({
+    mutationFn: async (input: {
+      parentId: string;
+      childIds: string[];
+      relationType: RelationType;
+    }) => {
+      const parentNum = numericIdFromNodeId(input.parentId);
+      if (parentNum == null) throw new Error('Некорректный руководитель');
+      const isPos = nodeKind(input.parentId) === 'pos';
+
+      const results = await Promise.all(
+        input.childIds.map(async (childId) => {
+          const childNum = numericIdFromNodeId(childId);
+          if (childNum == null) return null;
+          return isPos
+            ? setPositionSuperior({
+                subordinate_id: childNum,
+                superior_id: parentNum,
+                relation_type: input.relationType,
+              })
+            : setEmployeeSuperior({
+                subordinate_id: childNum,
+                superior_id: parentNum,
+                relation_type: input.relationType,
+              });
+        })
+      );
+      return results;
+    },
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: treeKey });
+      const previous = queryClient.getQueryData<OrgTree>(treeKey);
+      const origin: OrgEdgeOrigin = nodeKind(input.parentId) === 'pos' ? 'position' : 'employee';
+      queryClient.setQueryData<OrgTree>(treeKey, (old) => (
+        old ? applyBatchSuperiorChange(old, input.parentId, input.childIds, input.relationType, origin) : old
+      ));
+      return { previous };
+    },
+    onError: (err, _input, context) => {
+      if (context?.previous) queryClient.setQueryData(treeKey, context.previous);
+      reportApiError(err, 'Не удалось добавить подчинённых');
+    },
+    onSuccess: (_, input) => {
+      toast.success(`Добавлено подчинённых: ${input.childIds.length}`);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
+  });
+
+  const transferSubordinatesMutation = useMutation({
+    mutationFn: async (input: {
+      targetManagerId: string;
+      subordinateIds: string[];
+      relationType?: RelationType;
+    }) => {
+      const targetManagerNum = numericIdFromNodeId(input.targetManagerId);
+      if (targetManagerNum == null) throw new Error('Некорректный целевой руководитель');
+      const isPos = nodeKind(input.targetManagerId) === 'pos';
+      const relType = input.relationType || 'direct';
+
+      const results = await Promise.all(
+        input.subordinateIds.map(async (childId) => {
+          const childNum = numericIdFromNodeId(childId);
+          if (childNum == null) return null;
+          return isPos
+            ? setPositionSuperior({
+                subordinate_id: childNum,
+                superior_id: targetManagerNum,
+                relation_type: relType,
+              })
+            : setEmployeeSuperior({
+                subordinate_id: childNum,
+                superior_id: targetManagerNum,
+                relation_type: relType,
+              });
+        })
+      );
+      return results;
+    },
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: treeKey });
+      const previous = queryClient.getQueryData<OrgTree>(treeKey);
+      const origin: OrgEdgeOrigin = nodeKind(input.targetManagerId) === 'pos' ? 'position' : 'employee';
+      queryClient.setQueryData<OrgTree>(treeKey, (old) => (
+        old ? applyBatchSuperiorChange(old, input.targetManagerId, input.subordinateIds, input.relationType || 'direct', origin) : old
+      ));
+      return { previous };
+    },
+    onError: (err, _input, context) => {
+      if (context?.previous) queryClient.setQueryData(treeKey, context.previous);
+      reportApiError(err, 'Не удалось передать подчинённых');
+    },
+    onSuccess: (_, input) => {
+      toast.success(`Передано подчинённых: ${input.subordinateIds.length}`);
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
   });
 
@@ -105,34 +266,51 @@ export function useOrgEditMutations(treeKey: QueryKey) {
   const setManagerMutation = useMutation({
     mutationFn: (input: { departmentId: number; employeeId: number | null }) =>
       setDepartmentManager(input.departmentId, input.employeeId),
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: treeKey });
+      const previous = queryClient.getQueryData<OrgTree>(treeKey);
+      queryClient.setQueryData<OrgTree>(treeKey, (old) => (
+        old ? applyDepartmentManagerChange(old, input.departmentId, input.employeeId) : old
+      ));
+      return { previous };
+    },
+    onError: (err, _input, context) => {
+      if (context?.previous) queryClient.setQueryData(treeKey, context.previous);
+      reportApiError(err, 'Не удалось изменить руководителя отдела');
+    },
     onSuccess: () => toast.success('Руководитель отдела обновлён'),
-    onError: (err) => reportApiError(err, 'Не удалось изменить руководителя отдела'),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
   });
 
   /**
-   * Высокоуровневая операция "подчинить childId узлу parentId", используемая
-   * и drag&drop-ом (relationType всегда "direct"), и панелью (любой тип).
-   * Если у childId уже есть РЕДАКТИРУЕМЫЙ (не inferred) руководитель того же
-   * типа связи — подтверждаем замену: у бэкенда не более одного прямого
-   * руководителя на позицию/сотрудника, второй POST иначе вернёт 409.
-   * Ничего не подтверждаем, если текущий руководитель лишь "inferred" —
-   * там нет строки в БД, удалять нечего.
+   * Высокоуровневая операция "подчинить childId узлу parentId".
    */
-  const connectSuperior = (parentId: string, childId: string, relationType = 'direct') => {
+  const connectSuperior = (
+    parentId: string,
+    childId: string,
+    relationType = 'direct',
+    note?: string,
+    skipConfirm = false,
+  ) => {
     const tree = queryClient.getQueryData<OrgTree>(treeKey);
     const existing = tree ? resolveSuperiorEdge(tree.edges, childId) : null;
-    const mustReplace = existing && isEditableEdge(existing) && existing.relation_type === relationType;
+    const mustReplace = Boolean(
+      existing && isEditableEdge(existing) && existing.relation_type === relationType,
+    );
 
-    if (mustReplace && existing) {
+    if (mustReplace && !skipConfirm) {
       if (!window.confirm('У узла уже есть руководитель. Заменить его новым?')) return;
-      removeMutation.mutate(existing, {
-        onSuccess: () => connectMutation.mutate({ parentId, childId, relationType }),
-      });
-      return;
     }
-    connectMutation.mutate({ parentId, childId, relationType });
+    connectMutation.mutate({ parentId, childId, relationType, note });
   };
 
-  return { connectMutation, removeMutation, setManagerMutation, connectSuperior };
+  return {
+    connectMutation,
+    removeMutation,
+    setManagerMutation,
+    changeTypeMutation,
+    batchAddReportsMutation,
+    transferSubordinatesMutation,
+    connectSuperior,
+  };
 }

@@ -708,3 +708,210 @@ def test_tree_lang_en_is_noop_without_configured_provider(auth, dep, monkeypatch
 def test_tree_lang_invalid_422(auth):
     resp = Client().get(f"{BASE}/tree?lang=fr", **auth)
     assert resp.status_code == 422
+
+
+# ── PUT /org/relations/superior — атомарная замена руководителя ──────────────
+#
+# Ради этой ручки заведена вся эта секция: раньше фронт делал DELETE+POST
+# двумя запросами, и упавший второй оставлял должность ВООБЩЕ без
+# руководителя. Здесь обе операции в одной транзакции.
+
+@pytest.mark.django_db
+def test_set_superior_assigns_when_none(admin_auth, dep):
+    boss = _pos("A", dep, weight=10)
+    sub = _pos("B", dep, weight=20)
+
+    resp = Client().put(
+        f"{BASE}/relations/superior",
+        data={"subordinate_id": sub.id, "superior_id": boss.id},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["superior_position_id"] == boss.id
+    assert ReportingRelation.objects.filter(
+        subordinate_position=sub, relation_type="direct").count() == 1
+
+
+@pytest.mark.django_db
+def test_set_superior_replaces_atomically(admin_auth, dep):
+    """Старая связь исчезла, новая появилась — и ровно одна."""
+    old_boss = _pos("Old", dep, weight=10)
+    new_boss = _pos("New", dep, weight=11)
+    sub = _pos("Sub", dep, weight=20)
+    _rel(old_boss, sub, "direct")
+
+    resp = Client().put(
+        f"{BASE}/relations/superior",
+        data={"subordinate_id": sub.id, "superior_id": new_boss.id},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 200
+    rels = ReportingRelation.objects.filter(subordinate_position=sub, relation_type="direct")
+    assert rels.count() == 1
+    assert rels.first().superior_position_id == new_boss.id
+
+
+@pytest.mark.django_db
+def test_set_superior_null_clears(admin_auth, dep):
+    boss = _pos("A", dep, weight=10)
+    sub = _pos("B", dep, weight=20)
+    _rel(boss, sub, "direct")
+
+    resp = Client().put(
+        f"{BASE}/relations/superior",
+        data={"subordinate_id": sub.id, "superior_id": None},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 200
+    assert not ReportingRelation.objects.filter(
+        subordinate_position=sub, relation_type="direct").exists()
+
+
+@pytest.mark.django_db
+def test_set_superior_is_idempotent(admin_auth, dep):
+    """Повтор того же назначения не плодит строк и не двигает effective_from."""
+    boss = _pos("A", dep, weight=10)
+    sub = _pos("B", dep, weight=20)
+    body = {"subordinate_id": sub.id, "superior_id": boss.id}
+
+    first = Client().put(f"{BASE}/relations/superior", data=body,
+                         content_type="application/json", **admin_auth)
+    second = Client().put(f"{BASE}/relations/superior", data=body,
+                          content_type="application/json", **admin_auth)
+    assert first.status_code == second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+    assert ReportingRelation.objects.filter(subordinate_position=sub).count() == 1
+
+
+@pytest.mark.django_db
+def test_set_superior_cycle_409(admin_auth, dep):
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    _rel(a, b, "direct")
+
+    resp = Client().put(
+        f"{BASE}/relations/superior",
+        data={"subordinate_id": a.id, "superior_id": b.id},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.django_db
+def test_set_superior_replacing_old_parent_is_not_a_false_cycle(admin_auth, dep):
+    """A -> B. Просим сделать B руководителем... нет, просим переподчинить A
+    к C, где C подчинён B. Снятие старой связи должно происходить ДО проверки
+    цикла, иначе законная перестановка ложно читалась бы как кольцо."""
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    c = _pos("C", dep, weight=30)
+    _rel(a, b, "direct")   # A -> B
+    _rel(b, c, "direct")   # B -> C
+
+    # Переподчиняем B напрямую к C: старое ребро A->B снимается, остаётся
+    # B->C, и связь C->B замкнула бы кольцо — это ДОЛЖНО быть отвергнуто.
+    resp = Client().put(
+        f"{BASE}/relations/superior",
+        data={"subordinate_id": b.id, "superior_id": c.id},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409
+    # И старая связь при отказе обязана уцелеть — транзакция откатилась.
+    assert ReportingRelation.objects.filter(
+        superior_position=a, subordinate_position=b).exists()
+
+
+@pytest.mark.django_db
+def test_set_superior_forbidden_without_permission(auth, dep):
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    resp = Client().put(
+        f"{BASE}/relations/superior",
+        data={"subordinate_id": b.id, "superior_id": a.id},
+        content_type="application/json", **auth,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Missing permission: hr.org.edit"
+
+
+# ── PATCH /org/relations/{id} — смена типа связи ─────────────────────────────
+
+@pytest.mark.django_db
+def test_change_relation_type(admin_auth, dep):
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    rel = _rel(a, b, "direct")
+
+    resp = Client().patch(
+        f"{BASE}/relations/{rel.id}",
+        data={"relation_type": "functional"},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["relation_type"] == "functional"
+    rel.refresh_from_db()
+    assert rel.relation_type == "functional"
+
+
+@pytest.mark.django_db
+def test_change_relation_type_collision_409(admin_auth, dep):
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    rel = _rel(a, b, "direct")
+    _rel(a, b, "project")
+
+    resp = Client().patch(
+        f"{BASE}/relations/{rel.id}",
+        data={"relation_type": "project"},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.django_db
+def test_change_relation_type_cannot_create_cycle_for_positions(admin_auth, dep):
+    """Пин к докстрингу change_relation_type: _position_cycle_exists обходит
+    связи ВСЕХ типов, поэтому смена типа не добавляет и не убирает рёбер —
+    цикл появиться не может, и проверка на него здесь не нужна."""
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    rel = _rel(a, b, "functional")
+
+    resp = Client().patch(
+        f"{BASE}/relations/{rel.id}",
+        data={"relation_type": "direct"},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_change_relation_type_404(admin_auth):
+    resp = Client().patch(
+        f"{BASE}/relations/999999",
+        data={"relation_type": "direct"},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_change_relation_type_forbidden_without_permission(auth, dep):
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    rel = _rel(a, b, "direct")
+    resp = Client().patch(
+        f"{BASE}/relations/{rel.id}",
+        data={"relation_type": "functional"},
+        content_type="application/json", **auth,
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_relation_detail_rejects_other_methods(admin_auth, dep):
+    a = _pos("A", dep, weight=10)
+    b = _pos("B", dep, weight=20)
+    rel = _rel(a, b, "direct")
+    resp = Client().get(f"{BASE}/relations/{rel.id}", **admin_auth)
+    assert resp.status_code == 405

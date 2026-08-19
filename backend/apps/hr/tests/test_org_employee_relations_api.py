@@ -535,3 +535,176 @@ def test_tree_employees_mode_override_takes_priority_over_position_relation(auth
         body["edges"], source=f"emp_{other.id}", target=f"emp_{b.id}", origin="employee",
     )
     assert not _has_edge(body["edges"], source=f"emp_{a.id}", target=f"emp_{b.id}")
+
+
+# ── PUT /org/employee-relations/superior — атомарная замена ──────────────────
+#
+# Для relation_type="direct" другого способа нет в принципе: частичный unique
+# ux_employee_override_one_direct_superior допускает ровно одного прямого
+# руководителя, поэтому "создать новую, потом удалить старую" невозможно —
+# только снять и поставить, и только в одной транзакции.
+
+@pytest.mark.django_db
+def test_set_employee_superior_assigns(senior_auth, dep):
+    p = _pos("P", dep, weight=10)
+    a = _emp(dep, p, "a@htq.test")
+    b = _emp(dep, p, "b@htq.test")
+
+    resp = Client().put(
+        f"{BASE}/employee-relations/superior",
+        data={"subordinate_id": b.id, "superior_id": a.id},
+        content_type="application/json", **senior_auth,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["superior_employee_id"] == a.id
+    assert EmployeeReportingOverride.objects.filter(
+        subordinate=b, relation_type="direct").count() == 1
+
+
+@pytest.mark.django_db
+def test_set_employee_superior_replaces_without_violating_partial_unique(senior_auth, dep):
+    """Прямой руководитель ровно один: замена обязана пройти, хотя наивное
+    "создать вторую, потом удалить первую" упёрлось бы в констрейнт."""
+    p = _pos("P", dep, weight=10)
+    old = _emp(dep, p, "old@htq.test")
+    new = _emp(dep, p, "new@htq.test")
+    sub = _emp(dep, p, "sub@htq.test")
+    EmployeeReportingOverride.objects.create(superior=old, subordinate=sub, relation_type="direct")
+
+    resp = Client().put(
+        f"{BASE}/employee-relations/superior",
+        data={"subordinate_id": sub.id, "superior_id": new.id},
+        content_type="application/json", **senior_auth,
+    )
+    assert resp.status_code == 200
+    rels = EmployeeReportingOverride.objects.filter(subordinate=sub, relation_type="direct")
+    assert rels.count() == 1
+    assert rels.first().superior_id == new.id
+
+
+@pytest.mark.django_db
+def test_set_employee_superior_null_clears(senior_auth, dep):
+    p = _pos("P", dep, weight=10)
+    a = _emp(dep, p, "a@htq.test")
+    b = _emp(dep, p, "b@htq.test")
+    EmployeeReportingOverride.objects.create(superior=a, subordinate=b, relation_type="direct")
+
+    resp = Client().put(
+        f"{BASE}/employee-relations/superior",
+        data={"subordinate_id": b.id, "superior_id": None},
+        content_type="application/json", **senior_auth,
+    )
+    assert resp.status_code == 200
+    assert not EmployeeReportingOverride.objects.filter(subordinate=b).exists()
+
+
+@pytest.mark.django_db
+def test_set_employee_superior_cycle_409_and_rolls_back(senior_auth, dep):
+    p = _pos("P", dep, weight=10)
+    a = _emp(dep, p, "a@htq.test")
+    b = _emp(dep, p, "b@htq.test")
+    EmployeeReportingOverride.objects.create(superior=a, subordinate=b, relation_type="direct")
+
+    resp = Client().put(
+        f"{BASE}/employee-relations/superior",
+        data={"subordinate_id": a.id, "superior_id": b.id},
+        content_type="application/json", **senior_auth,
+    )
+    assert resp.status_code == 409
+    # Существующая связь уцелела — транзакция откатилась целиком.
+    assert EmployeeReportingOverride.objects.filter(superior=a, subordinate=b).exists()
+
+
+@pytest.mark.django_db
+def test_set_employee_superior_forbidden_without_permission(auth, dep):
+    p = _pos("P", dep, weight=10)
+    a = _emp(dep, p, "a@htq.test")
+    b = _emp(dep, p, "b@htq.test")
+    resp = Client().put(
+        f"{BASE}/employee-relations/superior",
+        data={"subordinate_id": b.id, "superior_id": a.id},
+        content_type="application/json", **auth,
+    )
+    assert resp.status_code == 403
+
+
+# ── PATCH /org/employee-relations/{id} — смена типа ──────────────────────────
+
+@pytest.mark.django_db
+def test_change_employee_relation_type(senior_auth, dep):
+    p = _pos("P", dep, weight=10)
+    a = _emp(dep, p, "a@htq.test")
+    b = _emp(dep, p, "b@htq.test")
+    rel = EmployeeReportingOverride.objects.create(
+        superior=a, subordinate=b, relation_type="functional")
+
+    resp = Client().patch(
+        f"{BASE}/employee-relations/{rel.id}",
+        data={"relation_type": "project"},
+        content_type="application/json", **senior_auth,
+    )
+    assert resp.status_code == 200
+    rel.refresh_from_db()
+    assert rel.relation_type == "project"
+
+
+@pytest.mark.django_db
+def test_change_employee_relation_type_to_direct_blocked_by_existing_direct(senior_auth, dep):
+    """Перевод в direct обязан упереться в частичный unique: у подчинённого
+    уже есть прямой руководитель."""
+    p = _pos("P", dep, weight=10)
+    a = _emp(dep, p, "a@htq.test")
+    other = _emp(dep, p, "other@htq.test")
+    sub = _emp(dep, p, "sub@htq.test")
+    EmployeeReportingOverride.objects.create(superior=other, subordinate=sub, relation_type="direct")
+    rel = EmployeeReportingOverride.objects.create(
+        superior=a, subordinate=sub, relation_type="functional")
+
+    resp = Client().patch(
+        f"{BASE}/employee-relations/{rel.id}",
+        data={"relation_type": "direct"},
+        content_type="application/json", **senior_auth,
+    )
+    assert resp.status_code == 409
+    assert "прямой руководитель" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_change_employee_relation_type_to_direct_cycle_409(senior_auth, dep):
+    """В отличие от должностей, здесь смена типа МЕНЯЕТ граф: эффективное
+    дерево учитывает только direct. Перевод functional -> direct может
+    замкнуть кольцо, и это обязано отлавливаться."""
+    p = _pos("P", dep, weight=10)
+    a = _emp(dep, p, "a@htq.test")
+    b = _emp(dep, p, "b@htq.test")
+    # a -> b прямая; обратная b -> a пока лишь функциональная (в дерево не входит)
+    EmployeeReportingOverride.objects.create(superior=a, subordinate=b, relation_type="direct")
+    rel = EmployeeReportingOverride.objects.create(
+        superior=b, subordinate=a, relation_type="functional")
+
+    resp = Client().patch(
+        f"{BASE}/employee-relations/{rel.id}",
+        data={"relation_type": "direct"},
+        content_type="application/json", **senior_auth,
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.django_db
+def test_change_employee_relation_type_404(senior_auth):
+    resp = Client().patch(
+        f"{BASE}/employee-relations/999999",
+        data={"relation_type": "direct"},
+        content_type="application/json", **senior_auth,
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_employee_relation_detail_rejects_other_methods(senior_auth, dep):
+    p = _pos("P", dep, weight=10)
+    a = _emp(dep, p, "a@htq.test")
+    b = _emp(dep, p, "b@htq.test")
+    rel = EmployeeReportingOverride.objects.create(superior=a, subordinate=b)
+    resp = Client().get(f"{BASE}/employee-relations/{rel.id}", **senior_auth)
+    assert resp.status_code == 405
