@@ -67,10 +67,10 @@ class RouteUpdate(BaseModel):
 
 
 class StageCreate(BaseModel):
-    """Этап маршрута вместе со списком согласующих.
+    """Этап маршрута вместе со списком HR-должностей.
 
-    ``approver_ids`` принимается прямо здесь, а не отдельным запросом на
-    каждого: этап без согласующих нельзя исполнить (``engine._approver_ids``
+    ``position_ids`` принимается прямо здесь, а не отдельным запросом на
+    каждого: этап без должностей нельзя исполнить (``engine._approver_ids``
     отказывает на запуске), так что создавать его отдельно от людей значило
     бы штатно проходить через заведомо нерабочее состояние.
 
@@ -83,27 +83,27 @@ class StageCreate(BaseModel):
     order: int = Field(1, ge=1, le=999)
     name: str = Field(..., min_length=1, max_length=200)
     quorum: Quorum = Quorum.ALL
-    approver_ids: list[int] = Field(default_factory=list)
+    position_ids: list[int] = Field(default_factory=list)
     # Пустое условие — «этап нужен всегда»; это и есть поведение всех этапов
     # до появления ветвления, поэтому значение по умолчанию именно такое.
     condition: Condition = Field(default_factory=list)
     is_fallback: bool = False
-    approver_kind: ApproverKind = ApproverKind.NAMED
+    approver_kind: ApproverKind = ApproverKind.POSITION
     requires_attachment: bool = False
     requires_comment: bool = False
 
     @model_validator(mode="after")
-    def _approvers_match_kind(self):
-        if len(set(self.approver_ids)) != len(self.approver_ids):
-            raise ValueError("согласующие в этапе повторяются")
+    def _roles_match_kind(self):
+        if len(set(self.position_ids)) != len(self.position_ids):
+            raise ValueError("должности в этапе повторяются")
         # Смысл сочетаний — в route_service._check_approver_kind; здесь
         # проверяется ровно то, что видно из схемы: список либо нужен, либо
         # неуместен. Дубль осознанный — 422 на форме понятнее, чем 409 из
         # сервиса, а сервис обязан защищаться и без схемы (его зовёт и
         # django-admin).
-        if self.approver_kind == ApproverKind.NAMED and not self.approver_ids:
-            raise ValueError("нужен хотя бы один согласующий")
-        if self.approver_kind != ApproverKind.NAMED and self.approver_ids:
+        if self.approver_kind == ApproverKind.POSITION and not self.position_ids:
+            raise ValueError("нужна хотя бы одна должность")
+        if self.approver_kind != ApproverKind.POSITION and self.position_ids:
             raise ValueError(
                 "у этапа с этим видом согласующих список не заполняется")
         return self
@@ -115,7 +115,7 @@ class StageUpdate(BaseModel):
     quorum: Optional[Quorum] = None
     # None — «не трогать список»; пустой список запрещён отдельной проверкой
     # в сервисе, чтобы не молча получить неисполнимый этап.
-    approver_ids: Optional[list[int]] = None
+    position_ids: Optional[list[int]] = None
     # А здесь пустой список — законное «снять условие»: отличить его от «не
     # трогать» позволяет exclude_unset во вьюхе (см. StageDetailView.patch).
     condition: Optional[Condition] = None
@@ -128,11 +128,10 @@ class StageUpdate(BaseModel):
     requires_comment: Optional[bool] = None
 
 
-class ApproverRead(BaseModel):
-    user_id: int
-    # Разворачивается через apps.users.interface — фронтенду нужно показать
-    # человека, а не число.
-    full_name: str = ""
+class RoleRead(BaseModel):
+    position_id: int
+    title: str = ""
+    department_name: Optional[str] = None
     is_active: bool = True
 
 
@@ -143,12 +142,12 @@ class StageRead(BaseModel):
     quorum: str
     condition: Condition = Field(default_factory=list)
     is_fallback: bool = False
-    approver_kind: ApproverKind = ApproverKind.NAMED
+    approver_kind: ApproverKind = ApproverKind.POSITION
     requires_attachment: bool = False
     requires_comment: bool = False
     # Пустой у этапа, который согласует инициатор: конкретный человек станет
     # известен только на запуске процесса.
-    approvers: list[ApproverRead]
+    roles: list[RoleRead]
 
 
 class CoverageGap(BaseModel):
@@ -219,7 +218,8 @@ class ProcessStageRead(BaseModel):
     # почему на этапе один человек и именно этот, ``requires_attachment`` и
     # ``requires_comment`` — рабочие поля, их читает engine.act на каждом
     # решении.
-    approver_kind: ApproverKind = ApproverKind.NAMED
+    approver_kind: ApproverKind = ApproverKind.POSITION
+    role_ids: list[int] = Field(default_factory=list)
     requires_attachment: bool = False
     requires_comment: bool = False
     decided_at: Optional[datetime]

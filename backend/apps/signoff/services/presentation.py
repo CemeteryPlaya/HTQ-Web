@@ -64,6 +64,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "condition": stage.condition or [],
                 "matched_by": stage.matched_by,
                 "approver_kind": stage.approver_kind,
+                "role_ids": stage.role_ids or [],
                 "requires_attachment": stage.requires_attachment,
                 "requires_comment": stage.requires_comment,
                 "decided_at": stage.decided_at,

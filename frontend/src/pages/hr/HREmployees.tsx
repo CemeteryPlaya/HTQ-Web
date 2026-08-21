@@ -3,28 +3,43 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Briefcase,
+  Check,
+  ChevronsUpDown,
   IdCard,
+  Lock,
   MoreHorizontal,
   Pencil,
+  Plus,
   Search,
   Share2,
   Trash2,
   UserPlus,
 } from 'lucide-react';
 import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
-import { EmployeeFormDialog } from '@/components/hr/EmployeeFormDialog';
-import { Employee, relationLabel } from '@/components/hr/employeeCommon';
+import { relationId, relationLabel } from '@/components/hr/employeeCommon';
 import {
+  createEmployeeUser,
+  createPosition,
   deleteEmployee,
+  fetchDepartments,
   fetchEmployees,
+  fetchEmployeeUsers,
+  fetchPositions,
 } from '@/api/hr';
+import api from '@/api/client';
 import HRLayout from '@/components/hr/HRLayout';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { PhoneInput } from '@/components/ui/phone-input';
+import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,7 +49,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { useHRLevel } from '@/hooks/useHRLevel';
-import type { Department, Employee, HRUserOption, Position } from '@/types/hr';
+import type { Department, HRUserOption, Position } from '@/types/hr';
 
 interface Employee {
   id: number;
@@ -108,6 +123,15 @@ const formatShortName = (last: string, first: string, patronymic: string): strin
   return [last, initials].filter(Boolean).join(' ').trim();
 };
 
+/** Map the UI's extended status choices to the API's persisted values. */
+const STATUS_TO_BACKEND: Record<string, 'active' | 'inactive' | 'terminated'> = {
+  active: 'active',
+  on_leave: 'inactive',
+  inactive: 'inactive',
+  dismissed: 'terminated',
+  terminated: 'terminated',
+};
+
 const HREmployees = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -121,13 +145,34 @@ const HREmployees = () => {
     hasHrAccess,
     canWriteBasic,
     canCreateEmployee,
+    canTransferEmployee,
     canDeleteEmployee,
+    canListUserOptions,
+    canManageUserOptions,
     isLoading: levelLoading,
   } = useHRLevel();
   const { data: employees, isLoading, error } = useQuery({
     queryKey: ['hr-employees'],
     queryFn: () => fetchEmployees({ limit: '200' }),
     enabled: hasHrAccess,
+  });
+
+  const { data: departments } = useQuery({
+    queryKey: ['hr-departments'],
+    queryFn: fetchDepartments,
+    enabled: hasHrAccess,
+  });
+
+  const { data: positions } = useQuery({
+    queryKey: ['hr-positions'],
+    queryFn: fetchPositions,
+    enabled: hasHrAccess,
+  });
+
+  const { data: users } = useQuery({
+    queryKey: ['hr-employee-users'],
+    queryFn: fetchEmployeeUsers,
+    enabled: canListUserOptions,
   });
 
   const [search, setSearch] = useState('');
@@ -148,8 +193,6 @@ const HREmployees = () => {
     });
   }, [employees, search, statusFilter]);
 
-  const [searchParams, setSearchParams] = useSearchParams();
-
   useEffect(() => {
     if (searchParams.get('action') === 'new' && canCreateEmployee) {
       startCreate();
@@ -160,6 +203,74 @@ const HREmployees = () => {
   }, [searchParams, canCreateEmployee]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
+  const [form, setForm] = useState({
+    user: 'none',
+    position: 'none',
+    department: 'none',
+    phone: '',
+    date_hired: '',
+    date_dismissed: '',
+    status: 'active',
+    notes: '',
+  });
+  const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const status = STATUS_TO_BACKEND[form.status] || 'active';
+      if (editing) {
+        const payload: Record<string, unknown> = {
+          status,
+          phone: form.phone || undefined,
+          bio: form.notes || undefined,
+        };
+        if (form.position !== 'none') payload.position_id = Number(form.position);
+        if (form.department !== 'none') payload.department_id = Number(form.department);
+        if (form.date_dismissed) payload.termination_date = form.date_dismissed;
+        return (await api.put(`hr/v1/employees/${editing.id}/`, payload)).data;
+      }
+
+      const selected = users?.find((user) => String(user.id) === form.user);
+      if (!selected) throw new Error('user_required');
+      const [firstName = '', ...lastNameParts] = selected.full_name.trim().split(/\s+/);
+      return (await api.post('hr/v1/employees/', {
+        user_id: selected.id,
+        first_name: selected.first_name || firstName || 'Unknown',
+        last_name: selected.last_name || lastNameParts.join(' '),
+        email: selected.email,
+        phone: form.phone || undefined,
+        department_id: Number(form.department),
+        position_id: Number(form.position),
+        hire_date: form.date_hired,
+        status,
+        bio: form.notes || undefined,
+      })).data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['hr-employees'] });
+      queryClient.invalidateQueries({ queryKey: ['hr-employee-users'] });
+      setDialogOpen(false);
+      setEditing(null);
+      setFormError(null);
+      setFieldErrors({});
+    },
+    onError: (err: any) => {
+      const data = err?.response?.data;
+      if (Array.isArray(data?.detail)) {
+        const errors: Record<string, string> = {};
+        data.detail.forEach((item: any) => {
+          const field = String(item.loc?.[item.loc.length - 1] || 'unknown');
+          errors[field] = item.msg || String(item);
+        });
+        setFieldErrors(errors);
+        setFormError(Object.entries(errors).map(([field, message]) => `${field}: ${message}`).join(' • '));
+        return;
+      }
+      setFieldErrors({});
+      setFormError(typeof data?.detail === 'string' ? data.detail : (err?.message || 'Не удалось сохранить сотрудника'));
+    },
+  });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
@@ -640,7 +751,6 @@ const HREmployees = () => {
               </div>
             </DialogContent>
           </Dialog>
-        </div>
         </div>
 
         <div className="bg-card rounded-3xl border shadow-2xs overflow-hidden">

@@ -59,6 +59,7 @@ from apps.signoff.models import (
 )
 from apps.signoff.services import conditions, registry
 # Соседи — только через interface (apps/core/tests/test_app_isolation.py).
+from apps.hr import interface as hr
 from apps.messenger import interface as messenger
 from apps.users import interface as users
 
@@ -204,7 +205,7 @@ def start(*, subject_type: str, subject_id: int,
 
     route = (ApprovalRoute.objects
              .filter(subject_type=subject_type, is_active=True)
-             .prefetch_related("stages__approvers").first())
+             .prefetch_related("stages__roles").first())
     if route is None:
         raise RouteNotConfigured(
             f"Для «{subject.label}» не настроен маршрут согласования"
@@ -242,6 +243,8 @@ def start(*, subject_type: str, subject_id: int,
             process=process, order=order, name=stage.name, quorum=stage.quorum,
             condition=stage.condition, matched_by=matched_by,
             approver_kind=stage.approver_kind,
+            role_ids=([row.position_id for row in stage.roles.all()]
+                      if stage.approver_kind == ApproverKind.POSITION else []),
             requires_attachment=stage.requires_attachment,
             requires_comment=stage.requires_comment,
             state=StageState.ACTIVE if order == first_order else StageState.WAITING,
@@ -365,17 +368,19 @@ def _resolve_stages(selected, *,
 
     active = _active_user_ids(all_ids)
     for _, stage, _, user_ids in plan:
-        if not any(user_id in active for user_id in user_ids):
-            if stage.approver_kind == ApproverKind.INITIATOR:
-                # Маршрут тут ни при чём — «поправьте маршрут» отправило бы
-                # человека не туда: чинить нужно учётную запись инициатора.
+        if stage.approver_kind == ApproverKind.INITIATOR:
+            if not any(user_id in active for user_id in user_ids):
                 raise RouteUnusable(
                     f"Этап «{stage.name}» подписывает инициатор, но его "
                     f"учётная запись неактивна"
                 )
+        elif len(active.intersection(user_ids)) != len(user_ids):
+            # HR filters inactive accounts while resolving positions.  Keep a
+            # final check here for the small window before tasks are written:
+            # every generated task must be executable, including ALL quorum.
             raise RouteUnusable(
-                f"На этапе «{stage.name}» не осталось ни одного активного "
-                f"согласующего — поправьте маршрут"
+                f"На этапе «{stage.name}» есть неактивный согласующий — "
+                f"проверьте должности и связанные учётные записи"
             )
     return plan
 
@@ -398,12 +403,23 @@ def _approver_ids(stage, *, initiator_id: int | None) -> list[int]:
             )
         return [initiator_id]
 
-    user_ids = [row.user_id for row in stage.approvers.all()]
-    if not user_ids:
+    position_ids = [row.position_id for row in stage.roles.all()]
+    if not position_ids:
         raise RouteUnusable(
-            f"На этапе «{stage.name}» не назначен ни один согласующий"
+            f"На этапе «{stage.name}» не назначена ни одна должность"
         )
-    return user_ids
+    resolved = hr.resolve_position_users(position_ids)
+    missing = [position_id for position_id in position_ids
+               if not resolved.get(position_id)]
+    if missing:
+        raise RouteUnusable(
+            f"На этапе «{stage.name}» нет активного сотрудника с активной "
+            f"учётной записью для должности: " + ", ".join(map(str, missing))
+        )
+    return list(dict.fromkeys(
+        user_id for position_id in position_ids
+        for user_id in resolved[position_id]
+    ))
 
 
 def _active_user_ids(user_ids) -> set[int]:

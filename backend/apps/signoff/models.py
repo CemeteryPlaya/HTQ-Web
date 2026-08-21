@@ -16,7 +16,8 @@
 Три слоя:
 
 1. **Маршрут** — ``ApprovalRoute`` + ``ApprovalRouteStage`` +
-   ``ApprovalRouteStageApprover``. Настройка: какие этапы и кто на них
+   ``ApprovalRouteStageRole``. Настройка: какие этапы и какие HR-должности
+   на них
    согласует. Ведётся администратором, меняется редко.
 2. **Процесс** — ``ApprovalProcess`` + ``ApprovalProcessStage`` +
    ``ApprovalTask``. Живой экземпляр согласования конкретного объекта.
@@ -50,8 +51,9 @@ class Quorum(models.TextChoices):
 class ApproverKind(models.TextChoices):
     """Откуда берётся список согласующих этапа.
 
-    ``NAMED`` — как было и как будет в большинстве этапов: люди перечислены
-    в маршруте поимённо (``ApprovalRouteStageApprover``).
+    ``POSITION`` — обычный случай: маршрут перечисляет HR-должности
+    (``ApprovalRouteStageRole``), а на запуске они разрешаются в текущие
+    активные учётные записи сотрудников.
 
     ``INITIATOR`` — согласующий известен только в момент ЗАПУСКА: это тот,
     кто отправил объект на согласование. Нужен для «подписи автора» —
@@ -59,12 +61,9 @@ class ApproverKind(models.TextChoices):
     остальными документ и прикладывает его скан
     (``requires_attachment``).
 
-    Почему это не противоречит решению «ролей и групп здесь нет»
-    (см. докстринг ``ApprovalRouteStageApprover``): роль — это правило
-    «кто угодно с таким признаком», то есть параллельный ролевой механизм.
-    Здесь же вычисляется ОДИН конкретный пользователь из данных самого
-    процесса — ``ApprovalProcess.initiator_id``, — и вычисляется один раз,
-    на запуске, ровно как разбирается ветвление.
+    В отличие от ``POSITION`` здесь вычисляется ОДИН конкретный пользователь
+    из данных самого процесса — ``ApprovalProcess.initiator_id`` — и
+    вычисляется один раз, на запуске, ровно как разбирается ветвление.
 
     Почему «инициатор», а не «автор документа»: у signoff нет и не может
     быть доступа к полям предметной модели (``Agreement.created_by`` лежит
@@ -73,7 +72,7 @@ class ApproverKind(models.TextChoices):
     его автор, — но название честно говорит, что именно движок разрешает.
     """
 
-    NAMED = "named", "Названные в маршруте"
+    POSITION = "position", "По должности"
     INITIATOR = "initiator", "Инициатор согласования"
 
 
@@ -410,7 +409,7 @@ class ApprovalRouteStage(models.Model):
     )
     approver_kind = models.CharField(
         max_length=16, choices=ApproverKind.choices,
-        default=ApproverKind.NAMED, db_default=ApproverKind.NAMED,
+        default=ApproverKind.POSITION, db_default=ApproverKind.POSITION,
         verbose_name="Кто согласует",
         help_text="«Инициатор» — список согласующих не заполняется, "
                   "решение принимает отправивший объект на согласование",
@@ -453,16 +452,16 @@ class ApprovalRouteStage(models.Model):
             raise ValidationError({
                 "condition": "Этап «иначе» не может иметь собственного условия",
             })
-        # ``self.pk`` — потому что у несохранённого этапа инлайн согласующих
-        # ещё не записан, и спрашивать ``approvers`` не на чем. На правке
+        # ``self.pk`` — потому что у несохранённого этапа инлайн должностей
+        # ещё не записан, и спрашивать ``roles`` не на чем. На правке
         # существующего этапа проверка работает, а сочетание, собранное
         # одним сохранением «этап + инлайн», отсечёт HTTP-путь
         # (``route_service._check_approver_kind``) и следующая же правка здесь.
-        if (self.pk and self.approver_kind != ApproverKind.NAMED
-                and self.approvers.exists()):
+        if (self.pk and self.approver_kind != ApproverKind.POSITION
+                and self.roles.exists()):
             raise ValidationError({
-                "approver_kind": "У этапа с этим видом согласующих не должно "
-                                 "быть названных поимённо — уберите их",
+                "approver_kind": "У этапа инициатора не должно быть "
+                                 "назначенных должностей — уберите их",
             })
         if not self.condition or not self.route_id:
             return
@@ -473,35 +472,31 @@ class ApprovalRouteStage(models.Model):
             raise ValidationError({"condition": str(exc)}) from exc
 
 
-class ApprovalRouteStageApprover(models.Model):
-    """Согласующий на этапе маршрута.
+class ApprovalRouteStageRole(models.Model):
+    """HR-должность, которая согласует этап маршрута.
 
-    ``user_id`` — голый ``IntegerField``, не FK: ``apps.users`` — соседняя
-    аппка, межаппный FK запрещён. Разрешение id в профиль — через
-    ``apps.users.interface``.
-
-    Ролей/групп здесь нет: платформа сознательно живёт без
-    ``PermissionsMixin`` и Django-групп (см. ``apps/users/models.py``,
-    решение Р1), а заводить третий параллельный ролевой механизм ради
-    маршрутов согласования — плохой размен. Смысл этапа несёт его
-    ``name``, а не роль исполнителя.
+    ``position_id`` — голый integer, а не межапповый FK.  На запуске
+    ``apps.hr.interface`` находит текущих активных сотрудников на этой
+    должности и их активные ``user_id``; именно последние попадают в снимок
+    ``ApprovalTask``.  Поэтому смена сотрудника меняет будущие процессы, но
+    никогда не переписывает уже выданные задания и их аудит.
     """
 
     stage = models.ForeignKey(ApprovalRouteStage, on_delete=models.CASCADE,
-                              related_name="approvers")
-    user_id = models.IntegerField(db_index=True, verbose_name="Пользователь")
+                              related_name="roles")
+    position_id = models.IntegerField(db_index=True, verbose_name="Должность")
 
     class Meta:
         ordering = ("id",)
         constraints = [
-            models.UniqueConstraint(fields=["stage", "user_id"],
-                                    name="uq_signoff_stage_approver"),
+            models.UniqueConstraint(fields=["stage", "position_id"],
+                                    name="uq_signoff_stage_role"),
         ]
-        verbose_name = "Согласующий"
-        verbose_name_plural = "Согласующие"
+        verbose_name = "Должность согласующего"
+        verbose_name_plural = "Должности согласующих"
 
     def __str__(self) -> str:
-        return f"user#{self.user_id} @ {self.stage_id}"
+        return f"position#{self.position_id} @ {self.stage_id}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -606,8 +601,12 @@ class ApprovalProcessStage(models.Model):
     # («пусть подписывает финдиректор, а не инициатор») не переписывала
     # объяснение уже принятых решений.
     approver_kind = models.CharField(max_length=16, choices=ApproverKind.choices,
-                                     default=ApproverKind.NAMED,
-                                     db_default=ApproverKind.NAMED)
+                                     default=ApproverKind.POSITION,
+                                     db_default=ApproverKind.POSITION)
+    # HR-должности, по которым на запуске были разрешены конкретные задачи.
+    # Сотрудник на должности может смениться завтра; карточка старого процесса
+    # всё равно должна объяснять, какую именно роль он подписывал.
+    role_ids = models.JSONField(default=list, blank=True)
     # А это в снимке РАБОЧИЕ поля: их читает ``engine.act`` на каждом
     # решении. Снять галочку в маршруте посреди идущего согласования не
     # должно избавлять от документа (или пояснения) тех, кто ещё не решил.

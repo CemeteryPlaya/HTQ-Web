@@ -19,6 +19,7 @@ from apps.signoff.models import (
     TaskState,
 )
 from apps.signoff.services import engine
+from apps.hr.models import Employee, EmployeeStatus
 from apps.signoff.tests.helpers import (
     active_user_ids,
     make_doc,
@@ -83,13 +84,29 @@ def test_stage_snapshot_survives_a_later_edit_of_the_route():
     stage = route.stages.first()
     stage.name = "Переименованный этап"
     stage.save()
-    stage.approvers.all().delete()
-    stage.approvers.create(user_id=b.pk)
+    stage.roles.all().delete()
+    stage.roles.create(position_id=b.pk)
 
     process.refresh_from_db()
     snapshot = process.stages.first()
     assert snapshot.name == "Исходный этап"
     assert active_user_ids(process) == {a.pk}
+
+
+def test_route_resolves_the_current_employee_in_a_position():
+    former, replacement = make_user("former"), make_user("replacement")
+    doc = make_doc()
+    make_route([(1, "Финансовый контроль", Quorum.ALL, [former.pk])])
+
+    # The route still refers to former's POSITION.  HR changes the holder
+    # before this process starts, so the new employee receives the task.
+    Employee.objects.filter(user_id=former.pk).update(status=EmployeeStatus.TERMINATED)
+    Employee.objects.filter(user_id=replacement.pk).update(position_id=former.pk)
+
+    process = engine.start(subject_type=ProbeDoc.SIGNOFF_SUBJECT_TYPE,
+                           subject_id=doc.pk)
+    assert active_user_ids(process) == {replacement.pk}
+    assert process.stages.get().role_ids == [former.pk]
 
 
 def test_start_without_a_route_is_refused():

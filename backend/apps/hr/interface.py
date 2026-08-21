@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from apps.core.services import require_service
 
-from apps.hr.models import Department, Employee
+from apps.hr.models import Department, Employee, EmployeeStatus, Position
+from apps.users import interface as users
 
 _BRIEF_FIELDS = ("id", "name", "path", "is_active")
 
@@ -117,6 +118,64 @@ def list_employees_brief(limit: int = 500) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def get_positions_brief(position_ids: list[int]) -> list[dict]:
+    """Position directory for a neighbouring app's configuration screen.
+
+    A signoff route stores a position, never an employee or platform account.
+    Inactive positions are returned too: an administrator must be able to see
+    and repair an old route rather than have its reference disappear from the
+    editor.
+    """
+    require_service("hr")
+    ids = list(dict.fromkeys(position_ids))
+    if not ids:
+        return []
+    rows = (Position.objects.filter(id__in=ids).select_related("department")
+            .values("id", "title", "department__name", "is_active"))
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "department_name": row["department__name"],
+            "is_active": row["is_active"],
+        }
+        for row in rows
+    ]
+
+
+def resolve_position_users(position_ids: list[int]) -> dict[int, list[int]]:
+    """Resolve HR positions to their current, usable platform accounts.
+
+    The answer deliberately contains only employees who are active, not soft
+    deleted, linked to an account, and whose account is active.  This keeps a
+    route declarative ("financial controller") while a live approval task
+    remains attributable to one concrete JWT identity.
+    """
+    require_service("hr")
+    ids = list(dict.fromkeys(position_ids))
+    if not ids:
+        return {}
+
+    rows = list(
+        Employee.objects.filter(
+            position_id__in=ids,
+            status=EmployeeStatus.ACTIVE,
+            is_deleted=False,
+            user_id__isnull=False,
+            position__is_active=True,
+        ).values("position_id", "user_id")
+    )
+    briefs = {row["id"]: row for row in users.get_users_brief(
+        [row["user_id"] for row in rows]
+    )}
+    resolved: dict[int, list[int]] = {position_id: [] for position_id in ids}
+    for row in rows:
+        brief = briefs.get(row["user_id"])
+        if brief and brief.get("is_active"):
+            resolved[row["position_id"]].append(row["user_id"])
+    return resolved
 
 
 def link_employee_user(employee_id: int, user_id: int) -> bool:

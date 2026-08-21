@@ -399,22 +399,22 @@ def test_a_signature_stage_is_created_without_approvers(client):
     route = make_route([(1, "Проверка", Quorum.ALL, [a.pk])])
 
     created = post_json(client, f"{BASE}/routes/{route.pk}/stages", {
-        "order": 2, "name": "Подпись", "approver_ids": [],
+        "order": 2, "name": "Подпись", "position_ids": [],
         "approver_kind": ApproverKind.INITIATOR, "requires_attachment": True,
     }, **auth(admin_token()))
 
     assert created.status_code == 201, created.content
     body = created.json()
-    assert body["approvers"] == []
+    assert body["roles"] == []
     assert body["requires_attachment"] is True
 
 
-def test_a_signature_stage_with_named_approvers_is_refused(client):
+def test_a_signature_stage_with_roles_is_refused(client):
     a = make_user("a")
     route = make_route([(1, "Проверка", Quorum.ALL, [a.pk])])
 
     refused = post_json(client, f"{BASE}/routes/{route.pk}/stages", {
-        "order": 2, "name": "Подпись", "approver_ids": [a.pk],
+        "order": 2, "name": "Подпись", "position_ids": [a.pk],
         "approver_kind": ApproverKind.INITIATOR,
     }, **auth(admin_token()))
 
@@ -434,22 +434,22 @@ def test_switching_a_stage_to_the_initiator_clears_its_approvers(client):
                          **auth(admin_token()))
 
     assert patched.status_code == 200, patched.content
-    assert patched.json()["approvers"] == []
-    assert not stage.approvers.exists()
+    assert patched.json()["roles"] == []
+    assert not stage.roles.exists()
 
 
-def test_switching_back_to_named_without_a_list_is_refused(client):
+def test_switching_back_to_position_without_a_list_is_refused(client):
     a = make_user("a")
     route = make_route([(1, "Проверка", Quorum.ALL, [a.pk]),
                         (2, "Подпись", Quorum.ALL, [], SIGNATURE)])
     stage = route.stages.get(order=2)
 
     refused = patch_json(client, f"{BASE}/stages/{stage.pk}",
-                         {"approver_kind": ApproverKind.NAMED},
+                         {"approver_kind": ApproverKind.POSITION},
                          **auth(admin_token()))
 
     assert refused.status_code == 409
-    assert "хотя бы один согласующий" in refused.json()["detail"]
+    assert "хотя бы одна должность" in refused.json()["detail"]
 
 
 def test_a_signature_stage_that_is_not_last_is_flagged_in_the_editor(client):
