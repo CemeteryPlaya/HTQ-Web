@@ -4,17 +4,24 @@
  */
 
 import type { Condition, ConditionOp, ProcessStage, SubjectField } from '@/types/signoff';
+import i18next from '@/i18n';
 
-/** Подписи операторов условия — те же слова, что в текстах ошибок бэкенда. */
-export const OP_LABELS: Record<ConditionOp, string> = {
-  eq: 'равно',
-  in: 'одно из',
-  not_in: 'не из',
-  gt: 'больше',
-  gte: 'больше или равно',
-  lt: 'меньше',
-  lte: 'меньше или равно',
+/** Ключи подписей операторов условия. Перевод берётся на чтение —
+ *  `opLabel()`, а не готовая строка: словарь i18n на момент импорта модуля
+ *  ещё не загружен. */
+const OP_LABEL_KEYS: Record<ConditionOp, string> = {
+  eq: 'signoff.conditionOp.eq',
+  in: 'signoff.conditionOp.in',
+  not_in: 'signoff.conditionOp.notIn',
+  gt: 'signoff.conditionOp.gt',
+  gte: 'signoff.conditionOp.gte',
+  lt: 'signoff.conditionOp.lt',
+  lte: 'signoff.conditionOp.lte',
 };
+
+export function opLabel(op: ConditionOp): string {
+  return i18next.t(OP_LABEL_KEYS[op]);
+}
 
 /**
  * Условие ветки одной строкой — для карточек, где места на редактор нет.
@@ -39,9 +46,9 @@ export function conditionText(condition: Condition, fields: SubjectField[]): str
         ? predicate.value.map(render).join(', ')
         : render(predicate.value);
 
-      return `${label} ${OP_LABELS[predicate.op]} ${value}`;
+      return `${label} ${opLabel(predicate.op)} ${value}`;
     })
-    .join(' и ');
+    .join(i18next.t('signoff.conditionJoiner'));
 }
 
 /** ISO → «12.03.2026, 14:05». Пустая строка, если даты нет. */
@@ -49,7 +56,7 @@ export function formatMoment(value: string | null): string {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString('ru-RU', {
+  return date.toLocaleString(i18next.language, {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',

@@ -6,8 +6,11 @@ import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { Video } from 'lucide-react';
+import { playMeetingReminder } from '@/lib/sound/soundService';
+import { useTranslation } from 'react-i18next';
 
 export const ConferenceNotifier = () => {
+    const { t } = useTranslation();
     const { activeProfile } = useActiveProfile();
     const navigate = useNavigate();
     
@@ -52,36 +55,14 @@ export const ConferenceNotifier = () => {
                     notifiedRef.current.add(ev.id);
                     
                     // Play a pleasant sound
-                    try {
-                        // Using a simple oscillator for a "pleasant ding" without needing external assets
-                        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-                        const oscillator = audioCtx.createOscillator();
-                        const gainNode = audioCtx.createGain();
-                        
-                        oscillator.type = 'sine';
-                        // A pleasant chime chord
-                        oscillator.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
-                        oscillator.frequency.exponentialRampToValueAtTime(1046.50, audioCtx.currentTime + 0.5); // C6
-                        
-                        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-                        gainNode.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.1);
-                        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.5);
-                        
-                        oscillator.connect(gainNode);
-                        gainNode.connect(audioCtx.destination);
-                        
-                        oscillator.start();
-                        oscillator.stop(audioCtx.currentTime + 1.5);
-                    } catch (e) {
-                        console.error("Audio playback failed", e);
-                    }
+                    playMeetingReminder();
 
                     // Show toast notification
-                    toast('🎥 Конференция начинается', {
-                        description: `«${ev.title}» начнётся через 5 минут.`,
+                    toast(t('conference.notify.starting'), {
+                        description: t('conference.notify.startsSoon', { title: ev.title }),
                         duration: 30000, // 30 seconds
                         action: {
-                            label: 'Войти',
+                            label: t('conference.notify.join'),
                             onClick: () => navigate(`/room/${ev.conference_room_id}`),
                         },
                     });
@@ -94,7 +75,7 @@ export const ConferenceNotifier = () => {
         const interval = setInterval(checkConferences, 30000);
         
         return () => clearInterval(interval);
-    }, [timeline, isAuth, navigate]);
+    }, [timeline, isAuth, navigate, t]);
 
     return null; // This is a logic-only component
 };

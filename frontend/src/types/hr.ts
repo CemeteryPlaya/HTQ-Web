@@ -18,6 +18,7 @@ export interface Position {
   weight?: number;
   level?: number;
   grade?: number;
+  is_active?: boolean;
   is_system?: boolean;
   permissions?: {
     hr_level?: 'junior' | 'middle' | 'senior' | 'lead' | null;

@@ -153,7 +153,7 @@ const News = () => {
           {/* Tags */}
           {tags.length > 0 && (
             <div className="mb-10 flex flex-wrap items-center gap-2 animate-fade-in-up" style={{ animationDelay: '200ms' }}>
-              <span className="mr-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Теги:</span>
+              <span className="mr-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">{t('news.tagsLabel')}</span>
               <button
                 onClick={() => setTag(null)}
                 className={`rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-300 ${
@@ -162,7 +162,7 @@ const News = () => {
                     : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
                 }`}
               >
-                Все
+                {t('common.all')}
               </button>
               {tags.slice(0, 24).map((tg) => (
                 <button
@@ -223,7 +223,7 @@ const News = () => {
                   setTag(null);
                 }}
               >
-                Сбросить фильтры
+                {t('news.resetFilters')}
               </Button>
             </div>
           )}

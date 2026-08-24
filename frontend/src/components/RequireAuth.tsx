@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { useActiveProfile } from "@/hooks/useActiveProfile";
 import { hasAnyRole, HR_ROLES, EDITOR_ROLES } from "@/lib/auth/roles";
 import type { RouteRole } from "@/app/routing/types";
+import { useTranslation } from 'react-i18next';
 
 // Admin/superuser is always allowed everywhere; staff is admin-equivalent on
 // the user-service side (every admin endpoint accepts ``is_staff OR is_superuser``),
@@ -25,6 +26,7 @@ interface RequireAuthProps {
 }
 
 const RequireAuth = ({ children, requiredRole }: RequireAuthProps) => {
+    const { t } = useTranslation();
     const location = useLocation();
     const { activeProfile, isLoading, error, isLoggedIn, clearAuthStorage, refetch } = useActiveProfile({
         retry: false,
@@ -48,13 +50,13 @@ const RequireAuth = ({ children, requiredRole }: RequireAuthProps) => {
             return (
                 <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-6 text-center">
                     <p className="text-muted-foreground">
-                        Не удалось связаться с сервером. Проверьте подключение и попробуйте снова.
+                        {t('auth.errors.serverUnreachable')}
                     </p>
                     <button
                         onClick={() => refetch()}
                         className="rounded-full border px-5 py-2 text-sm font-medium transition-colors hover:bg-accent"
                     >
-                        Повторить
+                        {t('common.retry')}
                     </button>
                 </div>
             );

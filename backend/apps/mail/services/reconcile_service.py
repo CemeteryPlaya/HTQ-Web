@@ -15,6 +15,9 @@
                   → импортировать (pull): завести ``ProvisionedMailbox``
 ``mismatched``    есть с обеих сторон, но отличаются квота/имя/активность
                   → выровнять в выбранную сторону
+``unlinked``      ящик без владельца, а его адрес совпадает с email
+                  пользователя платформы
+                  → привязать к сотруднику и завести ему почтовый аккаунт
 ``in_sync``       совпадают — ничего делать не надо
 
 Два режима получения «правой стороны»:
@@ -42,6 +45,9 @@ from django.utils import timezone
 from apps.mail.models import ProvisionedMailbox
 from apps.mail.services import mail_config
 from apps.mail.services import mailbox_service as mbx_svc
+# Поиск владельца идёт через интерфейс соседней аппки, а не по её моделям —
+# правило изоляции (apps/core/tests/test_app_isolation.py).
+from apps.users import interface as users_interface
 from apps.mail.services.crypto import crypto_service
 from apps.mail.services.provisioning import (
     ProvisioningError,
@@ -59,7 +65,7 @@ LIVE_STATUSES = ("active", "error")
 
 @dataclass
 class Difference:
-    kind: str                      # only_local | only_remote | mismatched
+    kind: str                      # only_local | only_remote | mismatched | unlinked
     address: str
     mailbox_id: int | None = None
     user_id: int | None = None
@@ -100,6 +106,8 @@ class ReconcileReport:
                 "only_local": sum(1 for d in self.differences if d.kind == "only_local"),
                 "only_remote": sum(1 for d in self.differences if d.kind == "only_remote"),
                 "mismatched": sum(1 for d in self.differences if d.kind == "mismatched"),
+                "unlinked": sum(1 for d in self.differences if d.kind == "unlinked"),
+                "linked": sum(1 for d in self.differences if d.action == "linked"),
             },
             "differences": [asdict(d) for d in self.differences],
             "errors": self.errors,
@@ -187,6 +195,9 @@ def reconcile(*, apply: bool = False, direction: str = "report") -> ReconcileRep
     except RemoteListingUnsupported as exc:
         report.mode = "probe"
         _reconcile_by_probe(provisioner, local_rows, report, apply=apply, direction=direction)
+        # Владельцев ищем и здесь: для этого сервер списка ящиков не нужен —
+        # сверяются адреса строк, которые у платформы уже есть.
+        _link_orphans(report, apply=apply)
         report.errors.append(str(exc))
         report.finished_at = timezone.now().isoformat()
         return report
@@ -241,6 +252,11 @@ def reconcile(*, apply: bool = False, direction: str = "report") -> ReconcileRep
         if apply:
             _apply_only_remote(rm, diff, direction=direction)
         report.differences.append(diff)
+
+    # ── сторона 3: у кого из бесхозных ящиков есть владелец ─────────────
+    # После импорта намеренно: свежепритянутые с сервера ящики проходят тот
+    # же поиск владельца, что и висящие с прошлых прогонов.
+    _link_orphans(report, apply=apply)
 
     report.finished_at = timezone.now().isoformat()
     log.info(
@@ -321,9 +337,10 @@ def _apply_only_local(provisioner, mb: ProvisionedMailbox, diff: Difference, *, 
 def _apply_only_remote(rm: RemoteMailbox, diff: Difference, *, direction: str) -> None:
     """Ящик есть на сервере, строки у нас нет — импортируем.
 
-    ``user_id`` намеренно остаётся пустым: связать ящик с сотрудником может
-    только человек, угадывать по адресу неправильно. Привязка делается
-    отдельно, из карточки ящика.
+    ``user_id`` здесь не проставляется: владельца ищет отдельный шаг
+    ``_link_orphans`` уже после импорта, по точному совпадению адреса с
+    email пользователя. Так один и тот же код привязывает и свежий импорт, и
+    строки, которые висят без владельца с прошлых прогонов.
     """
     if direction not in ("pull", "both"):
         return
@@ -342,6 +359,82 @@ def _apply_only_remote(rm: RemoteMailbox, diff: Difference, *, direction: str) -
         diff.action, diff.error = "import_failed", str(exc)
         return
     diff.action, diff.mailbox_id = "imported", mb.id
+
+
+def _link_orphans(report: ReconcileReport, *, apply: bool) -> None:
+    """Найти владельцев для ящиков, которые висят ничьими.
+
+    Признак ровно один: **адрес ящика совпадает с email пользователя**. Это
+    не догадка по имени и не эвристика — человек сам ввёл этот адрес как
+    свой, и другого владельца у ``sanzhar.inamzhanov@htq.group`` быть не
+    может. Ящики, под которые пользователя нет (общие ``info@``, ``sales@``),
+    так и остаются без владельца: гадать по ним нечем и не нужно.
+
+    Привязка — это три вещи, а не одна: проставить ``user_id``, завести
+    ``EmailAccount`` и добыть ящику пароль. Без аккаунта ящик остаётся
+    «мёртвой» строкой в админке (список писем, синхронизация и отправка ходят
+    именно через него), а без пароля аккаунт есть, но пустой. Всё три делает
+    ``mailbox_service.attach_existing`` + ``ensure_credentials`` — та же пара,
+    которой пользуется заведение ящика со сверкой.
+
+    Без ``apply`` ничего не меняется: найденные пары попадают в отчёт как
+    ``kind="unlinked"``, и админ видит, кому что достанется, до того как
+    нажмёт «Принять данные сервера».
+    """
+    orphans = list(ProvisionedMailbox.objects
+                   .filter(user_id__isnull=True)
+                   .exclude(status="deleted")
+                   .order_by("address"))
+    if not orphans:
+        return
+
+    owners = users_interface.find_user_ids_by_emails([mb.address for mb in orphans])
+    if not owners:
+        return
+
+    # user_id в ProvisionedMailbox — UNIQUE: у сотрудника не может быть двух
+    # ящиков. Занятые владельцы отбираются заранее, чтобы каждая коллизия
+    # стала строкой отчёта, а не исключением из середины прогона.
+    taken = set(ProvisionedMailbox.objects
+                .filter(user_id__in=set(owners.values()))
+                .exclude(status="deleted")
+                .values_list("user_id", flat=True))
+
+    for mb in orphans:
+        user_id = owners.get(mb.address.lower())
+        if user_id is None:
+            continue
+
+        diff = Difference(
+            kind="unlinked", address=mb.address, mailbox_id=mb.id, user_id=user_id,
+            local=_local_snapshot(mb),
+            detail=f"Ящик без владельца, а адрес совпадает с email пользователя #{user_id}",
+        )
+
+        if user_id in taken:
+            diff.detail = (
+                f"Адрес совпадает с email пользователя #{user_id}, но у него уже "
+                f"есть другой ящик — привязка требует решения человека"
+            )
+            diff.action, diff.error = "skipped", "user_already_has_mailbox"
+            report.differences.append(diff)
+            continue
+
+        if apply:
+            try:
+                mb = mbx_svc.attach_existing(address=mb.address, user_id=user_id, verify=False)
+                # Проставить user_id мало: без сохранённого пароля ящик
+                # подключён только на бумаге — ни синхронизации, ни отправки.
+                # Там, где сервер умеет выдать app-password, забираем его тут.
+                mbx_svc.ensure_credentials(mb)
+            except Exception as exc:  # noqa: BLE001 — одна привязка не роняет прогон
+                diff.action, diff.error = "link_failed", str(exc)
+                report.differences.append(diff)
+                continue
+            taken.add(user_id)
+            diff.action = "linked"
+
+        report.differences.append(diff)
 
 
 def _apply_mismatch(

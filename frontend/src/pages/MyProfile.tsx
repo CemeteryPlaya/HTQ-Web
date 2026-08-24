@@ -139,7 +139,7 @@ const MyProfile = () => {
                     <div className="text-center space-y-3">
                         <p className="text-destructive font-medium">{t('profile.error', 'Ошибка загрузки профиля')}</p>
                         <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
-                            Обновить страницу
+                            {t('common.refreshPage')}
                         </Button>
                     </div>
                 </main>
@@ -152,37 +152,45 @@ const MyProfile = () => {
         <div className="min-h-screen bg-background flex flex-col">
             <Header />
 
-            <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-                {/* Page Title Header */}
-                <div className="mb-6 flex items-center justify-between">
-                    <div>
-                        <h1 className="text-3xl font-extrabold tracking-tight">{t('profile.title', 'Мой профиль')}</h1>
-                        <p className="text-xs text-muted-foreground mt-1">
-                            Личные данные, настройки аккаунта и рабочая HR-информация
-                        </p>
-                    </div>
-                </div>
+            <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+                {/* Одна сетка на всю страницу.
+                    Телефон: одна колонка, порядок задаётся order-*.
+                    Десктоп: ряд и колонка КАЖДОГО блока заданы явно
+                    (lg:row-start-* + lg:col-start-*).
 
-                {profile && (
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                        {/* Sidebar */}
-                        <div className="lg:col-span-3">
-                            <ProfileSidebar
-                                roles={profile.roles}
-                                department={profile.department}
-                                position={profile.position}
-                            />
-                        </div>
-
-                        {/* Main Content Area */}
-                        <div className="lg:col-span-9 space-y-6">
-                            {/* Profile Hero Header */}
+                    Явно — потому что неявная расстановка по order-* ставила
+                    шапку профиля в один ряд с сайдбаром: высота ряда равнялась
+                    высоте сайдбара, под короткой шапкой зияла пустота на весь
+                    его рост, а контент начинался только НИЖЕ сайдбара.
+                    Сайдбар растянут на два ряда (lg:row-span-2) — тогда справа
+                    от него шапка и контент идут друг за другом. */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-x-8 gap-y-6 items-start">
+                    {/* Profile Hero Header — на мобильном в самом верху: профиль
+                        должен открываться на имени и аватаре, а не на заголовке. */}
+                    {profile && (
+                        <div className="order-1 lg:col-span-9 lg:col-start-4 lg:row-start-2">
                             <ProfileHeader
                                 profile={profile}
                                 onAvatarChange={handleAvatarChange}
                                 onLogout={handleLogout}
                             />
+                        </div>
+                    )}
 
+                    {/* Page Title Header */}
+                    <div className="order-2 flex items-center justify-between lg:col-span-12 lg:row-start-1">
+                        <div>
+                            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">{t('profile.title', 'Мой профиль')}</h1>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                                {t('profile.pageSubtitle')}
+                            </p>
+                        </div>
+                    </div>
+
+                    {profile && (
+                        <>
+                        {/* Main Content Area */}
+                        <div className="order-3 lg:col-span-9 lg:col-start-4 lg:row-start-3 space-y-6">
                             {/* Корпоративная почта — блок сам скрывается,
                                 если админ не включил самоподключение. */}
                             <ConnectCorporateMailbox />
@@ -202,7 +210,7 @@ const MyProfile = () => {
                                     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-1">
                                         <div className="flex items-center gap-2">
                                             <IdCard className="h-5 w-5 text-primary" />
-                                            <h3 className="text-lg font-bold">Моя HR-карточка</h3>
+                                            <h3 className="text-lg font-bold">{t('profile.hrCard')}</h3>
                                         </div>
                                         <div className="flex gap-2">
                                             <Button
@@ -212,11 +220,11 @@ const MyProfile = () => {
                                                 onClick={() => setShareCardOpen(true)}
                                             >
                                                 <Share2 className="h-4 w-4" />
-                                                Поделиться
+                                                {t('common.share')}
                                             </Button>
                                             <Button asChild size="sm" className="gap-1.5 rounded-xl">
                                                 <Link to="/employee/me">
-                                                    Открыть
+                                                    {t('common.open')}
                                                     <ArrowRight className="h-4 w-4" />
                                                 </Link>
                                             </Button>
@@ -229,10 +237,10 @@ const MyProfile = () => {
                                     <div className="mb-4 flex items-center justify-between gap-3 px-1">
                                         <div className="flex items-center gap-2">
                                             <FolderGit2 className="h-5 w-5 text-primary" />
-                                            <h3 className="text-lg font-bold">Мои проекты PMO</h3>
+                                            <h3 className="text-lg font-bold">{t('profile.myPmoProjects')}</h3>
                                         </div>
                                         <Badge variant={totalPmoAllocation > 100 ? 'destructive' : 'outline'}>
-                                            Загрузка: {totalPmoAllocation}%
+                                            {t('profile.pmoAllocation', { percent: totalPmoAllocation })}
                                         </Badge>
                                     </div>
                                     <div className="space-y-2.5">
@@ -249,7 +257,7 @@ const MyProfile = () => {
                                                 </div>
                                                 {item.is_primary && (
                                                     <Badge variant="secondary" className="text-[11px]">
-                                                        Лид
+                                                        {t('profile.pmoLead')}
                                                     </Badge>
                                                 )}
                                                 <span className="font-mono text-sm font-semibold tabular-nums text-foreground">
@@ -261,8 +269,18 @@ const MyProfile = () => {
                                 </div>
                             )}
                         </div>
-                    </div>
-                )}
+
+                        {/* Sidebar (последним на мобильном, левая колонка на десктопе) */}
+                        <div className="order-4 lg:col-span-3 lg:col-start-1 lg:row-start-2 lg:row-span-2">
+                            <ProfileSidebar
+                                roles={profile.roles}
+                                department={profile.department}
+                                position={profile.position}
+                            />
+                        </div>
+                        </>
+                    )}
+                </div>
             </main>
 
             <ShareEmployeeDialog

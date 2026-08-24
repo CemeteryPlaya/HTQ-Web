@@ -19,3 +19,14 @@ def clear_service_status_cache():
     cache.clear()
     yield
     cache.clear()
+
+
+# Прод-режим подмен на один тест. Весь прогон идёт в strict (settings/test.py:
+# fallback поднимает FallbackNotAllowed вместо подмены), и это правильный
+# дефолт — но тесту, который проверяет ПОВЕДЕНИЕ деградации (что вьюха отдала
+# 200 и пустой список, а не 500), нужен именно прод-режим. Живёт здесь, а не в
+# apps/core/tests/, потому что понадобится любой аппке.
+@pytest.fixture
+def fallback_log_mode(settings):
+    settings.FALLBACK_MODE = "log"
+    return settings

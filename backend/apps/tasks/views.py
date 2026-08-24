@@ -44,6 +44,7 @@ from .services import resource_service
 from .services import roadmap_service
 from .services import sequence_service
 from .services import site_service
+from .services import staff_report_service
 from .services import task_content_service
 from .services import task_response
 from .services import task_service
@@ -905,6 +906,169 @@ def roadmap_daily_reports(request, roadmap_id: int):
                 daily_report_service.list_reports(
                     roadmap_id=roadmap_id, date_from=date_from,
                     date_to=date_to))]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Отчёты по персоналу проекта — /projects/{id}/staff-reports, /staff-reports
+#
+# Права: смотреть и вести численность проекта может только руководство,
+# ответственный за проект и админ. В отличие от ежедневки, где отчёт о
+# СВОЕЙ смене заводит любой участник задачи, это управленческие данные по
+# объекту целиком, и правило на чтение и на запись здесь одно.
+# ─────────────────────────────────────────────────────────────────────────
+
+def _staff_project(request, project_id: int):
+    """Проект, чью численность вызывающий вправе смотреть и вести.
+
+    Два гейта, в этом порядке — буквально как в ``_project_for_write``:
+
+    * ``get_project`` со scope вернёт ``Http404`` на проект вне области
+      видимости — тот же контракт «404, а не 403», что у задач, чтобы
+      нельзя было перечислять проекты чужих отделов;
+    * владение: внутри своей области обычный сотрудник ведёт численность
+      только своего проекта. Чужой — акт руководства.
+
+    Один helper на чтение и на запись намеренно: правило здесь буквально
+    одно, и двум копиям было бы нечему соответствовать, кроме друг друга.
+    """
+    employee_scope, department_id = project_service.scope_for(request.token)
+    project = project_service.get_project(
+        project_id, employee_scope=employee_scope, department_id=department_id)
+    if not (request.token.is_elevated
+            or project.owner_id == request.token.user_id):
+        raise PermissionDenied(
+            "Only the project owner (or admin) can see project staffing")
+    return project
+
+
+@api_view(methods=("GET",))
+def staff_report_projects(request):
+    """Проекты, по которым вызывающий вправе вести численность.
+
+    Существует ради селектора на странице: без него фронт предлагал бы
+    любой видимый проект и ловил 403 на половине из них. Причина
+    расхождения — в токене нет ролей вида ``hr_manager`` (только
+    ``is_staff``/``is_superuser``), поэтому роут-гейт фронта шире
+    серверного правила, и сузить список должен сервер.
+    """
+    employee_scope, department_id = project_service.scope_for(request.token)
+    projects = [
+        project for project in project_service.list_projects(
+            employee_scope=employee_scope, department_id=department_id)
+        if request.token.is_elevated
+        or project.owner_id == request.token.user_id]
+    return project_service.build_responses(projects)
+
+
+@api_view(methods=("GET",))
+def project_staff_board(request, project_id: int):
+    """Доска численности проекта на ``?date=``: блок × (факт, план, ежедневка).
+
+    Отдельный эндпоинт, а не «список блоков + отчёт каждого»: страница на
+    12 блоков стоила бы 25 обращений, потому что план и сверка с ежедневкой
+    приходят из других таблиц. Здесь один запрос на сущность.
+    """
+    project = _staff_project(request, project_id)
+    try:
+        on = _date_param(request, "date") or timezone.localdate()
+    except _ParamError as exc:
+        return exc.response
+    board = staff_report_service.staff_board(project_id=project.id, on=on)
+    return schemas.ProjectStaffBoardResponse.model_validate({
+        "project_id": project.id, "project_name": project.name,
+        "date": on, **board})
+
+
+@api_view(methods=("GET",))
+def _list_project_staff_reports(request, project_id: int):
+    project = _staff_project(request, project_id)
+    try:
+        date_from = _date_param(request, "date_from")
+        date_to = _date_param(request, "date_to")
+    except _ParamError as exc:
+        return exc.response
+    return [schemas.ProjectStaffReportResponse.model_validate(row)
+            for row in staff_report_service.build_reports(
+                staff_report_service.list_reports(
+                    project_id=project.id, date_from=date_from,
+                    date_to=date_to))]
+
+
+@api_view(methods=("POST",), body=schemas.ProjectStaffReportCreate, status=201)
+def _create_project_staff_report(request, project_id: int,
+                                 data: schemas.ProjectStaffReportCreate):
+    project = _staff_project(request, project_id)
+    try:
+        report = staff_report_service.create_report(
+            project.id, data.model_dump(), author_id=request.token.user_id)
+    except ValueError as exc:
+        return json_error(str(exc), 422)
+    return schemas.ProjectStaffReportResponse.model_validate(
+        staff_report_service.build_report(report))
+
+
+def project_staff_reports(request, project_id: int):
+    if request.method == "GET":
+        return _list_project_staff_reports(request, project_id=project_id)
+    if request.method == "POST":
+        return _create_project_staff_report(request, project_id=project_id)
+    return _method_not_allowed(request)
+
+
+def _staff_report_for_action(request, report_id: int):
+    """Отчёт, который вызывающий вправе открыть, — вместе с проверкой прав."""
+    report = staff_report_service.get_report(report_id)
+    _staff_project(request, report.project_id)
+    return report
+
+
+@api_view(methods=("GET",))
+def _get_staff_report(request, report_id: int):
+    report = _staff_report_for_action(request, report_id)
+    return schemas.ProjectStaffReportResponse.model_validate(
+        staff_report_service.build_report(report))
+
+
+@api_view(methods=("PATCH",), body=schemas.ProjectStaffReportUpdate)
+def _update_staff_report(request, report_id: int,
+                         data: schemas.ProjectStaffReportUpdate):
+    _staff_report_for_action(request, report_id)
+    changes = data.model_dump(exclude_unset=True)
+    if changes.get("lines") is not None:
+        changes["lines"] = [dict(row) for row in changes["lines"]]
+    try:
+        report = staff_report_service.update_report(
+            report_id, changes, editor_id=request.token.user_id)
+    except ValueError as exc:
+        return json_error(str(exc), 422)
+    return schemas.ProjectStaffReportResponse.model_validate(
+        staff_report_service.build_report(report))
+
+
+@api_view(methods=("DELETE",), status=204)
+def _delete_staff_report(request, report_id: int):
+    _staff_report_for_action(request, report_id)
+    staff_report_service.delete_report(report_id)
+    return _no_content()
+
+
+def staff_report_detail(request, report_id: int):
+    if request.method == "GET":
+        return _get_staff_report(request, report_id=report_id)
+    if request.method == "PATCH":
+        return _update_staff_report(request, report_id=report_id)
+    if request.method == "DELETE":
+        return _delete_staff_report(request, report_id=report_id)
+    return _method_not_allowed(request)
+
+
+@api_view(methods=("GET",))
+def staff_report_revisions(request, report_id: int):
+    """Лента версий отчёта по персоналу. Читают те же, кто видит отчёт."""
+    _staff_report_for_action(request, report_id)
+    return [schemas.ProjectStaffRevisionResponse.model_validate(row)
+            for row in staff_report_service.build_revisions(
+                staff_report_service.list_revisions(report_id))]
 
 
 # ─────────────────────────────────────────────────────────────────────────

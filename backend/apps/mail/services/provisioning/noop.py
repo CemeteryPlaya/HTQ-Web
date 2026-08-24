@@ -46,3 +46,8 @@ class NoopProvisioner:
 
     def verify(self, *, address: str, password: str) -> tuple[bool, str | None]:
         return False, "почтовый сервер не подключён"
+
+    def exists_remote(self, *, address: str) -> tuple[bool | None, str | None]:
+        """Сервера нет — спрашивать некого. Ящик живёт только в БД платформы,
+        поэтому сверка ограничится локальной строкой."""
+        return None, "почтовый сервер не подключён"

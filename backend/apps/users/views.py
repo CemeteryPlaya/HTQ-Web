@@ -357,8 +357,21 @@ def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
             last_name=user.last_name or "",
             full_name=user.display_name or "",
             local_part=mailbox_local_part,
+            # Корпоративный email — это и есть адрес ящика: админ, вписавший
+            # ruslan.amirov@htq.group, уже назвал его, и транслитерация ФИО
+            # (r.amirov) дала бы ящик, не совпадающий с логином сотрудника.
+            email=user.email or "",
             password=mailbox_password,
             quota_mb=mailbox_quota_mb,
+        )
+    else:
+        # Галку не ставили — значит ящик не заказывали и создавать его нечего.
+        # Но если ящик с таким адресом на почтовом сервере УЖЕ есть, оставлять
+        # его неподключённым бессмысленно: сотрудник завтра откроет «Почту» и
+        # не найдёт там своей рабочей переписки. Ничего не создаёт, молчит,
+        # когда подключать нечего.
+        mailbox = mail_interface.attach_mailbox_by_email(
+            user_id=user.id, email=user.email or "",
         )
     # `payload` still has every field `admin_service.create_user` was called
     # with EXCEPT `password` — never let the plaintext password (or, were

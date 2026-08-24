@@ -37,6 +37,7 @@ from .permissions import (
     CARD_GROUPS_EDIT,
     CARD_GROUPS_VIEW,
     LEVEL_PRESETS,
+    ORG_EDIT,
     STAFFING_MANAGE,
     STAFFING_VIEW,
 )
@@ -206,6 +207,8 @@ _PERMISSION_CATALOG = {
 
         {"key": "hr.staffing.view",   "label": "Штатное расписание — просмотр",  "description": None, "group": "Штатное расписание"},
         {"key": "hr.staffing.manage", "label": "Штатное расписание — управление", "description": None, "group": "Штатное расписание"},
+
+        {"key": "contracts.advance_payment.record_payment", "label": "Оформление предоплат", "description": "Загрузка платёжного поручения и номера проводки после согласования", "group": "Договоры"},
     ],
     "level_presets": {lvl: sorted(keys) for lvl, keys in LEVEL_PRESETS.items()},
 }
@@ -862,16 +865,27 @@ def employee_card(request, id: int):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  /org/* — порт services/hr/app/api/v1/org.py (6 эндпойнтов)
+#  /org/* — порт services/hr/app/api/v1/org.py (6 эндпойнтов) + ручная правка
+#  руководителей/подчинённых (не порт: employee-relations, department manager)
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Авторизация (решение контроллера, docs/plans/2026-07-20-hr-domain.md,
-# под-модуль org): reads = ``get_current_user`` исходника -> ``auth="jwt"``;
-# writes = ``require_hr_write`` исходника (``current_user.is_elevated``) ->
-# ``api_view(auth="jwt", admin=True)`` — ровно тот же предикат, что у
-# positions/*. Тонкий ``hr_access`` (как в employees) здесь НЕ нужен —
-# исходный org.py тоже использует грубую пару get_current_user/require_hr_write,
-# а не HRAccess.
+# Авторизация writes (``POST/DELETE relations``, ``POST/DELETE
+# employee-relations``, ``PUT departments/{id}/manager``) — ИЗМЕНЕНА
+# относительно исходного порта: было ``api_view(admin=True)`` (=
+# require_hr_write исходника = is_elevated, тот же грубый предикат, что у
+# positions/*). Стало — ключ прав ``hr.org.edit`` через ``_require_permission``
+# (идиома staffing/*), доступный HR senior/lead — решение пользователя:
+# оргструктуру правит HR, а не только платформенный админ. Elevated-токены
+# (``is_staff``/``is_superuser``) доступ СОХРАНЯЮТ: ``resolve_hr_access``
+# коротит их в ``HRAccess(level="lead", permissions={"*"})``, а ``has()``
+# отдаёт True на любой ключ при ``"*"``.
+#
+# ``PUT /org/settings/deletion-strategy`` НАМЕРЕННО остаётся ``admin=True`` —
+# это глобальная политика удаления отделов, а не редактирование связей
+# подчинения, и её зона ответственности не менялась этой задачей.
+#
+# reads (``GET tree``, ``GET subordination-matrix``, ``GET employee-relations``,
+# ``GET settings/deletion-strategy``) — как и раньше, обычный ``auth="jwt"``.
 
 
 @api_view(methods=("GET",), auth="jwt")
@@ -896,10 +910,13 @@ def org_subordination_matrix(request):
     return org_service.get_subordination_matrix(unit_id=query.unit_id)
 
 
-# ── /org/relations — CRUD ─────────────────────────────────────────────────────
+# ── /org/relations — CRUD (позиции) ───────────────────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.RelationCreate, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.RelationCreate, status=201)
 def add_reporting_relation(request, data: schemas.RelationCreate):
+    _, err = _require_permission(request, ORG_EDIT)
+    if err:
+        return err
     try:
         rel = org_service.add_relation(
             superior_id=data.superior_position_id,
@@ -910,18 +927,212 @@ def add_reporting_relation(request, data: schemas.RelationCreate):
         )
     except org_service.RelationSelfReferential as exc:
         return json_error(exc.detail, 422)
+    except org_service.PositionNotFound as exc:
+        return json_error(exc.detail, 404)
     except org_service.RelationDuplicate as exc:
+        return json_error(exc.detail, 409)
+    except org_service.RelationCycle as exc:
         return json_error(exc.detail, 409)
     return org_service.serialize_relation(rel)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt")
 def remove_reporting_relation(request, relation_id: int):
+    _, err = _require_permission(request, ORG_EDIT)
+    if err:
+        return err
     try:
         org_service.remove_relation(relation_id)
     except org_service.RelationNotFound as exc:
         return json_error(exc.detail, 404)
     return HttpResponse(status=204)
+
+
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.RelationTypeUpdate)
+def _change_relation_type(request, relation_id: int, data: schemas.RelationTypeUpdate):
+    _, err = _require_permission(request, ORG_EDIT)
+    if err:
+        return err
+    try:
+        rel = org_service.change_relation_type(relation_id, data.relation_type)
+    except org_service.RelationNotFound as exc:
+        return json_error(exc.detail, 404)
+    except org_service.RelationDuplicate as exc:
+        return json_error(exc.detail, 409)
+    return org_service.serialize_relation(rel)
+
+
+def org_relation_detail(request, relation_id: int):
+    if request.method == "DELETE":
+        return remove_reporting_relation(request, relation_id=relation_id)
+    if request.method == "PATCH":
+        return _change_relation_type(request, relation_id=relation_id)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.SuperiorSet)
+def org_relation_superior(request, data: schemas.SuperiorSet):
+    """Атомарно: у должности ровно один руководитель данного типа.
+
+    Заменяет пару DELETE+POST с фронта — см. докстринг
+    ``org_service.set_position_superior``.
+    """
+    _, err = _require_permission(request, ORG_EDIT)
+    if err:
+        return err
+    try:
+        rel = org_service.set_position_superior(
+            subordinate_id=data.subordinate_id,
+            superior_id=data.superior_id,
+            relation_type=data.relation_type,
+        )
+    except org_service.RelationSelfReferential as exc:
+        return json_error(exc.detail, 422)
+    except org_service.PositionNotFound as exc:
+        return json_error(exc.detail, 404)
+    except org_service.RelationCycle as exc:
+        return json_error(exc.detail, 409)
+    # Сняли руководителя — тела нет, но это успех, а не "не найдено".
+    return org_service.serialize_relation(rel) if rel is not None else {"detail": None}
+
+
+# ── /org/employee-relations — CRUD (сотрудники, не порт) ──────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_employee_relations(request):
+    try:
+        query = schemas.EmployeeRelationQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+    return org_service.list_employee_relations(
+        employee_id=query.employee_id, department_id=query.department_id,
+    )
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeRelationCreate, status=201)
+def _create_employee_relation(request, data: schemas.EmployeeRelationCreate):
+    _, err = _require_permission(request, ORG_EDIT)
+    if err:
+        return err
+    try:
+        rel = org_service.add_employee_relation(
+            superior_id=data.superior_employee_id,
+            subordinate_id=data.subordinate_employee_id,
+            relation_type=data.relation_type,
+            note=data.note,
+            created_by=request.token.user_id,
+        )
+    except org_service.EmployeeRelationSelfReferential as exc:
+        return json_error(exc.detail, 422)
+    except org_service.EmployeeNotFoundForRelation as exc:
+        return json_error(exc.detail, 404)
+    except org_service.EmployeeNotActiveForRelation as exc:
+        return json_error(exc.detail, 422)
+    except org_service.EmployeeRelationDuplicate as exc:
+        return json_error(exc.detail, 409)
+    except org_service.EmployeeAlreadyHasSuperior as exc:
+        return json_error(exc.detail, 409)
+    except org_service.RelationCycle as exc:
+        return json_error(exc.detail, 409)
+    return org_service.serialize_employee_relation(rel)
+
+
+def org_employee_relations_collection(request):
+    if request.method == "GET":
+        return _list_employee_relations(request)
+    if request.method == "POST":
+        return _create_employee_relation(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("DELETE",), auth="jwt")
+def remove_employee_relation(request, relation_id: int):
+    _, err = _require_permission(request, ORG_EDIT)
+    if err:
+        return err
+    try:
+        org_service.remove_employee_relation(relation_id, changed_by_id=request.token.user_id)
+    except org_service.EmployeeRelationNotFound as exc:
+        return json_error(exc.detail, 404)
+    return HttpResponse(status=204)
+
+
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.RelationTypeUpdate)
+def _change_employee_relation_type(request, relation_id: int, data: schemas.RelationTypeUpdate):
+    _, err = _require_permission(request, ORG_EDIT)
+    if err:
+        return err
+    try:
+        rel = org_service.change_employee_relation_type(
+            relation_id, data.relation_type, changed_by_id=request.token.user_id,
+        )
+    except org_service.EmployeeRelationNotFound as exc:
+        return json_error(exc.detail, 404)
+    except org_service.EmployeeRelationDuplicate as exc:
+        return json_error(exc.detail, 409)
+    except org_service.EmployeeAlreadyHasSuperior as exc:
+        return json_error(exc.detail, 409)
+    except org_service.RelationCycle as exc:
+        return json_error(exc.detail, 409)
+    return org_service.serialize_employee_relation(rel)
+
+
+def org_employee_relation_detail(request, relation_id: int):
+    if request.method == "DELETE":
+        return remove_employee_relation(request, relation_id=relation_id)
+    if request.method == "PATCH":
+        return _change_employee_relation_type(request, relation_id=relation_id)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.SuperiorSet)
+def org_employee_relation_superior(request, data: schemas.SuperiorSet):
+    """Персональный аналог ``org_relation_superior``.
+
+    Для ``direct`` иначе нельзя в принципе: частичный unique допускает ровно
+    одного прямого руководителя, поэтому "создать новую, потом удалить
+    старую" невозможно — только снять и поставить в одной транзакции.
+    """
+    _, err = _require_permission(request, ORG_EDIT)
+    if err:
+        return err
+    try:
+        rel = org_service.set_employee_superior(
+            subordinate_id=data.subordinate_id,
+            superior_id=data.superior_id,
+            relation_type=data.relation_type,
+            created_by=request.token.user_id,
+        )
+    except org_service.EmployeeRelationSelfReferential as exc:
+        return json_error(exc.detail, 422)
+    except org_service.EmployeeNotFoundForRelation as exc:
+        return json_error(exc.detail, 404)
+    except org_service.EmployeeNotActiveForRelation as exc:
+        return json_error(exc.detail, 422)
+    except org_service.RelationCycle as exc:
+        return json_error(exc.detail, 409)
+    return org_service.serialize_employee_relation(rel) if rel is not None else {"detail": None}
+
+
+# ── /org/departments/{id}/manager — не порт, закрывает дыру: ─────────────────
+# DepartmentUpdate.manager_id нельзя сбросить в null из-за exclude_none-
+# семантики PATCH (см. schemas.DepartmentManagerSet).
+
+@api_view(methods=("PUT",), auth="jwt", body=schemas.DepartmentManagerSet)
+def org_department_manager(request, department_id: int, data: schemas.DepartmentManagerSet):
+    _, err = _require_permission(request, ORG_EDIT)
+    if err:
+        return err
+    try:
+        return org_service.set_department_manager(
+            department_id, data.employee_id, changed_by_id=request.token.user_id,
+        )
+    except org_service.OrgDepartmentNotFound as exc:
+        return json_error(exc.detail, 404)
+    except org_service.EmployeeNotFoundForRelation as exc:
+        return json_error(exc.detail, 404)
+    except org_service.EmployeeNotActiveForRelation as exc:
+        return json_error(exc.detail, 422)
 
 
 # ── /org/settings/deletion-strategy ────────────────────────────────────────────

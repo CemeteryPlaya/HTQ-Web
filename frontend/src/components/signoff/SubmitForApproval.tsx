@@ -37,6 +37,7 @@ import type { ApprovalProcess, ApprovalState } from '@/types/signoff';
 
 import { reportApiError } from '@/lib/apiError';
 import { ApprovalStateBadge } from './states';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   subjectType: string;
@@ -60,6 +61,9 @@ interface Props {
    * согласование действительно идёт.)
    */
   showProcessLink?: boolean;
+  /** Показывать ли плашку состояния рядом с действием. В таблицах, где
+   * состояние уже вынесено в отдельную колонку, её дублировать не нужно. */
+  showState?: boolean;
 }
 
 export function SubmitForApproval({
@@ -70,7 +74,9 @@ export function SubmitForApproval({
   invalidate = [],
   size = 'sm',
   showProcessLink = false,
+  showState = true,
 }: Props) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [startedId, setStartedId] = useState<number | null>(null);
 
@@ -106,7 +112,7 @@ export function SubmitForApproval({
     mutationFn: () => submit(subjectId).then((r) => r.data),
     onSuccess: (process) => {
       setStartedId(process.id);
-      toast.success('Отправлено на согласование');
+      toast.success(t('signoff.submit.done'));
       queryClient.invalidateQueries({ queryKey: ['signoff'] });
       for (const key of invalidate) {
         queryClient.invalidateQueries({ queryKey: key });
@@ -115,22 +121,33 @@ export function SubmitForApproval({
     // 409 здесь — «маршрут не настроен», «уже на согласовании»,
     // «несогласованный бюджет/контрагент»; 503 — модуль выключен целиком.
     onError: (err) =>
-      reportApiError(err, 'Не удалось отправить на согласование'),
+      reportApiError(err, t('signoff.submit.error')),
   });
 
   // Решение принято или ещё принимается — отправлять нечего. Ссылка на
   // карточку появляется, только если её есть за что показать (см.
   // `showProcessLink`); без неё остаётся одна плашка.
   if (state === 'pending' || decided) {
+    // Tables that already render approval state in a separate column pass
+    // `showState={false}`. Do not leave their action cell visually empty
+    // while a process link is unavailable (or intentionally suppressed).
+    if (!showState && activeProcessId === null) {
+      return (
+        <span className="text-sm text-muted-foreground">
+          {state === 'pending' ? 'Согласуется' : '—'}
+        </span>
+      );
+    }
+
     return (
       <div className="flex items-center justify-end gap-2">
-        <ApprovalStateBadge state={state} />
+        {showState && <ApprovalStateBadge state={state} />}
         {/* Решать — там же: на карточке процесса есть и кнопки решения, и
             этот самый документ внутри. Здесь их нет намеренно. */}
         {activeProcessId !== null && (
           <Button asChild size={size} variant="ghost">
             <Link to={`/signoff/processes/${activeProcessId}`}>
-              Карточка согласования
+              {t('signoff.submit.cardTitle')}
             </Link>
           </Button>
         )}
@@ -140,7 +157,7 @@ export function SubmitForApproval({
 
   return (
     <div className="flex items-center justify-end gap-2">
-      {state === 'rework' && <ApprovalStateBadge state={state} />}
+      {state === 'rework' && showState && <ApprovalStateBadge state={state} />}
       <Button
         size={size}
         variant={state === 'rework' ? 'outline' : 'default'}
@@ -152,7 +169,7 @@ export function SubmitForApproval({
         ) : (
           <Send className="mr-1.5 h-4 w-4" />
         )}
-        {state === 'rework' ? 'Отправить снова' : 'На согласование'}
+        {state === 'rework' ? t('signoff.submit.again') : t('signoff.submit.action')}
       </Button>
     </div>
   );

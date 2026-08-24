@@ -4,10 +4,9 @@
  * на одной странице, чтобы не пропадать при переходе внутри раздела.
  *
  * «Маршруты» видны только администратору: править их может лишь он
- * (`api_view(admin=True)`), а читать разрешено всем — фронтенду надо
- * показывать, кто будет согласовывать, до отправки. Пункт меню всё равно
- * скрыт: настройка платформы обычному сотруднику не нужна, а страница
- * закрыта ещё и роутером (`requiresRole: 'admin'`).
+ * (`api_view(admin=True)`). Пункт меню скрыт, страница закрыта роутером
+ * (`requiresRole: 'admin'`), а API повторяет ту же проверку — прямой запрос
+ * не раскрывает имена согласующих и внутренние правила маршрута.
  */
 
 import type { ReactNode } from 'react';
@@ -16,16 +15,18 @@ import { GitBranch, Inbox, ListChecks } from 'lucide-react';
 
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
+import { BackToProfile } from '@/components/BackToProfile';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasAnyRole } from '@/lib/auth/roles';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 
 /** Те же роли, что считает администраторскими раздел «Запросы». */
 const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 interface NavItem {
   to: string;
-  label: string;
+  labelKey: string;
   icon: typeof Inbox;
   /** Активен и для вложенных путей. */
   matchPrefix?: string;
@@ -33,16 +34,16 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { to: '/signoff', label: 'Ждёт меня', icon: Inbox },
+  { to: '/signoff', labelKey: 'signoff.nav.inbox', icon: Inbox },
   {
     to: '/signoff/processes',
-    label: 'Согласования',
+    labelKey: 'signoff.nav.title',
     icon: ListChecks,
     matchPrefix: '/signoff/processes',
   },
   {
     to: '/signoff/routes',
-    label: 'Маршруты',
+    labelKey: 'signoff.nav.routes',
     icon: GitBranch,
     matchPrefix: '/signoff/routes',
     adminOnly: true,
@@ -50,6 +51,7 @@ const NAV: NavItem[] = [
 ];
 
 export function SignoffShell({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const { pathname } = useLocation();
   const { activeProfile } = useActiveProfile();
   const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
@@ -62,10 +64,11 @@ export function SignoffShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-background flex flex-col">
       <Header />
       <div className="flex-1 container mx-auto px-4 py-8">
+        <BackToProfile className="mb-6" />
         <div className="flex flex-col gap-6 md:flex-row md:gap-8">
           <aside className="md:w-56 shrink-0">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3 px-3">
-              Согласования
+              {t('signoff.nav.title')}
             </h2>
             <nav className="flex flex-row gap-1 overflow-x-auto md:flex-col md:overflow-visible">
               {items.map((item) => {
@@ -82,7 +85,7 @@ export function SignoffShell({ children }: { children: ReactNode }) {
                     )}
                   >
                     <Icon className="h-4 w-4 shrink-0" />
-                    {item.label}
+                    {t(item.labelKey)}
                   </Link>
                 );
               })}

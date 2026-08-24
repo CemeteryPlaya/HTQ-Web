@@ -561,10 +561,10 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                         )}
                     </div>
 
-                    {/* Исполнитель: своя команда или субподрядчик. */}
+                    {/* Исполнитель: своя команда или партнёр. */}
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <Label>{t('tasks.pages.contractors.one', 'Подрядчик')}</Label>
+                            <Label>{t('tasks.pages.contractors.one', 'Партнёр')}</Label>
                             <Select
                                 value={form.contractor || '__none__'}
                                 onValueChange={(v) => setForm({

@@ -4,13 +4,19 @@
  * parameters synchronized.
  */
 
-// 1.5 Мбит/с, а не 1.0: SFU и так провижнен именно под столько
-// (VIDEO_BITRATE_BPS=1_500_000, maxIncomingBitrate=1.875 Мбит/с в
-// sfu/src/config.ts), то есть клиент резал сам себя ниже разрешённого
-// потолка. 720p30 на 1 Мбит/с выглядит мягко на любом кодеке — лишние
-// 500 кбит/с не стоят ничего ни SFU, ни сети, а разница видна.
-export const VIDEO_TARGET_BITRATE_BPS = 1_500_000;
-export const VIDEO_TARGET_BITRATE_KBPS = 1_500;
+// 5 Мбит/с — потолок, а не расход. Это `maxBitrate` энкодера и `b=AS` в SDP:
+// столько отправитель имеет ПРАВО занять, когда картинка того требует
+// (движение, мелкий текст на демонстрации экрана). На статичной сцене VP8/H264
+// отдадут те же 300–800 кбит/с, что и раньше, — верхняя граница на это не
+// влияет.
+//
+// Держать эту константу в согласии с SFU обязательно: там тот же потолок
+// задаётся VIDEO_BITRATE_BPS (sfu/src/config.ts), от него же считаются
+// initialAvailableOutgoingBitrate и maxIncomingBitrate (×1.25 = 6.25 Мбит/с).
+// Если клиент попросит больше, чем принимает SFU, транспорт молча срежет — и
+// разбираться в этом придётся по графикам, а не по коду.
+export const VIDEO_TARGET_BITRATE_BPS = 5_000_000;
+export const VIDEO_TARGET_BITRATE_KBPS = 5_000;
 export const AUDIO_TARGET_BITRATE_BPS = 64_000;
 export const TARGET_FPS = 30;
 

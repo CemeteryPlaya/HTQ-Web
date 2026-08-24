@@ -214,7 +214,7 @@ def filtered_tasks(*, status=None, priority=None, task_type=None,
     if contractor_id is not None:
         qs = qs.filter(contractor_id=contractor_id)
     if contractor_unset:
-        # «Своя команда» — задачи без подрядчика. Отдельный флаг, а не
+        # «Своя команда» — задачи без партнёра. Отдельный флаг, а не
         # contractor_id=0: NULL нельзя выразить через параметр-число.
         qs = qs.filter(contractor_id__isnull=True)
     if parent_id is not None:

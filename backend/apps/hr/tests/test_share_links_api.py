@@ -32,7 +32,7 @@ import pytest
 from django.db import connection
 from django.test import Client
 
-from apps.hr.models import Department, Employee, Position, ShareableLink, ShareLinkAudit
+from apps.hr.models import Department, Employee, Position, ReportingRelation, ShareableLink, ShareLinkAudit
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -269,6 +269,37 @@ def test_public_org_consume_no_auth_required(auth):
     body = resp.json()
     assert "tree" in body
     assert resp["X-Robots-Tag"] == "noindex, nofollow"
+
+
+@pytest.mark.django_db
+def test_public_org_tree_edges_do_not_carry_relation_id(auth):
+    """relation_id адресует /org/relations, /org/employee-relations — ручки
+    правки, к которым у анонимного зрителя ссылки нет доступа (auth="jwt").
+    Belt-and-braces: _strip_public_pii режет relation_id на уровне схемы, а
+    не полагается только на то, что снаружи никто не спросит. origin
+    остаётся — он не адресует ничего и даёт тот же честный пунктир на
+    угаданных связях."""
+    dep = _dep("ИТ", "it")
+    boss = _pos("Начальник", dep, weight=10)
+    report = _pos("Подчинённый", dep, weight=20)
+    _emp(dep, boss, "boss@htq.test")
+    _emp(dep, report, "report@htq.test")
+    ReportingRelation.objects.create(
+        superior_position=boss, subordinate_position=report,
+        relation_type="direct", effective_from=datetime.date(2024, 1, 1),
+    )
+
+    created = Client().post(
+        f"{BASE}/", data={"label": "x", "link_type": "permanent_with_expiry"},
+        content_type="application/json", **auth,
+    ).json()
+    token = created["token"]
+
+    body = Client().get(f"{PUBLIC_ORG}/{token}").json()
+    edges = body["tree"]["edges"]
+    assert edges, "ожидалось хотя бы одно ребро в дереве"
+    assert all("relation_id" not in e for e in edges)
+    assert any(e.get("origin") == "position" for e in edges)
 
 
 @pytest.mark.django_db

@@ -24,6 +24,7 @@ import {
 } from '@/components/contracts/ReferenceCombobox';
 import { contractsApi } from '@/api/contracts';
 import type { BudgetFullCreatePayload, BudgetProgramLine } from '@/types/contracts';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Заявка на бюджет — одна форма на всё.
@@ -86,6 +87,7 @@ const emptyRow = (): ProgramRow => ({
 });
 
 const BudgetCreate = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -203,14 +205,14 @@ const BudgetCreate = () => {
     const next: Errors = {};
 
     if (!administrator) {
-      next.administrator = 'Выберите проект или впишите новый';
+      next.administrator = t('contracts.budgetForm.errors.administrator');
     } else if (administrator.kind === 'new' && !country) {
-      next.country = 'Выберите страну или впишите новую';
+      next.country = t('contracts.counterpartyForm.errors.country');
     }
 
     const year = Number(periodYear);
     if (!Number.isInteger(year) || year < 2000 || year > 2100) {
-      next.periodYear = 'Год в диапазоне 2000–2100';
+      next.periodYear = t('contracts.budgetForm.errors.year');
     }
 
     // Дубли среди НОВЫХ программ: существующие уже отфильтрованы из списка,
@@ -222,16 +224,16 @@ const BudgetCreate = () => {
       const at = `rows.${row.key}`;
 
       if (!row.program) {
-        next[`${at}.program`] = 'Выберите программу или впишите новую';
+        next[`${at}.program`] = t('contracts.budgetForm.errors.program');
       } else if (row.program.kind === 'new') {
         if (!row.expenseItem.trim()) {
-          next[`${at}.expenseItem`] = 'Укажите статью расходов';
+          next[`${at}.expenseItem`] = t('contracts.budgetForm.errors.expenseItem');
         } else {
           const key = `${row.program.label.trim().toLowerCase()}|${row.expenseItem
             .trim()
             .toLowerCase()}`;
           if (seenNew.has(key)) {
-            next[`${at}.program`] = 'Эта программа уже есть в заявке';
+            next[`${at}.program`] = t('contracts.budgetForm.errors.duplicateProgram');
           }
           seenNew.add(key);
         }
@@ -239,11 +241,11 @@ const BudgetCreate = () => {
 
       const amount = row.amount.trim();
       if (!amount) {
-        next[`${at}.amount`] = 'Укажите сумму';
+        next[`${at}.amount`] = t('contracts.budgetForm.errors.amount');
       } else if (!AMOUNT_RE.test(amount)) {
-        next[`${at}.amount`] = 'Число, максимум два знака после запятой';
+        next[`${at}.amount`] = t('contracts.budgetForm.errors.amountFormat');
       } else if (amount.split(/[.,]/)[0].length > AMOUNT_MAX_INT_DIGITS) {
-        next[`${at}.amount`] = 'Сумма слишком большая';
+        next[`${at}.amount`] = t('contracts.budgetForm.errors.amountTooLarge');
       }
     });
 
@@ -285,11 +287,12 @@ const BudgetCreate = () => {
     mutationFn: () => contractsApi.createBudgetFull(buildPayload()).then((r) => r.data),
     onSuccess: (budget) => {
       queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      toast.success(
-        `Бюджет ${budget.period_year} создан: ${budget.lines.length} ` +
-          `${budget.lines.length === 1 ? 'программа' : 'программы'}, ` +
-          `${budget.allocated} ${budget.currency}`,
-      );
+      toast.success(t('contracts.budgetForm.created', {
+        year: budget.period_year,
+        programmes: t('contracts.budget.programmeCount', { count: budget.lines.length }),
+        amount: budget.allocated,
+        currency: budget.currency,
+      }));
       // На карточку, а не в список: заполняющий только что собрал бюджет
       // целиком и первым делом захочет его проверить и отправить на
       // согласование.
@@ -311,7 +314,7 @@ const BudgetCreate = () => {
         toast.error(detail.map((item: any) => item.msg).join('; '));
         return;
       }
-      toast.error('Не удалось создать бюджет');
+      toast.error(t('contracts.budgetForm.createError'));
     },
   });
 
@@ -320,7 +323,7 @@ const BudgetCreate = () => {
     const found = validate();
     setErrors(found);
     if (Object.keys(found).length > 0) {
-      toast.error('Проверьте заполнение формы');
+      toast.error(t('contracts.formInvalid'));
       return;
     }
     mutation.mutate();
@@ -338,15 +341,14 @@ const BudgetCreate = () => {
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
           >
             <ArrowLeft className="h-4 w-4" />
-            К списку бюджетов
+            {t('contracts.budgetForm.backToList')}
           </Link>
           <div className="flex items-center gap-3">
             <Wallet className="h-7 w-7 text-muted-foreground" />
             <div>
-              <h1 className="text-3xl font-bold">Заявка на бюджет</h1>
+              <h1 className="text-3xl font-bold">{t('contracts.budgetRequest')}</h1>
               <p className="text-muted-foreground text-sm mt-1">
-                Заполните целиком — справочники можно завести прямо здесь,
-                отдельно ходить никуда не нужно.
+                {t('contracts.budgetForm.subtitle')}
               </p>
             </div>
           </div>
@@ -356,17 +358,15 @@ const BudgetCreate = () => {
           {/* ─── Администратор бюджета ─────────────────────────────────── */}
           <Card>
             <CardHeader>
-              <CardTitle>Администратор бюджета</CardTitle>
+              <CardTitle>{t('contracts.budgetAdministrator')}</CardTitle>
               <CardDescription>
-                Держатель бюджетных строк — проект в стране. Денег на самой
-                записи нет: суммы живут на бюджетах, и у одного проекта их
-                несколько — по одному под каждую программу.
+                {t('contracts.budgetForm.administratorHint')}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <Label htmlFor="administrator">Название проекта</Label>
+                  <Label htmlFor="administrator">{t('contracts.budgetForm.projectName')}</Label>
                   <ReferenceCombobox
                     id="administrator"
                     options={administratorOptions}
@@ -379,9 +379,9 @@ const BudgetCreate = () => {
                         setIsoCode('');
                       }
                     }}
-                    placeholder="Выберите или впишите новый"
-                    searchPlaceholder="Поиск по проекту или стране…"
-                    createLabel={(input) => `Создать проект «${input}»`}
+                    placeholder={t('contracts.pickOrTypeNewM')}
+                    searchPlaceholder={t('contracts.budgetForm.searchProject')}
+                    createLabel={(input) => t('contracts.createProject', { input })}
                     loading={administratorsLoading}
                     invalid={Boolean(errors.administrator)}
                   />
@@ -389,7 +389,7 @@ const BudgetCreate = () => {
                 </div>
 
                 <div>
-                  <Label htmlFor="country">Страна</Label>
+                  <Label htmlFor="country">{t('contracts.counterparty.country')}</Label>
                   {administratorLocked ? (
                     <Input value={effectiveCountryName} disabled />
                   ) : (
@@ -401,8 +401,8 @@ const BudgetCreate = () => {
                         setCountry(next);
                         if (next?.kind !== 'new') setIsoCode('');
                       }}
-                      placeholder="Выберите или впишите новую"
-                      createLabel={(input) => `Создать страну «${input}»`}
+                      placeholder={t('contracts.pickOrTypeNewF')}
+                      createLabel={(input) => t('contracts.createCountry', { input })}
                       disabled={!administrator}
                       loading={countriesLoading}
                       invalid={Boolean(errors.country)}
@@ -414,7 +414,7 @@ const BudgetCreate = () => {
 
               {country?.kind === 'new' && !administratorLocked && (
                 <div className="sm:w-40">
-                  <Label htmlFor="iso-code">Код ISO (необязательно)</Label>
+                  <Label htmlFor="iso-code">{t('contracts.isoCode')}</Label>
                   <Input
                     id="iso-code"
                     value={isoCode}
@@ -427,8 +427,7 @@ const BudgetCreate = () => {
 
               {administratorLocked && (
                 <p className="text-xs text-muted-foreground">
-                  Страна принадлежит выбранной записи справочника — чтобы
-                  изменить её, правьте самого администратора, а не заявку.
+                  {t('contracts.budgetForm.countryLockedHint')}
                 </p>
               )}
             </CardContent>
@@ -437,15 +436,14 @@ const BudgetCreate = () => {
           {/* ─── Общее для заявки ──────────────────────────────────────── */}
           <Card>
             <CardHeader>
-              <CardTitle>Год и валюта</CardTitle>
+              <CardTitle>{t('contracts.budgetForm.yearAndCurrency')}</CardTitle>
               <CardDescription>
-                Общие на всю заявку: она и есть бюджет проекта на год, а в
-                одной валюте суммы программ складываются в итог.
+                {t('contracts.budgetForm.yearAndCurrencyHint')}
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 sm:grid-cols-3">
               <div>
-                <Label htmlFor="period-year">Бюджетный год</Label>
+                <Label htmlFor="period-year">{t('contracts.budgetYear')}</Label>
                 <Input
                   id="period-year"
                   inputMode="numeric"
@@ -457,7 +455,7 @@ const BudgetCreate = () => {
               </div>
 
               <div>
-                <Label htmlFor="currency">Валюта</Label>
+                <Label htmlFor="currency">{t('contracts.columns.currency')}</Label>
                 <Select value={currency} onValueChange={setCurrency}>
                   <SelectTrigger id="currency">
                     <SelectValue />
@@ -477,12 +475,9 @@ const BudgetCreate = () => {
           {/* ─── Программы ─────────────────────────────────────────────── */}
           <Card>
             <CardHeader>
-              <CardTitle>Программы и суммы</CardTitle>
+              <CardTitle>{t('contracts.budgetForm.programmesAndAmounts')}</CardTitle>
               <CardDescription>
-                По строке на программу — у каждой своя сумма. Программа и
-                статья расходов вместе образуют одну запись справочника; с
-                администратором и годом они дают уникальную бюджетную строку.
-                В списках программа подписана как «код название».
+                {t('contracts.budgetForm.programmesHint')}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -498,7 +493,7 @@ const BudgetCreate = () => {
                   >
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-muted-foreground">
-                        Программа {index + 1}
+                        {t('contracts.budgetForm.programmeNumber', { number: index + 1 })}
                       </span>
                       <Button
                         type="button"
@@ -506,7 +501,7 @@ const BudgetCreate = () => {
                         size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-destructive"
                         onClick={() => removeRow(row.key)}
-                        aria-label={`Убрать программу ${index + 1}`}
+                        aria-label={t('contracts.budgetForm.removeProgramme', { number: index + 1 })}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -514,7 +509,7 @@ const BudgetCreate = () => {
 
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div>
-                        <Label htmlFor={`${row.key}-program`}>Название программы</Label>
+                        <Label htmlFor={`${row.key}-program`}>{t('contracts.budgetForm.programmeName')}</Label>
                         <ReferenceCombobox
                           id={`${row.key}-program`}
                           options={optionsForRow(row.key)}
@@ -528,9 +523,9 @@ const BudgetCreate = () => {
                                 : {}),
                             })
                           }
-                          placeholder="Выберите или впишите новую"
-                          searchPlaceholder="Поиск по программе или статье…"
-                          createLabel={(input) => `Создать программу «${input}»`}
+                          placeholder={t('contracts.pickOrTypeNewF')}
+                          searchPlaceholder={t('contracts.budgetForm.searchProgramme')}
+                          createLabel={(input) => t('contracts.createProgramme', { input })}
                           loading={programsLoading}
                           invalid={Boolean(errors[`${at}.program`])}
                         />
@@ -538,7 +533,7 @@ const BudgetCreate = () => {
                       </div>
 
                       <div>
-                        <Label htmlFor={`${row.key}-expense-item`}>Статья расходов</Label>
+                        <Label htmlFor={`${row.key}-expense-item`}>{t('contracts.columns.expenseItem')}</Label>
                         <Input
                           id={`${row.key}-expense-item`}
                           value={existing?.expense_item ?? row.expenseItem}
@@ -546,7 +541,7 @@ const BudgetCreate = () => {
                             patchRow(row.key, { expenseItem: event.target.value })
                           }
                           disabled={locked || !row.program}
-                          placeholder="Оборудование"
+                          placeholder={t('contracts.budgetForm.expenseItemPlaceholder')}
                           className={
                             errors[`${at}.expenseItem`] ? 'border-destructive' : undefined
                           }
@@ -562,7 +557,7 @@ const BudgetCreate = () => {
                             «код название», и без своего поля заполняющий
                             вписывал бы код в название, чтобы получить такую же
                             строку. */}
-                        <Label htmlFor={`${row.key}-code`}>Код (необязательно)</Label>
+                        <Label htmlFor={`${row.key}-code`}>{t('contracts.budgetForm.codeOptional')}</Label>
                         <Input
                           id={`${row.key}-code`}
                           value={existing?.code ?? row.programCode}
@@ -576,7 +571,7 @@ const BudgetCreate = () => {
                       </div>
 
                       <div>
-                        <Label htmlFor={`${row.key}-amount`}>Сумма, {currency}</Label>
+                        <Label htmlFor={`${row.key}-amount`}>{t('contracts.budgetForm.amountIn', { currency })}</Label>
                         <Input
                           id={`${row.key}-amount`}
                           inputMode="decimal"
@@ -594,13 +589,13 @@ const BudgetCreate = () => {
                     </div>
 
                     <div>
-                      <Label htmlFor={`${row.key}-note`}>Примечание</Label>
+                      <Label htmlFor={`${row.key}-note`}>{t('contracts.columns.note')}</Label>
                       <Textarea
                         id={`${row.key}-note`}
                         value={row.note}
                         onChange={(event) => patchRow(row.key, { note: event.target.value })}
                         rows={2}
-                        placeholder="Необязательно"
+                        placeholder={t('common.optional')}
                       />
                     </div>
                   </div>
@@ -609,23 +604,23 @@ const BudgetCreate = () => {
 
               <Button type="button" variant="outline" onClick={addRow} className="w-full">
                 <Plus className="mr-2 h-4 w-4" />
-                Добавить программу
+                {t('contracts.budgetForm.addProgramme')}
               </Button>
 
               <Separator />
 
               <div className="flex items-baseline justify-between">
                 <span className="text-sm text-muted-foreground">
-                  Итого по заявке ({rows.length}{' '}
-                  {rows.length === 1 ? 'строка' : rows.length < 5 ? 'строки' : 'строк'})
+                  {t('contracts.budgetForm.total', {
+                    rows: t('contracts.budgetForm.rowCount', { count: rows.length }),
+                  })}
                 </span>
                 <span className="text-lg font-semibold tabular-nums">
                   {totalLabel} {currency}
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
-                Остаток по каждой строке будет считаться сам, из договоров —
-                вручную его никто не правит.
+                {t('contracts.budgetForm.remainingHint')}
               </p>
             </CardContent>
           </Card>
@@ -633,54 +628,56 @@ const BudgetCreate = () => {
           {/* ─── Что будет создано ─────────────────────────────────────── */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Будет создано</CardTitle>
+              <CardTitle className="text-base">{t('contracts.budgetForm.willCreate')}</CardTitle>
             </CardHeader>
             <CardContent className="text-sm space-y-1">
               {administrator?.kind === 'new' && (
                 <p>
-                  Администратор бюджета — проект{' '}
+                  {t('contracts.budgetForm.willCreateAdministrator')}{' '}
                   <strong>{administrator.label}</strong>
-                  {country && <> в стране «{country.label}»</>}
+                  {country && <>{t('contracts.budgetForm.inCountry', { country: country.label })}</>}
                 </p>
               )}
               {country?.kind === 'new' && administrator?.kind === 'new' && (
                 <p>
-                  Страна <strong>{country.label}</strong>
+                  {t('contracts.counterparty.country')} <strong>{country.label}</strong>
                 </p>
               )}
               {rows
                 .filter((row) => row.program?.kind === 'new')
                 .map((row) => (
                   <p key={row.key}>
-                    Программа{' '}
+                    {t('contracts.columns.programme')}{' '}
                     <strong>
                       {[row.programCode.trim(), row.program!.label].filter(Boolean).join(' ')}
                     </strong>
-                    {row.expenseItem && <> — статья «{row.expenseItem}»</>}
+                    {row.expenseItem
+                      && <>{t('contracts.budgetForm.withExpenseItem', { item: row.expenseItem })}</>}
                   </p>
                 ))}
               <Separator className="my-2" />
               {rows.map((row, index) => (
                 <p key={row.key}>
-                  Бюджетная строка{' '}
+                  {t('contracts.budgetForm.budgetLine')}{' '}
                   <strong>
                     {row.amount || '—'} {currency}
                   </strong>{' '}
-                  — {row.program?.label ?? `программа ${index + 1} не выбрана`}
+                  — {row.program?.label ?? t('contracts.budgetForm.programmeNotPicked', { number: index + 1 })}
                 </p>
               ))}
               <p>
-                На {periodYear || '—'} год
+                {t('contracts.budgetForm.forYear', { year: periodYear || '—' })}
                 {(existingAdministrator || administrator?.kind === 'new') && (
                   <>
                     {' '}
-                    для {existingAdministrator?.display_name ?? administrator?.label}
+                    {t('contracts.budgetForm.forAdministrator', {
+                      name: existingAdministrator?.display_name ?? administrator?.label,
+                    })}
                   </>
                 )}
               </p>
               <p className="text-xs text-muted-foreground pt-1">
-                Всё в одной транзакции: если хотя бы одна строка не пройдёт,
-                не заведутся ни остальные, ни справочники.
+                {t('contracts.budgetForm.transactionHint')}
               </p>
             </CardContent>
           </Card>
@@ -688,7 +685,7 @@ const BudgetCreate = () => {
           <div className="flex gap-3">
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Создать бюджет
+              {t('contracts.budgetForm.submit')}
             </Button>
             <Button
               type="button"
@@ -696,7 +693,7 @@ const BudgetCreate = () => {
               onClick={() => navigate('/contracts/budgets')}
               disabled={mutation.isPending}
             >
-              Отмена
+              {t('common.cancel')}
             </Button>
           </div>
         </form>

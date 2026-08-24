@@ -187,17 +187,19 @@ const HRTasks: React.FC = () => {
               size="sm"
               onClick={() => setShowFilters(!showFilters)}
               className="h-9 w-9 p-0 rounded-xl"
-              title="Фильтры"
+              title={t('hr.tasks.filters')}
             >
               <Filter className="h-4 w-4" />
             </Button>
 
             <div className="text-xs font-semibold text-muted-foreground whitespace-nowrap hidden md:block">
-              Всего: {tasks.length}
+              {t('hr.tasks.totalCount', { count: tasks.length })}
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* flex-wrap обязателен: переключатель вида и «Создать задачу» в одну
+              строку не влезают на 360px и выталкивали кнопку за экран. */}
+          <div className="flex flex-wrap items-center gap-2">
             <div className="flex bg-muted/40 p-1 rounded-xl border">
               <Button
                 variant={viewMode === 'board' ? 'secondary' : 'ghost'}
@@ -206,7 +208,7 @@ const HRTasks: React.FC = () => {
                 onClick={() => setViewMode('board')}
               >
                 <LayoutGrid className="h-3.5 w-3.5" />
-                Канбан
+                {t('hr.tasks.kanban')}
               </Button>
               <Button
                 variant={viewMode === 'table' ? 'secondary' : 'ghost'}
@@ -215,13 +217,13 @@ const HRTasks: React.FC = () => {
                 onClick={() => setViewMode('table')}
               >
                 <LayoutList className="h-3.5 w-3.5" />
-                Таблица
+                {t('hr.tasks.table')}
               </Button>
             </div>
 
             <Button
               onClick={() => setCreateOpen(true)}
-              className="h-9 gap-2 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 font-semibold shadow-2xs"
+              className="h-9 min-h-[44px] flex-1 justify-center gap-2 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 font-semibold shadow-2xs sm:min-h-9 sm:flex-none"
             >
               <Plus className="h-4 w-4" />
               {t('tasks.pages.list.create', 'Создать задачу')}
@@ -287,7 +289,7 @@ const HRTasks: React.FC = () => {
 
             <Select value={contractorFilter} onValueChange={setContractorFilter}>
               <SelectTrigger className="h-9 text-xs rounded-xl bg-muted/30">
-                <SelectValue placeholder={t('tasks.pages.contractors.one', 'Подрядчик')} />
+                <SelectValue placeholder={t('tasks.pages.contractors.one', 'Партнёр')} />
               </SelectTrigger>
               <SelectContent className="rounded-2xl">
                 <SelectItem value="all">{t('tasks.pages.contractors.allPerformers', 'Все исполнители')}</SelectItem>

@@ -61,7 +61,7 @@ export const QUORUM_LABELS: Record<Quorum, string> = {
 /** Откуда берётся список согласующих этапа. `initiator` вместе с
  *  «требуется документ» и есть этап подписи автора. */
 export const APPROVER_KIND_LABELS: Record<ApproverKind, string> = {
-  named: 'Названные в маршруте',
+  position: 'По HR-должности',
   initiator: 'Инициатор согласования',
 };
 

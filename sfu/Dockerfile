@@ -44,10 +44,17 @@ RUN npm run build
 # -- Stage 2: Production --
 FROM node:22-bookworm-slim
 
-# Runtime dependencies for Mediasoup C++ worker
+# Runtime dependencies for Mediasoup C++ worker.
+#
+# ffmpeg — для записи конференций (src/recording.ts): PlainTransport отдаёт
+# RTP на localhost, ffmpeg ремуксит его в .mkv с `-c copy`. Именно ремукс, без
+# перекодирования, поэтому хватает обычной сборки и CPU почти не тратится;
+# сведение в одно видео и распознавание речи делает отдельный контейнер
+# backend-media-worker.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libstdc++6 \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

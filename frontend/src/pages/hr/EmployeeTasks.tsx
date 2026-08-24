@@ -122,7 +122,7 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                     {filteredTasks.length === 0 && (
                         <TableRow>
                             <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                                Нет задач
+                                {t('hr.tasks.empty')}
                             </TableCell>
                         </TableRow>
                     )}
@@ -215,8 +215,8 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                     <Tabs value={activeTab} onValueChange={setActiveTab}>
                         <div className="flex flex-col sm:flex-row gap-4 mb-4 items-center justify-between">
                             <TabsList>
-                                <TabsTrigger value="my-tasks">Мои задачи</TabsTrigger>
-                                <TabsTrigger value="department-tasks">Свободные задачи отдела</TabsTrigger>
+                                <TabsTrigger value="my-tasks">{t('hr.tasks.mine')}</TabsTrigger>
+                                <TabsTrigger value="department-tasks">{t('hr.tasks.departmentFree')}</TabsTrigger>
                             </TabsList>
 
                             <div className="flex gap-2 w-full sm:w-auto items-center">

@@ -132,6 +132,29 @@ def get_user_brief(user_id: int) -> dict | None:
     return _brief_from_values(row) if row is not None else None
 
 
+def find_user_ids_by_emails(emails: Iterable[str]) -> dict[str, int]:
+    """``{адрес в нижнем регистре: user_id}`` для тех адресов, под которыми в
+    платформе есть пользователь.
+
+    Пакетно, а не по одному: единственный потребитель — сверка почтовых
+    ящиков (``apps.mail.services.reconcile_service``), которая проверяет
+    десятки адресов за прогон, и запрос на каждый превратил бы её в N+1.
+
+    Регистр приводится так же, как при создании пользователя
+    (``admin_service``: ``email.strip().lower()``), иначе ящик
+    ``Sanzhar@htq.group`` не нашёл бы владельца с ``sanzhar@htq.group``.
+    Адреса без пользователя в ответ просто не попадают.
+    """
+    require_service("users")
+    normalized = {value.strip().lower() for value in emails if value and value.strip()}
+    if not normalized:
+        return {}
+    rows = (User.objects
+            .filter(email__in=normalized)
+            .values_list("email", "id"))
+    return {email.strip().lower(): user_id for email, user_id in rows}
+
+
 def verify_password(user_id: int, password: str) -> bool:
     """Re-check one user's own password — a *step-up* confirmation, not a
     login: it issues no token, touches no ``last_login``, and returns a plain
@@ -241,5 +264,13 @@ def create_user(*, email: str, first_name: str = "", last_name: str = "",
         raise DuplicateEmail() from None
     except admin_service.DuplicateUsername:
         raise DuplicateUsername() from None
+
+    # Сотрудника заводят по его рабочему адресу — если корпоративный ящик с
+    # этим адресом уже существует, подключаем его сразу. Ящик НЕ создаётся:
+    # HR-форма его не заказывала. Вызов ничего не бросает и ничего не значит,
+    # когда подключать нечего (личная почта, ящика нет, занят другим).
+    from apps.mail import interface as mail_interface
+
+    mail_interface.attach_mailbox_by_email(user_id=user.id, email=email_norm)
 
     return _option_from_user(user)

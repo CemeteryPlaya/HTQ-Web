@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useTranslation } from 'react-i18next';
+import i18n from '@/i18n';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -19,6 +20,7 @@ import {
 
 import api from '@/api/client';
 import { BackToProfile } from '@/components/BackToProfile';
+import { CorporateMailSettings } from '@/components/mail/CorporateMailSettings';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import ProfileSidebar from '@/components/profile/ProfileSidebar';
@@ -91,24 +93,17 @@ const Settings: React.FC = () => {
     return (
         <div className="min-h-screen bg-background flex flex-col">
             <Header />
-            <main className="flex-1 container mx-auto px-4 py-8">
+            <main className="flex-1 container mx-auto px-4 py-6 sm:px-6 lg:px-8">
                 <div className="flex items-center gap-3 mb-6">
-                    <BackToProfile className="mb-0" />
-                    <h1 className="text-3xl font-bold">
+                    <BackToProfile className="mb-0 text-xs" />
+                    <h1 className="text-2xl sm:text-3xl font-bold">
                         {t('settingsPage.title', 'Настройки')}
                     </h1>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-                    <div className="lg:col-span-1">
-                        <ProfileSidebar
-                            roles={profile.roles}
-                            department={profile.department}
-                            position={profile.position}
-                        />
-                    </div>
-
-                    <div className="lg:col-span-3 space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 items-start">
+                    {/* Settings cards (renders FIRST on mobile) */}
+                    <div className="order-1 lg:order-2 lg:col-span-3 space-y-6">
                         <PersonalInfoCard profile={profile} />
                         <ContactInfoCard profile={profile} />
                         <WorkInfoCard />
@@ -128,6 +123,15 @@ const Settings: React.FC = () => {
                                 queryClient.clear();
                                 navigate('/login');
                             }}
+                        />
+                    </div>
+
+                    {/* Sidebar (renders SECOND on mobile) */}
+                    <div className="order-2 lg:order-1 lg:col-span-1">
+                        <ProfileSidebar
+                            roles={profile.roles}
+                            department={profile.department}
+                            position={profile.position}
                         />
                     </div>
                 </div>
@@ -333,24 +337,17 @@ const PersonalInfoCard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
 const contactSchema = z.object({
     // Маска (PhoneInput) не даёт набрать лишнего, но недобранный номер
     // сохранить всё же можно — это ловим здесь. Схема объявлена вне
-    // компонента, поэтому t() недоступен: сообщение задано текстом.
+    // компонента, поэтому хук t() недоступен; сообщение берём из общего
+    // инстанса i18n и обязательно лениво — колбэк zod зовёт его на каждой
+    // валидации, а строковый литерал зафиксировал бы язык на момент импорта.
     phone: z
         .string()
         .max(30)
-        .refine(isKzPhoneValid, {
-            message: 'Введите номер полностью: +7 (700) 483-55-81',
-        })
+        .refine(isKzPhoneValid, () => ({
+            message: i18n.t('settingsPage.phoneIncomplete'),
+        }))
         .optional()
         .or(z.literal('')),
-    secondaryEmail: z
-        .string()
-        .max(254)
-        .optional()
-        .or(z.literal(''))
-        .refine(
-            (v) => !v || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v),
-            { message: 'invalid_email' },
-        ),
 });
 
 type ContactFormValues = z.infer<typeof contactSchema>;
@@ -363,7 +360,6 @@ const ContactInfoCard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
         resolver: zodResolver(contactSchema),
         defaultValues: {
             phone: profile.phone || '',
-            secondaryEmail: (profile.settings as any)?.secondary_email || '',
         },
     });
 
@@ -372,23 +368,14 @@ const ContactInfoCard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     // inputs would otherwise stay empty — re-sync via reset().
     useEffect(() => {
         if (form.formState.isDirty) return; // don't clobber unsaved edits
-        form.reset({
-            phone: profile.phone || '',
-            secondaryEmail: (profile.settings as any)?.secondary_email || '',
-        });
+        form.reset({ phone: profile.phone || '' });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [profile.phone, (profile.settings as any)?.secondary_email]);
+    }, [profile.phone]);
 
     const mutation = useMutation({
         mutationFn: async (values: ContactFormValues) => {
             const formData = new FormData();
             formData.append('phone', values.phone || '');
-            // Merge into existing settings JSON to preserve language/timezone/etc.
-            const mergedSettings = {
-                ...(profile.settings || {}),
-                secondary_email: values.secondaryEmail || '',
-            };
-            formData.append('settings', JSON.stringify(mergedSettings));
             const res = await api.patch<UserProfile>('users/v1/profile/me', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
@@ -397,10 +384,7 @@ const ContactInfoCard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
         onSuccess: (updated) => {
             queryClient.setQueryData(['profile'], updated);
             writeCachedProfile(updated);
-            form.reset({
-                phone: updated.phone || '',
-                secondaryEmail: (updated.settings as any)?.secondary_email || '',
-            });
+            form.reset({ phone: updated.phone || '' });
             toast.success(t('settingsPage.contactSaved', 'Контактные данные обновлены'));
         },
         onError: () => {
@@ -441,33 +425,6 @@ const ContactInfoCard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                                 </FormItem>
                             )}
                         />
-                        <FormField
-                            control={form.control}
-                            name="secondaryEmail"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel className="flex items-center gap-1">
-                                        <Mail className="h-4 w-4" />
-                                        {t('settingsPage.secondaryEmail', 'Дополнительная почта')}
-                                    </FormLabel>
-                                    <FormControl>
-                                        <Input
-                                            type="email"
-                                            placeholder="alt@example.com"
-                                            {...field}
-                                            value={field.value || ''}
-                                        />
-                                    </FormControl>
-                                    <FormDescription>
-                                        {t(
-                                            'settingsPage.secondaryEmailHint',
-                                            'Используется для уведомлений и восстановления пароля. Не заменяет основной email.',
-                                        )}
-                                    </FormDescription>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
                         <div className="flex justify-end">
                             <Button type="submit" disabled={mutation.isPending}>
                                 {mutation.isPending
@@ -477,6 +434,13 @@ const ContactInfoCard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                         </div>
                     </form>
                 </Form>
+
+                {/* Вне <form> намеренно: у почты свои действия («Подключить»,
+                    «Сохранить подпись») со своей проверкой на сервере, и
+                    отправлять их общей кнопкой «Сохранить» значило бы обещать
+                    одно сохранение там, где их два и они независимы. */}
+                <Separator className="my-6" />
+                <CorporateMailSettings />
             </CardContent>
         </Card>
     );

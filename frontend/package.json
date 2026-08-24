@@ -8,12 +8,16 @@
     "build": "vite build",
     "postbuild": "node scripts/check-bundle-size.mjs",
     "lint": "eslint .",
+    "typecheck": "tsc -b",
     "preview": "vite build && vite preview",
     "images": "node convert-images.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "test:mobile": "playwright test --config=playwright.mobile.config.ts",
+    "test:mobile:probe": "playwright test --config=playwright.mobile.config.ts 00_probe --project=android-360",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",
@@ -82,6 +86,7 @@
     "@eslint/js": "^9.32.0",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/typography": "^0.5.16",
+    "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.0.0",
     "@testing-library/user-event": "^14.6.1",
@@ -94,6 +99,7 @@
     "babel-plugin-react-compiler": "^1.0.0",
     "compression": "^1.8.1",
     "eslint": "^9.32.0",
+    "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^15.15.0",

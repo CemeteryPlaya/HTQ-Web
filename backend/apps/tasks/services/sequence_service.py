@@ -18,12 +18,24 @@ create.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from django.db import transaction
 
 from ..models import ProductionDay, TaskSequence
-from .production_calendar import WORKING_DAY_TYPES
+from .production_calendar import WORKING_DAY_TYPES, base_day_type
+
+# Потолок обхода в ``due_date_from_working_days``. Календарных дней на N
+# рабочих нужно ~1.4·N (выходные) плюс праздники; тройной запас и месяц сверху
+# покрывают любой реальный отрезок, но не дают циклу уйти в бесконечность,
+# если оверрайды объявят рабочими нулевое количество дней.
+_SCAN_FACTOR = 3
+_SCAN_SLACK_DAYS = 30
+# ~10 рабочих лет. Схема ``estimated_working_days`` — голый ``int | None``, а
+# обход теперь идёт по дням, так что запрос с 10_000_000 крутил бы цикл
+# впустую и упирался в переполнение ``date``. Прежняя версия была защищена
+# двумя индексными запросами; эта защищается явным потолком.
+_MAX_WORKING_DAYS = 2600
 
 DEFAULT_PREFIX = "TASK"
 
@@ -59,24 +71,35 @@ def due_date_from_working_days(start_date: date, working_days: int) -> date | No
     day starting Monday is Monday, not Tuesday (the original's ``+ working
     days - 1`` offset against the cumulative counter).
 
-    Returns ``None`` when the production calendar has no row for
-    ``start_date`` or does not extend far enough. That is the original's
-    behaviour and the caller treats it as "no computed deadline", falling
-    back to whatever ``due_date`` the client sent.
+    Считается по СГЕНЕРИРОВАННОМУ календарю с оверрайдами поверх, а не по
+    таблице ``ProductionDay`` — по той же причине, что и в
+    ``calendar_service.working_days_between``: ``ProductionDay`` это таблица
+    переопределений, а не календарь, и в обычной базе строк в ней нет вообще.
+    Прежняя версия брала ``working_days_since_epoch`` из строки за
+    ``start_date`` и без неё возвращала ``None`` — то есть на любой не
+    размеченной вручную базе ``estimated_working_days`` при создании задачи
+    молча терялся. Заодно снимается ограничение «отрезок не пересекает
+    1 января»: счётчик там сбрасывается, а обход по дням — нет.
+
+    ``None`` — если ``working_days`` не положительное, выходит за
+    ``_MAX_WORKING_DAYS`` или рабочих дней не набралось в пределах потолка
+    обхода. Вызывающий трактует это как «дедлайн не вычислен» и оставляет
+    ``due_date``, присланный клиентом.
     """
-    if working_days is None or working_days < 1:
+    if working_days is None or not 1 <= working_days <= _MAX_WORKING_DAYS:
         return None
-    anchor = (ProductionDay.objects
-              .filter(date=start_date)
-              .values_list("working_days_since_epoch", flat=True)
-              .first())
-    if anchor is None:
-        return None
-    target = anchor + working_days - 1
-    return (ProductionDay.objects
-            .filter(date__gte=start_date,
-                    day_type__in=WORKING_DAY_TYPES,
-                    working_days_since_epoch__gte=target)
-            .order_by("date")
-            .values_list("date", flat=True)
-            .first())
+    limit = start_date + timedelta(
+        days=working_days * _SCAN_FACTOR + _SCAN_SLACK_DAYS)
+    overrides = dict(ProductionDay.objects
+                     .filter(date__gte=start_date, date__lte=limit)
+                     .values_list("date", "day_type"))
+    seen = 0
+    day = start_date
+    while day <= limit:
+        day_type = overrides.get(day) or base_day_type(day)
+        if day_type in WORKING_DAY_TYPES:
+            seen += 1
+            if seen == working_days:
+                return day
+        day += timedelta(days=1)
+    return None

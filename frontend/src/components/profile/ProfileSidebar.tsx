@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -37,11 +37,12 @@ import {
     ExternalLink,
     Search,
     X,
-    ChevronDown,
     ChevronRight,
+    Volume2,
     type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { SoundSettingsModal } from '@/components/sound/SoundSettingsModal';
 
 import api from '@/api/client';
 import { apiPath } from '@/api/endpoints';
@@ -92,7 +93,7 @@ type ItemProps = ItemConfig & {
 const SidebarItem: React.FC<ItemProps> = ({ to, icon: Icon, label, badge, external, onClick }) => {
     const linkClasses = ({ isActive }: { isActive: boolean }) =>
         cn(
-            'group relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150',
+            'group relative flex min-h-[44px] items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150 sm:min-h-0',
             'text-muted-foreground hover:bg-accent/80 hover:text-foreground',
             isActive && 'bg-primary/10 text-primary font-semibold border-l-2 border-primary pl-2.5 shadow-2xs',
         );
@@ -128,40 +129,112 @@ const SidebarItem: React.FC<ItemProps> = ({ to, icon: Icon, label, badge, extern
 };
 
 type SectionProps = {
+    id: string;
     title: string;
     children: React.ReactNode;
     count?: number;
-    defaultOpen?: boolean;
     forceOpen?: boolean;
 };
 
-const SidebarSection: React.FC<SectionProps> = ({ title, children, count, defaultOpen = true, forceOpen = false }) => {
-    const [isOpen, setIsOpen] = useState(defaultOpen);
+const SECTIONS_KEY = 'htq.profileSidebar.collapsedSections';
+
+/**
+ * Сайдбар живёт только на /myprofile и /settings, поэтому каждый заход на
+ * профиль монтирует его заново. Без сохранённого состояния свёрнутый раздел
+ * (в HR — дюжина страниц) схлопывался обратно при каждом возврате, и до своих
+ * страниц приходилось докликиваться снова.
+ */
+function readCollapsedSections(): Record<string, boolean> {
+    if (typeof window === 'undefined') return {};
+    try {
+        const parsed: unknown = JSON.parse(window.localStorage.getItem(SECTIONS_KEY) ?? '{}');
+        return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {};
+    } catch {
+        // Битый JSON или запрещённый storage — навигацию это ронять не должно.
+        return {};
+    }
+}
+
+function writeCollapsedSection(id: string, collapsed: boolean) {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(
+            SECTIONS_KEY,
+            JSON.stringify({ ...readCollapsedSections(), [id]: collapsed }),
+        );
+    } catch {
+        // Приватный режим: выбор просто не переживёт перезагрузку страницы.
+    }
+}
+
+const SidebarSection: React.FC<SectionProps> = ({ id, title, children, count, forceOpen = false }) => {
+    // Разделы раскрыты по умолчанию: доступные страницы должны быть видны
+    // сразу, а не после догадки, что заголовок вообще кликабелен.
+    const [isOpen, setIsOpen] = useState(() => !readCollapsedSections()[id]);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const revealRef = useRef(false);
 
     const expanded = forceOpen || isOpen;
+    const contentId = `sidebar-section-${id}`;
+
+    const toggle = () => {
+        const next = !isOpen;
+        revealRef.current = next;
+        writeCollapsedSection(id, !next);
+        setIsOpen(next);
+    };
+
+    // Раздел у нижнего края прокручиваемого сайдбара раскрывался за пределами
+    // видимой области — со стороны это выглядело как «клик ничего не сделал».
+    useEffect(() => {
+        if (!expanded || !revealRef.current) return;
+        revealRef.current = false;
+        containerRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, [expanded]);
 
     return (
-        <div className="space-y-1">
+        <div ref={containerRef} className="space-y-1">
             <button
                 type="button"
-                onClick={() => setIsOpen(prev => !prev)}
-                className="flex w-full items-center justify-between px-2.5 py-1.5 text-xs font-bold uppercase tracking-wider text-muted-foreground/80 hover:text-foreground transition-colors rounded-md hover:bg-accent/40"
+                onClick={toggle}
+                aria-expanded={expanded}
+                aria-controls={contentId}
+                className={cn(
+                    'flex min-h-[44px] w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5',
+                    'text-xs font-bold uppercase tracking-wider transition-colors sm:min-h-0',
+                    // Раскрытое состояние помечено фоном, цветом текста, счётчиком
+                    // и поворотом шеврона: по одному шеврону в 14px его не видно.
+                    expanded
+                        ? 'bg-accent/60 text-foreground'
+                        : 'text-muted-foreground/80 hover:bg-accent/40 hover:text-foreground',
+                )}
             >
                 <span className="truncate">{title}</span>
                 <div className="flex items-center gap-1.5 shrink-0">
                     {count !== undefined && count > 0 && (
-                        <span className="rounded-full bg-muted/80 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                        <span
+                            className={cn(
+                                'rounded-full px-1.5 py-0.5 text-[10px] font-semibold transition-colors',
+                                expanded ? 'bg-primary/15 text-primary' : 'bg-muted/80 text-muted-foreground',
+                            )}
+                        >
                             {count}
                         </span>
                     )}
-                    {expanded ? (
-                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/70" />
-                    ) : (
-                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/70" />
-                    )}
+                    <ChevronRight
+                        aria-hidden
+                        className={cn(
+                            'h-3.5 w-3.5 transition-transform duration-200',
+                            expanded ? 'rotate-90 text-primary' : 'text-muted-foreground/70',
+                        )}
+                    />
                 </div>
             </button>
-            {expanded && <nav className="flex flex-col gap-0.5 pl-0.5">{children}</nav>}
+            {expanded && (
+                <nav id={contentId} className="flex flex-col gap-0.5 pl-0.5">
+                    {children}
+                </nav>
+            )}
         </div>
     );
 };
@@ -196,6 +269,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     const communicationItems: ItemConfig[] = useMemo(() => [
         { id: 'messenger', to: '/messenger', icon: MessageSquare, label: t('profile.sidebar.messenger', 'Мессенджер') },
         { id: 'conference', to: '/conference', icon: Video, label: t('profile.sidebar.conference', 'Видеоконференция'), onClick: gateService('conference') },
+        { id: 'conference-history', to: '/conference/history', icon: History, label: t('profile.sidebar.conferenceHistory', 'История конференций'), onClick: gateService('conference') },
         { id: 'email', to: '/email', icon: Mail, label: t('profile.sidebar.email', 'Почта') },
         // `isDisabled` В ЗАВИСИМОСТЯХ ОБЯЗАТЕЛЕН. Без него мемо считался один раз,
         // на первом рендере — когда ответ реестра ещё не пришёл и действовал
@@ -323,13 +397,13 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
 
             {isSearching && totalResults === 0 && (
                 <div className="py-6 text-center text-xs text-muted-foreground">
-                    Ничего не найдено
+                    {t('common.nothingFound')}
                 </div>
             )}
 
             {/* Account Section */}
             {filteredAccount.length > 0 && (
-                <SidebarSection title={t('profile.sidebar.account')} count={filteredAccount.length} forceOpen={isSearching}>
+                <SidebarSection id="account" title={t('profile.sidebar.account')} count={filteredAccount.length} forceOpen={isSearching}>
                     {filteredAccount.map((item) => (
                         <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
                     ))}
@@ -338,7 +412,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
 
             {/* Communications Section */}
             {filteredComm.length > 0 && (
-                <SidebarSection title={t('profile.sidebar.sectionCommunications', 'Коммуникации')} count={filteredComm.length} forceOpen={isSearching}>
+                <SidebarSection id="communications" title={t('profile.sidebar.sectionCommunications', 'Коммуникации')} count={filteredComm.length} forceOpen={isSearching}>
                     {filteredComm.map((item) => (
                         <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
                     ))}
@@ -347,7 +421,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
 
             {/* Work Section */}
             {filteredWork.length > 0 && (
-                <SidebarSection title={t('profile.sidebar.sectionWork', 'Работа')} count={filteredWork.length} forceOpen={isSearching}>
+                <SidebarSection id="work" title={t('profile.sidebar.sectionWork', 'Работа')} count={filteredWork.length} forceOpen={isSearching}>
                     {filteredWork.map((item) => (
                         <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
                     ))}
@@ -356,7 +430,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
 
             {/* Content Section */}
             {filteredContent.length > 0 && (
-                <SidebarSection title={t('profile.sidebar.editor')} count={filteredContent.length} forceOpen={isSearching}>
+                <SidebarSection id="content" title={t('profile.sidebar.editor')} count={filteredContent.length} forceOpen={isSearching}>
                     {filteredContent.map((item) => (
                         <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
                     ))}
@@ -365,7 +439,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
 
             {/* HR Section */}
             {filteredHr.length > 0 && (
-                <SidebarSection title={t('profile.sidebar.hrManagement')} count={filteredHr.length} forceOpen={isSearching} defaultOpen={false}>
+                <SidebarSection id="hr" title={t('profile.sidebar.hrManagement')} count={filteredHr.length} forceOpen={isSearching}>
                     {filteredHr.map((item) => (
                         <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
                     ))}
@@ -374,7 +448,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
 
             {/* Admin Section */}
             {filteredAdmin.length > 0 && (
-                <SidebarSection title={t('profile.sidebar.adminTools')} count={filteredAdmin.length} forceOpen={isSearching} defaultOpen={false}>
+                <SidebarSection id="admin" title={t('profile.sidebar.adminTools')} count={filteredAdmin.length} forceOpen={isSearching}>
                     {filteredAdmin.map((item) => (
                         <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
                     ))}
@@ -383,12 +457,27 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
 
             {/* Monitoring Section */}
             {filteredMonitoring.length > 0 && (
-                <SidebarSection title={t('profile.sidebar.monitoring', 'Мониторинг')} count={filteredMonitoring.length} forceOpen={isSearching} defaultOpen={false}>
+                <SidebarSection id="monitoring" title={t('profile.sidebar.monitoring', 'Мониторинг')} count={filteredMonitoring.length} forceOpen={isSearching}>
                     {filteredMonitoring.map((item) => (
                         <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
                     ))}
                 </SidebarSection>
             )}
+
+            {/* Quick sound control */}
+            <div className="pt-2 mt-auto border-t border-border/40">
+                <SoundSettingsModal
+                    trigger={
+                        <button
+                            type="button"
+                            className="group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent/80 hover:text-foreground transition-all duration-150"
+                        >
+                            <Volume2 className="h-4 w-4 shrink-0 transition-transform duration-200 group-hover:scale-110" />
+                            <span className="flex-1 truncate text-left">{t('sound.title', 'Звуки уведомлений')}</span>
+                        </button>
+                    }
+                />
+            </div>
 
             {blockedService && (
                 <ServiceUnavailableDialog

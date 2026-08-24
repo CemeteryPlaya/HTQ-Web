@@ -6,9 +6,13 @@
 
 **Права.** Разделены по слоям домена, и разделены не так, как в contracts:
 
-* **Маршруты** — настройка платформы: читать может любой аутентифицированный
-  (фронтенду надо показать «кто будет согласовать» до отправки), править —
-  только администратор.
+* **Маршруты** — настройка платформы: и читать, и править может только
+  администратор. Маршрут раскрывает имена согласующих и внутренние правила
+  ветвления; обычной карточке предметного объекта эти данные не нужны.
+* **Процессы** — администратор видит всё, обычный сотрудник только процессы,
+  которые он отправил либо в которых назначен согласующим. Это же правило
+  действует для списка и карточки: подбором числового id чужой процесс не
+  открыть.
 * **Решения** (``/tasks/...``) — НЕ администраторские. В этом весь смысл
   модуля: согласует названный в маршруте человек, а не тот, у кого есть
   ``is_staff``. Кто именно вправе решить, проверяет ``engine.act`` по
@@ -26,6 +30,7 @@ from __future__ import annotations
 
 import logging
 
+from django.db.models import Q, QuerySet
 from django.http import Http404, HttpResponse
 from django.utils.decorators import method_decorator
 
@@ -89,6 +94,9 @@ class SignoffView(ApiView):
 
 
 read = method_decorator(api_view(methods=("GET",), auth="jwt"))
+admin_read = method_decorator(
+    api_view(methods=("GET",), auth="jwt", admin=True)
+)
 
 
 def write(method: str, body=None, status: int = 200, admin: bool = True):
@@ -96,12 +104,38 @@ def write(method: str, body=None, status: int = 200, admin: bool = True):
                                      body=body, status=status, admin=admin))
 
 
+def _visible_processes(query: QuerySet, token) -> QuerySet:
+    """Ограничить процессы участием вызывающего пользователя.
+
+    Инициатору нужна история отправленного, согласующему — контекст своей
+    задачи (включая уже закрытые круги), администратору — полный надзор.
+    ``distinct`` обязателен: у пользователя могут быть задачи в нескольких
+    этапах одного процесса.
+    """
+    if token.is_elevated:
+        return query
+    return query.filter(
+        Q(initiator_id=token.user_id)
+        | Q(stages__tasks__user_id=token.user_id)
+    ).distinct()
+
+
+def _visible_process_or_404(process_id: int, token) -> ApprovalProcess:
+    """Карточка по тем же правилам, что список, без утечки существования id."""
+    process = _visible_processes(
+        ApprovalProcess.objects.all(), token,
+    ).filter(pk=process_id).first()
+    if process is None:
+        raise Http404("Процесс согласования не найден")
+    return process
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Маршруты
 # ═══════════════════════════════════════════════════════════════════════
 
 class RouteCollectionView(SignoffView):
-    @read
+    @admin_read
     def get(self, request):
         rows = routes.list_routes(subject_type=self.str_param("subject_type"),
                                   is_active=self.bool_param("is_active"))
@@ -118,7 +152,7 @@ class RouteCollectionView(SignoffView):
 
 
 class RouteDetailView(SignoffView):
-    @read
+    @admin_read
     def get(self, request, route_id: int):
         # ``gaps=True`` только здесь: карточка одного маршрута — это экран
         # редактора, ради которого подсказка и считается.
@@ -152,7 +186,7 @@ class RouteStagesView(SignoffView):
 
 
 class StageDetailView(SignoffView):
-    @read
+    @admin_read
     def get(self, request, stage_id: int):
         return schemas.StageRead.model_validate(
             routes.serialize_stage(routes.get_stage_or_404(stage_id)))
@@ -185,7 +219,10 @@ class StageDetailView(SignoffView):
 class ProcessCollectionView(SignoffView):
     @read
     def get(self, request):
-        query = ApprovalProcess.objects.prefetch_related("stages__tasks")
+        query = _visible_processes(
+            ApprovalProcess.objects.prefetch_related("stages__tasks"),
+            request.token,
+        )
         subject_type = self.str_param("subject_type")
         subject_id = self.int_param("subject_id")
         state = self.str_param("state")
@@ -222,9 +259,7 @@ class ProcessCollectionView(SignoffView):
 class ProcessDetailView(SignoffView):
     @read
     def get(self, request, process_id: int):
-        process = ApprovalProcess.objects.filter(pk=process_id).first()
-        if process is None:
-            raise Http404("Процесс согласования не найден")
+        process = _visible_process_or_404(process_id, request.token)
         return schemas.ProcessRead.model_validate(
             presentation.serialize_process(process, enrich=True))
 
@@ -259,7 +294,7 @@ class ProcessCancelView(SignoffView):
 
 class ProcessReworkView(SignoffView):
     """«Вернуть на доработку» по УЖЕ ЗАКРЫТОМУ кругу — администратором или
-    согласующим этого процесса.
+    согласующим, который действительно принял решение в этом процессе.
 
     Зачем эндпоинт существует. Согласованный и отклонённый объекты заперты
     для правки (``signoff.Approvable.assert_editable``), и это единственный
@@ -270,11 +305,11 @@ class ProcessReworkView(SignoffView):
 
     ``admin=False``, и права проверяются по ДАННЫМ, как в
     ``ProcessCancelView``: администратор — всегда, а из обычных
-    пользователей — тот, кто в этом процессе согласующий. Он и есть тот, кто
-    вправе передумать: заметил ошибку в подписанном им же документе —
-    отправил переделывать. Инициатора здесь намеренно НЕТ, в отличие от
-    отзыва: отзывают СВОЮ заявку, пока её никто не рассмотрел, а отпереть
-    согласованный документ по собственному желанию значило бы обойти
+    пользователей — тот, кто в этом процессе уже принял решение. Участник,
+    чья задача была пропущена из-за кворума или раннего завершения, документ
+    фактически не рассматривал и отпирать его не вправе. Инициатора здесь
+    намеренно НЕТ, в отличие от отзыва: отзывают СВОЮ заявку, пока она идёт,
+    а отпереть решённый документ по собственному желанию значило бы обойти
     решение, которое приняли другие.
     """
 
@@ -284,11 +319,11 @@ class ProcessReworkView(SignoffView):
         if process is None:
             raise Http404("Процесс согласования не найден")
 
-        # Любая задача процесса, в любом состоянии: согласующий, чей этап
-        # погас как «не потребовалось» (кворум «достаточно одного»), — такой
-        # же участник круга, как и решивший.
+        # Только реально принятое решение. Наличие созданной, но погашенной
+        # задачи ещё не даёт права отпирать завершённый документ.
         is_approver = ApprovalTask.objects.filter(
             stage__process_id=process_id, user_id=request.token.user_id,
+            acted_at__isnull=False,
         ).exists()
         if not (is_approver or request.token.is_elevated):
             return json_error("Вернуть на доработку может согласующий этого "

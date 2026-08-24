@@ -29,6 +29,7 @@ import {
   Circle,
   CircleDot,
   FileText,
+  MessageSquare,
   MinusCircle,
   PenLine,
   Split,
@@ -43,6 +44,7 @@ import type { ApprovalProcess, SubjectField, TaskState } from '@/types/signoff';
 import { conditionText, formatMoment, groupStages } from './format';
 import { QUORUM_LABELS, TASK_STATE_LABELS } from './labels';
 import { StageStateBadge } from './states';
+import { useTranslation } from 'react-i18next';
 
 const TASK_ICONS: Record<TaskState, { icon: typeof Circle; className: string }> = {
   pending: { icon: CircleDot, className: 'text-amber-600 dark:text-amber-500' },
@@ -61,6 +63,7 @@ function TaskRow({
   task: ApprovalProcess['stages'][number]['tasks'][number];
   stateLabels: Record<string, string>;
 }) {
+  const { t } = useTranslation();
   const { icon: Icon, className } = TASK_ICONS[task.state] ?? TASK_ICONS.pending;
   return (
     <li className="flex items-start gap-2 py-1.5">
@@ -68,7 +71,7 @@ function TaskRow({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2">
           <span className="text-sm font-medium">
-            {task.full_name || `Пользователь #${task.user_id}`}
+            {task.full_name || t('signoff.userNumber', { id: task.user_id })}
           </span>
           <span className="text-xs text-muted-foreground">
             {stateLabels[task.state] ?? TASK_STATE_LABELS[task.state] ?? task.state}
@@ -94,11 +97,11 @@ function TaskRow({
                 rel="noreferrer"
                 className="text-primary hover:underline break-all"
               >
-                Приложенный документ
+                {t('signoff.timeline.attachedDocument')}
               </a>
             ) : (
               <span className="text-muted-foreground">
-                Документ приложен (ссылка недоступна)
+                {t('signoff.timeline.attachedNoLink')}
               </span>
             )}
           </p>
@@ -129,12 +132,13 @@ export function ProcessTimeline({
   fields = [],
   compact = false,
 }: Props) {
+  const { t } = useTranslation();
   const groups = groupStages(process.stages);
 
   if (groups.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        В снимке процесса нет ни одного этапа.
+        {t('signoff.timeline.noStages')}
       </p>
     );
   }
@@ -159,7 +163,7 @@ export function ProcessTimeline({
               </span>
               {group.length > 1 && (
                 <Badge variant="outline" className="text-muted-foreground">
-                  параллельно · {group.length}
+                  {t('signoff.timeline.parallel', { count: group.length })}
                 </Badge>
               )}
             </div>
@@ -198,14 +202,20 @@ export function ProcessTimeline({
                         там ровно один, и «нужны все» из одного человека
                         только путало бы. */}
                     {stage.approver_kind === 'initiator'
-                      ? 'подписывает инициатор'
+                      ? t('signoff.timeline.initiatorSigns')
                       : QUORUM_LABELS[stage.quorum] ?? stage.quorum}
                     {stage.decided_at && ` · ${formatMoment(stage.decided_at)}`}
                   </p>
                   {stage.requires_attachment && (
                     <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                       <PenLine className="h-3.5 w-3.5 shrink-0" />
-                      согласование только с приложенным PDF
+                      {t('signoff.timeline.pdfRequired')}
+                    </p>
+                  )}
+                  {stage.requires_comment && (
+                    <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                      согласование только с пояснением
                     </p>
                   )}
                   {stage.matched_by !== 'always' && (
@@ -213,7 +223,7 @@ export function ProcessTimeline({
                       <Split className="h-3.5 w-3.5 shrink-0 mt-px" />
                       <span className="break-words">
                         {stage.matched_by === 'fallback'
-                          ? 'ветка «иначе» — ни одно условие шага не сошлось'
+                          ? t('signoff.timeline.otherwiseBranch')
                           : conditionText(stage.condition, fields)}
                       </span>
                     </p>

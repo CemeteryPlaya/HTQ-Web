@@ -1,17 +1,23 @@
 """Kazakhstan production calendar.
 
-Ported verbatim from ``services/task/app/services/production_calendar.py``.
-The holiday table and the day-classification rules are business data, not
-implementation detail — they decide real deadlines, so they are copied
-value-for-value rather than "cleaned up".
+Ported from ``services/task/app/services/production_calendar.py``. The
+day-classification rules are business data, not implementation detail — they
+decide real deadlines, so they are kept value-for-value rather than "cleaned
+up".
+
+The holiday table itself no longer lives here: it moved to
+``apps.core.kz_holidays``, shared with ``apps.hr``, and is computed per year
+instead of being a hardcoded 2026 dictionary. The output for 2026 is
+unchanged — that is pinned by ``apps/core/tests/test_kz_holidays.py``.
 
 ``working_days_since_epoch`` is the running count of working days from
 1 January of the row's own year. The name says "epoch" but the counter
 resets each year — that is the original's behaviour (``iter_calendar_days``
-starts at ``date(start.year, 1, 1)`` with ``working_days = 0``), and the
-deadline lookup only ever compares two rows within one year's window, so the
-per-year reset is harmless. Preserved as-is because changing it would
-silently shift every stored counter without changing any test.
+starts at ``date(start.year, 1, 1)`` with ``working_days = 0``). It stays
+part of the API response, but nothing computes deadlines from it anymore:
+``sequence_service.due_date_from_working_days`` walks the days instead,
+precisely so a span crossing 1 January isn't broken by the reset. Preserved
+as-is because changing it would silently shift every stored counter.
 """
 
 from __future__ import annotations
@@ -19,31 +25,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Iterator
 
-# Source: official Kazakhstan 2026 holiday calendar published on gov.kz —
-# https://www.gov.kz/article/33969?lang=ru / https://www.gov.kz/article/16887
-KZ_HOLIDAYS_2026: dict[date, str] = {
-    date(2026, 1, 1): "Новый год",
-    date(2026, 1, 2): "Новый год",
-    date(2026, 1, 7): "Православное Рождество",
-    date(2026, 3, 8): "Международный женский день",
-    date(2026, 3, 9): "Международный женский день (перенос)",
-    date(2026, 3, 21): "Наурыз мейрамы",
-    date(2026, 3, 22): "Наурыз мейрамы",
-    date(2026, 3, 23): "Наурыз мейрамы",
-    date(2026, 3, 24): "Наурыз мейрамы (перенос)",
-    date(2026, 3, 25): "Наурыз мейрамы (перенос)",
-    date(2026, 5, 1): "Праздник единства народа Казахстана",
-    date(2026, 5, 7): "День защитника Отечества",
-    date(2026, 5, 9): "День Победы",
-    date(2026, 5, 11): "День Победы (перенос)",
-    date(2026, 5, 27): "Курбан-айт",
-    date(2026, 7, 6): "День Столицы",
-    date(2026, 8, 30): "День Конституции Республики Казахстан",
-    date(2026, 8, 31): "День Конституции Республики Казахстан (перенос)",
-    date(2026, 10, 25): "День Республики",
-    date(2026, 10, 26): "День Республики (перенос)",
-    date(2026, 12, 16): "День Независимости",
-}
+from apps.core import kz_holidays
 
 # Day types that count toward the working-day total. "short" is a
 # pre-holiday shortened day — still a working day for deadline purposes.
@@ -51,7 +33,7 @@ WORKING_DAY_TYPES = frozenset({"working", "short"})
 
 
 def base_day_type(day: date) -> str:
-    if day in KZ_HOLIDAYS_2026:
+    if kz_holidays.is_holiday(day):
         return "holiday"
     if day.weekday() >= 5:
         return "weekend"
@@ -59,7 +41,7 @@ def base_day_type(day: date) -> str:
 
 
 def base_note(day: date) -> str | None:
-    return KZ_HOLIDAYS_2026.get(day)
+    return kz_holidays.holiday_note(day)
 
 
 def iter_calendar_days(
@@ -105,6 +87,6 @@ def iter_calendar_days(
 
 def build_year_rows(year: int, overrides: dict[date, object] | None = None) -> list[dict]:
     """All calendar rows for ``year`` (the original's ``build_2026_seed_rows``
-    generalised to any year — 2026 is the only year with holiday data, so
-    other years come out as plain weekday/weekend)."""
+    generalised to any year — holidays now come from ``apps.core.kz_holidays``,
+    which computes them for every year, so no year comes out bare)."""
     return list(iter_calendar_days(date(year, 1, 1), date(year, 12, 31), overrides))

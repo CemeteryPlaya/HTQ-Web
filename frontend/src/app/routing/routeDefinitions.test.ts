@@ -40,9 +40,13 @@ describe('routeDefinitions', () => {
         expect(byPath.get('/tasks/reports')?.requiresRole).toBe('hr');
         expect(byPath.get('/tasks/resources')?.requiresRole).toBe('hr');
         expect(byPath.get('/tasks/equipment')?.requiresRole).toBe('admin');
+        // Численность персонала — управленческие данные по объекту целиком,
+        // в отличие от соседней ежедневки, куда отчитываются о своей смене.
+        expect(byPath.get('/tasks/project-daily')?.requiresRole).toBe('hr');
         // ...а сами задачи — нет: рядовой сотрудник ведёт там свою работу.
         expect(byPath.get('/tasks')?.requiresRole).toBeUndefined();
         expect(byPath.get('/tasks/:id')?.requiresRole).toBeUndefined();
+        expect(byPath.get('/tasks/daily')?.requiresRole).toBeUndefined();
     });
 
     it('страница проектов закрыта ролью задач, а не редакторской', () => {

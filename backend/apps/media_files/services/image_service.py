@@ -198,6 +198,12 @@ def detect_mime(data: bytes, fallback: str | None = None) -> str:
     magic-unavailable fallback branch (``python-magic`` is not used here at
     all — it segfaults without a native libmagic install rather than
     raising). ``fallback`` is normally the client-supplied Content-Type.
+
+    Deliberately NOT routed through ``htqweb.fallback``: that branch is not
+    a substitution for something broken, it is the only branch there is —
+    100% of calls take it. Counting it would add a metric that never varies
+    and a log line on every upload, teaching readers to ignore the word
+    FALLBACK exactly where it is supposed to mean something.
     """
     return fallback or "application/octet-stream"
 

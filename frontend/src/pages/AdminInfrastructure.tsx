@@ -37,6 +37,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 
 type CredentialField = {
     key: string;
@@ -112,8 +113,10 @@ const Sparkline: React.FC<{ points: HistoryPoint[]; width?: number; height?: num
     width = 120,
     height = 28,
 }) => {
+    const { t } = useTranslation();
+
     if (!points.length) {
-        return <span className="text-[10px] text-muted-foreground">нет данных</span>;
+        return <span className="text-[10px] text-muted-foreground">{t('admin.infrastructure.noData')}</span>;
     }
     const values = points.map((p) => p.latency_ms ?? 0);
     const max = Math.max(...values, 1);
@@ -155,6 +158,7 @@ const extractError = (err: any, fallback: string) =>
     err?.response?.data?.detail ?? err?.message ?? fallback;
 
 const AdminInfrastructure = () => {
+  const { t } = useTranslation();
     const [dialogOpen, setDialogOpen] = useState(false);
     const [password, setPassword] = useState('');
     const [revealed, setRevealed] = useState<InfrastructureResponse | null>(null);
@@ -187,10 +191,10 @@ const AdminInfrastructure = () => {
             setShownFields(new Set());
             setPassword('');
             setDialogOpen(false);
-            toast.success('Доступ к секретам подтвержден. Кликните по полю, чтобы показать.');
+            toast.success(t('admin.infrastructure.revealConfirmed'));
         },
         onError: (err) => {
-            toast.error(extractError(err, 'Не удалось подтвердить пароль'));
+            toast.error(extractError(err, t('admin.infrastructure.passwordError')));
         },
     });
 
@@ -212,13 +216,13 @@ const AdminInfrastructure = () => {
             setSecondsLeft(left);
             if (left <= 0) {
                 setRevealed(null);
-                toast.info('Секреты скрыты (истёк TTL)');
+                toast.info(t('admin.infrastructure.secretsHidden'));
             }
         };
         tick();
         const id = window.setInterval(tick, 1000);
         return () => window.clearInterval(id);
-    }, [revealed]);
+    }, [revealed, t]);
 
     const visibleData = revealed ?? data;
     const secretCount = useMemo(
@@ -245,7 +249,7 @@ const AdminInfrastructure = () => {
             const res = await api.get<AuditResponse>('admin/v1/infrastructure/audit/reveals');
             setAuditEvents(res.data.events);
         } catch (err) {
-            toast.error(extractError(err, 'Не удалось загрузить журнал'));
+            toast.error(extractError(err, t('admin.infrastructure.logError')));
         } finally {
             setAuditLoading(false);
         }
@@ -272,7 +276,7 @@ const AdminInfrastructure = () => {
             setHealth((prev) => ({ ...prev, ...map }));
             fetchHistory();
         } catch (err) {
-            toast.error(extractError(err, 'Не удалось проверить статус'));
+            toast.error(extractError(err, t('admin.infrastructure.statusError')));
             setHealth((prev) => {
                 const next = { ...prev };
                 ids.forEach((id) => {
@@ -306,14 +310,14 @@ const AdminInfrastructure = () => {
             fetchHistory();
         } catch (err) {
             setHealth((prev) => ({ ...prev, [resourceId]: { status: 'unknown' } }));
-            toast.error(extractError(err, 'Проверка не удалась'));
+            toast.error(extractError(err, t('admin.infrastructure.checkFailed')));
         }
     };
 
     const copyValue = async (field: CredentialField) => {
         if (!field.copyable || !field.value) return;
         await navigator.clipboard.writeText(field.value);
-        toast.success(`${field.label}: скопировано`);
+        toast.success(t('admin.infrastructure.copied', { label: field.label }));
     };
 
     if (isLoading) {
@@ -335,9 +339,9 @@ const AdminInfrastructure = () => {
                 <main className="flex-1 container mx-auto px-4 py-8 flex items-center justify-center">
                     <Alert variant="destructive" className="max-w-xl">
                         <Lock className="h-4 w-4" />
-                        <AlertTitle>Доступ закрыт</AlertTitle>
+                        <AlertTitle>{t('admin.infrastructure.accessDenied')}</AlertTitle>
                         <AlertDescription>
-                            Нужны права администратора для просмотра инфраструктуры.
+                            {t('admin.infrastructure.adminOnly')}
                         </AlertDescription>
                     </Alert>
                 </main>
@@ -356,39 +360,39 @@ const AdminInfrastructure = () => {
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                         <div>
                             <div className="flex flex-wrap items-center gap-2">
-                                <h1 className="text-3xl font-bold">Инфраструктура</h1>
+                                <h1 className="text-3xl font-bold">{t('profile.sidebar.infrastructure')}</h1>
                                 {visibleData.environment && (
                                     <Badge variant={visibleData.environment === 'production' ? 'destructive' : 'outline'}>
                                         env: {visibleData.environment}
                                     </Badge>
                                 )}
                                 <Badge variant={visibleData.credentials_visible ? 'destructive' : 'secondary'}>
-                                    {visibleData.credentials_visible ? 'секреты открыты' : 'секреты скрыты'}
+                                    {visibleData.credentials_visible ? t('admin.infrastructure.secretsShown') : t('admin.infrastructure.secretsHiddenShort')}
                                 </Badge>
                             </div>
                             <p className="mt-1 text-sm text-muted-foreground">
-                                MongoDB, MinIO, SQL и служебные подключения.
+                                {t('admin.infrastructure.subtitle')}
                             </p>
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
                             <Button variant="outline" onClick={checkAllHealth}>
                                 <Activity className="h-4 w-4" />
-                                Проверить все
+                                {t('admin.infrastructure.checkAll')}
                             </Button>
                             <Button variant="outline" onClick={openAudit}>
                                 <History className="h-4 w-4" />
-                                Журнал ревелов
+                                {t('admin.infrastructure.revealLog')}
                             </Button>
                             {visibleData.credentials_visible ? (
                                 <Button variant="outline" onClick={() => setRevealed(null)}>
                                     <EyeOff className="h-4 w-4" />
-                                    Скрыть пароли
+                                    {t('admin.infrastructure.hidePasswords')}
                                 </Button>
                             ) : (
                                 <Button onClick={() => setDialogOpen(true)}>
                                     <Eye className="h-4 w-4" />
-                                    Показать пароли
+                                    {t('admin.infrastructure.showPasswords')}
                                 </Button>
                             )}
                         </div>
@@ -398,11 +402,11 @@ const AdminInfrastructure = () => {
                 {visibleData.credentials_visible && (
                     <Alert className="mb-6 border-amber-200 bg-amber-50 text-amber-950">
                         <ShieldCheck className="h-4 w-4" />
-                        <AlertTitle>Повторная проверка пройдена</AlertTitle>
+                        <AlertTitle>{t('admin.infrastructure.reverified')}</AlertTitle>
                         <AlertDescription>
-                            Открыто секретных полей: {secretCount}.
+                            {t('admin.infrastructure.revealedCount', { count: secretCount })}
                             {secondsLeft != null && (
-                                <> Авто-скрытие через <span className="font-mono font-semibold">
+                                <> {t('admin.infrastructure.autoHideIn')} <span className="font-mono font-semibold">
                                     {String(Math.floor(secondsLeft / 60)).padStart(2, '0')}:
                                     {String(secondsLeft % 60).padStart(2, '0')}
                                 </span>.</>
@@ -421,8 +425,8 @@ const AdminInfrastructure = () => {
                             : 'secondary';
                         const badgeLabel =
                             hs.status === 'ok' ? `OK${hs.latency_ms != null ? ` · ${hs.latency_ms} ms` : ''}`
-                            : hs.status === 'error' ? 'ошибка'
-                            : hs.status === 'checking' ? 'проверка...'
+                            : hs.status === 'error' ? t('admin.infrastructure.statusErrorShort')
+                            : hs.status === 'checking' ? t('admin.infrastructure.statusChecking')
                             : resource.status;
                         const StatusIcon =
                             hs.status === 'ok' ? CheckCircle2
@@ -502,7 +506,7 @@ const AdminInfrastructure = () => {
                                                                 else next.add(fieldId);
                                                                 return next;
                                                             })}
-                                                            title={isShown ? 'Скрыть' : 'Показать'}
+                                                            title={isShown ? t('common.hide') : t('common.show')}
                                                         >
                                                             {isShown ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                                                         </Button>
@@ -514,7 +518,7 @@ const AdminInfrastructure = () => {
                                                         className="h-8 w-8"
                                                         onClick={() => copyValue(field)}
                                                         disabled={!field.copyable}
-                                                        title={`Скопировать ${field.label}`}
+                                                        title={t('admin.infrastructure.copyField', { label: field.label })}
                                                     >
                                                         <Copy className="h-4 w-4" />
                                                     </Button>
@@ -534,7 +538,7 @@ const AdminInfrastructure = () => {
                                         {hs.status === 'checking'
                                             ? <Loader2 className="h-4 w-4 animate-spin" />
                                             : <Activity className="h-4 w-4" />}
-                                        Проверить
+                                        {t('admin.infrastructure.check')}
                                     </Button>
                                     {resource.links.map((link) => (
                                         <Button key={`${resource.id}-${link.url}`} variant="outline" size="sm" asChild>
@@ -565,10 +569,10 @@ const AdminInfrastructure = () => {
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
                             <History className="h-5 w-5" />
-                            Журнал раскрытий секретов
+                            {t('admin.infrastructure.revealLogTitle')}
                         </DialogTitle>
                         <DialogDescription>
-                            Последние {auditEvents?.length ?? 0} событий (in-memory ring, очищается при рестарте admin-service).
+                            {t('admin.infrastructure.revealLogHint', { count: auditEvents?.length ?? 0 })}
                         </DialogDescription>
                     </DialogHeader>
                     {auditLoading ? (
@@ -580,7 +584,7 @@ const AdminInfrastructure = () => {
                             <table className="w-full text-xs">
                                 <thead className="sticky top-0 bg-muted">
                                     <tr className="text-left">
-                                        <th className="px-2 py-1.5">Время</th>
+                                        <th className="px-2 py-1.5">{t('admin.infrastructure.timeColumn')}</th>
                                         <th className="px-2 py-1.5">Email</th>
                                         <th className="px-2 py-1.5">IP</th>
                                         <th className="px-2 py-1.5">User-Agent</th>
@@ -588,7 +592,7 @@ const AdminInfrastructure = () => {
                                 </thead>
                                 <tbody>
                                     {(auditEvents ?? []).length === 0 ? (
-                                        <tr><td colSpan={4} className="px-2 py-3 text-center text-muted-foreground">Пусто</td></tr>
+                                        <tr><td colSpan={4} className="px-2 py-3 text-center text-muted-foreground">{t('admin.infrastructure.logEmpty')}</td></tr>
                                     ) : (
                                         (auditEvents ?? []).map((ev, i) => (
                                             <tr key={i} className="border-t">
@@ -611,10 +615,10 @@ const AdminInfrastructure = () => {
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
                             <KeyRound className="h-5 w-5" />
-                            Подтверждение администратора
+                            {t('admin.infrastructure.confirmTitle')}
                         </DialogTitle>
                         <DialogDescription>
-                            Введите пароль текущей учетной записи администратора.
+                            {t('admin.infrastructure.confirmHint')}
                         </DialogDescription>
                     </DialogHeader>
 
@@ -626,7 +630,7 @@ const AdminInfrastructure = () => {
                         }}
                     >
                         <div className="space-y-2">
-                            <Label htmlFor="admin-password">Пароль</Label>
+                            <Label htmlFor="admin-password">{t('admin.infrastructure.password')}</Label>
                             <Input
                                 id="admin-password"
                                 type="password"
@@ -644,11 +648,11 @@ const AdminInfrastructure = () => {
                                 onClick={() => setDialogOpen(false)}
                                 disabled={revealMutation.isPending}
                             >
-                                Отмена
+                                {t('common.cancel')}
                             </Button>
                             <Button type="submit" disabled={!password || revealMutation.isPending}>
                                 {revealMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-                                Показать
+                                {t('common.show')}
                             </Button>
                         </DialogFooter>
                     </form>

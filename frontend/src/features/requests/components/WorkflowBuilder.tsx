@@ -25,6 +25,9 @@ import {
 
 import { EmployeePicker } from '@/features/requests/components/EmployeePicker';
 import { useEmployeeNames } from '@/features/requests/hooks';
+import { translatedMap } from '@/lib/i18n/translatedMap';
+import { useTranslation } from 'react-i18next';
+import i18next from '@/i18n';
 import type {
   Assignee, AssigneeKind, WorkflowEdge, WorkflowGraph, WorkflowNode,
 } from '@/features/requests/types';
@@ -34,23 +37,23 @@ interface Props {
   onChange: (graph: WorkflowGraph) => void;
 }
 
-const APPROVER_KINDS: { kind: AssigneeKind; label: string }[] = [
-  { kind: 'user', label: 'Указать согласующего' },
-  { kind: 'initiator', label: 'Заявитель' },
-  { kind: 'initiator_supervisor', label: 'Руководитель' },
-  { kind: 'department_head', label: 'Начальник отдела' },
-  { kind: 'role', label: 'Роль' },
-  { kind: 'project_admins', label: 'Администраторы проекта' },
+const APPROVER_KINDS: { kind: AssigneeKind; labelKey: string }[] = [
+  { kind: 'user', labelKey: 'requests.approverKind.user' },
+  { kind: 'initiator', labelKey: 'requests.approverKind.initiator' },
+  { kind: 'initiator_supervisor', labelKey: 'requests.approverKind.supervisor' },
+  { kind: 'department_head', labelKey: 'requests.approverKind.departmentHead' },
+  { kind: 'role', labelKey: 'requests.approverKind.role' },
+  { kind: 'project_admins', labelKey: 'requests.approverKind.projectAdmins' },
 ];
 
-const CC_KINDS: { kind: AssigneeKind; label: string }[] = [
-  { kind: 'initiator', label: 'Заявитель' },
-  { kind: 'user', label: 'Указать получателя' },
-  { kind: 'role', label: 'Роль' },
+const CC_KINDS: { kind: AssigneeKind; labelKey: string }[] = [
+  { kind: 'initiator', labelKey: 'requests.approverKind.initiator' },
+  { kind: 'user', labelKey: 'requests.approverKind.recipient' },
+  { kind: 'role', labelKey: 'requests.approverKind.role' },
 ];
 
-const KIND_LABEL: Record<string, string> = Object.fromEntries(
-  [...APPROVER_KINDS, ...CC_KINDS].map((k) => [k.kind, k.label]),
+const KIND_LABEL: Record<string, string> = translatedMap(
+  Object.fromEntries([...APPROVER_KINDS, ...CC_KINDS].map((k) => [k.kind, k.labelKey])),
 );
 
 /* ─── assignee helpers ──────────────────────────────────────────────────── */
@@ -68,7 +71,7 @@ function makeAssignee(kind: AssigneeKind, ids: number[], name = ''): Assignee {
 }
 function assigneeSummary(a: Assignee | null | undefined, names: Map<number, string>): string {
   if (!a) return '—';
-  if (a.kind === 'role' && a.name) return `Роль «${a.name}»`;
+  if (a.kind === 'role' && a.name) return i18next.t('requests.workflow.roleNamed', { name: a.name });
   const ids = assigneeIds(a);
   if (ids.length) return ids.map((id) => names.get(id) ?? `ID ${id}`).join(', ');
   return KIND_LABEL[a.kind] ?? a.kind;
@@ -81,7 +84,11 @@ function namesOf(ids: number[], names: Map<number, string>): string {
   return ids.map((id) => names.get(id) ?? `ID ${id}`).join(', ');
 }
 
-const SUBMIT_LABEL: Record<string, string> = { all: 'Все', selected: 'Выбранные', none: 'Никто' };
+const SUBMIT_LABEL: Record<string, string> = translatedMap({
+  all: 'requests.submitScope.all',
+  selected: 'requests.submitScope.selected',
+  none: 'requests.submitScope.none',
+});
 
 /* ─── graph <-> parts ───────────────────────────────────────────────────── */
 
@@ -111,7 +118,7 @@ function newApproval(): WorkflowNode {
   return {
     id: `n_${Math.random().toString(36).slice(2, 7)}`,
     type: 'approval',
-    name: 'Согласование',
+    name: i18next.t('requests.workflow.approvalStep'),
     approval_type: 'manual',
     assignee: { kind: 'user' },
     mode: 'any',
@@ -132,12 +139,13 @@ function NodeCard({
   onClick: () => void;
   onDelete?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="w-72 overflow-hidden rounded-lg border shadow-[var(--shadow-soft)]">
       <div className={`flex items-center justify-between px-3 py-1.5 text-xs font-semibold text-white ${headerColor}`}>
         <span className="truncate">{header}</span>
         {onDelete && (
-          <button type="button" onClick={onDelete} className="opacity-80 hover:opacity-100" aria-label="Удалить шаг">
+          <button type="button" onClick={onDelete} className="opacity-80 hover:opacity-100" aria-label={t('requests.workflow.deleteStep')}>
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         )}
@@ -147,7 +155,7 @@ function NodeCard({
           <div key={i} className="truncate text-sm text-muted-foreground">{l}</div>
         ))}
         <div className="mt-1 flex items-center gap-1 text-xs text-primary">
-          <Pencil className="h-3 w-3" /> редактировать
+          <Pencil className="h-3 w-3" /> {t('requests.workflow.editLower')}
         </div>
       </button>
     </div>
@@ -155,12 +163,13 @@ function NodeCard({
 }
 
 function Insert({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
       onClick={onClick}
       className="my-1 flex h-6 w-6 items-center justify-center rounded-full border bg-card text-primary hover:bg-primary hover:text-primary-foreground"
-      aria-label="Добавить шаг согласования"
+      aria-label={t('requests.workflow.addStep')}
     >
       <Plus className="h-4 w-4" />
     </button>
@@ -172,6 +181,7 @@ function Insert({ onClick }: { onClick: () => void }) {
 type EditTarget = { role: 'start' | 'approval' | 'end'; index: number };
 
 export function WorkflowBuilder({ graph, onChange }: Props) {
+  const { t } = useTranslation();
   const { start, approvals, end } = graphToParts(graph);
   const names = useEmployeeNames();
   const [edit, setEdit] = useState<EditTarget | null>(null);
@@ -208,10 +218,10 @@ export function WorkflowBuilder({ graph, onChange }: Props) {
   return (
     <div className="flex flex-col items-center py-2">
       <NodeCard
-        header="Начало"
+        header={t('requests.workflow.start')}
         headerColor="bg-slate-500"
         lines={[
-          `Кто подаёт: ${SUBMIT_LABEL[start.submit_scope ?? 'all']}`
+          t('requests.workflow.whoSubmitsValue', { scope: SUBMIT_LABEL[start.submit_scope ?? 'all'] })
           + (start.submit_scope === 'selected' ? ` — ${namesOf(start.submit_user_ids ?? [], names)}` : ''),
         ]}
         onClick={() => openEditor('start', -1, start)}
@@ -221,9 +231,9 @@ export function WorkflowBuilder({ graph, onChange }: Props) {
       {approvals.map((a, i) => (
         <Fragment key={a.id}>
           <NodeCard
-            header={a.name || 'Согласование'}
+            header={a.name || t('requests.workflow.approvalStep')}
             headerColor="bg-orange-500"
-            lines={[`Согласующий: ${assigneeSummary(a.assignee, names)}`, `CC: ${ccSummary(a.cc, names)}`]}
+            lines={[t('requests.workflow.approverValue', { value: assigneeSummary(a.assignee, names) }), `CC: ${ccSummary(a.cc, names)}`]}
             onClick={() => openEditor('approval', i, a)}
             onDelete={() => deleteApproval(i)}
           />
@@ -232,7 +242,7 @@ export function WorkflowBuilder({ graph, onChange }: Props) {
       ))}
 
       <NodeCard
-        header="Подтверждение"
+        header={t('requests.workflow.end')}
         headerColor="bg-slate-500"
         lines={[`CC: ${ccSummary(end.cc, names)}`]}
         onClick={() => openEditor('end', -1, end)}
@@ -244,7 +254,7 @@ export function WorkflowBuilder({ graph, onChange }: Props) {
             <>
               <SheetHeader>
                 <SheetTitle>
-                  {edit.role === 'start' ? 'Начало' : edit.role === 'end' ? 'Подтверждение' : (draft.name || 'Согласование')}
+                  {edit.role === 'start' ? t('requests.workflow.start') : edit.role === 'end' ? t('requests.workflow.end') : (draft.name || t('requests.workflow.approvalStep'))}
                 </SheetTitle>
               </SheetHeader>
 
@@ -255,8 +265,8 @@ export function WorkflowBuilder({ graph, onChange }: Props) {
               </div>
 
               <SheetFooter>
-                <Button variant="outline" onClick={() => { setEdit(null); setDraft(null); }}>Отмена</Button>
-                <Button onClick={saveDraft}>Сохранить</Button>
+                <Button variant="outline" onClick={() => { setEdit(null); setDraft(null); }}>{t('common.cancel')}</Button>
+                <Button onClick={saveDraft}>{t('common.save')}</Button>
               </SheetFooter>
             </>
           )}
@@ -271,10 +281,11 @@ export function WorkflowBuilder({ graph, onChange }: Props) {
 type EditorProps = { draft: WorkflowNode; patch: (p: Partial<WorkflowNode>) => void };
 
 function StartEditor({ draft, patch }: EditorProps) {
+  const { t } = useTranslation();
   const scope = draft.submit_scope ?? 'all';
   return (
     <div className="space-y-3">
-      <Label>Кто может подавать этот запрос</Label>
+      <Label>{t('requests.workflow.whoCanSubmit')}</Label>
       <RadioGroup value={scope} onValueChange={(v) => patch({ submit_scope: v as WorkflowNode['submit_scope'] })}>
         {(['all', 'selected', 'none'] as const).map((v) => (
           <label key={v} className="flex items-center gap-2 text-sm">
@@ -284,7 +295,7 @@ function StartEditor({ draft, patch }: EditorProps) {
       </RadioGroup>
       {scope === 'selected' && (
         <div className="space-y-1.5">
-          <Label className="text-xs">Кто подаёт</Label>
+          <Label className="text-xs">{t('requests.workflow.whoSubmits')}</Label>
           <EmployeePicker value={draft.submit_user_ids ?? []} onChange={(ids) => patch({ submit_user_ids: ids })} />
         </div>
       )}
@@ -293,37 +304,38 @@ function StartEditor({ draft, patch }: EditorProps) {
 }
 
 function ApprovalEditor({ draft, patch }: EditorProps) {
+  const { t } = useTranslation();
   const kind = (draft.assignee?.kind ?? 'user') as AssigneeKind;
 
   return (
     <>
       <div className="space-y-1.5">
-        <Label className="text-xs">Название шага</Label>
+        <Label className="text-xs">{t('requests.workflow.stepName')}</Label>
         <Input value={draft.name ?? ''} onChange={(e) => patch({ name: e.target.value })} />
       </div>
 
       <div className="space-y-2">
-        <Label>Тип согласования</Label>
+        <Label>{t('requests.workflow.approvalType')}</Label>
         <RadioGroup
           value={draft.approval_type ?? 'manual'}
           onValueChange={(v) => patch({ approval_type: v as WorkflowNode['approval_type'] })}
           className="flex flex-wrap gap-4"
         >
-          {([['manual', 'Ручное'], ['auto_approve', 'Авто-одобрение'], ['auto_reject', 'Авто-отклонение']] as const).map(([v, l]) => (
+          {([['manual', t('requests.workflow.manual')], ['auto_approve', t('requests.workflow.autoApprove')], ['auto_reject', t('requests.workflow.autoReject')]] as const).map(([v, l]) => (
             <label key={v} className="flex items-center gap-2 text-sm"><RadioGroupItem value={v} /> {l}</label>
           ))}
         </RadioGroup>
       </div>
 
       <div className="space-y-2">
-        <Label>Согласующий</Label>
+        <Label>{t('requests.workflow.approver')}</Label>
         <RadioGroup
           value={kind}
           onValueChange={(v) => patch({ assignee: makeAssignee(v as AssigneeKind, assigneeIds(draft.assignee), draft.assignee?.name ?? '') })}
           className="grid grid-cols-2 gap-2"
         >
           {APPROVER_KINDS.map((k) => (
-            <label key={k.kind} className="flex items-center gap-2 text-sm"><RadioGroupItem value={k.kind} /> {k.label}</label>
+            <label key={k.kind} className="flex items-center gap-2 text-sm"><RadioGroupItem value={k.kind} /> {t(k.labelKey)}</label>
           ))}
         </RadioGroup>
         {kind === 'user' && (
@@ -336,49 +348,49 @@ function ApprovalEditor({ draft, patch }: EditorProps) {
           <Input
             value={draft.assignee?.name ?? ''}
             onChange={(e) => patch({ assignee: { kind: 'role', name: e.target.value } })}
-            placeholder="Название роли"
+            placeholder={t('requests.workflow.roleNamePlaceholder')}
           />
         )}
       </div>
 
       <div className="space-y-1.5">
-        <Label className="text-xs">Режим</Label>
+        <Label className="text-xs">{t('requests.workflow.mode')}</Label>
         <Select value={draft.mode ?? 'any'} onValueChange={(v) => patch({ mode: v as WorkflowNode['mode'] })}>
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="any">Любой из согласующих</SelectItem>
-            <SelectItem value="all">Все согласующие</SelectItem>
-            <SelectItem value="sequential">Последовательно</SelectItem>
+            <SelectItem value="any">{t('requests.workflow.modeAny')}</SelectItem>
+            <SelectItem value="all">{t('requests.workflow.modeAll')}</SelectItem>
+            <SelectItem value="sequential">{t('requests.workflow.modeSequential')}</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       <div className="space-y-2">
-        <Label>CC (копии)</Label>
+        <Label>{t('requests.workflow.cc')}</Label>
         <CcEditor value={draft.cc ?? []} onChange={(cc) => patch({ cc })} />
       </div>
 
       <div className="space-y-1.5">
-        <Label className="text-xs">Если согласующий пуст</Label>
+        <Label className="text-xs">{t('requests.workflow.emptyApprover')}</Label>
         <Select value={draft.empty_rule ?? 'auto_approve'} onValueChange={(v) => patch({ empty_rule: v as WorkflowNode['empty_rule'] })}>
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="auto_approve">Авто-одобрить</SelectItem>
-            <SelectItem value="specify">Указать согласующего</SelectItem>
-            <SelectItem value="transfer_admin">Передать администратору</SelectItem>
+            <SelectItem value="auto_approve">{t('requests.workflow.emptyAutoApprove')}</SelectItem>
+            <SelectItem value="specify">{t('requests.approverKind.user')}</SelectItem>
+            <SelectItem value="transfer_admin">{t('requests.workflow.emptyToAdmin')}</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       <div className="space-y-1.5">
-        <Label className="text-xs">Если согласующий = заявитель</Label>
+        <Label className="text-xs">{t('requests.workflow.selfApproval')}</Label>
         <Select value={draft.same_person_rule ?? 'review'} onValueChange={(v) => patch({ same_person_rule: v as WorkflowNode['same_person_rule'] })}>
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="review">Заявитель сам рассматривает</SelectItem>
-            <SelectItem value="auto_skip">Авто-пропуск</SelectItem>
-            <SelectItem value="forward_manager">Переслать руководителю</SelectItem>
-            <SelectItem value="forward_department">Переслать начальнику отдела</SelectItem>
+            <SelectItem value="review">{t('requests.workflow.selfDecides')}</SelectItem>
+            <SelectItem value="auto_skip">{t('requests.workflow.selfSkip')}</SelectItem>
+            <SelectItem value="forward_manager">{t('requests.workflow.selfToSupervisor')}</SelectItem>
+            <SelectItem value="forward_department">{t('requests.workflow.selfToDeptHead')}</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -387,9 +399,11 @@ function ApprovalEditor({ draft, patch }: EditorProps) {
 }
 
 function EndEditor({ draft, patch }: EditorProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="space-y-2">
-      <Label>CC-получатели (кто получит копию по завершении)</Label>
+      <Label>{t('requests.workflow.ccRecipients')}</Label>
       <CcEditor value={draft.cc ?? []} onChange={(cc) => patch({ cc })} />
     </div>
   );
@@ -398,6 +412,7 @@ function EndEditor({ draft, patch }: EditorProps) {
 /** Multiple CC recipients of mixed kinds at once — Requester + specific people
  *  + a role, combined (Lark parity). */
 function CcEditor({ value, onChange }: { value: Assignee[]; onChange: (cc: Assignee[]) => void }) {
+  const { t } = useTranslation();
   const cc = value ?? [];
   const hasInitiator = cc.some((c) => c.kind === 'initiator');
   const usersEntry = cc.find((c) => c.kind === 'users' || c.kind === 'user');
@@ -420,17 +435,17 @@ function CcEditor({ value, onChange }: { value: Assignee[]; onChange: (cc: Assig
   return (
     <div className="space-y-3 rounded-md border p-3">
       <label className="flex items-center gap-2 text-sm">
-        <Checkbox checked={hasInitiator} onCheckedChange={(v) => setInitiator(Boolean(v))} /> Заявитель
+        <Checkbox checked={hasInitiator} onCheckedChange={(v) => setInitiator(Boolean(v))} /> {t('requests.approverKind.initiator')}
       </label>
       <div className="space-y-1.5">
-        <Label className="text-xs">Указать получателей</Label>
+        <Label className="text-xs">{t('requests.workflow.pickRecipients')}</Label>
         <EmployeePicker value={userIds} onChange={setUsers} />
       </div>
       <div className="space-y-1.5">
-        <Label className="text-xs">Роль (необязательно)</Label>
-        <Input value={roleEntry?.name ?? ''} onChange={(e) => setRole(e.target.value)} placeholder="напр. accounting" />
+        <Label className="text-xs">{t('requests.workflow.roleOptional')}</Label>
+        <Input value={roleEntry?.name ?? ''} onChange={(e) => setRole(e.target.value)} placeholder={t('requests.workflow.rolePlaceholder')} />
       </div>
-      <p className="text-xs text-muted-foreground">Можно комбинировать: Заявитель + конкретные люди + роль.</p>
+      <p className="text-xs text-muted-foreground">{t('requests.workflow.combineHint')}</p>
     </div>
   );
 }

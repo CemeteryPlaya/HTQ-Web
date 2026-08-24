@@ -24,6 +24,8 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
+import i18next from '@/i18n';
+import { useTranslation } from 'react-i18next';
 import {
   FolderOpen,
   Upload,
@@ -50,11 +52,11 @@ import {
 /* ------------------------------------------------------------------ */
 
 function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 Б';
+  const units = ['files.unitB', 'files.unitKB', 'files.unitMB', 'files.unitGB'];
+  if (bytes === 0) return `0 ${i18next.t(units[0])}`;
   const k = 1024;
-  const sizes = ['Б', 'КБ', 'МБ', 'ГБ'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + i18next.t(units[i]);
 }
 
 function formatDate(iso: string): string {
@@ -106,14 +108,10 @@ function getFileColor(name: string): string {
   return 'from-slate-500/10 to-slate-500/5';
 }
 
+/** Формы множественного числа отдаёт i18next: в русском их три, в
+ *  английском две, и вручную это уже пересчитывали неправильно. */
 function formatFileCount(count: number): string {
-  const suffix =
-    count === 1
-      ? 'файл'
-      : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 10 || count % 100 >= 20)
-      ? 'файла'
-      : 'файлов';
-  return `${count} ${suffix}`;
+  return i18next.t('files.fileCount', { count });
 }
 
 /* ------------------------------------------------------------------ */
@@ -121,6 +119,7 @@ function formatFileCount(count: number): string {
 /* ------------------------------------------------------------------ */
 
 const DepartmentFiles: React.FC = () => {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -173,15 +172,15 @@ const DepartmentFiles: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['department-files'] });
       queryClient.invalidateQueries({ queryKey: ['department-folders'] });
       queryClient.invalidateQueries({ queryKey: ['department-file-folders'] });
-      toast({ title: 'Файл загружен', description: 'Файл успешно загружен в папку отдела.' });
+      toast({ title: t('files.uploaded'), description: t('files.uploadedHint') });
       setUploadDialogOpen(false);
       setSelectedFile(null);
       setUploadDescription('');
     },
     onError: (err: any) => {
       toast({
-        title: 'Ошибка загрузки',
-        description: err?.response?.data?.detail || 'Не удалось загрузить файл.',
+        title: t('files.uploadErrorTitle'),
+        description: err?.response?.data?.detail || t('files.uploadError'),
         variant: 'destructive',
       });
     },
@@ -193,15 +192,15 @@ const DepartmentFiles: React.FC = () => {
     onSuccess: (folder) => {
       queryClient.invalidateQueries({ queryKey: ['department-file-folders'] });
       setSelectedFileFolder(folder);
-      toast({ title: 'Папка создана', description: `Папка «${folder.name}» добавлена.` });
+      toast({ title: t('files.folderCreated'), description: t('files.folderCreatedHint', { name: folder.name }) });
       setCreateFolderDialogOpen(false);
       setNewFolderName('');
       setSearchQuery('');
     },
     onError: (err: any) => {
       toast({
-        title: 'Ошибка создания папки',
-        description: err?.response?.data?.detail || 'Не удалось создать папку.',
+        title: t('files.folderErrorTitle'),
+        description: err?.response?.data?.detail || t('files.folderError'),
         variant: 'destructive',
       });
     },
@@ -213,14 +212,14 @@ const DepartmentFiles: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['department-files'] });
       queryClient.invalidateQueries({ queryKey: ['department-folders'] });
       queryClient.invalidateQueries({ queryKey: ['department-file-folders'] });
-      toast({ title: 'Файл удалён', description: 'Файл успешно удалён.' });
+      toast({ title: t('files.deleted'), description: t('files.deletedHint') });
       setDeleteDialogOpen(false);
       setFileToDelete(null);
     },
     onError: (err: any) => {
       toast({
-        title: 'Ошибка удаления',
-        description: err?.response?.data?.detail || 'Не удалось удалить файл.',
+        title: t('files.deleteErrorTitle'),
+        description: err?.response?.data?.detail || t('files.deleteError'),
         variant: 'destructive',
       });
     },
@@ -300,7 +299,7 @@ const DepartmentFiles: React.FC = () => {
       <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-10 w-10 animate-spin text-primary" />
-          <p className="text-muted-foreground text-sm animate-pulse">Загрузка папок...</p>
+          <p className="text-muted-foreground text-sm animate-pulse">{t('files.loadingFolders')}</p>
         </div>
       </div>
     );
@@ -316,9 +315,9 @@ const DepartmentFiles: React.FC = () => {
             <div className="p-4 rounded-full bg-muted/50">
               <FolderLock className="h-12 w-12 text-muted-foreground" />
             </div>
-            <h2 className="text-xl font-semibold text-foreground">Нет доступных папок</h2>
+            <h2 className="text-xl font-semibold text-foreground">{t('files.noFolders')}</h2>
             <p className="text-sm text-muted-foreground text-center max-w-xs">
-              Вы не привязаны ни к одному отделу. Обратитесь к HR-менеджеру для назначения в отдел.
+              {t('files.noDepartment')}
             </p>
             <BackToProfile className="mb-0 mt-2" />
           </CardContent>
@@ -351,10 +350,10 @@ const DepartmentFiles: React.FC = () => {
               </div>
               <div>
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
-                  Файлы отдела
+                  {t('profile.sidebar.departmentFiles')}
                 </h1>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Общий доступ к файлам вашего отдела
+                  {t('files.subtitle')}
                 </p>
               </div>
             </div>
@@ -366,14 +365,14 @@ const DepartmentFiles: React.FC = () => {
                   className="gap-2 bg-background/70"
                 >
                   <FolderPlus className="h-4 w-4" />
-                  <span>Создать папку</span>
+                  <span>{t('files.createFolder')}</span>
                 </Button>
                 <Button
                   onClick={() => fileInputRef.current?.click()}
                   className="gap-2 bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 shadow-lg shadow-primary/20 transition-all duration-300 hover:shadow-primary/30 hover:scale-[1.02]"
                 >
                   <Upload className="h-4 w-4" />
-                  <span>Загрузить файл</span>
+                  <span>{t('files.uploadFile')}</span>
                 </Button>
               </div>
             )}
@@ -445,7 +444,7 @@ const DepartmentFiles: React.FC = () => {
                 <div className="relative w-full sm:w-64">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder={selectedFileFolder ? 'Поиск в папке...' : 'Поиск файлов и папок...'}
+                    placeholder={selectedFileFolder ? t('files.searchInFolder') : t('files.searchAll')}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="pl-9 bg-background/60 border-border/50"
@@ -481,7 +480,7 @@ const DepartmentFiles: React.FC = () => {
               <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-primary/10 backdrop-blur-sm border-2 border-dashed border-primary">
                 <div className="flex flex-col items-center gap-3">
                   <Cloud className="h-12 w-12 text-primary animate-bounce" />
-                  <p className="text-primary font-medium">Отпустите файл для загрузки</p>
+                  <p className="text-primary font-medium">{t('files.dropToUpload')}</p>
                 </div>
               </div>
             )}
@@ -503,17 +502,17 @@ const DepartmentFiles: React.FC = () => {
                   <div className="text-center">
                     <p className="text-muted-foreground font-medium">
                       {searchQuery
-                        ? 'Ничего не найдено'
+                        ? t('common.nothingFound')
                         : selectedFileFolder
-                        ? 'Папка пуста'
-                        : 'Пока нет файлов и папок'}
+                        ? t('files.folderEmpty')
+                        : t('files.empty')}
                     </p>
                     <p className="text-xs text-muted-foreground/60 mt-1">
                       {searchQuery
-                        ? 'Попробуйте изменить поисковый запрос'
+                        ? t('files.tryAnotherQuery')
                         : selectedFileFolder
-                        ? 'Перетащите файл сюда или нажмите «Загрузить файл»'
-                        : 'Создайте папку или загрузите файл в корень отдела'}
+                        ? t('files.dragHint')
+                        : t('files.rootHint')}
                     </p>
                   </div>
                   {!searchQuery && (
@@ -525,7 +524,7 @@ const DepartmentFiles: React.FC = () => {
                           className="gap-2"
                         >
                           <FolderPlus className="h-4 w-4" />
-                          Создать папку
+                          {t('files.createFolder')}
                         </Button>
                       )}
                       <Button
@@ -534,7 +533,7 @@ const DepartmentFiles: React.FC = () => {
                         className="gap-2"
                       >
                         <Upload className="h-4 w-4" />
-                        Загрузить файл
+                        {t('files.uploadFile')}
                       </Button>
                     </div>
                   )}
@@ -577,7 +576,7 @@ const DepartmentFiles: React.FC = () => {
                           </div>
                           {folder.created_by_name && (
                             <p className="text-[11px] text-muted-foreground/70 mt-1 truncate">
-                              Создал: {folder.created_by_name}
+                              {t('files.createdBy', { name: folder.created_by_name })}
                             </p>
                           )}
                         </div>
@@ -630,7 +629,7 @@ const DepartmentFiles: React.FC = () => {
                             onClick={() => {
                               if (file.file_url) downloadFileUrl(file.file_url);
                             }}
-                            title="Скачать"
+                            title={t('common.download')}
                           >
                             <Download className="h-4 w-4" />
                           </Button>
@@ -642,7 +641,7 @@ const DepartmentFiles: React.FC = () => {
                               setFileToDelete(file);
                               setDeleteDialogOpen(true);
                             }}
-                            title="Удалить"
+                            title={t('common.delete')}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -669,14 +668,14 @@ const DepartmentFiles: React.FC = () => {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FolderPlus className="h-5 w-5 text-primary" />
-              Создать папку
+              {t('files.createFolder')}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-2 py-2">
-            <label className="text-sm font-medium text-foreground">Название папки</label>
+            <label className="text-sm font-medium text-foreground">{t('files.folderName')}</label>
             <Input
               autoFocus
-              placeholder="Например, Регламенты"
+              placeholder={t('files.folderNamePlaceholder')}
               value={newFolderName}
               onChange={(event) => setNewFolderName(event.target.value)}
               onKeyDown={(event) => {
@@ -690,7 +689,7 @@ const DepartmentFiles: React.FC = () => {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setCreateFolderDialogOpen(false)}>
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button
               onClick={handleCreateFolder}
@@ -702,7 +701,7 @@ const DepartmentFiles: React.FC = () => {
               ) : (
                 <FolderPlus className="h-4 w-4" />
               )}
-              Создать
+              {t('common.create')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -714,7 +713,7 @@ const DepartmentFiles: React.FC = () => {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Upload className="h-5 w-5 text-primary" />
-              Загрузить файл
+              {t('files.uploadFile')}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2 min-w-0">
@@ -744,15 +743,15 @@ const DepartmentFiles: React.FC = () => {
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Cloud className="h-8 w-8 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">Нажмите для выбора файла</p>
+                <p className="text-sm text-muted-foreground">{t('files.pickFile')}</p>
               </div>
             )}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                Описание <span className="text-muted-foreground">(необязательно)</span>
+                {t('calendar.form.description')} <span className="text-muted-foreground">{t('files.optionalParen')}</span>
               </label>
               <Textarea
-                placeholder="Краткое описание файла..."
+                placeholder={t('files.descriptionPlaceholder')}
                 value={uploadDescription}
                 onChange={(e) => setUploadDescription(e.target.value)}
                 rows={2}
@@ -762,7 +761,7 @@ const DepartmentFiles: React.FC = () => {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setUploadDialogOpen(false)}>
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button
               onClick={handleUpload}
@@ -774,7 +773,7 @@ const DepartmentFiles: React.FC = () => {
               ) : (
                 <Upload className="h-4 w-4" />
               )}
-              Загрузить
+              {t('files.upload')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -786,16 +785,17 @@ const DepartmentFiles: React.FC = () => {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
               <Trash2 className="h-5 w-5" />
-              Удалить файл?
+              {t('files.deleteConfirmTitle')}
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground py-2">
-            Файл <strong className="text-foreground">{fileToDelete?.name}</strong> будет удалён
-            безвозвратно.
+            {t('files.deleteConfirmBefore')}{' '}
+            <strong className="text-foreground">{fileToDelete?.name}</strong>{' '}
+            {t('files.deleteConfirmAfter')}
           </p>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setDeleteDialogOpen(false)}>
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button
               variant="destructive"
@@ -808,7 +808,7 @@ const DepartmentFiles: React.FC = () => {
               ) : (
                 <Trash2 className="h-4 w-4" />
               )}
-              Удалить
+              {t('common.delete')}
             </Button>
           </DialogFooter>
         </DialogContent>

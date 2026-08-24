@@ -8,15 +8,17 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { useCc, useDone, useInbox, useRequestsStream, useSent } from '@/features/requests/hooks';
 import type { RequestInstance, RequestStatus } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
+import { translatedMap } from '@/lib/i18n/translatedMap';
 
-const STATUS_LABEL: Record<RequestStatus, string> = {
-  draft: 'Черновик',
-  pending: 'На рассмотрении',
-  approved: 'Одобрено',
-  rejected: 'Отклонено',
-  cancelled: 'Отменено',
-  returned: 'Возвращено',
-};
+const STATUS_LABEL: Record<RequestStatus, string> = translatedMap({
+  draft: 'requests.statusRu.draft',
+  pending: 'requests.statusRu.pending',
+  approved: 'requests.statusRu.approved',
+  rejected: 'requests.statusRu.rejected',
+  cancelled: 'requests.statusRu.cancelled',
+  returned: 'requests.statusRu.returned',
+});
 
 function Tile({ label, value }: { label: string; value: number }) {
   return (
@@ -30,6 +32,7 @@ function Tile({ label, value }: { label: string; value: number }) {
 }
 
 export default function MyStatsPage() {
+  const { t } = useTranslation();
   useRequestsStream();
   const sent = useSent();
   const inbox = useInbox();
@@ -47,7 +50,7 @@ export default function MyStatsPage() {
   const countStatus = (s: RequestStatus) => all.filter((r) => r.status === s).length;
 
   return (
-    <RequestsLayout title="Моя статистика" subtitle="По вашим запросам, где вы участвовали">
+    <RequestsLayout title={t('requests.nav.myStats')} subtitle={t('requests.myStats.subtitle')}>
       {loading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24" />)}
@@ -55,15 +58,15 @@ export default function MyStatsPage() {
       ) : (
         <div className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Tile label="Всего с моим участием" value={all.length} />
-            <Tile label="Отправлено мной" value={sent.data?.length ?? 0} />
-            <Tile label="Ждут моего согласования" value={inbox.data?.length ?? 0} />
-            <Tile label="Я в копии" value={cc.data?.length ?? 0} />
+            <Tile label={t('requests.myStats.totalInvolved')} value={all.length} />
+            <Tile label={t('requests.myStats.sentByMe')} value={sent.data?.length ?? 0} />
+            <Tile label={t('requests.myStats.awaitingMe')} value={inbox.data?.length ?? 0} />
+            <Tile label={t('requests.myStats.ccMe')} value={cc.data?.length ?? 0} />
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle>По статусам</CardTitle>
+              <CardTitle>{t('requests.myStats.byStatus')}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">

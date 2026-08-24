@@ -258,6 +258,57 @@ class OrgSettingUpdate(BaseModel):
     deletion_strategy: DeletionStrategyLiteral
 
 
+class EmployeeRelationCreate(BaseModel):
+    """POST /org/employee-relations — не порт, ново для ручной правки орг-связей."""
+
+    superior_employee_id: int
+    subordinate_employee_id: int
+    relation_type: RelationTypeLiteral = "direct"
+    note: str | None = Field(default=None, max_length=255)
+
+
+class EmployeeRelationQuery(BaseModel):
+    """Query(employee_id, department_id) роутера GET /org/employee-relations."""
+
+    employee_id: int | None = None
+    department_id: int | None = None
+
+
+class SuperiorSet(BaseModel):
+    """PUT /org/relations/superior и /org/employee-relations/superior.
+
+    Идемпотентное «у подчинённого ровно один руководитель данного типа».
+    Заменяет пару DELETE+POST, которую фронт делал двумя запросами: упавший
+    второй оставлял узел вообще без руководителя.
+
+    ``superior_id=None`` (явный null ИЛИ отсутствие поля) — снять
+    руководителя этого типа и нового не назначать.
+    """
+
+    subordinate_id: int
+    superior_id: int | None = None
+    relation_type: RelationTypeLiteral = "direct"
+
+
+class RelationTypeUpdate(BaseModel):
+    """PATCH /org/relations/{id} и /org/employee-relations/{id} — смена типа
+    существующей связи без пересоздания строки."""
+
+    relation_type: RelationTypeLiteral
+
+
+class DepartmentManagerSet(BaseModel):
+    """PUT /org/departments/{id}/manager.
+
+    ``employee_id=None`` (явный null ИЛИ поле отсутствует) — снять
+    руководителя отдела. Отдельная схема/ручка вместо DepartmentUpdate:
+    у того PATCH-семантика ``exclude_none``, при которой ``manager_id: null``
+    молча игнорируется (см. DepartmentUpdate выше и department_service.py).
+    """
+
+    employee_id: int | None = None
+
+
 # ── recruiting — порт services/hr/app/schemas/{vacancy,application}.py ──────
 
 VacancyStatusLiteral = Literal["open", "closed", "on_hold"]
@@ -566,9 +617,13 @@ class CalendarWorkingDaysQuery(BaseModel):
 
 
 class CalendarYearQuery(BaseModel):
-    """Порт Query(year) роутера ``GET /calendar/``."""
+    """Порт Query(year) роутера ``GET /calendar/``.
 
-    year: int
+    Границы как у ``TimeMonthlyReportQuery.year``: ответ — 365 строк на год, и
+    ``year=0``/``year=999999`` роняли бы ``date(year, 1, 1)`` вместо 422.
+    """
+
+    year: int = Field(..., ge=2000, le=2100)
 
 
 class EmployeeCalendarQuery(BaseModel):

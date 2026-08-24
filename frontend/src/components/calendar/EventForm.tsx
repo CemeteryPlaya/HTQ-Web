@@ -36,6 +36,7 @@ import type { Department } from '@/types/hr';
 
 import { ParticipantsPicker } from './ParticipantsPicker';
 import type { CalendarUserOption } from '@/api/calendar';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   /** When present, the form starts in edit mode and seeds its state from this event. */
@@ -54,13 +55,13 @@ interface Props {
   excludeFromPicker?: number | null;
 }
 
-const COLOR_SWATCHES: { value: string; label: string; bg: string }[] = [
-  { value: '', label: 'Стандартный', bg: 'bg-muted' },
-  { value: '#3b82f6', label: 'Синий', bg: 'bg-blue-500' },
-  { value: '#10b981', label: 'Зелёный', bg: 'bg-emerald-500' },
-  { value: '#f59e0b', label: 'Янтарь', bg: 'bg-amber-500' },
-  { value: '#ec4899', label: 'Розовый', bg: 'bg-pink-500' },
-  { value: '#8b5cf6', label: 'Фиолетовый', bg: 'bg-violet-500' },
+const COLOR_SWATCHES: { value: string; labelKey: string; bg: string }[] = [
+  { value: '', labelKey: 'calendar.form.colors.default', bg: 'bg-muted' },
+  { value: '#3b82f6', labelKey: 'calendar.form.colors.blue', bg: 'bg-blue-500' },
+  { value: '#10b981', labelKey: 'calendar.form.colors.green', bg: 'bg-emerald-500' },
+  { value: '#f59e0b', labelKey: 'calendar.form.colors.amber', bg: 'bg-amber-500' },
+  { value: '#ec4899', labelKey: 'calendar.form.colors.pink', bg: 'bg-pink-500' },
+  { value: '#8b5cf6', labelKey: 'calendar.form.colors.violet', bg: 'bg-violet-500' },
 ];
 
 /** Two-digit pad for date / time fragments. */
@@ -112,6 +113,7 @@ export const EventForm: React.FC<Props> = ({
   onSubmit,
   excludeFromPicker,
 }) => {
+  const { t } = useTranslation();
   const todayStr = useMemo(() => {
     const ref = defaultDate ?? new Date();
     return `${ref.getFullYear()}-${pad(ref.getMonth() + 1)}-${pad(ref.getDate())}`;
@@ -153,16 +155,16 @@ export const EventForm: React.FC<Props> = ({
     e.preventDefault();
     setFormError(null);
     if (!title.trim()) {
-      setFormError('Введите название события');
+      setFormError(t('calendar.form.errors.titleRequired'));
       return;
     }
     if (!startDate) {
-      setFormError('Укажите дату начала');
+      setFormError(t('calendar.form.errors.startRequired'));
       return;
     }
     const effectiveEndDate = endDate || startDate;
     if (effectiveEndDate < startDate) {
-      setFormError('Дата окончания не может быть раньше даты начала');
+      setFormError(t('calendar.form.errors.endBeforeStart'));
       return;
     }
 
@@ -173,11 +175,11 @@ export const EventForm: React.FC<Props> = ({
       endIso = combineEndOfDayToIso(effectiveEndDate);
     } else {
       if (!startTime || !endTime) {
-        setFormError('Заполните время начала и окончания');
+        setFormError(t('calendar.form.errors.timeRequired'));
         return;
       }
       if (startDate === effectiveEndDate && endTime <= startTime) {
-        setFormError('Время окончания должно быть позже времени начала');
+        setFormError(t('calendar.form.errors.endTimeBeforeStart'));
         return;
       }
       startIso = combineToIso(startDate, startTime);
@@ -205,13 +207,13 @@ export const EventForm: React.FC<Props> = ({
     <form className="p-6 md:p-8 space-y-5 bg-card" onSubmit={handleSubmit}>
       <div className="space-y-2">
         <Label htmlFor="ev-title" className="text-sm font-semibold ml-1">
-          Заголовок
+          {t('calendar.form.title')}
         </Label>
         <Input
           id="ev-title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Название события"
+          placeholder={t('calendar.form.titlePlaceholder')}
           className="rounded-2xl h-12 bg-muted/30 border-none focus-visible:ring-primary/40"
           autoFocus
         />
@@ -220,7 +222,7 @@ export const EventForm: React.FC<Props> = ({
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label htmlFor="ev-start-date" className="text-sm font-semibold ml-1">
-            Дата начала
+            {t('calendar.form.startDate')}
           </Label>
           <Input
             id="ev-start-date"
@@ -235,7 +237,7 @@ export const EventForm: React.FC<Props> = ({
         </div>
         <div className="space-y-2">
           <Label htmlFor="ev-end-date" className="text-sm font-semibold ml-1">
-            Дата окончания
+            {t('calendar.form.endDate')}
           </Label>
           <Input
             id="ev-end-date"
@@ -253,14 +255,14 @@ export const EventForm: React.FC<Props> = ({
           checked={isAllDay}
           onCheckedChange={(v) => setIsAllDay(Boolean(v))}
         />
-        <span className="text-sm font-medium">Весь день</span>
+        <span className="text-sm font-medium">{t('calendar.form.allDay')}</span>
       </label>
 
       {!isAllDay && (
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="ev-start-time" className="text-sm font-semibold ml-1">
-              Время начала
+              {t('calendar.form.startTime')}
             </Label>
             <Input
               id="ev-start-time"
@@ -272,7 +274,7 @@ export const EventForm: React.FC<Props> = ({
           </div>
           <div className="space-y-2">
             <Label htmlFor="ev-end-time" className="text-sm font-semibold ml-1">
-              Время окончания
+              {t('calendar.form.endTime')}
             </Label>
             <Input
               id="ev-end-time"
@@ -287,7 +289,7 @@ export const EventForm: React.FC<Props> = ({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label className="text-sm font-semibold ml-1">Тип</Label>
+          <Label className="text-sm font-semibold ml-1">{t('calendar.form.type')}</Label>
           <Select
             value={eventType}
             onValueChange={(v) => setEventType(v as CalendarEventType)}
@@ -296,25 +298,25 @@ export const EventForm: React.FC<Props> = ({
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="rounded-2xl border-none shadow-xl">
-              <SelectItem value="personal" className="rounded-xl">Личное</SelectItem>
-              <SelectItem value="department" className="rounded-xl">Для отдела</SelectItem>
-              <SelectItem value="common" className="rounded-xl">Общее</SelectItem>
-              <SelectItem value="conference" className="rounded-xl">🎥 Конференция</SelectItem>
+              <SelectItem value="personal" className="rounded-xl">{t('calendar.form.typePersonal')}</SelectItem>
+              <SelectItem value="department" className="rounded-xl">{t('calendar.form.typeDepartment')}</SelectItem>
+              <SelectItem value="common" className="rounded-xl">{t('calendar.form.typeCommon')}</SelectItem>
+              <SelectItem value="conference" className="rounded-xl">{t('calendar.form.typeConference')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         {eventType === 'department' && (
           <div className="space-y-2">
-            <Label className="text-sm font-semibold ml-1">Отдел</Label>
+            <Label className="text-sm font-semibold ml-1">{t('calendar.form.department')}</Label>
             <Select
               value={departmentId}
               onValueChange={(v) => setDepartmentId(v)}
             >
               <SelectTrigger className="rounded-2xl h-12 bg-muted/30 border-none focus-visible:ring-primary/40">
-                <SelectValue placeholder="Выберите отдел" />
+                <SelectValue placeholder={t('calendar.form.departmentPlaceholder')} />
               </SelectTrigger>
               <SelectContent className="rounded-2xl border-none shadow-xl">
-                <SelectItem value="none" className="rounded-xl">— Не выбран —</SelectItem>
+                <SelectItem value="none" className="rounded-xl">{t('calendar.form.departmentNone')}</SelectItem>
                 {departments.map((d) => (
                   <SelectItem key={d.id} value={String(d.id)} className="rounded-xl">
                     {d.name}
@@ -327,14 +329,14 @@ export const EventForm: React.FC<Props> = ({
       </div>
 
       <div className="space-y-2">
-        <Label className="text-sm font-semibold ml-1">Цвет</Label>
+        <Label className="text-sm font-semibold ml-1">{t('calendar.form.color')}</Label>
         <div className="flex gap-2 flex-wrap">
           {COLOR_SWATCHES.map((s) => (
             <button
               type="button"
               key={s.value || 'default'}
               onClick={() => setColor(s.value)}
-              title={s.label}
+              title={t(s.labelKey)}
               className={cn(
                 'h-8 w-8 rounded-full border-2 transition-transform',
                 s.bg,
@@ -342,7 +344,7 @@ export const EventForm: React.FC<Props> = ({
                   ? 'border-foreground scale-110'
                   : 'border-transparent hover:scale-105',
               )}
-              aria-label={s.label}
+              aria-label={t(s.labelKey)}
               aria-pressed={color === s.value}
             />
           ))}
@@ -351,27 +353,27 @@ export const EventForm: React.FC<Props> = ({
 
       <div className="space-y-2">
         <Label htmlFor="ev-description" className="text-sm font-semibold ml-1">
-          Описание
+          {t('calendar.form.description')}
         </Label>
         <Textarea
           id="ev-description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="Подробности события..."
+          placeholder={t('calendar.form.descriptionPlaceholder')}
           className="min-h-[100px] rounded-2xl bg-muted/30 border-none focus-visible:ring-primary/40 p-4"
         />
       </div>
 
       <div className="space-y-2">
-        <Label className="text-sm font-semibold ml-1">Участники</Label>
+        <Label className="text-sm font-semibold ml-1">{t('calendar.form.participants')}</Label>
         <ParticipantsPicker
           options={userOptions}
           value={participants}
           onChange={setParticipants}
-          placeholder="Кого пригласить (например, на совещание)"
+          placeholder={t('calendar.form.participantsPlaceholder')}
         />
         <p className="text-[11px] text-muted-foreground ml-1">
-          Событие появится в календаре у всех выбранных. Автор остаётся участником.
+          {t('calendar.form.participantsHint')}
         </p>
       </div>
 
@@ -383,14 +385,14 @@ export const EventForm: React.FC<Props> = ({
 
       <div className="flex justify-end gap-3 pt-2">
         <Button type="button" variant="ghost" onClick={onCancel} className="rounded-xl px-6">
-          Отмена
+          {t('common.cancel')}
         </Button>
         <Button
           type="submit"
           disabled={submitting}
           className="px-10 rounded-xl h-11 font-bold shadow-lg shadow-primary/20"
         >
-          {submitting ? 'Сохранение…' : submitLabel}
+          {submitting ? t('common.saving') : submitLabel}
         </Button>
       </div>
     </form>

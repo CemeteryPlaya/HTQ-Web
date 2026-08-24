@@ -27,6 +27,8 @@ from urllib.parse import urlparse, urlunparse
 from django.conf import settings
 from django.http import HttpRequest
 
+from htqweb.fallback import fallback
+
 from apps.core.services import service_enabled
 
 from .. import schemas
@@ -112,10 +114,18 @@ def _wt_certificate_hashes() -> list[str]:
     if hash_file:
         try:
             from_file = Path(hash_file).read_text(encoding="utf-8").strip()
-        except OSError:
+        except OSError as exc:
             # Мост ещё не стартовал или том не смонтирован — не повод
             # ронять конфиг: без хэшей фронт просто уйдёт на WebSocket.
-            from_file = ""
+            #
+            # Путь ЗАДАН, то есть WebTransport от нас ждали, а получат
+            # WebSocket — и заметит это только тот, кто измерит задержку
+            # сигналинга. Отсюда громкость: снаружи деградация невидима.
+            from_file = fallback("cms.conference.wt_cert_unreadable", "",
+                                 reason="файл отпечатка сертификата QUIC-моста "
+                                        "не прочитан; сигналинг уйдёт на "
+                                        "WebSocket",
+                                 exc=exc, path=hash_file)
         if from_file and from_file not in hashes:
             hashes.append(from_file)
 

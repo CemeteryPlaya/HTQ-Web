@@ -21,6 +21,7 @@ import {
   Check,
   ChevronDown,
   Inbox as InboxIcon,
+  MessageSquare,
   Paperclip,
   Undo2,
   X,
@@ -54,8 +55,10 @@ import {
 } from '@/components/ui/table';
 import { signoffApi } from '@/api/signoff';
 import type { InboxItem } from '@/types/signoff';
+import { useTranslation } from 'react-i18next';
 
 const SignoffInbox = () => {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [target, setTarget] = useState<DecisionTarget | null>(null);
 
@@ -75,6 +78,7 @@ const SignoffInbox = () => {
       subjectLabel:
         item.subject_title ?? `${item.subject_type} #${item.subject_id}`,
       requiresAttachment: item.requires_attachment,
+      requiresComment: item.requires_comment,
       attachedFileId: item.file_id,
     });
 
@@ -83,9 +87,9 @@ const SignoffInbox = () => {
       <div className="mb-6 flex items-center gap-3">
         <InboxIcon className="h-7 w-7 text-muted-foreground" />
         <div>
-          <h1 className="text-3xl font-bold">Ждёт меня</h1>
+          <h1 className="text-3xl font-bold">{t('signoff.nav.inbox')}</h1>
           <p className="text-sm text-muted-foreground">
-            Запросы, по которым решение за вами прямо сейчас.
+            {t('signoff.inbox.subtitle')}
           </p>
         </div>
         {items.length > 0 && (
@@ -102,22 +106,22 @@ const SignoffInbox = () => {
           </div>
         ) : isError ? (
           <p className="p-6 text-sm text-destructive">
-            Не удалось загрузить очередь согласований.
+            {t('signoff.inbox.loadError')}
           </p>
         ) : items.length === 0 ? (
           <div className="p-10 text-center">
             <p className="text-muted-foreground">
-              Ничего не ждёт вашего решения.
+              {t('signoff.inbox.empty')}
             </p>
           </div>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Объект</TableHead>
-                <TableHead>Этап</TableHead>
-                <TableHead>Отправлено</TableHead>
-                <TableHead className="text-right">Решение</TableHead>
+                <TableHead>{t('signoff.columns.subject')}</TableHead>
+                <TableHead>{t('signoff.columns.stage')}</TableHead>
+                <TableHead>{t('signoff.columns.submitted')}</TableHead>
+                <TableHead className="text-right">{t('signoff.columns.decision')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -145,7 +149,13 @@ const SignoffInbox = () => {
                     {item.requires_attachment && (
                       <div className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
                         <Paperclip className="h-3 w-3" />
-                        {item.file_id ? 'документ приложен' : 'нужен PDF'}
+                        {item.file_id ? t('signoff.inbox.documentAttached') : t('signoff.inbox.pdfNeeded')}
+                      </div>
+                    )}
+                    {item.requires_comment && (
+                      <div className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+                        <MessageSquare className="h-3 w-3" />
+                        нужно пояснение
                       </div>
                     )}
                   </TableCell>
@@ -166,7 +176,7 @@ const SignoffInbox = () => {
                       <DropdownMenu modal={false}>
                         <DropdownMenuTrigger asChild>
                           <Button size="sm">
-                            Действия
+                            {t('common.actions')}
                             <ChevronDown className="ml-1.5 h-4 w-4 opacity-70" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -175,20 +185,20 @@ const SignoffInbox = () => {
                             onClick={() => openDecision(item, 'approve')}
                           >
                             <Check className="mr-2 h-4 w-4" />
-                            Согласовать
+                            {t('signoff.decision.approve.action')}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => openDecision(item, 'rework')}
                           >
                             <Undo2 className="mr-2 h-4 w-4" />
-                            На доработку
+                            {t('signoff.decision.rework.action')}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             className="text-destructive focus:text-destructive"
                             onClick={() => openDecision(item, 'reject')}
                           >
                             <X className="mr-2 h-4 w-4" />
-                            Отклонить
+                            {t('signoff.decision.reject.action')}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>

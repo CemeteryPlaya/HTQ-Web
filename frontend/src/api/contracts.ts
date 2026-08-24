@@ -21,10 +21,34 @@ import type {
   Counterparty,
   CounterpartyFullCreatePayload,
   Country,
+  Invoice,
+  InvoiceStatus,
+  AdvancePayment,
+  AccountableFundsRequest,
+  AdvanceReport,
+  CompletionAct,
+  ContractsWorkItem,
+  ContractPayment,
   Program,
 } from '@/types/contracts';
 
 const path = (suffix: string) => apiPath('contracts', suffix);
+
+export interface PaginationParams {
+  page: number;
+  page_size: number;
+  search?: string;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  pagination: {
+    page: number;
+    page_size: number;
+    total: number;
+    total_pages: number;
+  };
+}
 
 export interface BudgetListParams {
   administrator_id?: number;
@@ -45,6 +69,9 @@ export interface AgreementListParams {
   status?: string;
 }
 
+/** Те же фильтры, что у договоров (у бэкенда это тот же набор параметров). */
+export type InvoiceListParams = AgreementListParams;
+
 /**
  * Отправка на согласование живёт ЗДЕСЬ, а не в api/signoff.ts, и это не
  * случайность. У signoff есть общий `POST /processes`, но он принимает
@@ -56,6 +83,9 @@ export interface AgreementListParams {
  * Ответ — карточка ПРОЦЕССА (201), а не отправленного объекта.
  */
 export const contractsApi = {
+  /** Personal contracts actions; approval decisions remain in signoff. */
+  myTasks: () => api.get<ContractsWorkItem[]>(path('tasks/mine')),
+
   // ─── Справочники ───────────────────────────────────────────────────────
   getEnums: () => api.get<ContractsEnums>(path('enums')),
 
@@ -76,6 +106,8 @@ export const contractsApi = {
   // ─── Бюджеты ───────────────────────────────────────────────────────────
   listBudgets: (params?: BudgetListParams) =>
     api.get<Budget[]>(path('budgets'), { params }),
+  listBudgetsPage: (params: BudgetListParams & PaginationParams) =>
+    api.get<PaginatedResponse<Budget>>(path('budgets'), { params }),
   getBudget: (id: number) => api.get<Budget>(path(`budgets/${id}`)),
   /**
    * Заявка на бюджет вместе со справочниками — одним запросом, одной
@@ -119,6 +151,8 @@ export const contractsApi = {
   // ─── Реестр контрагентов ───────────────────────────────────────────────
   listCounterparties: (params?: { search?: string; status?: string }) =>
     api.get<Counterparty[]>(path('counterparties'), { params }),
+  listCounterpartiesPage: (params: { search?: string; status?: string } & PaginationParams) =>
+    api.get<PaginatedResponse<Counterparty>>(path('counterparties'), { params }),
   getCounterparty: (id: number) =>
     api.get<Counterparty>(path(`counterparties/${id}`)),
   createCounterparty: (data: {
@@ -147,6 +181,8 @@ export const contractsApi = {
   // ─── Договоры ──────────────────────────────────────────────────────────
   listAgreements: (params?: AgreementListParams) =>
     api.get<Agreement[]>(path('agreements'), { params }),
+  listAgreementsPage: (params: AgreementListParams & PaginationParams) =>
+    api.get<PaginatedResponse<Agreement>>(path('agreements'), { params }),
   getAgreement: (id: number) => api.get<Agreement>(path(`agreements/${id}`)),
   createAgreement: (data: {
     number: string;
@@ -179,4 +215,122 @@ export const contractsApi = {
   },
   getAgreementFileUrl: (id: number) =>
     api.get<{ url: string }>(path(`agreements/${id}/file-url`)),
+
+  // ─── Счета на оплату (без договора) ────────────────────────────────────
+  //
+  // Устроены как договоры, но проще: без `number`, `payment_type`,
+  // `signed_date`, `currency` (её снимает бэкенд со строки бюджета).
+  // Согласование — то же, что у договора (`submitInvoice`), с одним отличием:
+  // скан обязателен уже на отправке (счёт без договора и ЕСТЬ платёжный
+  // документ), и его отсутствие бэкенд отобьёт 409-м.
+  listInvoices: (params?: InvoiceListParams) =>
+    api.get<Invoice[]>(path('invoices'), { params }),
+  listInvoicesPage: (params: InvoiceListParams & PaginationParams) =>
+    api.get<PaginatedResponse<Invoice>>(path('invoices'), { params }),
+  getInvoice: (id: number) => api.get<Invoice>(path(`invoices/${id}`)),
+  submitInvoice: (id: number) =>
+    api.post<ApprovalProcess>(path(`invoices/${id}/submit`)),
+  createInvoice: (data: {
+    name: string;
+    /** Счёт ссылается на СТРОКУ бюджета: деньги выделены программе. */
+    budget_line_id: number;
+    counterparty_id: number;
+    amount: string;
+    note?: string;
+  }) => api.post<Invoice>(path('invoices'), data),
+  updateInvoice: (id: number, data: Record<string, unknown>) =>
+    api.patch<Invoice>(path(`invoices/${id}`), data),
+  /** Единственный путь смены статуса — переход проверяется на бэкенде. */
+  changeInvoiceStatus: (id: number, status: InvoiceStatus) =>
+    api.post<Invoice>(path(`invoices/${id}/status`), { status }),
+  uploadInvoiceFile: (id: number, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post<Invoice>(path(`invoices/${id}/file`), form);
+  },
+  getInvoiceFileUrl: (id: number) =>
+    api.get<{ url: string }>(path(`invoices/${id}/file-url`)),
+
+  // ─── Предоплаты на основании договоров ────────────────────────────────
+  listAdvancePayments: (params?: { agreement_id?: number; awaiting_payment?: boolean }) =>
+    api.get<AdvancePayment[]>(path('advance-payments'), { params }),
+  listAdvancePaymentsPage: (params: { agreement_id?: number; awaiting_payment?: boolean } & PaginationParams) =>
+    api.get<PaginatedResponse<AdvancePayment>>(path('advance-payments'), { params }),
+  getAdvancePayment: (id: number) =>
+    api.get<AdvancePayment>(path(`advance-payments/${id}`)),
+  createAdvancePayment: (data: { agreement_id: number; amount: string }) =>
+    api.post<AdvancePayment>(path('advance-payments'), data),
+  submitAdvancePayment: (id: number) =>
+    api.post<ApprovalProcess>(path(`advance-payments/${id}/submit`)),
+  recordAdvancePayment: (id: number, postingNumber: string, file: File) => {
+    const form = new FormData();
+    form.append('posting_number', postingNumber);
+    form.append('file', file);
+    return api.post<AdvancePayment>(path(`advance-payments/${id}/payment-order`), form);
+  },
+  getAdvancePaymentOrderUrl: (id: number) =>
+    api.get<{ url: string }>(path(`advance-payments/${id}/payment-order-url`)),
+
+  listAccountableFundsRequests: (params?: { budget_id?: number; administrator_id?: number; program_id?: number; accountable_user_id?: number }) =>
+    api.get<AccountableFundsRequest[]>(path('accountable-funds-requests'), { params }),
+  listAccountableFundsRequestsPage: (params: { budget_id?: number; administrator_id?: number; program_id?: number; accountable_user_id?: number } & PaginationParams) =>
+    api.get<PaginatedResponse<AccountableFundsRequest>>(path('accountable-funds-requests'), { params }),
+  getAccountableFundsRequest: (id: number) =>
+    api.get<AccountableFundsRequest>(path(`accountable-funds-requests/${id}`)),
+  createAccountableFundsRequest: (data: { budget_line_id: number; amount: string; goal: string }) =>
+    api.post<AccountableFundsRequest>(path('accountable-funds-requests'), data),
+  submitAccountableFundsRequest: (id: number) =>
+    api.post<ApprovalProcess>(path(`accountable-funds-requests/${id}/submit`)),
+  assignAccountableFundsRequestBudgetLine: (id: number, budgetLineId: number) =>
+    api.post<AccountableFundsRequest>(path(`accountable-funds-requests/${id}/budget-line`), { budget_line_id: budgetLineId }),
+  markAccountableFundsRequestPaid: (id: number) =>
+    api.post<AccountableFundsRequest>(path(`accountable-funds-requests/${id}/accounting-paid`)),
+  listAdvanceReports: (requestId: number) =>
+    api.get<AdvanceReport[]>(path(`accountable-funds-requests/${requestId}/advance-reports`)),
+  createAdvanceReport: (requestId: number, expenseName: string, amount: string, file: File) => {
+    const form = new FormData();
+    form.append('expense_name', expenseName); form.append('amount', amount); form.append('file', file);
+    return api.post<AdvanceReport>(path(`accountable-funds-requests/${requestId}/advance-reports`), form);
+  },
+  submitAdvanceReport: (id: number) => api.post<ApprovalProcess>(path(`advance-reports/${id}/submit`)),
+  getAdvanceReportFileUrl: (id: number) => api.get<{ url: string }>(path(`advance-reports/${id}/file-url`)),
+  getAdvanceReport: (id: number) => api.get<AdvanceReport>(path(`advance-reports/${id}`)),
+
+  listContractPayments: (params?: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean }) =>
+    api.get<ContractPayment[]>(path('contract-payments'), { params }),
+  listContractPaymentsPage: (params: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean } & PaginationParams) =>
+    api.get<PaginatedResponse<ContractPayment>>(path('contract-payments'), { params }),
+  getContractPayment: (id: number) => api.get<ContractPayment>(path(`contract-payments/${id}`)),
+  createContractPayment: (administratorId: number, agreementId: number, amount: string, invoice: File) => {
+    const form = new FormData();
+    form.append('administrator_id', String(administratorId)); form.append('agreement_id', String(agreementId));
+    form.append('amount', amount); form.append('invoice', invoice);
+    return api.post<ContractPayment>(path('contract-payments'), form);
+  },
+  submitContractPayment: (id: number) => api.post<ApprovalProcess>(path(`contract-payments/${id}/submit`)),
+  recordContractPayment: (id: number, postingNumber: string, file: File) => {
+    const form = new FormData(); form.append('posting_number', postingNumber); form.append('file', file);
+    return api.post<ContractPayment>(path(`contract-payments/${id}/payment-order`), form);
+  },
+  getContractPaymentInvoiceUrl: (id: number) => api.get<{ url: string }>(path(`contract-payments/${id}/invoice-url`)),
+  getContractPaymentOrderUrl: (id: number) => api.get<{ url: string }>(path(`contract-payments/${id}/payment-order-url`)),
+
+  listCompletionActs: (params?: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean }) =>
+    api.get<CompletionAct[]>(path('completion-acts'), { params }),
+  listCompletionActsPage: (params: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean } & PaginationParams) =>
+    api.get<PaginatedResponse<CompletionAct>>(path('completion-acts'), { params }),
+  getCompletionAct: (id: number) => api.get<CompletionAct>(path(`completion-acts/${id}`)),
+  createCompletionAct: (administratorId: number, agreementId: number, amount: string, act: File) => {
+    const form = new FormData();
+    form.append('administrator_id', String(administratorId)); form.append('agreement_id', String(agreementId));
+    form.append('amount', amount); form.append('act', act);
+    return api.post<CompletionAct>(path('completion-acts'), form);
+  },
+  submitCompletionAct: (id: number) => api.post<ApprovalProcess>(path(`completion-acts/${id}/submit`)),
+  recordCompletionAct: (id: number, postingNumber: string, file: File) => {
+    const form = new FormData(); form.append('posting_number', postingNumber); form.append('file', file);
+    return api.post<CompletionAct>(path(`completion-acts/${id}/payment-order`), form);
+  },
+  getCompletionActUrl: (id: number) => api.get<{ url: string }>(path(`completion-acts/${id}/act-url`)),
+  getCompletionActOrderUrl: (id: number) => api.get<{ url: string }>(path(`completion-acts/${id}/payment-order-url`)),
 };

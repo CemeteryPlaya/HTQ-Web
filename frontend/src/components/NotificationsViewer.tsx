@@ -22,8 +22,10 @@ import {
     notificationSourceLabel,
     notificationTargetUrl,
 } from '@/api/tasks';
-import type { Notification } from '@/types/tasks';
 import { MessengerToast } from '@/components/MessengerToast';
+import { playNotificationSound } from '@/lib/sound/soundService';
+import { SoundSettingsModal } from '@/components/sound/SoundSettingsModal';
+import { Volume2 } from 'lucide-react';
 
 /** Icon to show on the left side of each notification, picked from the
  *  source type. Calendar / Task / HR / fallback. */
@@ -135,6 +137,8 @@ export const NotificationsViewer: React.FC = () => {
             const body = formatNotificationText(n);
             const title = n.actor_name ? `${n.actor_name} ${body}` : body;
             const url = notificationTargetUrl(n);
+            // Play corresponding pleasant sound (debounced internally)
+            playNotificationSound(n);
 
             // Messenger gets a rich layout (avatar + 2-line clamp + time).
             // Other types stay on the default sonner text toast — they read
@@ -159,11 +163,11 @@ export const NotificationsViewer: React.FC = () => {
 
             toast(title, {
                 id: `notif-${n.id}`,
-                description: source ? `Источник: ${source}` : undefined,
+                description: source ? t('notifications.toastSource', { source }) : undefined,
                 duration: 8000,
                 action: url
                     ? {
-                          label: 'Открыть',
+                          label: t('common.open'),
                           onClick: () => {
                               markReadMutation.mutate(n.id);
                               navigate(url);
@@ -172,7 +176,7 @@ export const NotificationsViewer: React.FC = () => {
                     : undefined,
             });
         }
-    }, [notifications, markReadMutation, navigate]);
+    }, [notifications, markReadMutation, navigate, t]);
 
     return (
         <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
@@ -187,7 +191,7 @@ export const NotificationsViewer: React.FC = () => {
 
             <DropdownMenuContent align="end" className="w-80 max-h-[85vh] overflow-y-auto">
                 <div className="flex items-center justify-between px-2 py-2">
-                    <DropdownMenuLabel className="p-0">Уведомления</DropdownMenuLabel>
+                    <DropdownMenuLabel className="p-0">{t('notifications.title')}</DropdownMenuLabel>
                     {unreadCount > 0 && (
                         <Button
                             variant="ghost"
@@ -195,7 +199,7 @@ export const NotificationsViewer: React.FC = () => {
                             className="h-auto p-0 text-xs text-primary hover:bg-transparent hover:underline"
                             onClick={() => markAllReadMutation.mutate()}
                         >
-                            Прочитать все
+                            {t('notifications.markAllRead')}
                         </Button>
                     )}
                 </div>
@@ -204,7 +208,7 @@ export const NotificationsViewer: React.FC = () => {
                 {topNotifications.length === 0 ? (
                     <div className="py-6 text-center text-sm text-muted-foreground flex flex-col items-center gap-2">
                         <CheckSquare className="h-8 w-8 text-muted-foreground/30" />
-                        <p>Нет новых уведомлений</p>
+                        <p>{t('notifications.empty')}</p>
                     </div>
                 ) : (
                     <div className="flex flex-col gap-1 px-1 py-1">
@@ -244,12 +248,27 @@ export const NotificationsViewer: React.FC = () => {
 
                         {notifications.length > 10 && (
                             <div className="p-2 text-center text-xs text-muted-foreground">
-                                Показаны последние 10
+                                {t('notifications.latestTen')}
                             </div>
                         )}
                     </div>
                 )}
 
+                <DropdownMenuSeparator />
+                <div className="px-2 py-1 flex items-center justify-between">
+                    <SoundSettingsModal
+                        trigger={
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5 w-full justify-start font-normal"
+                            >
+                                <Volume2 className="h-3.5 w-3.5" />
+                                <span>{t('sound.settings', 'Настройки звуков')}</span>
+                            </Button>
+                        }
+                    />
+                </div>
                 <DropdownMenuSeparator />
                 <Link
                     to="/notifications"
@@ -257,7 +276,7 @@ export const NotificationsViewer: React.FC = () => {
                     className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-primary hover:bg-muted/50 transition-colors"
                 >
                     <History className="h-4 w-4" />
-                    Показать всю историю
+                    {t('notifications.showHistory')}
                 </Link>
             </DropdownMenuContent>
         </DropdownMenu>

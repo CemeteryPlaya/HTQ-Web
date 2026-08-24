@@ -1,15 +1,16 @@
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { Calendar, ArrowRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import type { NewsItem } from '@/types/news';
 
 const FALLBACK_IMAGE = '/images/panels5.webp';
 
-function formatDate(value: string | null | undefined): string {
+function formatDate(value: string | null | undefined, locale: string): string {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleDateString('ru-RU', {
+  return date.toLocaleDateString(locale, {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
@@ -23,8 +24,9 @@ interface NewsCardProps {
 }
 
 export function NewsCard({ item, className = '' }: NewsCardProps) {
+  const { t, i18n } = useTranslation();
   const cover = item.image || FALLBACK_IMAGE;
-  const date = formatDate(item.published_at || item.scheduled_at || item.created_at);
+  const date = formatDate(item.published_at || item.scheduled_at || item.created_at, i18n.language);
 
   return (
     <Link
@@ -89,7 +91,7 @@ export function NewsCard({ item, className = '' }: NewsCardProps) {
           )}
           
           <div className="flex items-center text-sm font-semibold text-primary opacity-0 transition-all duration-300 -translate-x-4 group-hover:opacity-100 group-hover:translate-x-0">
-            Читать далее <ArrowRight className="ml-1.5 h-4 w-4" />
+            {t('news.read_more')} <ArrowRight className="ml-1.5 h-4 w-4" />
           </div>
         </div>
       </div>

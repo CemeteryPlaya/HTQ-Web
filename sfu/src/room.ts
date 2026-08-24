@@ -134,6 +134,32 @@ export class Room {
     return result;
   }
 
+  /**
+   * Счётчики комнаты для Prometheus.
+   *
+   * Метод на самой комнате, а не обход `peers` снаружи: коллекция приватная
+   * намеренно, и открывать её ради одного экспорта значило бы дать всем
+   * желающим менять состав участников в обход addPeer/removePeer.
+   */
+  metricsSnapshot(): {
+    peers: number;
+    transports: number;
+    producers: number;
+    consumers: number;
+  } {
+    let transports = 0;
+    let producers = 0;
+    let consumers = 0;
+
+    for (const peer of this.peers.values()) {
+      transports += peer.transports.size;
+      producers += peer.producers.size;
+      consumers += peer.consumers.size;
+    }
+
+    return { peers: this.peers.size, transports, producers, consumers };
+  }
+
   // ─────────────────────────────────────────────────────
   // Жизненный цикл участника
   // ─────────────────────────────────────────────────────
@@ -507,6 +533,16 @@ export class Room {
       throw new Error(`Consumer ${consumerId} уже закрыт (транспорт завершён)`);
     }
     await consumer.pause();
+  }
+
+  /**
+   * Producer участника по его id.
+   *
+   * Нужен записи (`recording.ts`): чтобы повесить на поток PlainTransport,
+   * нужен сам объект, а `produce()` отдаёт наружу только строку id.
+   */
+  getProducer(peerId: string, producerId: string): mediasoupTypes.Producer | undefined {
+    return this.peers.get(peerId)?.producers.get(producerId);
   }
 
   hasConsumerForProducer(peerId: string, producerId: string): boolean {

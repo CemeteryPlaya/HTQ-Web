@@ -24,8 +24,10 @@ import { MessageCircle } from 'lucide-react';
 import { messengerApi } from './api/messengerApi';
 import { getMessengerSocket } from './api/socket';
 import { getAccessToken } from '@/lib/auth/profileStorage';
+import { useTranslation } from 'react-i18next';
 
 export const MessengerBadge = () => {
+    const { t } = useTranslation();
     const queryClient = useQueryClient();
     const location = useLocation();
     const onMessengerPage = location.pathname.startsWith('/messenger');
@@ -66,8 +68,8 @@ export const MessengerBadge = () => {
             } catch {
                 body = '';
             }
-            new Notification(sender?.full_name || sender?.username || 'Новое сообщение', {
-                body: body || 'Вложение',
+            new Notification(sender?.full_name || sender?.username || t('messenger.newMessage'), {
+                body: body || t('messenger.attachment'),
                 tag: `messenger-room-${payload.room_id}`,
             });
         };
@@ -78,7 +80,7 @@ export const MessengerBadge = () => {
             socket.off('message_new', onNew);
             socket.off('message_read', refresh);
         };
-    }, [queryClient, onMessengerPage]);
+    }, [queryClient, onMessengerPage, t]);
 
     if (!getAccessToken()) return null;
 
@@ -91,7 +93,7 @@ export const MessengerBadge = () => {
                 }
             }}
             className="relative inline-flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-accent hover:text-accent-foreground"
-            title={total > 0 ? `Непрочитанных сообщений: ${total}` : 'Мессенджер'}
+            title={total > 0 ? t('messenger.unreadCount', { total }) : t('profile.sidebar.messenger')}
         >
             <MessageCircle className="w-5 h-5" />
             {total > 0 && (

@@ -18,12 +18,14 @@ import {
   VIDEO_TARGET_HEIGHT,
   VIDEO_TARGET_WIDTH,
 } from './qualityProfile';
+import { fallback } from '@/lib/fallback';
 import { Result, err, ok } from './result';
 import {
   WebRTCError,
   createWebRTCError,
   webRTCErrorFromUnknown,
 } from './WebRTCError';
+import i18next from '@/i18n';
 
 // ═══════════════════════════════════════════════════════════
 // Types
@@ -1113,9 +1115,18 @@ export class MediaEngine {
         });
         this.applyContentHints(audioOnlyStream);
         this.events.onInfo?.(
-          'Камера недоступна. Продолжаем в аудио-режиме.'
+          i18next.t('conference.media.cameraUnavailable')
         );
-        return ok(audioOnlyStream);
+        // expected: ветка ровно для этого и существует, участнику про неё
+        // сказано, и строгий режим не должен запирать разработчика без
+        // веб-камеры. Но в телеметрию событие уходит: «камеры пропали разом
+        // у всех» — это уже не отсутствие камеры, а сломанный HTTPS или
+        // политика браузера, и заметить это надо по всплеску.
+        return ok(fallback('conference.media.audio_only', audioOnlyStream, {
+          reason: 'захват камеры не удался — звонок идёт только со звуком',
+          expected: true,
+          cause: fullCaptureCause,
+        }));
       } catch (audioOnlyCause) {
         const domException =
           typeof DOMException !== 'undefined' && audioOnlyCause instanceof DOMException
@@ -1226,12 +1237,12 @@ export class MediaEngine {
 
       if (hasCameraWarning) {
         this.events.onInfo?.(
-          'Камера сейчас недоступна. Звонок продолжен только со звуком.'
+          i18next.t('conference.media.cameraUnavailableNow')
         );
       }
       if (hasLikelySilentMicWarning) {
         this.events.onInfo?.(
-          'Микрофон сейчас не даёт заметного сигнала (тишина). Подключение продолжено; попробуйте сказать пару слов после входа.'
+          i18next.t('conference.media.micSilent')
         );
       }
     }
@@ -2031,7 +2042,7 @@ export class MediaEngine {
         this.publicSrflxCandidateDiscovered.set(pc, true);
         if (!this.announcedPublicSrflx && this.expectsPublicSrflxCandidate) {
           this.announcedPublicSrflx = true;
-          this.events.onInfo?.('STUN вернул публичный srflx ICE-кандидат. Глобальный маршрут доступен.');
+          this.events.onInfo?.(i18next.t('conference.media.stunOk'));
         }
 
         if (shouldLogIceRouting) {
@@ -2104,7 +2115,7 @@ export class MediaEngine {
       }
     );
     this.events.onInfo?.(
-      'Публичный srflx ICE-кандидат не получен. Проверьте доступ к STUN/TURN (особенно при тесте через ngrok).'
+      i18next.t('conference.media.stunMissing')
     );
   }
 
@@ -2165,7 +2176,7 @@ export class MediaEngine {
           }
         );
         this.events.onInfo?.(
-          'SFU выдал только локальные ICE-адреса. Для связи через интернет будет использован TURN relay.'
+          i18next.t('conference.media.sfuLocalOnlyRelay')
         );
         return;
       }
@@ -2180,8 +2191,7 @@ export class MediaEngine {
         }
       );
       this.events.onInfo?.(
-        'SFU выдал только локальные ICE-адреса (например 192.168.x.x). ' +
-          'Для звонков через интернет нужен публичный WEBRTC_ANNOUNCED_IP и открытый media-порт SFU (UDP/TCP), либо рабочий TURN relay.'
+        i18next.t('conference.media.sfuLocalOnlyHelp')
       );
     }
   }
@@ -2415,7 +2425,7 @@ export class MediaEngine {
           'Switching to relay-only mode and restarting ICE.'
       );
       this.events.onInfo?.(
-        'Прямые ICE-кандидаты не получены, включаю TURN relay и выполняю ICE restart'
+        i18next.t('conference.media.iceRestartRelay')
       );
       this.performIceRestart(pc);
     } catch (cause) {
@@ -3090,7 +3100,7 @@ export class MediaEngine {
       this.events.onChatMessage?.({
         text,
         peerId: String(data.peerId || ''),
-        displayName: String(data.displayName || 'Участник'),
+        displayName: String(data.displayName || i18next.t('conference.media.participant')),
         sentAt: String(data.sentAt || new Date().toISOString()),
       });
     });

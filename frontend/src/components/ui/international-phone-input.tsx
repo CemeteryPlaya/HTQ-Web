@@ -106,10 +106,10 @@ export const InternationalPhoneInput: React.FC<InternationalPhoneInputProps> = (
   readOnly,
   ...rest
 }) => {
-  const kz = isKzPhoneLike(value);
+  const kz = isKzPhoneLike(value) || !String(value ?? '').trim();
   const isEmpty = !String(value ?? '').trim();
 
-  const region: PhoneRegion = isEmpty ? 'empty' : kz ? 'kz' : 'intl';
+  const region: PhoneRegion = isEmpty ? 'empty' : isKzPhoneLike(value) ? 'kz' : 'intl';
 
   /** Цифры, которые пользователь видит/правит в KZ-режиме (без `+7`). */
   const kzDigits = nsnFromValue(value);
@@ -124,6 +124,11 @@ export const InternationalPhoneInput: React.FC<InternationalPhoneInputProps> = (
   const handleChange = React.useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
       const text = event.target.value;
+
+      if (!text.trim() || text === '(') {
+        emitKz('');
+        return;
+      }
 
       if (isKzPhoneLike(text)) {
         // В KZ-поле лежит национальная часть без `+7` — берём цифры как есть.

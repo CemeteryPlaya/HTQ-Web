@@ -19,6 +19,7 @@ import {
   MapPin,
   Truck,
   Search,
+  Users,
   X,
   ChevronRight,
   type LucideIcon,
@@ -36,6 +37,7 @@ const taskNavItems: TaskNavItem[] = [
   // ── Оперативные работы
   { to: '/tasks', icon: CheckSquare, labelKey: 'tasks.nav.tasks', elevatedOnly: false, category: 'ops' },
   { to: '/tasks/daily', icon: ClipboardList, labelKey: 'tasks.nav.daily', elevatedOnly: false, category: 'ops' },
+  { to: '/tasks/project-daily', icon: Users, labelKey: 'tasks.nav.projectDaily', elevatedOnly: true, category: 'ops' },
 
   // ── Планирование
   { to: '/tasks/roadmap', icon: Map, labelKey: 'tasks.nav.roadmap', elevatedOnly: true, category: 'planning' },
@@ -51,11 +53,11 @@ const taskNavItems: TaskNavItem[] = [
   { to: '/tasks/reports', icon: BarChart3, labelKey: 'tasks.nav.reports', elevatedOnly: true, category: 'analytics' },
 ];
 
-const categoryTitles: Record<string, string> = {
-  ops: 'Оперативные работы',
-  planning: 'Планирование',
-  resources: 'Ресурсы и объекты',
-  analytics: 'Аналитика и отчеты',
+const categoryTitleKeys: Record<string, string> = {
+  ops: 'tasks.nav.categories.ops',
+  planning: 'tasks.nav.categories.planning',
+  resources: 'tasks.nav.categories.resources',
+  analytics: 'tasks.nav.categories.analytics',
 };
 
 interface Props {
@@ -132,7 +134,7 @@ export const TasksLayout: React.FC<Props> = ({ title, subtitle, children }) => {
                   key={item.to}
                   to={item.to}
                   className={cn(
-                    'flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-semibold whitespace-nowrap transition-all duration-200 border shadow-2xs',
+                    'flex min-h-[44px] items-center gap-2 px-4 py-2 rounded-2xl text-xs font-semibold whitespace-nowrap transition-all duration-200 border shadow-2xs',
                     active
                       ? 'bg-primary text-primary-foreground border-primary shadow-sm'
                       : 'bg-card text-muted-foreground hover:bg-muted/80 hover:text-foreground border-border/50'
@@ -156,7 +158,7 @@ export const TasksLayout: React.FC<Props> = ({ title, subtitle, children }) => {
                   <Input
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Поиск разделов..."
+                    placeholder={t('tasks.nav.searchSections')}
                     className="pl-8 pr-8 h-8 text-xs rounded-xl bg-muted/30 border-muted-foreground/20 focus:bg-background"
                   />
                   {searchQuery && (
@@ -175,7 +177,7 @@ export const TasksLayout: React.FC<Props> = ({ title, subtitle, children }) => {
                     return (
                       <div key={catKey} className="space-y-1.5">
                         <div className="px-3 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
-                          {categoryTitles[catKey]}
+                          {t(categoryTitleKeys[catKey])}
                         </div>
                         <div className="space-y-1">
                           {items.map((item) => {
@@ -210,7 +212,7 @@ export const TasksLayout: React.FC<Props> = ({ title, subtitle, children }) => {
                   })}
                   {filteredNavItems.length === 0 && (
                     <div className="py-4 text-center text-xs text-muted-foreground">
-                      Разделы не найдены
+                      {t('tasks.nav.noSections')}
                     </div>
                   )}
                 </nav>

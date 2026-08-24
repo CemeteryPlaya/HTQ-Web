@@ -1,14 +1,13 @@
 /**
  * Список согласований — надзорный экран.
  *
- * `GET /processes` открыт любому аутентифицированному, а не только
- * администратору, поэтому страница доступна всем: сотруднику надо видеть,
- * что стало с ЕГО отправленным, а очередь «ждёт меня» этого не показывает —
- * там только то, где решение за ним.
+ * Страница доступна всем, но API возвращает обычному сотруднику только те
+ * процессы, которые он отправил либо в которых назначен согласующим.
+ * Администратор видит все процессы для надзора.
  *
  * Отсюда фильтр «Мои» — это `initiator_id` = текущий пользователь, то есть
- * «что отправил я». Он не про «где я согласующий»: такого параметра у
- * эндпоинта нет намеренно, персональная очередь отдаётся только своя.
+ * «что отправил я». Без фильтра список включает также процессы, где
+ * пользователь был или остаётся согласующим.
  */
 
 import { useMemo, useState } from 'react';
@@ -40,12 +39,14 @@ import {
 } from '@/components/ui/table';
 import { signoffApi, type ProcessListParams } from '@/api/signoff';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { useTranslation } from 'react-i18next';
 
 /** Значение «фильтр не выбран» для shadcn-select: пустая строка ему
  *  запрещена (Radix трактует её как «сбросить значение»). */
 const ANY = '__any__';
 
 const ProcessList = () => {
+  const { t } = useTranslation();
   const { activeProfile } = useActiveProfile();
   const myId = activeProfile?.id ? Number(activeProfile.id) : null;
 
@@ -93,9 +94,9 @@ const ProcessList = () => {
       <div className="mb-6 flex items-center gap-3">
         <ListChecks className="h-7 w-7 text-muted-foreground" />
         <div>
-          <h1 className="text-3xl font-bold">Согласования</h1>
+          <h1 className="text-3xl font-bold">{t('signoff.nav.title')}</h1>
           <p className="text-sm text-muted-foreground">
-            Все запущенные процессы — идущие и завершённые.
+            {t('signoff.list.subtitle')}
           </p>
         </div>
       </div>
@@ -103,10 +104,10 @@ const ProcessList = () => {
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Select value={subjectType} onValueChange={setSubjectType}>
           <SelectTrigger className="w-56">
-            <SelectValue placeholder="Тип объекта" />
+            <SelectValue placeholder={t('signoff.list.typeFilter')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={ANY}>Все типы объектов</SelectItem>
+            <SelectItem value={ANY}>{t('signoff.list.allTypes')}</SelectItem>
             {subjects.map((subject) => (
               <SelectItem key={subject.subject_type} value={subject.subject_type}>
                 {subject.label}
@@ -117,10 +118,10 @@ const ProcessList = () => {
 
         <Select value={state} onValueChange={setState}>
           <SelectTrigger className="w-52">
-            <SelectValue placeholder="Состояние" />
+            <SelectValue placeholder={t('signoff.columns.state')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={ANY}>Любое состояние</SelectItem>
+            <SelectItem value={ANY}>{t('signoff.list.anyState')}</SelectItem>
             {(enums?.process_state ?? []).map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 {option.label}
@@ -135,11 +136,11 @@ const ProcessList = () => {
           disabled={myId === null}
           title={
             myId === null
-              ? 'Профиль ещё не загружен'
-              : 'Только то, что отправил я'
+              ? t('signoff.list.profileNotLoaded')
+              : t('signoff.list.onlyMineHint')
           }
         >
-          Мои отправленные
+          {t('signoff.list.onlyMine')}
         </Button>
       </div>
 
@@ -152,22 +153,22 @@ const ProcessList = () => {
           </div>
         ) : isError ? (
           <p className="p-6 text-sm text-destructive">
-            Не удалось загрузить согласования.
+            {t('signoff.list.loadError')}
           </p>
         ) : processes.length === 0 ? (
           <p className="p-10 text-center text-muted-foreground">
-            Ни одного согласования по этим условиям.
+            {t('signoff.list.empty')}
           </p>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="w-16">#</TableHead>
-                <TableHead>Объект</TableHead>
-                <TableHead>Тип</TableHead>
-                <TableHead>Состояние</TableHead>
-                <TableHead>Запущено</TableHead>
-                <TableHead>Завершено</TableHead>
+                <TableHead>{t('signoff.columns.subject')}</TableHead>
+                <TableHead>{t('signoff.columns.type')}</TableHead>
+                <TableHead>{t('signoff.columns.state')}</TableHead>
+                <TableHead>{t('signoff.columns.started')}</TableHead>
+                <TableHead>{t('signoff.columns.finished')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

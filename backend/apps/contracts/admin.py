@@ -19,12 +19,18 @@ from django.contrib import admin
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
 from .models import (
+    AccountableFundsRequest,
+    AdvanceReport,
     Administrator,
+    AdvancePayment,
     Agreement,
     Budget,
     BudgetLine,
     Counterparty,
+    CompletionAct,
+    ContractPayment,
     Country,
+    Invoice,
     Program,
 )
 from .services import budget_calc
@@ -139,3 +145,76 @@ class AgreementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     # исправления данных, и запретить здесь ручную починку статуса значило бы
     # оставить систему без выхода из состояния, куда её загнал баг. Проверка
     # лимита при этом НЕ выполняется — учитывайте, правя статус отсюда.
+
+
+@admin.register(Invoice)
+class InvoiceAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "name", "counterparty", "budget_line", "amount",
+                    "currency", "status", "approval_state", "created_at")
+    list_filter = ("status", "approval_state", "currency",
+                   "budget_line__budget__period_year")
+    search_fields = ("name", "note", "counterparty__name",
+                     "counterparty__bin_iin")
+    readonly_fields = ("created_at", "updated_at", "file_id", "currency",
+                       "approval_state")
+    raw_id_fields = ("budget_line", "counterparty")
+    list_select_related = ("budget_line", "budget_line__program", "counterparty")
+    # `currency` read-only: она снимается со строки бюджета при создании, а не
+    # задаётся руками (см. докстринг модели Invoice). `approval_state` тоже —
+    # его единственный писатель — движок signoff.
+
+
+@admin.register(AdvancePayment)
+class AdvancePaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "agreement", "amount", "status", "approval_state", "posting_number",
+                    "paid_by", "paid_at", "created_at")
+    list_filter = ("status", "approval_state", "agreement__budget_line__budget__period_year")
+    search_fields = ("agreement__number", "agreement__name", "posting_number")
+    readonly_fields = ("created_at", "updated_at", "approval_state", "paid_by", "paid_at")
+    raw_id_fields = ("agreement",)
+    list_select_related = ("agreement", "agreement__counterparty")
+
+
+@admin.register(AccountableFundsRequest)
+class AccountableFundsRequestAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "budget_line", "administrator", "program", "amount", "goal", "status",
+                    "approval_state", "accounting_paid", "accountable_user_id")
+    list_filter = ("status", "approval_state", "accounting_paid", "budget_line__budget__administrator", "budget_line__program")
+    search_fields = ("goal",)
+    readonly_fields = ("created_at", "updated_at", "approval_state", "accounting_paid_by",
+                       "accounting_paid_at", "accountable_user_id", "created_by", "administrator", "program")
+    raw_id_fields = ("budget_line",)
+    list_select_related = ("budget_line", "budget_line__budget__administrator", "budget_line__program", "administrator", "program")
+
+
+@admin.register(AdvanceReport)
+class AdvanceReportAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "accountable_funds_request", "expense_name", "amount",
+                    "approval_state", "created_by", "created_at")
+    list_filter = ("approval_state",)
+    search_fields = ("expense_name",)
+    readonly_fields = ("created_at", "updated_at", "approval_state", "created_by")
+    raw_id_fields = ("accountable_funds_request",)
+    list_select_related = ("accountable_funds_request",)
+
+
+@admin.register(ContractPayment)
+class ContractPaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "administrator", "agreement", "amount", "status",
+                    "approval_state", "posting_number", "paid_by", "paid_at")
+    list_filter = ("status", "approval_state", "administrator")
+    search_fields = ("agreement__number", "agreement__name", "posting_number")
+    readonly_fields = ("created_at", "updated_at", "approval_state", "paid_by", "paid_at")
+    raw_id_fields = ("administrator", "agreement")
+    list_select_related = ("administrator", "agreement", "agreement__counterparty")
+
+
+@admin.register(CompletionAct)
+class CompletionActAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "administrator", "agreement", "amount", "status",
+                    "approval_state", "posting_number", "paid_by", "paid_at")
+    list_filter = ("status", "approval_state", "administrator")
+    search_fields = ("agreement__number", "agreement__name", "posting_number")
+    readonly_fields = ("created_at", "updated_at", "approval_state", "paid_by", "paid_at")
+    raw_id_fields = ("administrator", "agreement")
+    list_select_related = ("administrator", "agreement", "agreement__counterparty")

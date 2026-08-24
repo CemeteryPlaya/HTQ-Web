@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/select';
 import { contractsApi } from '@/api/contracts';
 import type { AgreementStatus, BudgetLineFlat, PaymentType } from '@/types/contracts';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Оформление договора.
@@ -58,6 +59,7 @@ function toKopecks(value: string): bigint {
 }
 
 const AgreementCreate = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -171,17 +173,17 @@ const AgreementCreate = () => {
 
   const validate = (): Errors => {
     const next: Errors = {};
-    if (!administratorId) next.administrator = 'Выберите администратора бюджета';
-    else if (!programId) next.program = 'Выберите программу';
-    else if (!lineId) next.budget = 'Выберите бюджетный год';
-    if (!counterpartyId) next.counterparty = 'Выберите контрагента';
-    if (!number.trim()) next.number = 'Укажите номер договора';
-    if (!name.trim()) next.name = 'Укажите наименование договора';
-    if (!amount.trim()) next.amount = 'Укажите сумму договора';
+    if (!administratorId) next.administrator = t('contracts.agreementForm.errors.administrator');
+    else if (!programId) next.program = t('contracts.agreementForm.errors.program');
+    else if (!lineId) next.budget = t('contracts.agreementForm.errors.budget');
+    if (!counterpartyId) next.counterparty = t('contracts.agreementForm.errors.counterparty');
+    if (!number.trim()) next.number = t('contracts.agreementForm.errors.number');
+    if (!name.trim()) next.name = t('contracts.agreementForm.errors.name');
+    if (!amount.trim()) next.amount = t('contracts.agreementForm.errors.amount');
     else if (!AMOUNT_RE.test(amount.trim())) {
-      next.amount = 'Сумма — число, максимум два знака после запятой';
+      next.amount = t('contracts.agreementForm.errors.amountFormat');
     } else if (toKopecks(amount.trim()) === 0n) {
-      next.amount = 'Сумма должна быть больше нуля';
+      next.amount = t('contracts.agreementForm.errors.amountPositive');
     }
     return next;
   };
@@ -211,7 +213,7 @@ const AgreementCreate = () => {
           await contractsApi.uploadAgreementFile(agreement.id, file);
         } catch {
           toast.warning(
-            `Договор ${agreement.number} создан, но файл приложить не удалось — попробуйте ещё раз из карточки.`,
+            t('contracts.agreementForm.createdNoFile', { number: agreement.number }),
           );
         }
       }
@@ -219,7 +221,7 @@ const AgreementCreate = () => {
     },
     onSuccess: (agreement) => {
       queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      toast.success(`Договор ${agreement.number} оформлен`);
+      toast.success(t('contracts.agreementForm.created', { number: agreement.number }));
       navigate('/contracts/agreements');
     },
     onError: (error: any) => {
@@ -235,7 +237,7 @@ const AgreementCreate = () => {
         toast.error(detail.map((item: any) => item.msg).join('; '));
         return;
       }
-      toast.error('Не удалось оформить договор');
+      toast.error(t('contracts.agreementForm.createError'));
     },
   });
 
@@ -244,7 +246,7 @@ const AgreementCreate = () => {
     const found = validate();
     setErrors(found);
     if (Object.keys(found).length > 0) {
-      toast.error('Проверьте заполнение формы');
+      toast.error(t('contracts.formInvalid'));
       return;
     }
     mutation.mutate();
@@ -265,14 +267,14 @@ const AgreementCreate = () => {
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
           >
             <ArrowLeft className="h-4 w-4" />
-            К списку договоров
+            {t('contracts.agreementForm.backToList')}
           </Link>
           <div className="flex items-center gap-3">
             <FileText className="h-7 w-7 text-muted-foreground" />
             <div>
-              <h1 className="text-3xl font-bold">Новый договор</h1>
+              <h1 className="text-3xl font-bold">{t('contracts.newAgreement')}</h1>
               <p className="text-muted-foreground text-sm mt-1">
-                Списывается с одной бюджетной строки — её остаток виден сразу.
+                {t('contracts.agreementForm.subtitle')}
               </p>
             </div>
           </div>
@@ -281,22 +283,22 @@ const AgreementCreate = () => {
         {(noBudgets || noCounterparties) && (
           <Card className="mb-6 border-amber-500/50">
             <CardContent className="pt-6 text-sm">
-              <p className="font-medium mb-2">Сначала нужны справочники:</p>
+              <p className="font-medium mb-2">{t('contracts.agreementForm.needReferences')}</p>
               <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
                 {noBudgets && (
                   <li>
-                    Нет ни одного бюджета —{' '}
+                    {t('contracts.agreementForm.noBudgets')}{' '}
                     <Link to="/contracts/budgets/new" className="underline">
-                      создайте бюджетную строку
+                      {t('contracts.agreementForm.createBudgetLine')}
                     </Link>
                     .
                   </li>
                 )}
                 {noCounterparties && (
                   <li>
-                    Реестр контрагентов пуст —{' '}
+                    {t('contracts.agreementForm.noCounterparties')}{' '}
                     <Link to="/contracts/counterparties/new" className="underline">
-                      добавьте контрагента
+                      {t('contracts.agreementForm.addCounterparty')}
                     </Link>
                     .
                   </li>
@@ -310,16 +312,15 @@ const AgreementCreate = () => {
           {/* ─── Источник финансирования ───────────────────────────────── */}
           <Card>
             <CardHeader>
-              <CardTitle>Источник финансирования</CardTitle>
+              <CardTitle>{t('contracts.agreementForm.fundingSource')}</CardTitle>
               <CardDescription>
-                Администратор и программа вместе определяют бюджетную строку,
-                с которой спишется договор.
+                {t('contracts.agreementForm.fundingHint')}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <Label htmlFor="administrator">Администратор бюджета</Label>
+                  <Label htmlFor="administrator">{t('contracts.budgetAdministrator')}</Label>
                   <Select
                     value={administratorId}
                     onValueChange={chooseAdministrator}
@@ -329,7 +330,7 @@ const AgreementCreate = () => {
                       id="administrator"
                       className={errors.administrator ? 'border-destructive' : undefined}
                     >
-                      <SelectValue placeholder="Выберите" />
+                      <SelectValue placeholder={t('contracts.pick')} />
                     </SelectTrigger>
                     <SelectContent>
                       {administrators.map((row) => (
@@ -343,7 +344,7 @@ const AgreementCreate = () => {
                 </div>
 
                 <div>
-                  <Label htmlFor="program">Программа</Label>
+                  <Label htmlFor="program">{t('contracts.columns.programme')}</Label>
                   <Select
                     value={programId}
                     onValueChange={chooseProgram}
@@ -355,7 +356,7 @@ const AgreementCreate = () => {
                     >
                       <SelectValue
                         placeholder={
-                          administratorId ? 'Выберите' : 'Сначала администратор'
+                          administratorId ? t('contracts.pick') : t('contracts.agreementForm.administratorFirst')
                         }
                       />
                     </SelectTrigger>
@@ -374,13 +375,13 @@ const AgreementCreate = () => {
               {/* Год спрашивается, только если строк за разные годы больше одной. */}
               {yearOptions.length > 1 && (
                 <div className="sm:w-48">
-                  <Label htmlFor="budget-year">Бюджетный год</Label>
+                  <Label htmlFor="budget-year">{t('contracts.budgetYear')}</Label>
                   <Select value={lineId} onValueChange={setLineId}>
                     <SelectTrigger
                       id="budget-year"
                       className={errors.budget ? 'border-destructive' : undefined}
                     >
-                      <SelectValue placeholder="Выберите" />
+                      <SelectValue placeholder={t('contracts.pick')} />
                     </SelectTrigger>
                     <SelectContent>
                       {yearOptions.map((row) => (
@@ -397,19 +398,19 @@ const AgreementCreate = () => {
               {selectedLine && (
                 <div className="rounded-md border bg-muted/40 p-4 text-sm">
                   <div className="flex flex-wrap justify-between gap-2">
-                    <span className="text-muted-foreground">Выделено</span>
+                    <span className="text-muted-foreground">{t('contracts.columns.allocated')}</span>
                     <span className="tabular-nums">
                       {formatAmount(selectedLine.amount)} {selectedLine.currency}
                     </span>
                   </div>
                   <div className="flex flex-wrap justify-between gap-2">
-                    <span className="text-muted-foreground">Законтрактовано</span>
+                    <span className="text-muted-foreground">{t('contracts.columns.contracted')}</span>
                     <span className="tabular-nums">
                       {formatAmount(selectedLine.committed)}
                     </span>
                   </div>
                   <div className="flex flex-wrap justify-between gap-2 font-medium mt-1 pt-1 border-t">
-                    <span>Остаток</span>
+                    <span>{t('contracts.columns.remaining')}</span>
                     <span className="tabular-nums">
                       {formatAmount(selectedLine.remaining)}
                     </span>
@@ -422,23 +423,23 @@ const AgreementCreate = () => {
           {/* ─── Договор ───────────────────────────────────────────────── */}
           <Card>
             <CardHeader>
-              <CardTitle>Договор</CardTitle>
+              <CardTitle>{t('contracts.agreement.title')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <Label htmlFor="number">Номер договора</Label>
+                  <Label htmlFor="number">{t('contracts.agreementForm.numberLabel')}</Label>
                   <Input
                     id="number"
                     value={number}
                     onChange={(event) => setNumber(event.target.value)}
-                    placeholder="Д-001"
+                    placeholder={t('contracts.agreementForm.numberPlaceholder')}
                     className={errors.number ? 'border-destructive' : undefined}
                   />
                   {fieldError('number')}
                 </div>
                 <div>
-                  <Label htmlFor="counterparty">Контрагент</Label>
+                  <Label htmlFor="counterparty">{t('contracts.columns.counterparty')}</Label>
                   <Select
                     value={counterpartyId}
                     onValueChange={setCounterpartyId}
@@ -448,7 +449,7 @@ const AgreementCreate = () => {
                       id="counterparty"
                       className={errors.counterparty ? 'border-destructive' : undefined}
                     >
-                      <SelectValue placeholder="Выберите из реестра" />
+                      <SelectValue placeholder={t('contracts.agreementForm.pickFromRegistry')} />
                     </SelectTrigger>
                     <SelectContent>
                       {counterparties.map((row) => (
@@ -463,12 +464,12 @@ const AgreementCreate = () => {
               </div>
 
               <div>
-                <Label htmlFor="name">Наименование договора</Label>
+                <Label htmlFor="name">{t('contracts.agreementForm.nameLabel')}</Label>
                 <Input
                   id="name"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
-                  placeholder="Поставка ноутбуков"
+                  placeholder={t('contracts.agreementForm.namePlaceholder')}
                   className={errors.name ? 'border-destructive' : undefined}
                 />
                 {fieldError('name')}
@@ -476,7 +477,7 @@ const AgreementCreate = () => {
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <div>
-                  <Label htmlFor="amount">Сумма договора</Label>
+                  <Label htmlFor="amount">{t('contracts.agreementForm.amountLabel')}</Label>
                   <div className="flex items-center gap-2">
                     <Input
                       id="amount"
@@ -498,7 +499,7 @@ const AgreementCreate = () => {
                 </div>
 
                 <div>
-                  <Label htmlFor="payment-type">Тип оплаты</Label>
+                  <Label htmlFor="payment-type">{t('contracts.columns.paymentType')}</Label>
                   <Select
                     value={paymentType}
                     onValueChange={(value) => setPaymentType(value as PaymentType)}
@@ -517,7 +518,7 @@ const AgreementCreate = () => {
                 </div>
 
                 <div>
-                  <Label htmlFor="signed-date">Дата подписания</Label>
+                  <Label htmlFor="signed-date">{t('contracts.columns.signedAt')}</Label>
                   <Input
                     id="signed-date"
                     type="date"
@@ -531,17 +532,14 @@ const AgreementCreate = () => {
                 <div className="flex gap-2 rounded-md border border-destructive/50 bg-destructive/5 p-3 text-sm">
                   <AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />
                   <div>
-                    Сумма превышает остаток бюджета (
-                    {formatAmount(selectedLine.remaining)}{' '}
-                    {selectedLine.currency}). Сохранить получится только
-                    черновиком — он бюджет не занимает.
+                    {t('contracts.agreementForm.overBudget', { amount: formatAmount(selectedLine.remaining), currency: selectedLine.currency })}
                   </div>
                 </div>
               )}
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <Label htmlFor="status">Статус</Label>
+                  <Label htmlFor="status">{t('contracts.columns.status')}</Label>
                   <Select
                     value={status}
                     onValueChange={(value) => setStatus(value as AgreementStatus)}
@@ -566,13 +564,13 @@ const AgreementCreate = () => {
                   </Select>
                   <p className="text-xs text-muted-foreground mt-1">
                     {willCommit
-                      ? 'Этот статус занимает бюджет.'
-                      : 'Черновик бюджет не занимает.'}
+                      ? t('contracts.agreementForm.statusConsumes')
+                      : t('contracts.agreementForm.draftDoesNot')}
                   </p>
                 </div>
 
                 <div>
-                  <Label htmlFor="file">Файл договора</Label>
+                  <Label htmlFor="file">{t('contracts.agreementForm.fileLabel')}</Label>
                   <Input
                     id="file"
                     type="file"
@@ -590,9 +588,9 @@ const AgreementCreate = () => {
           </Card>
 
           <div className="flex gap-3">
-            <Button type="submit" disabled={mutation.isPending || noBudgets}>
+            <Button type="submit" disabled={mutation.isPending || noBudgets || noCounterparties}>
               {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Оформить договор
+              {t('contracts.agreementForm.submit')}
             </Button>
             <Button
               type="button"
@@ -600,7 +598,7 @@ const AgreementCreate = () => {
               onClick={() => navigate('/contracts/agreements')}
               disabled={mutation.isPending}
             >
-              Отмена
+              {t('common.cancel')}
             </Button>
           </div>
         </form>

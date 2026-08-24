@@ -336,7 +336,7 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
                                 <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-600 rounded-md text-sm flex flex-col gap-1">
                                     <div className="flex items-center gap-2 font-medium">
                                         <AlertTriangle className="h-4 w-4" />
-                                        <span>Конфликт сроков</span>
+                                        <span>{t('hr.tasks.dateConflict')}</span>
                                     </div>
                                     <ul className="list-disc pl-6 space-y-1 mt-1 text-xs">
                                         {task.date_warnings.map((w, idx) => (
@@ -351,15 +351,15 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <Label className="text-xs text-muted-foreground uppercase flex items-center gap-1">
-                                            <Clock className="h-3 w-3" /> Старт
+                                            <Clock className="h-3 w-3" /> {t('hr.tasks.start')}
                                         </Label>
                                         <div className="mt-1">
                                             <p className="text-sm">
                                                 {task.start_date || '—'}
                                             </p>
                                             {task.task_type === 'epic' && task.effective_start_date && task.effective_start_date !== task.start_date && (
-                                                <p className="text-xs text-green-600 font-medium mt-0.5" title="Вычислено по вложенным задачам">
-                                                    Эфф: {task.effective_start_date}
+                                                <p className="text-xs text-green-600 font-medium mt-0.5" title={t('hr.tasks.computedFromChildren')}>
+                                                    {t('hr.tasks.effectiveStart', { date: task.effective_start_date })}
                                                 </p>
                                             )}
                                         </div>
@@ -374,8 +374,8 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
                                                 {task.due_date || '—'}
                                             </p>
                                             {task.task_type === 'epic' && task.effective_due_date && task.effective_due_date !== task.due_date && (
-                                                <p className="text-xs text-green-600 font-medium mt-0.5" title="Вычислено по вложенным задачам">
-                                                    Эфф: {task.effective_due_date}
+                                                <p className="text-xs text-green-600 font-medium mt-0.5" title={t('hr.tasks.computedFromChildren')}>
+                                                    {t('hr.tasks.effectiveDue', { date: task.effective_due_date })}
                                                 </p>
                                             )}
                                         </div>

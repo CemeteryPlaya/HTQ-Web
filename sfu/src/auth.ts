@@ -8,8 +8,16 @@
  * над `header.payload`, всё остальное — разбор claim'ов.
  *
  * Проверяем то же, что и `decode_token` на бэкенде: подпись, алгоритм,
- * `exp`, `iss` и дополнительно `token_type == "access"` (refresh-токен
- * в сигналинг пускать незачем).
+ * `exp`, `iss` и дополнительно тип токена: в сигналинг пускаются `access`
+ * (сотрудник платформы) и `guest` (внешний участник, вошедший по
+ * ссылке-приглашению). Refresh-токену здесь делать нечего.
+ *
+ * ⚠️ Гостевой токен сам по себе НЕ право войти куда угодно: он выписан на
+ * одну комнату (claim `room_id`), и проверку соответствия делает вызывающий
+ * код при входе в комнату — здесь комната ещё неизвестна, авторизация идёт
+ * на upgrade WebSocket, до первого сигнального сообщения. Забыть эту
+ * проверку значит превратить приглашение на планёрку в ключ от всех
+ * совещаний компании, поэтому она вынесена в отдельный `guestMayJoin`.
  */
 
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -23,6 +31,8 @@ export interface AccessTokenClaims {
   is_superuser?: boolean;
   is_admin?: boolean;
   token_type?: string;
+  /** Только у гостевых токенов: комната, на которую выписан токен. */
+  room_id?: string;
   iat?: number;
   exp?: number;
   iss?: string;
@@ -126,11 +136,37 @@ export function verifyAccessToken(
     return { ok: false, reason: `unexpected issuer: ${String(claims.iss)}` };
   }
 
-  if (claims.token_type && claims.token_type !== 'access') {
-    return { ok: false, reason: `token_type must be "access", got "${claims.token_type}"` };
+  const tokenType = claims.token_type || 'access';
+  if (tokenType !== 'access' && tokenType !== 'guest') {
+    return {
+      ok: false,
+      reason: `token_type must be "access" or "guest", got "${tokenType}"`,
+    };
+  }
+  if (tokenType === 'guest' && !String(claims.room_id || '').trim()) {
+    // Гостевой токен без комнаты — это токен «в любую комнату». Такого не
+    // выпускает никто, значит он либо подделан, либо собран сломанным кодом.
+    return { ok: false, reason: 'guest token has no room_id claim' };
   }
 
   return { ok: true, claims };
+}
+
+/** Гость — участник без учётки в платформе (вошёл по ссылке-приглашению). */
+export function isGuest(claims: AccessTokenClaims): boolean {
+  return claims.token_type === 'guest';
+}
+
+/**
+ * Вправе ли этот токен войти в ЭТУ комнату.
+ *
+ * Для сотрудника — да, комнаты платформы ему и так доступны. Для гостя —
+ * только в ту, на которую выписано приглашение: иначе достаточно было бы
+ * получить любую гостевую ссылку, чтобы слушать любое совещание.
+ */
+export function guestMayJoin(claims: AccessTokenClaims, roomId: string): boolean {
+  if (!isGuest(claims)) return true;
+  return String(claims.room_id || '').trim() === String(roomId || '').trim();
 }
 
 /**

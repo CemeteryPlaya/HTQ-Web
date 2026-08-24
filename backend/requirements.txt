@@ -52,3 +52,13 @@ google-auth==2.36.0
 # transitively via some other FastAPI-side dependency this Django port
 # doesn't carry), so pinned explicitly here.
 requests==2.34.2
+
+# ── Наблюдаемость: /metrics для Prometheus ───────────────────────────────
+# Даёт HTTP-метрики (латентность, коды ответов по вьюхам), а через
+# движки-обёртки (django_prometheus.db.backends.*, .cache.backends.*) —
+# ещё и запросы к БД с попаданиями в кэш. `prometheus-client` приходит
+# транзитивно и с ним, и с flower, но пинуется явно: multiprocess-режим
+# gunicorn'а (htqweb/gunicorn_conf.py, apps/core/views.py::metrics) зависит
+# от его API напрямую, а не через django-prometheus.
+django-prometheus==2.5.0
+prometheus-client==0.25.0

@@ -238,10 +238,58 @@ def test_processes_can_be_looked_up_by_subject(client):
 
     found = client.get(
         f"{BASE}/processes?subject_type={SUBJECT}&subject_id={doc.pk}",
-        **auth(token()))
+        **auth(user_token(a)))
     assert found.status_code == 200
     assert len(found.json()) == 1
     assert found.json()[0]["subject_id"] == doc.pk
+
+
+def test_process_list_is_scoped_to_participants_but_admin_sees_all(client):
+    approver = make_user("approver")
+    initiator = make_user("initiator")
+    stranger = make_user("stranger")
+    doc = make_doc("Закрытый финансовый документ")
+    simple_route(approver.pk)
+    process = engine.start(
+        subject_type=SUBJECT, subject_id=doc.pk, initiator_id=initiator.pk,
+    )
+
+    for participant in (initiator, approver):
+        response = client.get(f"{BASE}/processes", **auth(user_token(participant)))
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()] == [process.pk]
+
+    hidden = client.get(f"{BASE}/processes", **auth(user_token(stranger)))
+    assert hidden.status_code == 200
+    assert hidden.json() == []
+
+    overseen = client.get(f"{BASE}/processes", **auth(admin_token()))
+    assert [row["id"] for row in overseen.json()] == [process.pk]
+
+
+def test_process_detail_is_hidden_from_non_participants(client):
+    approver = make_user("approver")
+    initiator = make_user("initiator")
+    stranger = make_user("stranger")
+    doc = make_doc()
+    simple_route(approver.pk)
+    process = engine.start(
+        subject_type=SUBJECT, subject_id=doc.pk, initiator_id=initiator.pk,
+    )
+
+    assert client.get(
+        f"{BASE}/processes/{process.pk}", **auth(user_token(initiator)),
+    ).status_code == 200
+    assert client.get(
+        f"{BASE}/processes/{process.pk}", **auth(user_token(approver)),
+    ).status_code == 200
+    # 404, not 403: do not reveal that the guessed financial process exists.
+    assert client.get(
+        f"{BASE}/processes/{process.pk}", **auth(user_token(stranger)),
+    ).status_code == 404
+    assert client.get(
+        f"{BASE}/processes/{process.pk}", **auth(admin_token()),
+    ).status_code == 200
 
 
 def test_unknown_process_is_404(client):
@@ -356,6 +404,24 @@ def test_an_admin_can_return_anyones_process_for_rework(client):
     returned = post_json(client, f"{BASE}/processes/{process.pk}/rework", {},
                          **auth(admin_token()))
     assert returned.status_code == 200, returned.content
+
+
+def test_a_skipped_approver_cannot_reopen_a_finished_process(client):
+    acted, skipped = make_user("acted"), make_user("skipped")
+    doc = make_doc()
+    simple_route(acted.pk, skipped.pk, quorum=Quorum.ANY)
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
+    engine.act(task_id=task_for(process, acted.pk).pk, actor_id=acted.pk,
+               decision=engine.APPROVE)
+
+    forbidden = post_json(
+        client, f"{BASE}/processes/{process.pk}/rework", {},
+        **auth(user_token(skipped)),
+    )
+    assert forbidden.status_code == 403
+
+    doc.refresh_from_db()
+    assert doc.approval_state == ApprovalState.APPROVED
 
 
 def test_the_initiator_alone_cannot_return_for_rework(client):

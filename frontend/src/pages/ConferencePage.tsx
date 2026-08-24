@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { WebRTCManager, RemoteStream, QualityMetrics, WebRTCError } from '@/lib/webrtc';
+import { usePreviewMedia } from '@/lib/webrtc/usePreviewMedia';
 import type { ChatMessagePayload, PeerMediaState } from '@/lib/webrtc/MediaEngine';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -15,7 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
   Video, VideoOff, Mic, MicOff, PhoneOff, 
-  MonitorPlay, Settings, Activity, Copy, Plus, LogIn,
+  MonitorPlay, Settings, Activity, Copy, Plus, LogIn, Link2,
   Volume2, VolumeX, Users, Shield, Zap, Sparkles, Check,
   Maximize2, Minimize2, Pin, MessageSquare, Send, Share2,
   LayoutGrid, Grid, MonitorUp, Radio, CheckCircle2, Info,
@@ -30,6 +31,10 @@ import { Slider } from '@/components/ui/slider';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getAccessToken } from '@/lib/auth/profileStorage';
+import { readGuestSession } from '@/lib/conference/guestSession';
+import { InviteDialog } from '@/components/conference/InviteDialog';
+import { useTranslation } from 'react-i18next';
+import i18next from '@/i18n';
 
 type ConferenceRuntimeConfig = {
   sfu_signaling_url: string;
@@ -69,7 +74,7 @@ export interface RoomSettings {
 }
 
 const DEFAULT_ROOM_SETTINGS: RoomSettings = {
-  roomTitle: 'Корпоративная видеовстреча',
+  roomTitle: i18next.t('conference.page.defaultRoomTitle'),
   passwordProtection: false,
   passwordPin: '',
   enableWaitingRoom: false,
@@ -349,6 +354,7 @@ const VideoTile = ({
   camEnabled?: boolean;
   onSpotlightToggle?: () => void;
 }) => {
+  const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const ringRef = useRef<HTMLDivElement>(null);
@@ -537,7 +543,7 @@ const VideoTile = ({
             </span>
           </div>
           <span className="text-xs text-zinc-400 font-medium">
-            {camEnabled ? 'Подключение видео…' : 'Камера отключена'}
+            {camEnabled ? t('conference.page.videoConnecting') : t('conference.page.cameraOff')}
           </span>
         </div>
       )}
@@ -554,7 +560,7 @@ const VideoTile = ({
           className="absolute top-4 right-4 z-30 h-8 px-3 text-xs bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg border border-emerald-400/30 font-medium"
         >
           <Volume2 className="w-3.5 h-3.5 mr-1.5 animate-bounce" />
-          Включить звук
+          {t('conference.page.enableSound')}
         </Button>
       )}
 
@@ -567,7 +573,7 @@ const VideoTile = ({
             className={`h-8 w-8 rounded-lg bg-black/60 backdrop-blur-md text-white border border-white/10 hover:bg-black/80 transition-colors ${
               isSpotlighted ? 'text-emerald-400 bg-black/90 border-emerald-500/40' : ''
             }`}
-            title={isSpotlighted ? 'Снять фокус' : 'Закрепить видео'}
+            title={isSpotlighted ? t('conference.page.unspotlight') : t('conference.page.spotlight')}
           >
             <Pin className="w-3.5 h-3.5" />
           </Button>
@@ -590,10 +596,10 @@ const VideoTile = ({
             {isHost && (
               <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] px-1.5 py-0.5 rounded font-bold flex items-center gap-0.5">
                 <Crown className="w-2.5 h-2.5" />
-                Организатор
+                {t('conference.page.host')}
               </span>
             )}
-            {isLocal && <span className="text-emerald-400 font-normal opacity-90">(Вы)</span>}
+            {isLocal && <span className="text-emerald-400 font-normal opacity-90">{t('conference.page.youParen')}</span>}
           </span>
         </div>
 
@@ -612,7 +618,7 @@ const VideoTile = ({
               <PopoverContent className="w-48 bg-[#18191c] border-[#2b2d31] p-3 text-gray-200 shadow-2xl rounded-xl" side="top" align="end" sideOffset={8}>
                 <div className="flex flex-col gap-2.5 relative z-50">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-gray-300">Громкость</span>
+                    <span className="text-xs font-medium text-gray-300">{t('conference.page.volume')}</span>
                     <span className="text-xs font-mono text-emerald-400 font-bold">{volume[0]}%</span>
                   </div>
                   <Slider 
@@ -633,6 +639,7 @@ const VideoTile = ({
 };
 
 export const ConferencePage = () => {
+  const { t } = useTranslation();
   const { toast } = useToast();
   const navigate = useNavigate();
   const { roomId: roomIdFromUrl } = useParams<{ roomId?: string }>();
@@ -640,17 +647,33 @@ export const ConferencePage = () => {
   const isRoomSelected = activeRoomId.length > 0;
 
   // Authentication & Profile
+  //
+  // В комнате могут оказаться двое разных людей: сотрудник платформы и
+  // гость, вошедший по ссылке-приглашению. У второго нет ни учётки, ни
+  // профиля, ни доступа к /conference/config — всё, что у него есть, это
+  // токен на ОДНУ комнату и конфиг, приехавший вместе с ним.
   const token = getAccessToken();
+  const guest = useMemo(() => {
+    const session = readGuestSession();
+    if (!session) return null;
+    // Гостевой токен действителен ровно для своей комнаты — открытая
+    // вручную чужая ссылка не должна выглядеть как «сейчас войдём».
+    return session.roomId === (roomIdFromUrl || '').trim() ? session : null;
+  }, [roomIdFromUrl]);
+  const isGuest = Boolean(guest) && !token;
+  const signalingToken = () => (isGuest ? guest!.token : getAccessToken());
   const { data: userProfile } = useQuery({
     queryKey: ['profile'],
     queryFn: async () => {
       const res = await api.get<UserProfile>('users/v1/profile/me');
       return res.data;
     },
+    // У гостя профиля нет: запрос вернул бы 401 и увёл его на страницу
+    // входа прямо из звонка.
     enabled: !!token,
   });
 
-  const { data: conferenceConfig } = useQuery({
+  const { data: fetchedConfig } = useQuery({
     queryKey: ['conference-config'],
     queryFn: async () => {
       const res = await api.get<ConferenceRuntimeConfig>('cms/v1/conference/config');
@@ -659,6 +682,12 @@ export const ConferencePage = () => {
     enabled: !!token,
     staleTime: 5 * 60 * 1000,
   });
+  // Гостю конфиг приезжает вместе с гостевым токеном: сам эндпоинт закрыт
+  // платформенным JWT, и открывать его наружу ради адреса сигналинга —
+  // лишняя публичная поверхность.
+  const conferenceConfig = (isGuest
+    ? (guest!.conference as ConferenceRuntimeConfig | undefined)
+    : fetchedConfig);
   
   const user = userProfile || null;
   
@@ -698,14 +727,54 @@ export const ConferencePage = () => {
   const [chatInput, setChatInput] = useState('');
 
   // Pre-join Media Stream
-  const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
   const [previewCamEnabled, setPreviewCamEnabled] = useState(true);
   const [previewMicEnabled, setPreviewMicEnabled] = useState(true);
   const [previewAudioLevel, setPreviewAudioLevel] = useState(0);
+  // Предпросмотр включается ТОЛЬКО по явному действию. Раньше камера и
+  // микрофон захватывались на входе в комнату — человек ещё не решил,
+  // заходить ли в разговор, а лампочка камеры уже горела.
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [previewActive, setPreviewActive] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const previewRingRef = useRef<HTMLDivElement>(null);
 
+  const handlePreviewFailure = useCallback((err: unknown) => {
+    console.warn('Pre-call media preview request failed:', err);
+    setPreviewActive(false);
+    setPreviewError(
+      t('conference.page.mediaPermissionError')
+    );
+  }, [t]);
+
+  // Захват и — что важнее — освобождение устройств живут в хуке
+  // (lib/webrtc/usePreviewMedia.ts): там же лежат тесты на «камера отпущена
+  // при уходе со страницы», которые на этой странице не написать.
+  const {
+    stream: previewStream,
+    stop: stopPreviewStream,
+  } = usePreviewMedia({
+    // isRoomSelected здесь не для красоты: карточка предпросмотра рисуется
+    // только на экране комнаты, а эффект захвата разметке не подчиняется —
+    // раньше на /conference без комнаты камера включалась молча, вообще без
+    // видимого предпросмотра. Условие захвата обязано совпадать с условием
+    // показа, иначе они снова разъедутся.
+    active: previewActive && isRoomSelected && !connected,
+    cam: previewCamEnabled,
+    mic: previewMicEnabled,
+    onFailure: handlePreviewFailure,
+  });
+
   useAudioActivity(previewStream, previewRingRef, setPreviewAudioLevel);
+
+  // Маршрут комнаты открыт без обязательной авторизации — иначе гость с
+  // токеном в sessionStorage до неё бы не добрался. Право находиться здесь
+  // проверяется тут: либо рабочая сессия, либо гостевая на ЭТУ комнату.
+  // Случайный посетитель отправляется на вход, как и раньше.
+  useEffect(() => {
+    if (token || isGuest) return;
+    navigate('/login', { replace: true, state: { from: location.pathname } });
+  }, [token, isGuest, navigate]);
 
   // Load / Sync Room Settings from localStorage
   useEffect(() => {
@@ -726,7 +795,7 @@ export const ConferencePage = () => {
     if (activeRoomId) {
       localStorage.setItem(`conf_settings_${activeRoomId}`, JSON.stringify(updated));
     }
-    toast({ description: 'Настройки комнаты обновлены' });
+    toast({ description: t('conference.page.settingsSaved') });
   };
 
   // Preset Template loader
@@ -741,7 +810,7 @@ export const ConferencePage = () => {
         enableWaitingRoom: true,
         videoQuality: '1080p',
       };
-      toast({ description: 'Применен пресет: Вебинар / Презентация' });
+      toast({ description: t('conference.page.presetWebinarApplied') });
     } else if (preset === 'meeting') {
       updated = {
         ...updated,
@@ -751,7 +820,7 @@ export const ConferencePage = () => {
         enableWaitingRoom: false,
         videoQuality: '720p',
       };
-      toast({ description: 'Применен пресет: Рабочее совещание' });
+      toast({ description: t('conference.page.presetMeetingApplied') });
     } else if (preset === 'private') {
       updated = {
         ...updated,
@@ -760,53 +829,17 @@ export const ConferencePage = () => {
         enableE2EEncryption: true,
         videoQuality: '1080p',
       };
-      toast({ description: 'Применен пресет: Приватный звонок 1-на-1' });
+      toast({ description: t('conference.page.presetPrivateApplied') });
     }
     saveRoomSettings(updated);
   };
 
-  // Pre-call Media Preview setup & teardown
-  useEffect(() => {
-    if (connected) {
-      if (previewStream) {
-        previewStream.getTracks().forEach((track) => track.stop());
-        setPreviewStream(null);
-      }
-      return;
-    }
-
-    let isMounted = true;
-
-    async function initPreviewMedia() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
-        });
-        if (!isMounted) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        setPreviewStream(stream);
-      } catch (err) {
-        console.warn('Pre-call media preview request failed:', err);
-      }
-    }
-
-    void initPreviewMedia();
-
-    return () => {
-      isMounted = false;
-      if (previewStream) {
-        previewStream.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, [connected]);
 
   useEffect(() => {
-    if (previewVideoRef.current && previewStream) {
-      previewVideoRef.current.srcObject = previewStream;
-    }
+    if (!previewVideoRef.current) return;
+    // Снимаем ссылку вместе с потоком: элемент, оставленный с остановленным
+    // MediaStream, держит его в памяти и показывает застывший кадр.
+    previewVideoRef.current.srcObject = previewStream;
   }, [previewStream, previewCamEnabled]);
 
   useEffect(() => {
@@ -873,7 +906,7 @@ export const ConferencePage = () => {
     if (!normalized) {
       toast({
         variant: 'destructive',
-        description: 'Введите ID комнаты',
+        description: t('conference.page.enterRoomId'),
       });
       return;
     }
@@ -885,39 +918,32 @@ export const ConferencePage = () => {
     if (!activeRoomId) return;
     try {
       await navigator.clipboard.writeText(activeRoomId);
-      toast({ description: 'ID комнаты скопирован в буфер' });
+      toast({ description: t('conference.page.roomIdCopied') });
     } catch {
       toast({
         variant: 'destructive',
-        description: 'Не удалось скопировать ID комнаты',
+        description: t('conference.page.roomIdCopyFailed'),
       });
     }
   };
 
-  const togglePreviewCam = () => {
-    if (previewStream) {
-      const videoTrack = previewStream.getVideoTracks()[0];
-      if (videoTrack) videoTrack.enabled = !previewCamEnabled;
-    }
-    setPreviewCamEnabled(!previewCamEnabled);
-  };
-
-  const togglePreviewMic = () => {
-    if (previewStream) {
-      const audioTrack = previewStream.getAudioTracks()[0];
-      if (audioTrack) audioTrack.enabled = !previewMicEnabled;
-    }
-    setPreviewMicEnabled(!previewMicEnabled);
-  };
+  // Переключатели только меняют намерение — открыть или отпустить устройство
+  // решает эффект предпросмотра выше. Он же переживает случай «выключили
+  // камеру, оставили микрофон»: поток пересобирается, камера отпускается
+  // по-настоящему.
+  const togglePreviewCam = () => setPreviewCamEnabled((on) => !on);
+  const togglePreviewMic = () => setPreviewMicEnabled((on) => !on);
 
   const handleJoin = async () => {
     if (!isRoomSelected) {
-      toast({ variant: 'destructive', description: 'Сначала создайте комнату или введите ID' });
+      toast({ variant: 'destructive', description: t('conference.page.noRoomYet') });
       return;
     }
 
-    if (!user) {
-      toast({ variant: 'destructive', description: 'Пользователь не авторизован' });
+    // Гостю профиль не нужен: он представился на странице приглашения, и
+    // его имя лежит в гостевой сессии.
+    if (!user && !isGuest) {
+      toast({ variant: 'destructive', description: t('conference.page.notAuthorised') });
       return;
     }
 
@@ -926,7 +952,7 @@ export const ConferencePage = () => {
       if (enteredPasswordInput.trim() !== roomSettings.passwordPin.trim()) {
         toast({
           variant: 'destructive',
-          description: 'Неверный PIN-код для входа в эту комнату',
+          description: t('conference.page.wrongPin'),
         });
         return;
       }
@@ -936,7 +962,7 @@ export const ConferencePage = () => {
     if (!isHost && roomSettings.lockRoom) {
       toast({
         variant: 'destructive',
-        description: 'Комната заблокирована организатором. Новые подключения запрещены.',
+        description: t('conference.page.roomLocked'),
       });
       return;
     }
@@ -944,20 +970,20 @@ export const ConferencePage = () => {
     if (needsSecureMediaContext()) {
       toast({
         variant: 'destructive',
-        description: 'Для доступа к камере/микрофону откройте страницу по HTTPS или через localhost.',
+        description: t('conference.page.needsSecureContext'),
       });
       return;
     }
 
-    if (previewStream) {
-      previewStream.getTracks().forEach((track) => track.stop());
-      setPreviewStream(null);
-    }
+    // Устройства предпросмотра отпускаются ДО того, как их запросит
+    // MediaEngine: иначе камера окажется занята собственной же вкладкой.
+    setPreviewActive(false);
+    stopPreviewStream();
 
     const signalingUrlResolution = resolveSignalingUrl(conferenceConfig);
     const signalingUrl = signalingUrlResolution.url;
     if (!signalingUrl) {
-      toast({ variant: 'destructive', description: 'SFU URL не получен с backend' });
+      toast({ variant: 'destructive', description: t('conference.page.noSfuUrl') });
       return;
     }
 
@@ -992,7 +1018,7 @@ export const ConferencePage = () => {
           next.set(peerId, name);
           return next;
         });
-        toast({ description: `${name} присоединился к встрече` });
+        toast({ description: t('conference.page.participantJoined', { name }) });
       },
       onParticipantLeft: (peerId: string) => {
         setParticipants(prev => {
@@ -1040,7 +1066,7 @@ export const ConferencePage = () => {
       },
       onCodecPolicyChanged: (policy: 'balanced' | 'vp8-only') => {
         if (policy === 'vp8-only') {
-          toast({ description: 'Оптимизация видеопотока: переключение на VP8' });
+          toast({ description: t('conference.page.switchingToVp8') });
         }
       },
       onError: (error: WebRTCError) => {
@@ -1048,7 +1074,7 @@ export const ConferencePage = () => {
         console.error(error);
         toast({
           variant: 'destructive',
-          description: `Ошибка WebRTC: ${error.message}`
+          description: t('conference.page.webrtcError', { message: error.message })
         });
       }
     };
@@ -1059,10 +1085,12 @@ export const ConferencePage = () => {
     const createManager = (policy: 'balanced' | 'vp8-only') =>
       new WebRTCManager({
         signalingUrl,
-        authToken: () => getAccessToken(),
+        authToken: signalingToken,
         webTransport: webTransportConfig,
         roomId: activeRoomId,
-        displayName: user.firstName ? `${user.firstName} ${user.lastName || ''}` : user.email,
+        displayName: user
+          ? (user.firstName ? `${user.firstName} ${user.lastName || ''}` : user.email)
+          : (guest?.displayName || t('conference.page.guest')),
         iceServers: runtimeIceServers,
         initialVideoCodecPolicy: policy,
         autoVp8Fallback: false,
@@ -1073,7 +1101,7 @@ export const ConferencePage = () => {
     let joinResult = await activeManager.join();
 
     if (!joinResult.ok && isCodecCompatibilityError(joinResult.error)) {
-      toast({ description: 'VP8 недоступен. Пробуем H.264...' });
+      toast({ description: t('conference.page.tryingH264') });
       await activeManager.leave();
       const balancedManager = createManager('balanced');
       activeManager = balancedManager;
@@ -1085,7 +1113,7 @@ export const ConferencePage = () => {
       setManager(null);
       toast({
         variant: 'destructive',
-        description: `Не удалось подключиться: ${joinResult.error.message}`
+        description: t('conference.page.joinFailed', { message: joinResult.error.message })
       });
       return;
     }
@@ -1117,7 +1145,7 @@ export const ConferencePage = () => {
     });
 
     if (roomSettings.muteOnEntry && !isHost) {
-      toast({ description: 'Организатор включил выключение микрофона при входе' });
+      toast({ description: t('conference.page.muteOnEntryNotice') });
     }
   };
 
@@ -1143,7 +1171,7 @@ export const ConferencePage = () => {
       if (!audioResult.ok) {
         toast({
           variant: 'destructive',
-          description: `Ошибка микрофона: ${audioResult.error.message}`,
+          description: t('conference.page.micError', { message: audioResult.error.message }),
         });
         return;
       }
@@ -1159,7 +1187,7 @@ export const ConferencePage = () => {
         localStream.getVideoTracks().some((track) => track.readyState === 'live');
       if (!hasVideoTrack) {
         setCamEnabled(false);
-        toast({ description: 'Камера недоступна. Конференция работает в аудио-режиме.' });
+        toast({ description: t('conference.page.audioOnlyNotice') });
         return;
       }
 
@@ -1168,7 +1196,7 @@ export const ConferencePage = () => {
       if (!videoResult.ok) {
         toast({
           variant: 'destructive',
-          description: `Ошибка камеры: ${videoResult.error.message}`,
+          description: t('conference.page.camError', { message: videoResult.error.message }),
         });
         return;
       }
@@ -1180,19 +1208,19 @@ export const ConferencePage = () => {
   // Host Moderation Actions
   const handleHostMuteAll = () => {
     if (!isHost) return;
-    toast({ description: 'Звук у всех участников выключен организатором' });
+    toast({ description: t('conference.page.mutedAll') });
   };
 
   const handleHostStopAllVideos = () => {
     if (!isHost) return;
-    toast({ description: 'Видеопотоки участников остановлены организатором' });
+    toast({ description: t('conference.page.stoppedAllVideo') });
   };
 
   const handleHostLockToggle = () => {
     if (!isHost) return;
     const nextState = !roomSettings.lockRoom;
     saveRoomSettings({ ...roomSettings, lockRoom: nextState });
-    toast({ description: nextState ? 'Комната заблокирована для новых подключений' : 'Разблокирован вход в комнату' });
+    toast({ description: nextState ? t('conference.page.roomLockedNow') : t('conference.page.roomUnlockedNow') });
   };
 
   const toggleFullscreen = () => {
@@ -1210,13 +1238,13 @@ export const ConferencePage = () => {
     if (!chatInput.trim()) return;
 
     if (!roomSettings.allowChat && !isHost) {
-      toast({ variant: 'destructive', description: 'Организатор отключил текстовый чат' });
+      toast({ variant: 'destructive', description: t('conference.page.chatDisabled') });
       return;
     }
 
     const newMsg: ChatMessage = {
       id: Date.now().toString(),
-      sender: user?.firstName || 'Я',
+      sender: user?.firstName || t('conference.page.me'),
       text: chatInput.trim(),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       isSelf: true,
@@ -1231,7 +1259,7 @@ export const ConferencePage = () => {
     if (sendResult && !sendResult.ok) {
       toast({
         variant: 'destructive',
-        description: 'Сообщение не ушло — нет связи с комнатой',
+        description: t('conference.page.messageNotSent'),
       });
     }
   };
@@ -1265,13 +1293,13 @@ export const ConferencePage = () => {
 
       return {
         peerId,
-        displayName: peerStreams[0]?.displayName || 'Участник',
+        displayName: peerStreams[0]?.displayName || t('conference.media.participant'),
         stream: combinedStream,
       };
     });
-  }, [remoteStreams]);
+  }, [remoteStreams, t]);
 
-  const localDisplayName = user?.firstName || 'Я';
+  const localDisplayName = user?.firstName || t('conference.page.me');
 
   // ═══════════════════════════════════════════════════════════
   // ACTIVE CALL INTERFACE (CONNECTED STATE)
@@ -1288,21 +1316,34 @@ export const ConferencePage = () => {
             <div className="flex items-center gap-3">
               <Badge variant="outline" className="gap-2 py-1 px-3 bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-xs font-semibold rounded-full">
                 <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Голос подключен
+                {t('conference.page.voiceConnected')}
               </Badge>
 
               {isHost && (
                 <Badge variant="secondary" className="gap-1 bg-amber-500/20 text-amber-300 border-amber-500/30 text-xs font-bold">
-                  <Crown className="w-3 h-3" /> Вы — Организатор
+                  <Crown className="w-3 h-3" /> {t('conference.page.youAreHost')}
                 </Badge>
               )}
+
+              {/* Запись ведётся автоматически на каждой встрече, и участники
+                  обязаны это видеть — молча писать людей нельзя. Индикатор
+                  постоянный: включать/выключать запись из интерфейса нельзя,
+                  поэтому и состояния «не пишем» здесь не бывает. */}
+              <Badge
+                variant="outline"
+                title={t('conference.page.recordingTooltip')}
+                className="gap-1.5 py-1 px-2.5 bg-rose-500/10 text-rose-300 border-rose-500/30 text-xs font-semibold rounded-full"
+              >
+                <div className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                {t('conference.page.recording')}
+              </Badge>
 
               {activeRoomId && (
                 <button
                   onClick={handleCopyRoomId}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white rounded-lg text-xs font-mono border border-white/10 transition-colors"
                 >
-                  <span className="text-gray-400 font-sans text-[11px]">Комната:</span>
+                  <span className="text-gray-400 font-sans text-[11px]">{t('conference.page.roomLabel')}</span>
                   <span className="font-bold text-emerald-400">{activeRoomId}</span>
                   <Copy className="w-3 h-3 ml-1 text-gray-400" />
                 </button>
@@ -1326,10 +1367,10 @@ export const ConferencePage = () => {
                       className="h-8 px-3 text-xs bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg font-bold flex items-center gap-1.5"
                     >
                       <SlidersHorizontal className="w-3.5 h-3.5" />
-                      Настройки комнаты
+                      {t('conference.page.roomSettings')}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Глубокая настройка прав и качества</TooltipContent>
+                  <TooltipContent>{t('conference.page.roomSettingsHint')}</TooltipContent>
                 </Tooltip>
               )}
 
@@ -1344,10 +1385,10 @@ export const ConferencePage = () => {
                       className={`h-7 px-2.5 text-xs rounded-md ${layoutMode === 'grid' ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-400 hover:text-white'}`}
                     >
                       <LayoutGrid className="w-3.5 h-3.5 mr-1" />
-                      Сетка
+                      {t('conference.page.layoutGrid')}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Режим равной сетки</TooltipContent>
+                  <TooltipContent>{t('conference.page.layoutGridHint')}</TooltipContent>
                 </Tooltip>
 
                 <Tooltip>
@@ -1359,10 +1400,10 @@ export const ConferencePage = () => {
                       className={`h-7 px-2.5 text-xs rounded-md ${layoutMode === 'spotlight' ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-400 hover:text-white'}`}
                     >
                       <Pin className="w-3.5 h-3.5 mr-1" />
-                      Фокус
+                      {t('conference.page.layoutSpotlight')}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Фокус на докладчике</TooltipContent>
+                  <TooltipContent>{t('conference.page.layoutSpotlightHint')}</TooltipContent>
                 </Tooltip>
               </div>
 
@@ -1378,7 +1419,7 @@ export const ConferencePage = () => {
                     {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>{isFullscreen ? 'Выйти из полноэкранного режима' : 'Полноэкранный режим'}</TooltipContent>
+                <TooltipContent>{isFullscreen ? t('conference.page.exitFullscreen') : t('conference.page.enterFullscreen')}</TooltipContent>
               </Tooltip>
 
               {/* Toggle Sidebar Button */}
@@ -1398,7 +1439,7 @@ export const ConferencePage = () => {
                     </span>
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Боковая панель</TooltipContent>
+                <TooltipContent>{t('conference.page.sidePanel')}</TooltipContent>
               </Tooltip>
             </div>
           </header>
@@ -1513,7 +1554,7 @@ export const ConferencePage = () => {
                   <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/10">
                     <div className="flex items-center gap-2 text-sm font-bold text-emerald-400">
                       <Activity className="w-4 h-4 text-emerald-400" />
-                      Метрики WebRTC SFU соединения
+                      {t('conference.page.metricsTitle')}
                     </div>
                     <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-white" onClick={() => setShowStats(false)}>
                       ✕
@@ -1557,7 +1598,7 @@ export const ConferencePage = () => {
                       }`}
                     >
                       <Users className="w-3.5 h-3.5" />
-                      Участники ({participants.size + 1})
+                      {t('conference.page.participantsCount', { count: participants.size + 1 })}
                     </button>
                     <button
                       onClick={() => setActiveTab('chat')}
@@ -1566,7 +1607,7 @@ export const ConferencePage = () => {
                       }`}
                     >
                       <MessageSquare className="w-3.5 h-3.5" />
-                      Чат
+                      {t('conference.page.chat')}
                     </button>
                   </div>
                   <Button variant="ghost" size="icon" className="h-6 w-6 text-gray-400 hover:text-white" onClick={() => setShowSidebar(false)}>
@@ -1577,7 +1618,7 @@ export const ConferencePage = () => {
                 {/* Host Quick Moderation Toolbar Bar */}
                 {isHost && activeTab === 'participants' && (
                   <div className="p-2.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between gap-1 text-xs">
-                    <span className="font-bold text-amber-300 text-[11px]">Модерация:</span>
+                    <span className="font-bold text-amber-300 text-[11px]">{t('conference.page.moderation')}</span>
                     <div className="flex items-center gap-1">
                       <Button
                         variant="ghost"
@@ -1585,7 +1626,7 @@ export const ConferencePage = () => {
                         onClick={handleHostMuteAll}
                         className="h-7 px-2 text-[10px] bg-black/40 hover:bg-black/60 text-amber-200 border border-amber-500/20 rounded font-semibold"
                       >
-                        <MicOff className="w-3 h-3 mr-1 text-rose-400" /> Выкл. звук всем
+                        <MicOff className="w-3 h-3 mr-1 text-rose-400" /> {t('conference.page.muteAll')}
                       </Button>
                       <Button
                         variant="ghost"
@@ -1596,7 +1637,7 @@ export const ConferencePage = () => {
                         }`}
                       >
                         {roomSettings.lockRoom ? <Lock className="w-3 h-3 mr-1 text-rose-400" /> : <Unlock className="w-3 h-3 mr-1 text-emerald-400" />}
-                        {roomSettings.lockRoom ? 'Заблокано' : 'Заблокировать'}
+                        {roomSettings.lockRoom ? t('conference.page.lockedShort') : t('conference.page.lockAction')}
                       </Button>
                     </div>
                   </div>
@@ -1605,7 +1646,7 @@ export const ConferencePage = () => {
                 {/* Tab 1: Participants List */}
                 {activeTab === 'participants' && (
                   <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                    <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">В эфире (1 + {participants.size})</div>
+                    <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">{t('conference.page.onAir', { count: participants.size })}</div>
                     
                     {/* Local user entry */}
                     <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 border border-white/5">
@@ -1615,11 +1656,11 @@ export const ConferencePage = () => {
                         </div>
                         <div className="flex flex-col truncate">
                           <span className="text-xs font-semibold text-gray-200 truncate flex items-center gap-1">
-                            {localDisplayName} (Вы)
+                            {localDisplayName} {t('conference.page.youParen')}
                             {isHost && <Crown className="w-3 h-3 text-amber-400" />}
                           </span>
                           <span className="text-[10px] text-emerald-400 font-mono">
-                            {isHost ? 'Организатор' : 'Участник'}
+                            {isHost ? t('conference.page.host') : t('conference.media.participant')}
                           </span>
                         </div>
                       </div>
@@ -1653,11 +1694,11 @@ export const ConferencePage = () => {
                               </PopoverTrigger>
                               <PopoverContent side="left" className="w-44 bg-zinc-900 border-zinc-800 p-2 text-xs text-white">
                                 <div className="flex flex-col gap-1">
-                                  <button onClick={() => toast({ description: `Микрофон ${name} отключен` })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-300">
-                                    <MicOff className="w-3.5 h-3.5" /> Заглушить
+                                  <button onClick={() => toast({ description: t('conference.page.participantMuted', { name }) })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-300">
+                                    <MicOff className="w-3.5 h-3.5" /> {t('conference.page.muteOne')}
                                   </button>
-                                  <button onClick={() => toast({ description: `Участник ${name} исключен` })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-400 font-bold">
-                                    <UserX className="w-3.5 h-3.5" /> Исключить
+                                  <button onClick={() => toast({ description: t('conference.page.participantKicked', { name }) })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-400 font-bold">
+                                    <UserX className="w-3.5 h-3.5" /> {t('conference.page.kick')}
                                   </button>
                                 </div>
                               </PopoverContent>
@@ -1676,7 +1717,7 @@ export const ConferencePage = () => {
                       {chatMessages.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full text-center text-gray-500 p-4">
                           <MessageSquare className="w-8 h-8 mb-2 opacity-50 text-emerald-400" />
-                          <p className="text-xs">Сообщений пока нет. Напишите первым!</p>
+                          <p className="text-xs">{t('conference.page.chatEmpty')}</p>
                         </div>
                       ) : (
                         chatMessages.map((msg) => (
@@ -1699,7 +1740,7 @@ export const ConferencePage = () => {
                       <Input
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
-                        placeholder={roomSettings.allowChat || isHost ? 'Напишите сообщение...' : 'Чат отключен организатором'}
+                        placeholder={roomSettings.allowChat || isHost ? t('conference.page.chatPlaceholder') : t('conference.page.chatDisabledPlaceholder')}
                         disabled={!roomSettings.allowChat && !isHost}
                         className="h-9 bg-zinc-900 border-white/10 text-xs text-white placeholder:text-gray-500 focus-visible:ring-emerald-500"
                       />
@@ -1724,10 +1765,10 @@ export const ConferencePage = () => {
                   }`}
                 >
                   {!micEnabled ? <MicOff className="w-4 h-4 text-white" /> : <Mic className="w-4 h-4 text-emerald-400" />}
-                  <span className="hidden sm:inline">{!micEnabled ? 'Вкл. звук' : 'Выкл. звук'}</span>
+                  <span className="hidden sm:inline">{!micEnabled ? t('conference.page.unmuteShort') : t('conference.page.muteShort')}</span>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{micEnabled ? 'Выключить микрофон' : 'Включить микрофон'}</TooltipContent>
+              <TooltipContent>{micEnabled ? t('conference.page.micOff') : t('conference.page.micOn')}</TooltipContent>
             </Tooltip>
 
             <Tooltip>
@@ -1739,10 +1780,10 @@ export const ConferencePage = () => {
                   }`}
                 >
                   {!camEnabled ? <VideoOff className="w-4 h-4 text-white" /> : <Video className="w-4 h-4 text-emerald-400" />}
-                  <span className="hidden sm:inline">{!camEnabled ? 'Вкл. камеру' : 'Выкл. камеру'}</span>
+                  <span className="hidden sm:inline">{!camEnabled ? t('conference.page.camOnShort') : t('conference.page.camOffShort')}</span>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{camEnabled ? 'Выключить камеру' : 'Включить камеру'}</TooltipContent>
+              <TooltipContent>{camEnabled ? t('conference.page.camOff') : t('conference.page.camOn')}</TooltipContent>
             </Tooltip>
 
             <div className="w-px h-7 bg-white/10 my-auto" />
@@ -1759,7 +1800,7 @@ export const ConferencePage = () => {
                   <Settings className="w-5 h-5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Качество и Статистика</TooltipContent>
+              <TooltipContent>{t('conference.page.qualityStats')}</TooltipContent>
             </Tooltip>
 
             <Button 
@@ -1768,7 +1809,7 @@ export const ConferencePage = () => {
               className="h-12 px-6 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-700 hover:to-red-800 text-white shadow-lg shadow-rose-900/40 font-bold flex items-center gap-2 border border-rose-500/30 ml-2"
             >
               <PhoneOff className="w-4 h-4" />
-              <span>Завершить</span>
+              <span>{t('conference.page.leave')}</span>
             </Button>
           </footer>
 
@@ -1778,26 +1819,26 @@ export const ConferencePage = () => {
               <DialogHeader>
                 <DialogTitle className="text-xl font-bold flex items-center gap-2 text-emerald-400">
                   <SlidersHorizontal className="w-5 h-5" />
-                  Глубокая настройка параметров конференции
+                  {t('conference.page.settingsDialogTitle')}
                 </DialogTitle>
                 <DialogDescription className="text-xs text-zinc-400">
-                  Параметры безопасности, разрешений участников и качества трансляции для комнаты
+                  {t('conference.page.settingsDialogHint')}
                 </DialogDescription>
               </DialogHeader>
 
               <div className="space-y-6 py-4">
                 {/* Presets Bar */}
                 <div className="p-4 bg-muted/20 rounded-2xl border border-white/10 space-y-3">
-                  <span className="text-xs font-bold text-gray-300 uppercase tracking-wider block">Быстрые пресеты для встречи:</span>
+                  <span className="text-xs font-bold text-gray-300 uppercase tracking-wider block">{t('conference.page.presetsLabel')}</span>
                   <div className="grid grid-cols-3 gap-2">
                     <Button variant="outline" size="sm" onClick={() => applyPreset('webinar')} className="text-xs bg-zinc-900 hover:bg-zinc-800 border-white/10">
-                      🎙️ Вебинар
+                      {t('conference.page.presetWebinar')}
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => applyPreset('meeting')} className="text-xs bg-zinc-900 hover:bg-zinc-800 border-white/10">
-                      💼 Совещание
+                      {t('conference.page.presetMeeting')}
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => applyPreset('private')} className="text-xs bg-zinc-900 hover:bg-zinc-800 border-white/10">
-                      🔒 Приватный 1-на-1
+                      {t('conference.page.presetPrivate')}
                     </Button>
                   </div>
                 </div>
@@ -1805,14 +1846,14 @@ export const ConferencePage = () => {
                 {/* Section 1: Security & Protection */}
                 <div className="space-y-4">
                   <h4 className="text-sm font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <Shield className="w-4 h-4" /> Безопасность и доступ
+                    <Shield className="w-4 h-4" /> {t('conference.page.securitySection')}
                   </h4>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-semibold">Зал ожидания (Модерация)</Label>
-                        <p className="text-[11px] text-zinc-400">Организатор одобряет каждый вход</p>
+                        <Label className="text-xs font-semibold">{t('conference.page.waitingRoom')}</Label>
+                        <p className="text-[11px] text-zinc-400">{t('conference.page.waitingRoomHint')}</p>
                       </div>
                       <Switch
                         checked={roomSettings.enableWaitingRoom}
@@ -1822,8 +1863,8 @@ export const ConferencePage = () => {
 
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-semibold">Заблокировать комнату</Label>
-                        <p className="text-[11px] text-zinc-400">Запретить новые подключения</p>
+                        <Label className="text-xs font-semibold">{t('conference.page.lockRoom')}</Label>
+                        <p className="text-[11px] text-zinc-400">{t('conference.page.lockRoomHint')}</p>
                       </div>
                       <Switch
                         checked={roomSettings.lockRoom}
@@ -1834,7 +1875,7 @@ export const ConferencePage = () => {
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5 col-span-full">
                       <div className="space-y-1 flex-1 pr-4">
                         <div className="flex items-center justify-between">
-                          <Label className="text-xs font-semibold">Защита по PIN-паролю</Label>
+                          <Label className="text-xs font-semibold">{t('conference.page.pinProtection')}</Label>
                           <Switch
                             checked={roomSettings.passwordProtection}
                             onCheckedChange={(checked) => saveRoomSettings({ ...roomSettings, passwordProtection: checked })}
@@ -1844,7 +1885,7 @@ export const ConferencePage = () => {
                           <Input
                             value={roomSettings.passwordPin}
                             onChange={(e) => saveRoomSettings({ ...roomSettings, passwordPin: e.target.value })}
-                            placeholder="Введите PIN-код (например: 1234)"
+                            placeholder={t('conference.page.pinPlaceholder')}
                             className="h-9 mt-2 bg-zinc-950 border-zinc-800 text-xs font-mono"
                           />
                         )}
@@ -1856,14 +1897,14 @@ export const ConferencePage = () => {
                 {/* Section 2: Default Participant Rights */}
                 <div className="space-y-4">
                   <h4 className="text-sm font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <Users className="w-4 h-4" /> Права участников при входе
+                    <Users className="w-4 h-4" /> {t('conference.page.entryRightsSection')}
                   </h4>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-semibold">Выключать звук при входе</Label>
-                        <p className="text-[11px] text-zinc-400">Участники заходят без микрофона</p>
+                        <Label className="text-xs font-semibold">{t('conference.page.muteOnEntry')}</Label>
+                        <p className="text-[11px] text-zinc-400">{t('conference.page.muteOnEntryHint')}</p>
                       </div>
                       <Switch
                         checked={roomSettings.muteOnEntry}
@@ -1873,8 +1914,8 @@ export const ConferencePage = () => {
 
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-semibold">Выключать видео при входе</Label>
-                        <p className="text-[11px] text-zinc-400">Участники заходят без камеры</p>
+                        <Label className="text-xs font-semibold">{t('conference.page.videoOffOnEntry')}</Label>
+                        <p className="text-[11px] text-zinc-400">{t('conference.page.videoOffOnEntryHint')}</p>
                       </div>
                       <Switch
                         checked={roomSettings.disableVideoOnEntry}
@@ -1884,8 +1925,8 @@ export const ConferencePage = () => {
 
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-semibold">Текстовый чат</Label>
-                        <p className="text-[11px] text-zinc-400">Разрешить отправку сообщений</p>
+                        <Label className="text-xs font-semibold">{t('conference.page.textChat')}</Label>
+                        <p className="text-[11px] text-zinc-400">{t('conference.page.textChatHint')}</p>
                       </div>
                       <Switch
                         checked={roomSettings.allowChat}
@@ -1894,7 +1935,7 @@ export const ConferencePage = () => {
                     </div>
 
                     <div className="p-3.5 bg-zinc-900/60 rounded-xl border border-white/5 space-y-1.5">
-                      <Label className="text-xs font-semibold">Демонстрация экрана</Label>
+                      <Label className="text-xs font-semibold">{t('conference.page.screenShare')}</Label>
                       <Select
                         value={roomSettings.allowScreenShare}
                         onValueChange={(val: 'all' | 'host_only') => saveRoomSettings({ ...roomSettings, allowScreenShare: val })}
@@ -1903,8 +1944,8 @@ export const ConferencePage = () => {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-zinc-900 border-zinc-800 text-white">
-                          <SelectItem value="all" className="text-xs">Всем участникам</SelectItem>
-                          <SelectItem value="host_only" className="text-xs">Только организатору</SelectItem>
+                          <SelectItem value="all" className="text-xs">{t('conference.page.screenShareAll')}</SelectItem>
+                          <SelectItem value="host_only" className="text-xs">{t('conference.page.screenShareHost')}</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -1914,12 +1955,12 @@ export const ConferencePage = () => {
                 {/* Section 3: Media Stream & SFU Quality */}
                 <div className="space-y-4">
                   <h4 className="text-sm font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <Zap className="w-4 h-4" /> Качество видео и SFU сервер
+                    <Zap className="w-4 h-4" /> {t('conference.page.qualitySection')}
                   </h4>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="p-3.5 bg-zinc-900/60 rounded-xl border border-white/5 space-y-1.5">
-                      <Label className="text-xs font-semibold">Разрешение видеопотока</Label>
+                      <Label className="text-xs font-semibold">{t('conference.page.resolution')}</Label>
                       <Select
                         value={roomSettings.videoQuality}
                         onValueChange={(val: '1080p' | '720p' | '480p') => saveRoomSettings({ ...roomSettings, videoQuality: val })}
@@ -1936,7 +1977,7 @@ export const ConferencePage = () => {
                     </div>
 
                     <div className="p-3.5 bg-zinc-900/60 rounded-xl border border-white/5 space-y-1.5">
-                      <Label className="text-xs font-semibold">Предпочтительный кодек</Label>
+                      <Label className="text-xs font-semibold">{t('conference.page.codec')}</Label>
                       <Select
                         value={roomSettings.codecPreference}
                         onValueChange={(val: 'auto' | 'vp8' | 'h264') => saveRoomSettings({ ...roomSettings, codecPreference: val })}
@@ -1945,8 +1986,8 @@ export const ConferencePage = () => {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-zinc-900 border-zinc-800 text-white">
-                          <SelectItem value="auto" className="text-xs">Автоматически (VP8/H264)</SelectItem>
-                          <SelectItem value="vp8" className="text-xs">VP8 (Приоритетный)</SelectItem>
+                          <SelectItem value="auto" className="text-xs">{t('conference.page.codecAuto')}</SelectItem>
+                          <SelectItem value="vp8" className="text-xs">{t('conference.page.codecVp8')}</SelectItem>
                           <SelectItem value="h264" className="text-xs">H.264 Baseline</SelectItem>
                         </SelectContent>
                       </Select>
@@ -1957,7 +1998,7 @@ export const ConferencePage = () => {
 
               <DialogFooter>
                 <Button onClick={() => setShowSettingsModal(false)} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold">
-                  Сохранить настройки
+                  {t('conference.page.saveSettings')}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -1990,20 +2031,20 @@ export const ConferencePage = () => {
               </div>
               <div>
                 <h1 className="text-3xl sm:text-4xl font-bold font-display tracking-tight text-foreground">
-                  Видеоконференция
+                  {t('conference.join.defaultTitle')}
                 </h1>
                 <p className="text-muted-foreground mt-1 text-base font-medium">
-                  Защищенная корпоративная видеосвязь с P2P и WebTransport шифрованием
+                  {t('conference.page.landingSubtitle')}
                 </p>
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2">
               <Badge variant="secondary" className="gap-1.5 py-1 px-3 bg-primary/10 text-primary border-primary/20">
-                <Shield className="w-3.5 h-3.5" /> P2P Шифрование
+                <Shield className="w-3.5 h-3.5" /> {t('conference.page.badgeP2p')}
               </Badge>
               <Badge variant="secondary" className="gap-1.5 py-1 px-3 bg-secondary/10 text-secondary-foreground border-secondary/20">
-                <Zap className="w-3.5 h-3.5" /> SFU Низкая задержка
+                <Zap className="w-3.5 h-3.5" /> {t('conference.page.badgeSfu')}
               </Badge>
             </div>
           </div>
@@ -2019,11 +2060,11 @@ export const ConferencePage = () => {
                   <TabsList className="grid grid-cols-2 w-full max-w-md mx-auto mb-8 h-12 bg-muted/50 p-1 rounded-xl">
                     <TabsTrigger value="create" className="rounded-lg font-semibold text-sm">
                       <Plus className="w-4 h-4 mr-2" />
-                      Создать встречу
+                      {t('conference.page.tabCreate')}
                     </TabsTrigger>
                     <TabsTrigger value="join" className="rounded-lg font-semibold text-sm">
                       <LogIn className="w-4 h-4 mr-2" />
-                      Войти по ID
+                      {t('conference.page.tabJoin')}
                     </TabsTrigger>
                   </TabsList>
 
@@ -2034,9 +2075,9 @@ export const ConferencePage = () => {
                         <MonitorPlay className="w-10 h-10" />
                       </div>
                       <div className="max-w-lg">
-                        <h3 className="font-bold text-2xl tracking-tight">Новая комната для видеоэфира</h3>
+                        <h3 className="font-bold text-2xl tracking-tight">{t('conference.page.newRoomTitle')}</h3>
                         <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-                          Создайте мгновенную защищенную видеокомнату. Настройте права, пароли и качество.
+                          {t('conference.page.newRoomHint')}
                         </p>
                       </div>
 
@@ -2047,7 +2088,7 @@ export const ConferencePage = () => {
                           className="h-14 px-8 text-base font-bold rounded-xl shadow-xl hover:shadow-primary/30 transition-all btn-primary"
                         >
                           <Sparkles className="w-5 h-5 mr-2" />
-                          Создать комнату
+                          {t('conference.page.createRoom')}
                         </Button>
                         <Button
                           onClick={() => setShowSettingsModal(true)}
@@ -2056,7 +2097,7 @@ export const ConferencePage = () => {
                           className="h-14 px-6 text-sm font-bold rounded-xl border-2 border-primary/30"
                         >
                           <SlidersHorizontal className="w-4 h-4 mr-2 text-primary" />
-                          Настроить параметры
+                          {t('conference.page.configure')}
                         </Button>
                       </div>
                     </div>
@@ -2069,9 +2110,9 @@ export const ConferencePage = () => {
                         <LogIn className="w-8 h-8" />
                       </div>
                       <div className="max-w-md">
-                        <h3 className="font-bold text-xl tracking-tight">Присоединиться по ID</h3>
+                        <h3 className="font-bold text-xl tracking-tight">{t('conference.page.joinByIdTitle')}</h3>
                         <p className="text-muted-foreground mt-1 text-sm">
-                          Введите идентификатор комнаты, предоставленный организатором
+                          {t('conference.page.joinByIdHint')}
                         </p>
                       </div>
 
@@ -2080,7 +2121,7 @@ export const ConferencePage = () => {
                           value={joinRoomInput}
                           onChange={(e) => setJoinRoomInput(e.target.value)}
                           onKeyDown={(e) => e.key === 'Enter' && handleGoToRoom()}
-                          placeholder="Например: 12ab-34cd"
+                          placeholder={t('conference.page.roomIdPlaceholder')}
                           className="h-14 rounded-xl bg-background/80 border-border font-mono text-center text-lg font-bold focus-visible:ring-primary"
                         />
                         <Button
@@ -2088,7 +2129,7 @@ export const ConferencePage = () => {
                           size="lg"
                           className="h-14 px-8 font-bold rounded-xl shrink-0 btn-primary"
                         >
-                          Войти <LogIn className="w-4 h-4 ml-2" />
+                          {t('conference.notify.join')} <LogIn className="w-4 h-4 ml-2" />
                         </Button>
                       </div>
                     </div>
@@ -2107,13 +2148,13 @@ export const ConferencePage = () => {
                 <Card className="glass shadow-elevated border-white/10 dark:bg-zinc-950/60 rounded-3xl overflow-hidden backdrop-blur-xl">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-lg font-bold flex items-center justify-between">
-                      <span>Проверка камеры и звука</span>
+                      <span>{t('conference.page.previewTitle')}</span>
                       <Badge variant="outline" className="text-xs bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
-                        <CheckCircle2 className="w-3 h-3 mr-1" /> Предпросмотр
+                        <CheckCircle2 className="w-3 h-3 mr-1" /> {t('conference.page.previewBadge')}
                       </Badge>
                     </CardTitle>
                     <CardDescription className="text-xs">
-                      Убедитесь, что вы хорошо выглядите и слышите звук перед входом
+                      {t('conference.page.previewHint')}
                     </CardDescription>
                   </CardHeader>
 
@@ -2121,7 +2162,7 @@ export const ConferencePage = () => {
                     <div className="relative aspect-video bg-zinc-900 rounded-2xl overflow-hidden ring-1 ring-white/10 shadow-lg flex items-center justify-center">
                       <div ref={previewRingRef} className="absolute inset-0 pointer-events-none rounded-2xl border-2 border-transparent transition-all z-20" />
                       
-                      {previewCamEnabled ? (
+                      {previewActive && previewCamEnabled ? (
                         <video
                           ref={previewVideoRef}
                           autoPlay
@@ -2130,11 +2171,43 @@ export const ConferencePage = () => {
                           className="w-full h-full object-cover scale-x-[-1]"
                         />
                       ) : (
-                        <div className="flex flex-col items-center justify-center p-6 text-center">
+                        // pb-20 — запас под плавающую панель с микрофоном и
+                        // камерой: она приклеена к низу этого же контейнера и
+                        // без отступа накрывает кнопку.
+                        <div className="flex flex-col items-center justify-center px-6 pt-6 pb-20 text-center">
                           <div className="w-20 h-20 rounded-full bg-emerald-700/40 ring-4 ring-emerald-500/20 flex items-center justify-center text-white text-3xl font-bold font-display mb-3">
                             {user?.firstName?.charAt(0) || 'Y'}
                           </div>
-                          <span className="text-xs text-gray-400">Камера отключена</span>
+                          {previewActive ? (
+                            <span className="text-xs text-gray-400">{t('conference.page.cameraOff')}</span>
+                          ) : (
+                            <>
+                              {/* Не «камера выключена»: иконки на панели ниже
+                                  в этот момент горят зелёным (они про то, с
+                                  чем войти в звонок), и две надписи спорили бы
+                                  друг с другом. Здесь речь именно о
+                                  предпросмотре. */}
+                              <span className="text-xs text-gray-400 mb-4 max-w-xs">
+                                {t('conference.page.previewOff')}
+                              </span>
+                              <Button
+                                size="sm"
+                                className="rounded-xl bg-emerald-600 text-white hover:bg-emerald-700"
+                                onClick={() => {
+                                  setPreviewError(null);
+                                  setPreviewActive(true);
+                                }}
+                              >
+                                <Video className="w-4 h-4 mr-2" />
+                                {t('conference.page.startPreview')}
+                              </Button>
+                              {previewError && (
+                                <span className="mt-3 max-w-xs text-xs text-rose-400">
+                                  {previewError}
+                                </span>
+                              )}
+                            </>
+                          )}
                         </div>
                       )}
 
@@ -2143,6 +2216,9 @@ export const ConferencePage = () => {
                           variant="ghost"
                           size="icon"
                           onClick={togglePreviewMic}
+                          title={previewActive
+                            ? (previewMicEnabled ? t('conference.page.micOff') : t('conference.page.micOn'))
+                            : (previewMicEnabled ? t('conference.page.joinWithMicOn') : t('conference.page.joinWithMicOff'))}
                           className={`h-10 w-10 rounded-xl transition-colors ${
                             !previewMicEnabled ? 'bg-rose-600 text-white hover:bg-rose-700' : 'bg-white/10 text-white hover:bg-white/20'
                           }`}
@@ -2154,6 +2230,9 @@ export const ConferencePage = () => {
                           variant="ghost"
                           size="icon"
                           onClick={togglePreviewCam}
+                          title={previewActive
+                            ? (previewCamEnabled ? t('conference.page.camOff') : t('conference.page.camOn'))
+                            : (previewCamEnabled ? t('conference.page.joinWithCamOn') : t('conference.page.joinWithCamOff'))}
                           className={`h-10 w-10 rounded-xl transition-colors ${
                             !previewCamEnabled ? 'bg-rose-600 text-white hover:bg-rose-700' : 'bg-white/10 text-white hover:bg-white/20'
                           }`}
@@ -2170,7 +2249,7 @@ export const ConferencePage = () => {
                         ) : (
                           <MicOff className="w-4 h-4 text-rose-500" />
                         )}
-                        <span>{previewMicEnabled ? 'Микрофон работает' : 'Микрофон выключен'}</span>
+                        <span>{previewMicEnabled ? t('conference.page.micWorking') : t('conference.page.micOffState')}</span>
                       </div>
 
                       <div className="flex items-center gap-1 h-4 w-24">
@@ -2195,7 +2274,7 @@ export const ConferencePage = () => {
                 <Card className="glass shadow-elevated border-white/10 dark:bg-zinc-950/60 rounded-3xl overflow-hidden backdrop-blur-xl flex-1 flex flex-col">
                   <CardHeader>
                     <div className="flex items-center justify-between">
-                      <CardTitle className="text-xl font-bold">Готовность к эфиру</CardTitle>
+                      <CardTitle className="text-xl font-bold">{t('conference.page.readiness')}</CardTitle>
                       <Button
                         variant="outline"
                         size="sm"
@@ -2203,18 +2282,18 @@ export const ConferencePage = () => {
                         className="h-9 px-3 text-xs bg-primary/10 hover:bg-primary/20 text-primary border-primary/30 font-bold rounded-xl shadow-sm"
                       >
                         <SlidersHorizontal className="w-4 h-4 mr-1.5" />
-                        Настройки
+                        {t('profile.settings')}
                       </Button>
                     </div>
                     <CardDescription className="text-xs">
-                      Вы подключаетесь к изолированной комнате видеоконференции
+                      {t('conference.page.isolatedRoomHint')}
                     </CardDescription>
                   </CardHeader>
 
                   <CardContent className="flex-1 flex flex-col justify-between gap-5">
                     {/* Room ID Box */}
                     <div className="p-4 bg-muted/30 rounded-2xl border border-border/50 flex flex-col gap-2.5">
-                      <span className="text-xs font-medium text-muted-foreground">Идентификатор комнаты</span>
+                      <span className="text-xs font-medium text-muted-foreground">{t('conference.page.roomIdLabel')}</span>
                       <div className="flex items-center justify-between bg-background p-3 rounded-xl border border-border shadow-inner">
                         <span className="font-mono text-xl text-primary font-bold tracking-wider">{activeRoomId}</span>
                         <Button
@@ -2226,6 +2305,16 @@ export const ConferencePage = () => {
                           <Copy className="h-4 w-4" />
                         </Button>
                       </div>
+                      {/* Диктовать идентификатор больше не нужно — и, главное,
+                          внешнего участника иначе не позвать вовсе. */}
+                      <Button
+                        variant="secondary"
+                        className="rounded-xl"
+                        onClick={() => setInviteOpen(true)}
+                      >
+                        <Link2 className="mr-2 h-4 w-4" />
+                        {t('conference.page.inviteByLink')}
+                      </Button>
                     </div>
 
                     {/* Room Active Settings Pills Box */}
@@ -2235,25 +2324,25 @@ export const ConferencePage = () => {
                     >
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                          <SlidersHorizontal className="w-3.5 h-3.5 text-primary" /> Параметры встречи:
+                          <SlidersHorizontal className="w-3.5 h-3.5 text-primary" /> {t('conference.page.meetingParams')}
                         </span>
-                        <span className="text-[11px] font-medium text-primary group-hover:underline">Настроить →</span>
+                        <span className="text-[11px] font-medium text-primary group-hover:underline">{t('conference.page.configureArrow')}</span>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
                         <Badge variant="outline" className="text-[10px] py-0.5 px-2 bg-background/80">
-                          📺 Качество: {roomSettings.videoQuality}
+                          {t('conference.page.qualityBadge', { quality: roomSettings.videoQuality })}
                         </Badge>
                         <Badge variant="outline" className={`text-[10px] py-0.5 px-2 ${roomSettings.enableWaitingRoom ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-background/80'}`}>
-                          🛡️ Зал ожидания: {roomSettings.enableWaitingRoom ? 'Вкл' : 'Выкл'}
+                          🛡️ {t('conference.page.waitingRoom')}: {roomSettings.enableWaitingRoom ? t('common.onShort') : t('common.offShort')}
                         </Badge>
                         <Badge variant="outline" className={`text-[10px] py-0.5 px-2 ${roomSettings.passwordProtection ? 'bg-amber-500/10 text-amber-600 border-amber-500/30' : 'bg-background/80'}`}>
-                          🔑 PIN-код: {roomSettings.passwordProtection ? 'Вкл' : 'Выкл'}
+                          🔑 PIN: {roomSettings.passwordProtection ? t('common.onShort') : t('common.offShort')}
                         </Badge>
                         <Badge variant="outline" className="text-[10px] py-0.5 px-2 bg-background/80">
-                          🎙️ Авто-выкл. звука: {roomSettings.muteOnEntry ? 'Вкл' : 'Выкл'}
+                          🎙️ {t('conference.page.muteOnEntry')}: {roomSettings.muteOnEntry ? t('common.onShort') : t('common.offShort')}
                         </Badge>
                         <Badge variant="outline" className="text-[10px] py-0.5 px-2 bg-background/80">
-                          🖥️ Экран: {roomSettings.allowScreenShare === 'all' ? 'Все' : 'Host'}
+                          {t('conference.page.screenBadge', { who: roomSettings.allowScreenShare === 'all' ? t('common.all') : 'Host' })}
                         </Badge>
                       </div>
                     </div>
@@ -2262,13 +2351,13 @@ export const ConferencePage = () => {
                     {!isHost && roomSettings.passwordProtection && (
                       <div className="p-3.5 bg-amber-500/10 rounded-xl border border-amber-500/20 space-y-2">
                         <Label className="text-xs font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1">
-                          <Lock className="w-3.5 h-3.5" /> Введите PIN-код для входа
+                          <Lock className="w-3.5 h-3.5" /> {t('conference.page.enterPinTitle')}
                         </Label>
                         <Input
                           type="password"
                           value={enteredPasswordInput}
                           onChange={(e) => setEnteredPasswordInput(e.target.value)}
-                          placeholder="Пароль от организатора"
+                          placeholder={t('conference.page.hostPasswordPlaceholder')}
                           className="h-10 bg-background border-amber-500/30 text-sm font-mono text-center font-bold"
                         />
                       </div>
@@ -2280,9 +2369,9 @@ export const ConferencePage = () => {
                         {user?.firstName?.charAt(0) || 'U'}
                       </div>
                       <div className="truncate">
-                        <div className="text-xs text-muted-foreground">Вы входите как</div>
+                        <div className="text-xs text-muted-foreground">{t('conference.page.joiningAs')}</div>
                         <div className="text-sm font-bold text-foreground flex items-center gap-1.5 truncate">
-                          <span className="truncate">{user?.firstName ? `${user.firstName} ${user.lastName || ''}` : user?.email || 'Гость'}</span>
+                          <span className="truncate">{user?.firstName ? `${user.firstName} ${user.lastName || ''}` : user?.email || t('conference.page.guest')}</span>
                           {isHost && <Crown className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
                         </div>
                       </div>
@@ -2295,7 +2384,7 @@ export const ConferencePage = () => {
                         size="lg"
                         className="w-full text-base sm:text-lg h-14 sm:h-16 font-bold shadow-xl rounded-xl btn-primary shadow-primary/25 leading-snug whitespace-normal px-4 py-2"
                       >
-                        Присоединиться к видеоконференции
+                        {t('conference.page.joinConference')}
                       </Button>
                       <Button
                         onClick={() => navigate('/conference')}
@@ -2303,7 +2392,7 @@ export const ConferencePage = () => {
                         variant="outline"
                         className="w-full text-sm h-11 font-medium rounded-xl border-2"
                       >
-                        Покинуть зал ожидания
+                        {t('conference.page.leaveWaitingRoom')}
                       </Button>
                     </div>
                   </CardContent>
@@ -2319,39 +2408,39 @@ export const ConferencePage = () => {
               <DialogHeader>
                 <DialogTitle className="text-xl font-bold flex items-center gap-2 text-emerald-400">
                   <SlidersHorizontal className="w-5 h-5" />
-                  Глубокая настройка параметров конференции
+                  {t('conference.page.settingsDialogTitle')}
                 </DialogTitle>
                 <DialogDescription className="text-xs text-zinc-400">
-                  Параметры безопасности, разрешений участников и качества трансляции для комнаты
+                  {t('conference.page.settingsDialogHint')}
                 </DialogDescription>
               </DialogHeader>
 
               <div className="space-y-6 py-4">
                 <div className="p-4 bg-muted/20 rounded-2xl border border-white/10 space-y-3">
-                  <span className="text-xs font-bold text-gray-300 uppercase tracking-wider block">Быстрые пресеты для встречи:</span>
+                  <span className="text-xs font-bold text-gray-300 uppercase tracking-wider block">{t('conference.page.presetsLabel')}</span>
                   <div className="grid grid-cols-3 gap-2">
                     <Button variant="outline" size="sm" onClick={() => applyPreset('webinar')} className="text-xs bg-zinc-900 hover:bg-zinc-800 border-white/10">
-                      🎙️ Вебинар
+                      {t('conference.page.presetWebinar')}
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => applyPreset('meeting')} className="text-xs bg-zinc-900 hover:bg-zinc-800 border-white/10">
-                      💼 Совещание
+                      {t('conference.page.presetMeeting')}
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => applyPreset('private')} className="text-xs bg-zinc-900 hover:bg-zinc-800 border-white/10">
-                      🔒 Приватный 1-на-1
+                      {t('conference.page.presetPrivate')}
                     </Button>
                   </div>
                 </div>
 
                 <div className="space-y-4">
                   <h4 className="text-sm font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <Shield className="w-4 h-4" /> Безопасность и доступ
+                    <Shield className="w-4 h-4" /> {t('conference.page.securitySection')}
                   </h4>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-semibold">Зал ожидания (Модерация)</Label>
-                        <p className="text-[11px] text-zinc-400">Организатор одобряет каждый вход</p>
+                        <Label className="text-xs font-semibold">{t('conference.page.waitingRoom')}</Label>
+                        <p className="text-[11px] text-zinc-400">{t('conference.page.waitingRoomHint')}</p>
                       </div>
                       <Switch
                         checked={roomSettings.enableWaitingRoom}
@@ -2361,8 +2450,8 @@ export const ConferencePage = () => {
 
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-semibold">Заблокировать комнату</Label>
-                        <p className="text-[11px] text-zinc-400">Запретить новые подключения</p>
+                        <Label className="text-xs font-semibold">{t('conference.page.lockRoom')}</Label>
+                        <p className="text-[11px] text-zinc-400">{t('conference.page.lockRoomHint')}</p>
                       </div>
                       <Switch
                         checked={roomSettings.lockRoom}
@@ -2373,7 +2462,7 @@ export const ConferencePage = () => {
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5 col-span-full">
                       <div className="space-y-1 flex-1 pr-4">
                         <div className="flex items-center justify-between">
-                          <Label className="text-xs font-semibold">Защита по PIN-паролю</Label>
+                          <Label className="text-xs font-semibold">{t('conference.page.pinProtection')}</Label>
                           <Switch
                             checked={roomSettings.passwordProtection}
                             onCheckedChange={(checked) => saveRoomSettings({ ...roomSettings, passwordProtection: checked })}
@@ -2383,7 +2472,7 @@ export const ConferencePage = () => {
                           <Input
                             value={roomSettings.passwordPin}
                             onChange={(e) => saveRoomSettings({ ...roomSettings, passwordPin: e.target.value })}
-                            placeholder="Введите PIN-код (например: 1234)"
+                            placeholder={t('conference.page.pinPlaceholder')}
                             className="h-9 mt-2 bg-zinc-950 border-zinc-800 text-xs font-mono"
                           />
                         )}
@@ -2394,14 +2483,14 @@ export const ConferencePage = () => {
 
                 <div className="space-y-4">
                   <h4 className="text-sm font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <Users className="w-4 h-4" /> Права участников при входе
+                    <Users className="w-4 h-4" /> {t('conference.page.entryRightsSection')}
                   </h4>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-semibold">Выключать звук при входе</Label>
-                        <p className="text-[11px] text-zinc-400">Участники заходят без микрофона</p>
+                        <Label className="text-xs font-semibold">{t('conference.page.muteOnEntry')}</Label>
+                        <p className="text-[11px] text-zinc-400">{t('conference.page.muteOnEntryHint')}</p>
                       </div>
                       <Switch
                         checked={roomSettings.muteOnEntry}
@@ -2411,8 +2500,8 @@ export const ConferencePage = () => {
 
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-semibold">Выключать видео при входе</Label>
-                        <p className="text-[11px] text-zinc-400">Участники заходят без камеры</p>
+                        <Label className="text-xs font-semibold">{t('conference.page.videoOffOnEntry')}</Label>
+                        <p className="text-[11px] text-zinc-400">{t('conference.page.videoOffOnEntryHint')}</p>
                       </div>
                       <Switch
                         checked={roomSettings.disableVideoOnEntry}
@@ -2422,8 +2511,8 @@ export const ConferencePage = () => {
 
                     <div className="flex items-center justify-between p-3.5 bg-zinc-900/60 rounded-xl border border-white/5">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-semibold">Текстовый чат</Label>
-                        <p className="text-[11px] text-zinc-400">Разрешить отправку сообщений</p>
+                        <Label className="text-xs font-semibold">{t('conference.page.textChat')}</Label>
+                        <p className="text-[11px] text-zinc-400">{t('conference.page.textChatHint')}</p>
                       </div>
                       <Switch
                         checked={roomSettings.allowChat}
@@ -2432,7 +2521,7 @@ export const ConferencePage = () => {
                     </div>
 
                     <div className="p-3.5 bg-zinc-900/60 rounded-xl border border-white/5 space-y-1.5">
-                      <Label className="text-xs font-semibold">Демонстрация экрана</Label>
+                      <Label className="text-xs font-semibold">{t('conference.page.screenShare')}</Label>
                       <Select
                         value={roomSettings.allowScreenShare}
                         onValueChange={(val: 'all' | 'host_only') => saveRoomSettings({ ...roomSettings, allowScreenShare: val })}
@@ -2441,8 +2530,8 @@ export const ConferencePage = () => {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-zinc-900 border-zinc-800 text-white">
-                          <SelectItem value="all" className="text-xs">Всем участникам</SelectItem>
-                          <SelectItem value="host_only" className="text-xs">Только организатору</SelectItem>
+                          <SelectItem value="all" className="text-xs">{t('conference.page.screenShareAll')}</SelectItem>
+                          <SelectItem value="host_only" className="text-xs">{t('conference.page.screenShareHost')}</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -2451,12 +2540,12 @@ export const ConferencePage = () => {
 
                 <div className="space-y-4">
                   <h4 className="text-sm font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <Zap className="w-4 h-4" /> Качество видео и SFU сервер
+                    <Zap className="w-4 h-4" /> {t('conference.page.qualitySection')}
                   </h4>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="p-3.5 bg-zinc-900/60 rounded-xl border border-white/5 space-y-1.5">
-                      <Label className="text-xs font-semibold">Разрешение видеопотока</Label>
+                      <Label className="text-xs font-semibold">{t('conference.page.resolution')}</Label>
                       <Select
                         value={roomSettings.videoQuality}
                         onValueChange={(val: '1080p' | '720p' | '480p') => saveRoomSettings({ ...roomSettings, videoQuality: val })}
@@ -2473,7 +2562,7 @@ export const ConferencePage = () => {
                     </div>
 
                     <div className="p-3.5 bg-zinc-900/60 rounded-xl border border-white/5 space-y-1.5">
-                      <Label className="text-xs font-semibold">Предпочтительный кодек</Label>
+                      <Label className="text-xs font-semibold">{t('conference.page.codec')}</Label>
                       <Select
                         value={roomSettings.codecPreference}
                         onValueChange={(val: 'auto' | 'vp8' | 'h264') => saveRoomSettings({ ...roomSettings, codecPreference: val })}
@@ -2482,8 +2571,8 @@ export const ConferencePage = () => {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-zinc-900 border-zinc-800 text-white">
-                          <SelectItem value="auto" className="text-xs">Автоматически (VP8/H264)</SelectItem>
-                          <SelectItem value="vp8" className="text-xs">VP8 (Приоритетный)</SelectItem>
+                          <SelectItem value="auto" className="text-xs">{t('conference.page.codecAuto')}</SelectItem>
+                          <SelectItem value="vp8" className="text-xs">{t('conference.page.codecVp8')}</SelectItem>
                           <SelectItem value="h264" className="text-xs">H.264 Baseline</SelectItem>
                         </SelectContent>
                       </Select>
@@ -2494,7 +2583,7 @@ export const ConferencePage = () => {
 
               <DialogFooter>
                 <Button onClick={() => setShowSettingsModal(false)} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold">
-                  Сохранить настройки
+                  {t('conference.page.saveSettings')}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -2503,6 +2592,10 @@ export const ConferencePage = () => {
         </div>
       </main>
       </div>
+      {isRoomSelected && (
+        <InviteDialog roomId={activeRoomId} open={inviteOpen} onOpenChange={setInviteOpen} />
+      )}
+
       </TooltipProvider>
     );
 };

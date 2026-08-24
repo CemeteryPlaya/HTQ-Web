@@ -53,6 +53,10 @@ function mediaLegacyGuardPlugin() {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const enableDevCompression = env.VITE_DEV_COMPRESSION === "true";
+  // Слежение опросом: обязательно, когда dev-сервер живёт в контейнере, а
+  // исходники примонтированы с хоста (docker-compose.dev.yml ставит эту
+  // переменную). Подробности — у server.watch ниже.
+  const usePolling = env.VITE_USE_POLLING === "true";
 
   // HTTPS in dev is opt-in via VITE_DEV_HTTPS=true. Default: plain HTTP on :3000
   // (matches the docker-compose.test-*.yml setup and avoids cert headaches).
@@ -404,6 +408,17 @@ export default defineConfig(({ mode }) => {
     allowedHosts: true,
     cors: true,
     hmr: hmrConfig,
+    // Опрос вместо inotify. Нужен, когда Vite крутится в контейнере, а
+    // исходники лежат на смонтированном диске Windows: события файловой
+    // системы через такой монт не доходят, watcher молчит, и браузер
+    // получает модуль, собранный при старте сервера. Внешне это выглядит
+    // как «правку не применили» — код на диске новый, в контейнере новый, а
+    // в браузере старый, и лечится только рестартом контейнера.
+    // Стоит это одного обхода дерева раз в секунду; вне Docker включать
+    // незачем — отсюда переменная.
+    watch: usePolling
+      ? { usePolling: true, interval: 1000, binaryInterval: 2000 }
+      : undefined,
     proxy: buildProxyConfig(),
   },
   preview: {

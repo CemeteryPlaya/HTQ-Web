@@ -23,6 +23,7 @@ import api from '@/api/client';
 import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import type { OrgRawNode } from './OrgChart';
+import { useTranslation } from 'react-i18next';
 
 type Mode = 'auth' | 'public';
 
@@ -90,6 +91,7 @@ function Field({ icon: Icon, label, value }: { icon: typeof Mail; label: string;
 }
 
 export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
+  const { t } = useTranslation();
   const meta = node?.meta;
   const holderId = metaNumber(meta, 'holder_id');
   const holderName = metaString(meta, 'holder_name');
@@ -142,7 +144,7 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
                 {holderName ?? positionTitle}
               </SheetTitle>
               <SheetDescription className="text-left">
-                {holderName ? positionTitle : 'Должность'}
+                {holderName ? positionTitle : t('hr.card.position')}
               </SheetDescription>
             </div>
           </div>
@@ -152,7 +154,7 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
           {/* Phantom (vacant) flag — visible in both modes */}
           {isPhantom && (
             <div className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs italic text-muted-foreground">
-              Должность не занята.
+              {t('hr.drawer.positionVacant')}
             </div>
           )}
 
@@ -160,18 +162,18 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
           {headsDepartmentName && (
             <div className="flex items-center gap-2 rounded-md border bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
               <Crown className="h-4 w-4" />
-              <span>Руководит отделом «{headsDepartmentName}»</span>
+              <span>{t('hr.drawer.headsDepartment', { department: headsDepartmentName })}</span>
             </div>
           )}
 
           <Field
             icon={Briefcase}
-            label="Должность"
+            label={t('hr.card.position')}
             value={positionTitle}
           />
           <Field
             icon={Building2}
-            label="Отдел"
+            label={t('hr.card.department')}
             value={departmentName}
           />
 
@@ -182,7 +184,7 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
                   ? <a className="underline-offset-2 hover:underline" href={`mailto:${holderEmail}`}>{holderEmail}</a>
                   : null
               } />
-              <Field icon={Phone} label="Телефон" value={
+              <Field icon={Phone} label={t('profile.phone')} value={
                 holderPhone
                   ? <a className="underline-offset-2 hover:underline" href={`tel:${holderPhone}`}>{holderPhone}</a>
                   : null
@@ -194,7 +196,7 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
           {isAuthMode && holderId !== null && (
             <>
               {employeeQuery.isLoading && (
-                <div className="text-sm text-muted-foreground">Загрузка профиля…</div>
+                <div className="text-sm text-muted-foreground">{t('hr.drawer.loading')}</div>
               )}
               {employee && (
                 <div className="space-y-3 border-t pt-4">
@@ -203,12 +205,12 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
                       ? <a className="underline-offset-2 hover:underline" href={`mailto:${employee.email}`}>{employee.email}</a>
                       : null
                   } />
-                  <Field icon={Phone} label="Телефон" value={
+                  <Field icon={Phone} label={t('profile.phone')} value={
                     employee.phone
                       ? <a className="underline-offset-2 hover:underline" href={`tel:${employee.phone}`}>{employee.phone}</a>
                       : null
                   } />
-                  <Field icon={Calendar} label="Дата найма" value={fmtDate(employee.hire_date)} />
+                  <Field icon={Calendar} label={t('hr.card.hireDate')} value={fmtDate(employee.hire_date)} />
                   {employee.bio && (
                     <div className="rounded-md bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                       {employee.bio}
@@ -220,14 +222,14 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
               {pmos.length > 0 && (
                 <div className="space-y-2 border-t pt-4">
                   <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-semibold">Проекты (PMO)</h4>
+                    <h4 className="text-sm font-semibold">{t('hr.drawer.pmoProjects')}</h4>
                     <span className={`text-xs ${totalAllocation > 100 ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
-                      Загрузка: {totalAllocation}%
+                      {t('profile.pmoAllocation', { percent: totalAllocation })}
                     </span>
                   </div>
                   {totalAllocation > 100 && (
                     <p className="text-xs text-destructive">
-                      Превышение допустимой загрузки 100%.
+                      {t('hr.drawer.overAllocated')}
                     </p>
                   )}
                   <ul className="space-y-1.5">
@@ -236,7 +238,7 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 font-medium">
                             <span className="truncate">{p.pmo_name}</span>
-                            {p.is_primary && <Badge variant="default" className="h-4 text-[10px]">Лид</Badge>}
+                            {p.is_primary && <Badge variant="default" className="h-4 text-[10px]">{t('profile.pmoLead')}</Badge>}
                           </div>
                           {p.position_in_pmo && (
                             <div className="text-muted-foreground truncate">{p.position_in_pmo}</div>
@@ -251,7 +253,7 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
 
               {!employeeQuery.isLoading && !employee && (
                 <div className="text-xs italic text-muted-foreground">
-                  Профиль не найден.
+                  {t('hr.drawer.notFound')}
                 </div>
               )}
             </>

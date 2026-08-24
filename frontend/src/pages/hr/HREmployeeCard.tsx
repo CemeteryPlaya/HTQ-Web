@@ -22,6 +22,7 @@ import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
 import { CardT2SectionDialog } from '@/components/hr/CardT2SectionDialog';
 import { Button } from '@/components/ui/button';
 import { useHRLevel } from '@/hooks/useHRLevel';
+import { useTranslation } from 'react-i18next';
 
 /** Строка «подпись — значение» внутри секции Т-2. */
 const Row = ({ label, value }: { label: string; value?: string | null }) => (
@@ -56,6 +57,7 @@ const T2Section = ({
 );
 
 const HREmployeeCard = () => {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const employeeId = Number(id);
@@ -76,16 +78,16 @@ const HREmployeeCard = () => {
     enabled: !!employeeId && (hasPerm('hr.card.financial.view') || hasPerm('hr.card.personal.view')),
   });
 
-  const title = data?.full_name || 'Карточка сотрудника';
+  const title = data?.full_name || t('share.employee.title');
   const subtitle = [data?.position?.title, data?.department?.name]
     .filter(Boolean)
     .join(' · ');
 
   if (levelLoading || isLoading) {
     return (
-      <HRLayout title="Карточка сотрудника" subtitle="">
+      <HRLayout title={t('share.employee.title')} subtitle="">
         <div className="rounded-2xl border bg-card/70 p-8 text-center">
-          Загрузка...
+          {t('common.loading')}
         </div>
       </HRLayout>
     );
@@ -93,9 +95,9 @@ const HREmployeeCard = () => {
 
   if (!hasHrAccess) {
     return (
-      <HRLayout title="Карточка сотрудника" subtitle="">
+      <HRLayout title={t('share.employee.title')} subtitle="">
         <div className="rounded-2xl border bg-card/70 p-8 text-center text-muted-foreground">
-          Недостаточно прав для HR-раздела
+          {t('hr.employeeCard.noRights')}
         </div>
       </HRLayout>
     );
@@ -103,11 +105,11 @@ const HREmployeeCard = () => {
 
   if (error || !data) {
     return (
-      <HRLayout title="Карточка сотрудника" subtitle="">
+      <HRLayout title={t('share.employee.title')} subtitle="">
         <div className="rounded-2xl border bg-card/70 p-8 text-center text-destructive">
-          Не удалось загрузить карточку.{' '}
+          {t('hr.employeeCard.loadError')}{' '}
           <Link className="underline" to="/hr/employees">
-            Назад к списку
+            {t('hr.employeeCard.backToList')}
           </Link>
         </div>
       </HRLayout>
@@ -125,7 +127,7 @@ const HREmployeeCard = () => {
             className="gap-1.5"
           >
             <ArrowLeft className="h-4 w-4" />
-            Назад
+            {t('common.back')}
           </Button>
           <div className="ml-auto flex flex-wrap gap-2">
             {canWriteBasic && (
@@ -136,12 +138,12 @@ const HREmployeeCard = () => {
                 className="gap-1.5"
               >
                 <Pencil className="h-4 w-4" />
-                Редактировать
+                {t('common.edit')}
               </Button>
             )}
             <Button size="sm" onClick={() => setShareOpen(true)} className="gap-1.5">
               <Share2 className="h-4 w-4" />
-              Поделиться
+              {t('common.share')}
             </Button>
           </div>
         </div>
@@ -151,37 +153,38 @@ const HREmployeeCard = () => {
         {/* Секции Т-2. Условие — ПРАВО, а не наличие данных: у сотрудника,
             заведённого без карточки, бэкенд возвращает секцию со всеми null,
             и проверка на данные прятала бы саму возможность их завести
-            (строку `EmployeeCard` создаёт upsert при первом сохранении). */}
+            (строку `EmployeeCard` создаёт upsert при первом сохранении).
+
+            Подписи строк берём из `hr.pages.employees.fields.*` — тех же
+            ключей, что и форма редактирования (`cardT2Fields.ts`): иначе
+            карточка и форма назвали бы одно поле по-разному.
+
+            Секции «Сертификаты / СРО» здесь больше нет: миграция
+            hr/0016_remove_employeecard_certs сняла её колонки, на бэкенде
+            остались только financial и personal. */}
         {hasPerm('hr.card.financial.view') && (
           <T2Section
-            title="Финансы"
+            title={t('hr.employeeCard.finance')}
             canEdit={hasPerm('hr.card.financial.edit')}
             onEdit={() => setEditingSection('financial')}
           >
-            <Row label="Оклад" value={cardT2?.financial?.salary} />
-            <Row label="Премия" value={cardT2?.financial?.bonus} />
-            <Row label="Счёт" value={cardT2?.financial?.bank_account} />
+            <Row label={t('hr.pages.employees.fields.salary')} value={cardT2?.financial?.salary} />
+            <Row label={t('hr.pages.employees.fields.bonus')} value={cardT2?.financial?.bonus} />
+            <Row label={t('hr.pages.employees.fields.bankAccount')} value={cardT2?.financial?.bank_account} />
           </T2Section>
         )}
         {hasPerm('hr.card.personal.view') && (
           <T2Section
-            title="Личные данные"
+            title={t('hr.employeeCard.personal')}
             canEdit={hasPerm('hr.card.personal.edit')}
             onEdit={() => setEditingSection('personal')}
           >
-            <Row label="Паспорт" value={cardT2?.personal?.passport_data} />
-            <Row label="ИИН/ИНН" value={cardT2?.personal?.inn} />
-            <Row label="Дата рождения" value={cardT2?.personal?.birth_date} />
-            <Row label="Место рождения" value={cardT2?.personal?.birth_place} />
-            <Row label="Гражданство" value={cardT2?.personal?.citizenship} />
+            <Row label={t('hr.pages.employees.fields.passportData')} value={cardT2?.personal?.passport_data} />
+            <Row label={t('hr.pages.employees.fields.inn')} value={cardT2?.personal?.inn} />
+            <Row label={t('hr.pages.employees.fields.birthDate')} value={cardT2?.personal?.birth_date} />
+            <Row label={t('hr.pages.employees.fields.birthPlace')} value={cardT2?.personal?.birth_place} />
+            <Row label={t('hr.pages.employees.fields.citizenship')} value={cardT2?.personal?.citizenship} />
           </T2Section>
-        )}
-        {hasPerm('hr.card.certs.view') && cardT2?.certs && (
-          <section className="rounded-lg border p-4">
-            <h3 className="font-semibold mb-2">Сертификаты / СРО</h3>
-            <div className="text-sm">СРО №: {cardT2.certs.sro_permit_number ?? '—'} (до {cardT2.certs.sro_permit_expiry ?? '—'})</div>
-            <div className="text-sm">Охрана труда №: {cardT2.certs.safety_cert_number ?? '—'} (до {cardT2.certs.safety_cert_expiry ?? '—'})</div>
-          </section>
         )}
       </HRLayout>
 

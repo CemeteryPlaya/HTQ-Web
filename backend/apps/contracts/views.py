@@ -34,6 +34,10 @@ django-вьюха ``View``): ``dispatch`` разводит методы сам, 
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+from math import ceil
+from typing import Callable, Iterable
+
 from django.http import Http404, HttpResponse
 from django.utils.decorators import method_decorator
 
@@ -41,13 +45,32 @@ from apps.signoff import interface as signoff
 from htqweb.http import ApiView, api_view, json_error
 
 from . import schemas
-from .models import AgreementStatus, BudgetStatus, CounterpartyStatus, PaymentType
+from .models import (
+    AgreementStatus,
+    BudgetStatus,
+    CounterpartyStatus,
+    InvoiceStatus,
+    PaymentType,
+)
 from .services import agreement_service as agr_svc
 from .services import budget_service as budget_svc
 from .services import counterparty_service as cp_svc
+from .services import invoice_service as inv_svc
+from .services import advance_payment_service as adv_svc
+from .services import accountable_funds_request_service as accountable_funds_svc
+from .services import advance_report_service as advance_report_svc
+from .services import contract_payment_service as contract_payment_svc
+from .services import completion_act_service as completion_act_svc
 from .services import reference_service as ref_svc
+from .services import work_queue_service as work_queue_svc
 from .services.agreement_service import AgreementRuleViolation
 from .services.budget_calc import COMMITTING_STATUSES, BudgetExceeded
+from .services.invoice_service import InvoiceRuleViolation
+from .services.advance_payment_service import AdvancePaymentRuleViolation
+from .services.accountable_funds_request_service import AccountableFundsRequestRuleViolation
+from .services.advance_report_service import AdvanceReportRuleViolation
+from .services.contract_payment_service import ContractPaymentRuleViolation
+from .services.completion_act_service import CompletionActRuleViolation
 from .services.reference_service import ReferenceConflict
 
 # Конфликты доменного уровня, которые вьюха переводит в 409. Собраны в один
@@ -58,8 +81,13 @@ from .services.reference_service import ReferenceConflict
 # согласовании», «в этапе не осталось активных согласующих» — это ровно
 # такие же конфликты состояния, и различать их для фронтенда незачем, ему
 # нужен текст. Импортируется из signoff.interface (правило границ).
-CONFLICTS = (ReferenceConflict, AgreementRuleViolation, BudgetExceeded,
-             signoff.SignoffError, signoff.UnknownSubject)
+CONFLICTS = (ReferenceConflict, AgreementRuleViolation, InvoiceRuleViolation,
+             AdvancePaymentRuleViolation,
+             AccountableFundsRequestRuleViolation,
+             AdvanceReportRuleViolation,
+             ContractPaymentRuleViolation,
+             CompletionActRuleViolation,
+             BudgetExceeded, signoff.SignoffError, signoff.UnknownSubject)
 
 
 class ContractsView(ApiView):
@@ -97,6 +125,58 @@ class ContractsView(ApiView):
     def str_param(self, name: str) -> str | None:
         return self.request.GET.get(name) or None
 
+    def paginated(self, rows: Iterable, serialize: Callable) -> list | dict:
+        """Return a backwards-compatible list, or a page envelope on request.
+
+        Existing form and overview callers consume collection endpoints as plain
+        arrays. Lists opt into the envelope with ``page``/``page_size``; this
+        keeps those callers stable while allowing the registry UI to paginate.
+        """
+        if "page" not in self.request.GET and "page_size" not in self.request.GET:
+            return [serialize(row) for row in rows]
+
+        page = max(self.int_param("page") or 1, 1)
+        page_size = min(max(self.int_param("page_size") or 25, 1), 100)
+        search = (self.str_param("search") or "").casefold()
+
+        def as_json(item):
+            # ``api_view`` knows how to unwrap top-level Pydantic models in a
+            # list, while Django's JSON encoder receives nested page items
+            # directly. Convert those nested models explicitly.
+            return item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+
+        # Services currently return materialized lists. Serialize once before
+        # slicing when searching so the search spans the complete collection;
+        # without a search, slice first to avoid serializing off-page rows.
+        if search:
+            items = [serialize(row) for row in rows]
+            items = [item for item in items if search in str(item).casefold()]
+        else:
+            total = len(rows)
+            start = (page - 1) * page_size
+            items = [as_json(serialize(row)) for row in rows[start:start + page_size]]
+            return {
+                "items": items,
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "total_pages": max(ceil(total / page_size), 1),
+                },
+            }
+
+        total = len(items)
+        start = (page - 1) * page_size
+        return {
+            "items": [as_json(item) for item in items[start:start + page_size]],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": max(ceil(total / page_size), 1),
+            },
+        }
+
 
 # Декораторы читаются лучше короткими алиасами: они повторяются на каждом
 # методе, и в развёрнутом виде описание прав тонет в синтаксисе.
@@ -108,6 +188,16 @@ def write(method: str, body=None, status: int = 200, admin: bool = True):
     где заявку подаёт сотрудник, а решение принимает согласование."""
     return method_decorator(api_view(methods=(method,), auth="jwt",
                                      body=body, status=status, admin=admin))
+
+
+class WorkQueueView(ContractsView):
+    """Contracts actions for the current user; signoff decisions stay in signoff."""
+
+    @read
+    def get(self, request):
+        return [schemas.WorkQueueItemRead.model_validate(row) for row in work_queue_svc.list_my_actions(
+            user_id=request.token.user_id, is_elevated=request.token.is_elevated,
+        )]
 
 
 # DELETE отдаёт 204 без тела — конвенция репозитория (apps/cms/views.py).
@@ -263,7 +353,7 @@ class BudgetCollectionView(ContractsView):
             status=self.str_param("status"),
             approval_state=self.str_param("approval_state"),
         )
-        return [schemas.BudgetRead.model_validate(row) for row in rows]
+        return self.paginated(rows, schemas.BudgetRead.model_validate)
 
 
 class BudgetFullCreateView(ContractsView):
@@ -360,6 +450,41 @@ class AgreementSubmitView(SubmitView):
             lambda **kw: agr_svc.submit_for_approval(agreement_id, **kw))
 
 
+class InvoiceSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, invoice_id: int):
+        return self.submitted(
+            lambda **kw: inv_svc.submit_for_approval(invoice_id, **kw))
+
+
+class AdvancePaymentSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, payment_id: int):
+        return self.submitted(
+            lambda **kw: adv_svc.submit_for_approval(payment_id, **kw))
+
+
+class AccountableFundsRequestSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, request_id: int):
+        return self.submitted(
+            lambda **kw: accountable_funds_svc.submit_for_approval(request_id, **kw))
+
+
+class ContractPaymentSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, payment_id: int):
+        return self.submitted(
+            lambda **kw: contract_payment_svc.submit_for_approval(payment_id, **kw))
+
+
+class CompletionActSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, act_id: int):
+        return self.submitted(
+            lambda **kw: completion_act_svc.submit_for_approval(act_id, **kw))
+
+
 class BudgetAgreementsView(ContractsView):
     """Договоры бюджета — по ВСЕМ его строкам, то, из чего сложился остаток."""
 
@@ -444,7 +569,7 @@ class CounterpartyCollectionView(ContractsView):
             country_id=self.int_param("country_id"),
             approval_state=self.str_param("approval_state"),
         )
-        return [schemas.CounterpartyRead.model_validate(row) for row in rows]
+        return self.paginated(rows, schemas.CounterpartyRead.model_validate)
 
     @write("POST", body=schemas.CounterpartyCreate, status=201, admin=False)
     def post(self, request, data: schemas.CounterpartyCreate):
@@ -511,8 +636,10 @@ class AgreementCollectionView(ContractsView):
             period_year=self.int_param("period_year"),
             status=self.str_param("status"),
         )
-        return [schemas.AgreementRead.model_validate(agr_svc.serialize_agreement(row))
-                for row in rows]
+        return self.paginated(
+            rows,
+            lambda row: schemas.AgreementRead.model_validate(agr_svc.serialize_agreement(row)),
+        )
 
     @write("POST", body=schemas.AgreementCreate, status=201, admin=False)
     def post(self, request, data: schemas.AgreementCreate):
@@ -634,8 +761,553 @@ class AgreementFileUrlView(ContractsView):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Счета на оплату (без договора)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Форма счёта, как и форма договора, выбирает источник денег из плоского
+# списка ``GET /budget-lines`` (администратор → программа), поэтому своего
+# справочного эндпоинта модуль счетов не заводит. Отдельного маршрута
+# «отправить на согласование» здесь ещё нет — согласование счёта первой
+# фазой не подключено (см. докстринг модели Invoice).
+
+class InvoiceCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = inv_svc.list_invoices(
+            budget_id=self.int_param("budget_id"),
+            budget_line_id=self.int_param("budget_line_id"),
+            counterparty_id=self.int_param("counterparty_id"),
+            administrator_id=self.int_param("administrator_id"),
+            program_id=self.int_param("program_id"),
+            period_year=self.int_param("period_year"),
+            status=self.str_param("status"),
+        )
+        return self.paginated(
+            rows,
+            lambda row: schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(row)),
+        )
+
+    @write("POST", body=schemas.InvoiceCreate, status=201, admin=False)
+    def post(self, request, data: schemas.InvoiceCreate):
+        try:
+            invoice = inv_svc.create_invoice(created_by=request.token.user_id,
+                                             **data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(invoice))
+
+
+class InvoiceDetailView(ContractsView):
+    @read
+    def get(self, request, invoice_id: int):
+        return schemas.InvoiceRead.model_validate(
+            inv_svc.serialize_invoice(inv_svc.get_invoice_or_404(invoice_id)))
+
+    @write("PATCH", body=schemas.InvoiceUpdate, admin=False)
+    def patch(self, request, invoice_id: int, data: schemas.InvoiceUpdate):
+        # Правка по тем же правам, что и скан (``InvoiceFileView``): автор
+        # правит СВОЙ счёт, пока он черновик, администратор — всегда. У
+        # договоров правка осталась чисто админской, но у счёта без договора
+        # заводит его сотрудник, и не дать ему исправить собственный черновик
+        # до отправки значило бы гонять за каждой опечаткой к администратору.
+        invoice = inv_svc.get_invoice_or_404(invoice_id)
+        if not request.token.is_elevated:
+            if invoice.created_by != request.token.user_id:
+                return json_error(
+                    "Редактировать счёт может автор или администратор", 403)
+            if invoice.status != InvoiceStatus.DRAFT:
+                return json_error(
+                    f"Счёт в статусе «{invoice.get_status_display()}» — "
+                    f"править может только администратор", 403)
+        try:
+            invoice = inv_svc.update_invoice(invoice_id, **data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(invoice))
+
+    @write("DELETE")
+    def delete(self, request, invoice_id: int):
+        try:
+            inv_svc.delete_invoice(invoice_id)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return HttpResponse(status=204)
+
+
+class InvoiceStatusView(ContractsView):
+    """Единственный путь смены статуса счёта — здесь проверяется допустимость
+    перехода (``invoice_service.ALLOWED_TRANSITIONS``). PATCH счёта статус не
+    принимает, иначе таблица переходов обходилась бы одним полем.
+
+    ``enforce_approval_lock=True`` — как у договора: под идущим согласованием
+    ручной перевод запрещён. В первой фазе согласование счёта не подключено,
+    поэтому проверка инертна (счёт не выходит из ``approval_state=draft``)."""
+
+    @write("POST", body=schemas.InvoiceStatusChange)
+    def post(self, request, invoice_id: int, data: schemas.InvoiceStatusChange):
+        try:
+            invoice = inv_svc.change_status(invoice_id, data.status,
+                                            actor_id=request.token.user_id,
+                                            enforce_approval_lock=True)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(invoice))
+
+
+class InvoiceFileView(ContractsView):
+    """Загрузка скана счёта (multipart, поле ``file``).
+
+    Права те же, что у скана договора (``AgreementFileView``): автор
+    прикладывает файл, пока счёт ЧЕРНОВИК, администратор — всегда. Счёт без
+    приложенного скана отправлять на согласование нечего, поэтому право
+    завести счёт без права приложить к нему файл — половина права
+    (``admin=False``), но проверка тоньше и по данным, а не декоратором.
+    """
+
+    @write("POST", admin=False)
+    def post(self, request, invoice_id: int):
+        invoice = inv_svc.get_invoice_or_404(invoice_id)
+        if not request.token.is_elevated:
+            if invoice.created_by != request.token.user_id:
+                return json_error(
+                    "Приложить файл может автор счёта или администратор", 403)
+            if invoice.status != InvoiceStatus.DRAFT:
+                return json_error(
+                    f"Счёт в статусе «{invoice.get_status_display()}» — "
+                    f"заменить скан может только администратор", 403)
+
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+
+        invoice = inv_svc.attach_file(
+            invoice_id,
+            data=upload.read(),
+            filename=upload.name,
+            mime=upload.content_type or "application/octet-stream",
+            owner_id=request.token.user_id,
+        )
+        return schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(invoice))
+
+
+class InvoiceFileUrlView(ContractsView):
+    """Подписанная ссылка на скан счёта."""
+
+    @read
+    def get(self, request, invoice_id: int):
+        invoice = inv_svc.get_invoice_or_404(invoice_id)
+        url = inv_svc.file_url(invoice)
+        if url is None:
+            raise Http404("К счёту не приложен файл")
+        return {"url": url}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Предоплаты на основании договоров
+# ═══════════════════════════════════════════════════════════════════════
+
+class AdvancePaymentCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = adv_svc.list_advance_payments(
+            agreement_id=self.int_param("agreement_id"),
+            awaiting_payment=self.bool_param("awaiting_payment"),
+        )
+        return self.paginated(
+            rows,
+            lambda row: schemas.AdvancePaymentRead.model_validate(adv_svc.serialize_advance_payment(row)),
+        )
+
+    @write("POST", body=schemas.AdvancePaymentCreate, status=201, admin=False)
+    def post(self, request, data: schemas.AdvancePaymentCreate):
+        try:
+            payment = adv_svc.create_advance_payment(
+                created_by=request.token.user_id, **data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AdvancePaymentRead.model_validate(
+            adv_svc.serialize_advance_payment(payment))
+
+
+class AdvancePaymentDetailView(ContractsView):
+    @read
+    def get(self, request, payment_id: int):
+        return schemas.AdvancePaymentRead.model_validate(
+            adv_svc.serialize_advance_payment(
+                adv_svc.get_advance_payment_or_404(payment_id)))
+
+
+class AdvancePaymentPaymentOrderView(ContractsView):
+    """Бухгалтерское проведение одобренной предоплаты, не этап signoff."""
+
+    @write("POST", admin=False)
+    def post(self, request, payment_id: int):
+        posting_number = (request.POST.get("posting_number") or "").strip()
+        if not posting_number:
+            return json_error("Укажите номер проводки", 422)
+        if len(posting_number) > 100:
+            return json_error("Номер проводки не длиннее 100 символов", 422)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+        try:
+            payment = adv_svc.record_payment(
+                payment_id,
+                posting_number=posting_number,
+                data=upload.read(),
+                filename=upload.name,
+                mime=upload.content_type or "application/octet-stream",
+                actor_id=request.token.user_id,
+                is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AdvancePaymentRead.model_validate(
+            adv_svc.serialize_advance_payment(payment))
+
+
+class AdvancePaymentPaymentOrderUrlView(ContractsView):
+    @read
+    def get(self, request, payment_id: int):
+        payment = adv_svc.get_advance_payment_or_404(payment_id)
+        url = adv_svc.payment_order_url(payment)
+        if url is None:
+            raise Http404("К предоплате не приложено платёжное поручение")
+        return {"url": url}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Заявки на подотчётные средства
+# ═══════════════════════════════════════════════════════════════════════
+
+class AccountableFundsRequestCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = accountable_funds_svc.list_requests(
+            budget_id=self.int_param("budget_id"),
+            administrator_id=self.int_param("administrator_id"),
+            program_id=self.int_param("program_id"),
+            accountable_user_id=self.int_param("accountable_user_id"),
+        )
+        return self.paginated(
+            rows,
+            lambda row: schemas.AccountableFundsRequestRead.model_validate(
+                accountable_funds_svc.serialize_request(row)),
+        )
+
+    @write("POST", body=schemas.AccountableFundsRequestCreate, status=201, admin=False)
+    def post(self, request, data: schemas.AccountableFundsRequestCreate):
+        try:
+            row = accountable_funds_svc.create_request(
+                created_by=request.token.user_id, **data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AccountableFundsRequestRead.model_validate(
+            accountable_funds_svc.serialize_request(row))
+
+
+class AccountableFundsRequestDetailView(ContractsView):
+    @read
+    def get(self, request, request_id: int):
+        return schemas.AccountableFundsRequestRead.model_validate(
+            accountable_funds_svc.serialize_request(
+                accountable_funds_svc.get_request_or_404(request_id)))
+
+
+class AccountableFundsRequestBudgetLineAssignView(ContractsView):
+    @write("POST", body=schemas.AccountableFundsRequestBudgetLineAssign, admin=False)
+    def post(self, request, request_id: int, data: schemas.AccountableFundsRequestBudgetLineAssign):
+        try:
+            row = accountable_funds_svc.assign_budget_line(
+                request_id,
+                actor_id=request.token.user_id,
+                is_elevated=request.token.is_elevated,
+                **data.model_dump(),
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AccountableFundsRequestRead.model_validate(
+            accountable_funds_svc.serialize_request(row))
+
+
+class AccountableFundsRequestAccountingPaidView(ContractsView):
+    """Отдельное бухгалтерское действие после окончания Signoff."""
+
+    @write("POST", admin=False)
+    def post(self, request, request_id: int):
+        try:
+            row = accountable_funds_svc.mark_accounting_paid(
+                request_id,
+                actor_id=request.token.user_id,
+                is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AccountableFundsRequestRead.model_validate(
+            accountable_funds_svc.serialize_request(row))
+
+
+class AdvanceReportCollectionView(ContractsView):
+    @read
+    def get(self, request, request_id: int):
+        accountable_funds_svc.get_request_or_404(request_id)
+        rows = advance_report_svc.list_advance_reports(request_id=request_id)
+        return [schemas.AdvanceReportRead.model_validate(
+            advance_report_svc.serialize_advance_report(row)) for row in rows]
+
+    @write("POST", status=201, admin=False)
+    def post(self, request, request_id: int):
+        expense_name = (request.POST.get("expense_name") or "").strip()
+        try:
+            amount = Decimal(request.POST.get("amount") or "")
+        except (TypeError, ValueError, InvalidOperation):
+            return json_error("Укажите корректную сумму", 422)
+        if not expense_name:
+            return json_error("Укажите наименование затрат", 422)
+        if len(expense_name) > 500:
+            return json_error("Наименование затрат не длиннее 500 символов", 422)
+        if amount <= 0:
+            return json_error("Сумма должна быть больше нуля", 422)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+        try:
+            report = advance_report_svc.create_advance_report(
+                request_id=request_id, expense_name=expense_name, amount=amount,
+                data=upload.read(), filename=upload.name,
+                mime=upload.content_type or "application/octet-stream",
+                actor_id=request.token.user_id,
+                is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.AdvanceReportRead.model_validate(
+            advance_report_svc.serialize_advance_report(report))
+
+
+class AdvanceReportDetailView(ContractsView):
+    @read
+    def get(self, request, report_id: int):
+        return schemas.AdvanceReportRead.model_validate(
+            advance_report_svc.serialize_advance_report(
+                advance_report_svc.get_advance_report_or_404(report_id)))
+
+
+class AdvanceReportSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, report_id: int):
+        try:
+            return self.submitted(
+                lambda **kw: advance_report_svc.submit_for_approval(
+                    report_id, is_elevated=request.token.is_elevated, **kw))
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+
+
+class AdvanceReportFileUrlView(ContractsView):
+    @read
+    def get(self, request, report_id: int):
+        url = advance_report_svc.file_url(
+            advance_report_svc.get_advance_report_or_404(report_id))
+        return {"url": url}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Служебное
 # ═══════════════════════════════════════════════════════════════════════
+
+class ContractPaymentCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = contract_payment_svc.list_contract_payments(
+            administrator_id=self.int_param("administrator_id"),
+            agreement_id=self.int_param("agreement_id"),
+            awaiting_payment=self.bool_param("awaiting_payment"),
+        )
+        return self.paginated(
+            rows,
+            lambda row: schemas.ContractPaymentRead.model_validate(
+                contract_payment_svc.serialize_contract_payment(row)),
+        )
+
+    @write("POST", status=201, admin=False)
+    def post(self, request):
+        try:
+            administrator_id = int(request.POST.get("administrator_id") or "")
+            agreement_id = int(request.POST.get("agreement_id") or "")
+            amount = Decimal(request.POST.get("amount") or "")
+        except (TypeError, ValueError, InvalidOperation):
+            return json_error("Укажите администратора, договор и корректную сумму", 422)
+        if amount <= 0:
+            return json_error("Сумма должна быть больше нуля", 422)
+        invoice = request.FILES.get("invoice")
+        if invoice is None:
+            return json_error("Файл счёта не передан (ожидается поле «invoice»)", 422)
+        try:
+            payment = contract_payment_svc.create_contract_payment(
+                administrator_id=administrator_id, agreement_id=agreement_id, amount=amount,
+                invoice_data=invoice.read(), invoice_filename=invoice.name,
+                invoice_mime=invoice.content_type or "application/octet-stream",
+                created_by=request.token.user_id,
+            )
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.ContractPaymentRead.model_validate(
+            contract_payment_svc.serialize_contract_payment(payment))
+
+
+class ContractPaymentDetailView(ContractsView):
+    @read
+    def get(self, request, payment_id: int):
+        return schemas.ContractPaymentRead.model_validate(
+            contract_payment_svc.serialize_contract_payment(
+                contract_payment_svc.get_contract_payment_or_404(payment_id)))
+
+
+class ContractPaymentInvoiceUrlView(ContractsView):
+    @read
+    def get(self, request, payment_id: int):
+        url = contract_payment_svc.invoice_url(
+            contract_payment_svc.get_contract_payment_or_404(payment_id))
+        if url is None:
+            raise Http404("К оплате не приложен счёт")
+        return {"url": url}
+
+
+class ContractPaymentPaymentOrderView(ContractsView):
+    @write("POST", admin=False)
+    def post(self, request, payment_id: int):
+        posting_number = (request.POST.get("posting_number") or "").strip()
+        if not posting_number:
+            return json_error("Укажите номер проводки", 422)
+        if len(posting_number) > 100:
+            return json_error("Номер проводки не длиннее 100 символов", 422)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+        try:
+            payment = contract_payment_svc.record_payment(
+                payment_id, posting_number=posting_number, data=upload.read(),
+                filename=upload.name, mime=upload.content_type or "application/octet-stream",
+                actor_id=request.token.user_id, is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.ContractPaymentRead.model_validate(
+            contract_payment_svc.serialize_contract_payment(payment))
+
+
+class ContractPaymentPaymentOrderUrlView(ContractsView):
+    @read
+    def get(self, request, payment_id: int):
+        url = contract_payment_svc.payment_order_url(
+            contract_payment_svc.get_contract_payment_or_404(payment_id))
+        if url is None:
+            raise Http404("К оплате не приложено платёжное поручение")
+        return {"url": url}
+
+
+class CompletionActCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = completion_act_svc.list_completion_acts(
+            administrator_id=self.int_param("administrator_id"),
+            agreement_id=self.int_param("agreement_id"),
+            awaiting_payment=self.bool_param("awaiting_payment"),
+        )
+        return self.paginated(
+            rows,
+            lambda row: schemas.CompletionActRead.model_validate(
+                completion_act_svc.serialize_completion_act(row)),
+        )
+
+    @write("POST", status=201, admin=False)
+    def post(self, request):
+        try:
+            administrator_id = int(request.POST.get("administrator_id") or "")
+            agreement_id = int(request.POST.get("agreement_id") or "")
+            amount = Decimal(request.POST.get("amount") or "")
+        except (TypeError, ValueError, InvalidOperation):
+            return json_error("Укажите администратора, договор и корректную сумму", 422)
+        if amount <= 0:
+            return json_error("Сумма должна быть больше нуля", 422)
+        act_file = request.FILES.get("act")
+        if act_file is None:
+            return json_error("Файл акта не передан (ожидается поле «act»)", 422)
+        try:
+            act = completion_act_svc.create_completion_act(
+                administrator_id=administrator_id, agreement_id=agreement_id, amount=amount,
+                act_data=act_file.read(), act_filename=act_file.name,
+                act_mime=act_file.content_type or "application/octet-stream",
+                created_by=request.token.user_id,
+            )
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.CompletionActRead.model_validate(
+            completion_act_svc.serialize_completion_act(act))
+
+
+class CompletionActDetailView(ContractsView):
+    @read
+    def get(self, request, act_id: int):
+        return schemas.CompletionActRead.model_validate(
+            completion_act_svc.serialize_completion_act(
+                completion_act_svc.get_completion_act_or_404(act_id)))
+
+
+class CompletionActActUrlView(ContractsView):
+    @read
+    def get(self, request, act_id: int):
+        url = completion_act_svc.act_url(completion_act_svc.get_completion_act_or_404(act_id))
+        if url is None:
+            raise Http404("К записи не приложен акт")
+        return {"url": url}
+
+
+class CompletionActPaymentOrderView(ContractsView):
+    @write("POST", admin=False)
+    def post(self, request, act_id: int):
+        posting_number = (request.POST.get("posting_number") or "").strip()
+        if not posting_number:
+            return json_error("Укажите номер проводки", 422)
+        if len(posting_number) > 100:
+            return json_error("Номер проводки не длиннее 100 символов", 422)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+        try:
+            act = completion_act_svc.record_payment(
+                act_id, posting_number=posting_number, data=upload.read(),
+                filename=upload.name, mime=upload.content_type or "application/octet-stream",
+                actor_id=request.token.user_id, is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.CompletionActRead.model_validate(
+            completion_act_svc.serialize_completion_act(act))
+
+
+class CompletionActPaymentOrderUrlView(ContractsView):
+    @read
+    def get(self, request, act_id: int):
+        url = completion_act_svc.payment_order_url(
+            completion_act_svc.get_completion_act_or_404(act_id))
+        if url is None:
+            raise Http404("К акту не приложено платёжное поручение")
+        return {"url": url}
+
 
 class EnumsView(ContractsView):
     """Справочник choice-полей для фронтенда — чтобы подписи статусов и типов
@@ -651,13 +1323,21 @@ class EnumsView(ContractsView):
             "agreement_status": pairs(AgreementStatus.choices),
             "budget_status": pairs(BudgetStatus.choices),
             "counterparty_status": pairs(CounterpartyStatus.choices),
+            "invoice_status": pairs(InvoiceStatus.choices),
             "payment_type": pairs(PaymentType.choices),
             # Из каких статусов договор занимает бюджет — фронтенду нужно,
             # чтобы объяснить пользователю, почему остаток не изменился после
-            # сохранения черновика.
+            # сохранения черновика. Счёт начинает занимать бюджет только после
+            # одобрения; его множество не нужно фронтенду для формы договора.
             "committing_statuses": sorted(COMMITTING_STATUSES),
             "transitions": {
                 current: sorted(targets)
                 for current, targets in agr_svc.ALLOWED_TRANSITIONS.items()
+            },
+            # Таблица переходов счёта — отдельная от договорной: у счёта свой
+            # жизненный цикл (paid/cancelled вместо signed/executed/terminated).
+            "invoice_transitions": {
+                current: sorted(targets)
+                for current, targets in inv_svc.ALLOWED_TRANSITIONS.items()
             },
         }

@@ -8,6 +8,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import i18next from '@/i18n';
 import {
     MessageCircle, Send, Search, Plus, ArrowLeft,
     Users, Lock, User, Loader2, Check, CheckCheck, Trash2, Paperclip, FileText, Download, Music, X,
@@ -84,15 +85,15 @@ function formatTime(dateStr: string): string {
 
 /** «был(а) в сети …» из ISO-времени последнего оффлайна (presence-сервис). */
 function formatLastSeen(iso: string | null | undefined): string {
-    if (!iso) return 'не в сети';
+    if (!iso) return i18next.t('messenger.lastSeen.offline');
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return 'не в сети';
+    if (Number.isNaN(d.getTime())) return i18next.t('messenger.lastSeen.offline');
     const mins = Math.max(0, Math.floor((Date.now() - d.getTime()) / 60000));
-    if (mins < 1) return 'был(а) только что';
-    if (mins < 60) return `был(а) ${mins} мин назад`;
+    if (mins < 1) return i18next.t('messenger.lastSeen.justNow');
+    if (mins < 60) return i18next.t('messenger.lastSeen.minutesAgo', { mins });
     const sameDay = d.toDateString() === new Date().toDateString();
-    if (sameDay) return `был(а) в ${formatTime(iso)}`;
-    return `был(а) ${d.toLocaleDateString()} ${formatTime(iso)}`;
+    if (sameDay) return i18next.t('messenger.lastSeen.atTime', { time: formatTime(iso) });
+    return i18next.t('messenger.lastSeen.onDate', { date: d.toLocaleDateString(), time: formatTime(iso) });
 }
 
 //  Room-list preview — today shows HH:mm, older days collapse to "dd MMM"
@@ -228,6 +229,7 @@ interface VoiceMessagePlayerProps {
 }
 
 const VoiceMessagePlayer: React.FC<VoiceMessagePlayerProps> = ({ src, filename, isMine }) => {
+    const { t } = useTranslation();
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
@@ -389,7 +391,7 @@ const VoiceMessagePlayer: React.FC<VoiceMessagePlayerProps> = ({ src, filename, 
                 type="button"
                 onClick={togglePlay}
                 className={`flex-shrink-0 h-10 w-10 rounded-full flex items-center justify-center transition-colors ${buttonBg}`}
-                aria-label={isPlaying ? 'Пауза' : 'Воспроизвести'}
+                aria-label={isPlaying ? t('messenger.audio.pause') : t('messenger.audio.play')}
             >
                 {isPlaying
                     ? <Pause className="h-4 w-4 fill-current" />
@@ -413,8 +415,8 @@ const VoiceMessagePlayer: React.FC<VoiceMessagePlayerProps> = ({ src, filename, 
                             ? 'bg-primary-foreground/15 hover:bg-primary-foreground/25 text-primary-foreground'
                             : 'bg-muted hover:bg-muted/70 text-foreground'
                     }`}
-                    title="Скорость воспроизведения"
-                    aria-label="Скорость воспроизведения"
+                    title={t('messenger.audio.speed')}
+                    aria-label={t('messenger.audio.speed')}
                 >
                     {PLAYBACK_RATES[rateIdx]}x
                 </button>
@@ -428,7 +430,7 @@ const VoiceMessagePlayer: React.FC<VoiceMessagePlayerProps> = ({ src, filename, 
                 className={`flex-shrink-0 p-1.5 rounded-full transition-colors ${
                     isMine ? 'hover:bg-primary-foreground/15' : 'hover:bg-muted'
                 }`}
-                title="Скачать"
+                title={t('common.download')}
             >
                 <Download className={`h-4 w-4 ${labelColor}`} />
             </a>
@@ -485,6 +487,7 @@ const ChatImageAttachment: React.FC<ChatImageAttachmentProps> = ({
     width,
     height,
 }) => {
+    const { t } = useTranslation();
     const [zoom, setZoom] = useState(false);
     const [errored, setErrored] = useState(false);
     const previewSrc = thumbSrc || src;
@@ -512,7 +515,7 @@ const ChatImageAttachment: React.FC<ChatImageAttachmentProps> = ({
             <div className="flex items-center gap-2 bg-background/20 p-2 rounded-lg">
                 <FileText className="h-5 w-5 opacity-70" />
                 <span className="text-sm font-medium truncate max-w-[150px]" title={filename}>
-                    {filename || 'Изображение'}
+                    {filename || t('messenger.image')}
                 </span>
                 <a
                     href={src}
@@ -520,7 +523,7 @@ const ChatImageAttachment: React.FC<ChatImageAttachmentProps> = ({
                     rel="noreferrer"
                     download={filename}
                     className="ml-2 p-1.5 bg-background/30 rounded-full hover:bg-background/50 transition-colors"
-                    title="Скачать"
+                    title={t('common.download')}
                 >
                     <Download className="h-4 w-4" />
                 </a>
@@ -535,7 +538,7 @@ const ChatImageAttachment: React.FC<ChatImageAttachmentProps> = ({
                 onClick={() => setZoom(true)}
                 className="block w-[280px] max-w-full rounded-lg overflow-hidden bg-background/10 cursor-zoom-in"
                 style={{ aspectRatio: aspect, maxHeight: 320 }}
-                aria-label={filename || 'Открыть изображение'}
+                aria-label={filename || t('messenger.openImage')}
             >
                 <img
                     src={previewSrc}
@@ -562,7 +565,7 @@ const ChatImageAttachment: React.FC<ChatImageAttachmentProps> = ({
                         type="button"
                         onClick={(e) => { e.stopPropagation(); setZoom(false); }}
                         className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
-                        aria-label="Закрыть"
+                        aria-label={t('common.close')}
                     >
                         <X className="h-5 w-5 text-white" />
                     </button>
@@ -571,7 +574,7 @@ const ChatImageAttachment: React.FC<ChatImageAttachmentProps> = ({
                         download={filename}
                         onClick={(e) => e.stopPropagation()}
                         className="absolute top-4 right-16 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
-                        title="Скачать"
+                        title={t('common.download')}
                     >
                         <Download className="h-5 w-5 text-white" />
                     </a>
@@ -627,12 +630,12 @@ const SearchResultThumb: React.FC<{ src: string; filename?: string }> = ({ src, 
 
 type MediaKind = 'all' | 'images' | 'audio' | 'documents' | 'video';
 
-const MEDIA_OPTIONS: { id: MediaKind; label: string }[] = [
-    { id: 'all',       label: 'Все' },
-    { id: 'images',    label: 'Картинки' },
-    { id: 'audio',     label: 'Аудио' },
-    { id: 'documents', label: 'Документы' },
-    { id: 'video',     label: 'Видео' },
+const MEDIA_OPTIONS: { id: MediaKind; labelKey: string }[] = [
+    { id: 'all',       labelKey: 'messenger.search.mediaAll' },
+    { id: 'images',    labelKey: 'messenger.search.mediaImages' },
+    { id: 'audio',     labelKey: 'messenger.search.mediaAudio' },
+    { id: 'documents', labelKey: 'messenger.search.mediaDocuments' },
+    { id: 'video',     labelKey: 'messenger.search.mediaVideo' },
 ];
 
 interface ChatSearchSheetProps {
@@ -643,6 +646,7 @@ interface ChatSearchSheetProps {
 }
 
 const ChatSearchSheet: React.FC<ChatSearchSheetProps> = ({ open, onOpenChange, roomId, onJump }) => {
+    const { t } = useTranslation();
     const [text, setText] = useState('');
     const [kind, setKind] = useState<MediaKind>('all');
     const [since, setSince] = useState<string>('');
@@ -690,7 +694,7 @@ const ChatSearchSheet: React.FC<ChatSearchSheetProps> = ({ open, onOpenChange, r
         <Sheet open={open} onOpenChange={onOpenChange}>
             <SheetContent side="right" className="w-full sm:max-w-md flex flex-col p-0">
                 <SheetHeader className="p-4 border-b">
-                    <SheetTitle>Поиск в чате</SheetTitle>
+                    <SheetTitle>{t('messenger.search.title')}</SheetTitle>
                 </SheetHeader>
 
                 <div className="p-4 space-y-3 border-b">
@@ -700,7 +704,7 @@ const ChatSearchSheet: React.FC<ChatSearchSheetProps> = ({ open, onOpenChange, r
                             type="text"
                             value={text}
                             onChange={(e) => setText(e.target.value)}
-                            placeholder="Текст сообщения, имя файла..."
+                            placeholder={t('messenger.search.placeholder')}
                             className="w-full pl-9 pr-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                             autoFocus
                         />
@@ -718,14 +722,14 @@ const ChatSearchSheet: React.FC<ChatSearchSheetProps> = ({ open, onOpenChange, r
                                         : 'bg-accent text-muted-foreground hover:bg-accent/80'
                                 }`}
                             >
-                                {opt.label}
+                                {t(opt.labelKey)}
                             </button>
                         ))}
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
                         <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                            С
+                            {t('messenger.search.dateFrom')}
                             <input
                                 type="date"
                                 value={since}
@@ -734,7 +738,7 @@ const ChatSearchSheet: React.FC<ChatSearchSheetProps> = ({ open, onOpenChange, r
                             />
                         </label>
                         <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                            По
+                            {t('messenger.search.dateTo')}
                             <input
                                 type="date"
                                 value={until}
@@ -748,7 +752,7 @@ const ChatSearchSheet: React.FC<ChatSearchSheetProps> = ({ open, onOpenChange, r
                 <div className="flex-1 overflow-y-auto p-2">
                     {!hasAnyFilter && (
                         <p className="text-sm text-muted-foreground text-center py-8 px-4">
-                            Введите запрос, выберите тип медиа или укажите даты.
+                            {t('messenger.search.hint')}
                         </p>
                     )}
                     {hasAnyFilter && isFetching && (
@@ -758,7 +762,7 @@ const ChatSearchSheet: React.FC<ChatSearchSheetProps> = ({ open, onOpenChange, r
                     )}
                     {hasAnyFilter && !isFetching && (results?.length ?? 0) === 0 && (
                         <p className="text-sm text-muted-foreground text-center py-8 px-4">
-                            Ничего не найдено.
+                            {t('messenger.search.empty')}
                         </p>
                     )}
                     {hasAnyFilter && !isFetching && (results?.length ?? 0) > 0 && (
@@ -808,7 +812,7 @@ const ChatSearchSheet: React.FC<ChatSearchSheetProps> = ({ open, onOpenChange, r
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                                                     <span className="truncate font-medium text-foreground">
-                                                        {(m.sender as any)?.full_name || m.sender?.username || 'Система'}
+                                                        {(m.sender as any)?.full_name || m.sender?.username || t('messenger.systemSender')}
                                                     </span>
                                                     <span className="flex-shrink-0">{fmtDate(m.created_at)}</span>
                                                 </div>
@@ -862,6 +866,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
     isUploadingGroupAvatar = false,
     presence = {},
 }) => {
+    const { t } = useTranslation();
     const queryClient = useQueryClient();
     // «Добавить участников» — поиск по реестру пользователей, как в форме
     // создания группы. Доступно только админу группы (canManage ниже).
@@ -877,17 +882,17 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
         queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
     const membershipError = (err: unknown) => {
         const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
-        toast.error(typeof detail === 'string' ? detail : 'Не удалось изменить состав группы');
+        toast.error(typeof detail === 'string' ? detail : t('messenger.errors.updateMembers'));
     };
 
     const addMutation = useMutation({
         mutationFn: (userId: number) => messengerApi.addParticipants(room.id, [userId]),
-        onSuccess: () => { invalidateRooms(); toast.success('Участник добавлен'); },
+        onSuccess: () => { invalidateRooms(); toast.success(t('messenger.memberAdded')); },
         onError: membershipError,
     });
     const removeMutation = useMutation({
         mutationFn: (userId: number) => messengerApi.removeParticipant(room.id, userId),
-        onSuccess: () => { invalidateRooms(); toast.success('Участник исключён'); },
+        onSuccess: () => { invalidateRooms(); toast.success(t('messenger.memberRemoved')); },
         onError: membershipError,
     });
     const roleMutation = useMutation({
@@ -932,10 +937,10 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                     </DialogTitle>
                     <DialogDescription>
                         {room.room_type === 'group'
-                            ? `Группа · ${room.participants.length} участников`
+                            ? t('messenger.groupWithCount', { count: room.participants.length })
                             : room.room_type === 'secret'
-                                ? 'Секретный чат · E2EE'
-                                : 'Личный чат'}
+                                ? t('messenger.secretChat')
+                                : t('messenger.directChat')}
                     </DialogDescription>
                 </DialogHeader>
 
@@ -970,7 +975,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                 const st = uid != null ? presence[uid] : undefined;
                                 return (
                                     <p className={`text-xs mt-1 ${st?.online ? 'text-green-600' : 'text-muted-foreground'}`}>
-                                        {st?.online ? '🟢 В сети' : formatLastSeen(st?.last_seen)}
+                                        {st?.online ? t('messenger.onlineBadge') : formatLastSeen(st?.last_seen)}
                                     </p>
                                 );
                             })()}
@@ -978,7 +983,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                         <dl className="w-full grid grid-cols-[80px_1fr] gap-x-3 gap-y-1.5 text-sm mt-2">
                             {otherUser.username && (
                                 <>
-                                    <dt className="text-muted-foreground">Логин</dt>
+                                    <dt className="text-muted-foreground">{t('messenger.login')}</dt>
                                     <dd className="font-medium truncate">{otherUser.username}</dd>
                                 </>
                             )}
@@ -990,7 +995,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                             )}
                             {otherUser.phone && (
                                 <>
-                                    <dt className="text-muted-foreground">Телефон</dt>
+                                    <dt className="text-muted-foreground">{t('profile.phone')}</dt>
                                     <dd className="font-medium truncate">{otherUser.phone}</dd>
                                 </>
                             )}
@@ -1023,13 +1028,13 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                                 ? 'bg-background/60 opacity-100'
                                                 : 'bg-background/40 opacity-0 hover:opacity-100'
                                         }`}
-                                        title="Изменить фото группы"
+                                        title={t('messenger.changeGroupPhoto')}
                                     >
                                         {isUploadingGroupAvatar ? (
                                             <Loader2 className="h-6 w-6 animate-spin text-foreground" />
                                         ) : (
                                             <span className="text-xs font-medium text-foreground">
-                                                Изменить
+                                                {t('common.change')}
                                             </span>
                                         )}
                                         <input
@@ -1050,7 +1055,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                         </div>
                         <div>
                             <div className="flex items-center justify-between mb-2">
-                                <p className="text-xs uppercase tracking-wide text-muted-foreground">Участники</p>
+                                <p className="text-xs uppercase tracking-wide text-muted-foreground">{t('messenger.members')}</p>
                                 {canManage && (
                                     <button
                                         type="button"
@@ -1058,7 +1063,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                         className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
                                     >
                                         <UserPlus className="h-3.5 w-3.5" />
-                                        {addOpen ? 'Скрыть' : 'Добавить'}
+                                        {addOpen ? t('common.hide') : t('common.add')}
                                     </button>
                                 )}
                             </div>
@@ -1071,7 +1076,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                         type="text"
                                         value={addQuery}
                                         onChange={(e) => setAddQuery(e.target.value)}
-                                        placeholder="Поиск сотрудников..."
+                                        placeholder={t('messenger.searchEmployees')}
                                         className="w-full mb-2 px-3 py-1.5 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                     />
                                     <ul className="max-h-40 overflow-y-auto divide-y">
@@ -1088,7 +1093,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                                             if (uid != null) addMutation.mutate(uid);
                                                         }}
                                                         className="p-1.5 rounded-full hover:bg-primary/10 text-primary disabled:opacity-50"
-                                                        title="Добавить в группу"
+                                                        title={t('messenger.addToGroup')}
                                                     >
                                                         <UserPlus className="h-4 w-4" />
                                                     </button>
@@ -1096,7 +1101,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                             ))}
                                         {addCandidates.filter((u) => !memberIds.has(uidOf(u))).length === 0 && (
                                             <li className="py-2 text-xs text-muted-foreground text-center">
-                                                Все найденные уже в группе
+                                                {t('messenger.allAlreadyInGroup')}
                                             </li>
                                         )}
                                     </ul>
@@ -1126,14 +1131,14 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                                     </div>
                                                 )}
                                                 {online && (
-                                                    <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-green-500 ring-2 ring-card" title="В сети" />
+                                                    <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-green-500 ring-2 ring-card" title={t('messenger.online')} />
                                                 )}
                                             </div>
                                             <div className="flex-1 min-w-0">
                                                 <p className="text-sm font-medium truncate">
                                                     {name}
                                                     {isSelf && (
-                                                        <span className="ml-1 text-xs text-muted-foreground">(вы)</span>
+                                                        <span className="ml-1 text-xs text-muted-foreground">{t('messenger.you')}</span>
                                                     )}
                                                 </p>
                                                 {u.position_title && (
@@ -1142,7 +1147,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                             </div>
                                             {p.role === 'admin' && (
                                                 <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded bg-accent text-muted-foreground">
-                                                    админ
+                                                    {t('messenger.admin')}
                                                 </span>
                                             )}
                                             {canManage && !isSelf && (
@@ -1155,7 +1160,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                                             role: p.role === 'admin' ? 'member' : 'admin',
                                                         })}
                                                         className={`p-1.5 rounded-full transition-colors disabled:opacity-50 ${p.role === 'admin' ? 'text-primary hover:bg-primary/10' : 'text-muted-foreground hover:bg-accent'}`}
-                                                        title={p.role === 'admin' ? 'Снять права админа' : 'Назначить админом'}
+                                                        title={p.role === 'admin' ? t('messenger.revokeAdmin') : t('messenger.makeAdmin')}
                                                     >
                                                         <ShieldCheck className="h-4 w-4" />
                                                     </button>
@@ -1163,12 +1168,12 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                                                         type="button"
                                                         disabled={removeMutation.isPending}
                                                         onClick={() => {
-                                                            if (confirm(`Исключить ${name} из группы?`)) {
+                                                            if (confirm(t('messenger.confirmRemoveMember', { name }))) {
                                                                 removeMutation.mutate(uid);
                                                             }
                                                         }}
                                                         className="p-1.5 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
-                                                        title="Исключить из группы"
+                                                        title={t('messenger.removeFromGroup')}
                                                     >
                                                         <UserMinus className="h-4 w-4" />
                                                     </button>
@@ -1183,7 +1188,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
                 )}
 
                 <div className="text-xs text-muted-foreground text-center pt-2">
-                    Создан {new Date(room.created_at).toLocaleString()}
+                    {t('messenger.createdAt', { stamp: new Date(room.created_at).toLocaleString() })}
                 </div>
             </DialogContent>
         </Dialog>
@@ -1394,7 +1399,7 @@ const MessengerPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['messenger-messages', activeRoomId] });
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
         },
-        onError: () => toast.error('Ошибка отправки'),
+        onError: () => toast.error(t('messenger.errors.send')),
     });
 
     const editMutation = useMutation({
@@ -1408,7 +1413,7 @@ const MessengerPage: React.FC = () => {
         },
         onError: (err: unknown) => {
             const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
-            toast.error(typeof detail === 'string' ? detail : 'Не удалось изменить сообщение');
+            toast.error(typeof detail === 'string' ? detail : t('messenger.errors.edit'));
         },
     });
 
@@ -1420,7 +1425,7 @@ const MessengerPage: React.FC = () => {
         },
         onError: (err: unknown) => {
             const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
-            toast.error(typeof detail === 'string' ? detail : 'Не удалось удалить сообщение');
+            toast.error(typeof detail === 'string' ? detail : t('messenger.errors.delete'));
         },
     });
 
@@ -1433,7 +1438,7 @@ const MessengerPage: React.FC = () => {
                 (id): id is number => typeof id === 'number' && Number.isFinite(id),
             );
             if (participantIds.length === 0) {
-                throw new Error('Не выбран ни один участник');
+                throw new Error(t('messenger.errors.noMembers'));
             }
             const room = await messengerApi.createRoom({
                 room_type: data.room_type,
@@ -1482,7 +1487,7 @@ const MessengerPage: React.FC = () => {
             toast.error(
                 typeof detail === 'string'
                     ? detail
-                    : message || 'Не удалось создать чат',
+                    : message || t('messenger.errors.createChat'),
             );
         },
     });
@@ -1493,7 +1498,7 @@ const MessengerPage: React.FC = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
         },
-        onError: () => toast.error('Не удалось обновить чат'),
+        onError: () => toast.error(t('messenger.errors.updateChat')),
     });
 
     // DELETE /rooms/{id} does one of two things depending on who asks and
@@ -1508,11 +1513,11 @@ const MessengerPage: React.FC = () => {
             setActiveRoomId(null);
             toast.success(
                 res?.result === 'deleted'
-                    ? 'Чат удалён для всех участников'
-                    : 'Чат убран из вашего списка',
+                    ? t('messenger.chatDeletedForAll')
+                    : t('messenger.chatRemovedForYou'),
             );
         },
-        onError: () => toast.error('Ошибка удаления чата'),
+        onError: () => toast.error(t('messenger.errors.deleteChat')),
     });
 
     // --- Smart auto-scroll ---
@@ -1579,7 +1584,7 @@ const MessengerPage: React.FC = () => {
                 if (fileInputRef.current) fileInputRef.current.value = '';
                 setMessageText('');
             } catch (err) {
-                toast.error('Ошибка загрузки файла');
+                toast.error(t('messenger.errors.upload'));
             } finally {
                 setUploadingFile(false);
             }
@@ -1587,7 +1592,7 @@ const MessengerPage: React.FC = () => {
             sendMutation.mutate({ text });
             setMessageText('');
         }
-    }, [activeRoomId, messageText, selectedFile, sendMutation, uploadingFile, editingMsg, editMutation]);
+    }, [activeRoomId, messageText, selectedFile, sendMutation, uploadingFile, editingMsg, editMutation, t]);
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -1754,10 +1759,10 @@ const MessengerPage: React.FC = () => {
                 (other as any)?.full_name ||
                 other?.username ||
                 other?.first_name ||
-                'Чат'
+                t('messenger.chat')
             );
         }
-        return `Чат #${room.id}`;
+        return t('messenger.chatNumber', { id: room.id });
     };
 
     const getRoomAvatar = (room: ChatRoom) => {
@@ -1772,7 +1777,7 @@ const MessengerPage: React.FC = () => {
      *  the textual preview. ``React.ReactNode`` so the consumer can drop it
      *  straight into the row layout. */
     const getLastMessagePreview = (room: ChatRoom): React.ReactNode => {
-        if (!room.last_message) return 'Нет сообщений';
+        if (!room.last_message) return t('messenger.noMessages');
         const last = room.last_message;
         const senderUid = (last as any).sender_id ?? uidOf(last.sender);
         const isMine = senderUid != null && myUid != null && senderUid === myUid;
@@ -1786,25 +1791,25 @@ const MessengerPage: React.FC = () => {
                 thumbSrc = decoded.thumb_url || decoded.file_url || null;
             }
             const kindLabel = decoded.mime_type?.startsWith('image/')
-                ? '🖼 Изображение'
+                ? t('messenger.preview.image')
                 : decoded.mime_type?.startsWith('video/')
-                ? '🎬 Видео'
+                ? t('messenger.preview.video')
                 : decoded.mime_type?.startsWith('audio/')
-                ? '🎤 Голосовое сообщение'
-                : `📎 ${decoded.file_name || 'Вложение'}`;
+                ? t('messenger.preview.voice')
+                : `📎 ${decoded.file_name || t('messenger.attachment')}`;
             body = decoded.text?.trim() ? `${kindLabel}: ${decoded.text}` : kindLabel;
         } else {
             body = (decoded as string).substring(0, 60);
         }
 
-        // ``Вы: `` prefix for messages the current user authored. Group rooms
+        // `Вы: ` prefix for messages the current user authored. Group rooms
         // also get a sender prefix so the recipient sees who wrote what
         // without opening the chat. Direct chats stay unprefixed for the
         // other person — the column is small and the chat title already
         // identifies them.
         let prefix = '';
         if (isMine) {
-            prefix = 'Вы: ';
+            prefix = t('messenger.preview.youPrefix');
         } else if (room.room_type === 'group' && last.sender) {
             const author = (last.sender as any)?.full_name || last.sender.username || '';
             const short = author.split(/\s+/)[0];
@@ -1836,11 +1841,11 @@ const MessengerPage: React.FC = () => {
     return (
         <div className="min-h-screen bg-background flex flex-col">
             <Header />
-            <main className="flex-1 container mx-auto px-0 sm:px-4 py-4 sm:py-6 max-w-6xl flex flex-col">
-                <div className="mb-4 px-4 sm:px-0">
-                    <BackToProfile />
+            <main className="flex-1 container mx-auto px-0 sm:px-4 py-2 sm:py-6 pb-24 sm:pb-6 max-w-6xl flex flex-col">
+                <div className="mb-3 px-4 sm:px-0">
+                    <BackToProfile className="mb-0 text-xs" />
                 </div>
-                <div className="bg-card rounded-xl border shadow-sm overflow-hidden flex" style={{ height: 'calc(100vh - 200px)', minHeight: '500px' }}>
+                <div className="bg-card rounded-xl border shadow-sm overflow-hidden flex" style={{ height: 'calc(100dvh - 170px)', minHeight: '420px' }}>
 
                     {/* ===== LEFT PANEL: Chat List ===== */}
                     <div className={`w-full sm:w-80 lg:w-96 border-r flex flex-col ${mobileShowChat ? 'hidden sm:flex' : 'flex'}`}>
@@ -1848,7 +1853,7 @@ const MessengerPage: React.FC = () => {
                         <div className="p-4 border-b flex items-center justify-between bg-card">
                             <h2 className="font-display text-lg font-bold flex items-center gap-2">
                                 <MessageCircle className="h-5 w-5 text-primary" />
-                                Сообщения
+                                {t('messenger.messages')}
                             </h2>
                             <button
                                 onClick={() => {
@@ -1859,7 +1864,7 @@ const MessengerPage: React.FC = () => {
                                     setGroupTitle('');
                                 }}
                                 className="p-2 rounded-lg hover:bg-accent transition-colors"
-                                title="Новый чат"
+                                title={t('messenger.newChat')}
                             >
                                 <Plus className="h-5 w-5" />
                             </button>
@@ -1875,7 +1880,7 @@ const MessengerPage: React.FC = () => {
                                     type="text"
                                     value={roomsFilter}
                                     onChange={(e) => setRoomsFilter(e.target.value)}
-                                    placeholder="Поиск чатов и контактов..."
+                                    placeholder={t('messenger.searchChats')}
                                     className="w-full pl-9 pr-8 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 />
                                 {roomsFilter && (
@@ -1883,7 +1888,7 @@ const MessengerPage: React.FC = () => {
                                         type="button"
                                         onClick={() => setRoomsFilter('')}
                                         className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-accent transition-colors"
-                                        title="Очистить"
+                                        title={t('common.clear')}
                                     >
                                         <X className="h-3.5 w-3.5 text-muted-foreground" />
                                     </button>
@@ -1908,7 +1913,7 @@ const MessengerPage: React.FC = () => {
                                             }}
                                             className={`text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${isGroupMode ? 'bg-primary text-primary-foreground' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
                                         >
-                                            {isGroupMode ? 'Отмена группы' : 'Создать группу'}
+                                            {isGroupMode ? t('messenger.cancelGroup') : t('messenger.createGroup')}
                                         </button>
                                         {isGroupMode && selectedUserIds.length > 0 && (
                                             <button
@@ -1916,7 +1921,7 @@ const MessengerPage: React.FC = () => {
                                                 disabled={!groupTitle.trim() || createRoomMutation.isPending}
                                                 className="text-xs px-3 py-1.5 rounded-full bg-green-500 text-white font-medium hover:bg-green-600 focus:outline-none disabled:opacity-50"
                                             >
-                                                Создать ({selectedUserIds.length + 1})
+                                                {t('messenger.createWithCount', { count: selectedUserIds.length + 1 })}
                                             </button>
                                         )}
                                     </div>
@@ -1953,7 +1958,7 @@ const MessengerPage: React.FC = () => {
                                                 </label>
                                                 <input
                                                     type="text"
-                                                    placeholder="Название группы..."
+                                                    placeholder={t('messenger.groupNamePlaceholder')}
                                                     value={groupTitle}
                                                     onChange={(e) => setGroupTitle(e.target.value)}
                                                     className="flex-1 px-3 py-2 rounded-lg bg-background border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/40"
@@ -1969,7 +1974,7 @@ const MessengerPage: React.FC = () => {
                                                     }}
                                                     className="text-xs text-muted-foreground hover:text-foreground w-fit"
                                                 >
-                                                    Убрать фото
+                                                    {t('messenger.removePhoto')}
                                                 </button>
                                             )}
                                         </>
@@ -1979,7 +1984,7 @@ const MessengerPage: React.FC = () => {
                                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                         <input
                                             type="text"
-                                            placeholder={isGroupMode ? "Поиск участников..." : "Фильтр..."}
+                                            placeholder={isGroupMode ? t('messenger.searchMembers') : t('common.filter')}
                                             value={searchQuery}
                                             onChange={(e) => setSearchQuery(e.target.value)}
                                             className="w-full pl-9 pr-8 py-2 rounded-xl bg-background border text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 transition-shadow"
@@ -2053,7 +2058,7 @@ const MessengerPage: React.FC = () => {
                                                             </div>
                                                         )}
                                                         {!isGroupMode && targetUid != null && presence[targetUid]?.online && (
-                                                            <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title="В сети" />
+                                                            <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title={t('messenger.online')} />
                                                         )}
                                                     </button>
                                                 )
@@ -2062,7 +2067,7 @@ const MessengerPage: React.FC = () => {
                                     ) : (
                                         <div className="px-4 py-6 text-center text-muted-foreground">
                                             <User className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                                            <p className="text-sm">Никого не найдено</p>
+                                            <p className="text-sm">{t('messenger.nobodyFound')}</p>
                                         </div>
                                     )}
                                 </div>
@@ -2078,8 +2083,8 @@ const MessengerPage: React.FC = () => {
                             ) : rooms.length === 0 ? (
                                 <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-8 text-center">
                                     <MessageCircle className="h-12 w-12 mb-3 opacity-30" />
-                                    <p className="text-sm font-medium">Нет чатов</p>
-                                    <p className="text-xs mt-1">Нажмите + чтобы начать</p>
+                                    <p className="text-sm font-medium">{t('messenger.noChats')}</p>
+                                    <p className="text-xs mt-1">{t('messenger.tapPlusToStart')}</p>
                                 </div>
                             ) : (
                                 filteredRooms.map(room => {
@@ -2162,7 +2167,7 @@ const MessengerPage: React.FC = () => {
                             {roomsFilter.trim() && filteredRooms.length === 0 && !roomsLoading && (
                                 <div className="border-t bg-accent/20">
                                     <div className="px-4 py-2 text-[11px] uppercase tracking-wide text-muted-foreground">
-                                        Контакты
+                                        {t('messenger.contacts')}
                                     </div>
                                     {directoryQuery.isFetching && (
                                         <div className="flex items-center justify-center py-4">
@@ -2171,7 +2176,7 @@ const MessengerPage: React.FC = () => {
                                     )}
                                     {!directoryQuery.isFetching && (directoryQuery.data?.length ?? 0) === 0 && (
                                         <p className="px-4 py-4 text-sm text-muted-foreground">
-                                            Ничего не найдено.
+                                            {t('messenger.search.empty')}
                                         </p>
                                     )}
                                     {!directoryQuery.isFetching && (directoryQuery.data ?? []).map((u: any) => {
@@ -2208,7 +2213,7 @@ const MessengerPage: React.FC = () => {
                                                     )}
                                                 </div>
                                                 {uid != null && presence[uid]?.online && (
-                                                    <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title="В сети" />
+                                                    <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title={t('messenger.online')} />
                                                 )}
                                             </button>
                                         );
@@ -2238,7 +2243,7 @@ const MessengerPage: React.FC = () => {
                                         type="button"
                                         onClick={() => setInfoOpen(true)}
                                         className="flex items-center gap-3 -m-1 p-1 rounded-lg hover:bg-accent/50 transition-colors min-w-0"
-                                        title="Информация о чате"
+                                        title={t('messenger.chatInfo')}
                                     >
                                         {/* Show the same avatar that the room-list row shows.
                                             Falls back to a kind-specific placeholder (secret →
@@ -2276,14 +2281,14 @@ const MessengerPage: React.FC = () => {
                                             </p>
                                         <p className="text-xs text-muted-foreground">
                                             {activeRoom.room_type === 'secret'
-                                                ? 'Секретный чат · E2EE'
+                                                ? t('messenger.secretChat')
                                                 : activeRoom.room_type === 'group'
-                                                    ? `${activeRoom.participants.length} участников`
+                                                    ? t('messenger.membersCount', { count: activeRoom.participants.length })
                                                     : (() => {
                                                         const other = me ? getOtherMember(activeRoom, myUid) : null;
                                                         const uid = uidOf(other);
                                                         const st = uid != null ? presence[uid] : undefined;
-                                                        if (st?.online) return '🟢 В сети';
+                                                        if (st?.online) return t('messenger.onlineBadge');
                                                         return st?.last_seen ? formatLastSeen(st.last_seen) : (other?.position_title || '');
                                                     })()
                                             }
@@ -2294,7 +2299,7 @@ const MessengerPage: React.FC = () => {
                                         <button
                                             onClick={() => setSearchOpen(true)}
                                             className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors"
-                                            title="Поиск в чате"
+                                            title={t('messenger.search.title')}
                                         >
                                             <Search className="h-4 w-4" />
                                         </button>
@@ -2310,16 +2315,18 @@ const MessengerPage: React.FC = () => {
                                                 const isOwner =
                                                     activeRoom.room_type === 'group' && myRole === 'admin';
                                                 const prompt = isOwner
-                                                    ? `Удалить группу${activeRoom.name ? ` «${activeRoom.name}»` : ''} для всех участников? Отменить это будет нельзя.`
+                                                    ? t(activeRoom.name
+                                                        ? 'messenger.confirmDeleteNamedGroup'
+                                                        : 'messenger.confirmDeleteGroup', { name: activeRoom.name })
                                                     : activeRoom.room_type === 'group'
-                                                        ? 'Выйти из группы? Она пропадёт из вашего списка.'
-                                                        : 'Убрать чат из вашего списка? Он вернётся, если собеседник напишет.';
+                                                        ? t('messenger.confirmLeaveGroup')
+                                                        : t('messenger.confirmHideChat');
                                                 if (confirm(prompt)) {
                                                     deleteRoomMutation.mutate(activeRoom.id);
                                                 }
                                             }}
                                             className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
-                                            title="Удалить чат / выйти из группы"
+                                            title={t('messenger.deleteOrLeave')}
                                         >
                                             <Trash2 className="h-4 w-4" />
                                         </button>
@@ -2357,11 +2364,11 @@ const MessengerPage: React.FC = () => {
                                                     roomId: activeRoom.id,
                                                     payload: { avatar_url: att.url },
                                                 });
-                                                toast.success('Фото группы обновлено');
+                                                toast.success(t('messenger.groupPhotoUpdated'));
                                             }
                                         } catch (err) {
                                             console.warn('group avatar update failed', err);
-                                            toast.error('Не удалось обновить фото группы');
+                                            toast.error(t('messenger.errors.groupPhoto'));
                                         }
                                     }}
                                 />
@@ -2379,7 +2386,7 @@ const MessengerPage: React.FC = () => {
                                     ) : orderedMessages.length === 0 ? (
                                         <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                                             <MessageCircle className="h-10 w-10 mb-2 opacity-20" />
-                                            <p className="text-sm">Начните разговор</p>
+                                            <p className="text-sm">{t('messenger.startConversation')}</p>
                                         </div>
                                     ) : (() => {
                                         // Pre-compute the highest message-index that ALL other
@@ -2460,7 +2467,7 @@ const MessengerPage: React.FC = () => {
                                                                     type="button"
                                                                     onClick={() => { setEditingMsg(null); setReplyTo(msg); }}
                                                                     className="p-1.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                                                                    title="Ответить"
+                                                                    title={t('messenger.reply')}
                                                                 >
                                                                     <ReplyIcon className="h-3.5 w-3.5" />
                                                                 </button>
@@ -2477,7 +2484,7 @@ const MessengerPage: React.FC = () => {
                                                                         );
                                                                     }}
                                                                     className="p-1.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                                                                    title="Редактировать"
+                                                                    title={t('common.edit')}
                                                                 >
                                                                     <Pencil className="h-3.5 w-3.5" />
                                                                 </button>
@@ -2486,12 +2493,12 @@ const MessengerPage: React.FC = () => {
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => {
-                                                                        if (confirm('Удалить сообщение?')) {
+                                                                        if (confirm(t('messenger.confirmDeleteMessage'))) {
                                                                             deleteMsgMutation.mutate(String(msg.id));
                                                                         }
                                                                     }}
                                                                     className="p-1.5 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                                                                    title="Удалить"
+                                                                    title={t('common.delete')}
                                                                 >
                                                                     <Trash2 className="h-3.5 w-3.5" />
                                                                 </button>
@@ -2530,10 +2537,10 @@ const MessengerPage: React.FC = () => {
                                                                         }`}
                                                                 >
                                                                     <span className={`block text-[11px] font-semibold ${isMe ? 'text-primary-foreground/80' : 'text-primary'}`}>
-                                                                        {msg.reply_to.sender_name || 'Сообщение'}
+                                                                        {msg.reply_to.sender_name || t('messenger.messageWord')}
                                                                     </span>
                                                                     <span className={`block text-xs truncate ${isMe ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
-                                                                        {msg.reply_to.preview || 'вложение'}
+                                                                        {msg.reply_to.preview || t('messenger.attachmentWord')}
                                                                     </span>
                                                                 </button>
                                                             )}
@@ -2541,7 +2548,7 @@ const MessengerPage: React.FC = () => {
                                                                 inside a single long token (URL, ``aaaaa…``) so
                                                                 the bubble can't push the layout off-screen. */}
                                                             <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                                                                {isDeletedMsg ? 'Сообщение удалено' : (() => {
+                                                                {isDeletedMsg ? t('messenger.messageDeleted') : (() => {
                                                                     const decoded = decodeMessageText(msg);
                                                                     if (typeof decoded === 'object') {
                                                                         const isAudio = decoded.mime_type?.startsWith('audio/');
@@ -2566,14 +2573,14 @@ const MessengerPage: React.FC = () => {
                                                                                 ) : (
                                                                                     <div className="flex items-center gap-2 bg-background/20 p-2 rounded-lg">
                                                                                         <FileText className="h-5 w-5 opacity-70" />
-                                                                                        <span className="text-sm font-medium truncate max-w-[150px]" title={decoded.file_name}>{decoded.file_name || 'Файл'}</span>
+                                                                                        <span className="text-sm font-medium truncate max-w-[150px]" title={decoded.file_name}>{decoded.file_name || t('messenger.file')}</span>
                                                                                         <a
                                                                                             href={decoded.file_url}
                                                                                             target="_blank"
                                                                                             rel="noreferrer"
                                                                                             download={decoded.file_name}
                                                                                             className="ml-2 p-1.5 bg-background/30 rounded-full hover:bg-background/50 transition-colors"
-                                                                                            title="Скачать"
+                                                                                            title={t('common.download')}
                                                                                         >
                                                                                             <Download className="h-4 w-4" />
                                                                                         </a>
@@ -2588,16 +2595,16 @@ const MessengerPage: React.FC = () => {
                                                             <p className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isDeletedMsg ? 'text-muted-foreground' : isMe ? 'text-primary-foreground/60' : 'text-muted-foreground'
                                                                 }`}>
                                                                 {msg.is_edited && !isDeletedMsg && (
-                                                                    <span title="Отредактировано">изменено</span>
+                                                                    <span title={t('messenger.editedTitle')}>{t('messenger.editedMark')}</span>
                                                                 )}
                                                                 {formatTime(msg.created_at)}
                                                                 {isMe && !isDeletedMsg && (
                                                                     isPending ? (
-                                                                        <Check className="h-3 w-3 opacity-60" aria-label="Отправляется" />
+                                                                        <Check className="h-3 w-3 opacity-60" aria-label={t('messenger.statusSending')} />
                                                                     ) : isReadByOthers ? (
-                                                                        <CheckCheck className="h-3 w-3 text-emerald-300" aria-label="Прочитано" />
+                                                                        <CheckCheck className="h-3 w-3 text-emerald-300" aria-label={t('messenger.statusRead')} />
                                                                     ) : (
-                                                                        <CheckCheck className="h-3 w-3 opacity-60" aria-label="Доставлено" />
+                                                                        <CheckCheck className="h-3 w-3 opacity-60" aria-label={t('messenger.statusDelivered')} />
                                                                     )
                                                                 )}
                                                             </p>
@@ -2625,15 +2632,15 @@ const MessengerPage: React.FC = () => {
                                             <div className="min-w-0 flex-1">
                                                 <p className="text-xs font-semibold text-primary">
                                                     {editingMsg
-                                                        ? 'Редактирование'
-                                                        : `Ответ · ${(replyTo!.sender as any)?.full_name || replyTo!.sender?.username || 'сообщение'}`}
+                                                        ? t('messenger.editing')
+                                                        : t('messenger.replyingTo', { name: (replyTo!.sender as any)?.full_name || replyTo!.sender?.username || t('messenger.messageWordLower') })}
                                                 </p>
                                                 <p className="text-xs text-muted-foreground truncate">
                                                     {(() => {
                                                         const src = editingMsg || replyTo!;
                                                         const decoded = decodeMessageText(src);
                                                         const text = typeof decoded === 'string' ? decoded : decoded.text;
-                                                        return text || src.attachments?.[0]?.filename || 'вложение';
+                                                        return text || src.attachments?.[0]?.filename || t('messenger.attachmentWord');
                                                     })()}
                                                 </p>
                                             </div>
@@ -2645,7 +2652,7 @@ const MessengerPage: React.FC = () => {
                                                     setEditingMsg(null);
                                                 }}
                                                 className="p-1.5 rounded-full hover:bg-accent transition-colors flex-shrink-0"
-                                                title="Отменить"
+                                                title={t('common.cancelAction')}
                                             >
                                                 <X className="h-4 w-4 text-muted-foreground" />
                                             </button>
@@ -2694,7 +2701,7 @@ const MessengerPage: React.FC = () => {
                                                 type="button"
                                                 onClick={() => { setSelectedFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
                                                 className="p-1 hover:bg-background rounded-full transition-colors flex-shrink-0"
-                                                title="Удалить файл"
+                                                title={t('messenger.removeFile')}
                                             >
                                                 <X className="h-4 w-4 text-muted-foreground hover:text-destructive transition-colors" />
                                             </button>
@@ -2738,7 +2745,7 @@ const MessengerPage: React.FC = () => {
                                             value={messageText}
                                             onChange={(e) => setMessageText(e.target.value)}
                                             onKeyDown={handleKeyDown}
-                                            placeholder="Написать сообщение..."
+                                            placeholder={t('messenger.composePlaceholder')}
                                             className="flex-1 resize-none rounded-xl border bg-background px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 max-h-32"
                                             rows={1}
                                         />
@@ -2762,9 +2769,9 @@ const MessengerPage: React.FC = () => {
                                 <div className="w-24 h-24 rounded-full bg-primary/5 flex items-center justify-center mb-4">
                                     <MessageCircle className="h-12 w-12 text-primary/30" />
                                 </div>
-                                <p className="font-medium text-lg">Мессенджер</p>
+                                <p className="font-medium text-lg">{t('profile.sidebar.messenger')}</p>
                                 <p className="text-sm mt-1 max-w-xs text-center">
-                                    Выберите чат слева или создайте новый, чтобы начать общение с коллегами
+                                    {t('messenger.emptyStateHint')}
                                 </p>
                             </div>
                         )}

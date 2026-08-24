@@ -14,6 +14,7 @@
  *   - `attachments[]` — files, carried separately from the text.
  */
 import type { ChatMessage } from './types';
+import i18next from '@/i18n';
 
 export type DecodedMessage = {
     text: string;
@@ -58,5 +59,5 @@ export function decodeMessageText(msg: ChatMessage): DecodedMessage | string {
         }
         return text || msg.content || '';
     }
-    return '🔒 Зашифрованное сообщение';
+    return i18next.t('messenger.encryptedMessage');
 }

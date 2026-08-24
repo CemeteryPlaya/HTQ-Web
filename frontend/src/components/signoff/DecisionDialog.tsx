@@ -6,12 +6,15 @@
  * запертым, «вернуть на доработку» — открывает его автору для правки. Круг
  * закрывают оба одинаково.
  *
- * Комментарий обязателен у обоих отрицательных. Схема бэкенда его не
- * требует нигде (`comment: str = ""`), но отказ и возврат без объяснения
- * нечего дорабатывать: инициатор увидит состояние и не узнает, что
- * исправить. Согласие в объяснении не нуждается.
+ * Комментарий обязателен у обоих отрицательных всегда, а при СОГЛАСИИ —
+ * только если этап помечен `requiresComment` (`ProcessStage.requires_comment`).
+ * Отказ и возврат без объяснения нечего дорабатывать: инициатор увидит
+ * состояние и не узнает, что исправить. Согласие в объяснении по умолчанию
+ * не нуждается — но этап может его потребовать, и тогда гейт бэкенда
+ * (`engine.act` → `CommentRequired`) отобьёт пустой комментарий 409-м; форма
+ * лишь спрашивает то же заранее.
  *
- * Документ (`requiresAttachment`) — зеркально: нужен только при СОГЛАСИИ.
+ * Документ (`requiresAttachment`) — так же: нужен только при СОГЛАСИИ.
  * Так устроен и гейт на бэкенде: требовать PDF от того, кто отклоняет,
  * незачем — документа, который ему полагалось бы подписать, не существует.
  * Поэтому поле файла исчезает, стоит переключиться на отказ.
@@ -106,6 +109,10 @@ export interface DecisionTarget {
   subjectLabel: string;
   /** Этап требует приложенного PDF (`ProcessStage.requires_attachment`). */
   requiresAttachment?: boolean;
+  /** Этап требует пояснения к решению (`ProcessStage.requires_comment`).
+   *  Действует только при согласии — у отказа и доработки комментарий
+   *  обязателен и так. */
+  requiresComment?: boolean;
   /** Документ, приложенный к этому запросу РАНЬШЕ: человек мог загрузить
    *  его, закрыть диалог и вернуться. Тогда файл выбирать заново не нужно —
    *  но заменить можно. */
@@ -140,6 +147,15 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
   // подписывать нечего ни отказом, ни возвратом на доработку.
   const needsDocument = Boolean(target?.requiresAttachment) && isApprove;
   const alreadyAttached = Boolean(target?.attachedFileId);
+  // Пояснение обязательно у отказа и доработки всегда (`kind.commentRequired`),
+  // а у согласия — если этого требует этап. Одно эффективное правило: и подпись
+  // поля, и проверка на отправке смотрят на него.
+  const commentRequiredMessage =
+    kind?.commentRequired
+    ?? (Boolean(target?.requiresComment) && isApprove
+      ? 'На этом этапе согласование возможно только с пояснением к решению.'
+      : undefined);
+  const needsComment = Boolean(commentRequiredMessage);
 
   const mutation = useMutation({
     mutationFn: async ({
@@ -181,8 +197,8 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
 
   const submit = () => {
     if (!target || !kind) return;
-    if (kind.commentRequired && !comment.trim()) {
-      setError(kind.commentRequired);
+    if (needsComment && !comment.trim()) {
+      setError(commentRequiredMessage!);
       return;
     }
     if (needsDocument && !file && !alreadyAttached) {
@@ -245,7 +261,7 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
 
         <div className="space-y-2">
           <Label htmlFor="signoff-comment">
-            Комментарий{kind?.commentRequired ? '' : ' (необязательно)'}
+            Комментарий{needsComment ? '' : ' (необязательно)'}
           </Label>
           <Textarea
             id="signoff-comment"

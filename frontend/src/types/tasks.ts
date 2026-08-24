@@ -9,13 +9,13 @@ export interface Label {
   color: string;
 }
 
-/* ---------- Contractors (субподрядчики) ---------- */
+/* ---------- Contractors (партнёры) ---------- */
 export type ContractorStatus = 'active' | 'suspended' | 'blacklisted' | 'archived';
 
 /**
- * Уровень допуска представителя подрядчика. Пока только хранится и
+ * Уровень допуска представителя партнёра. Пока только хранится и
  * показывается: правами он начнёт управлять вместе с учётными записями,
- * которых у подрядчиков на этом этапе нет.
+ * которых у партнёров на этом этапе нет.
  */
 export type ContractorLevel = 'junior' | 'middle' | 'senior';
 
@@ -64,7 +64,7 @@ export interface ContractorEngagement {
   project_name: string | null;
   site_id: number | null;
   site_name: string | null;
-  /** Привлечение на один пакет работ: «развозку отдали субподряду». */
+  /** Привлечение на один пакет работ: «развозку отдали партнёру». */
   roadmap_id: number | null;
   roadmap_name: string | null;
   contract_no: string | null;
@@ -304,6 +304,97 @@ export interface DailyReportRevision {
   quantity: number;
   headcount: number | null;
   comment: string;
+  edited_by_id: number | null;
+  edited_by_name: string | null;
+  edited_at: string;
+}
+
+/* ---------- Отчёты по персоналу проекта ---------- */
+
+/** Строка отчёта: сколько людей одной роли вышло на блок. */
+export interface ProjectStaffLine {
+  work_role_id: number;
+  work_role_name: string;
+  headcount: number;
+}
+
+/**
+ * Отчёт по персоналу: сколько людей и каких ролей стояло на блоке в день.
+ *
+ * Вторая ось факта рядом с `DailyReport`. Та отвечает «сколько сделано»,
+ * эта — «сколькими людьми». `work_date` — дата ВЫХОДА людей, `created_at` —
+ * дата заполнения формы.
+ */
+export interface ProjectStaffReport {
+  id: number;
+  project_id: number;
+  project_name: string;
+  site_id: number;
+  site_name: string;
+  site_block_id: number;
+  site_block_name: string;
+  work_date: string;
+  author_id: number | null;
+  author_name: string | null;
+  comment: string;
+  total_headcount: number;
+  lines: ProjectStaffLine[];
+  current_revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Роль в строке блока. `work_role_id === null` — плановая потребность без
+ * указанной роли; `planned === null` — плана по роли нет, сравнивать не с чем.
+ */
+export interface ProjectStaffRoleRow {
+  work_role_id: number | null;
+  work_role_name: string;
+  planned: number | null;
+  actual: number;
+}
+
+/**
+ * Блок проекта на выбранную дату. Строка есть у каждого блока, даже без
+ * отчёта (`report_id === null`) — страница отвечает и на «где не отчитались».
+ *
+ * `daily_headcount` — сумма `DailyReport.headcount` по задачам блока за ту же
+ * дату. Это сверка, а не источник: в ежедневке headcount необязателен.
+ */
+export interface ProjectStaffBoardBlock {
+  site_id: number;
+  site_name: string;
+  site_block_id: number;
+  site_block_name: string;
+  report_id: number | null;
+  total_headcount: number;
+  planned_headcount: number | null;
+  delta: number | null;
+  daily_headcount: number;
+  comment: string;
+  roles: ProjectStaffRoleRow[];
+}
+
+export interface ProjectStaffBoard {
+  project_id: number;
+  project_name: string;
+  date: string;
+  total_actual: number;
+  total_planned: number | null;
+  total_daily: number;
+  blocks: ProjectStaffBoardBlock[];
+}
+
+/** Снимок отчёта по персоналу — со строками внутри. */
+export interface ProjectStaffRevision {
+  id: number;
+  report_id: number;
+  revision_no: number;
+  work_date: string;
+  comment: string;
+  total_headcount: number;
+  lines: ProjectStaffLine[];
   edited_by_id: number | null;
   edited_by_name: string | null;
   edited_at: string;

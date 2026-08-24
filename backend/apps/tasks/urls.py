@@ -68,12 +68,28 @@ urlpatterns = [
     path("daily-reports/<int:report_id>/revisions/",
          views.daily_report_revisions),
 
+    # Отчёты по персоналу проекта: сколько людей и каких ролей стояло на
+    # блоке в конкретный день. Соседний daily-reports — про выработку в
+    # штуках, это другая ось факта.
+    #
+    # ``staff-reports/projects`` — фиксированный путь ДО <int:>, иначе
+    # "projects" ушло бы в конвертер и дало 404 (тот же приём, что у
+    # daily-reports/board выше).
+    path("staff-reports/projects", views.staff_report_projects),
+    path("staff-reports/projects/", views.staff_report_projects),
+    path("staff-reports/<int:report_id>", views.staff_report_detail),
+    path("staff-reports/<int:report_id>/", views.staff_report_detail),
+    path("staff-reports/<int:report_id>/revisions",
+         views.staff_report_revisions),
+    path("staff-reports/<int:report_id>/revisions/",
+         views.staff_report_revisions),
+
     # Task links — frontend: 'task-links/', 'task-links/{id}/'.
     path("task-links/", views.links_collection),
     path("task-links/<int:link_id>", views.link_detail),
     path("task-links/<int:link_id>/", views.link_detail),
 
-    # Contractors (субподрядчики) — new domain, no FastAPI original.
+    # Contractors (партнёры) — new domain, no FastAPI original.
     path("contractors/", views.contractors_collection),
     path("contractors", views.contractors_collection),
     path("contractors/<int:contractor_id>", views.contractor_detail),
@@ -132,6 +148,13 @@ urlpatterns = [
     path("projects/<int:project_id>/tasks/", views.project_tasks),
     path("projects/<int:project_id>/sites", views.project_sites),
     path("projects/<int:project_id>/sites/", views.project_sites),
+    # Численность проекта: доска на дату + лента/заведение отчётов.
+    path("projects/<int:project_id>/staff-board", views.project_staff_board),
+    path("projects/<int:project_id>/staff-board/", views.project_staff_board),
+    path("projects/<int:project_id>/staff-reports",
+         views.project_staff_reports),
+    path("projects/<int:project_id>/staff-reports/",
+         views.project_staff_reports),
 
     # Resource assignments — FastAPI declared the detail route without a
     # trailing slash, the frontend calls it with one. Путь сохранён при

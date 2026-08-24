@@ -14,13 +14,15 @@ import { useParams } from 'react-router-dom';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import AgreementDetailView from '@/components/contracts/AgreementDetailView';
 import { BackLink } from '@/components/contracts/detail';
+import { useTranslation } from 'react-i18next';
 
 const AgreementDetail = () => {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
 
   return (
     <ContractsShell>
-      <BackLink to="/contracts/agreements">Ко всем договорам</BackLink>
+      <BackLink to="/contracts/agreements">{t('contracts.agreement.backToList')}</BackLink>
       <AgreementDetailView id={Number(id)} />
     </ContractsShell>
   );

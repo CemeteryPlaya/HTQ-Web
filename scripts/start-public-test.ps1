@@ -41,8 +41,10 @@ $ErrorActionPreference = 'Stop'
 $RootDir  = Split-Path -Parent $PSScriptRoot
 $EnvFile  = Join-Path $RootDir '.env'
 $ToolsDir = Join-Path $env:LOCALAPPDATA 'HTQWeb\tools'
-$Compose  = @('-f', (Join-Path $RootDir 'docker-compose.yml'),
-              '-f', (Join-Path $RootDir 'docker-compose.dev.yml'))
+# Тестовый стек с БД из .env: Vite HMR на :3000 плюс sfu — ровно то, что
+# раньше давала пара docker-compose.yml + docker-compose.dev.yml. Файлы
+# намеренно самодостаточны, поэтому ключ `-f` ровно один (см. CLAUDE.md).
+$Compose  = @('-f', (Join-Path $RootDir 'docker-compose.test-env.yml'))
 
 # Маркеры управляемого блока в .env — по ним же он и снимается при откате.
 $BlockStart = '# >>> public-test >>>'
@@ -177,7 +179,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Docker недоступен — запусти
 Write-Ok 'Docker на связи'
 
 $sfuState = (& docker compose @Compose ps --format '{{.Service}} {{.State}}' | Select-String '^sfu ')
-if (-not $sfuState) { throw 'Контейнер sfu не запущен: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d' }
+if (-not $sfuState) { throw 'Контейнер sfu не запущен: docker compose -f docker-compose.test-env.yml up -d' }
 Write-Ok "sfu: $($sfuState.Line.Trim())"
 
 $viteAlive = $false

@@ -353,11 +353,16 @@ def reconcile_mailboxes() -> dict:
     )
     if report.differences:
         logger.warning(
-            "mail_reconcile_differences mode=%s only_local=%d only_remote=%d mismatched=%d applied=%s",
+            "mail_reconcile_differences mode=%s only_local=%d only_remote=%d "
+            "mismatched=%d unlinked=%d linked=%d applied=%s",
             report.mode,
             sum(1 for d in report.differences if d.kind == "only_local"),
             sum(1 for d in report.differences if d.kind == "only_remote"),
             sum(1 for d in report.differences if d.kind == "mismatched"),
+            # unlinked — ящики, у которых нашёлся владелец по адресу; linked —
+            # сколько из них реально привязано (только при auto_apply).
+            sum(1 for d in report.differences if d.kind == "unlinked"),
+            sum(1 for d in report.differences if d.action == "linked"),
             auto_apply,
         )
     return report.to_dict()

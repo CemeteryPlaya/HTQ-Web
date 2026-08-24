@@ -24,6 +24,7 @@ import { signoffApi } from '@/api/signoff';
 import { formatMoment } from './format';
 import { labelMap } from './labels';
 import { ProcessStateBadge } from './states';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   subjectType: string;
@@ -31,6 +32,7 @@ interface Props {
 }
 
 export function SubjectProcesses({ subjectType, subjectId }: Props) {
+  const { t } = useTranslation();
   const {
     data: processes = [],
     isLoading,
@@ -53,7 +55,7 @@ export function SubjectProcesses({ subjectType, subjectId }: Props) {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">История согласований</CardTitle>
+        <CardTitle className="text-base">{t('signoff.history.title')}</CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -62,11 +64,11 @@ export function SubjectProcesses({ subjectType, subjectId }: Props) {
           // 503 — модуль согласования выключен целиком. Это не поломка
           // карточки: остальные её блоки читаются и без него.
           <p className="text-sm text-muted-foreground">
-            История согласований недоступна.
+            {t('signoff.history.unavailable')}
           </p>
         ) : processes.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Объект ещё не отправляли на согласование.
+            {t('signoff.history.neverSubmitted')}
           </p>
         ) : (
           <ul className="divide-y">
@@ -80,12 +82,12 @@ export function SubjectProcesses({ subjectType, subjectId }: Props) {
                     to={`/signoff/processes/${process.id}`}
                     className="text-sm font-medium hover:underline underline-offset-2"
                   >
-                    Согласование #{process.id}
+                    {t('signoff.history.processNumber', { id: process.id })}
                   </Link>
                   <p className="text-xs text-muted-foreground">
-                    Запущено {formatMoment(process.created_at)}
+                    {t('signoff.detail.startedAt', { stamp: formatMoment(process.created_at) })}
                     {process.finished_at
-                      && ` · завершено ${formatMoment(process.finished_at)}`}
+                      && t('signoff.history.finishedAt', { stamp: formatMoment(process.finished_at) })}
                   </p>
                 </div>
                 <ProcessStateBadge

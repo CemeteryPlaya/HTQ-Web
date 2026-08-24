@@ -392,7 +392,7 @@ def _overrides(start: dt.date, end: dt.date) -> dict[dt.date, ProductionDay]:
 
 
 def list_production_days(start: dt.date, end: dt.date) -> list[dict]:
-    """Generated baseline (KZ weekends + 2026 holidays) with stored rows
+    """Generated baseline (KZ weekends + holidays of any year) with stored rows
     acting as manual overrides.
 
     Overrides are fetched from 1 January so the running working-day counter

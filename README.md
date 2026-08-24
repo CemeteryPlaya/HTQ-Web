@@ -405,6 +405,21 @@ mkcert -cert-file .\infra\certs\cert.pem -key-file .\infra\certs\key.pem localho
 Туннель наружу — `scripts/start-sfu-tunnel.ps1`, после чего обновить signaling-URL в
 `frontend/.env`.
 
+**Показать стенд человеку снаружи** (проверить конференцию с чужой машины) —
+`scripts/start-public-test.ps1`, подробности в
+[docs/TUNNEL_SETUP.md](./docs/TUNNEL_SETUP.md). Туннеля два, потому что ни один
+HTTP-туннель не несёт UDP: Cloudflare везёт сигналинг, bore.pub — медиа поверх
+TCP. Скрипт печатает публичную ссылку и по Ctrl+C возвращает стенд в локальное
+состояние.
+
+```powershell
+docker compose -f docker-compose.test-env.yml up -d      # стек с БД из .env
+.\scripts\start-public-test.ps1 -GuestEmail guest@example.com
+```
+
+⚠️ Туннель открывает наружу **весь** стенд, включая `/django-admin/` с
+сид-аккаунтом. Смените пароль перед сеансом и гасите туннель сразу после.
+
 ---
 
 ## Документация

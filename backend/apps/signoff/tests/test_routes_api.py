@@ -34,14 +34,12 @@ def test_route_crud(client):
 
     stage = post_json(client, f"{BASE}/routes/{route_id}/stages",
                       {"order": 1, "name": "Финансовый контроль",
-                       "quorum": Quorum.ALL, "approver_ids": [a.pk]}, **admin)
+                       "quorum": Quorum.ALL, "position_ids": [a.pk]}, **admin)
     assert stage.status_code == 201, stage.content
-    assert [x["user_id"] for x in stage.json()["approvers"]] == [a.pk]
-    # Имя разворачивается через apps.users.interface — фронтенду нужен
-    # человек, а не число.
-    assert stage.json()["approvers"][0]["full_name"]
+    assert [x["position_id"] for x in stage.json()["roles"]] == [a.pk]
+    assert stage.json()["roles"][0]["title"]
 
-    listed = client.get(f"{BASE}/routes", **auth(token()))
+    listed = client.get(f"{BASE}/routes", **admin)
     assert listed.status_code == 200
     assert len(listed.json()[0]["stages"]) == 1
 
@@ -76,37 +74,37 @@ def test_route_for_an_unregistered_subject_is_409(client):
     assert "не зарегистрирован" in clash.json()["detail"]
 
 
-def test_stage_with_an_unknown_approver_is_409(client):
+def test_stage_with_an_unknown_position_is_409(client):
     admin = auth(admin_token())
     route = make_route([(1, "Этап", Quorum.ALL, [make_user("a").pk])])
 
     bad = post_json(client, f"{BASE}/routes/{route.pk}/stages",
                     {"order": 2, "name": "Второй", "quorum": Quorum.ALL,
-                     "approver_ids": [999_999]}, **admin)
+                     "position_ids": [999_999]}, **admin)
     assert bad.status_code == 409
-    assert "Не найдены пользователи" in bad.json()["detail"]
+    assert "Не найдены должности" in bad.json()["detail"]
 
 
-def test_stage_without_approvers_is_rejected_by_the_schema(client):
+def test_stage_without_roles_is_rejected_by_the_schema(client):
     route = make_route([(1, "Этап", Quorum.ALL, [make_user("a").pk])])
     bad = post_json(client, f"{BASE}/routes/{route.pk}/stages",
                     {"order": 2, "name": "Пустой", "quorum": Quorum.ALL,
-                     "approver_ids": []}, **auth(admin_token()))
+                     "position_ids": []}, **auth(admin_token()))
     assert bad.status_code == 422
 
 
-def test_stage_approvers_are_replaced_wholesale(client):
+def test_stage_roles_are_replaced_wholesale(client):
     a, b = make_user("a"), make_user("b")
     route = make_route([(1, "Этап", Quorum.ALL, [a.pk])])
     stage = route.stages.first()
 
     updated = patch_json(client, f"{BASE}/stages/{stage.pk}",
-                         {"approver_ids": [b.pk]}, **auth(admin_token()))
+                         {"position_ids": [b.pk]}, **auth(admin_token()))
     assert updated.status_code == 200
-    assert [x["user_id"] for x in updated.json()["approvers"]] == [b.pk]
+    assert [x["position_id"] for x in updated.json()["roles"]] == [b.pk]
 
 
-def test_patch_without_approver_ids_leaves_them_alone(client):
+def test_patch_without_position_ids_leaves_them_alone(client):
     """``None`` — «не трогать», и это должно отличаться от «стереть»."""
     a = make_user("a")
     route = make_route([(1, "Этап", Quorum.ALL, [a.pk])])
@@ -115,7 +113,7 @@ def test_patch_without_approver_ids_leaves_them_alone(client):
     updated = patch_json(client, f"{BASE}/stages/{stage.pk}",
                          {"name": "Новое название"}, **auth(admin_token()))
     assert updated.status_code == 200
-    assert [x["user_id"] for x in updated.json()["approvers"]] == [a.pk]
+    assert [x["position_id"] for x in updated.json()["roles"]] == [a.pk]
 
 
 def test_emptying_the_approver_list_is_409(client):
@@ -124,9 +122,9 @@ def test_emptying_the_approver_list_is_409(client):
     stage = route.stages.first()
 
     bad = patch_json(client, f"{BASE}/stages/{stage.pk}",
-                     {"approver_ids": []}, **auth(admin_token()))
+                     {"position_ids": []}, **auth(admin_token()))
     assert bad.status_code == 409
-    assert "хотя бы один согласующий" in bad.json()["detail"]
+    assert "хотя бы одна должность" in bad.json()["detail"]
 
 
 def test_the_last_stage_of_a_route_cannot_be_deleted(client):
@@ -155,10 +153,11 @@ def test_a_non_last_stage_can_be_deleted(client):
 
 # ── Права ───────────────────────────────────────────────────────────────
 
-def test_reading_routes_needs_only_a_token_writing_needs_admin(client):
+def test_reading_and_writing_routes_need_admin(client):
     make_route([(1, "Этап", Quorum.ALL, [make_user("a").pk])])
 
-    assert client.get(f"{BASE}/routes", **auth(token())).status_code == 200
+    assert client.get(f"{BASE}/routes", **auth(token())).status_code == 403
+    assert client.get(f"{BASE}/routes", **auth(admin_token())).status_code == 200
 
     forbidden = post_json(client, f"{BASE}/routes",
                           {"subject_type": SUBJECT, "name": "Ещё один"},

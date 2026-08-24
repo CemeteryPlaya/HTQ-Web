@@ -43,7 +43,9 @@ ENDPOINTS=(
     "/api/cms/v1/news/                           no"
     "/api/cms/v1/news/?page=2                    no"
     "/api/requests/v1/templates/                 yes"
-    "/api/mail/v1/accounts/                      yes"
+    # Префикс домена почты — email, а не mail (app_label и URL сознательно
+    # расходятся, см. API.md). С /api/mail/ ручка просто отдавала 404.
+    "/api/email/v1/accounts/                     yes"
     "/api/media/v1/files/                        yes"
     # Deliberate misses — feed the 4xx/error panels:
     "/api/tasks/v1/tasks/999999/                 yes"

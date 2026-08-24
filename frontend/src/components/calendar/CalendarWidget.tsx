@@ -158,7 +158,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
     };
 
     const handleDeleteEvent = (ev: CalendarEvent) => {
-        if (window.confirm(`Удалить событие «${ev.title}»?`)) {
+        if (window.confirm(t('calendar.confirmDeleteEvent', { title: ev.title }))) {
             deleteEventMutation.mutate(ev.id);
         }
     };
@@ -273,7 +273,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                             toggleHoliday(day, dayType);
                                         }}
                                         className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
-                                        title={dayType === 'holiday' ? "Сделать рабочим" : "Сделать выходным"}
+                                        title={dayType === 'holiday' ? t('calendar.makeWorkday') : t('calendar.makeHoliday')}
                                         disabled={updateDayMutation.isPending}
                                     >
                                         <CalendarIcon className="w-3 h-3 md:w-4 md:h-4" />
@@ -333,14 +333,16 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                 "flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-card/50 rounded-3xl border backdrop-blur-sm shadow-xl shadow-foreground/5 transition-all hover:shadow-primary/5",
                 compact ? "p-4" : "p-6"
             )}>
-                <div className="flex items-center gap-2 md:gap-4">
+                {/* flex-wrap: стрелки + название месяца + «Сегодня» в одну
+                    строку на 360px не помещаются и выталкивали кнопку за экран. */}
+                <div className="flex flex-wrap items-center gap-2 md:gap-4">
                     <Button variant="outline" size="icon" onClick={handlePrevMonth} aria-label="Previous month" className="rounded-xl md:rounded-2xl shadow-none hover:bg-primary/5 w-8 h-8 md:w-10 md:h-10">
                         <ChevronLeft className="h-4 w-4" />
                     </Button>
                     <div className="flex flex-col items-center">
                         <h2 className={cn(
                             "font-bold text-center capitalize tracking-tight",
-                            compact ? "text-lg min-w-[120px]" : "text-2xl min-w-[200px]"
+                            compact ? "text-lg min-w-[120px]" : "text-xl min-w-[140px] sm:text-2xl sm:min-w-[200px]"
                         )}>
                             {format(currentDate, 'LLLL yyyy', { locale: dateLocale })}
                         </h2>
@@ -441,7 +443,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                             <CalendarIcon className="h-5 w-5 md:h-6 md:w-6" /> {d.note}
                                                         </h3>
                                                         <Badge className="bg-red-500 hover:bg-red-600 text-white px-2 md:px-4 py-1 rounded-lg md:rounded-xl font-bold border-none text-[10px] md:text-xs">
-                                                            Праздник
+                                                            {t('calendar.holiday')}
                                                         </Badge>
                                                     </div>
                                                     <div className="flex flex-col md:flex-row gap-2 md:gap-6 text-xs md:text-sm font-medium text-red-500/80 mt-2">
@@ -468,7 +470,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                             {ev.event_type === 'conference' && '🎥 '}{ev.title}
                                                         </h3>
                                                         <Badge variant="secondary" className={cn("px-2 md:px-4 py-1 rounded-lg md:rounded-xl capitalize font-bold text-[10px] md:text-xs", ev.event_type === 'conference' && "bg-pink-500 text-white hover:bg-pink-600")}>
-                                                            {ev.event_type === 'conference' ? 'Конференция' : ev.event_type === 'common' ? t('hr.calendar.eventTypes.common') : ev.event_type === 'department' ? t('hr.calendar.eventTypes.department') : t('hr.calendar.eventTypes.personal')}
+                                                            {ev.event_type === 'conference' ? t('hr.calendar.eventTypes.conference') : ev.event_type === 'common' ? t('hr.calendar.eventTypes.common') : ev.event_type === 'department' ? t('hr.calendar.eventTypes.department') : t('hr.calendar.eventTypes.personal')}
                                                         </Badge>
                                                     </div>
                                                     <div className="flex flex-wrap gap-2 md:gap-6 text-xs md:text-sm font-medium text-muted-foreground">
@@ -487,7 +489,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                                         className="inline-flex items-center gap-1.5 bg-pink-500 text-white px-3 py-1.5 rounded-full text-xs font-bold hover:bg-pink-600 transition-colors shadow-sm animate-pulse"
                                                                     >
                                                                         <Video className="h-3.5 w-3.5" />
-                                                                        Войти в конференцию
+                                                                        {t('calendar.joinConference')}
                                                                     </Link>
                                                                 );
                                                             }
@@ -495,7 +497,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                             return (
                                                                 <span className="inline-flex items-center gap-1.5 bg-muted/60 text-muted-foreground px-3 py-1.5 rounded-full text-xs font-medium">
                                                                     <Clock className="h-3.5 w-3.5" />
-                                                                    Начало в {format(start, 'HH:mm')}
+                                                                    {t('calendar.startsAt', { time: format(start, 'HH:mm') })}
                                                                 </span>
                                                             );
                                                         })()}
@@ -584,7 +586,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                 
                                                 {events.length > 0 && (
                                                     <div className="space-y-2 relative">
-                                                        <div className="sticky top-0 bg-card/90 backdrop-blur-sm z-10 py-1 font-semibold text-sm text-foreground/80 my-2">📝 {t('hr.calendar.newEvent').replace('Новое с', 'С').replace('New e', 'E')}</div>
+                                                        <div className="sticky top-0 bg-card/90 backdrop-blur-sm z-10 py-1 font-semibold text-sm text-foreground/80 my-2">📝 {t('calendar.eventsHeading')}</div>
                                                         {events.sort((a,b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime()).map(ev => (
                                                             <div key={ev.id} className={cn(
                                                                 "p-3 rounded-xl border flex flex-col gap-1.5",
@@ -598,7 +600,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                                         {ev.event_type === 'conference' && '🎥 '}{ev.title}
                                                                     </h5>
                                                                     <Badge variant="outline" className={cn("text-[10px] capitalize whitespace-nowrap", ev.event_type === 'conference' && "bg-pink-500/10 text-pink-600 border-pink-500/30")}>
-                                                                        {ev.event_type === 'conference' ? 'Конференция' : ev.event_type === 'common' ? t('hr.calendar.eventTypes.common') : ev.event_type === 'department' ? t('hr.calendar.eventTypes.department') : t('hr.calendar.eventTypes.personal')}
+                                                                        {ev.event_type === 'conference' ? t('hr.calendar.eventTypes.conference') : ev.event_type === 'common' ? t('hr.calendar.eventTypes.common') : ev.event_type === 'department' ? t('hr.calendar.eventTypes.department') : t('hr.calendar.eventTypes.personal')}
                                                                     </Badge>
                                                                 </div>
                                                                 {ev.description && <p className="text-xs text-muted-foreground line-clamp-2">{ev.description}</p>}
@@ -611,9 +613,9 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                                         <div className="text-[11px] text-muted-foreground flex items-center gap-1.5"
                                                                              title={ev.participants.map((p) => `${p.full_name || `#${p.user_id}`}${p.rsvp_status ? ` · ${p.rsvp_status}` : ''}`).join(', ')}>
                                                                             <Users className="w-3 h-3" />
-                                                                            Участники: {ev.participants.length}
+                                                                            {t('calendar.participantsCount', { count: ev.participants.length })}
                                                                             {ev.creator_name && (
-                                                                                <span className="opacity-70 ml-1">· автор: {ev.creator_name}</span>
+                                                                                <span className="opacity-70 ml-1">{t('calendar.byAuthor', { name: ev.creator_name })}</span>
                                                                             )}
                                                                         </div>
                                                                         <div className="flex flex-wrap gap-1">
@@ -654,7 +656,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                                                         : 'bg-muted/40 text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-600',
                                                                                 )}
                                                                             >
-                                                                                <CheckIcon className="h-3 w-3" /> Иду
+                                                                                <CheckIcon className="h-3 w-3" /> {t('calendar.rsvpGoing')}
                                                                             </button>
                                                                             <button
                                                                                 onClick={(e) => { e.stopPropagation(); rsvpMutation.mutate({ id: ev.id, status: 'declined' }); }}
@@ -666,7 +668,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                                                         : 'bg-muted/40 text-muted-foreground hover:bg-red-500/10 hover:text-red-600',
                                                                                 )}
                                                                             >
-                                                                                <XCircle className="h-3 w-3" /> Не иду
+                                                                                <XCircle className="h-3 w-3" /> {t('calendar.rsvpNotGoing')}
                                                                             </button>
                                                                         </div>
                                                                     );
@@ -685,7 +687,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                                                 onClick={(e) => e.stopPropagation()}
                                                                             >
                                                                                 <Video className="h-3.5 w-3.5" />
-                                                                                Войти в конференцию
+                                                                                {t('calendar.joinConference')}
                                                                             </Link>
                                                                         );
                                                                     }
@@ -693,7 +695,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                                     return (
                                                                         <span className="inline-flex items-center gap-1.5 bg-muted/60 text-muted-foreground px-3 py-1.5 rounded-lg text-xs font-medium mt-1 w-fit">
                                                                             <Clock className="h-3.5 w-3.5" />
-                                                                            Начало в {format(start, 'HH:mm')}
+                                                                            {t('calendar.startsAt', { time: format(start, 'HH:mm') })}
                                                                         </span>
                                                                     );
                                                                 })()}
@@ -703,14 +705,14 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                                             onClick={(e) => { e.stopPropagation(); handleEditEvent(ev); }}
                                                                             className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-primary bg-muted/40 hover:bg-muted px-2 py-1 rounded-md transition-colors"
                                                                         >
-                                                                            <Pencil className="h-3 w-3" /> Изменить
+                                                                            <Pencil className="h-3 w-3" /> {t('common.change')}
                                                                         </button>
                                                                         <button
                                                                             onClick={(e) => { e.stopPropagation(); handleDeleteEvent(ev); }}
                                                                             className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-red-500 bg-muted/40 hover:bg-red-500/10 px-2 py-1 rounded-md transition-colors"
                                                                             disabled={deleteEventMutation.isPending}
                                                                         >
-                                                                            <Trash2 className="h-3 w-3" /> Удалить
+                                                                            <Trash2 className="h-3 w-3" /> {t('common.delete')}
                                                                         </button>
                                                                     </div>
                                                                 )}
@@ -766,7 +768,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                         <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-3xl" />
                         <DialogHeader>
                             <DialogTitle className="text-2xl md:text-3xl font-black flex items-center gap-3">
-                                <Pencil className="h-6 w-6 md:h-8 md:w-8" /> Редактировать событие
+                                <Pencil className="h-6 w-6 md:h-8 md:w-8" /> {t('calendar.editEvent')}
                             </DialogTitle>
                         </DialogHeader>
                     </div>
@@ -777,7 +779,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                             userOptions={userOptions}
                             departments={departments}
                             submitting={updateEventMutation.isPending}
-                            submitLabel="Сохранить"
+                            submitLabel={t('common.save')}
                             onCancel={() => { setIsEditModalOpen(false); setEditingEvent(null); }}
                             onSubmit={(data) => updateEventMutation.mutate({ id: editingEvent.id, data })}
                         />
