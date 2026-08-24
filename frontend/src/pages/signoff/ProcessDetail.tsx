@@ -327,6 +327,8 @@ const ProcessDetail = () => {
                                 subjectLabel,
                                 requiresAttachment:
                                   myPending.stage.requires_attachment,
+                                requiresComment:
+                                  myPending.stage.requires_comment,
                                 attachedFileId: myPending.task.file_id,
                               })
                             }

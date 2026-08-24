@@ -29,6 +29,7 @@ from apps.signoff.tests.helpers import (
     post_json,
     stage_names,
     token,
+    user_token,
 )
 
 pytestmark = pytest.mark.django_db
@@ -267,7 +268,7 @@ def test_stage_can_be_created_with_a_condition(approvers):
 
     response = post_json(client, f"{BASE}/routes/{route.pk}/stages", {
         "order": 2, "name": "Зона 1", "quorum": "all",
-        "approver_ids": [approvers["zone1"].pk], "condition": zone(1),
+        "position_ids": [approvers["zone1"].pk], "condition": zone(1),
     }, **auth(admin_token()))
 
     assert response.status_code == 201, response.content
@@ -282,7 +283,7 @@ def test_condition_on_an_unknown_field_is_refused_at_configuration_time(approver
 
     response = post_json(client, f"{BASE}/routes/{route.pk}/stages", {
         "order": 2, "name": "Ветка", "quorum": "all",
-        "approver_ids": [approvers["zone1"].pk],
+        "position_ids": [approvers["zone1"].pk],
         "condition": [{"field": "страна", "op": "eq", "value": 1}],
     }, **auth(admin_token()))
 
@@ -296,7 +297,7 @@ def test_condition_value_outside_the_reference_book_is_refused(approvers):
 
     response = post_json(client, f"{BASE}/routes/{route.pk}/stages", {
         "order": 2, "name": "Ветка", "quorum": "all",
-        "approver_ids": [approvers["zone1"].pk], "condition": zone(99),
+        "position_ids": [approvers["zone1"].pk], "condition": zone(99),
     }, **auth(admin_token()))
 
     assert response.status_code == 409
@@ -309,7 +310,7 @@ def test_fallback_with_its_own_condition_is_refused(approvers):
 
     response = post_json(client, f"{BASE}/routes/{route.pk}/stages", {
         "order": 2, "name": "Ветка", "quorum": "all",
-        "approver_ids": [approvers["zone1"].pk],
+        "position_ids": [approvers["zone1"].pk],
         "condition": zone(1), "is_fallback": True,
     }, **auth(admin_token()))
 
@@ -324,7 +325,7 @@ def test_unknown_operator_is_a_422(approvers):
 
     response = post_json(client, f"{BASE}/routes/{route.pk}/stages", {
         "order": 2, "name": "Ветка", "quorum": "all",
-        "approver_ids": [approvers["zone1"].pk],
+        "position_ids": [approvers["zone1"].pk],
         "condition": [{"field": "zone", "op": "магия", "value": 1}],
     }, **auth(admin_token()))
 
@@ -368,7 +369,7 @@ def test_route_card_warns_about_options_without_a_branch(approvers):
     route = branching_route(approvers)
     client = Client()
 
-    response = client.get(f"{BASE}/routes/{route.pk}", **auth(token()))
+    response = client.get(f"{BASE}/routes/{route.pk}", **auth(admin_token()))
 
     assert response.status_code == 200
     gaps = response.json()["coverage_gaps"]
@@ -382,7 +383,7 @@ def test_no_warning_once_a_fallback_closes_the_group(approvers):
     route = branching_route(approvers, fallback=True)
     client = Client()
 
-    response = client.get(f"{BASE}/routes/{route.pk}", **auth(token()))
+    response = client.get(f"{BASE}/routes/{route.pk}", **auth(admin_token()))
 
     assert response.json()["coverage_gaps"] == []
 
@@ -393,7 +394,10 @@ def test_process_card_shows_the_facts_and_the_branch(approvers):
     process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
     client = Client()
 
-    response = client.get(f"{BASE}/processes/{process.pk}", **auth(token()))
+    response = client.get(
+        f"{BASE}/processes/{process.pk}",
+        **auth(user_token(approvers["checker"])),
+    )
 
     assert response.status_code == 200
     card = response.json()

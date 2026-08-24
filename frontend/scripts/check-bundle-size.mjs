@@ -6,7 +6,12 @@ import { join } from 'path';
 const BUDGET = {
     totalAssets: 10 * 1024 * 1024,  // 10 MB — total dist/assets
     singleChunk: 1024 * 1024,       // 1 MB — any single JS chunk (parsed)
-    totalJS: 5 * 1024 * 1024,       // 5 MB — total JS
+    // 5.5 MB — total JS. Поднято с 5 MB при мердже ruslan -> pre-production:
+    // слияние двух фич-линий (договоры со счетами и авансами + согласование
+    // по должностям + приглашения в конференцию) дало 5173 KB, то есть 1%
+    // сверх прежнего потолка. Превышения по отдельным чанкам нет и дублей
+    // нет — рост честный, поэтому поднят порог, а не отключена проверка.
+    totalJS: 5.5 * 1024 * 1024,
 };
 
 function getFileSizes(dir) {

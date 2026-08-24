@@ -207,6 +207,8 @@ _PERMISSION_CATALOG = {
 
         {"key": "hr.staffing.view",   "label": "Штатное расписание — просмотр",  "description": None, "group": "Штатное расписание"},
         {"key": "hr.staffing.manage", "label": "Штатное расписание — управление", "description": None, "group": "Штатное расписание"},
+
+        {"key": "contracts.advance_payment.record_payment", "label": "Оформление предоплат", "description": "Загрузка платёжного поручения и номера проводки после согласования", "group": "Договоры"},
     ],
     "level_presets": {lvl: sorted(keys) for lvl, keys in LEVEL_PRESETS.items()},
 }

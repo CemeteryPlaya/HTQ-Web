@@ -19,57 +19,51 @@ import type {
   TaskState,
 } from '@/types/signoff';
 
-import { translatedMap } from '@/lib/i18n/translatedMap';
+export const PROCESS_STATE_LABELS: Record<ProcessState, string> = {
+  pending: 'На согласовании',
+  approved: 'Согласовано',
+  rejected: 'Отклонено',
+  rework: 'Возвращено на доработку',
+  cancelled: 'Отозвано',
+};
 
-// Значения словарей ниже — КЛЮЧИ перевода, а не готовые подписи; см.
-// `translatedMap` о том, почему на уровне модуля иначе нельзя.
+export const STAGE_STATE_LABELS: Record<StageState, string> = {
+  waiting: 'Ожидает очереди',
+  active: 'На рассмотрении',
+  approved: 'Согласован',
+  rejected: 'Отклонён',
+  rework: 'Возвращён на доработку',
+  skipped: 'Не потребовался',
+};
 
-
-export const PROCESS_STATE_LABELS: Record<ProcessState, string> = translatedMap({
-  pending: 'signoff.processState.pending',
-  approved: 'signoff.processState.approved',
-  rejected: 'signoff.processState.rejected',
-  rework: 'signoff.processState.rework',
-  cancelled: 'signoff.processState.cancelled',
-});
-
-export const STAGE_STATE_LABELS: Record<StageState, string> = translatedMap({
-  waiting: 'signoff.stageState.waiting',
-  active: 'signoff.stageState.active',
-  approved: 'signoff.stageState.approved',
-  rejected: 'signoff.stageState.rejected',
-  rework: 'signoff.stageState.rework',
-  skipped: 'signoff.stageState.skipped',
-});
-
-export const TASK_STATE_LABELS: Record<TaskState, string> = translatedMap({
-  pending: 'signoff.taskState.pending',
-  approved: 'signoff.taskState.approved',
-  rejected: 'signoff.taskState.rejected',
-  rework: 'signoff.taskState.rework',
-  skipped: 'signoff.taskState.skipped',
-});
+export const TASK_STATE_LABELS: Record<TaskState, string> = {
+  pending: 'Ожидает решения',
+  approved: 'Согласовано',
+  rejected: 'Отклонено',
+  rework: 'Возвращено на доработку',
+  skipped: 'Не потребовалось',
+};
 
 /** Состояние согласования предметного объекта (колонка `approval_state`). */
-export const APPROVAL_STATE_LABELS: Record<ApprovalState, string> = translatedMap({
-  draft: 'signoff.approvalState.draft',
-  pending: 'signoff.approvalState.pending',
-  approved: 'signoff.approvalState.approved',
-  rejected: 'signoff.approvalState.rejected',
-  rework: 'signoff.approvalState.rework',
-});
+export const APPROVAL_STATE_LABELS: Record<ApprovalState, string> = {
+  draft: 'Черновик',
+  pending: 'На согласовании',
+  approved: 'Согласовано',
+  rejected: 'Отклонено',
+  rework: 'На доработке',
+};
 
-export const QUORUM_LABELS: Record<Quorum, string> = translatedMap({
-  any: 'signoff.quorum.any',
-  all: 'signoff.quorum.all',
-});
+export const QUORUM_LABELS: Record<Quorum, string> = {
+  any: 'Достаточно одного',
+  all: 'Нужны все',
+};
 
 /** Откуда берётся список согласующих этапа. `initiator` вместе с
  *  «требуется документ» и есть этап подписи автора. */
-export const APPROVER_KIND_LABELS: Record<ApproverKind, string> = translatedMap({
-  named: 'signoff.approverKind.named',
-  initiator: 'signoff.approverKind.initiator',
-});
+export const APPROVER_KIND_LABELS: Record<ApproverKind, string> = {
+  position: 'По HR-должности',
+  initiator: 'Инициатор согласования',
+};
 
 /** `[{value, label}]` → `{value: label}`. Enums приходят списком пар, а
  *  показывать плашку удобнее по ключу. */

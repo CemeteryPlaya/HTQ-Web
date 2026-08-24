@@ -14,13 +14,23 @@ from __future__ import annotations
 
 import pytest
 
-from apps.contracts.models import Agreement, AgreementStatus, Budget, Counterparty
+from apps.contracts.models import (
+    Agreement,
+    AgreementStatus,
+    Budget,
+    Counterparty,
+    Invoice,
+    InvoiceStatus,
+    AdvanceReport,
+)
+from apps.contracts.services import budget_calc
 from apps.contracts.tests.helpers import (
     BASE,
     admin_token,
     auth,
     make_administrator,
     make_agreement,
+    make_invoice,
     make_line,
     make_counterparty,
     make_program,
@@ -32,7 +42,7 @@ from apps.core.models import ServiceStatus
 from apps.signoff.models import (
     ApprovalRoute,
     ApprovalRouteStage,
-    ApprovalRouteStageApprover,
+    ApprovalRouteStageRole,
     ApprovalState,
     ApprovalTask,
     ProcessState,
@@ -40,14 +50,29 @@ from apps.signoff.models import (
     TaskState,
 )
 from apps.signoff.services import engine
+from apps.hr.models import Department, Employee, EmployeeStatus, Position
 from apps.users.models import User, UserStatus
 
 pytestmark = pytest.mark.django_db
 
 
 def make_user(username: str = "approver") -> User:
-    return User.objects.create(username=username, email=f"{username}@htq.test",
+    user = User.objects.create(username=username, email=f"{username}@htq.test",
                                password="x", status=UserStatus.ACTIVE)
+    department, _ = Department.objects.get_or_create(
+        path="contracts-signoff-tests", defaults={"name": "Contracts signoff tests"})
+    position = Position.objects.filter(pk=user.pk).first()
+    if position is None:
+        position = Position.objects.create(
+            id=user.pk, title=f"Contracts {username}", department=department,
+            weight=user.pk + 20_000,
+        )
+    Employee.objects.create(
+        user_id=user.pk, first_name=username, last_name="Tester",
+        email=f"employee-{username}@htq.test", department=department,
+        position=position, hire_date="2024-01-01", status=EmployeeStatus.ACTIVE,
+    )
+    return user
 
 
 def route_for(subject_type: str, *user_ids: int) -> ApprovalRoute:
@@ -58,7 +83,7 @@ def route_for(subject_type: str, *user_ids: int) -> ApprovalRoute:
                                               name="Единственный этап",
                                               quorum=Quorum.ALL)
     for user_id in user_ids:
-        ApprovalRouteStageApprover.objects.create(stage=stage, user_id=user_id)
+        ApprovalRouteStageRole.objects.create(stage=stage, position_id=user_id)
     return route
 
 
@@ -86,13 +111,17 @@ def approve(subject) -> None:
 # Регистрация типов
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_all_three_models_are_registered_as_approvable(client):
+def test_all_contract_models_are_registered_as_approvable(client):
     listed = client.get("/api/signoff/v1/subjects", **auth(token())).json()
     by_type = {row["subject_type"]: row for row in listed}
 
     assert by_type["contracts.budget"]["label"] == "Бюджет"
     assert by_type["contracts.counterparty"]["label"] == "Контрагент"
     assert by_type["contracts.agreement"]["label"] == "Договор"
+    assert by_type["contracts.invoice"]["label"] == "Счёт на оплату"
+    assert by_type["contracts.advance_payment"]["label"] == "Предоплата на основании договора"
+    assert by_type["contracts.advance_report"]["label"] == "Авансовый отчёт"
+    assert by_type["contracts.completion_act"]["label"] == "Акт выполненных работ"
 
 
 def test_the_process_card_shows_a_human_readable_subject(client):
@@ -723,3 +752,148 @@ def test_the_engine_can_still_move_the_agreement_it_locked(client):
     agreement.refresh_from_db()
     assert agreement.status == AgreementStatus.APPROVED
     assert agreement.approval_state == ApprovalState.APPROVED
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Счёт: то же согласование, что у договора, с двумя отличиями
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Устроен как договор (те же колбэки on_started/approved/rejected/rework/
+# cancelled, тот же возврат в ``draft`` на отказе), но счёт занимает бюджет
+# только после одобрения, а скан обязателен уже на отправке, потому что счёт
+# без договора и ЕСТЬ платёжный документ. Черновик для отправки заводится
+# СРАЗУ со сканом (``file_id``) — иначе submit упрётся в гейт скана, который
+# проверяется отдельным тестом.
+
+def _draft_invoice(**over) -> Invoice:
+    line = make_line()
+    counterparty = make_counterparty()
+    over.setdefault("file_id", "scan-invoice")
+    over.setdefault("status", InvoiceStatus.DRAFT)
+    return make_invoice(line=line, counterparty=counterparty, **over)
+
+
+def test_submitting_an_invoice_moves_it_to_on_review(client):
+    approver = make_user()
+    invoice = _draft_invoice()
+    route_for(Invoice.SIGNOFF_SUBJECT_TYPE, approver.pk)
+
+    submitted = post_json(client, f"{BASE}/invoices/{invoice.pk}/submit",
+                          {}, **auth(token()))
+    assert submitted.status_code == 201, submitted.content
+
+    invoice.refresh_from_db()
+    assert invoice.status == InvoiceStatus.ON_REVIEW
+    assert invoice.approval_state == ApprovalState.PENDING
+
+
+def test_approval_moves_the_invoice_to_approved(client):
+    approver = make_user()
+    invoice = _draft_invoice()
+    route_for(Invoice.SIGNOFF_SUBJECT_TYPE, approver.pk)
+    process = invoice.submit_for_approval()
+
+    decide(process, approver, engine.APPROVE)
+
+    invoice.refresh_from_db()
+    assert invoice.status == InvoiceStatus.APPROVED
+    assert invoice.approval_state == ApprovalState.APPROVED
+
+
+def test_invoice_approval_reduces_the_program_remaining_budget(client):
+    approver = make_user()
+    line = make_line(amount="500000.00")
+    invoice = make_invoice(line=line, amount="200000.00", file_id="scan-invoice")
+    route_for(Invoice.SIGNOFF_SUBJECT_TYPE, approver.pk)
+
+    assert budget_calc.remaining_for(line) == 500000
+    process = invoice.submit_for_approval()
+    decide(process, approver, engine.APPROVE)
+
+    invoice.refresh_from_db()
+    assert invoice.status == InvoiceStatus.APPROVED
+    assert budget_calc.remaining_for(line) == 300000
+
+
+def test_rejection_returns_the_invoice_to_draft(client):
+    """Отклонённый счёт дорабатывают и отправляют снова — ``cancelled`` было
+    бы «счёт не оплачиваем», а не «поправьте»."""
+    approver = make_user()
+    invoice = _draft_invoice()
+    route_for(Invoice.SIGNOFF_SUBJECT_TYPE, approver.pk)
+    process = invoice.submit_for_approval()
+
+    decide(process, approver, engine.REJECT)
+
+    invoice.refresh_from_db()
+    assert invoice.status == InvoiceStatus.DRAFT
+    assert invoice.approval_state == ApprovalState.REJECTED
+
+
+def test_cancelling_returns_the_invoice_to_draft(client):
+    approver = make_user()
+    initiator = make_user("initiator")
+    invoice = _draft_invoice()
+    route_for(Invoice.SIGNOFF_SUBJECT_TYPE, approver.pk)
+    process = invoice.submit_for_approval(initiator_id=initiator.pk)
+
+    engine.cancel(process_id=process.pk, actor_id=initiator.pk)
+
+    invoice.refresh_from_db()
+    assert invoice.status == InvoiceStatus.DRAFT
+    # Отзыв — не отказ: счёт снова черновик по обеим осям.
+    assert invoice.approval_state == ApprovalState.DRAFT
+
+
+def test_only_a_draft_invoice_is_submitted(client):
+    approver = make_user()
+    invoice = _draft_invoice(status=InvoiceStatus.PAID)
+    route_for(Invoice.SIGNOFF_SUBJECT_TYPE, approver.pk)
+
+    bad = post_json(client, f"{BASE}/invoices/{invoice.pk}/submit", {},
+                    **auth(token()))
+    assert bad.status_code == 409
+    assert "черновик" in bad.json()["detail"]
+
+
+def test_an_invoice_without_a_scan_is_not_submitted(client):
+    """Отличие от договора: счёт без договора и ЕСТЬ тот документ, по которому
+    платят — согласующему без скана нечего смотреть. Проверяется на отправке,
+    адресным сообщением, а не отказом из середины транзакции движка."""
+    approver = make_user()
+    invoice = _draft_invoice(file_id=None)
+    route_for(Invoice.SIGNOFF_SUBJECT_TYPE, approver.pk)
+
+    bad = post_json(client, f"{BASE}/invoices/{invoice.pk}/submit", {},
+                    **auth(token()))
+    assert bad.status_code == 409
+    assert "скан" in bad.json()["detail"]
+    # Процесс не запустился — счёт остался нетронутым черновиком.
+    invoice.refresh_from_db()
+    assert invoice.status == InvoiceStatus.DRAFT
+    assert invoice.approval_state == ApprovalState.DRAFT
+
+
+def test_a_submitted_invoice_is_locked_for_editing(client):
+    """Пока идёт согласование, счёт править нельзя — ``assert_editable`` по
+    ``approval_state=pending`` (та же ось, что запирает договор)."""
+    approver = make_user()
+    invoice = _draft_invoice()
+    route_for(Invoice.SIGNOFF_SUBJECT_TYPE, approver.pk)
+    invoice.submit_for_approval()
+
+    locked = patch_json(client, f"{BASE}/invoices/{invoice.pk}",
+                        {"name": "Правка на согласовании"}, **auth(admin_token()))
+    assert locked.status_code == 409
+    assert "согласовани" in locked.json()["detail"]
+
+
+def test_the_invoice_process_card_shows_a_human_readable_subject(client):
+    approver = make_user()
+    invoice = _draft_invoice(name="Картриджи")
+    route_for(Invoice.SIGNOFF_SUBJECT_TYPE, approver.pk)
+
+    submitted = post_json(client, f"{BASE}/invoices/{invoice.pk}/submit",
+                          {}, **auth(token())).json()
+    assert "Картриджи" in submitted["subject_title"]
+    assert submitted["subject_url"] == f"/contracts/invoices/{invoice.pk}"

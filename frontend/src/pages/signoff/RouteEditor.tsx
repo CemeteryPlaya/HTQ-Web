@@ -21,7 +21,7 @@
  * иначе легко ждать, что правка догонит уже начатое.
  *
  * Ограничения бэкенда воспроизведены в интерфейсе, чтобы не ловить их
- * ошибкой: у этапа должен быть хотя бы один согласующий, последний этап
+ * ошибкой: у этапа должна быть хотя бы одна HR-должность, последний этап
  * маршрута удалить нельзя (маршрут без этапов неисполним), а этап «иначе» не
  * может иметь собственного условия.
  */
@@ -34,6 +34,7 @@ import {
   ArrowLeft,
   GitBranch,
   Loader2,
+  MessageSquare,
   Paperclip,
   Pencil,
   PenLine,
@@ -44,7 +45,7 @@ import {
 import { toast } from 'sonner';
 
 import { SignoffShell } from '@/components/signoff/SignoffShell';
-import { ApproverPicker } from '@/components/signoff/ApproverPicker';
+import { PositionPicker } from '@/components/signoff/PositionPicker';
 import { ConditionEditor } from '@/components/signoff/ConditionEditor';
 import { conditionText } from '@/components/signoff/format';
 import { APPROVER_KIND_LABELS, QUORUM_LABELS } from '@/components/signoff/labels';
@@ -82,7 +83,6 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { signoffApi } from '@/api/signoff';
-import { useTranslation } from 'react-i18next';
 import type {
   ApproverKind,
   Condition,
@@ -96,11 +96,12 @@ interface StageDraft {
   order: number;
   name: string;
   quorum: Quorum;
-  approverIds: number[];
+  positionIds: number[];
   condition: Condition;
   isFallback: boolean;
   approverKind: ApproverKind;
   requiresAttachment: boolean;
+  requiresComment: boolean;
 }
 
 const emptyDraft = (order: number): StageDraft => ({
@@ -108,11 +109,12 @@ const emptyDraft = (order: number): StageDraft => ({
   order,
   name: '',
   quorum: 'all',
-  approverIds: [],
+  positionIds: [],
   condition: [],
   isFallback: false,
-  approverKind: 'named',
+  approverKind: 'position',
   requiresAttachment: false,
+  requiresComment: false,
 });
 
 /** Этапы по группам `order`, группы — по возрастанию. */
@@ -127,7 +129,6 @@ function groupByOrder(stages: RouteStage[]): [number, RouteStage[]][] {
 }
 
 const RouteEditor = () => {
-  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const routeId = Number(id);
   const queryClient = useQueryClient();
@@ -167,21 +168,21 @@ const RouteEditor = () => {
     mutationFn: (isActive: boolean) =>
       signoffApi.updateRoute(routeId, { is_active: isActive }).then((r) => r.data),
     onSuccess: (updated) => {
-      toast.success(updated.is_active ? t('signoff.editor.routeEnabled') : t('signoff.editor.routeDisabled'));
+      toast.success(updated.is_active ? 'Маршрут включён' : 'Маршрут выключен');
       refresh();
     },
     onError: (err) =>
-      reportApiError(err, t('signoff.editor.toggleError')),
+      reportApiError(err, 'Не удалось изменить состояние маршрута'),
   });
 
   const renameRoute = useMutation({
     mutationFn: (name: string) =>
       signoffApi.updateRoute(routeId, { name }).then((r) => r.data),
     onSuccess: () => {
-      toast.success(t('signoff.editor.nameSaved'));
+      toast.success('Название сохранено');
       refresh();
     },
-    onError: (err) => reportApiError(err, t('signoff.editor.renameError')),
+    onError: (err) => reportApiError(err, 'Не удалось переименовать маршрут'),
   });
 
   const saveStage = useMutation({
@@ -192,33 +193,34 @@ const RouteEditor = () => {
         quorum: stage.quorum,
         // У этапа подписи список обязан быть пустым: непустой бэкенд
         // отвергнет как противоречие, а не «поймёт, что имелось в виду».
-        approver_ids: stage.approverKind === 'named' ? stage.approverIds : [],
+        position_ids: stage.approverKind === 'position' ? stage.positionIds : [],
         // Условие шлём всегда, в том числе пустым: для PATCH пустой массив —
         // это «снять ветку», и не прислать его значило бы не уметь её снять.
         condition: stage.isFallback ? [] : stage.condition,
         is_fallback: stage.isFallback,
         approver_kind: stage.approverKind,
         requires_attachment: stage.requiresAttachment,
+        requires_comment: stage.requiresComment,
       };
       return stage.id === null
         ? signoffApi.addStage(routeId, payload).then((r) => r.data)
         : signoffApi.updateStage(stage.id, payload).then((r) => r.data);
     },
     onSuccess: () => {
-      toast.success(t('signoff.editor.stageSaved'));
+      toast.success('Этап сохранён');
       setDraft(null);
       refresh();
     },
-    onError: (err) => reportApiError(err, t('signoff.editor.stageSaveError')),
+    onError: (err) => reportApiError(err, 'Не удалось сохранить этап'),
   });
 
   const deleteStage = useMutation({
     mutationFn: (stageId: number) => signoffApi.deleteStage(stageId),
     onSuccess: () => {
-      toast.success(t('signoff.editor.stageDeleted'));
+      toast.success('Этап удалён');
       refresh();
     },
-    onError: (err) => reportApiError(err, t('signoff.editor.stageDeleteError')),
+    onError: (err) => reportApiError(err, 'Не удалось удалить этап'),
   });
 
   const openEdit = (stage: RouteStage) =>
@@ -227,18 +229,20 @@ const RouteEditor = () => {
       order: stage.order,
       name: stage.name,
       quorum: stage.quorum,
-      approverIds: stage.approvers.map((approver) => approver.user_id),
+      positionIds: stage.roles.map((role) => role.position_id),
       condition: stage.condition ?? [],
       isFallback: stage.is_fallback,
       approverKind: stage.approver_kind,
       requiresAttachment: stage.requires_attachment,
+      requiresComment: stage.requires_comment,
     });
 
   const knownNames = useMemo(() => {
     const names: Record<number, string> = {};
     for (const stage of route?.stages ?? []) {
-      for (const approver of stage.approvers) {
-        if (approver.full_name) names[approver.user_id] = approver.full_name;
+      for (const role of stage.roles) {
+        if (role.title) names[role.position_id] = [role.title, role.department_name]
+          .filter(Boolean).join(' · ');
       }
     }
     return names;
@@ -247,11 +251,13 @@ const RouteEditor = () => {
   const submitDraft = () => {
     if (!draft) return;
     if (!draft.name.trim()) {
-      setDraftError(t('signoff.editor.errors.nameRequired'));
+      setDraftError('У этапа должно быть название — именно оно несёт смысл, '
+        + 'ролей у платформы нет.');
       return;
     }
-    if (draft.approverKind === 'named' && draft.approverIds.length === 0) {
-      setDraftError(t('signoff.editor.errors.approverRequired'));
+    if (draft.approverKind === 'position' && draft.positionIds.length === 0) {
+      setDraftError('Нужна хотя бы одна должность: этап без неё движок не '
+        + 'запустит.');
       return;
     }
     // Предикат без выбранного значения бэкенд отвергнет 409-м; поймать это
@@ -263,7 +269,8 @@ const RouteEditor = () => {
         (Array.isArray(predicate.value) && predicate.value.length === 0),
     );
     if (!draft.isFallback && empty) {
-      setDraftError(t('signoff.editor.errors.predicateWithoutValue'));
+      setDraftError('В условии есть предикат без значения — выберите значение '
+        + 'или уберите строку.');
       return;
     }
     setDraftError('');
@@ -279,7 +286,7 @@ const RouteEditor = () => {
         className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
       >
         <ArrowLeft className="h-4 w-4" />
-        {t('signoff.editor.backToRoutes')}
+        Ко всем маршрутам
       </Link>
 
       {isLoading ? (
@@ -288,7 +295,7 @@ const RouteEditor = () => {
           <Skeleton className="h-40 w-full" />
         </div>
       ) : isError || !route ? (
-        <p className="text-sm text-destructive">{t('signoff.editor.notFound')}</p>
+        <p className="text-sm text-destructive">Маршрут не найден.</p>
       ) : (
         <>
           <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -305,7 +312,7 @@ const RouteEditor = () => {
 
             <div className="flex items-center gap-3">
               <Label htmlFor="route-active" className="text-sm">
-                {route.is_active ? t('signoff.editor.active') : t('signoff.editor.disabled')}
+                {route.is_active ? 'Активен' : 'Выключен'}
               </Label>
               <Switch
                 id="route-active"
@@ -318,7 +325,7 @@ const RouteEditor = () => {
 
           <div className="mb-6 flex flex-wrap items-end gap-2">
             <div className="flex-1 min-w-64 space-y-1.5">
-              <Label htmlFor="route-rename">{t('signoff.editor.routeName')}</Label>
+              <Label htmlFor="route-rename">Название маршрута</Label>
               <Input
                 id="route-rename"
                 defaultValue={route.name}
@@ -339,7 +346,7 @@ const RouteEditor = () => {
               <div className="flex gap-2">
                 <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
                 <div className="text-sm space-y-1">
-                  <p className="font-medium">{t('signoff.editor.gapTitle')}</p>
+                  <p className="font-medium">В ветвлении есть пробел</p>
                   {route.coverage_gaps?.map((gap) => (
                     <p key={`${gap.order}-${gap.field}`} className="text-muted-foreground">
                       Шаг {gap.order}, «{gap.label}»: нет ветки для{' '}
@@ -347,7 +354,10 @@ const RouteEditor = () => {
                     </p>
                   ))}
                   <p className="text-muted-foreground">
-                    {t('signoff.editor.gapBody')}
+                    Объект с таким значением отправить на согласование не
+                    получится — добавьте ветку или этап «иначе». Отказ увидит
+                    тот, кто нажмёт «отправить», поэтому лучше закрыть пробел
+                    здесь.
                   </p>
                 </div>
               </div>
@@ -359,9 +369,13 @@ const RouteEditor = () => {
               <div className="flex gap-2">
                 <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
                 <div className="text-sm space-y-1">
-                  <p className="font-medium">{t('signoff.editor.signatureNotLastTitle')}</p>
+                  <p className="font-medium">Подпись инициатора стоит не последней</p>
                   <p className="text-muted-foreground">
-                    {t('signoff.editor.signatureNotLastBody')}
+                    Согласование завершается, когда пройден последний шаг, — а
+                    после этапа подписи в маршруте есть ещё шаги. Значит подпись
+                    здесь превращается из финальной в промежуточное
+                    подтверждение. Если задумывалась именно подпись автора,
+                    перенесите этап на последний шаг.
                   </p>
                 </div>
               </div>
@@ -370,24 +384,28 @@ const RouteEditor = () => {
 
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-lg font-semibold">{t('signoff.editor.stages')}</h2>
+              <h2 className="text-lg font-semibold">Этапы</h2>
               <p className="text-sm text-muted-foreground">
-                {t('signoff.editor.stagesHint')}
+                Шаги идут сверху вниз; этапы внутри одного шага согласуются
+                одновременно. Отказ на любом этапе отклоняет весь процесс
+                сразу. Этап с условием попадёт в согласование только если
+                условие сошлось.
               </p>
             </div>
             <Button onClick={() => setDraft(emptyDraft(nextOrder))}>
               <Plus className="mr-1.5 h-4 w-4" />
-              {t('signoff.editor.addStage')}
+              Добавить этап
             </Button>
           </div>
 
           {route.stages.length === 0 ? (
             <div className="rounded-lg border border-dashed p-10 text-center">
               <p className="text-muted-foreground mb-4">
-                {t('signoff.editor.noStages')}
+                Этапов нет — маршрут неисполним, отправить объект на
+                согласование по нему нельзя.
               </p>
               <Button variant="outline" onClick={() => setDraft(emptyDraft(1))}>
-                {t('signoff.editor.addFirstStage')}
+                Добавить первый этап
               </Button>
             </div>
           ) : (
@@ -399,14 +417,14 @@ const RouteEditor = () => {
                       {index + 1}
                     </span>
                     <span className="text-sm text-muted-foreground">
-                      {t('signoff.editor.stepNumber', { order })}
+                      шаг {order}
                     </span>
                     {stages.length > 1 && (
                       <Badge variant="outline" className="text-muted-foreground">
                         {stages.some((stage) => stage.condition.length > 0
                           || stage.is_fallback)
-                          ? t('signoff.editor.branching', { count: stages.length })
-                          : t('signoff.editor.parallel', { count: stages.length })}
+                          ? `ветвление · ${stages.length}`
+                          : `параллельно · ${stages.length}`}
                       </Badge>
                     )}
                     <Button
@@ -419,7 +437,7 @@ const RouteEditor = () => {
                       }}
                     >
                       <Plus className="mr-1 h-3.5 w-3.5" />
-                      {t('signoff.editor.toThisStep')}
+                      в этот шаг
                     </Button>
                   </div>
 
@@ -441,7 +459,13 @@ const RouteEditor = () => {
                             {stage.requires_attachment && (
                               <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                                 <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                                {t('signoff.editor.pdfOnly')}
+                                только с приложенным PDF
+                              </p>
+                            )}
+                            {stage.requires_comment && (
+                              <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                                только с пояснением
                               </p>
                             )}
                             {(stage.condition.length > 0 || stage.is_fallback) && (
@@ -449,7 +473,7 @@ const RouteEditor = () => {
                                 <Split className="h-3.5 w-3.5 shrink-0 mt-px" />
                                 <span className="break-words">
                                   {stage.is_fallback
-                                    ? t('signoff.editor.fallbackHint')
+                                    ? 'иначе — когда в шаге не сошлось ни одно условие'
                                     : conditionText(stage.condition, fields)}
                                 </span>
                               </p>
@@ -459,7 +483,7 @@ const RouteEditor = () => {
                             <Button
                               size="icon"
                               variant="ghost"
-                              aria-label={t('signoff.editor.editStage')}
+                              aria-label="Изменить этап"
                               onClick={() => openEdit(stage)}
                             >
                               <Pencil className="h-4 w-4" />
@@ -469,11 +493,11 @@ const RouteEditor = () => {
                                 <Button
                                   size="icon"
                                   variant="ghost"
-                                  aria-label={t('signoff.editor.deleteStage')}
+                                  aria-label="Удалить этап"
                                   disabled={onlyStage}
                                   title={
                                     onlyStage
-                                      ? t('signoff.editor.cannotDeleteLast')
+                                      ? 'Последний этап удалить нельзя — маршрут без этапов неисполним'
                                       : undefined
                                   }
                                 >
@@ -483,18 +507,21 @@ const RouteEditor = () => {
                               <AlertDialogContent>
                                 <AlertDialogHeader>
                                   <AlertDialogTitle>
-                                    {t('signoff.editor.deleteConfirmTitle', { name: stage.name })}
+                                    Удалить этап «{stage.name}»?
                                   </AlertDialogTitle>
                                   <AlertDialogDescription>
-                                    {t('signoff.editor.deleteConfirmBody')}
+                                    Уже идущие согласования это не затронет —
+                                    они работают по снимку маршрута, сделанному
+                                    при запуске. Изменится только то, что будет
+                                    отправлено дальше.
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
-                                  <AlertDialogCancel>{t('signoff.editor.keep')}</AlertDialogCancel>
+                                  <AlertDialogCancel>Оставить</AlertDialogCancel>
                                   <AlertDialogAction
                                     onClick={() => deleteStage.mutate(stage.id)}
                                   >
-                                    {t('common.delete')}
+                                    Удалить
                                   </AlertDialogAction>
                                 </AlertDialogFooter>
                               </AlertDialogContent>
@@ -506,22 +533,22 @@ const RouteEditor = () => {
                           {stage.approver_kind === 'initiator' ? (
                             <Badge variant="outline" className="text-muted-foreground">
                               <PenLine className="mr-1 h-3 w-3" />
-                              {t('signoff.editor.initiatorApprover')}
+                              инициатор согласования
                             </Badge>
-                          ) : stage.approvers.length === 0 ? (
+                          ) : stage.roles.length === 0 ? (
                             <span className="text-sm text-destructive">
-                              {t('signoff.editor.noApprovers')}
+                              должностей нет — этап не исполнится
                             </span>
                           ) : (
-                            stage.approvers.map((approver) => (
+                            stage.roles.map((role) => (
                               <Badge
-                                key={approver.user_id}
+                                key={role.position_id}
                                 variant="secondary"
-                                className={approver.is_active ? '' : 'opacity-60'}
+                                className={role.is_active ? '' : 'opacity-60'}
                               >
-                                {approver.full_name
-                                  || t('signoff.userNumber', { id: approver.user_id })}
-                                {!approver.is_active && t('signoff.approvers.disabledSuffix')}
+                                {[role.title, role.department_name].filter(Boolean).join(' · ')
+                                  || `Должность #${role.position_id}`}
+                                {!role.is_active && ' (неактивна)'}
                               </Badge>
                             ))
                           )}
@@ -546,34 +573,35 @@ const RouteEditor = () => {
             <DialogContent className="sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>
-                  {draft?.id === null ? t('signoff.editor.newStage') : t('signoff.editor.stageTitle')}
+                  {draft?.id === null ? 'Новый этап' : 'Этап маршрута'}
                 </DialogTitle>
                 <DialogDescription>
-                  {t('signoff.editor.stepHint')}
+                  Этапы с одинаковым номером шага согласуются одновременно, с
+                  разными — друг за другом.
                 </DialogDescription>
               </DialogHeader>
 
               {draft && (
                 <div className="space-y-4">
                   <div className="space-y-1.5">
-                    <Label htmlFor="stage-name">{t('signoff.editor.stageName')}</Label>
+                    <Label htmlFor="stage-name">Название этапа</Label>
                     <Input
                       id="stage-name"
                       value={draft.name}
                       maxLength={200}
-                      placeholder={t('signoff.editor.stageNamePlaceholder')}
+                      placeholder="Например: финансовый контроль"
                       onChange={(event) =>
                         setDraft({ ...draft, name: event.target.value })
                       }
                     />
                     <p className="text-xs text-muted-foreground">
-                      {t('signoff.editor.stageNameHint')}
+                      Роли в платформе нет — смысл этапа несёт его название.
                     </p>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-1.5">
-                      <Label htmlFor="stage-order">{t('signoff.editor.stepNumberLabel')}</Label>
+                      <Label htmlFor="stage-order">Номер шага</Label>
                       <Input
                         id="stage-order"
                         type="number"
@@ -591,9 +619,9 @@ const RouteEditor = () => {
 
                     {/* У этапа подписи согласующий ровно один, и кворум
                         «нужны все» из одного человека только путал бы. */}
-                    {draft.approverKind === 'named' && (
+                    {draft.approverKind === 'position' && (
                       <div className="space-y-1.5">
-                        <Label>{t('signoff.editor.quorum')}</Label>
+                        <Label>Кворум</Label>
                         <Select
                           value={draft.quorum}
                           onValueChange={(value) =>
@@ -613,7 +641,7 @@ const RouteEditor = () => {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label>{t('signoff.editor.whoApproves')}</Label>
+                    <Label>Кто согласует</Label>
                     <Select
                       value={draft.approverKind}
                       onValueChange={(value) =>
@@ -625,7 +653,7 @@ const RouteEditor = () => {
                         setDraft({
                           ...draft,
                           approverKind: value as ApproverKind,
-                          approverIds: value === 'named' ? draft.approverIds : [],
+                          positionIds: value === 'position' ? draft.positionIds : [],
                         })
                       }
                     >
@@ -633,8 +661,8 @@ const RouteEditor = () => {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="named">
-                          {APPROVER_KIND_LABELS.named}
+                        <SelectItem value="position">
+                          {APPROVER_KIND_LABELS.position}
                         </SelectItem>
                         <SelectItem value="initiator">
                           {APPROVER_KIND_LABELS.initiator}
@@ -643,7 +671,9 @@ const RouteEditor = () => {
                     </Select>
                     {draft.approverKind === 'initiator' && (
                       <p className="text-xs text-muted-foreground">
-                        {t('signoff.editor.initiatorHint')}
+                        Согласует тот, кто отправил объект на согласование —
+                        конкретный человек станет известен при запуске. Такой
+                        этап ставят последним: он и есть подпись автора.
                       </p>
                     )}
                   </div>
@@ -651,10 +681,12 @@ const RouteEditor = () => {
                   <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
                     <div className="min-w-0">
                       <Label htmlFor="stage-attachment" className="text-sm">
-                        {t('signoff.editor.requireDocument')}
+                        Требуется документ (PDF)
                       </Label>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {t('signoff.editor.requireDocumentHint')}
+                        Согласовать этап будет можно только приложив файл. На
+                        отказ это не влияет: документа, который отказавшему
+                        полагалось бы подписать, не существует.
                       </p>
                     </div>
                     <Switch
@@ -666,17 +698,38 @@ const RouteEditor = () => {
                     />
                   </div>
 
-                  {draft.approverKind === 'named' && (
+                  <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                    <div className="min-w-0">
+                      <Label htmlFor="stage-comment" className="text-sm">
+                        Требуется пояснение
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Согласовать этап будет можно только с непустым
+                        комментарием. На отказ и возврат на доработку не влияет:
+                        там пояснение и так по смыслу обязательно.
+                      </p>
+                    </div>
+                    <Switch
+                      id="stage-comment"
+                      checked={draft.requiresComment}
+                      onCheckedChange={(checked) =>
+                        setDraft({ ...draft, requiresComment: checked })
+                      }
+                    />
+                  </div>
+
+                  {draft.approverKind === 'position' && (
                     <div className="space-y-1.5">
-                      <Label>{t('signoff.editor.approvers')}</Label>
-                      <ApproverPicker
-                        value={draft.approverIds}
+                      <Label>Должности согласующих</Label>
+                      <PositionPicker
+                        value={draft.positionIds}
                         knownNames={knownNames}
-                        onChange={(ids) => setDraft({ ...draft, approverIds: ids })}
+                        onChange={(ids) => setDraft({ ...draft, positionIds: ids })}
                       />
                       {draft.id !== null && (
                         <p className="text-xs text-muted-foreground">
-                          {t('signoff.editor.approversHint')}
+                          Список заменяется целиком: сохранится ровно то, что
+                          выбрано сейчас.
                         </p>
                       )}
                     </div>
@@ -685,13 +738,13 @@ const RouteEditor = () => {
                   {fields.length > 0 && (
                     <div className="space-y-2 border-t pt-4">
                       <div className="flex items-center justify-between gap-3">
-                        <Label>{t('signoff.editor.whenNeeded')}</Label>
+                        <Label>Когда нужен этот этап</Label>
                         <div className="flex items-center gap-2">
                           <Label
                             htmlFor="stage-fallback"
                             className="text-xs font-normal text-muted-foreground"
                           >
-                            {t('signoff.editor.otherwise')}
+                            иначе
                           </Label>
                           <Switch
                             id="stage-fallback"
@@ -714,7 +767,8 @@ const RouteEditor = () => {
 
                       {draft.isFallback ? (
                         <p className="text-xs text-muted-foreground">
-                          {t('signoff.editor.otherwiseHint')}
+                          Этап пойдёт, только если в его шаге не сошлось ни одно
+                          условие. Собственного условия у «иначе» быть не может.
                         </p>
                       ) : (
                         <ConditionEditor
@@ -734,13 +788,13 @@ const RouteEditor = () => {
 
               <DialogFooter>
                 <Button variant="outline" onClick={() => setDraft(null)}>
-                  {t('common.cancel')}
+                  Отмена
                 </Button>
                 <Button onClick={submitDraft} disabled={saveStage.isPending}>
                   {saveStage.isPending && (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   )}
-                  {t('common.save')}
+                  Сохранить
                 </Button>
               </DialogFooter>
             </DialogContent>

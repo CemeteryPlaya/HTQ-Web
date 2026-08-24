@@ -6,12 +6,15 @@
  * запертым, «вернуть на доработку» — открывает его автору для правки. Круг
  * закрывают оба одинаково.
  *
- * Комментарий обязателен у обоих отрицательных. Схема бэкенда его не
- * требует нигде (`comment: str = ""`), но отказ и возврат без объяснения
- * нечего дорабатывать: инициатор увидит состояние и не узнает, что
- * исправить. Согласие в объяснении не нуждается.
+ * Комментарий обязателен у обоих отрицательных всегда, а при СОГЛАСИИ —
+ * только если этап помечен `requiresComment` (`ProcessStage.requires_comment`).
+ * Отказ и возврат без объяснения нечего дорабатывать: инициатор увидит
+ * состояние и не узнает, что исправить. Согласие в объяснении по умолчанию
+ * не нуждается — но этап может его потребовать, и тогда гейт бэкенда
+ * (`engine.act` → `CommentRequired`) отобьёт пустой комментарий 409-м; форма
+ * лишь спрашивает то же заранее.
  *
- * Документ (`requiresAttachment`) — зеркально: нужен только при СОГЛАСИИ.
+ * Документ (`requiresAttachment`) — так же: нужен только при СОГЛАСИИ.
  * Так устроен и гейт на бэкенде: требовать PDF от того, кто отклоняет,
  * незачем — документа, который ему полагалось бы подписать, не существует.
  * Поэтому поле файла исчезает, стоит переключиться на отказ.
@@ -48,7 +51,6 @@ import { signoffApi } from '@/api/signoff';
 import type { ApprovalProcess } from '@/types/signoff';
 
 import { reportApiError } from '@/lib/apiError';
-import { useTranslation } from 'react-i18next';
 
 export type DecisionKind = 'approve' | 'reject' | 'rework';
 
@@ -58,40 +60,46 @@ export type DecisionKind = 'approve' | 'reject' | 'rework';
 const KINDS: Record<
   DecisionKind,
   {
-    titleKey: string;
-    actionKey: string;
-    toastKey: string;
+    title: string;
+    action: string;
+    toast: string;
     variant: 'default' | 'destructive' | 'outline';
     /** Пусто — комментарий необязателен. */
-    commentRequiredKey?: string;
-    warningKey?: string;
-    placeholderKey: string;
+    commentRequired?: string;
+    warning?: string;
+    placeholder: string;
   }
 > = {
   approve: {
-    titleKey: 'signoff.decision.approve.title',
-    actionKey: 'signoff.decision.approve.action',
-    toastKey: 'signoff.decision.approve.toast',
+    title: 'Согласовать',
+    action: 'Согласовать',
+    toast: 'Согласовано',
     variant: 'default',
-    placeholderKey: 'signoff.decision.approve.placeholder',
+    placeholder: 'Замечания, если есть',
   },
   reject: {
-    titleKey: 'signoff.decision.reject.title',
-    actionKey: 'signoff.decision.reject.action',
-    toastKey: 'signoff.decision.reject.toast',
+    title: 'Отклонить согласование',
+    action: 'Отклонить',
+    toast: 'Отклонено',
     variant: 'destructive',
-    commentRequiredKey: 'signoff.decision.reject.commentRequired',
-    warningKey: 'signoff.decision.reject.warning',
-    placeholderKey: 'signoff.decision.reject.placeholder',
+    commentRequired: 'Укажите причину — инициатору нужно понимать, почему отказ.',
+    warning:
+      'Отказ на любом этапе закрывает весь процесс сразу — оставшиеся запросы '
+      + 'гаснут. Объект при этом остаётся закрытым для правки: если его нужно '
+      + 'переделать, выберите «На доработку».',
+    placeholder: 'Почему документ не годится',
   },
   rework: {
-    titleKey: 'signoff.decision.rework.title',
-    actionKey: 'signoff.decision.rework.action',
-    toastKey: 'signoff.decision.rework.toast',
+    title: 'Вернуть на доработку',
+    action: 'На доработку',
+    toast: 'Возвращено на доработку',
     variant: 'outline',
-    commentRequiredKey: 'signoff.decision.rework.commentRequired',
-    warningKey: 'signoff.decision.rework.warning',
-    placeholderKey: 'signoff.decision.rework.placeholder',
+    commentRequired: 'Укажите, что исправить — за этим автора и возвращают.',
+    warning:
+      'Процесс закроется сразу, оставшиеся запросы погаснут, а объект '
+      + 'откроется автору для правки. Доработанный он отправляется заново — '
+      + 'новым кругом согласования.',
+    placeholder: 'Что нужно исправить',
   },
 };
 
@@ -101,6 +109,10 @@ export interface DecisionTarget {
   subjectLabel: string;
   /** Этап требует приложенного PDF (`ProcessStage.requires_attachment`). */
   requiresAttachment?: boolean;
+  /** Этап требует пояснения к решению (`ProcessStage.requires_comment`).
+   *  Действует только при согласии — у отказа и доработки комментарий
+   *  обязателен и так. */
+  requiresComment?: boolean;
   /** Документ, приложенный к этому запросу РАНЬШЕ: человек мог загрузить
    *  его, закрыть диалог и вернуться. Тогда файл выбирать заново не нужно —
    *  но заменить можно. */
@@ -115,7 +127,6 @@ interface Props {
 }
 
 export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
-  const { t } = useTranslation();
   const [comment, setComment] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState('');
@@ -136,6 +147,15 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
   // подписывать нечего ни отказом, ни возвратом на доработку.
   const needsDocument = Boolean(target?.requiresAttachment) && isApprove;
   const alreadyAttached = Boolean(target?.attachedFileId);
+  // Пояснение обязательно у отказа и доработки всегда (`kind.commentRequired`),
+  // а у согласия — если этого требует этап. Одно эффективное правило: и подпись
+  // поля, и проверка на отправке смотрят на него.
+  const commentRequiredMessage =
+    kind?.commentRequired
+    ?? (Boolean(target?.requiresComment) && isApprove
+      ? 'На этом этапе согласование возможно только с пояснением к решению.'
+      : undefined);
+  const needsComment = Boolean(commentRequiredMessage);
 
   const mutation = useMutation({
     mutationFn: async ({
@@ -152,21 +172,21 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
       return data;
     },
     onSuccess: (process) => {
-      toast.success(kind ? t(kind.toastKey) : t('signoff.decision.sent'));
+      toast.success(kind?.toast ?? 'Решение отправлено');
       onOpenChange(false);
       onDecided(process);
     },
     // 409 здесь — «запрос адресован другому», «решение уже принято»,
     // «согласование завершено», «нужен документ»; 413/415 — файл слишком
     // большой или не PDF. Во всех случаях текст объясняет причину.
-    onError: (err) => reportApiError(err, t('signoff.decision.submitError')),
+    onError: (err) => reportApiError(err, 'Не удалось отправить решение'),
   });
 
   const pickFile = (chosen: File | null) => {
     // Проверяем здесь, хотя проверит и media_files (по magic-байтам):
     // сказать «нужен PDF» до загрузки 20 МБ дешевле для всех.
     if (chosen && chosen.type !== 'application/pdf') {
-      setError(t('signoff.decision.pdfOnly'));
+      setError('Документ принимается только в PDF.');
       setFile(null);
       if (fileInput.current) fileInput.current.value = '';
       return;
@@ -177,12 +197,12 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
 
   const submit = () => {
     if (!target || !kind) return;
-    if (kind.commentRequiredKey && !comment.trim()) {
-      setError(t(kind.commentRequiredKey));
+    if (needsComment && !comment.trim()) {
+      setError(commentRequiredMessage!);
       return;
     }
     if (needsDocument && !file && !alreadyAttached) {
-      setError(t('signoff.decision.pdfRequired'));
+      setError('На этом этапе согласование возможно только с приложенным PDF.');
       return;
     }
     setError('');
@@ -193,16 +213,16 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
     <Dialog open={target !== null} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{kind && t(kind.titleKey)}</DialogTitle>
+          <DialogTitle>{kind?.title}</DialogTitle>
           <DialogDescription>
             {target?.subjectLabel}
-            {kind?.warningKey && (
+            {kind?.warning && (
               <span
                 className={`block mt-2 ${
                   target?.kind === 'reject' ? 'text-destructive' : ''
                 }`}
               >
-                {t(kind.warningKey)}
+                {kind.warning}
               </span>
             )}
           </DialogDescription>
@@ -210,7 +230,7 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
 
         {needsDocument && (
           <div className="space-y-2">
-            <Label htmlFor="signoff-document">{t('signoff.decision.documentLabel')}</Label>
+            <Label htmlFor="signoff-document">Документ (PDF)</Label>
             <input
               ref={fileInput}
               id="signoff-document"
@@ -232,7 +252,7 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
               alreadyAttached && (
                 <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
                   <Paperclip className="h-4 w-4" />
-                  {t('signoff.decision.documentAttached')}
+                  Документ уже приложен — выберите файл, чтобы заменить его.
                 </p>
               )
             )}
@@ -241,8 +261,7 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
 
         <div className="space-y-2">
           <Label htmlFor="signoff-comment">
-            {t('signoff.decision.comment')}
-            {kind?.commentRequiredKey ? '' : t('signoff.decision.optionalSuffix')}
+            Комментарий{needsComment ? '' : ' (необязательно)'}
           </Label>
           <Textarea
             id="signoff-comment"
@@ -250,7 +269,7 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
             onChange={(event) => setComment(event.target.value)}
             maxLength={2000}
             rows={4}
-            placeholder={kind && t(kind.placeholderKey)}
+            placeholder={kind?.placeholder}
           />
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
@@ -261,7 +280,7 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
             onClick={() => onOpenChange(false)}
             disabled={mutation.isPending}
           >
-            {t('common.cancel')}
+            Отмена
           </Button>
           <Button
             variant={kind?.variant ?? 'default'}
@@ -277,7 +296,7 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
             ) : (
               <X className="mr-2 h-4 w-4" />
             )}
-            {kind && t(kind.actionKey)}
+            {kind?.action}
           </Button>
         </DialogFooter>
       </DialogContent>

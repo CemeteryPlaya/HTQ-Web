@@ -21,6 +21,7 @@ import {
   Check,
   ChevronDown,
   Inbox as InboxIcon,
+  MessageSquare,
   Paperclip,
   Undo2,
   X,
@@ -77,6 +78,7 @@ const SignoffInbox = () => {
       subjectLabel:
         item.subject_title ?? `${item.subject_type} #${item.subject_id}`,
       requiresAttachment: item.requires_attachment,
+      requiresComment: item.requires_comment,
       attachedFileId: item.file_id,
     });
 
@@ -148,6 +150,12 @@ const SignoffInbox = () => {
                       <div className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
                         <Paperclip className="h-3 w-3" />
                         {item.file_id ? t('signoff.inbox.documentAttached') : t('signoff.inbox.pdfNeeded')}
+                      </div>
+                    )}
+                    {item.requires_comment && (
+                      <div className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+                        <MessageSquare className="h-3 w-3" />
+                        нужно пояснение
                       </div>
                     )}
                   </TableCell>
