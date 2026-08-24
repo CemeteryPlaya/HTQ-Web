@@ -42,7 +42,7 @@ from apps.core.models import ServiceStatus
 from apps.signoff.models import (
     ApprovalRoute,
     ApprovalRouteStage,
-    ApprovalRouteStageApprover,
+    ApprovalRouteStageRole,
     ApprovalState,
     ApprovalTask,
     ProcessState,
@@ -50,14 +50,29 @@ from apps.signoff.models import (
     TaskState,
 )
 from apps.signoff.services import engine
+from apps.hr.models import Department, Employee, EmployeeStatus, Position
 from apps.users.models import User, UserStatus
 
 pytestmark = pytest.mark.django_db
 
 
 def make_user(username: str = "approver") -> User:
-    return User.objects.create(username=username, email=f"{username}@htq.test",
+    user = User.objects.create(username=username, email=f"{username}@htq.test",
                                password="x", status=UserStatus.ACTIVE)
+    department, _ = Department.objects.get_or_create(
+        path="contracts-signoff-tests", defaults={"name": "Contracts signoff tests"})
+    position = Position.objects.filter(pk=user.pk).first()
+    if position is None:
+        position = Position.objects.create(
+            id=user.pk, title=f"Contracts {username}", department=department,
+            weight=user.pk + 20_000,
+        )
+    Employee.objects.create(
+        user_id=user.pk, first_name=username, last_name="Tester",
+        email=f"employee-{username}@htq.test", department=department,
+        position=position, hire_date="2024-01-01", status=EmployeeStatus.ACTIVE,
+    )
+    return user
 
 
 def route_for(subject_type: str, *user_ids: int) -> ApprovalRoute:
@@ -68,7 +83,7 @@ def route_for(subject_type: str, *user_ids: int) -> ApprovalRoute:
                                               name="Единственный этап",
                                               quorum=Quorum.ALL)
     for user_id in user_ids:
-        ApprovalRouteStageApprover.objects.create(stage=stage, user_id=user_id)
+        ApprovalRouteStageRole.objects.create(stage=stage, position_id=user_id)
     return route
 
 

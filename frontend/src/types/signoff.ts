@@ -26,8 +26,8 @@ export type Quorum = 'any' | 'all';
 /**
  * Откуда берётся список согласующих этапа.
  *
- * `named` — люди перечислены в маршруте поимённо, как во всех обычных
- * этапах. `initiator` — согласующий известен только на запуске: это тот, кто
+ * `position` — HR-должности перечислены в маршруте, а их текущие сотрудники
+ * разворачиваются на запуске. `initiator` — согласующий известен только на запуске: это тот, кто
  * отправил объект на согласование. Второй вариант вместе с
  * `requires_attachment` и есть «этап подписи»: автор подтверждает
  * согласованный остальными документ и прикладывает его PDF.
@@ -36,7 +36,7 @@ export type Quorum = 'any' | 'all';
  * предметной модели и разрешает того, кто нажал «на согласование». В
  * contracts это один и тот же человек по бизнес-процессу.
  */
-export type ApproverKind = 'named' | 'initiator';
+export type ApproverKind = 'position' | 'initiator';
 
 /**
  * Чем кончился круг согласования.
@@ -146,10 +146,10 @@ export interface CoverageGap {
 
 // ─── Маршруты ────────────────────────────────────────────────────────────
 
-export interface Approver {
-  user_id: number;
-  /** Разворачивается бэкендом через apps.users — показывать надо человека. */
-  full_name: string;
+export interface RouteRole {
+  position_id: number;
+  title: string;
+  department_name: string | null;
   is_active: boolean;
 }
 
@@ -168,7 +168,7 @@ export interface RouteStage {
    *  ни одно условие. С непустым `condition` не сочетается — бэкенд такую
    *  пару не принимает. */
   is_fallback: boolean;
-  /** `initiator` — список `approvers` пустой, и это норма: человек станет
+  /** `initiator` — список `roles` пустой, и это норма: человек станет
    *  известен на запуске процесса. */
   approver_kind: ApproverKind;
   /** Согласовать этап можно только приложив PDF. На отказ не влияет. */
@@ -177,7 +177,7 @@ export interface RouteStage {
    *  `requires_attachment` и `approver_kind` — комментарий можно требовать и
    *  от названного согласующего. На отказ/доработку не влияет. */
   requires_comment: boolean;
-  approvers: Approver[];
+  roles: RouteRole[];
 }
 
 export interface ApprovalRoute {
@@ -214,6 +214,8 @@ export interface Subject {
 export interface ProcessTask {
   id: number;
   user_id: number;
+  /** HR position through which this task was assigned; null for legacy and initiator tasks. */
+  position_id: number | null;
   full_name: string;
   state: TaskState;
   comment: string;
@@ -240,6 +242,8 @@ export interface ProcessStage {
    *  `requires_comment` здесь — рабочие поля: правка маршрута не избавляет от
    *  документа (или пояснения) тех, кто ещё не решил. */
   approver_kind: ApproverKind;
+  /** HR-должности, по которым этот снимок маршрута разрешил задачи. */
+  role_ids: number[];
   requires_attachment: boolean;
   requires_comment: boolean;
   decided_at: string | null;
@@ -306,9 +310,9 @@ export interface StageInput {
   order: number;
   name: string;
   quorum: Quorum;
-  /** Минимум один у `named` — этап без согласующих движок не запустит. У
+  /** Минимум одна у `position` — этап без должностей движок не запустит. У
    *  `initiator` наоборот: список обязан быть пустым. */
-  approver_ids: number[];
+  position_ids: number[];
   condition?: Condition;
   is_fallback?: boolean;
   approver_kind?: ApproverKind;
@@ -316,7 +320,7 @@ export interface StageInput {
   requires_comment?: boolean;
 }
 
-/** PATCH этапа: `approver_ids` заменяет список ЦЕЛИКОМ, а его отсутствие
+/** PATCH этапа: `position_ids` заменяет список ЦЕЛИКОМ, а его отсутствие
  *  оставляет согласующих в покое. Не путать одно с другим.
  *
  *  То же и с `condition`: не прислать поле — «не трогать ветку», прислать
@@ -325,7 +329,7 @@ export interface StageUpdateInput {
   order?: number;
   name?: string;
   quorum?: Quorum;
-  approver_ids?: number[];
+  position_ids?: number[];
   condition?: Condition;
   is_fallback?: boolean;
   /** Переключение на `initiator` стирает названных согласующих само —
