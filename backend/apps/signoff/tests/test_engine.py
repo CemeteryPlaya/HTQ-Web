@@ -308,14 +308,17 @@ def test_quorum_any_needs_one_approval_from_every_selected_position():
                decision=engine.APPROVE)
     process.refresh_from_db()
     assert process.state == ProcessState.PENDING
-    assert active_user_ids(process) == {deputy.pk, manager.pk}
+    assert active_user_ids(process) == {manager.pk}
+    tasks[deputy.pk].refresh_from_db()
+    assert tasks[deputy.pk].state == TaskState.SKIPPED
+    with pytest.raises(engine.ProcessClosed):
+        engine.act(task_id=tasks[deputy.pk].pk, actor_id=deputy.pk,
+                   decision=engine.REJECT)
 
     engine.act(task_id=tasks[manager.pk].pk, actor_id=manager.pk,
                decision=engine.APPROVE)
     process.refresh_from_db()
     assert process.state == ProcessState.APPROVED
-    tasks[deputy.pk].refresh_from_db()
-    assert tasks[deputy.pk].state == TaskState.SKIPPED
 
 
 def test_quorum_all_needs_every_holder_of_every_selected_position():

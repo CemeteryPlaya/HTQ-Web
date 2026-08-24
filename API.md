@@ -761,9 +761,10 @@ so the dependency only ever points *domain → signoff*.
 
 **Route shape.** A route is an ordered list of stages. Stages with the
 **same `order` run in parallel**; different `order` runs sequentially. Each
-stage names its approvers explicitly (user ids — the platform has no groups;
-`User` deliberately omits `PermissionsMixin`) and a `quorum` of `any` or
-`all`. **Any negative decision at any stage closes the whole process
+stage names its HR positions explicitly. Their active employee accounts are
+resolved when the process starts, and a `quorum` applies within each selected
+position: `any` needs one holder of every position, while `all` needs every
+holder of every position. **Any negative decision at any stage closes the whole process
 immediately**; outstanding requests are marked `skipped`, not left hanging.
 Exactly one active route per subject type (partial unique index).
 

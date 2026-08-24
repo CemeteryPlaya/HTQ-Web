@@ -548,6 +548,16 @@ def _settle_stage(stage: ApprovalProcessStage) -> bool:
         approved = sum(task.state == TaskState.APPROVED for task in role_tasks)
         return bool(approved) if stage.quorum == Quorum.ANY else approved == len(role_tasks)
 
+    # Once one holder has approved an ``any`` role, the other holders have no
+    # further say in this stage.  Leave their tasks pending while another role
+    # is still awaited and one of them could reject a role that already passed.
+    if stage.quorum == Quorum.ANY:
+        for position_id, role_tasks in tasks_by_position.items():
+            if role_settled(role_tasks):
+                stage.tasks.filter(
+                    position_id=position_id, state=TaskState.PENDING,
+                ).update(state=TaskState.SKIPPED)
+
     enough = all(role_settled(role_tasks)
                  for role_tasks in tasks_by_position.values())
 
