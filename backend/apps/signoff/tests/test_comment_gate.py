@@ -152,7 +152,7 @@ def test_a_stage_requiring_a_comment_round_trips_through_the_route_api(client):
     route = make_route([(1, "Проверка", Quorum.ALL, [a.pk])])
 
     created = post_json(client, f"{BASE}/routes/{route.pk}/stages", {
-        "order": 2, "name": "Обоснование", "approver_ids": [a.pk],
+        "order": 2, "name": "Обоснование", "position_ids": [a.pk],
         "requires_comment": True,
     }, **auth(admin_token()))
 

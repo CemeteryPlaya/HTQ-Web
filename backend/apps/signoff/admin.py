@@ -27,7 +27,7 @@ from .models import (
     ApprovalProcessStage,
     ApprovalRoute,
     ApprovalRouteStage,
-    ApprovalRouteStageApprover,
+    ApprovalRouteStageRole,
     ApprovalTask,
 )
 
@@ -36,11 +36,11 @@ from .models import (
 # Маршруты — настройка
 # ═══════════════════════════════════════════════════════════════════════
 
-class ApproverInline(admin.TabularInline):
-    model = ApprovalRouteStageApprover
+class RoleInline(admin.TabularInline):
+    model = ApprovalRouteStageRole
     extra = 1
-    verbose_name = "Согласующий"
-    verbose_name_plural = "Согласующие"
+    verbose_name = "Должность согласующего"
+    verbose_name_plural = "Должности согласующих"
 
 
 @admin.register(ApprovalRouteStage)
@@ -58,13 +58,13 @@ class ApprovalRouteStageAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_filter = ("route", "quorum", "is_fallback", "approver_kind",
                    "requires_attachment", "requires_comment")
     search_fields = ("name",)
-    inlines = [ApproverInline]
+    inlines = [RoleInline]
 
     @admin.display(description="Согласующих")
     def approver_count(self, obj) -> int:
         """У этапа, который согласует инициатор, здесь ноль — и это норма:
         человек станет известен на запуске процесса."""
-        return obj.approvers.count()
+        return obj.roles.count()
 
     @admin.display(description="Ветка")
     def branch(self, obj) -> str:

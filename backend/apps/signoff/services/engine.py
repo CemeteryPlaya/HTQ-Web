@@ -59,6 +59,7 @@ from apps.signoff.models import (
 )
 from apps.signoff.services import conditions, registry
 # Соседи — только через interface (apps/core/tests/test_app_isolation.py).
+from apps.hr import interface as hr
 from apps.messenger import interface as messenger
 from apps.users import interface as users
 
@@ -204,7 +205,7 @@ def start(*, subject_type: str, subject_id: int,
 
     route = (ApprovalRoute.objects
              .filter(subject_type=subject_type, is_active=True)
-             .prefetch_related("stages__approvers").first())
+             .prefetch_related("stages__roles").first())
     if route is None:
         raise RouteNotConfigured(
             f"Для «{subject.label}» не настроен маршрут согласования"
@@ -237,18 +238,22 @@ def start(*, subject_type: str, subject_id: int,
         ) from exc
 
     first_order = min(order for order, _, _, _ in plan)
-    for order, stage, matched_by, approver_ids in plan:
+    for order, stage, matched_by, approvers_by_position in plan:
         process_stage = ApprovalProcessStage.objects.create(
             process=process, order=order, name=stage.name, quorum=stage.quorum,
             condition=stage.condition, matched_by=matched_by,
             approver_kind=stage.approver_kind,
+            role_ids=([row.position_id for row in stage.roles.all()]
+                      if stage.approver_kind == ApproverKind.POSITION else []),
             requires_attachment=stage.requires_attachment,
             requires_comment=stage.requires_comment,
             state=StageState.ACTIVE if order == first_order else StageState.WAITING,
         )
         ApprovalTask.objects.bulk_create([
-            ApprovalTask(stage=process_stage, user_id=user_id)
-            for user_id in approver_ids
+            ApprovalTask(stage=process_stage, user_id=user_id,
+                         position_id=position_id)
+            for position_id, user_ids in approvers_by_position.items()
+            for user_id in user_ids
         ])
 
     process.current_order = first_order
@@ -339,10 +344,10 @@ def _facts_hint(facts: dict) -> str:
 
 
 def _resolve_stages(selected, *,
-                    initiator_id: int | None) -> list[tuple[int, object, str, list[int]]]:
+                    initiator_id: int | None) -> list[tuple[int, object, str, dict[int | None, list[int]]]]:
     """Проверить исполнимость отобранных этапов и развернуть согласующих.
 
-    Возвращает ``(order, stage, matched_by, user_ids)``.
+    Возвращает ``(order, stage, matched_by, {position_id: user_ids})``.
 
     Здесь же ``ApproverKind`` превращается в конкретные id: дальше движок
     работает со списком пользователей и про вид согласующих не знает — ровно
@@ -355,32 +360,41 @@ def _resolve_stages(selected, *,
     Проверяются только ОТОБРАННЫЕ этапы — уволившийся согласующий в ветке,
     которая к этому объекту не относится, запуску не мешает.
     """
-    plan: list[tuple[int, object, str, list[int]]] = []
+    plan: list[tuple[int, object, str, dict[int | None, list[int]]]] = []
     all_ids: set[int] = set()
     for item in selected:
         stage = item.stage
-        user_ids = _approver_ids(stage, initiator_id=initiator_id)
-        all_ids.update(user_ids)
-        plan.append((stage.order, stage, item.matched_by, user_ids))
+        approvers_by_position = _approver_ids(stage, initiator_id=initiator_id)
+        all_ids.update(
+            user_id for user_ids in approvers_by_position.values()
+            for user_id in user_ids
+        )
+        plan.append((stage.order, stage, item.matched_by, approvers_by_position))
 
     active = _active_user_ids(all_ids)
-    for _, stage, _, user_ids in plan:
-        if not any(user_id in active for user_id in user_ids):
-            if stage.approver_kind == ApproverKind.INITIATOR:
-                # Маршрут тут ни при чём — «поправьте маршрут» отправило бы
-                # человека не туда: чинить нужно учётную запись инициатора.
+    for _, stage, _, approvers_by_position in plan:
+        user_ids = [
+            user_id for ids in approvers_by_position.values()
+            for user_id in ids
+        ]
+        if stage.approver_kind == ApproverKind.INITIATOR:
+            if not any(user_id in active for user_id in user_ids):
                 raise RouteUnusable(
                     f"Этап «{stage.name}» подписывает инициатор, но его "
                     f"учётная запись неактивна"
                 )
+        elif len(active.intersection(user_ids)) != len(user_ids):
+            # HR filters inactive accounts while resolving positions.  Keep a
+            # final check here for the small window before tasks are written:
+            # every generated task must be executable, including ALL quorum.
             raise RouteUnusable(
-                f"На этапе «{stage.name}» не осталось ни одного активного "
-                f"согласующего — поправьте маршрут"
+                f"На этапе «{stage.name}» есть неактивный согласующий — "
+                f"проверьте должности и связанные учётные записи"
             )
     return plan
 
 
-def _approver_ids(stage, *, initiator_id: int | None) -> list[int]:
+def _approver_ids(stage, *, initiator_id: int | None) -> dict[int | None, list[int]]:
     """Кому адресовать запросы этого этапа.
 
     Названные поимённо согласующие берутся из маршрута; этап
@@ -396,14 +410,25 @@ def _approver_ids(stage, *, initiator_id: int | None) -> list[int]:
                 f"Этап «{stage.name}» подписывает инициатор, но согласование "
                 f"запущено без инициатора"
             )
-        return [initiator_id]
+        return {None: [initiator_id]}
 
-    user_ids = [row.user_id for row in stage.approvers.all()]
-    if not user_ids:
+    position_ids = [row.position_id for row in stage.roles.all()]
+    if not position_ids:
         raise RouteUnusable(
-            f"На этапе «{stage.name}» не назначен ни один согласующий"
+            f"На этапе «{stage.name}» не назначена ни одна должность"
         )
-    return user_ids
+    resolved = hr.resolve_position_users(position_ids)
+    missing = [position_id for position_id in position_ids
+               if not resolved.get(position_id)]
+    if missing:
+        raise RouteUnusable(
+            f"На этапе «{stage.name}» нет активного сотрудника с активной "
+            f"учётной записью для должности: " + ", ".join(map(str, missing))
+        )
+    return {
+        position_id: list(dict.fromkeys(resolved[position_id]))
+        for position_id in position_ids
+    }
 
 
 def _active_user_ids(user_ids) -> set[int]:
@@ -510,12 +535,31 @@ def _settle_stage(stage: ApprovalProcessStage) -> bool:
     процесса, а не одного этапа.
     """
     tasks = list(stage.tasks.all())
-    approved = [t for t in tasks if t.state == TaskState.APPROVED]
+    tasks_by_position: dict[int | None, list[ApprovalTask]] = {}
+    for item in tasks:
+        tasks_by_position.setdefault(item.position_id, []).append(item)
 
+    # A selected HR position represents one required role in a stage.  The
+    # stage proceeds only after every selected role has met its quorum: ``any``
+    # means one current holder of *each* position; ``all`` means every current
+    # holder of *each* position.  Legacy tasks without a position snapshot stay
+    # in one group, preserving the semantics of processes already in flight.
+    def role_settled(role_tasks: list[ApprovalTask]) -> bool:
+        approved = sum(task.state == TaskState.APPROVED for task in role_tasks)
+        return bool(approved) if stage.quorum == Quorum.ANY else approved == len(role_tasks)
+
+    # Once one holder has approved an ``any`` role, the other holders have no
+    # further say in this stage.  Leave their tasks pending while another role
+    # is still awaited and one of them could reject a role that already passed.
     if stage.quorum == Quorum.ANY:
-        enough = bool(approved)
-    else:
-        enough = len(approved) == len(tasks)
+        for position_id, role_tasks in tasks_by_position.items():
+            if role_settled(role_tasks):
+                stage.tasks.filter(
+                    position_id=position_id, state=TaskState.PENDING,
+                ).update(state=TaskState.SKIPPED)
+
+    enough = all(role_settled(role_tasks)
+                 for role_tasks in tasks_by_position.values())
 
     if not enough:
         return False

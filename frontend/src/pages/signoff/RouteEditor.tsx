@@ -21,7 +21,7 @@
  * иначе легко ждать, что правка догонит уже начатое.
  *
  * Ограничения бэкенда воспроизведены в интерфейсе, чтобы не ловить их
- * ошибкой: у этапа должен быть хотя бы один согласующий, последний этап
+ * ошибкой: у этапа должна быть хотя бы одна HR-должность, последний этап
  * маршрута удалить нельзя (маршрут без этапов неисполним), а этап «иначе» не
  * может иметь собственного условия.
  */
@@ -45,7 +45,7 @@ import {
 import { toast } from 'sonner';
 
 import { SignoffShell } from '@/components/signoff/SignoffShell';
-import { ApproverPicker } from '@/components/signoff/ApproverPicker';
+import { PositionPicker } from '@/components/signoff/PositionPicker';
 import { ConditionEditor } from '@/components/signoff/ConditionEditor';
 import { conditionText } from '@/components/signoff/format';
 import { APPROVER_KIND_LABELS, QUORUM_LABELS } from '@/components/signoff/labels';
@@ -96,7 +96,7 @@ interface StageDraft {
   order: number;
   name: string;
   quorum: Quorum;
-  approverIds: number[];
+  positionIds: number[];
   condition: Condition;
   isFallback: boolean;
   approverKind: ApproverKind;
@@ -109,10 +109,10 @@ const emptyDraft = (order: number): StageDraft => ({
   order,
   name: '',
   quorum: 'all',
-  approverIds: [],
+  positionIds: [],
   condition: [],
   isFallback: false,
-  approverKind: 'named',
+  approverKind: 'position',
   requiresAttachment: false,
   requiresComment: false,
 });
@@ -193,7 +193,7 @@ const RouteEditor = () => {
         quorum: stage.quorum,
         // У этапа подписи список обязан быть пустым: непустой бэкенд
         // отвергнет как противоречие, а не «поймёт, что имелось в виду».
-        approver_ids: stage.approverKind === 'named' ? stage.approverIds : [],
+        position_ids: stage.approverKind === 'position' ? stage.positionIds : [],
         // Условие шлём всегда, в том числе пустым: для PATCH пустой массив —
         // это «снять ветку», и не прислать его значило бы не уметь её снять.
         condition: stage.isFallback ? [] : stage.condition,
@@ -229,7 +229,7 @@ const RouteEditor = () => {
       order: stage.order,
       name: stage.name,
       quorum: stage.quorum,
-      approverIds: stage.approvers.map((approver) => approver.user_id),
+      positionIds: stage.roles.map((role) => role.position_id),
       condition: stage.condition ?? [],
       isFallback: stage.is_fallback,
       approverKind: stage.approver_kind,
@@ -240,8 +240,9 @@ const RouteEditor = () => {
   const knownNames = useMemo(() => {
     const names: Record<number, string> = {};
     for (const stage of route?.stages ?? []) {
-      for (const approver of stage.approvers) {
-        if (approver.full_name) names[approver.user_id] = approver.full_name;
+      for (const role of stage.roles) {
+        if (role.title) names[role.position_id] = [role.title, role.department_name]
+          .filter(Boolean).join(' · ');
       }
     }
     return names;
@@ -254,8 +255,8 @@ const RouteEditor = () => {
         + 'ролей у платформы нет.');
       return;
     }
-    if (draft.approverKind === 'named' && draft.approverIds.length === 0) {
-      setDraftError('Нужен хотя бы один согласующий: этап без них движок не '
+    if (draft.approverKind === 'position' && draft.positionIds.length === 0) {
+      setDraftError('Нужна хотя бы одна должность: этап без неё движок не '
         + 'запустит.');
       return;
     }
@@ -534,20 +535,20 @@ const RouteEditor = () => {
                               <PenLine className="mr-1 h-3 w-3" />
                               инициатор согласования
                             </Badge>
-                          ) : stage.approvers.length === 0 ? (
+                          ) : stage.roles.length === 0 ? (
                             <span className="text-sm text-destructive">
-                              согласующих нет — этап не исполнится
+                              должностей нет — этап не исполнится
                             </span>
                           ) : (
-                            stage.approvers.map((approver) => (
+                            stage.roles.map((role) => (
                               <Badge
-                                key={approver.user_id}
+                                key={role.position_id}
                                 variant="secondary"
-                                className={approver.is_active ? '' : 'opacity-60'}
+                                className={role.is_active ? '' : 'opacity-60'}
                               >
-                                {approver.full_name
-                                  || `Пользователь #${approver.user_id}`}
-                                {!approver.is_active && ' (отключён)'}
+                                {[role.title, role.department_name].filter(Boolean).join(' · ')
+                                  || `Должность #${role.position_id}`}
+                                {!role.is_active && ' (неактивна)'}
                               </Badge>
                             ))
                           )}
@@ -618,7 +619,7 @@ const RouteEditor = () => {
 
                     {/* У этапа подписи согласующий ровно один, и кворум
                         «нужны все» из одного человека только путал бы. */}
-                    {draft.approverKind === 'named' && (
+                    {draft.approverKind === 'position' && (
                       <div className="space-y-1.5">
                         <Label>Кворум</Label>
                         <Select
@@ -652,7 +653,7 @@ const RouteEditor = () => {
                         setDraft({
                           ...draft,
                           approverKind: value as ApproverKind,
-                          approverIds: value === 'named' ? draft.approverIds : [],
+                          positionIds: value === 'position' ? draft.positionIds : [],
                         })
                       }
                     >
@@ -660,8 +661,8 @@ const RouteEditor = () => {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="named">
-                          {APPROVER_KIND_LABELS.named}
+                        <SelectItem value="position">
+                          {APPROVER_KIND_LABELS.position}
                         </SelectItem>
                         <SelectItem value="initiator">
                           {APPROVER_KIND_LABELS.initiator}
@@ -717,13 +718,13 @@ const RouteEditor = () => {
                     />
                   </div>
 
-                  {draft.approverKind === 'named' && (
+                  {draft.approverKind === 'position' && (
                     <div className="space-y-1.5">
-                      <Label>Согласующие</Label>
-                      <ApproverPicker
-                        value={draft.approverIds}
+                      <Label>Должности согласующих</Label>
+                      <PositionPicker
+                        value={draft.positionIds}
                         knownNames={knownNames}
-                        onChange={(ids) => setDraft({ ...draft, approverIds: ids })}
+                        onChange={(ids) => setDraft({ ...draft, positionIds: ids })}
                       />
                       {draft.id !== null && (
                         <p className="text-xs text-muted-foreground">
