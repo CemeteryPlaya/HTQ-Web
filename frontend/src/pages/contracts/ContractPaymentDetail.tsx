@@ -7,7 +7,7 @@ import { contractsApi } from '@/api/contracts';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { BackLink, DetailSkeleton, Field, FieldGrid } from '@/components/contracts/detail';
 import { formatAmount, formatMoment } from '@/components/contracts/format';
-import { reportApiError } from '@/components/signoff/apiError';
+import { reportApiError } from '@/lib/apiError';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Button } from '@/components/ui/button'; import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'; import { Input } from '@/components/ui/input'; import { Label } from '@/components/ui/label';

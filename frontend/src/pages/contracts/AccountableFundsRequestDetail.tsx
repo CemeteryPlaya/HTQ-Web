@@ -8,7 +8,7 @@ import { contractsApi } from '@/api/contracts';
 import { BackLink, DetailSkeleton, Field, FieldGrid } from '@/components/contracts/detail';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { formatAmount, formatMoment } from '@/components/contracts/format';
-import { reportApiError } from '@/components/signoff/apiError';
+import { reportApiError } from '@/lib/apiError';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { Badge } from '@/components/ui/badge';

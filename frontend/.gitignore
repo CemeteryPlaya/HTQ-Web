@@ -25,3 +25,6 @@ dist-ssr
 playwright-report/
 test-results/
 bundle-report.html
+
+# Кэш инкрементальной сборки tsc -b (npm run typecheck)
+*.tsbuildinfo
