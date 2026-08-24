@@ -1,7 +1,7 @@
 """Команда наполнения домена задач.
 
 Наполнение — такой же код, как остальной. Если оно молча перестанет
-связывать проект с объектом, посадит работника одного подрядчика на задачу
+связывать проект с объектом, посадит работника одного партнёра на задачу
 другого или повесит роудмап на блок чужой площадки, локальная база начнёт
 врать, а по ней потом смотрят глазами и делают выводы об отчётах.
 
@@ -43,6 +43,7 @@ from apps.tasks.models import (
     EquipmentOwnership,
     Project,
     ProjectSite,
+    ProjectStaffReport,
     ResourceKind,
     ResourceRequirement,
     Roadmap,
@@ -220,7 +221,7 @@ def test_task_block_belongs_to_the_task_site(hr_data):
 
 def test_contractor_worker_always_belongs_to_the_named_contractor(hr_data):
     """Работник и организация на задаче должны быть одной парой — иначе
-    отчёт «по подрядчику» посчитает человека не тому."""
+    отчёт «по партнёру» посчитает человека не тому."""
     _seed()
     mismatched = [
         task.summary
@@ -232,10 +233,10 @@ def test_contractor_worker_always_belongs_to_the_named_contractor(hr_data):
 
 
 def test_some_tasks_inherit_their_contractor_from_the_site(hr_data):
-    """Наследование подрядчика проверяемо только на задачах, которые его не
+    """Наследование партнёра проверяемо только на задачах, которые его не
     называют.
 
-    Нужен не «хоть кто-то без подрядчика» — таких хватает и в офисной
+    Нужен не «хоть кто-то без партнёра» — таких хватает и в офисной
     части, — а именно задача пакета работ, у площадки которой есть активное
     привлечение: только на ней ``effective_contractors`` вернёт не то же
     самое, что ``task.contractor``.
@@ -248,7 +249,7 @@ def test_some_tasks_inherit_their_contractor_from_the_site(hr_data):
         contractor=None, site_id__in=sites_with_engagement).exclude(
         roadmap=None)
     assert inheriting.count() >= 2, (
-        "в демо не осталось задач, на которых видно наследование подрядчика")
+        "в демо не осталось задач, на которых видно наследование партнёра")
 
 
 def test_contractor_equipment_always_names_its_owner(hr_data):
@@ -304,7 +305,7 @@ def test_every_task_has_a_type(hr_data):
 
 
 def test_engagements_may_have_no_project(hr_data):
-    """Подрядчик на объекте вне проекта — реальный случай, ради которого
+    """Партнёр на объекте вне проекта — реальный случай, ради которого
     оба поля привлечения nullable."""
     _seed()
     assert ContractorEngagement.objects.filter(
@@ -313,7 +314,7 @@ def test_engagements_may_have_no_project(hr_data):
 
 def test_contractor_levels_are_all_represented(hr_data):
     """Уровень — свойство человека, и в демо должны быть все три, иначе
-    матрицу прав подрядчиков не на чем показать."""
+    матрицу прав партнёров не на чем показать."""
     _seed()
     assert set(ContractorWorker.objects.values_list("level", flat=True)) == {
         "junior", "middle", "senior",
@@ -420,6 +421,85 @@ def test_demo_contains_a_corrected_report(hr_data):
     assert versions[0].quantity != versions[1].quantity
 
 
+# ── отчёты по персоналу ────────────────────────────────────────────────────
+
+def test_staff_reports_are_unique_per_block_and_day(hr_data):
+    """У численности, в отличие от выработки, UNIQUE(проект, блок, дата)
+    ЕСТЬ: два отчёта за один день на одном блоке — это двойной счёт людей,
+    а не две смены. Сид обязан этому соответствовать."""
+    _seed()
+    pairs = list(ProjectStaffReport.objects.filter(is_deleted=False)
+                 .values_list("project_id", "site_block_id", "work_date"))
+    assert len(pairs) == len(set(pairs))
+    assert len(pairs) == 18
+
+
+def test_staff_reports_land_on_blocks_that_have_a_plan(hr_data):
+    """Иначе доске нечего сравнивать: строка без плана показывает прочерк,
+    и демо не отвечает на вопрос, ради которого заведено."""
+    _seed()
+    planned_blocks = set(
+        ResourceRequirement.objects
+        .filter(kind=ResourceKind.HUMAN, roadmap__isnull=False)
+        .values_list("roadmap__site_block_id", flat=True))
+    reported = set(ProjectStaffReport.objects.filter(is_deleted=False)
+                   .values_list("site_block_id", flat=True))
+    assert reported and reported <= planned_blocks
+
+
+def test_staff_report_dates_are_never_in_the_future(hr_data):
+    """Дата ВЫХОДА людей: отчитаться за завтра нельзя."""
+    _seed()
+    today = dt.date.today()
+    assert not ProjectStaffReport.objects.filter(
+        work_date__gt=today).exists()
+    assert ProjectStaffReport.objects.filter(work_date=today).exists()
+
+
+def test_every_staff_report_starts_with_revision_one(hr_data):
+    _seed()
+    for report in ProjectStaffReport.objects.all():
+        assert report.revisions.filter(revision_no=1).exists(), report.id
+        assert report.revisions.count() == report.current_revision
+
+
+def test_demo_contains_a_corrected_staff_report(hr_data):
+    """Ровно одна правка — ради ленты версий, та же причина, что у
+    ежедневки. Снимок обязан отличаться СОСТАВОМ, иначе сервис (справедливо)
+    второй версии не создаст."""
+    _seed()
+    corrected = ProjectStaffReport.objects.filter(current_revision__gt=1)
+    assert corrected.count() == 1
+    versions = list(corrected.get().revisions.all())
+    assert [v.revision_no for v in versions] == [1, 2]
+    assert versions[0].total_headcount != versions[1].total_headcount
+    # Имя роли лежит в снимке: версия читается и без справочника.
+    assert all("work_role_name" in line for line in versions[0].lines)
+
+
+def test_a_stopped_site_has_no_recent_staffing(hr_data):
+    """Кандыагаш «встал»: план на сегодня есть, людей нет. Ради этой строки
+    на доске и видно отставание, а не ровные нули везде."""
+    _seed()
+    today = dt.date.today()
+    stopped = SiteBlock.objects.get(name="Участок 12–19")
+    assert not ProjectStaffReport.objects.filter(
+        site_block=stopped, work_date=today).exists()
+    latest = (ProjectStaffReport.objects.filter(site_block=stopped)
+              .order_by("-work_date").first())
+    assert latest is not None
+    assert (today - latest.work_date).days > 14
+
+
+def test_seeding_twice_adds_no_staff_reports(hr_data):
+    """Проба на существование в сиде проверяет инвариант модели: без неё
+    повторный прогон упёрся бы в UNIQUE, а не тихо создал дубль."""
+    _seed()
+    before = ProjectStaffReport.objects.count()
+    _seed()
+    assert ProjectStaffReport.objects.count() == before
+
+
 # ── то, ради чего цифры подобраны именно так ───────────────────────────────
 
 def test_plan_fact_shows_a_package_that_is_behind(hr_data):
@@ -512,6 +592,9 @@ def test_purge_removes_everything_it_seeded(hr_data):
     # Отчёты и объёмы уходят каскадом от задач, а не отдельным проходом.
     assert DailyReport.objects.count() == 0
     assert TaskVolume.objects.count() == 0
+    # А вот отчёты по персоналу — проходом: они держат блок через PROTECT,
+    # и дожидаться каскада от проекта нельзя, тот сносится позже блока.
+    assert ProjectStaffReport.objects.count() == 0
 
 
 def test_purge_keeps_foreign_rows(hr_data):
@@ -593,6 +676,7 @@ def test_wipe_then_seed_restores_the_same_shape(hr_data):
     assert Roadmap.objects.count() == 8
     assert Task.objects.count() == 25
     assert DailyReport.objects.count() == 31
+    assert ProjectStaffReport.objects.count() == 18
 
 
 def test_wipe_refuses_when_something_outside_references_the_domain(hr_data):

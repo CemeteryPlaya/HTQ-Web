@@ -280,11 +280,11 @@ def test_roadmap_tasks_endpoint_lists_only_its_own(roadmap):
     assert [t["summary"] for t in resp.json()] == ["Своя"]
 
 
-# ── субподряд на роудмапе ───────────────────────────────────────────────
+# ── партнёр на роудмапе ───────────────────────────────────────────────
 
 @pytest.mark.django_db
 def test_contractor_can_be_engaged_on_a_roadmap_alone(roadmap):
-    """Третья стрелка в «Субподряд» на схеме: «развозку отдали субподряду,
+    """Третья стрелка в «Партнёр» на схеме: «развозку отдали партнёру,
     монтаж делаем сами»."""
     from apps.tasks.models import Contractor
     org = Contractor.objects.create(name="СтройПодряд")

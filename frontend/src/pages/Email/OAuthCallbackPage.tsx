@@ -4,8 +4,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { emailService } from '@/services/emailService';
 import { CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useTranslation } from 'react-i18next';
 
 export default function OAuthCallbackPage() {
+    const { t } = useTranslation();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [searchParams] = useSearchParams();
@@ -25,13 +27,13 @@ export default function OAuthCallbackPage() {
 
             if (error) {
                 setStatus('error');
-                setErrorMessage(`Провайдер вернул ошибку: ${error}`);
+                setErrorMessage(t('email.oauth.providerError', { error }));
                 return;
             }
 
             if (!code || !state) {
                 setStatus('error');
-                setErrorMessage('Отсутствуют необходимые параметры (code/state).');
+                setErrorMessage(t('email.oauth.missingParams'));
                 return;
             }
 
@@ -49,13 +51,13 @@ export default function OAuthCallbackPage() {
                 setErrorMessage(
                     err.response?.data?.detail ||
                         err.response?.data?.error ||
-                        'Не удалось завершить авторизацию.',
+                        t('email.oauth.failed'),
                 );
             }
         };
 
         handleCallback();
-    }, [searchParams, navigate, queryClient]);
+    }, [searchParams, navigate, queryClient, t]);
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-muted/20">
@@ -65,9 +67,9 @@ export default function OAuthCallbackPage() {
                         <div className="flex justify-center">
                             <Loader2 className="h-16 w-16 text-primary animate-spin" />
                         </div>
-                        <h1 className="text-2xl font-bold">Авторизация...</h1>
+                        <h1 className="text-2xl font-bold">{t('email.oauth.authorizing')}</h1>
                         <p className="text-muted-foreground">
-                            Связываемся с провайдером для подтверждения доступа.
+                            {t('email.oauth.contacting')}
                         </p>
                     </>
                 )}
@@ -79,12 +81,12 @@ export default function OAuthCallbackPage() {
                                 <CheckCircle2 className="h-12 w-12" />
                             </div>
                         </div>
-                        <h1 className="text-2xl font-bold">Успешно подключено!</h1>
+                        <h1 className="text-2xl font-bold">{t('email.oauth.connected')}</h1>
                         <p className="text-muted-foreground">
-                            Ваша почта успешно привязана. Теперь вы можете отправлять письма внешним клиентам.
+                            {t('email.oauth.connectedHint')}
                         </p>
                         <p className="text-xs text-muted-foreground pt-4">
-                            Перенаправление в почтовый ящик...
+                            {t('email.oauth.redirecting')}
                         </p>
                     </>
                 )}
@@ -96,11 +98,11 @@ export default function OAuthCallbackPage() {
                                 <XCircle className="h-12 w-12" />
                             </div>
                         </div>
-                        <h1 className="text-2xl font-bold">Ошибка авторизации</h1>
+                        <h1 className="text-2xl font-bold">{t('email.oauth.errorTitle')}</h1>
                         <p className="text-destructive font-medium">{errorMessage}</p>
                         <div className="pt-4">
                             <Button onClick={() => navigate('/email')} className="w-full">
-                                Вернуться в почту
+                                {t('email.oauth.backToMail')}
                             </Button>
                         </div>
                     </>

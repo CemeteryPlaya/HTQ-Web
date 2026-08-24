@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { useCc, useDone, useInbox, useRequestsStream, useSent } from '@/features/requests/hooks';
 import type { RequestInstance } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
 
 const STATUS_VARIANT: Record<RequestInstance['status'], string> = {
   draft:     'bg-slate-200 text-slate-700 hover:bg-slate-200',
@@ -23,6 +24,7 @@ const STATUS_VARIANT: Record<RequestInstance['status'], string> = {
 };
 
 function RequestRow({ r }: { r: RequestInstance }) {
+  const { t } = useTranslation();
   return (
     <Link
       to={`/requests/${r.id}`}
@@ -34,7 +36,7 @@ function RequestRow({ r }: { r: RequestInstance }) {
           <span className="text-xs text-muted-foreground">{r.code}</span>
         </div>
         <div className="text-xs text-muted-foreground">
-          инициатор #{r.initiator_id}
+          {t('requests.list.initiatorNumber', { id: r.initiator_id })}
           {r.total_amount != null && (
             <> · {r.total_amount} {r.currency || ''}</>
           )}
@@ -54,6 +56,7 @@ function ListBlock({
   data: ReturnType<typeof useInbox>;
   emptyMessage: string;
 }) {
+  const { t } = useTranslation();
   if (data.isLoading) {
     return (
       <div className="space-y-2 p-4">
@@ -66,7 +69,7 @@ function ListBlock({
   if (data.error) {
     return (
       <div className="px-4 py-6 text-sm text-destructive">
-        Не удалось загрузить запросы.
+        {t('requests.list.loadError')}
       </div>
     );
   }
@@ -81,6 +84,7 @@ function ListBlock({
 }
 
 export default function RequestsPage() {
+  const { t } = useTranslation();
   useRequestsStream();
   const inbox = useInbox();
   const done = useDone();
@@ -89,8 +93,8 @@ export default function RequestsPage() {
 
   return (
     <RequestsLayout
-      title="Запросы"
-      subtitle="Подача и согласование заявок"
+      title={t('requests.nav.inbox')}
+      subtitle={t('requests.list.subtitle')}
     >
       <Tabs defaultValue="inbox" className="space-y-4">
         <TabsList>
@@ -127,35 +131,35 @@ export default function RequestsPage() {
           <Button asChild>
             <Link to="/requests/new">
               <PlusCircle className="mr-2 h-4 w-4" />
-              Создать запрос
+              {t('requests.list.create')}
             </Link>
           </Button>
         </div>
         <TabsContent value="inbox">
           <Card>
             <CardContent className="p-0">
-              <ListBlock data={inbox} emptyMessage="Нет запросов на согласование." />
+              <ListBlock data={inbox} emptyMessage={t('requests.list.emptyInbox')} />
             </CardContent>
           </Card>
         </TabsContent>
         <TabsContent value="done">
           <Card>
             <CardContent className="p-0">
-              <ListBlock data={done} emptyMessage="Вы пока не согласовывали запросов." />
+              <ListBlock data={done} emptyMessage={t('requests.list.emptyDone')} />
             </CardContent>
           </Card>
         </TabsContent>
         <TabsContent value="cc">
           <Card>
             <CardContent className="p-0">
-              <ListBlock data={cc} emptyMessage="Вас пока не добавляли в копию." />
+              <ListBlock data={cc} emptyMessage={t('requests.list.emptyCc')} />
             </CardContent>
           </Card>
         </TabsContent>
         <TabsContent value="sent">
           <Card>
             <CardContent className="p-0">
-              <ListBlock data={sent} emptyMessage="Вы пока не отправляли запросов." />
+              <ListBlock data={sent} emptyMessage={t('requests.list.emptySent')} />
             </CardContent>
           </Card>
         </TabsContent>

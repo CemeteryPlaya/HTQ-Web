@@ -13,13 +13,15 @@ import { useParams } from 'react-router-dom';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import BudgetDetailView from '@/components/contracts/BudgetDetailView';
 import { BackLink } from '@/components/contracts/detail';
+import { useTranslation } from 'react-i18next';
 
 const BudgetDetail = () => {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
 
   return (
     <ContractsShell>
-      <BackLink to="/contracts/budgets">Ко всем бюджетам</BackLink>
+      <BackLink to="/contracts/budgets">{t('contracts.budget.backToList')}</BackLink>
       <BudgetDetailView id={Number(id)} />
     </ContractsShell>
   );

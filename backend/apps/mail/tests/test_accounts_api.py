@@ -123,7 +123,7 @@ def test_list_returns_only_own_accounts_ordered_default_first(user, other_user, 
     assert [a["id"] for a in body] == [default_acc.id] + [
         a.id for a in EmailAccount.objects.filter(user_id=user.id).exclude(id=default_acc.id).order_by("id")
     ]
-    assert {"id", "type", "provider", "address", "display_name", "is_default",
+    assert {"id", "type", "provider", "address", "display_name", "signature", "is_default",
             "is_active", "last_sync_at", "last_sync_error", "watch_expires_at",
             "connected_at", "unread_count"} == set(body[0])
     assert body[0]["unread_count"] == 0

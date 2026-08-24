@@ -248,7 +248,7 @@ class WorkVolumeType(models.Model):
 
 class EquipmentOwnership(models.TextChoices):
     OWN = "own", "Собственная"
-    CONTRACTOR = "contractor", "Подрядчика"
+    CONTRACTOR = "contractor", "Партнёра"
     RENTED = "rented", "Аренда"
 
 
@@ -261,7 +261,7 @@ class Equipment(models.Model):
 
     ``ownership`` — три значения, а не «NULL в ``contractor`` значит наша»:
     иначе «своя» и «не заполнено» неразличимы, и парк, который вёлся до
-    появления подрядчиков, пришлось бы считать неизвестным. С явным
+    появления партнёров, пришлось бы считать неизвестным. С явным
     значением существующие строки честно становятся ``own``.
     """
 
@@ -295,7 +295,7 @@ class Equipment(models.Model):
         verbose_name = "Техника"
         verbose_name_plural = "Техника"
         constraints = [
-            # Техника подрядчика обязана называть подрядчика. Стиль тот же,
+            # Техника партнёра обязана называть партнёра. Стиль тот же,
             # что у ck_assignment_exactly_one_resource ниже: правило про одну
             # строку одной таблицы — значит место ему в БД, а не в сервисе.
             models.CheckConstraint(
@@ -317,12 +317,12 @@ class ContractorStatus(models.TextChoices):
 
 
 class ContractorLevel(models.TextChoices):
-    """Уровень допуска представителя подрядчика.
+    """Уровень допуска представителя партнёра.
 
     Значения совпадают с тремя младшими членами
     ``htqweb.authn.levels.DepartmentLevel``, чтобы этап «вход для
-    подрядчиков» переиспользовал готовые ``rank``/``meets`` без конвертации.
-    Уровень — свойство ЧЕЛОВЕКА, а не организации: у одного подрядчика
+    партнёров» переиспользовал готовые ``rank``/``meets`` без конвертации.
+    Уровень — свойство ЧЕЛОВЕКА, а не организации: у одного партнёра
     прораб и разнорабочий получают разные права.
 
     Согласованная матрица (заработает вместе с учётками):
@@ -352,7 +352,7 @@ class Contractor(models.Model):
 
     В ``apps.hr`` не кладём сознательно: ``Employee.department`` и
     ``Employee.position`` — ``FK PROTECT NOT NULL``, а у сварщика внешнего
-    подрядчика нет ни отдела, ни штатной должности. Синтетические записи
+    партнёра нет ни отдела, ни штатной должности. Синтетические записи
     испортили бы оргструктуру и все HR-отчёты, которые эти колонки читают.
     """
 
@@ -375,24 +375,24 @@ class Contractor(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
-        verbose_name = "Подрядчик"
-        verbose_name_plural = "Подрядчики"
+        verbose_name = "Партнёр"
+        verbose_name_plural = "Партнёры"
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Contractor id={self.id} name={self.name!r}>"
 
 
 class ContractorWorker(models.Model):
-    """Представитель подрядчика — носитель уровня допуска.
+    """Представитель партнёра — носитель уровня допуска.
 
     ``user_id`` — ЗАГОТОВКА под будущий вход в систему. Сейчас его не
-    заполняет ничто: ``apps.users`` о подрядчиках не знает, ``scope_for`` их
+    заполняет ничто: ``apps.users`` о партнёрах не знает, ``scope_for`` их
     не читает, ``roles_for`` не меняется. Форма колонки один в один с
     ``hr.Employee.user_id`` (nullable + unique): в Postgres это «сколько
     угодно NULL, но не более одной строки на аккаунт».
 
     ``position_title`` — свободный текст, а НЕ ``hr.Position``: должности
-    подрядчика вне нашего штатного расписания, и заводить их там значило бы
+    партнёра вне нашего штатного расписания, и заводить их там значило бы
     засорить справочник должностей чужими записями.
     """
 
@@ -418,8 +418,8 @@ class ContractorWorker(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
-        verbose_name = "Работник подрядчика"
-        verbose_name_plural = "Работники подрядчиков"
+        verbose_name = "Работник партнёра"
+        verbose_name_plural = "Работники партнёров"
 
     @property
     def full_name(self) -> str:
@@ -664,7 +664,7 @@ class ProjectSite(models.Model):
     """Объект в составе проекта.
 
     Явная through-модель, а не автотаблица Django: связь несёт признак
-    основного объекта и период присутствия проекта на нём — так «подрядчик
+    основного объекта и период присутствия проекта на нём — так «партнёр
     ушёл с объекта в марте» выражается без удаления истории. Прецедент —
     ``TaskDepartmentLink`` ниже.
 
@@ -795,17 +795,17 @@ class Roadmap(models.Model):
 
 
 class ContractorEngagement(models.Model):
-    """Привлечение подрядчика: кто, на какой проект/объект, в какие сроки.
+    """Привлечение партнёра: кто, на какой проект/объект, в какие сроки.
 
     Пара «организация + объект» — ровно та единица, в которой сформулировано
     право senior «видеть все задачи своей организации по объекту», поэтому
     из этой строки вырастет скоуп видимости, когда появятся учётки.
 
     Все три целевых поля nullable при CHECK «хотя бы одно» — это покрывает
-    реальные случаи: подрядчик на объекте вне конкретного проекта (только
-    site), подрядчик на проекте целиком, то есть на всех его объектах
-    (только project), подрядчик на конкретной паре, и подрядчик, взятый на
-    один пакет работ (roadmap) — «развозку валов отдали субподряду, монтаж
+    реальные случаи: партнёр на объекте вне конкретного проекта (только
+    site), партнёр на проекте целиком, то есть на всех его объектах
+    (только project), партнёр на конкретной паре, и партнёр, взятый на
+    один пакет работ (roadmap) — «развозку валов отдали партнёру, монтаж
     делаем сами».
 
     ``PROTECT`` на организации и объекте: привлечение архивируют
@@ -838,13 +838,13 @@ class ContractorEngagement(models.Model):
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
-        verbose_name = "Привлечение подрядчика"
-        verbose_name_plural = "Привлечения подрядчиков"
+        verbose_name = "Привлечение партнёра"
+        verbose_name_plural = "Привлечения партнёров"
         constraints = [
             # nulls_distinct=False — иначе констрейнт бесполезен ровно там,
             # где он нужнее всего. В SQL два NULL считаются РАЗНЫМИ, так что
             # обычный UNIQUE пропустил бы сколько угодно копий
-            # (подрядчик, NULL, объект) — а это самый частый случай:
+            # (партнёр, NULL, объект) — а это самый частый случай:
             # привлечение на объект вне конкретного проекта.
             # Postgres 15+ (здесь 16) и Django 5.0+ это поддерживают.
             models.UniqueConstraint(
@@ -1276,6 +1276,155 @@ class DailyReportRevision(models.Model):
 
     def __repr__(self) -> str:  # pragma: no cover
         return (f"<DailyReportRevision report={self.report_id} "
+                f"rev={self.revision_no}>")
+
+
+class ProjectStaffReport(models.Model):
+    """Ежедневный отчёт по ПЕРСОНАЛУ: сколько людей стояло на блоке в день.
+
+    Вторая ось факта, ортогональная ``DailyReport``. Та отвечает «сколько
+    сделано» (выработка в штуках по видам работ), эта — «сколькими людьми»
+    (численность по ролям). Раньше численность нигде не собиралась:
+    ``DailyReport.headcount`` есть, но он про одну задачу и одну смену, а
+    вопрос «сколько человек было на проекте 5 июня» задают про объект.
+
+    Пара ``project`` + ``site_block`` повторяет ``Roadmap`` буквально:
+    площадка своей колонкой НЕ хранится, она выводится джойном
+    ``site_block__site``. Правило «площадка блока входит в объекты проекта»
+    живёт в ``roadmap_service.require_project_block``, а не в БД — по той
+    же причине, что и у роудмапа (у существующих проектов объектов нет, и
+    констрейнт сломал бы их разом).
+
+    ``UNIQUE(project, site_block, work_date)`` — ЕСТЬ, и это сознательное
+    расхождение с ``DailyReport``, где его нет намеренно. Выработка —
+    инкремент: две смены за день складываются в 180 валов, и оба отчёта
+    правдивы. Численность — состояние: если бригадир и прораб оба заведут
+    «12 монтажников на блоке 1», сумма 24 будет ложью про количество
+    людей. Один блок × одна дата = один отчёт, исправления идут правкой —
+    ради неё и заведены ревизии. Условие ``WHERE NOT is_deleted`` нужно,
+    чтобы удалённый отчёт не блокировал заведение нового за тот же день.
+
+    ``is_deleted`` вместо удаления — как у ``DailyReport`` и ``Task``.
+    """
+
+    project = models.ForeignKey("Project", on_delete=models.CASCADE,
+                                related_name="staff_reports")
+    site_block = models.ForeignKey(SiteBlock, on_delete=models.PROTECT,
+                                   related_name="staff_reports")
+    # Р2: автор — users id из JWT, FK нет.
+    author_id = models.IntegerField(null=True, blank=True, db_index=True)
+    # Дата ВЫХОДА людей, не заполнения формы — то же различие и по той же
+    # причине, что у ``DailyReport.work_date``.
+    work_date = models.DateField(db_index=True)
+    comment = models.TextField(default="", blank=True, db_default="")
+
+    # Денормализованный номер текущей ревизии — см. ``DailyReport``.
+    current_revision = models.PositiveSmallIntegerField(default=1, db_default=1)
+    is_deleted = models.BooleanField(default=False, db_default=False,
+                                     db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Отчёт по персоналу проекта"
+        verbose_name_plural = "Отчёты по персоналу проекта"
+        indexes = [
+            models.Index(fields=["project", "work_date"],
+                         name="ix_staff_report_project_date"),
+            models.Index(fields=["site_block", "work_date"],
+                         name="ix_staff_report_block_date"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "site_block", "work_date"],
+                condition=models.Q(is_deleted=False),
+                name="uq_staff_report_project_block_date",
+            ),
+        ]
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (f"<ProjectStaffReport project={self.project_id} "
+                f"block={self.site_block_id} {self.work_date} "
+                f"rev={self.current_revision}>")
+
+
+class ProjectStaffReportLine(models.Model):
+    """Строка отчёта по персоналу: «монтажник — 12».
+
+    ``work_role`` здесь NOT NULL, в отличие от
+    ``ResourceRequirement.work_role`` (там nullable ради законного «нужно 2
+    человека, роль не важна»). Разбивка по ролям — весь смысл этой формы,
+    а NULL вдобавок сломал бы дедуп: ``UNIQUE(report, NULL)`` в Postgres
+    дубли не ловит. Для «прочих» заводится роль в справочнике — он
+    редактируемый через ``/api/tasks/v1/work-roles/``.
+    """
+
+    report = models.ForeignKey(ProjectStaffReport, on_delete=models.CASCADE,
+                               related_name="lines")
+    work_role = models.ForeignKey(WorkRole, on_delete=models.PROTECT,
+                                  related_name="staff_report_lines")
+    headcount = models.PositiveSmallIntegerField()
+
+    class Meta:
+        verbose_name = "Строка отчёта по персоналу"
+        verbose_name_plural = "Строки отчёта по персоналу"
+        ordering = ["id"]
+        constraints = [
+            models.UniqueConstraint(fields=["report", "work_role"],
+                                    name="uq_staff_report_line_role"),
+            models.CheckConstraint(
+                condition=models.Q(headcount__gte=0),
+                name="ck_staff_report_line_headcount_non_negative",
+            ),
+        ]
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (f"<ProjectStaffReportLine report={self.report_id} "
+                f"role={self.work_role_id} x{self.headcount}>")
+
+
+class ProjectStaffReportRevision(models.Model):
+    """Снимок отчёта по персоналу — как ``DailyReportRevision``, но со строками.
+
+    Строки снимаются в ``lines`` (JSON), а не отдельной таблицей. Ревизия
+    неизменяема и никогда не запрашивается «по строке» — её только рендерят
+    лентой версий. Отдельная таблица строк-ревизий потребовала бы FK на
+    ``WorkRole`` с PROTECT, и историческая версия навсегда запретила бы
+    удалить роль из справочника. Снимок с ``work_role_name`` внутри
+    читается, даже если роль потом переименовали или деактивировали. Тот же
+    приём и по той же причине — ``approvals.RequestFormTemplateVersion``.
+
+    ``total_headcount`` денормализован в снимок, чтобы лента версий
+    рисовалась без разбора JSON на каждой строке.
+    """
+
+    report = models.ForeignKey(ProjectStaffReport, on_delete=models.CASCADE,
+                               related_name="revisions")
+    revision_no = models.PositiveSmallIntegerField()
+
+    # Снимок. Проект и блок сюда не копируются: сменить их — это другой
+    # отчёт, а не другая версия этого, и сервис такую правку не принимает.
+    work_date = models.DateField()
+    comment = models.TextField(default="", blank=True, db_default="")
+    total_headcount = models.PositiveIntegerField(default=0, db_default=0)
+    # [{"work_role_id": int, "work_role_name": str, "headcount": int}, …]
+    lines = models.JSONField(default=list, blank=True, db_default=[])
+
+    edited_by_id = models.IntegerField(null=True, blank=True)
+    edited_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Версия отчёта по персоналу"
+        verbose_name_plural = "Версии отчётов по персоналу"
+        ordering = ["revision_no"]
+        constraints = [
+            models.UniqueConstraint(fields=["report", "revision_no"],
+                                    name="uq_staff_report_revision"),
+        ]
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (f"<ProjectStaffReportRevision report={self.report_id} "
                 f"rev={self.revision_no}>")
 
 

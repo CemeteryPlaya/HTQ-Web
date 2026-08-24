@@ -12,6 +12,7 @@ import { MessageView } from '@/pages/Email/components/MessageView';
 import { ComposeDialog } from '@/pages/Email/components/ComposeDialog';
 import { ConnectAccountDialog } from '@/pages/Email/components/ConnectAccountDialog';
 import { ConnectImapAccount } from '@/components/mail/ConnectImapAccount';
+import { MailboxPasswordPrompt } from '@/components/mail/MailboxPasswordPrompt';
 
 import {
   useEmailAccounts,
@@ -152,6 +153,9 @@ export default function EmailPage() {
 
   return (
     <EmailLayout sidebar={sidebar}>
+      {/* Ровно то место, где отсутствие пароля и видно: сотрудник открыл
+          почту, а её нет. Само скрывается, когда подключать нечего. */}
+      <MailboxPasswordPrompt variant="inline" className="mb-4" />
       <div className="flex h-[calc(100vh-200px)] min-h-[500px] overflow-hidden rounded-2xl border bg-card shadow-[var(--shadow-soft)]">
         <div className="flex w-full flex-col lg:w-[380px] lg:border-r">
           <div className="flex items-center justify-between border-b p-3">

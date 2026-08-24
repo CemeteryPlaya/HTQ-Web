@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/select';
 
 import { fetchDepartments, fetchEmployees } from '@/api/hr';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   value: number[];
@@ -28,7 +29,8 @@ interface Props {
   addLabel?: string;
 }
 
-export function EmployeePicker({ value, onChange, multiple = true, max, addLabel = 'Добавить' }: Props) {
+export function EmployeePicker({ value, onChange, multiple = true, max, addLabel }: Props) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [dept, setDept] = useState<string>('');
   const [search, setSearch] = useState('');
@@ -61,7 +63,7 @@ export function EmployeePicker({ value, onChange, multiple = true, max, addLabel
     if (value.includes(uid)) return;
     if (!multiple) { onChange([uid]); setOpen(false); return; }
     if (max && value.length >= max) {
-      toast.error(`Можно указать не более ${max}`);
+      toast.error(t('requests.employeePicker.maxReached', { max }));
       return;
     }
     onChange([...value, uid]);
@@ -73,14 +75,14 @@ export function EmployeePicker({ value, onChange, multiple = true, max, addLabel
         {value.map((uid) => (
           <span key={uid} className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2.5 py-1 text-xs">
             {nameById.get(uid) ?? `ID ${uid}`}
-            <button type="button" onClick={() => onChange(value.filter((x) => x !== uid))} aria-label="Убрать">
+            <button type="button" onClick={() => onChange(value.filter((x) => x !== uid))} aria-label={t('requests.employeePicker.remove')}>
               <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
             </button>
           </span>
         ))}
         {canAdd && (
           <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
-            <Plus className="mr-1 h-3.5 w-3.5" /> {addLabel}
+            <Plus className="mr-1 h-3.5 w-3.5" /> {addLabel ?? t('common.add')}
           </Button>
         )}
         {max && <span className="text-xs text-muted-foreground">{value.length}/{max}</span>}
@@ -88,12 +90,12 @@ export function EmployeePicker({ value, onChange, multiple = true, max, addLabel
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle>Выбор сотрудника</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('requests.employeePicker.title')}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">Подразделение</Label>
+              <Label className="text-xs">{t('requests.employeePicker.department')}</Label>
               <Select value={dept} onValueChange={(v) => { setDept(v); setSearch(''); }}>
-                <SelectTrigger><SelectValue placeholder="Выберите подразделение" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder={t('requests.employeePicker.pickDepartment')} /></SelectTrigger>
                 <SelectContent>
                   {departments.data?.map((d) => (
                     <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
@@ -106,12 +108,12 @@ export function EmployeePicker({ value, onChange, multiple = true, max, addLabel
               <>
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Поиск сотрудника…" className="pl-9" />
+                  <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('requests.employeePicker.searchPlaceholder')} className="pl-9" />
                 </div>
                 <div className="max-h-64 overflow-y-auto rounded-md border">
-                  {employees.isLoading && <div className="p-3 text-sm text-muted-foreground">Загрузка…</div>}
+                  {employees.isLoading && <div className="p-3 text-sm text-muted-foreground">{t('signoff.loadingEllipsis')}</div>}
                   {!employees.isLoading && list.length === 0 && (
-                    <div className="p-3 text-sm text-muted-foreground">В этом подразделении нет сотрудников с учётной записью.</div>
+                    <div className="p-3 text-sm text-muted-foreground">{t('requests.employeePicker.noAccounts')}</div>
                   )}
                   {list.map((e) => {
                     const picked = e.user_id != null && value.includes(e.user_id);
@@ -127,14 +129,14 @@ export function EmployeePicker({ value, onChange, multiple = true, max, addLabel
                           <span className="block font-medium">{e.full_name}</span>
                           {e.position_title && <span className="block text-xs text-muted-foreground">{e.position_title}</span>}
                         </span>
-                        {picked && <span className="text-xs text-muted-foreground">выбран</span>}
+                        {picked && <span className="text-xs text-muted-foreground">{t('requests.employeePicker.selected')}</span>}
                       </button>
                     );
                   })}
                 </div>
                 {multiple && (
                   <div className="flex justify-end">
-                    <Button type="button" size="sm" onClick={() => setOpen(false)}>Готово</Button>
+                    <Button type="button" size="sm" onClick={() => setOpen(false)}>{t('common.done')}</Button>
                   </div>
                 )}
               </>

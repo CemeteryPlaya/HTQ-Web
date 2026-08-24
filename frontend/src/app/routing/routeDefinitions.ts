@@ -7,13 +7,21 @@ export const publicRoutes: RouteConfig[] = [
   { path: '/news', component: lazyPages.News },
   { path: '/news/:slug', component: lazyPages.NewsDetail },
   { path: '/contacts', component: lazyPages.Contacts },
-  { path: '/design-preview', component: lazyPages.DesignPreview },
   { path: '/login', component: lazyPages.Login },
   { path: '/register', component: lazyPages.Register },
   // Public org view — shareable token, no auth required
   { path: '/public/org/:token', component: lazyPages.PublicOrgView },
   // Public single-employee card — shareable token, no auth required
   { path: '/public/employee/:token', component: lazyPages.PublicEmployeeView },
+  // Вход в конференцию по ссылке-приглашению: сюда приходит внешний
+  // участник, у которого учётки нет вовсе (см. ConferenceJoin.tsx).
+  { path: '/join/:token', component: lazyPages.ConferenceJoin },
+  // Комната открыта без обязательной авторизации намеренно: в ней может
+  // оказаться гость с токеном из sessionStorage. Право войти проверяет не
+  // маршрут, а SFU — он принимает гостевой токен только в ту комнату, на
+  // которую тот выписан. Сама страница отправит на /login того, у кого нет
+  // ни рабочей сессии, ни гостевой.
+  { path: '/room/:roomId', component: lazyPages.ConferencePage },
 ];
 
 // NOTE: paths in this array must be UNIQUE. `<Routes>` scores identical
@@ -48,7 +56,15 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/calendar', component: lazyPages.HRCalendar, requiresAuth: true },
   { path: '/files', component: lazyPages.DepartmentFiles, requiresAuth: true },
   { path: '/conference', component: lazyPages.ConferencePage, requiresAuth: true },
-  { path: '/room/:roomId', component: lazyPages.ConferencePage, requiresAuth: true },
+  // История встреч: кто собирал, когда, запись и протокол. Конкретный путь
+  // идёт перед параметрическим — иначе `/conference/history` попал бы в
+  // `:sessionId` соседнего маршрута.
+  { path: '/conference/history', component: lazyPages.ConferenceHistory, requiresAuth: true },
+  {
+    path: '/conference/history/:sessionId',
+    component: lazyPages.ConferenceSessionDetail,
+    requiresAuth: true,
+  },
 
   // ─── Tasks ────────────────────────────────────────────────────────────
   // `/tasks` and `/tasks/:id` are for everyone — TaskRouter serves regular
@@ -66,6 +82,10 @@ export const protectedRoutes: RouteConfig[] = [
   // рабочий экран раздела задач, а не управление справочником.
   { path: '/tasks/projects/:id/plan-fact', component: lazyPages.HRProjectPlanFact, requiresAuth: true, requiresRole: 'hr' },
   { path: '/tasks/daily', component: lazyPages.HRDailyReports, requiresAuth: true },
+  // Численность персонала по участкам. Под ролью, в отличие от соседней
+  // ежедневки: та про свою смену, эта — управленческие данные по объекту
+  // целиком (бэкенд пускает только владельца проекта и админа).
+  { path: '/tasks/project-daily', component: lazyPages.HRProjectStaffReports, requiresAuth: true, requiresRole: 'hr' },
   { path: '/tasks/reports', component: lazyPages.HRReports, requiresAuth: true, requiresRole: 'hr' },
   { path: '/tasks/resources', component: lazyPages.HRResourceSchedule, requiresAuth: true, requiresRole: 'hr' },
   { path: '/tasks/equipment', component: lazyPages.HREquipment, requiresAuth: true, requiresRole: 'admin' },

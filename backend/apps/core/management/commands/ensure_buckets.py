@@ -23,9 +23,17 @@ get_storage()``:
   байты через ``apps.media_files.interface.store_file()``, а не в свой
   собственный бакет.
 
-Старые ``htqweb-messenger``/``htqweb-conferences``/``htqweb-mail-attachments``
-(по бакету на микросервис) в коде не упоминаются ни разу — они умерли
-вместе с сервисами.
+Третьим в списке идёт ``settings.CONFERENCE_S3_BUCKET`` (записи
+конференций, ``apps.conference``). Обычно он РАВЕН ``MEDIA_S3_BUCKET`` —
+записи лежат там же под префиксом ``conference/``, и тогда цикл ниже просто
+схлопнет дубль. Отдельное имя нужно только тому, кто захочет развести
+записи и остальные файлы по разным политикам жизни в S3; заводится оно
+переменной окружения, без правок кода.
+
+Старые ``htqweb-messenger``/``htqweb-mail-attachments`` (по бакету на
+микросервис) в коде не упоминаются ни разу — они умерли вместе с
+сервисами. ``htqweb-conferences`` из той же эпохи тоже не воскрешён:
+записи пишутся в общий медиа-бакет, а не в свой.
 
 Никакого отношения к миграциям БД команда не имеет: только ``head_bucket``/
 ``create_bucket`` в объектном хранилище.
@@ -40,7 +48,8 @@ def buckets_in_use() -> list[str]:
     """Уникальные имена бакетов, реально читаемые из настроек (порядок
     сохранён, дубли схлопнуты — прод может указать одно имя в обе настройки)."""
     names: list[str] = []
-    for name in (settings.S3_BUCKET, settings.MEDIA_S3_BUCKET):
+    for name in (settings.S3_BUCKET, settings.MEDIA_S3_BUCKET,
+                 settings.CONFERENCE_S3_BUCKET):
         if name and name not in names:
             names.append(name)
     return names

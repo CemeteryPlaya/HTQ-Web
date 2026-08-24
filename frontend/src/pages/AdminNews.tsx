@@ -30,11 +30,11 @@ import { NewsEditor } from '@/components/news/NewsEditor';
 import { TagsMultiSelect } from '@/components/news/TagsMultiSelect';
 import type { NewsItem, NewsStatus, NewsWritePayload } from '@/types/news';
 
-const STATUS_LABELS: Record<NewsStatus, { label: string; tone: string; ring: string }> = {
-  draft: { label: 'Черновик', tone: 'bg-muted text-muted-foreground border-transparent', ring: 'focus-visible:ring-muted' },
-  scheduled: { label: 'Запланировано', tone: 'bg-amber-500/10 text-amber-600 border-amber-500/20 dark:bg-amber-500/20 dark:text-amber-400', ring: 'focus-visible:ring-amber-500' },
-  published: { label: 'Опубликовано', tone: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20 dark:bg-emerald-500/20 dark:text-emerald-400', ring: 'focus-visible:ring-emerald-500' },
-  archived: { label: 'В архиве', tone: 'bg-zinc-500/10 text-zinc-600 border-zinc-500/20 dark:bg-zinc-500/20 dark:text-zinc-400', ring: 'focus-visible:ring-zinc-500' },
+const STATUS_LABELS: Record<NewsStatus, { labelKey: string; tone: string; ring: string }> = {
+  draft: { labelKey: 'admin.news.status.draft', tone: 'bg-muted text-muted-foreground border-transparent', ring: 'focus-visible:ring-muted' },
+  scheduled: { labelKey: 'admin.news.status.scheduled', tone: 'bg-amber-500/10 text-amber-600 border-amber-500/20 dark:bg-amber-500/20 dark:text-amber-400', ring: 'focus-visible:ring-amber-500' },
+  published: { labelKey: 'admin.news.status.published', tone: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20 dark:bg-emerald-500/20 dark:text-emerald-400', ring: 'focus-visible:ring-emerald-500' },
+  archived: { labelKey: 'admin.news.status.archived', tone: 'bg-zinc-500/10 text-zinc-600 border-zinc-500/20 dark:bg-zinc-500/20 dark:text-zinc-400', ring: 'focus-visible:ring-zinc-500' },
 };
 
 interface FormState {
@@ -92,7 +92,7 @@ function fromLocalInput(local: string): string | null {
 
 const AdminNews = () => {
   const qc = useQueryClient();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   const [statusFilter, setStatusFilter] = useState<'all' | NewsStatus>('all');
   const [search, setSearch] = useState('');
@@ -148,9 +148,9 @@ const AdminNews = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'news'] });
       qc.invalidateQueries({ queryKey: ['news'] });
-      toast.success('Новость удалена');
+      toast.success(t('admin.news.deleted'));
     },
-    onError: () => toast.error('Не удалось удалить новость'),
+    onError: () => toast.error(t('admin.news.deleteError')),
   });
 
   // Form handlers ---------------------------------------------------------
@@ -192,11 +192,11 @@ const AdminNews = () => {
 
   const save = async () => {
     if (!form.title || !form.slug) {
-      toast.error('Укажите заголовок и slug');
+      toast.error(t('admin.news.errors.titleAndSlug'));
       return;
     }
     if (form.status === 'scheduled' && !form.scheduled_at) {
-      toast.error('Для статуса «Запланировано» укажите дату публикации');
+      toast.error(t('admin.news.errors.scheduledDate'));
       return;
     }
     setSaving(true);
@@ -234,10 +234,10 @@ const AdminNews = () => {
 
       if (editing) {
         await cmsApi.updateNews(editing.id, payload);
-        toast.success('Изменения сохранены');
+        toast.success(t('common.changesSaved'));
       } else {
         await cmsApi.createNews(payload);
-        toast.success('Новость создана');
+        toast.success(t('admin.news.created'));
       }
       qc.invalidateQueries({ queryKey: ['admin', 'news'] });
       qc.invalidateQueries({ queryKey: ['news'] });
@@ -245,10 +245,10 @@ const AdminNews = () => {
     } catch (err: any) {
       const status = err?.response?.status;
       const detail = err?.response?.data?.detail || err?.message;
-      if (status === 401) toast.error('Неавторизован — выполните вход');
-      else if (status === 403) toast.error('Нужны права администратора');
-      else if (status === 409) toast.error(`Конфликт: ${detail}`);
-      else toast.error(`Ошибка: ${detail || 'unknown'}`);
+      if (status === 401) toast.error(t('common.errors.unauthorised'));
+      else if (status === 403) toast.error(t('common.errors.adminRequired'));
+      else if (status === 409) toast.error(t('common.errors.conflict', { detail }));
+      else toast.error(t('common.errors.generic', { detail: detail || 'unknown' }));
     } finally {
       setSaving(false);
     }
@@ -272,14 +272,14 @@ const AdminNews = () => {
               C M S
             </div>
             <h1 className="font-display text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl md:text-5xl">
-              Управление новостями
+              {t('admin.news.title')}
             </h1>
             <p className="mt-3 text-sm font-medium text-muted-foreground/80 sm:text-base">
-              CRUD, теги, категории, отложенная публикация.
+              {t('admin.news.subtitle')}
             </p>
           </div>
           <Button onClick={openCreate} className="rounded-full shadow-lg shadow-primary/20 hover:scale-105 transition-transform" size="lg">
-            <Plus className="mr-2 h-5 w-5" /> Новая новость
+            <Plus className="mr-2 h-5 w-5" /> {t('admin.news.newArticle')}
           </Button>
         </div>
 
@@ -297,7 +297,7 @@ const AdminNews = () => {
             >
               <div className="flex items-center justify-between">
                 <span className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_LABELS[s].tone}`}>
-                  {STATUS_LABELS[s].label}
+                  {t(STATUS_LABELS[s].labelKey)}
                 </span>
               </div>
               <div className="mt-4 font-display text-4xl font-bold text-foreground">
@@ -312,7 +312,7 @@ const AdminNews = () => {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск по заголовку или анонсу"
+            placeholder={t('admin.news.searchPlaceholder')}
             className="h-11 rounded-xl bg-background/80 shadow-sm md:max-w-md"
           />
           <div className="flex flex-1 flex-wrap gap-2">
@@ -321,11 +321,11 @@ const AdminNews = () => {
               className={`h-11 rounded-xl px-5 transition-all ${statusFilter === 'all' ? 'shadow-md shadow-primary/20' : 'bg-background/50 hover:bg-background/80'}`}
               onClick={() => setStatusFilter('all')}
             >
-              Все статусы
+              {t('admin.news.allStatuses')}
             </Button>
           </div>
           <div className="text-sm font-medium text-muted-foreground md:ml-auto">
-            Показано: <span className="text-foreground">{newsList.length}</span> из {pageData?.total ?? '—'}
+            {t('admin.news.shown')} <span className="text-foreground">{newsList.length}</span> {t('admin.news.ofTotal', { total: pageData?.total ?? '—' })}
           </div>
         </div>
 
@@ -335,7 +335,7 @@ const AdminNews = () => {
             <div className="flex h-32 items-center justify-center rounded-3xl border border-border/50 bg-card/40 backdrop-blur-sm">
               <div className="flex items-center gap-3 text-muted-foreground">
                 <span className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                Загрузка новостей...
+                {t('admin.news.loading')}
               </div>
             </div>
           )}
@@ -344,10 +344,10 @@ const AdminNews = () => {
               <div className="mb-4 rounded-full bg-muted/50 p-4">
                 <Calendar className="h-8 w-8 text-muted-foreground" />
               </div>
-              <div className="text-xl font-bold">Ничего не найдено</div>
-              <p className="mt-2 text-muted-foreground">По вашему запросу не найдено ни одной новости.</p>
+              <div className="text-xl font-bold">{t('common.nothingFound')}</div>
+              <p className="mt-2 text-muted-foreground">{t('admin.news.noMatches')}</p>
               <Button className="mt-6 rounded-full" onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" /> Создать первую новость
+                <Plus className="mr-2 h-4 w-4" /> {t('admin.news.createFirst')}
               </Button>
             </div>
           )}
@@ -375,7 +375,7 @@ const AdminNews = () => {
                       <div className="mb-1.5 flex flex-wrap items-center gap-2">
                         <h2 className="truncate text-lg font-bold text-foreground group-hover:text-primary transition-colors">{item.title}</h2>
                         <span className={`rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${tone.tone}`}>
-                          {tone.label}
+                          {t(tone.labelKey)}
                         </span>
                         {item.category && (
                           <Badge variant="outline" className="bg-background/50">{item.category.name}</Badge>
@@ -388,7 +388,7 @@ const AdminNews = () => {
                           <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground/80">
                             <Calendar className="h-3.5 w-3.5 text-primary/70" />
                             {item.status === 'scheduled' && item.scheduled_at
-                              ? `Публикация: ${new Date(item.scheduled_at).toLocaleString('ru-RU')}`
+                              ? t('admin.news.publishAt', { stamp: new Date(item.scheduled_at).toLocaleString(i18n.language) })
                               : item.published_at
                                 ? new Date(item.published_at).toLocaleString('ru-RU')
                                 : ''}
@@ -408,11 +408,11 @@ const AdminNews = () => {
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-2 border-t pt-4 md:border-none md:pt-0">
                     <Button variant="secondary" size="sm" onClick={() => openEdit(item)} className="rounded-xl bg-secondary/10 text-secondary-foreground hover:bg-secondary/20">
-                      Редактировать
+                      {t('common.edit')}
                     </Button>
                     <Button variant="ghost" size="sm" asChild className="rounded-xl hover:bg-primary/5 hover:text-primary">
                       <a href={`/news/${item.slug}`} target="_blank" rel="noreferrer">
-                        <Eye className="mr-1.5 h-4 w-4" /> Просмотр
+                        <Eye className="mr-1.5 h-4 w-4" /> {t('admin.news.preview')}
                       </a>
                     </Button>
                     <Button
@@ -420,7 +420,7 @@ const AdminNews = () => {
                       size="sm"
                       className="rounded-xl text-destructive hover:bg-destructive/10 hover:text-destructive"
                       onClick={() => {
-                        if (window.confirm(`Удалить «${item.title}»?`)) deleteMutation.mutate(item.id);
+                        if (window.confirm(t('admin.news.deleteConfirm', { title: item.title }))) deleteMutation.mutate(item.id);
                       }}
                     >
                       <Trash2 className="h-4 w-4" />
@@ -462,36 +462,36 @@ const AdminNews = () => {
             <DialogHeader className="mb-6 border-b border-border/50 pb-4">
               <div className="flex flex-wrap items-center justify-between gap-4 sm:pr-6">
                 <DialogTitle className="font-display text-2xl font-bold sm:text-3xl">
-                  {editing ? 'Редактирование новости' : 'Создание новости'}
+                  {editing ? t('admin.news.editTitle') : t('admin.news.createTitle')}
                 </DialogTitle>
                 <span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wider ${STATUS_LABELS[form.status].tone}`}>
-                  {STATUS_LABELS[form.status].label}
+                  {t(STATUS_LABELS[form.status].labelKey)}
                 </span>
               </div>
             </DialogHeader>
 
             <div className="grid gap-6">
               <div className="grid gap-2.5 text-sm font-medium">
-                <label htmlFor="news-title">Заголовок</label>
+                <label htmlFor="news-title">{t('admin.news.fieldTitle')}</label>
                 <Input
                   id="news-title"
                   value={form.title}
                   onBlur={onTitleBlur}
                   onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  placeholder="Введите броский заголовок..."
+                  placeholder={t('admin.news.titlePlaceholder')}
                   className="h-12 rounded-xl bg-muted/30 text-lg"
                 />
               </div>
 
               <div className="grid gap-2.5 text-sm font-medium">
                 <div className="flex items-center justify-between">
-                  <label htmlFor="news-slug">Slug (URL-адрес)</label>
+                  <label htmlFor="news-slug">{t('admin.news.slug')}</label>
                   <button
                     type="button"
                     className="text-xs font-semibold text-primary transition-colors hover:text-primary/80"
                     onClick={() => setForm((f) => ({ ...f, slug: slugify(f.title) }))}
                   >
-                    Сгенерировать из заголовка
+                    {t('admin.news.slugFromTitle')}
                   </button>
                 </div>
                 <Input
@@ -504,12 +504,12 @@ const AdminNews = () => {
               </div>
 
               <div className="grid gap-2.5 text-sm font-medium">
-                <label htmlFor="news-excerpt">Краткое описание (Анонс)</label>
+                <label htmlFor="news-excerpt">{t('admin.news.excerpt')}</label>
                 <Textarea
                   id="news-excerpt"
                   value={form.excerpt}
                   onChange={(e) => setForm({ ...form, excerpt: e.target.value })}
-                  placeholder="Текст, который будет виден на карточке новости..."
+                  placeholder={t('admin.news.excerptPlaceholder')}
                   className="min-h-[100px] resize-y rounded-xl bg-muted/30 text-base"
                   maxLength={500}
                 />
@@ -519,7 +519,7 @@ const AdminNews = () => {
               </div>
 
               <div className="grid gap-2.5 text-sm font-medium">
-                <label>Основной контент</label>
+                <label>{t('admin.news.content')}</label>
                 <div className="rounded-xl border border-border/50 bg-card/50 overflow-hidden">
                   <NewsEditor
                     value={form.content}
@@ -531,14 +531,14 @@ const AdminNews = () => {
               {/* Cover */}
               <div className="grid gap-3 text-sm font-medium">
                 <div className="flex items-center justify-between">
-                  <span>Обложка новости</span>
+                  <span>{t('admin.news.cover')}</span>
                   {form.imageUrl && (
                     <button
                       type="button"
                       className="text-xs font-semibold text-destructive transition-colors hover:text-destructive/80"
                       onClick={() => setForm((f) => ({ ...f, imageUrl: null, imageFile: null }))}
                     >
-                      Удалить обложку
+                      {t('admin.news.removeCover')}
                     </button>
                   )}
                 </div>
@@ -547,7 +547,7 @@ const AdminNews = () => {
                     <img src={form.imageUrl} alt="Cover preview" className="aspect-[21/9] w-full object-cover transition-transform group-hover:scale-105" />
                     <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
                       <label className="cursor-pointer rounded-full bg-white/20 px-4 py-2 text-sm font-semibold text-white backdrop-blur-md transition-colors hover:bg-white/30">
-                        Изменить изображение
+                        {t('admin.news.changeImage')}
                         <input
                           type="file"
                           accept="image/*"
@@ -564,7 +564,7 @@ const AdminNews = () => {
                     <div className="rounded-full bg-background p-3 shadow-sm">
                       <ImagePlus className="h-6 w-6 text-primary" />
                     </div>
-                    <span className="font-medium">Нажмите, чтобы загрузить обложку</span>
+                    <span className="font-medium">{t('admin.news.uploadCover')}</span>
                     <input
                       type="file"
                       accept="image/*"
@@ -579,7 +579,7 @@ const AdminNews = () => {
                   <Input
                     value={form.imageUrl}
                     onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
-                    placeholder="Или вставьте URL обложки"
+                    placeholder={t('admin.news.coverUrlPlaceholder')}
                     className="mt-2 h-10 rounded-xl bg-muted/30"
                   />
                 )}
@@ -588,7 +588,7 @@ const AdminNews = () => {
               {/* Category + Tags */}
               <div className="grid gap-6 rounded-2xl border border-border/50 bg-card/30 p-5 md:grid-cols-2">
                 <div className="grid gap-2.5 text-sm font-medium">
-                  <label>Категория</label>
+                  <label>{t('admin.news.category')}</label>
                   <Select
                     value={form.category_id ? String(form.category_id) : 'none'}
                     onValueChange={(v) =>
@@ -596,10 +596,10 @@ const AdminNews = () => {
                     }
                   >
                     <SelectTrigger className="h-11 rounded-xl bg-background/50">
-                      <SelectValue placeholder="Без категории" />
+                      <SelectValue placeholder={t('admin.news.noCategory')} />
                     </SelectTrigger>
                     <SelectContent className="rounded-xl">
-                      <SelectItem value="none">Без категории</SelectItem>
+                      <SelectItem value="none">{t('admin.news.noCategory')}</SelectItem>
                       {categories.map((c) => (
                         <SelectItem key={c.id} value={String(c.id)}>
                           {c.name}
@@ -609,7 +609,7 @@ const AdminNews = () => {
                   </Select>
                 </div>
                 <div className="grid gap-2.5 text-sm font-medium">
-                  <label>Теги</label>
+                  <label>{t('admin.news.tags')}</label>
                   <TagsMultiSelect
                     value={form.tag_ids}
                     onChange={(tag_ids) => setForm({ ...form, tag_ids })}
@@ -620,7 +620,7 @@ const AdminNews = () => {
               {/* Status + scheduling */}
               <div className="grid gap-6 rounded-2xl border border-border/50 bg-card/50 p-5 shadow-sm md:grid-cols-2">
                 <div className="grid gap-2.5 text-sm font-medium">
-                  <label>Статус публикации</label>
+                  <label>{t('admin.news.publicationStatus')}</label>
                   <Select
                     value={form.status}
                     onValueChange={(v: NewsStatus) => setForm({ ...form, status: v })}
@@ -629,16 +629,16 @@ const AdminNews = () => {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent className="rounded-xl">
-                      <SelectItem value="draft">Черновик</SelectItem>
-                      <SelectItem value="scheduled">Запланировать публикацию</SelectItem>
-                      <SelectItem value="published">Опубликовать сразу</SelectItem>
-                      <SelectItem value="archived">В архив</SelectItem>
+                      <SelectItem value="draft">{t('admin.news.status.draft')}</SelectItem>
+                      <SelectItem value="scheduled">{t('admin.news.schedulePublication')}</SelectItem>
+                      <SelectItem value="published">{t('admin.news.publishNow')}</SelectItem>
+                      <SelectItem value="archived">{t('admin.news.archiveIt')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 {form.status === 'scheduled' && (
                   <div className="grid gap-2.5 text-sm font-medium animate-in fade-in slide-in-from-top-2">
-                    <label>Дата и время публикации</label>
+                    <label>{t('admin.news.publishAtLabel')}</label>
                     <Input
                       type="datetime-local"
                       value={form.scheduled_at}
@@ -651,12 +651,12 @@ const AdminNews = () => {
 
               <div className="mt-4 flex flex-wrap items-center justify-end gap-3 border-t border-border/50 pt-6">
                 <Button variant="outline" size="lg" onClick={() => setDialogOpen(false)} disabled={saving} className="rounded-xl px-6">
-                  Отмена
+                  {t('common.cancel')}
                 </Button>
                 <Button size="lg" onClick={save} disabled={saving || !form.title || !form.slug} className="rounded-xl px-8 font-bold shadow-md shadow-primary/20">
                   {saving ? (
-                    <><div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" /> Сохранение...</>
-                  ) : editing ? 'Сохранить изменения' : 'Создать новость'}
+                    <><div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" /> {t('common.saving')}</>
+                  ) : editing ? t('profile.save') : t('admin.news.createArticle')}
                 </Button>
               </div>
             </div>

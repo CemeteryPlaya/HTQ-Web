@@ -21,7 +21,13 @@ import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { EmployeePicker } from '@/features/requests/components/EmployeePicker';
 import { useMyDataTables } from '@/features/requests/hooks';
 import type { DataTable } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
 
+/**
+ * Ключи — НЕ подписи интерфейса, а значения из данных запроса: колонка
+ * «Статус» приходит с бэкенда строкой по-русски, и таблица показывает её
+ * как есть. Переводить ключи нельзя — сломается подбор цвета.
+ */
 const STATUS_CLASS: Record<string, string> = {
   'На рассмотрении': 'bg-amber-100 text-amber-800',
   'Одобрено': 'bg-emerald-100 text-emerald-800',
@@ -32,6 +38,7 @@ const STATUS_CLASS: Record<string, string> = {
 };
 
 export default function DataManagementPage() {
+  const { t } = useTranslation();
   const tablesQ = useMyDataTables();
   const tables = useMemo(() => tablesQ.data ?? [], [tablesQ.data]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -48,17 +55,17 @@ export default function DataManagementPage() {
 
   return (
     <RequestsLayout
-      title="Управление данными"
-      subtitle="Таблица всех запросов по каждому шаблону, в реальном времени"
+      title={t('requests.nav.data')}
+      subtitle={t('requests.data.subtitle')}
       actions={active && (
         <>
           {active.can_manage && (
             <Button variant="outline" size="sm" onClick={() => setAccessOpen(true)}>
-              <Users className="mr-2 h-4 w-4" /> Доступ
+              <Users className="mr-2 h-4 w-4" /> {t('requests.data.access')}
             </Button>
           )}
           <Button variant="outline" size="sm" onClick={() => rows.refetch()}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${rows.isFetching ? 'animate-spin' : ''}`} /> Обновить
+            <RefreshCw className={`mr-2 h-4 w-4 ${rows.isFetching ? 'animate-spin' : ''}`} /> {t('email.actions.refresh')}
           </Button>
         </>
       )}
@@ -66,11 +73,11 @@ export default function DataManagementPage() {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)] items-start">
         <Card>
           <CardContent className="p-0">
-            <div className="border-b px-4 py-2 text-xs font-semibold uppercase text-muted-foreground">Зависимые таблицы</div>
+            <div className="border-b px-4 py-2 text-xs font-semibold uppercase text-muted-foreground">{t('requests.data.tables')}</div>
             {tablesQ.isLoading && <div className="space-y-2 p-4"><Skeleton className="h-9" /><Skeleton className="h-9" /></div>}
             {!tablesQ.isLoading && tables.length === 0 && (
               <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                Нет доступных таблиц. Они создаются автоматически при создании шаблона и видны его создателю, администраторам процесса и тем, кому выдан доступ.
+                {t('requests.data.noTables')}
               </div>
             )}
             {tables.map((t) => (
@@ -89,13 +96,13 @@ export default function DataManagementPage() {
 
         <div>
           {!active ? (
-            <Card><CardContent className="py-16 text-center text-sm text-muted-foreground">Выберите таблицу слева.</CardContent></Card>
+            <Card><CardContent className="py-16 text-center text-sm text-muted-foreground">{t('requests.data.pickTable')}</CardContent></Card>
           ) : (
             <Card>
               <CardContent className="p-0">
                 <div className="flex items-center justify-between border-b px-4 py-2">
                   <span className="font-medium">{active.name}</span>
-                  <span className="text-xs text-muted-foreground">Записей: {rows.data?.length ?? 0}</span>
+                  <span className="text-xs text-muted-foreground">{t('requests.data.recordCount', { count: rows.data?.length ?? 0 })}</span>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -109,7 +116,7 @@ export default function DataManagementPage() {
                         <tr><td colSpan={active.columns.length} className="px-3 py-6"><Skeleton className="h-6" /></td></tr>
                       )}
                       {!rows.isLoading && (rows.data?.length ?? 0) === 0 && (
-                        <tr><td colSpan={active.columns.length} className="px-3 py-10 text-center text-muted-foreground">Пока нет запросов по этому шаблону.</td></tr>
+                        <tr><td colSpan={active.columns.length} className="px-3 py-10 text-center text-muted-foreground">{t('requests.data.noRequests')}</td></tr>
                       )}
                       {rows.data?.map((r) => (
                         <tr key={r.id} className="border-b last:border-b-0 hover:bg-muted/20">
@@ -139,6 +146,7 @@ export default function DataManagementPage() {
 }
 
 function AccessDialog({ table, open, onOpenChange }: { table: DataTable; open: boolean; onOpenChange: (o: boolean) => void }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [ids, setIds] = useState<number[]>(table.access_ids ?? []);
   const [busy, setBusy] = useState(false);
@@ -148,10 +156,10 @@ function AccessDialog({ table, open, onOpenChange }: { table: DataTable; open: b
     try {
       await requestsApi.reference.setAccess(table.id, ids);
       qc.invalidateQueries({ queryKey: ['requests', 'reference', 'my-data-tables'] });
-      toast.success('Доступ обновлён');
+      toast.success(t('requests.data.accessUpdated'));
       onOpenChange(false);
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? 'Не удалось сохранить');
+      toast.error(e?.response?.data?.detail ?? t('requests.editor.saveError'));
     } finally {
       setBusy(false);
     }
@@ -160,14 +168,14 @@ function AccessDialog({ table, open, onOpenChange }: { table: DataTable; open: b
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
-        <DialogHeader><DialogTitle>Доступ к таблице «{table.name}»</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{t('requests.data.accessTitle', { name: table.name })}</DialogTitle></DialogHeader>
         <div className="space-y-2 py-2">
-          <Label className="text-sm">Кому выдан доступ (кроме создателя и администраторов процесса)</Label>
+          <Label className="text-sm">{t('requests.data.accessHint')}</Label>
           <EmployeePicker value={ids} onChange={setIds} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
-          <Button disabled={busy} onClick={save}>Сохранить</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t('common.cancel')}</Button>
+          <Button disabled={busy} onClick={save}>{t('common.save')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

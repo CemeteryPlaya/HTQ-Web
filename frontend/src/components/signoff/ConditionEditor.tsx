@@ -36,7 +36,8 @@ import type {
 // Подписи операторов и однострочный рендер условия живут в format.ts — это
 // данные и чистая функция, и в одном файле с компонентом они ломали бы fast
 // refresh (та же причина, по которой labels.ts отделён от states.tsx).
-import { OP_LABELS } from './format';
+import { opLabel } from './format';
+import { useTranslation } from 'react-i18next';
 
 const SET_OPS: ConditionOp[] = ['in', 'not_in'];
 const ORDER_OPS: ConditionOp[] = ['gt', 'gte', 'lt', 'lte'];
@@ -77,6 +78,7 @@ interface ValueEditorProps {
 
 /** Виджет значения — по типу поля, а не по оператору. */
 const ValueEditor = ({ field, op, value, onChange }: ValueEditorProps) => {
+  const { t } = useTranslation();
   const multiple = SET_OPS.includes(op);
 
   // Справочник: значения выбираются кликом. Свободного ввода здесь нет —
@@ -117,7 +119,7 @@ const ValueEditor = ({ field, op, value, onChange }: ValueEditorProps) => {
         })}
         {field.options.length === 0 && (
           <span className="text-xs text-muted-foreground">
-            Справочник пуст — выбирать нечего.
+            {t('signoff.conditions.emptyReference')}
           </span>
         )}
       </div>
@@ -134,8 +136,8 @@ const ValueEditor = ({ field, op, value, onChange }: ValueEditorProps) => {
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="true">да</SelectItem>
-          <SelectItem value="false">нет</SelectItem>
+          <SelectItem value="true">{t('common.yesLower')}</SelectItem>
+          <SelectItem value="false">{t('common.noLower')}</SelectItem>
         </SelectContent>
       </Select>
     );
@@ -148,7 +150,7 @@ const ValueEditor = ({ field, op, value, onChange }: ValueEditorProps) => {
     return (
       <Input
         value={asText}
-        placeholder="через запятую"
+        placeholder={t('signoff.conditions.commaSeparated')}
         onChange={(event) => {
           const parts = event.target.value
             .split(',')
@@ -195,11 +197,12 @@ export const ConditionEditor = ({
   onChange,
   disabled = false,
 }: ConditionEditorProps) => {
+  const { t } = useTranslation();
+
   if (fields.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        Для этого типа объектов ветвление не настроено: аппка не объявила ни
-        одного поля, по которому можно ветвить.
+        {t('signoff.conditions.noBranchFields')}
       </p>
     );
   }
@@ -230,10 +233,10 @@ export const ConditionEditor = ({
           disabled={disabled}
         >
           <Plus className="mr-1.5 h-3.5 w-3.5" />
-          Добавить условие
+          {t('signoff.conditions.add')}
         </Button>
         <p className="text-xs text-muted-foreground">
-          Без условия этап нужен всегда.
+          {t('signoff.conditions.alwaysRequired')}
         </p>
       </div>
     );
@@ -249,7 +252,7 @@ export const ConditionEditor = ({
             <div className="flex items-center gap-2">
               {index > 0 && (
                 <Badge variant="outline" className="shrink-0 text-muted-foreground">
-                  и
+                  {t('signoff.conditions.and')}
                 </Badge>
               )}
 
@@ -294,7 +297,7 @@ export const ConditionEditor = ({
                 <SelectContent>
                   {ops.map((op) => (
                     <SelectItem key={op} value={op}>
-                      {OP_LABELS[op]}
+                      {opLabel(op)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -304,7 +307,7 @@ export const ConditionEditor = ({
                 type="button"
                 size="icon"
                 variant="ghost"
-                aria-label="Убрать условие"
+                aria-label={t('signoff.conditions.remove')}
                 onClick={() => onChange(value.filter((_, i) => i !== index))}
               >
                 <X className="h-4 w-4" />
@@ -320,8 +323,7 @@ export const ConditionEditor = ({
 
             {!field && (
               <p className="text-xs text-destructive">
-                Поле «{predicate.field}» больше не существует — выберите другое,
-                иначе запуск согласования по этому маршруту откажет.
+                {t('signoff.conditions.missingField', { field: predicate.field })}
               </p>
             )}
           </div>
@@ -330,7 +332,7 @@ export const ConditionEditor = ({
 
       <Button type="button" variant="outline" size="sm" onClick={add}>
         <Plus className="mr-1.5 h-3.5 w-3.5" />
-        Ещё условие
+        {t('signoff.conditions.addMore')}
       </Button>
     </div>
   );

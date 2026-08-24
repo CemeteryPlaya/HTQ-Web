@@ -55,6 +55,9 @@ urlpatterns = [
     path("accounts/<int:account_id>/imap-password/", views.imap_account_password),
     path("accounts/<int:account_id>/imap-password", views.imap_account_password),
 
+    path("accounts/<int:account_id>/signature/", views.account_signature),
+    path("accounts/<int:account_id>/signature", views.account_signature),
+
     path("accounts/<int:account_id>/set-default/", views.account_set_default),
     path("accounts/<int:account_id>/set-default", views.account_set_default),
 
@@ -126,6 +129,10 @@ urlpatterns = [
     # (та же конвенция, что и aliases ниже).
     path("mailboxes/status/", views.mailbox_status),
     path("mailboxes/status", views.mailbox_status),
+
+    # Сверка адреса перед созданием («такой ящик уже есть?»).
+    path("mailboxes/lookup/", views.mailbox_lookup),
+    path("mailboxes/lookup", views.mailbox_lookup),
 
     # Реквизиты почтового сервера из интерфейса. ``settings/test/`` — ДО
     # ``settings/``, иначе более общий путь перехватил бы его.

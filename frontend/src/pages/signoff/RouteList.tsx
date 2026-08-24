@@ -42,8 +42,10 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { signoffApi } from '@/api/signoff';
 import type { ApprovalRoute, Subject } from '@/types/signoff';
+import { useTranslation } from 'react-i18next';
 
 const RouteList = () => {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [creatingFor, setCreatingFor] = useState<Subject | null>(null);
@@ -86,7 +88,7 @@ const RouteList = () => {
         .createRoute({ subject_type: subjectType, name, is_active: isActive })
         .then((r) => r.data),
     onSuccess: (route) => {
-      toast.success('Маршрут создан — добавьте этапы');
+      toast.success(t('signoff.routes.created'));
       setCreatingFor(null);
       setName('');
       queryClient.invalidateQueries({ queryKey: ['signoff'] });
@@ -95,12 +97,12 @@ const RouteList = () => {
       navigate(`/signoff/routes/${route.id}`);
     },
     // 409 — тип не зарегистрирован либо активный маршрут для него уже есть.
-    onError: (err) => reportApiError(err, 'Не удалось создать маршрут'),
+    onError: (err) => reportApiError(err, t('signoff.routes.createError')),
   });
 
   const openCreate = (subject: Subject) => {
     setCreatingFor(subject);
-    setName(`Согласование: ${subject.label.toLowerCase()}`);
+    setName(t('signoff.routes.defaultName', { label: subject.label.toLowerCase() }));
   };
 
   const isLoading = subjectsLoading || routesLoading;
@@ -110,9 +112,9 @@ const RouteList = () => {
       <div className="mb-6 flex items-center gap-3">
         <GitBranch className="h-7 w-7 text-muted-foreground" />
         <div>
-          <h1 className="text-3xl font-bold">Маршруты</h1>
+          <h1 className="text-3xl font-bold">{t('signoff.nav.routes')}</h1>
           <p className="text-sm text-muted-foreground">
-            Кто и в каком порядке согласует объекты каждого типа.
+            {t('signoff.routes.subtitle')}
           </p>
         </div>
       </div>
@@ -120,11 +122,7 @@ const RouteList = () => {
       <Alert className="mb-6">
         <AlertTriangle className="h-4 w-4" />
         <AlertDescription>
-          Включённый маршрут меняет поведение предметной аппки: с этого
-          момента несогласованный объект перестаёт приниматься там, где его
-          согласование проверяется (у договоров — бюджетная строка и
-          контрагент). Пока активного маршрута для типа нет, не блокируется
-          ничего.
+          {t('signoff.routes.enabledWarning')}
         </AlertDescription>
       </Alert>
 
@@ -136,16 +134,14 @@ const RouteList = () => {
         </div>
       ) : subjectsError ? (
         <p className="text-sm text-destructive">
-          Не удалось загрузить список согласуемых типов.
+          {t('signoff.routes.typesLoadError')}
         </p>
       ) : subjects.length === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Согласуемых типов нет</CardTitle>
+            <CardTitle className="text-base">{t('signoff.routes.noTypes')}</CardTitle>
             <CardDescription>
-              Реестр наполняют сами предметные аппки при старте бэкенда. Пустой
-              список значит, что ни одна из них себя не зарегистрировала —
-              либо все они отключены.
+              {t('signoff.routes.noTypesHint')}
             </CardDescription>
           </CardHeader>
         </Card>
@@ -165,11 +161,11 @@ const RouteList = () => {
                             variant="outline"
                             className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
                           >
-                            согласование включено
+                            {t('signoff.routes.approvalOn')}
                           </Badge>
                         ) : (
                           <Badge variant="outline" className="text-muted-foreground">
-                            без активного маршрута
+                            {t('signoff.routes.noActiveRoute')}
                           </Badge>
                         )}
                       </CardTitle>
@@ -184,16 +180,15 @@ const RouteList = () => {
                     >
                       <Plus className="mr-1.5 h-4 w-4" />
                       {subject.has_active_route
-                        ? 'Ещё маршрут (неактивный)'
-                        : 'Создать маршрут'}
+                        ? t('signoff.routes.addInactive')
+                        : t('signoff.routes.create')}
                     </Button>
                   </div>
                 </CardHeader>
                 <CardContent>
                   {typeRoutes.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
-                      Маршрутов нет — объекты этого типа отправить на
-                      согласование нельзя.
+                      {t('signoff.routes.emptyForType')}
                     </p>
                   ) : (
                     <ul className="divide-y">
@@ -211,12 +206,12 @@ const RouteList = () => {
                             </Link>
                             <p className="text-xs text-muted-foreground">
                               {route.stages.length === 0
-                                ? 'этапов нет — маршрут неисполним'
-                                : `этапов: ${route.stages.length}`}
+                                ? t('signoff.routes.noStages')
+                                : t('signoff.routes.stageCount', { count: route.stages.length })}
                             </p>
                           </div>
                           <Badge variant={route.is_active ? 'default' : 'outline'}>
-                            {route.is_active ? 'активен' : 'выключен'}
+                            {route.is_active ? t('signoff.routes.activeLower') : t('signoff.routes.disabledLower')}
                           </Badge>
                         </li>
                       ))}
@@ -231,12 +226,10 @@ const RouteList = () => {
             <Card className="border-dashed">
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">
-                  Маршруты на незарегистрированные типы
+                  {t('signoff.routes.orphanTitle')}
                 </CardTitle>
                 <CardDescription>
-                  Эти типы больше не приходят из реестра — их аппка отключена
-                  или сняла регистрацию. Маршруты остались в базе и здесь
-                  показаны, чтобы о них было известно.
+                  {t('signoff.routes.orphanHint')}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -269,33 +262,31 @@ const RouteList = () => {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Новый маршрут</DialogTitle>
+            <DialogTitle>{t('signoff.routes.newTitle')}</DialogTitle>
             <DialogDescription>
               {creatingFor?.label}
               {creatingFor?.has_active_route && (
                 <span className="block mt-2">
-                  Активный маршрут для этого типа уже есть, а больше одного
-                  быть не может — новый создастся выключенным. Включить его
-                  можно, выключив прежний.
+                  {t('signoff.routes.newHint')}
                 </span>
               )}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-2">
-            <Label htmlFor="route-name">Название</Label>
+            <Label htmlFor="route-name">{t('signoff.routes.nameLabel')}</Label>
             <Input
               id="route-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               maxLength={200}
-              placeholder="Например: согласование бюджетных заявок"
+              placeholder={t('signoff.routes.namePlaceholder')}
             />
           </div>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreatingFor(null)}>
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button
               disabled={!name.trim() || create.isPending}
@@ -310,7 +301,7 @@ const RouteList = () => {
               {create.isPending && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
-              Создать
+              {t('common.create')}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useHRLevel } from '@/hooks/useHRLevel';
+import { cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, Plus, Pencil, Trash2, Building2, Briefcase, Search } from 'lucide-react';
 
 /* ------------------------------------------------------------------ */
@@ -101,18 +102,23 @@ const HRDepartments = () => {
         detail && typeof detail === 'object' && detail.blockers ? detail.blockers : null;
       if (err?.response?.status === 409 && blockers) {
         const parts: string[] = [];
-        if (blockers.sub_departments) parts.push(`${blockers.sub_departments} подразделение(й)`);
-        if (blockers.positions) parts.push(`${blockers.positions} должность(ей)`);
-        if (blockers.employees) parts.push(`${blockers.employees} сотрудник(ов)`);
+        if (blockers.sub_departments) {
+          parts.push(t('hr.departments.blockerSubDepartments', { count: blockers.sub_departments }));
+        }
+        if (blockers.positions) {
+          parts.push(t('hr.departments.blockerPositions', { count: blockers.positions }));
+        }
+        if (blockers.employees) {
+          parts.push(t('hr.departments.blockerEmployees', { count: blockers.employees }));
+        }
         const ok = confirm(
-          `Подразделение «${name}» содержит ${parts.join(', ')}.\n` +
-            `Удалить вместе со всем содержимым? Это действие необратимо.`,
+          t('hr.departments.confirmCascadeDelete', { name, parts: parts.join(', ') }),
         );
         if (!ok) return;
         await deleteDeptMutation.mutateAsync({ id, cascade: true });
         return;
       }
-      const msg = typeof detail === 'string' ? detail : 'Не удалось удалить';
+      const msg = typeof detail === 'string' ? detail : t('hr.departments.deleteError');
       alert(msg);
     }
   };
@@ -209,17 +215,44 @@ const HRDepartments = () => {
           const posCount = dept.positions?.length || 0;
 
           return (
-            <div key={dept.id} className="rounded-3xl border bg-card shadow-2xs hover:shadow-xs transition-all overflow-hidden">
-              {/* Department row */}
-              <div className="flex items-center gap-3 px-6 py-4">
-                <button
-                  type="button"
-                  onClick={() => toggle(dept.id)}
-                  className="rounded-lg p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                  aria-label="Toggle positions"
+            <div
+              key={dept.id}
+              className={cn(
+                'rounded-3xl border bg-card shadow-2xs transition-all overflow-hidden',
+                // Раскрытое состояние видно по самой карточке, а не только по
+                // шеврону в 16px: при десятке отделов на экране понять с одного
+                // взгляда, какие открыты, иначе невозможно.
+                isOpen ? 'border-primary/40 shadow-xs ring-1 ring-primary/15' : 'hover:shadow-xs',
+              )}
+            >
+              {/* Department row — переключатель целиком, а не только шеврон */}
+              <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={isOpen}
+                aria-controls={`dept-${dept.id}-positions`}
+                // Имя задаём явно: иначе скринридер зачитал бы всё содержимое
+                // строки вместе с вложенными кнопками действий.
+                aria-label={t('hr.pages.structure.togglePositions', 'Должности отдела {{name}}', { name: dept.name })}
+                onClick={() => toggle(dept.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggle(dept.id);
+                  }
+                }}
+                className={cn(
+                  'flex cursor-pointer items-center gap-3 px-6 py-4 transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                  isOpen ? 'bg-muted/40' : 'hover:bg-muted/20',
+                )}
+              >
+                <span
+                  aria-hidden
+                  className="rounded-lg p-1 text-muted-foreground transition-colors"
                 >
                   {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                </button>
+                </span>
 
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary shrink-0">
                   <Building2 className="h-4.5 w-4.5" />
@@ -233,8 +266,17 @@ const HRDepartments = () => {
                       </span>
                     )}
                     <span className="font-bold text-base truncate text-foreground">{dept.name}</span>
-                    <span className="inline-flex items-center rounded-full bg-muted/80 px-2.5 py-0.5 text-xs font-semibold text-muted-foreground">
-                      {posCount} должностей
+                    {/* При нуле бейдж говорит об этом прямо: тогда пустой
+                        результат раскрытия перестаёт быть неожиданностью. */}
+                    <span
+                      className={cn(
+                        'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold',
+                        posCount > 0
+                          ? 'bg-muted/80 text-muted-foreground'
+                          : 'bg-muted/40 text-muted-foreground/70',
+                      )}
+                    >
+                      {posCount > 0 ? t('hr.departments.positionsCount', { count: posCount }) : t('hr.departments.noPositions')}
                     </span>
                   </div>
                   {dept.description && (
@@ -242,12 +284,14 @@ const HRDepartments = () => {
                   )}
                 </div>
 
-                <div className="flex items-center gap-1.5 shrink-0">
+                {/* Строка целиком — переключатель, поэтому клик по кнопкам
+                    действий не должен заодно сворачивать карточку. */}
+                <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                   <Button size="sm" variant="outline" className="gap-1.5 text-xs rounded-xl h-8" onClick={() => startCreatePos(dept.id)} title={t('hr.pages.structure.addPosition')}>
                     <Plus className="h-3.5 w-3.5" />
-                    <span>Должность</span>
+                    <span>{t('hr.card.position')}</span>
                   </Button>
-                  <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-xl" onClick={() => startEditDept(dept)} title="Редактировать">
+                  <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-xl" onClick={() => startEditDept(dept)} title={t('common.edit')}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
                   {isSenior && (
@@ -256,7 +300,7 @@ const HRDepartments = () => {
                       variant="ghost"
                       className="h-8 w-8 p-0 rounded-xl text-destructive hover:text-destructive hover:bg-destructive/10"
                       onClick={() => handleDeleteDept(dept.id, dept.name)}
-                      title="Удалить"
+                      title={t('common.delete')}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -266,7 +310,7 @@ const HRDepartments = () => {
 
               {/* Nested positions */}
               {isOpen && dept.positions && dept.positions.length > 0 && (
-                <div className="border-t bg-muted/30">
+                <div id={`dept-${dept.id}-positions`} className="border-t bg-muted/30">
                   {dept.positions.map((pos) => (
                     <div key={pos.id} className="flex items-center gap-3 px-5 py-3 pl-14 border-b last:border-b-0">
                       <Briefcase className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -297,11 +341,16 @@ const HRDepartments = () => {
 
               {/* Empty state for open dept */}
               {isOpen && (!dept.positions || dept.positions.length === 0) && (
-                <div className="border-t bg-muted/30 px-5 py-4 pl-14 text-sm text-muted-foreground">
-                  {t('hr.pages.structure.noPositions')}
-                  <Button size="sm" variant="link" className="ml-2 p-0 h-auto" onClick={() => startCreatePos(dept.id)}>
-                    {t('hr.pages.structure.addPosition')}
-                  </Button>
+                <div id={`dept-${dept.id}-positions`} className="border-t bg-muted/30 px-5 py-4 pl-14">
+                  {/* Рамка и иконка: пустой ответ должен читаться как ответ,
+                      а не как «ничего не произошло». */}
+                  <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground">
+                    <Briefcase className="h-4 w-4 shrink-0" />
+                    {t('hr.pages.structure.noPositions')}
+                    <Button size="sm" variant="link" className="p-0 h-auto" onClick={() => startCreatePos(dept.id)}>
+                      {t('hr.pages.structure.addPosition')}
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>

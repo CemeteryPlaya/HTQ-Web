@@ -13,18 +13,28 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useHRLevel } from '@/hooks/useHRLevel';
+import { translatedMap } from '@/lib/i18n/translatedMap';
+import { useTranslation } from 'react-i18next';
 
 interface PMO { id: number; name: string; code: string; description: string | null; head_employee_id: number | null; status: string }
 interface PMOMember { id: number; employee_id: number; employee_name: string; employee_email: string; primary_position: string | null; position_in_pmo: string | null; membership_type: string; allocation_percent: number; is_primary: boolean; from_date: string | null; to_date: string | null }
 interface Employee { id: number; full_name: string; email: string }
 
-const STATUS_LABELS: Record<string, string> = { active: 'Активный', suspended: 'Приостановлен', closed: 'Закрыт' };
+const STATUS_LABELS: Record<string, string> = translatedMap({
+  active: 'hr.pmo.status.active',
+  suspended: 'hr.pmo.status.suspended',
+  closed: 'hr.pmo.status.closed',
+});
 const STATUS_COLORS: Record<string, string> = {
   active: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
   suspended: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
   closed: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
 };
-const MEMBER_TYPE_LABELS: Record<string, string> = { permanent: 'Постоянный', assigned: 'Командированный', consulting: 'Консультант' };
+const MEMBER_TYPE_LABELS: Record<string, string> = translatedMap({
+  permanent: 'hr.pmo.memberType.permanent',
+  assigned: 'hr.pmo.memberType.assigned',
+  consulting: 'hr.pmo.memberType.consulting',
+});
 
 function PMOCard({ pmo, onSelect, selected }: { pmo: PMO; onSelect: () => void; selected: boolean }) {
   return (
@@ -50,6 +60,7 @@ function PMOCard({ pmo, onSelect, selected }: { pmo: PMO; onSelect: () => void; 
 }
 
 const HRPMO = () => {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { isSenior } = useHRLevel();
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -128,26 +139,26 @@ const HRPMO = () => {
   const selected = pmos.find((p) => p.id === selectedId);
 
   return (
-    <HRLayout title="Офис управления проектами" subtitle="PMO — проектные команды и структуры">
+    <HRLayout title={t('hr.pmo.title')} subtitle={t('hr.pmo.subtitle')}>
       <div className="flex gap-6 h-[calc(100vh-220px)] min-h-[600px]">
         {/* Left: PMO list */}
         <div className="w-72 flex-shrink-0 flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-muted-foreground">ОУП ({pmos.length})</span>
+            <span className="text-sm font-medium text-muted-foreground">{t('hr.pmo.listCount', { count: pmos.length })}</span>
             {isSenior && (
               <Dialog open={createOpen} onOpenChange={setCreateOpen}>
                 <DialogTrigger asChild>
-                  <Button size="sm">+ Создать</Button>
+                  <Button size="sm">{t('hr.pmo.create')}</Button>
                 </DialogTrigger>
                 <DialogContent>
-                  <DialogHeader><DialogTitle>Новый ОУП</DialogTitle></DialogHeader>
+                  <DialogHeader><DialogTitle>{t('hr.pmo.newTitle')}</DialogTitle></DialogHeader>
                   <div className="grid gap-3">
-                    <label className="grid gap-1.5 text-sm">Название<Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
-                    <label className="grid gap-1.5 text-sm">Код (уникальный)<Input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="PMO-001" /></label>
-                    <label className="grid gap-1.5 text-sm">Описание<Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
+                    <label className="grid gap-1.5 text-sm">{t('hr.pmo.name')}<Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+                    <label className="grid gap-1.5 text-sm">{t('hr.pmo.code')}<Input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="PMO-001" /></label>
+                    <label className="grid gap-1.5 text-sm">{t('calendar.form.description')}<Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
                     <div className="flex justify-end gap-2">
-                      <Button variant="outline" onClick={() => setCreateOpen(false)}>Отмена</Button>
-                      <Button onClick={() => createMutation.mutate()} disabled={!form.name || !form.code || createMutation.isPending}>Создать</Button>
+                      <Button variant="outline" onClick={() => setCreateOpen(false)}>{t('common.cancel')}</Button>
+                      <Button onClick={() => createMutation.mutate()} disabled={!form.name || !form.code || createMutation.isPending}>{t('common.create')}</Button>
                     </div>
                   </div>
                 </DialogContent>
@@ -159,7 +170,7 @@ const HRPMO = () => {
               <PMOCard key={p.id} pmo={p} selected={p.id === selectedId} onSelect={() => setSelectedId(p.id)} />
             ))}
             {pmos.length === 0 && (
-              <div className="text-sm text-muted-foreground text-center py-8">Нет ОУП</div>
+              <div className="text-sm text-muted-foreground text-center py-8">{t('hr.pmo.empty')}</div>
             )}
           </div>
         </div>
@@ -168,7 +179,7 @@ const HRPMO = () => {
         <div className="flex-1 min-w-0">
           {!selected ? (
             <div className="flex h-full items-center justify-center text-muted-foreground text-sm">
-              Выберите ОУП из списка слева
+              {t('hr.pmo.pickOne')}
             </div>
           ) : (
             <Tabs defaultValue="general" className="h-full flex flex-col">
@@ -178,15 +189,15 @@ const HRPMO = () => {
                   <span className="text-xs font-mono text-muted-foreground">{selected.code}</span>
                 </div>
                 <TabsList>
-                  <TabsTrigger value="general">Общее</TabsTrigger>
-                  <TabsTrigger value="members">Участники ({members.length})</TabsTrigger>
-                  <TabsTrigger value="chart">Граф</TabsTrigger>
+                  <TabsTrigger value="general">{t('hr.pmo.tabGeneral')}</TabsTrigger>
+                  <TabsTrigger value="members">{t('hr.pmo.tabMembers', { count: members.length })}</TabsTrigger>
+                  <TabsTrigger value="chart">{t('hr.pmo.tabGraph')}</TabsTrigger>
                 </TabsList>
               </div>
 
               <TabsContent value="general" className="flex-1">
                 <div className="rounded-xl border bg-card p-5 space-y-3">
-                  <div><span className="text-sm text-muted-foreground">Статус: </span>
+                  <div><span className="text-sm text-muted-foreground">{t('hr.pmo.statusLabel')} </span>
                     <Badge className={`text-xs ${STATUS_COLORS[selected.status] ?? ''}`} variant="outline">
                       {STATUS_LABELS[selected.status] ?? selected.status}
                     </Badge>
@@ -200,31 +211,31 @@ const HRPMO = () => {
                   {isSenior && (
                     <Dialog open={addMemberOpen} onOpenChange={setAddMemberOpen}>
                       <DialogTrigger asChild>
-                        <Button size="sm">+ Добавить</Button>
+                        <Button size="sm">{t('hr.pmo.addMemberShort')}</Button>
                       </DialogTrigger>
                       <DialogContent>
-                        <DialogHeader><DialogTitle>Добавить участника</DialogTitle></DialogHeader>
+                        <DialogHeader><DialogTitle>{t('hr.pmo.addMember')}</DialogTitle></DialogHeader>
                         <div className="grid gap-3">
-                          <label className="grid gap-1.5 text-sm">Сотрудник
+                          <label className="grid gap-1.5 text-sm">{t('hr.pmo.employee')}
                             <Select value={memberForm.employee_id} onValueChange={(v) => setMemberForm({ ...memberForm, employee_id: v })}>
-                              <SelectTrigger><SelectValue placeholder="Выберите сотрудника" /></SelectTrigger>
+                              <SelectTrigger><SelectValue placeholder={t('hr.pmo.pickEmployee')} /></SelectTrigger>
                               <SelectContent>
                                 {employees.map((e: any) => <SelectItem key={e.id} value={String(e.id)}>{e.full_name ?? `${e.first_name} ${e.last_name}`}</SelectItem>)}
                               </SelectContent>
                             </Select>
                           </label>
-                          <label className="grid gap-1.5 text-sm">Тип участия
+                          <label className="grid gap-1.5 text-sm">{t('hr.pmo.membershipType')}
                             <Select value={memberForm.membership_type} onValueChange={(v) => setMemberForm({ ...memberForm, membership_type: v })}>
                               <SelectTrigger><SelectValue /></SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="permanent">Постоянный</SelectItem>
-                                <SelectItem value="assigned">Командированный</SelectItem>
-                                <SelectItem value="consulting">Консультант</SelectItem>
+                                <SelectItem value="permanent">{t('hr.pmo.memberType.permanent')}</SelectItem>
+                                <SelectItem value="assigned">{t('hr.pmo.memberType.assigned')}</SelectItem>
+                                <SelectItem value="consulting">{t('hr.pmo.memberType.consulting')}</SelectItem>
                               </SelectContent>
                             </Select>
                           </label>
-                          <label className="grid gap-1.5 text-sm">Роль в ОУП<Input value={memberForm.position_in_pmo} onChange={(e) => setMemberForm({ ...memberForm, position_in_pmo: e.target.value })} placeholder="Необязательно" /></label>
-                          <label className="grid gap-1.5 text-sm">Загрузка %
+                          <label className="grid gap-1.5 text-sm">{t('hr.pmo.roleInPmo')}<Input value={memberForm.position_in_pmo} onChange={(e) => setMemberForm({ ...memberForm, position_in_pmo: e.target.value })} placeholder={t('common.optional')} /></label>
+                          <label className="grid gap-1.5 text-sm">{t('hr.pmo.allocationPercent')}
                             <Input
                               type="number"
                               min={0}
@@ -238,11 +249,11 @@ const HRPMO = () => {
                               checked={memberForm.is_primary}
                               onCheckedChange={(checked) => setMemberForm({ ...memberForm, is_primary: Boolean(checked) })}
                             />
-                            Назначить лидом
+                            {t('hr.pmo.makeLead')}
                           </label>
                           <div className="flex justify-end gap-2">
-                            <Button variant="outline" onClick={() => setAddMemberOpen(false)}>Отмена</Button>
-                            <Button onClick={() => addMemberMutation.mutate()} disabled={!memberForm.employee_id || addMemberMutation.isPending}>Добавить</Button>
+                            <Button variant="outline" onClick={() => setAddMemberOpen(false)}>{t('common.cancel')}</Button>
+                            <Button onClick={() => addMemberMutation.mutate()} disabled={!memberForm.employee_id || addMemberMutation.isPending}>{t('common.add')}</Button>
                           </div>
                         </div>
                       </DialogContent>
@@ -252,14 +263,14 @@ const HRPMO = () => {
                 {allocationWarning != null && allocationWarning > 100 && (
                   <Alert className="mb-3 border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
                     <AlertDescription>
-                      Суммарная нагрузка сотрудника в активных PMO: {allocationWarning}%. Превышает 100%.
+                      {t('hr.pmo.allocationWarning', { percent: allocationWarning })}
                     </AlertDescription>
                   </Alert>
                 )}
                 {membersLoading ? (
-                  <div className="text-sm text-muted-foreground text-center py-8">Загрузка…</div>
+                  <div className="text-sm text-muted-foreground text-center py-8">{t('signoff.loadingEllipsis')}</div>
                 ) : members.length === 0 ? (
-                  <div className="text-sm text-muted-foreground text-center py-8">Нет участников</div>
+                  <div className="text-sm text-muted-foreground text-center py-8">{t('hr.pmo.noMembers')}</div>
                 ) : (
                   <div className="space-y-2">
                     {members.map((m) => (
@@ -267,7 +278,7 @@ const HRPMO = () => {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <p className="font-medium text-sm truncate">{m.employee_name}</p>
-                            {m.is_primary && <Badge className="text-xs" variant="outline">Лид</Badge>}
+                            {m.is_primary && <Badge className="text-xs" variant="outline">{t('profile.pmoLead')}</Badge>}
                           </div>
                           <p className="text-xs text-muted-foreground">{m.position_in_pmo || m.primary_position || '—'}</p>
                         </div>
@@ -298,7 +309,7 @@ const HRPMO = () => {
                               })}
                               disabled={updateMemberMutation.isPending}
                             />
-                            Лид
+                            {t('profile.pmoLead')}
                           </label>
                         )}
                         <Badge variant="outline" className="text-xs shrink-0">{MEMBER_TYPE_LABELS[m.membership_type] ?? m.membership_type}</Badge>

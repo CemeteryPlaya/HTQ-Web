@@ -117,7 +117,7 @@ const AdminChats = () => {
                             <div>
                                 <h2 className="font-bold text-lg flex items-center">
                                     {selectedRoom?.room_type === 'secret' && <Lock className="h-4 w-4 mr-2 text-primary" />}
-                                    {((selectedRoom as any)?.title || (selectedRoom as any)?.name) || `Чат #${selectedRoom?.id ?? selectedRoomId} (${selectedRoom?.room_type ?? '—'})`}
+                                    {((selectedRoom as any)?.title || (selectedRoom as any)?.name) || t('admin.chats.roomFallbackTitle', { id: selectedRoom?.id ?? selectedRoomId, type: selectedRoom?.room_type ?? '—' })}
                                     {isDeleted(selectedRoom) && <Badge variant="outline" className="ml-3 text-xs border-destructive/40 text-destructive">{t('admin.chats.deleted', 'Удалён')}</Badge>}
                                 </h2>
                                 <p className="text-xs text-muted-foreground">
@@ -172,14 +172,14 @@ const AdminChats = () => {
                                                                 {decoded.text && <p className="text-sm mb-1">{decoded.text}</p>}
                                                                 <div className="flex items-center gap-2 bg-background/50 border p-2 rounded-lg max-w-sm">
                                                                     {isAudio ? <Music className="h-5 w-5 opacity-70" /> : <FileText className="h-5 w-5 opacity-70" />}
-                                                                    <span className="text-sm font-medium truncate flex-1" title={decoded.file_name}>{decoded.file_name || 'Файл'}</span>
+                                                                    <span className="text-sm font-medium truncate flex-1" title={decoded.file_name}>{decoded.file_name || t('messenger.file')}</span>
                                                                     <a
                                                                         href={decoded.file_url}
                                                                         target="_blank"
                                                                         rel="noreferrer"
                                                                         download={decoded.file_name}
                                                                         className="ml-2 p-1.5 bg-background rounded-full hover:bg-accent transition-colors border"
-                                                                        title="Скачать"
+                                                                        title={t('common.download')}
                                                                     >
                                                                         <Download className="h-4 w-4" />
                                                                     </a>

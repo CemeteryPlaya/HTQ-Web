@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -56,6 +57,42 @@ def issue_token_pair(user) -> dict:
         "refresh": _encode(_refresh_claims(user), timedelta(days=settings.JWT_REFRESH_TTL_DAYS), "refresh"),
         "token_type": "Bearer",
     }
+
+
+def issue_guest_token(*, room_id: str, display_name: str,
+                      ttl_minutes: int | None = None) -> tuple[str, int]:
+    """Токен внешнего участника конференции. Возвращает ``(токен, ttl_сек)``.
+
+    Гость — человек без учётки в платформе: открыл ссылку-приглашение, ввёл
+    имя, вошёл в звонок. Токен подписан тем же секретом, что и обычные, —
+    иначе SFU его не примет (он валидирует подпись сам, см. sfu/src/auth.ts),
+    — но отличается от них двумя вещами, и обе несут нагрузку:
+
+    * ``token_type="guest"`` — API платформы такой токен не пускает никуда.
+      Проверка стоит в ``htqweb.http._authenticate_jwt`` (пускает только
+      ``"access"``), а SFU разрешает гостю ровно одно действие — войти в
+      свою комнату.
+    * ``room_id`` — токен привязан к ОДНОЙ комнате. Без этого гостевая
+      ссылка на планёрку открывала бы любое совещание в компании: SFU не
+      знает, кого куда звали, и до сих пор верил любому валидному токену.
+
+    ``user_id`` не выдаётся намеренно, и это вторая линия обороны: даже если
+    когда-нибудь ослабят проверку ``token_type``, ``TokenPayload`` без
+    обязательного ``user_id`` не соберётся и авторизация всё равно откажет.
+    """
+    ttl = timedelta(minutes=ttl_minutes or settings.CONFERENCE_GUEST_TOKEN_TTL_MIN)
+    claims = {
+        # Уникальный sub на каждого гостя: по нему различаются участники в
+        # логах SFU, а имя человек вводит сам и оно не уникально.
+        "sub": f"guest:{secrets.token_hex(8)}",
+        "username": display_name,
+        "room_id": room_id,
+        "is_staff": False,
+        "is_superuser": False,
+        "is_admin": False,
+        "iss": settings.JWT_ISSUER,
+    }
+    return _encode(claims, ttl, "guest"), int(ttl.total_seconds())
 
 
 def decode_token(token: str) -> TokenPayload:

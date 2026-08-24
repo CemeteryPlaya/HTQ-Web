@@ -238,9 +238,47 @@ def test_create_user_provisions_a_real_mailbox_when_mail_is_configured(superuser
 
 
 @pytest.mark.django_db
-def test_create_user_mailbox_conflict_does_not_block_user_creation(superuser, db):
-    """Занятый адрес — повод сообщить об этом, но не повод не создать
-    сотрудника: ящик админ доведёт руками из раздела «Корпоративные ящики»."""
+def test_create_user_attaches_existing_mailbox_instead_of_duplicating(superuser, db):
+    """Ящик с таким адресом уже есть и он ничей — сотруднику подключается ИМЕННО
+    он, а не свежий ``i.ivanov2``.
+
+    Ради этого сверка и написана: раньше платформа знала только свою таблицу и
+    либо выдавала второй, пустой ящик, либо отвечала «already exists» и
+    оставляла админа ни с чем.
+    """
+    from apps.mail.models import EmailAccount, ProvisionedMailbox
+
+    existing = ProvisionedMailbox.objects.create(
+        local_part="i.ivanov", domain="htq.group", address="i.ivanov@htq.group",
+    )
+    with override_settings(MAILCOW_DOMAIN="htq.group"):
+        resp = Client().post(f"{BASE}/admin/users/", data={
+            "username": "clash", "email": "clash@htq.test", "password": "Passw0rd!",
+            "create_mailbox": True, "mailbox_local_part": "i.ivanov",
+        }, content_type="application/json", **_auth(superuser))
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["mailbox_error"] is None
+    assert body["mailbox"]["address"] == "i.ivanov@htq.group"
+    assert body["mailbox"]["attached"] is True
+
+    user = User.objects.get(username="clash")
+    existing.refresh_from_db()
+    assert existing.user_id == user.id
+    assert ProvisionedMailbox.objects.count() == 1  # дубля i.ivanov2 нет
+    assert EmailAccount.objects.filter(user_id=user.id, type="corporate").exists()
+
+
+@pytest.mark.django_db
+def test_create_user_mailbox_failure_does_not_block_user_creation(superuser, db):
+    """Нерабочая учётка ящика — повод сообщить об этом, но не повод не создать
+    сотрудника: ящик админ доведёт руками из раздела «Корпоративные ящики».
+
+    Здесь IMAP-режим и недоступный сервер: сверка нашла существующий ящик и
+    пошла проверять пару адрес/пароль логином, логин не прошёл — привязки нет,
+    а пользователь всё равно создан.
+    """
     from apps.mail.models import ProvisionedMailbox
 
     ProvisionedMailbox.objects.create(
@@ -256,8 +294,9 @@ def test_create_user_mailbox_conflict_does_not_block_user_creation(superuser, db
         }, content_type="application/json", **_auth(superuser))
 
     assert resp.status_code == 201
-    assert "already exists" in resp.json()["mailbox_error"]
+    assert "не принял эту пару адрес/пароль" in resp.json()["mailbox_error"]
     assert User.objects.filter(username="clash").exists()
+    assert ProvisionedMailbox.objects.get(address="i.ivanov@htq.group").user_id is None
 
 
 @pytest.mark.django_db
@@ -509,3 +548,67 @@ def test_delete_user_404_unknown_id(superuser, db):
 def test_get_single_user_405_not_a_route(superuser, plain_user):
     resp = Client().get(f"{BASE}/admin/users/{plain_user.id}/", **_auth(superuser))
     assert resp.status_code == 405
+
+
+@pytest.mark.django_db
+def test_created_user_gets_the_existing_mailbox_matching_their_email(superuser, db):
+    """Заявленный сценарий целиком: заводим Руслана Амирова с рабочим адресом,
+    ящик под этот адрес уже есть — он подключается сам, БЕЗ галки «создать
+    ящик». Иначе сотрудник откроет «Почту» и не найдёт там своей переписки.
+    """
+    from apps.mail.models import EmailAccount, ProvisionedMailbox
+
+    existing = ProvisionedMailbox.objects.create(
+        local_part="ruslan.amirov", domain="htq.group",
+        address="ruslan.amirov@htq.group",
+    )
+    with override_settings(MAILCOW_DOMAIN="htq.group"):
+        resp = Client().post(f"{BASE}/admin/users/", data={
+            "username": "r.amirov", "email": "ruslan.amirov@htq.group",
+            "password": "Passw0rd!", "first_name": "Руслан", "last_name": "Амиров",
+        }, content_type="application/json", **_auth(superuser))
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["mailbox"]["address"] == "ruslan.amirov@htq.group"
+    assert body["mailbox"]["attached"] is True
+    assert body["mailbox_error"] is None
+
+    user = User.objects.get(username="r.amirov")
+    existing.refresh_from_db()
+    assert existing.user_id == user.id
+    assert EmailAccount.objects.filter(user_id=user.id, type="corporate").exists()
+
+
+@pytest.mark.django_db
+def test_created_user_without_a_matching_mailbox_gets_nothing(superuser, db):
+    """Ящика нет — молчим. Галку не ставили, создавать ящик никто не просил."""
+    from apps.mail.models import ProvisionedMailbox
+
+    with override_settings(MAILCOW_DOMAIN="htq.group"):
+        resp = Client().post(f"{BASE}/admin/users/", data={
+            "username": "r.amirov", "email": "ruslan.amirov@htq.group",
+            "password": "Passw0rd!",
+        }, content_type="application/json", **_auth(superuser))
+
+    assert resp.status_code == 201
+    assert resp.json()["mailbox"] is None
+    assert ProvisionedMailbox.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_new_mailbox_is_named_after_the_email_not_the_transliterated_name(superuser, db):
+    """С галкой ящик заводится под адресом, который админ ВПИСАЛ, а не под
+    транслитерацией ФИО: иначе адрес ящика разошёлся бы с логином."""
+    from apps.mail.models import ProvisionedMailbox
+
+    with override_settings(MAILCOW_DOMAIN="htq.group"):
+        resp = Client().post(f"{BASE}/admin/users/", data={
+            "username": "r.amirov", "email": "ruslan.amirov@htq.group",
+            "password": "Passw0rd!", "first_name": "Руслан", "last_name": "Амиров",
+            "create_mailbox": True,
+        }, content_type="application/json", **_auth(superuser))
+
+    assert resp.status_code == 201
+    assert resp.json()["mailbox"]["address"] == "ruslan.amirov@htq.group"
+    assert ProvisionedMailbox.objects.get().address == "ruslan.amirov@htq.group"

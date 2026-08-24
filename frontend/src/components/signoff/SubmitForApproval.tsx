@@ -37,6 +37,7 @@ import type { ApprovalProcess, ApprovalState } from '@/types/signoff';
 
 import { reportApiError } from '@/lib/apiError';
 import { ApprovalStateBadge } from './states';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   subjectType: string;
@@ -71,6 +72,7 @@ export function SubmitForApproval({
   size = 'sm',
   showProcessLink = false,
 }: Props) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [startedId, setStartedId] = useState<number | null>(null);
 
@@ -106,7 +108,7 @@ export function SubmitForApproval({
     mutationFn: () => submit(subjectId).then((r) => r.data),
     onSuccess: (process) => {
       setStartedId(process.id);
-      toast.success('Отправлено на согласование');
+      toast.success(t('signoff.submit.done'));
       queryClient.invalidateQueries({ queryKey: ['signoff'] });
       for (const key of invalidate) {
         queryClient.invalidateQueries({ queryKey: key });
@@ -115,7 +117,7 @@ export function SubmitForApproval({
     // 409 здесь — «маршрут не настроен», «уже на согласовании»,
     // «несогласованный бюджет/контрагент»; 503 — модуль выключен целиком.
     onError: (err) =>
-      reportApiError(err, 'Не удалось отправить на согласование'),
+      reportApiError(err, t('signoff.submit.error')),
   });
 
   // Решение принято или ещё принимается — отправлять нечего. Ссылка на
@@ -130,7 +132,7 @@ export function SubmitForApproval({
         {activeProcessId !== null && (
           <Button asChild size={size} variant="ghost">
             <Link to={`/signoff/processes/${activeProcessId}`}>
-              Карточка согласования
+              {t('signoff.submit.cardTitle')}
             </Link>
           </Button>
         )}
@@ -152,7 +154,7 @@ export function SubmitForApproval({
         ) : (
           <Send className="mr-1.5 h-4 w-4" />
         )}
-        {state === 'rework' ? 'Отправить снова' : 'На согласование'}
+        {state === 'rework' ? t('signoff.submit.again') : t('signoff.submit.action')}
       </Button>
     </div>
   );

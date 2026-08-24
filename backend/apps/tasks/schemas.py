@@ -48,7 +48,7 @@ class DateWarning(BaseModel):
 
 
 class ContractorRef(BaseModel):
-    """Подрядчик в карточке задачи — только то, что рисует чип."""
+    """Партнёр в карточке задачи — только то, что рисует чип."""
 
     id: int
     name: str
@@ -209,7 +209,7 @@ class LinkResponse(BaseModel):
 
 # ── projects ────────────────────────────────────────────────────────────
 
-# ── contractors (субподрядчики) ─────────────────────────────────────────
+# ── contractors (партнёры) ─────────────────────────────────────────
 #
 # Домен новый. Уровень (junior/middle/senior) — свойство ЧЕЛОВЕКА, а не
 # организации, и на этом этапе он только хранится: правами он начнёт
@@ -308,8 +308,8 @@ class ContractorEngagementCreate(BaseModel):
     contractor_id: int
     project_id: int | None = None
     site_id: int | None = None
-    # Привлечение на один пакет работ: «развозку валов отдали субподряду,
-    # монтаж делаем сами». Третья стрелка в «Субподряд» на схеме.
+    # Привлечение на один пакет работ: «развозку валов отдали партнёру,
+    # монтаж делаем сами». Третья стрелка в «Партнёр» на схеме.
     roadmap_id: int | None = None
     contract_no: str | None = Field(None, max_length=64)
     scope: str = Field(default="", max_length=5000)
@@ -1136,7 +1136,7 @@ class EquipmentCreate(BaseModel):
         # с человеческим текстом, а не IntegrityError, ставший 500.
         if (self.ownership == EquipmentOwnership.CONTRACTOR
                 and self.contractor_id is None):
-            raise ValueError("Для техники подрядчика укажите подрядчика")
+            raise ValueError("Для техники партнёра укажите партнёра")
         return self
 
 
@@ -1257,6 +1257,130 @@ class DailyReportRevisionResponse(BaseModel):
     quantity: float
     headcount: int | None = None
     comment: str
+    edited_by_id: int | None = None
+    edited_by_name: str | None = None
+    edited_at: datetime
+
+
+class ProjectStaffLineIn(BaseModel):
+    """Строка ввода: сколько людей одной роли вышло на блок."""
+
+    work_role_id: int
+    headcount: int = Field(..., ge=0, le=32767)
+
+
+class ProjectStaffReportCreate(BaseModel):
+    """Отчёт по персоналу: сколько людей и каких ролей стояло на блоке.
+
+    ``project_id`` приходит путём, а не телом. ``lines`` обязателен и
+    непуст: отчёт без строк не отвечает на вопрос, ради которого заведён.
+    """
+
+    site_block_id: int
+    work_date: date
+    comment: str = Field(default="", max_length=5000)
+    lines: list[ProjectStaffLineIn] = Field(..., min_length=1)
+
+
+class ProjectStaffReportUpdate(BaseModel):
+    # Поля принимаются, но менять их нельзя: сервис отвечает 422 с
+    # объяснением. Молча выбрасывать их из схемы было бы хуже — клиент
+    # получал бы 200 и думал, что отчёт переехал на другой блок.
+    project_id: int | None = None
+    site_block_id: int | None = None
+    work_date: date | None = None
+    comment: str | None = Field(None, max_length=5000)
+    # ``None`` = «строки не трогаем», непустой список = полная замена.
+    # Частичной правки строк нет намеренно: форма редактирует таблицу
+    # целиком, и «поменяй только монтажников» пришлось бы выражать
+    # отдельным протоколом ради того же результата.
+    lines: list[ProjectStaffLineIn] | None = Field(None, min_length=1)
+
+
+class ProjectStaffLineOut(BaseModel):
+    work_role_id: int
+    work_role_name: str
+    headcount: int
+
+
+class ProjectStaffReportResponse(BaseModel):
+    id: int
+    project_id: int
+    project_name: str
+    site_id: int
+    site_name: str
+    site_block_id: int
+    site_block_name: str
+    # Дата ВЫХОДА людей. Не путать с created_at — датой заполнения.
+    work_date: date
+    author_id: int | None = None
+    author_name: str | None = None
+    comment: str
+    total_headcount: int
+    lines: list[ProjectStaffLineOut] = Field(default_factory=list)
+    current_revision: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectStaffRoleRow(BaseModel):
+    """Роль в строке блока: сколько нужно по плану и сколько вышло.
+
+    ``work_role_id`` = None — плановая потребность без указанной роли
+    (``ResourceRequirement.work_role`` nullable намеренно). ``planned`` =
+    None — плана по этой роли нет, и сравнивать не с чем.
+    """
+
+    work_role_id: int | None = None
+    work_role_name: str
+    planned: int | None = None
+    actual: int
+
+
+class ProjectStaffBoardBlock(BaseModel):
+    """Блок проекта на выбранную дату: факт, план и сверка с ежедневкой.
+
+    Строка есть у каждого блока, даже без отчёта (``report_id`` = None):
+    страница отвечает в том числе на «где ещё не отчитались».
+
+    ``daily_headcount`` — сумма ``DailyReport.headcount`` по задачам блока
+    за ту же дату. Это сверка, а не источник: в ежедневке headcount
+    необязателен, так что число почти всегда меньше заведённого по объекту.
+    """
+
+    site_id: int
+    site_name: str
+    site_block_id: int
+    site_block_name: str
+    report_id: int | None = None
+    total_headcount: int
+    planned_headcount: int | None = None
+    delta: int | None = None
+    daily_headcount: int
+    comment: str = ""
+    roles: list[ProjectStaffRoleRow] = Field(default_factory=list)
+
+
+class ProjectStaffBoardResponse(BaseModel):
+    project_id: int
+    project_name: str
+    date: date
+    total_actual: int
+    total_planned: int | None = None
+    total_daily: int
+    blocks: list[ProjectStaffBoardBlock] = Field(default_factory=list)
+
+
+class ProjectStaffRevisionResponse(BaseModel):
+    id: int
+    report_id: int
+    revision_no: int
+    work_date: date
+    comment: str
+    total_headcount: int
+    # Снимок строк с ИМЕНЕМ роли внутри: версия обязана читаться, даже если
+    # роль потом переименовали или убрали из справочника.
+    lines: list[ProjectStaffLineOut] = Field(default_factory=list)
     edited_by_id: int | None = None
     edited_by_name: str | None = None
     edited_at: datetime

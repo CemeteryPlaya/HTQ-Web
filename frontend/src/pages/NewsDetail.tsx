@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cmsApi } from '@/api/cms';
 import type { NewsItem } from '@/types/news';
+import { useTranslation } from 'react-i18next';
 
 type Lang = 'ru' | 'en' | 'kk';
 
@@ -54,6 +55,7 @@ function ArticleSkeleton() {
 }
 
 const NewsDetail = () => {
+  const { t } = useTranslation();
   const { slug } = useParams();
   const [news, setNews] = useState<NewsItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -99,10 +101,10 @@ const NewsDetail = () => {
         }));
         setCurrentLang(next);
       } else {
-        toast('Перевод поставлен в очередь — попробуйте через минуту');
+        toast(t('news.detail.translationQueued'));
       }
     } catch (err: any) {
-      toast.error(err?.response?.data?.detail || 'Ошибка перевода. Попробуйте позже.');
+      toast.error(err?.response?.data?.detail || t('news.detail.translationError'));
     } finally {
       setTranslating(false);
     }
@@ -134,7 +136,7 @@ const NewsDetail = () => {
             className="group mb-8 inline-flex items-center gap-2 rounded-full bg-muted/50 px-4 py-2 text-sm font-medium text-muted-foreground backdrop-blur-sm transition-all hover:bg-primary/10 hover:text-primary"
           >
             <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-1" />
-            К списку новостей
+            {t('news.detail.backToList')}
           </Link>
 
           {loading && <ArticleSkeleton />}
@@ -176,12 +178,12 @@ const NewsDetail = () => {
                           }).catch(console.error);
                         } else {
                           navigator.clipboard.writeText(window.location.href);
-                          toast.success('Ссылка скопирована!');
+                          toast.success(t('common.linkCopied'));
                         }
                       }}
                     >
                       <Share2 className="mr-2 h-4 w-4" />
-                      Поделиться
+                      {t('common.share')}
                     </Button>
                     <Button
                       variant="outline"
@@ -247,7 +249,7 @@ const NewsDetail = () => {
               {news.tags && news.tags.length > 0 && (
                 <div className="mt-16 flex flex-wrap items-center gap-3 border-t border-border/50 pt-8">
                   <span className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
-                    Теги:
+                    {t('news.tagsLabel')}
                   </span>
                   {news.tags.map((tag) => (
                     <Link

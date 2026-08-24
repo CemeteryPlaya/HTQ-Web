@@ -5,8 +5,10 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useHRLevel } from '@/hooks/useHRLevel';
 import { fetchStaffingLines, fetchStaffingSummary, deleteStaffingLine, type StaffingLine } from '@/api/hr';
+import { useTranslation } from 'react-i18next';
 
 const HRStaffing = () => {
+  const { t } = useTranslation();
   const { hasPerm } = useHRLevel();
   const qc = useQueryClient();
   const canView = hasPerm('hr.staffing.view');
@@ -17,23 +19,23 @@ const HRStaffing = () => {
   const del = useMutation({ mutationFn: (id: number) => deleteStaffingLine(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['staffing-lines'] }); qc.invalidateQueries({ queryKey: ['staffing-summary'] }); } });
 
   return (
-    <HRLayout title="Штатное расписание">
+    <HRLayout title={t('hr.nav.staffing')}>
       {summary && (
         <div className="mb-4 rounded-lg border p-4 text-sm">
-          <div>Итого ФОТ: <span className="font-semibold">{summary.total_fot}</span></div>
-          <div className="text-muted-foreground">Ставки: {summary.total_budgeted} · занято: {summary.total_filled} · вакантно: {summary.total_vacant}</div>
+          <div>{t('hr.staffing.totalPayroll')} <span className="font-semibold">{summary.total_fot}</span></div>
+          <div className="text-muted-foreground">{t('hr.staffing.summary', { budgeted: summary.total_budgeted, filled: summary.total_filled, vacant: summary.total_vacant })}</div>
         </div>
       )}
       <div className="border rounded-lg overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Должность</TableHead>
-              <TableHead>Отдел</TableHead>
-              <TableHead>Грейд</TableHead>
-              <TableHead>Ставки</TableHead>
-              <TableHead>Оклад</TableHead>
-              <TableHead>ФОТ</TableHead>
+              <TableHead>{t('hr.card.position')}</TableHead>
+              <TableHead>{t('hr.card.department')}</TableHead>
+              <TableHead>{t('hr.positions.grade')}</TableHead>
+              <TableHead>{t('hr.staffing.budgeted')}</TableHead>
+              <TableHead>{t('hr.staffing.salary')}</TableHead>
+              <TableHead>{t('hr.staffing.payroll')}</TableHead>
               {canManage && <TableHead></TableHead>}
             </TableRow>
           </TableHeader>
@@ -46,11 +48,11 @@ const HRStaffing = () => {
                 <TableCell>{l.headcount}</TableCell>
                 <TableCell>{l.salary}</TableCell>
                 <TableCell className="font-medium">{l.fot}</TableCell>
-                {canManage && <TableCell><Button size="sm" variant="outline" onClick={() => del.mutate(l.id)}>Удалить</Button></TableCell>}
+                {canManage && <TableCell><Button size="sm" variant="outline" onClick={() => del.mutate(l.id)}>{t('common.delete')}</Button></TableCell>}
               </TableRow>
             ))}
             {(lines ?? []).length === 0 && (
-              <TableRow><TableCell colSpan={canManage ? 7 : 6} className="text-center py-8 text-muted-foreground">Нет строк</TableCell></TableRow>
+              <TableRow><TableCell colSpan={canManage ? 7 : 6} className="text-center py-8 text-muted-foreground">{t('hr.staffing.empty')}</TableCell></TableRow>
             )}
           </TableBody>
         </Table>

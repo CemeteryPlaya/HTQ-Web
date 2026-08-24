@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 
 import { useApprove, useCancel, useReject, useRequestChanges } from '@/features/requests/hooks';
 import type { RequestInstance } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   instance: RequestInstance;
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export function ActionBar({ instance, currentUserId, isElevated = false, canApprove = false }: Props) {
+  const { t } = useTranslation();
   const [comment, setComment] = useState('');
   const approve = useApprove(instance.id);
   const reject = useReject(instance.id);
@@ -35,7 +37,7 @@ export function ActionBar({ instance, currentUserId, isElevated = false, canAppr
     return (
       <Card>
         <CardContent className="py-3 text-sm text-muted-foreground">
-          Запрос в статусе «{instance.status}». Действия недоступны.
+          {t('requests.actions.unavailable', { status: instance.status })}
         </CardContent>
       </Card>
     );
@@ -49,7 +51,7 @@ export function ActionBar({ instance, currentUserId, isElevated = false, canAppr
         toast.success(ok);
         setComment('');
       } catch (e: any) {
-        toast.error(e?.response?.data?.detail ?? e?.message ?? 'Не удалось выполнить действие');
+        toast.error(e?.response?.data?.detail ?? e?.message ?? t('requests.actions.failed'));
       }
     };
 
@@ -60,7 +62,7 @@ export function ActionBar({ instance, currentUserId, isElevated = false, canAppr
           <Textarea
             value={comment}
             onChange={(e) => setComment(e.target.value)}
-            placeholder="Комментарий (необязательно)"
+            placeholder={t('requests.actions.commentPlaceholder')}
             rows={2}
           />
         )}
@@ -69,24 +71,24 @@ export function ActionBar({ instance, currentUserId, isElevated = false, canAppr
             <>
               <Button
                 disabled={approve.isPending}
-                onClick={runMutation(approve, 'Одобрено')}
+                onClick={runMutation(approve, t('requests.status.approvedDone'))}
                 className="bg-emerald-600 hover:bg-emerald-700"
               >
-                Одобрить
+                {t('requests.actions.approve')}
               </Button>
               <Button
                 disabled={reject.isPending}
-                onClick={runMutation(reject, 'Отклонено')}
+                onClick={runMutation(reject, t('requests.status.rejectedDone'))}
                 variant="destructive"
               >
-                Отклонить
+                {t('requests.actions.reject')}
               </Button>
               <Button
                 disabled={requestChanges.isPending}
-                onClick={runMutation(requestChanges, 'Возвращено на доработку')}
+                onClick={runMutation(requestChanges, t('requests.status.returnedDone'))}
                 variant="outline"
               >
-                Вернуть на доработку
+                {t('requests.actions.requestChanges')}
               </Button>
             </>
           )}
@@ -97,13 +99,13 @@ export function ActionBar({ instance, currentUserId, isElevated = false, canAppr
               onClick={async () => {
                 try {
                   await cancel.mutateAsync();
-                  toast.success('Запрос отменён');
+                  toast.success(t('requests.actions.cancelled'));
                 } catch (e: any) {
-                  toast.error(e?.response?.data?.detail ?? e?.message ?? 'Не удалось отменить');
+                  toast.error(e?.response?.data?.detail ?? e?.message ?? t('requests.actions.cancelFailed'));
                 }
               }}
             >
-              Отменить
+              {t('requests.actions.cancel')}
             </Button>
           )}
         </div>

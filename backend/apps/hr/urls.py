@@ -152,8 +152,28 @@ urlpatterns = [
     path("org/relations", views.add_reporting_relation),
     path("org/relations/", views.add_reporting_relation),
 
-    path("org/relations/<int:relation_id>", views.remove_reporting_relation),
-    path("org/relations/<int:relation_id>/", views.remove_reporting_relation),
+    # ``superior`` — литерал, поэтому СТРОГО до <int:relation_id>: int-конвертер
+    # слово не матчит, но порядок сохраняем как и везде в этом файле.
+    path("org/relations/superior", views.org_relation_superior),
+    path("org/relations/superior/", views.org_relation_superior),
+
+    path("org/relations/<int:relation_id>", views.org_relation_detail),
+    path("org/relations/<int:relation_id>/", views.org_relation_detail),
+
+    # ── org/employee-relations, org/departments/{id}/manager — не порт,
+    # ручная правка руководителей/подчинённых на уровне сотрудников. Тот же
+    # порядок: литералы (``employee-relations``) до ``<int:...>``.
+    path("org/employee-relations", views.org_employee_relations_collection),
+    path("org/employee-relations/", views.org_employee_relations_collection),
+
+    path("org/employee-relations/superior", views.org_employee_relation_superior),
+    path("org/employee-relations/superior/", views.org_employee_relation_superior),
+
+    path("org/employee-relations/<int:relation_id>", views.org_employee_relation_detail),
+    path("org/employee-relations/<int:relation_id>/", views.org_employee_relation_detail),
+
+    path("org/departments/<int:department_id>/manager", views.org_department_manager),
+    path("org/departments/<int:department_id>/manager/", views.org_department_manager),
 
     path("org/settings/deletion-strategy", views.org_deletion_strategy),
     path("org/settings/deletion-strategy/", views.org_deletion_strategy),

@@ -156,7 +156,9 @@ const HRVacancies = () => {
     <div className="space-y-6">
       <div className="rounded-3xl border bg-card p-4 shadow-2xs">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="text-xs font-semibold text-muted-foreground">{t('hr.common.total')}: {vacancies?.length || 0} открытых/активных вакансий</div>
+          <div className="text-xs font-semibold text-muted-foreground">
+              {t('hr.vacancies.openCount', { count: vacancies?.length || 0 })}
+            </div>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
               <Button onClick={startCreate} className="h-9 gap-2 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 font-semibold shadow-2xs">

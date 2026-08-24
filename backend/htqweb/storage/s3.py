@@ -43,7 +43,8 @@ class Storage(Protocol):
     def delete(self, path: str) -> None: ...
     def exists(self, path: str) -> bool: ...
     def size(self, path: str) -> int: ...
-    def presigned_get_url(self, path: str, ttl: int | None = None) -> str: ...
+    def presigned_get_url(self, path: str, ttl: int | None = None, *,
+                          download_as: str | None = None) -> str: ...
 
 
 class LocalStorage:
@@ -85,7 +86,11 @@ class LocalStorage:
     def size(self, path: str) -> int:
         return self._resolve(path).stat().st_size
 
-    def presigned_get_url(self, path: str, ttl: int | None = None) -> str:
+    def presigned_get_url(self, path: str, ttl: int | None = None, *,
+                          download_as: str | None = None) -> str:
+        # download_as управляет заголовком ответа S3; у file:// заголовков
+        # нет, поэтому локальный бэкенд его молча игнорирует — как и bucket
+        # в get_storage() (см. её докстринг): local — dev-заглушка.
         return f"file://{self._resolve(path)}"
 
 
@@ -170,12 +175,28 @@ class S3Storage:
         response = s3.head_object(Bucket=self.bucket, Key=path)
         return response["ContentLength"]
 
-    def presigned_get_url(self, path: str, ttl: int | None = None) -> str:
+    def presigned_get_url(self, path: str, ttl: int | None = None, *,
+                          download_as: str | None = None) -> str:
+        """Временная прямая ссылка на объект.
+
+        ``download_as`` просит S3 отдать объект как вложение с этим именем
+        файла (``ResponseContentDisposition``). Нужен для «скачать запись»:
+        атрибут ``download`` у ссылки браузер игнорирует, когда файл лежит на
+        другом origin (а presigned-ссылка всегда на другом), поэтому имя и
+        режим вложения задаёт сам ответ хранилища. Скачивание при этом
+        остаётся прямым — байты не идут через Django.
+        """
         ttl_seconds = ttl if ttl is not None else self.default_presigned_ttl
         s3 = self._client(endpoint_override=self.public_endpoint)
+        params = {"Bucket": self.bucket, "Key": path}
+        if download_as:
+            safe_name = download_as.replace('"', "").replace("\\", "")
+            params["ResponseContentDisposition"] = (
+                f'attachment; filename="{safe_name}"'
+            )
         return s3.generate_presigned_url(
             "get_object",
-            Params={"Bucket": self.bucket, "Key": path},
+            Params=params,
             ExpiresIn=ttl_seconds,
         )
 

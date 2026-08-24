@@ -50,6 +50,15 @@ CELERY_BROKER_URL = "memory://"
 CELERY_RESULT_BACKEND = "cache+memory://"
 JWT_SECRET = "test-secret-key-for-htqweb-tests-32b"
 
+# Тесты идут в строгом режиме: fallback (htqweb/fallback.py) не подменяет
+# значение, а поднимает FallbackNotAllowed. Это и есть главная ценность
+# механизма — молчаливая подмена становится падающим тестом там, где её
+# никто не закладывал. Места, где деградация штатна, помечаются в коде
+# `expected=True` и strict их не роняет; тестам, которым нужен именно
+# прод-режим, доступна фикстура `fallback_log_mode` (backend/conftest.py).
+HTQ_ENV = "development"
+FALLBACK_MODE = fallback_mode_for(HTQ_ENV)  # noqa: F405
+
 # Eager mode runs .delay(...) inline — so notify_admins_on_contact_request
 # fires synchronously from the contact-request POST view during tests.
 # ADMINS defaults to [] (base.py, DJANGO_ADMINS unset) so mail_admins()

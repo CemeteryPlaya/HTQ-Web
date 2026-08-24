@@ -47,6 +47,7 @@ import {
 } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import type { Notification } from '@/types/tasks';
+import { useTranslation } from 'react-i18next';
 
 type StatusFilter = 'all' | 'unread' | 'read';
 
@@ -78,6 +79,7 @@ const fmtDate = (iso: string | null | undefined): string => {
 };
 
 const NotificationsHistory: React.FC = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [status, setStatus] = useState<StatusFilter>('all');
@@ -97,12 +99,12 @@ const NotificationsHistory: React.FC = () => {
     if (error) {
       const msg = (error as any)?.response?.data?.detail
         || (error as any)?.message
-        || 'Не удалось загрузить уведомления';
-      toast.error(`История уведомлений: ${msg}`);
+        || t('notifications.history.loadError');
+      toast.error(t('notifications.history.errorToast', { message: msg }));
       // eslint-disable-next-line no-console
       console.error('notification-history fetch failed', error);
     }
-  }, [error]);
+  }, [error, t]);
 
   // Invalidate both the history query and the live bell dropdown so
   // toggling read state stays in sync everywhere.
@@ -156,7 +158,7 @@ const NotificationsHistory: React.FC = () => {
               )}
             </h1>
             <p className="text-muted-foreground mt-1 italic">
-              Все уведомления с датой получения, датой прочтения и ссылками на источник.
+              {t('notifications.history.subtitle')}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -168,7 +170,7 @@ const NotificationsHistory: React.FC = () => {
               className="gap-1.5"
             >
               <RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} />
-              Обновить
+              {t('email.actions.refresh')}
             </Button>
             <Button
               size="sm"
@@ -177,14 +179,14 @@ const NotificationsHistory: React.FC = () => {
               className="gap-1.5"
             >
               <CheckCircle2 className="h-4 w-4" />
-              Прочитать все
+              {t('notifications.markAllRead')}
             </Button>
           </div>
         </div>
 
         <Tabs value={status} onValueChange={(v) => { setStatus(v as StatusFilter); setPage(1); }} className="mb-4">
           <TabsList>
-            <TabsTrigger value="all">Все</TabsTrigger>
+            <TabsTrigger value="all">{t('common.all')}</TabsTrigger>
             <TabsTrigger value="unread">
               Непрочитанные
               {unreadCount > 0 && (
@@ -193,24 +195,24 @@ const NotificationsHistory: React.FC = () => {
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="read">Прочитанные</TabsTrigger>
+            <TabsTrigger value="read">{t('notifications.history.readTab')}</TabsTrigger>
           </TabsList>
         </Tabs>
 
         <div className="rounded-2xl border bg-card overflow-hidden">
           {isLoading ? (
             <div className="p-12 text-center text-sm text-muted-foreground">
-              Загрузка...
+              {t('profile.loading')}
             </div>
           ) : items.length === 0 ? (
             <div className="p-12 text-center text-sm text-muted-foreground flex flex-col items-center gap-3">
               <Circle className="h-10 w-10 opacity-20" />
               <p>
                 {status === 'unread'
-                  ? 'Нет непрочитанных уведомлений'
+                  ? t('notifications.history.emptyUnread')
                   : status === 'read'
-                  ? 'Нет прочитанных уведомлений'
-                  : 'Уведомлений пока нет'}
+                  ? t('notifications.history.emptyRead')
+                  : t('notifications.history.empty')}
               </p>
             </div>
           ) : (
@@ -239,7 +241,7 @@ const NotificationsHistory: React.FC = () => {
                           'mt-1 h-2.5 w-2.5 flex-shrink-0 rounded-full',
                           n.is_read ? 'bg-muted' : 'bg-primary animate-pulse',
                         )}
-                        aria-label={n.is_read ? 'Прочитано' : 'Непрочитано'}
+                        aria-label={n.is_read ? t('notifications.history.readMark') : t('notifications.history.unreadMark')}
                       />
                       <div className="min-w-0 flex-1">
                         <div className="text-sm text-foreground">
@@ -253,9 +255,9 @@ const NotificationsHistory: React.FC = () => {
                           </span>
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                          <span>📅 Получено: {fmtDate(n.created_at)}</span>
+                          <span>{t('notifications.history.received', { stamp: fmtDate(n.created_at) })}</span>
                           <span>
-                            👁 Прочитано:{' '}
+                            {t('notifications.history.readAt')}
                             <span className={cn(n.read_at ? '' : 'italic opacity-70')}>
                               {n.read_at ? fmtDate(n.read_at) : '—'}
                             </span>
@@ -272,13 +274,13 @@ const NotificationsHistory: React.FC = () => {
                       {url ? (
                         <Button asChild variant="ghost" size="sm" className="gap-1 text-primary">
                           <Link to={url} onClick={(e) => e.stopPropagation()}>
-                            Перейти
+                            {t('notifications.history.goTo')}
                             <ArrowUpRight className="h-3.5 w-3.5" />
                           </Link>
                         </Button>
                       ) : (
                         <span className="text-xs italic text-muted-foreground px-2">
-                          без ссылки
+                          {t('notifications.history.noLink')}
                         </span>
                       )}
                       {n.is_read ? (
@@ -287,7 +289,7 @@ const NotificationsHistory: React.FC = () => {
                           size="sm"
                           onClick={(e) => { e.stopPropagation(); markUnreadM.mutate(n.id); }}
                           className="gap-1 text-muted-foreground hover:text-primary"
-                          title="Отметить как непрочитанное"
+                          title={t('notifications.history.markUnread')}
                         >
                           <Circle className="h-3.5 w-3.5" />
                         </Button>
@@ -297,7 +299,7 @@ const NotificationsHistory: React.FC = () => {
                           size="sm"
                           onClick={(e) => { e.stopPropagation(); markReadM.mutate(n.id); }}
                           className="gap-1 text-muted-foreground hover:text-primary"
-                          title="Отметить как прочитанное"
+                          title={t('notifications.history.markRead')}
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
                         </Button>
@@ -308,7 +310,7 @@ const NotificationsHistory: React.FC = () => {
                         onClick={(e) => { e.stopPropagation(); deleteM.mutate(n.id); }}
                         disabled={deleteM.isPending}
                         className="gap-1 text-muted-foreground hover:text-destructive"
-                        title="Удалить из истории"
+                        title={t('notifications.history.remove')}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -323,7 +325,7 @@ const NotificationsHistory: React.FC = () => {
         {totalPages > 1 && (
           <div className="mt-4 flex items-center justify-between text-sm">
             <p className="text-muted-foreground">
-              Страница {page} из {totalPages} · всего {totalRows}
+              {t('notifications.history.pageOf', { page, total: totalPages, rows: totalRows })}
             </p>
             <div className="flex gap-2">
               <Button
@@ -334,7 +336,7 @@ const NotificationsHistory: React.FC = () => {
                 className="gap-1"
               >
                 <ChevronLeft className="h-4 w-4" />
-                Назад
+                {t('common.prev')}
               </Button>
               <Button
                 variant="outline"
@@ -343,7 +345,7 @@ const NotificationsHistory: React.FC = () => {
                 disabled={page >= totalPages}
                 className="gap-1"
               >
-                Вперёд
+                {t('common.next')}
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>

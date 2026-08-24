@@ -26,6 +26,7 @@ import {
 } from '@/components/contracts/ReferenceCombobox';
 import { contractsApi } from '@/api/contracts';
 import type { CounterpartyStatus } from '@/types/contracts';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Карточка контрагента (раздел «Реестр контрагентов»).
@@ -52,6 +53,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 type Errors = Record<string, string>;
 
 const CounterpartyCreate = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -83,21 +85,21 @@ const CounterpartyCreate = () => {
   );
 
   const statusOptions = enums?.counterparty_status ?? [
-    { value: 'active', label: 'Активен' },
-    { value: 'inactive', label: 'Неактивен' },
-    { value: 'blocked', label: 'Заблокирован' },
+    { value: 'active', label: t('contracts.status.active') },
+    { value: 'inactive', label: t('contracts.status.inactive') },
+    { value: 'blocked', label: t('contracts.status.blocked') },
   ];
 
   const binLooksForeign = binIin.trim().length > 0 && !KZ_BIN_RE.test(binIin.trim());
 
   const validate = (): Errors => {
     const next: Errors = {};
-    if (!binIin.trim()) next.binIin = 'Укажите БИН/ИИН';
-    if (!name.trim()) next.name = 'Укажите наименование';
-    if (!country) next.country = 'Выберите страну или впишите новую';
+    if (!binIin.trim()) next.binIin = t('contracts.counterpartyForm.errors.bin');
+    if (!name.trim()) next.name = t('contracts.counterpartyForm.errors.name');
+    if (!country) next.country = t('contracts.counterpartyForm.errors.country');
     // E-mail необязателен, но заполненный обязан быть адресом: бэкенд его
     // проверяет и вернёт 422 — лучше сказать об этом до отправки формы.
-    if (email.trim() && !EMAIL_RE.test(email.trim())) next.email = 'Похоже, это не e-mail';
+    if (email.trim() && !EMAIL_RE.test(email.trim())) next.email = t('contracts.counterpartyForm.errors.email');
     return next;
   };
 
@@ -121,7 +123,7 @@ const CounterpartyCreate = () => {
         .then((r) => r.data),
     onSuccess: (row) => {
       queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      toast.success(`Контрагент добавлен: ${row.name}`);
+      toast.success(t('contracts.counterpartyForm.added', { name: row.name }));
       navigate('/contracts/counterparties');
     },
     onError: (error: unknown) => {
@@ -139,7 +141,7 @@ const CounterpartyCreate = () => {
         toast.error(detail.map((item) => (item as { msg?: string }).msg ?? '').join('; '));
         return;
       }
-      toast.error('Не удалось добавить контрагента');
+      toast.error(t('contracts.counterpartyForm.addError'));
     },
   });
 
@@ -148,7 +150,7 @@ const CounterpartyCreate = () => {
     const found = validate();
     setErrors(found);
     if (Object.keys(found).length > 0) {
-      toast.error('Проверьте заполнение формы');
+      toast.error(t('contracts.formInvalid'));
       return;
     }
     mutation.mutate();
@@ -166,15 +168,14 @@ const CounterpartyCreate = () => {
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
           >
             <ArrowLeft className="h-4 w-4" />
-            К реестру контрактов
+            {t('contracts.counterpartyForm.backToList')}
           </Link>
           <div className="flex items-center gap-3">
             <Building2 className="h-7 w-7 text-muted-foreground" />
             <div>
-              <h1 className="text-3xl font-bold">Новый контрагент</h1>
+              <h1 className="text-3xl font-bold">{t('contracts.newCounterparty')}</h1>
               <p className="text-muted-foreground text-sm mt-1">
-                Карточка заводится один раз и дальше просто выбирается при
-                оформлении договоров.
+                {t('contracts.counterpartyForm.subtitle')}
               </p>
             </div>
           </div>
@@ -183,16 +184,15 @@ const CounterpartyCreate = () => {
         <form onSubmit={handleSubmit} className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Реквизиты</CardTitle>
+              <CardTitle>{t('contracts.counterparty.details')}</CardTitle>
               <CardDescription>
-                БИН/ИИН уникален по реестру — повторно завести ту же
-                организацию не получится.
+                {t('contracts.counterpartyForm.binHint')}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <Label htmlFor="bin-iin">БИН / ИИН</Label>
+                  <Label htmlFor="bin-iin">{t('contracts.counterparty.bin')}</Label>
                   <BinIinInput
                     id="bin-iin"
                     value={binIin}
@@ -202,19 +202,18 @@ const CounterpartyCreate = () => {
                   {fieldError('binIin')}
                   {binLooksForeign && !errors.binIin && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Не похоже на казахстанский БИН/ИИН (12 цифр) — для
-                      иностранного контрагента это нормально.
+                      {t('contracts.counterpartyForm.binWarning')}
                     </p>
                   )}
                 </div>
 
                 <div>
-                  <Label htmlFor="name">Наименование</Label>
+                  <Label htmlFor="name">{t('contracts.columns.title')}</Label>
                   <Input
                     id="name"
                     value={name}
                     onChange={(event) => setName(event.target.value)}
-                    placeholder="ТОО «Альфа»"
+                    placeholder={t('contracts.counterpartyForm.namePlaceholder')}
                     className={errors.name ? 'border-destructive' : undefined}
                   />
                   {fieldError('name')}
@@ -223,7 +222,7 @@ const CounterpartyCreate = () => {
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <Label htmlFor="country">Страна</Label>
+                  <Label htmlFor="country">{t('contracts.counterparty.country')}</Label>
                   <ReferenceCombobox
                     id="country"
                     options={countryOptions}
@@ -232,8 +231,8 @@ const CounterpartyCreate = () => {
                       setCountry(next);
                       if (next?.kind !== 'new') setIsoCode('');
                     }}
-                    placeholder="Выберите или впишите новую"
-                    createLabel={(input) => `Создать страну «${input}»`}
+                    placeholder={t('contracts.pickOrTypeNewF')}
+                    createLabel={(input) => t('contracts.createCountry', { input })}
                     loading={countriesLoading}
                     invalid={Boolean(errors.country)}
                   />
@@ -241,7 +240,7 @@ const CounterpartyCreate = () => {
                 </div>
 
                 <div>
-                  <Label htmlFor="status">Статус</Label>
+                  <Label htmlFor="status">{t('contracts.columns.status')}</Label>
                   <Select
                     value={status}
                     onValueChange={(value) => setStatus(value as CounterpartyStatus)}
@@ -263,7 +262,7 @@ const CounterpartyCreate = () => {
               {/* Код ISO нужен только для новой страны — у выбранной он уже есть. */}
               {country?.kind === 'new' && (
                 <div className="sm:w-40">
-                  <Label htmlFor="iso-code">Код ISO (необязательно)</Label>
+                  <Label htmlFor="iso-code">{t('contracts.isoCode')}</Label>
                   <Input
                     id="iso-code"
                     value={isoCode}
@@ -277,10 +276,9 @@ const CounterpartyCreate = () => {
               <div className="flex items-start gap-3">
                 <Switch id="vat" checked={vat} onCheckedChange={setVat} />
                 <div>
-                  <Label htmlFor="vat">Плательщик НДС</Label>
+                  <Label htmlFor="vat">{t('contracts.counterpartyForm.vatPayer')}</Label>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Только признак «с НДС / без НДС». Ставка и номер
-                    свидетельства здесь не ведутся.
+                    {t('contracts.counterpartyForm.vatHint')}
                   </p>
                 </div>
               </div>
@@ -289,22 +287,22 @@ const CounterpartyCreate = () => {
 
           <Card>
             <CardHeader>
-              <CardTitle>Контактные данные</CardTitle>
+              <CardTitle>{t('contracts.counterpartyForm.contacts')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <Label htmlFor="contact-name">Генеральный директор</Label>
+                  <Label htmlFor="contact-name">{t('contracts.counterparty.ceo')}</Label>
                   <Input
                     id="contact-name"
                     value={contactName}
                     onChange={(event) => setContactName(event.target.value)}
-                    placeholder="Петров Пётр Петрович"
+                    placeholder={t('contracts.counterpartyForm.ceoPlaceholder')}
                     maxLength={200}
                   />
                 </div>
                 <div>
-                  <Label htmlFor="phone">Телефон</Label>
+                  <Label htmlFor="phone">{t('profile.phone')}</Label>
                   <InternationalPhoneInput
                     id="phone"
                     value={phone}
@@ -326,13 +324,13 @@ const CounterpartyCreate = () => {
                 </div>
               </div>
               <div>
-                <Label htmlFor="address">Адрес</Label>
+                <Label htmlFor="address">{t('contracts.counterparty.address')}</Label>
                 <Textarea
                   id="address"
                   value={address}
                   onChange={(event) => setAddress(event.target.value)}
                   rows={2}
-                  placeholder="Алматы, ул. Абая 1"
+                  placeholder={t('contracts.counterpartyForm.addressPlaceholder')}
                 />
               </div>
             </CardContent>
@@ -341,7 +339,7 @@ const CounterpartyCreate = () => {
           <div className="flex gap-3">
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Добавить контрагента
+              {t('contracts.counterpartyForm.submit')}
             </Button>
             <Button
               type="button"
@@ -349,7 +347,7 @@ const CounterpartyCreate = () => {
               onClick={() => navigate('/contracts/counterparties')}
               disabled={mutation.isPending}
             >
-              Отмена
+              {t('common.cancel')}
             </Button>
           </div>
         </form>

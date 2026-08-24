@@ -27,6 +27,7 @@ import { ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 import { isRoutableUrl } from './routable';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   title: string | null;
@@ -47,6 +48,7 @@ export function SubjectLink({
   processId,
   className,
 }: Props) {
+  const { t } = useTranslation();
   const label = title ?? `${subjectType} #${subjectId}`;
   const routable = isRoutableUrl(url);
 
@@ -66,7 +68,7 @@ export function SubjectLink({
               to={url as string}
               className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline underline-offset-2"
             >
-              открыть карточку в своём разделе
+              {t('signoff.openSubjectCard')}
               <ExternalLink className="h-3 w-3 shrink-0 opacity-60" />
             </Link>
           </div>

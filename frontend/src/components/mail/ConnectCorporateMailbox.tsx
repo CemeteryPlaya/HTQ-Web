@@ -1,76 +1,41 @@
 import React, { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { AtSign, Link2, Unlink, ShieldCheck } from 'lucide-react';
+import { AtSign, KeyRound, Link2, Unlink } from 'lucide-react';
 
 import api from '@/api/client';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import {
-    Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
 
-// GET/POST/DELETE email/v1/accounts/connect-corporate/
-// Обычному пользователю отдаётся только необходимое — без адресов серверов.
-type ConnectInfo = {
-    allowed: boolean;
-    domain: string;
-    mailbox: {
-        id: number;
-        address: string;
-        status: 'active' | 'archived' | 'deleted' | 'error';
-        last_error: string | null;
-    } | null;
-};
+import { MailboxPasswordDialog } from './MailboxPasswordDialog';
+import { useCorporateMailbox, useInvalidateCorporateMailbox } from './useCorporateMailbox';
 
 type ApiError = { response?: { data?: { detail?: string } } };
 
 /**
- * Самоподключение корпоративного ящика сотрудником.
+ * Корпоративный ящик сотрудника в его профиле.
  *
- * Ящик заводит почтовый администратор, сотрудник знает от него пароль — здесь
- * он привязывает ящик к своей учётной записи, не дожидаясь админа платформы.
- * Платформа проверяет пару живым IMAP-входом ДО сохранения, поэтому нерабочая
- * привязка не создаётся.
+ * Два разных сценария на одной карточке:
  *
- * Блок сам скрывается, если админ не включил режим, — чтобы не показывать
- * действие, которое заведомо вернёт отказ.
+ * 1. **Самоподключение.** Ящик завёл почтовый администратор, сотрудник знает
+ *    от него пароль и привязывает ящик сам, не дожидаясь админа платформы.
+ *    Доступно, только если админ включил режим (``self_service``).
+ * 2. **Доввод пароля.** Ящик уже НАЙДЕН и закреплён за сотрудником самой
+ *    платформой, но открыть его она не смогла (сервер без админ-API, Mailcow
+ *    отказал в app-password). Тогда карточка показывается ВСЕГДА, даже при
+ *    выключенном самообслуживании: иначе получилось бы «ящик ваш, но
+ *    пользоваться им нельзя».
+ *
+ * Проверка пары адрес/пароль идёт живым входом ДО сохранения, поэтому
+ * нерабочая привязка не создаётся.
  */
 export const ConnectCorporateMailbox: React.FC<{ className?: string }> = ({ className }) => {
     const { t } = useTranslation();
-    const qc = useQueryClient();
     const [open, setOpen] = useState(false);
-    const [address, setAddress] = useState('');
-    const [password, setPassword] = useState('');
 
-    const { data: info } = useQuery({
-        queryKey: ['corporate-mailbox-connect'],
-        queryFn: async () => (await api.get<ConnectInfo>('email/v1/accounts/connect-corporate/')).data,
-        staleTime: 60_000,
-        retry: false,
-    });
-
-    const invalidate = () => {
-        qc.invalidateQueries({ queryKey: ['corporate-mailbox-connect'] });
-        qc.invalidateQueries({ queryKey: ['email-accounts'] });
-    };
-
-    const connectMutation = useMutation({
-        mutationFn: () => api.post('email/v1/accounts/connect-corporate/', { address, password }),
-        onSuccess: () => {
-            toast.success(t('mail.connect.connected', 'Ящик подключён'));
-            setPassword('');
-            setOpen(false);
-            invalidate();
-        },
-        onError: (e: ApiError) => toast.error(
-            e?.response?.data?.detail || t('mail.connect.error', 'Не удалось подключить ящик'),
-            { duration: 12_000 },
-        ),
-    });
+    const { data: info } = useCorporateMailbox();
+    const invalidate = useInvalidateCorporateMailbox();
 
     const disconnectMutation = useMutation({
         mutationFn: () => api.delete('email/v1/accounts/connect-corporate/'),
@@ -81,21 +46,43 @@ export const ConnectCorporateMailbox: React.FC<{ className?: string }> = ({ clas
         onError: (e: ApiError) => toast.error(e?.response?.data?.detail || 'Error'),
     });
 
-    // Режим выключен админом — показывать нечего.
-    if (!info?.allowed) return null;
+    // Раньше здесь стоял ранний `return null`, уносивший ВЕСЬ поддеревом,
+    // включая диалог. Стоило запросу `connect-corporate` отдать ошибку или
+    // `allowed: false` (а он перезапрашивается сразу после подключения, и
+    // `retry: false` — то есть один сетевой сбой обнуляет `info`), как
+    // открытый диалог исчезал не закрывшись. Radix снимает свою блокировку
+    // `body { pointer-events: none }` в обработчике ЗАКРЫТИЯ; при резком
+    // размонтировании снимать её некому — и вся страница переставала
+    // принимать клики. Ровно то, на что жалуются: «после этого окна кнопки
+    // не нажимаются».
+    //
+    // Поэтому карточка скрывается, а диалог остаётся смонтированным, пока он
+    // открыт: закрыть его должен Radix, а не React-условие.
+    const canConnect = Boolean(info?.allowed);
+    const mailbox = info?.mailbox;
+    const awaiting = Boolean(info?.awaiting_password && mailbox);
 
-    const mailbox = info.mailbox;
+    if (!canConnect && !open) return null;
 
     return (
         <div className={className}>
-            <div className="rounded-lg border bg-card p-4">
+            {canConnect && (
+            <div className={`rounded-lg border p-4 ${awaiting ? 'border-amber-500/40 bg-amber-500/10' : 'bg-card'}`}>
                 <div className="flex items-start justify-between gap-4 flex-wrap">
                     <div className="space-y-1">
                         <h3 className="font-medium flex items-center gap-2">
-                            <AtSign className="h-4 w-4" />
-                            {t('mail.connect.title', 'Корпоративная почта')}
+                            {awaiting
+                                ? <KeyRound className="h-4 w-4 text-amber-600" />
+                                : <AtSign className="h-4 w-4" />}
+                            {awaiting
+                                ? t('mail.connect.pendingTitle', 'Введите пароль от вашего ящика')
+                                : t('mail.connect.title', 'Корпоративная почта')}
                         </h3>
-                        {mailbox ? (
+                        {awaiting ? (
+                            <p className="text-sm">
+                                {t('mail.connect.promptBody', 'Ваш рабочий ящик {{address}} найден на почтовом сервере, но платформа не может открыть его без пароля. Введите пароль — и почта появится здесь.', { address: mailbox?.address })}
+                            </p>
+                        ) : mailbox ? (
                             <p className="text-sm text-muted-foreground">
                                 <span className="font-mono">{mailbox.address}</span>{' '}
                                 <Badge variant={mailbox.status === 'active' ? 'default' : 'secondary'}>
@@ -107,17 +94,23 @@ export const ConnectCorporateMailbox: React.FC<{ className?: string }> = ({ clas
                             </p>
                         ) : (
                             <p className="text-sm text-muted-foreground">
-                                {t('mail.connect.subtitle', 'Подключите свой рабочий ящик @{{domain}}, чтобы читать и отправлять почту здесь.', { domain: info.domain })}
+                                {t('mail.connect.subtitle', 'Подключите свой рабочий ящик @{{domain}}, чтобы читать и отправлять почту здесь.', { domain: info?.domain })}
                             </p>
                         )}
                     </div>
 
                     <div className="flex gap-2">
-                        <Button variant={mailbox ? 'outline' : 'default'} className="gap-2" onClick={() => setOpen(true)}>
-                            <Link2 className="h-4 w-4" />
-                            {mailbox
-                                ? t('mail.connect.update', 'Обновить пароль')
-                                : t('mail.connect.connect', 'Подключить ящик')}
+                        <Button
+                            variant={mailbox && !awaiting ? 'outline' : 'default'}
+                            className="gap-2"
+                            onClick={() => setOpen(true)}
+                        >
+                            {awaiting ? <KeyRound className="h-4 w-4" /> : <Link2 className="h-4 w-4" />}
+                            {awaiting
+                                ? t('mail.connect.promptAction', 'Ввести пароль')
+                                : mailbox
+                                    ? t('mail.connect.update', 'Обновить пароль')
+                                    : t('mail.connect.connect', 'Подключить ящик')}
                         </Button>
                         {mailbox && (
                             <Button
@@ -132,56 +125,21 @@ export const ConnectCorporateMailbox: React.FC<{ className?: string }> = ({ clas
                     </div>
                 </div>
             </div>
+            )}
 
-            <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setPassword(''); }}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>{t('mail.connect.connect', 'Подключить ящик')}</DialogTitle>
-                        <DialogDescription>
-                            {t('mail.connect.hint', 'Введите адрес и пароль вашего рабочего ящика — те же, что вы используете в почтовом клиенте. Платформа проверит их на почтовом сервере и сохранит в зашифрованном виде.')}
-                        </DialogDescription>
-                    </DialogHeader>
+            {/* Вне условия выше намеренно: см. комментарий про
+                pointer-events — открытый диалог нельзя снимать с
+                монтирования, его должен закрыть Radix.
 
-                    <div className="space-y-3">
-                        <div className="space-y-1.5">
-                            <Label>{t('mail.connect.address', 'Адрес ящика')}</Label>
-                            <Input
-                                value={address || (mailbox?.address ?? '')}
-                                onChange={(e) => setAddress(e.target.value)}
-                                placeholder={`i.ivanov@${info.domain}`}
-                                autoComplete="username"
-                            />
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label>{t('mail.connect.password', 'Пароль ящика')}</Label>
-                            <Input
-                                type="password"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                autoComplete="current-password"
-                            />
-                        </div>
-                        <p className="flex items-start gap-2 text-xs text-muted-foreground">
-                            <ShieldCheck className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                            {t('mail.connect.security', 'Пароль хранится зашифрованным и используется только для получения и отправки вашей почты.')}
-                        </p>
-                    </div>
-
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setOpen(false)}>
-                            {t('profile.cancel', 'Отмена')}
-                        </Button>
-                        <Button
-                            onClick={() => connectMutation.mutate()}
-                            disabled={connectMutation.isPending || !password || !(address || mailbox?.address)}
-                        >
-                            {connectMutation.isPending
-                                ? t('mail.connect.checking', 'Проверяем…')
-                                : t('mail.connect.connect', 'Подключить ящик')}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                Адрес блокируется только у «ждущего» ящика: он уже назначен,
+                выбирать нечего. В режиме самообслуживания сотрудник вводит
+                адрес сам. */}
+            <MailboxPasswordDialog
+                open={open}
+                onOpenChange={setOpen}
+                domain={info?.domain}
+                fixedAddress={awaiting ? mailbox?.address : null}
+            />
         </div>
     );
 };

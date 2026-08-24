@@ -62,10 +62,10 @@ const navItems: HRNavItem[] = [
 ];
 
 const categoryTitles: Record<string, string> = {
-  people: 'Персонал',
-  org: 'Организация',
-  tracking: 'Учёт и время',
-  admin: 'Журналы и доступ',
+  people: 'hr.nav.groups.people',
+  org: 'hr.nav.groups.org',
+  tracking: 'hr.nav.groups.tracking',
+  admin: 'hr.nav.groups.admin',
 };
 
 interface Props {
@@ -161,7 +161,7 @@ export const HRLayout: React.FC<Props> = ({ title, subtitle, children }) => {
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Поиск по HR..."
+                    placeholder={t('hr.nav.searchPlaceholder')}
                     className="h-8.5 pl-8 pr-7 text-xs bg-muted/40 border-muted focus-visible:bg-background rounded-lg transition-colors"
                   />
                   {searchQuery && (
@@ -177,7 +177,7 @@ export const HRLayout: React.FC<Props> = ({ title, subtitle, children }) => {
 
                 {filteredNavItems.length === 0 && (
                   <div className="py-6 text-center text-xs text-muted-foreground">
-                    Ничего не найдено
+                    {t('common.nothingFound')}
                   </div>
                 )}
 

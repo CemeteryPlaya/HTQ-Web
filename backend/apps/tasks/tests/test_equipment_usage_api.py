@@ -1,4 +1,4 @@
-"""Учёт задействования техники и наследование подрядчика.
+"""Учёт задействования техники и наследование партнёра.
 
 Оба сюжета из SPEC §10 закрываются БЕЗ новых таблиц:
 
@@ -6,7 +6,7 @@
   существующим ``ResourceRequirement(kind=equipment)`` и
   ``ResourceAllocation`` — спека предлагала завести под это отдельный
   ``EquipmentEngagement``, но это поле в поле уже существующая потребность;
-* эффективный подрядчик разрешается по ``ContractorEngagement``, который уже
+* эффективный партнёр разрешается по ``ContractorEngagement``, который уже
   ключуется на проект, площадку и роудмап.
 """
 
@@ -195,11 +195,11 @@ def test_history_skips_allocations_with_no_dates_at_all(roadmap, kara):
     assert body["history"] == []
 
 
-# ── наследование подрядчика ─────────────────────────────────────────────
+# ── наследование партнёра ─────────────────────────────────────────────
 
 @pytest.mark.django_db
 def test_effective_contractor_is_inherited_from_the_roadmap(roadmap):
-    """Подрядчика назначают на пакет работ, а не задача за задачей."""
+    """Партнёра назначают на пакет работ, а не задача за задачей."""
     org = Contractor.objects.create(name="СтройПодряд")
     ContractorEngagement.objects.create(contractor=org, roadmap=roadmap)
     task = Task.objects.create(key="TASK-1", summary="A", roadmap=roadmap)

@@ -105,7 +105,7 @@ export const ProjectsSection = ({ limit = 10 }: ProjectsSectionProps) => {
                 </div>
                 {/* Swipe Hint on Mobile */}
                 <span className="lg:hidden text-[11px] text-primary-foreground/70 bg-black/30 px-2.5 py-1 rounded-full">
-                  Свайпайте ← →
+                  {t('common.swipeHint')}
                 </span>
               </div>
               <h3 className="font-display text-2xl sm:text-3xl font-bold text-primary-foreground mb-1 sm:mb-2">

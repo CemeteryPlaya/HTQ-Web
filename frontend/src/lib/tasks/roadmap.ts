@@ -4,6 +4,7 @@ import type {
     BlockProgress, BlockStatus, ResourceComparison, RoadmapStatus,
     ScheduleComparison, WorkVolumeUnit,
 } from '@/types/tasks';
+import i18next from '@/i18n';
 
 /**
  * Словари роудмапа и блока — та же форма и то же обоснование, что у
@@ -141,16 +142,18 @@ export const blockStatusLabel = (
 
 /* ---------- Единицы измерения объёмов ---------- */
 
-export const VOLUME_UNIT_LABEL: Record<WorkVolumeUnit, string> = {
-    piece: 'шт',
-    meter: 'м',
-    sq_meter: 'м²',
-    ton: 'т',
+/** Ключи, а не подписи: перевод берётся в `volumeUnitLabel()`, то есть в
+ *  момент отрисовки — словарь i18n на импорте модуля ещё не готов. */
+const VOLUME_UNIT_KEY: Record<WorkVolumeUnit, string> = {
+    piece: 'tasks.units.piece',
+    meter: 'tasks.units.meter',
+    sq_meter: 'tasks.units.sqMeter',
+    ton: 'tasks.units.ton',
 };
 
 export const volumeUnitLabel = (raw: string | null | undefined): string =>
-    (raw && Object.prototype.hasOwnProperty.call(VOLUME_UNIT_LABEL, raw))
-        ? VOLUME_UNIT_LABEL[raw as WorkVolumeUnit]
+    (raw && Object.prototype.hasOwnProperty.call(VOLUME_UNIT_KEY, raw))
+        ? i18next.t(VOLUME_UNIT_KEY[raw as WorkVolumeUnit])
         : '';
 
 /* ---------- План против факта ---------- */

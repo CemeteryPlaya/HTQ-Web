@@ -8,6 +8,8 @@
  * регуляркой по целой части, а дробная переносится как есть.
  */
 
+import i18next from '@/i18n';
+
 /** `5000000.00` → `«5 000 000,00»`. */
 export function formatAmount(value: string): string {
   const [whole, fraction = '00'] = value.split('.');
@@ -25,7 +27,7 @@ export function formatDate(value: string | null): string {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleDateString('ru-RU', {
+  return date.toLocaleDateString(i18next.language, {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -37,7 +39,7 @@ export function formatMoment(value: string | null): string {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString('ru-RU', {
+  return date.toLocaleString(i18next.language, {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',

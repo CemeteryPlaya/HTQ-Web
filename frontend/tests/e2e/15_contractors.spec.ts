@@ -1,10 +1,10 @@
 /**
- * Субподрядчики — сквозной проход по живому стеку.
+ * Партнёры — сквозной проход по живому стеку.
  *
  * Гонять только против ЛОКАЛЬНОЙ базы (см. шапку 14_sites.spec.ts).
  *
  * Первый блок — самый важный: он держит границу «справочник есть, входа
- * нет». Пока подрядчики не заходят в систему, `user_id` обязан оставаться
+ * нет». Пока партнёры не заходят в систему, `user_id` обязан оставаться
  * пустым, а уровень — не влиять на видимость. Когда вход будут включать,
  * эти тесты придётся менять осознанно, а не обнаружить их падение постфактум.
  */
@@ -13,8 +13,8 @@ import { test, expect } from "./fixtures";
 const API = "/api/tasks/v1";
 const stamp = () => Date.now() + Math.floor(Math.random() * 1000);
 
-test.describe("Субподрядчики", () => {
-  test("входа у подрядчика нет: user_id не выставляется через API", async ({
+test.describe("Партнёры", () => {
+  test("входа у партнёра нет: user_id не выставляется через API", async ({
     request,
     adminTokens,
   }) => {
@@ -229,7 +229,7 @@ test.describe("Субподрядчики", () => {
     expect(duplicate.status()).toBe(500);
   });
 
-  test("атрибуция задачи: подрядчик и его человек видны в ответе", async ({
+  test("атрибуция задачи: партнёр и его человек видны в ответе", async ({
     request,
     adminTokens,
   }) => {
@@ -251,7 +251,7 @@ test.describe("Субподрядчики", () => {
       await request.post(`${API}/tasks/`, {
         headers: auth,
         data: {
-          summary: `E2E подрядная задача ${stamp()}`,
+          summary: `E2E партнёрская задача ${stamp()}`,
           contractor_id: contractor.id,
           contractor_worker_id: worker.id,
         },
@@ -260,7 +260,7 @@ test.describe("Субподрядчики", () => {
     expect(task.contractor_name).toBe(contractor.name);
     expect(task.contractor_worker_name).toContain("Мастеров");
 
-    // Фильтр по подрядчику возвращает её.
+    // Фильтр по партнёру возвращает её.
     const filtered = await (
       await request.get(
         `${API}/tasks/?contractor_id=${contractor.id}&limit=200`,
@@ -279,7 +279,7 @@ test.describe("Субподрядчики", () => {
     expect(ownCrew.every((t: any) => t.contractor_id === null)).toBeTruthy();
   });
 
-  test("техника подрядчика обязана называть подрядчика", async ({
+  test("техника партнёра обязана называть партнёра", async ({
     request,
     adminTokens,
   }) => {

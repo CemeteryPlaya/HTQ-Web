@@ -210,7 +210,9 @@ def test_pull_imports_remote_only_mailbox(use_provisioner):
     assert imported.quota_mb == 512
     assert imported.local_part == "stranger"
     assert imported.domain == "htq.group"
-    # Связать ящик с сотрудником может только человек — не угадываем.
+    # Пользователя с таким email в платформе нет, значит и владельца у ящика
+    # нет: адрес — единственный признак, по которому сверка связывает
+    # (см. тесты привязки ниже).
     assert imported.user_id is None
     assert report.differences[0].action == "imported"
 
@@ -429,3 +431,143 @@ def test_status_endpoint_reports_connection(admin_auth):
     body = resp.json()
     assert body["provisioner"] == "imap"
     assert body["can_create_remotely"] is False
+
+
+# ── привязка бесхозных ящиков к сотрудникам ──────────────────────────────
+#
+# Признак ровно один: адрес ящика совпадает с email пользователя. Раньше
+# сверка оставляла владельца пустым всегда, и импортированные ящики висели
+# мёртвыми строками, пока админ не проставит user_id руками каждому.
+
+def _user(email: str, **kw) -> User:
+    return User.objects.create(
+        username=email.partition("@")[0], email=email, password="x",
+        status=UserStatus.ACTIVE, **kw,
+    )
+
+
+def _unlinked(report):
+    return [d for d in report.differences if d.kind == "unlinked"]
+
+
+@pytest.mark.django_db
+def test_imported_mailbox_is_linked_to_the_user_with_that_email(use_provisioner):
+    """Главный сценарий: ящик приехал с сервера, а сотрудник с таким адресом
+    в платформе уже есть — связываем без участия человека."""
+    user = _user("sanzhar.inamzhanov@htq.group")
+    use_provisioner(_FakeProvisioner([
+        RemoteMailbox.from_address("sanzhar.inamzhanov@htq.group", quota_mb=2048),
+    ]))
+
+    report = reconcile_service.reconcile(apply=True, direction="pull")
+
+    mb = ProvisionedMailbox.objects.get(address="sanzhar.inamzhanov@htq.group")
+    assert mb.user_id == user.id
+    assert [d.action for d in _unlinked(report)] == ["linked"]
+
+
+@pytest.mark.django_db
+def test_linking_creates_the_mail_account(use_provisioner):
+    """Привязка — это две вещи. Без EmailAccount ящик остаётся строкой в
+    админке: список писем, синхронизация и отправка ходят через аккаунт."""
+    from apps.mail.models import AccountType, EmailAccount
+
+    user = _user("ivan@htq.group")
+    _mailbox(address="ivan@htq.group", local_part="ivan")
+    use_provisioner(_FakeProvisioner([RemoteMailbox.from_address("ivan@htq.group")]))
+
+    reconcile_service.reconcile(apply=True, direction="pull")
+
+    account = EmailAccount.objects.get(user_id=user.id, address="ivan@htq.group")
+    assert account.type == AccountType.CORPORATE
+    assert account.is_active
+
+
+@pytest.mark.django_db
+def test_orphan_from_earlier_runs_is_linked_too(use_provisioner):
+    """Не только свежий импорт: строки, которые висят без владельца с прошлых
+    прогонов, — ровно та причина, по которой привязка вынесена отдельным
+    шагом после импорта."""
+    user = _user("old@htq.group")
+    mb = _mailbox(address="old@htq.group", local_part="old")
+    use_provisioner(_FakeProvisioner([RemoteMailbox.from_address("old@htq.group")]))
+
+    reconcile_service.reconcile(apply=True, direction="pull")
+
+    mb.refresh_from_db()
+    assert mb.user_id == user.id
+
+
+@pytest.mark.django_db
+def test_address_case_does_not_prevent_linking(use_provisioner):
+    """На сервере адрес может быть записан с заглавными — для почты это тот
+    же ящик, и владельца он терять не должен."""
+    user = _user("petrov@htq.group")
+    use_provisioner(_FakeProvisioner([RemoteMailbox.from_address("Petrov@htq.group")]))
+
+    reconcile_service.reconcile(apply=True, direction="pull")
+
+    assert ProvisionedMailbox.objects.get(address="Petrov@htq.group").user_id == user.id
+
+
+@pytest.mark.django_db
+def test_report_only_shows_the_candidate_and_changes_nothing(use_provisioner):
+    """Отчёт остаётся отчётом: админ видит, кому что достанется, до того как
+    нажмёт «Принять данные сервера»."""
+    _user("preview@htq.group")
+    mb = _mailbox(address="preview@htq.group", local_part="preview")
+    use_provisioner(_FakeProvisioner([RemoteMailbox.from_address("preview@htq.group")]))
+
+    report = reconcile_service.reconcile(apply=False)
+
+    mb.refresh_from_db()
+    assert mb.user_id is None
+    assert [d.action for d in _unlinked(report)] == [None]
+
+
+@pytest.mark.django_db
+def test_shared_mailbox_without_a_user_stays_ownerless(use_provisioner):
+    """``info@``, ``sales@`` — общие ящики. Пользователя с таким email нет,
+    и выдумывать владельца не из чего."""
+    mb = _mailbox(address="info@htq.group", local_part="info")
+    use_provisioner(_FakeProvisioner([RemoteMailbox.from_address("info@htq.group")]))
+
+    report = reconcile_service.reconcile(apply=True, direction="pull")
+
+    mb.refresh_from_db()
+    assert mb.user_id is None
+    assert _unlinked(report) == []
+
+
+@pytest.mark.django_db
+def test_user_who_already_has_a_mailbox_is_reported_not_relinked(use_provisioner):
+    """user_id в ProvisionedMailbox — UNIQUE: второй ящик тому же сотруднику
+    не привязать. Это решение человека, а не повод уронить прогон
+    исключением из середины."""
+    user = _user("dup@htq.group")
+    _mailbox(address="primary@htq.group", local_part="primary", user_id=user.id)
+    orphan = _mailbox(address="dup@htq.group", local_part="dup")
+    use_provisioner(_FakeProvisioner([
+        RemoteMailbox.from_address("primary@htq.group"),
+        RemoteMailbox.from_address("dup@htq.group"),
+    ]))
+
+    report = reconcile_service.reconcile(apply=True, direction="pull")
+
+    orphan.refresh_from_db()
+    assert orphan.user_id is None
+    diff = _unlinked(report)[0]
+    assert diff.action == "skipped"
+    assert diff.error == "user_already_has_mailbox"
+
+
+@pytest.mark.django_db
+def test_counts_expose_linking_to_the_admin_page(use_provisioner):
+    _user("counted@htq.group")
+    _mailbox(address="counted@htq.group", local_part="counted")
+    use_provisioner(_FakeProvisioner([RemoteMailbox.from_address("counted@htq.group")]))
+
+    body = reconcile_service.reconcile(apply=True, direction="pull").to_dict()
+
+    assert body["counts"]["unlinked"] == 1
+    assert body["counts"]["linked"] == 1

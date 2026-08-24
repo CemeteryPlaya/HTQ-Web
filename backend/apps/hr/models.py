@@ -325,6 +325,70 @@ class ReportingRelation(HrBase):
         return f"<ReportingRelation(sup={self.superior_position_id}, sub={self.subordinate_position_id}, type='{self.relation_type}')>"
 
 
+class EmployeeReportingOverride(HrBase):
+    """Персональное подчинение — сотрудник X подчиняется сотруднику Y
+    НЕЗАВИСИМО от связей их должностей.
+
+    Не порт: ``ReportingRelation`` работает с должностями и годами
+    подчиняется должностной иерархии; здесь — точечное переопределение
+    для конкретных людей (см. GET/POST/DELETE ``/org/employee-relations``).
+    Приоритет разрешения руководителя в ``org_service.get_org_tree``:
+    эта таблица -> ``ReportingRelation`` -> ``Department.manager`` ->
+    эвристика по названию должности/пути отдела.
+
+    ``effective_from``/``effective_to`` намеренно НЕ перенесены с
+    ``ReportingRelation`` — там они пишутся, но ни один запрос по ним не
+    фильтрует (см. докстринг ``org_service``); плодить те же мёртвые поля
+    в новой модели незачем.
+
+    ``created_by`` — id из JWT (``TokenPayload.user_id``, то же
+    пространство, что ``Employee.user_id``), НЕ FK — как ``AuditLog.changed_by``.
+    """
+
+    superior = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="subordinate_overrides",
+    )
+    subordinate = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="superior_overrides",
+    )
+    relation_type = models.CharField(
+        max_length=20,
+        choices=RelationType.choices,
+        default=RelationType.DIRECT,
+        db_default=RelationType.DIRECT.value,
+    )
+    note = models.CharField(max_length=255, null=True, blank=True)
+    created_by = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Подчинение сотрудника"
+        verbose_name_plural = "Подчинения сотрудников"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["superior", "subordinate", "relation_type"],
+                name="uq_employee_reporting_override",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(superior=models.F("subordinate")),
+                name="ck_no_self_employee_override",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(relation_type__in=list(RelationType.values)),
+                name="ck_employee_override_relation_type",
+            ),
+            # Не более одного ПРЯМОГО руководителя на сотрудника —
+            # functional/project не ограничены (матричная структура).
+            models.UniqueConstraint(
+                fields=["subordinate"],
+                condition=models.Q(relation_type="direct"),
+                name="ux_employee_override_one_direct_superior",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<EmployeeReportingOverride(sup={self.superior_id}, sub={self.subordinate_id}, type='{self.relation_type}')>"
+
+
 class OrgSettings(models.Model):
     """Key-value настройки поведения оргструктуры.
 

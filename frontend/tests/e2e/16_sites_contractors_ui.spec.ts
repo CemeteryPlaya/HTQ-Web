@@ -1,5 +1,5 @@
 /**
- * Страницы «Объекты» и «Субподрядчики» — проход по интерфейсу в браузере.
+ * Страницы «Объекты» и «Партнёры» — проход по интерфейсу в браузере.
  *
  * Гонять только против ЛОКАЛЬНОЙ базы (см. шапку 14_sites.spec.ts) и против
  * dev-сервера Vite, а не прод-бандла: сборка для прода падает в headless с
@@ -52,12 +52,12 @@ async function login(page: import("@playwright/test").Page) {
   });
 }
 
-test.describe("Страницы объектов и подрядчиков", () => {
+test.describe("Страницы объектов и партнёров", () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
   });
 
-  test("в меню раздела задач появились Объекты и Субподрядчики", async ({
+  test("в меню раздела задач появились Объекты и Партнёры", async ({
     page,
   }) => {
     await page.goto("/tasks/sites");
@@ -94,21 +94,21 @@ test.describe("Страницы объектов и подрядчиков", () 
     await expect(page.getByText(name)).toBeVisible({ timeout: 15_000 });
   });
 
-  test("страница подрядчиков открывается и просит выбрать организацию", async ({
+  test("страница партнёров открывается и просит выбрать организацию", async ({
     page,
   }) => {
     await page.goto("/tasks/contractors");
     await expect(
-      page.getByRole("heading", { name: "Субподрядчики" }).first(),
+      page.getByRole("heading", { name: "Партнёры" }).first(),
     ).toBeVisible();
     // Мастер-деталь: пока никто не выбран, правая часть подсказывает, что делать.
-    await expect(page.getByText(/Выберите подрядчика слева/)).toBeVisible();
+    await expect(page.getByText(/Выберите партнёра слева/)).toBeVisible();
   });
 
-  test("подрядчик заводится и открывается его карточка", async ({ page }) => {
+  test("партнёр заводится и открывается его карточка", async ({ page }) => {
     const name = `UI ТОО ${stamp()}`;
     await page.goto("/tasks/contractors");
-    await page.getByRole("button", { name: "Новый подрядчик" }).click();
+    await page.getByRole("button", { name: "Новый партнёр" }).click();
 
     const dialog = page.getByRole("dialog");
     await dialog.waitFor();

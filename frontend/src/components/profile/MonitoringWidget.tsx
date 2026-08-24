@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Activity, Server, AlertTriangle, CheckCircle2, ExternalLink } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { grafanaSsoUrl } from '@/lib/monitoring';
+import { useTranslation } from 'react-i18next';
 
 /**
  * MonitoringWidget — виджет быстрого доступа к мониторингу.
@@ -22,6 +23,7 @@ interface TargetGroup {
 }
 
 export const MonitoringWidget: React.FC = () => {
+    const { t } = useTranslation();
     const { data: targets, isLoading, error } = useQuery<PrometheusTarget[]>({
         queryKey: ['prometheus-targets'],
         queryFn: async () => {
@@ -47,7 +49,7 @@ export const MonitoringWidget: React.FC = () => {
                     <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
                         <Activity className="h-4.5 w-4.5 text-primary" />
                     </div>
-                    <h3 className="text-xl font-bold">Мониторинг</h3>
+                    <h3 className="text-xl font-bold">{t('monitoring.title')}</h3>
                 </div>
                 <div className="flex gap-2">
                     <a
@@ -75,7 +77,7 @@ export const MonitoringWidget: React.FC = () => {
             {isLoading && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                    Загрузка статуса сервисов…
+                    {t('monitoring.loading')}
                 </div>
             )}
 
@@ -83,7 +85,7 @@ export const MonitoringWidget: React.FC = () => {
                 <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
                     <AlertTriangle className="h-4 w-4 shrink-0" />
                     <span>
-                        Prometheus недоступен. Убедитесь, что мониторинг запущен.
+                        {t('monitoring.unavailable')}
                     </span>
                 </div>
             )}
@@ -95,7 +97,7 @@ export const MonitoringWidget: React.FC = () => {
                         <div className="flex items-center gap-1.5 rounded-lg border bg-background px-3 py-2">
                             <Server className="h-4 w-4 text-muted-foreground" />
                             <span className="text-sm font-medium">{totalCount}</span>
-                            <span className="text-xs text-muted-foreground">таргетов</span>
+                            <span className="text-xs text-muted-foreground">{t('monitoring.targets')}</span>
                         </div>
                         <div className="flex items-center gap-1.5 rounded-lg border bg-background px-3 py-2">
                             <CheckCircle2 className="h-4 w-4 text-emerald-500" />

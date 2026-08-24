@@ -106,15 +106,31 @@ class MailcowProvisioner:
             address=address, app_name="htqweb", password=password,
         )
 
-    def verify(self, *, address: str, password: str) -> tuple[bool, str | None]:
-        """У Mailcow есть API — спрашиваем его, а не логинимся по IMAP."""
+    def exists_remote(self, *, address: str) -> tuple[bool | None, str | None]:
+        """У Mailcow есть API — спрашиваем его, а не гадаем.
+
+        Недоступный Mailcow даёт ``None`` («не знаю»), а НЕ ``False``: ответить
+        «ящика нет» из-за сетевого таймаута значило бы разрешить создание дубля
+        поверх живого ящика.
+        """
         try:
             data = self.client.get_mailbox(address)
-        except Exception as exc:  # noqa: BLE001
-            return False, f"Mailcow get_mailbox: {exc}"
+        except Exception as exc:  # noqa: BLE001 — сеть/таймаут/битый ответ
+            return None, f"Mailcow get_mailbox: {exc}"
         if not data or (isinstance(data, list) and not data):
             return False, "mailbox not found on server"
         return True, None
+
+    def verify(self, *, address: str, password: str) -> tuple[bool, str | None]:
+        """Для Mailcow «проверить учётку» = «спросить API, есть ли ящик».
+
+        Пароль здесь не нужен и намеренно игнорируется: у платформы есть
+        админский API-ключ, логиниться по IMAP незачем.
+        """
+        exists, detail = self.exists_remote(address=address)
+        if exists:
+            return True, None
+        return False, detail or "mailbox not found on server"
 
 
 def _bytes_to_mb(raw) -> int:

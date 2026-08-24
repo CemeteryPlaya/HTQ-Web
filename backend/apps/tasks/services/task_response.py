@@ -61,7 +61,7 @@ class _Ctx:
             _iter_user_ids(tasks) if deep else _iter_list_user_ids(tasks)
         )
         self.departments = hydration.department_briefs(_iter_department_ids(tasks))
-        # Эффективный подрядчик — тоже батч и тоже здесь, по тому же
+        # Эффективный партнёр — тоже батч и тоже здесь, по тому же
         # инварианту модуля: одна волна на весь список, а не запрос на
         # задачу. Подъём по дереву (задача → роудмап → площадка → проект)
         # живёт в contractor_service, ему тут не место.
@@ -141,7 +141,7 @@ def _common_fields(task: Task, ctx: _Ctx) -> dict:
         # карточке оказались бы два несвязанных цветовых кода.
         "site_block_id": task.site_block_id,
         "site_block_name": (task.site_block.name if task.site_block else None),
-        # Подрядчик — модель этого же аппа, поэтому джойн, а не hydration.
+        # Партнёр — модель этого же аппа, поэтому джойн, а не hydration.
         "contractor_id": task.contractor_id,
         "contractor_name": task.contractor.name if task.contractor else None,
         # Кто РЕАЛЬНО выполняет: своё значение или унаследованное с

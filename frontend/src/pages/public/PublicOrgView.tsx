@@ -14,6 +14,7 @@ import { EmployeeDetailDrawer } from '@/components/hr/EmployeeDetailDrawer';
 import { OrgChart, type OrgRawNode } from '@/components/hr/OrgChart';
 import { ShareWatermark, type WatermarkPayload } from '@/components/share-link/ShareWatermark';
 import { Button } from '@/components/ui/button';
+import i18n from '@/i18n';
 
 type OrgLanguage = 'ru' | 'en';
 type OrgTree = { nodes: any[]; edges: any[] };
@@ -34,12 +35,9 @@ interface OrgData {
 
 type ViewState = 'loading' | 'error' | 'gone' | 'ok';
 
-const ERROR_MESSAGES: Record<number, string> = {
-  404: 'Ссылка не найдена или недействительна.',
-  410: 'Эта ссылка уже была использована или истекла.',
-};
-
 const TEXT: Record<OrgLanguage, {
+  linkNotFound: string;
+  linkExpired: string;
   unavailable: string;
   genericError: string;
   badResponse: string;
@@ -54,6 +52,8 @@ const TEXT: Record<OrgLanguage, {
   emptyTree: string;
 }> = {
   ru: {
+    linkNotFound: 'Ссылка не найдена или недействительна.',
+    linkExpired: 'Эта ссылка уже была использована или истекла.',
     unavailable: 'Доступ недоступен',
     genericError: 'Произошла ошибка. Обратитесь к отправителю ссылки.',
     badResponse: 'Сервер вернул некорректный ответ. Свяжитесь с отправителем ссылки.',
@@ -68,6 +68,8 @@ const TEXT: Record<OrgLanguage, {
     emptyTree: 'В этой ссылке нет доступных элементов оргструктуры. Создайте новую ссылку без ограничения уровня.',
   },
   en: {
+    linkNotFound: 'The link was not found or is not valid.',
+    linkExpired: 'This link has already been used or has expired.',
     unavailable: 'Access unavailable',
     genericError: 'Something went wrong. Contact the link sender.',
     badResponse: 'The server returned an invalid response. Contact the link sender.',
@@ -89,6 +91,15 @@ function buildConsumeUrl(token: string): string {
   const raw = (import.meta.env.VITE_API_BASE_URL ?? '/api').toString();
   const base = raw.replace(/\/+$/, '');
   return `${base}/hr/v1/public/org/${encodeURIComponent(token)}`;
+}
+
+/**
+ * Язык до того, как приехал ответ: у гостя нет профиля, поэтому берём язык
+ * интерфейса (i18n сам определил его по браузеру). Дальше язык диктует уже
+ * сама ссылка — `default_language` из полезной нагрузки.
+ */
+function guestLanguage(): OrgLanguage {
+  return normalizeLanguage(i18n.language?.split('-')[0]);
 }
 
 function normalizeLanguage(value: unknown): OrgLanguage {
@@ -167,7 +178,7 @@ const PublicOrgView = () => {
 
   useEffect(() => {
     if (!token) {
-      setErrorMsg(ERROR_MESSAGES[404]);
+      setErrorMsg(TEXT[guestLanguage()].linkNotFound);
       setState('gone');
       return;
     }
@@ -183,19 +194,20 @@ const PublicOrgView = () => {
         if (cancelled) return;
 
         if (res.status === 404 || res.status === 410) {
-          setErrorMsg(ERROR_MESSAGES[res.status]);
+          const gone = TEXT[guestLanguage()];
+          setErrorMsg(res.status === 404 ? gone.linkNotFound : gone.linkExpired);
           setState('gone');
           return;
         }
         if (!res.ok) {
-          setErrorMsg(TEXT.ru.genericError);
+          setErrorMsg(TEXT[guestLanguage()].genericError);
           setState('error');
           return;
         }
 
         const ct = res.headers.get('content-type') ?? '';
         if (!ct.includes('application/json')) {
-          setErrorMsg(TEXT.ru.badResponse);
+          setErrorMsg(TEXT[guestLanguage()].badResponse);
           setState('error');
           return;
         }
@@ -208,7 +220,7 @@ const PublicOrgView = () => {
         setState('ok');
       } catch {
         if (!cancelled) {
-          setErrorMsg(TEXT.ru.networkError);
+          setErrorMsg(TEXT[guestLanguage()].networkError);
           setState('error');
         }
       }
@@ -220,9 +232,9 @@ const PublicOrgView = () => {
   if (state === 'loading') {
     return (
       <div className="flex min-h-[100dvh] flex-col bg-background">
-        <GuestHeader lang="ru" />
+        <GuestHeader lang={guestLanguage()} />
         <div className="flex flex-1 items-center justify-center">
-          <div className="text-sm text-muted-foreground">{TEXT.ru.loading}</div>
+          <div className="text-sm text-muted-foreground">{TEXT[guestLanguage()].loading}</div>
         </div>
       </div>
     );
@@ -231,13 +243,13 @@ const PublicOrgView = () => {
   if (state === 'gone' || state === 'error') {
     return (
       <div className="flex min-h-[100dvh] flex-col bg-background">
-        <GuestHeader lang="ru" />
+        <GuestHeader lang={guestLanguage()} />
         <div className="flex flex-1 items-center justify-center p-6">
           <div className="max-w-sm space-y-3 text-center">
-            <h1 className="text-lg font-semibold">{TEXT.ru.accessDenied}</h1>
+            <h1 className="text-lg font-semibold">{TEXT[guestLanguage()].accessDenied}</h1>
             <p className="text-sm text-muted-foreground">{errorMsg}</p>
             <Button asChild variant="outline" size="sm" className="mt-4">
-              <Link to="/">{TEXT.ru.backHome}</Link>
+              <Link to="/">{TEXT[guestLanguage()].backHome}</Link>
             </Button>
           </div>
         </div>

@@ -45,6 +45,14 @@ class DraftIn(BaseModel):
 _EMAIL_RE = r"^[^\s@]+@[^\s@]+\.[^\s@]+$"
 
 
+class AccountSignatureRequest(BaseModel):
+    """Body for `PATCH /api/email/v1/accounts/{id}/signature/`."""
+
+    # Верхняя граница есть, но щедрая: подпись с адресом, телефоном и
+    # дисклеймером юротдела легко занимает пару тысяч знаков.
+    signature: str = Field(default="", max_length=4000)
+
+
 class MailboxCreateRequest(BaseModel):
     """Body for `POST /api/email/v1/mailboxes/`."""
 
@@ -61,6 +69,34 @@ class MailboxCreateRequest(BaseModel):
     quota_mb: int = Field(default=0, ge=0, description="0 = use MAILCOW_DEFAULT_QUOTA_MB")
     user_id: int | None = Field(default=None, description="Link to platform user; one mailbox per user_id")
     must_change_password: bool = Field(default=True)
+    # Сверка перед созданием: найденный ящик подключается к пользователю
+    # вместо заведения дубля. Выключается, когда админу нужен именно НОВЫЙ
+    # адрес (второй однофамилец), а не тот, что уже есть.
+    attach_if_exists: bool = Field(
+        default=True,
+        description="Attach an already existing mailbox instead of creating a duplicate",
+    )
+
+
+class MailboxLookupResponse(BaseModel):
+    """Ответ `GET /api/email/v1/mailboxes/lookup/` — вердикт сверки адреса.
+
+    Форма создания читает его, чтобы сказать админу, что произойдёт по
+    кнопке, ДО того как он её нажмёт. Порт dataclass
+    ``services/lookup_service.py::MailboxLookup``.
+    """
+
+    address: str
+    exists: bool = False
+    source: str = Field(default="none", description="none | local | remote | both")
+    checked_remote: bool = False
+    remote_detail: str | None = None
+    mailbox: dict | None = None
+    owner_user_id: int | None = None
+    owner_conflict: bool = False
+    can_attach: bool = False
+    needs_password: bool = False
+    detail: str = ""
 
 
 class MailboxUpdateRequest(BaseModel):

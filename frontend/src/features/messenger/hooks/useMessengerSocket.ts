@@ -8,7 +8,7 @@
  *   socket.emitTyping(true);
  */
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -17,6 +17,8 @@ import {
     type MessageReadPayload,
     type UserTypingPayload,
 } from '../api/socket';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { playMessengerChime, playMessengerPop } from '@/lib/sound/soundService';
 
 /** Shared presence cache: `['messenger-presence']` → Record<userId, …>.
  *  Seeded by the REST bulk query in MessengerPage, patched live by the
@@ -28,8 +30,24 @@ interface MessengerSocketApi {
 }
 
 
+/** Поля сообщения, которые читает выбор звука. Сокет объявляет
+ *  ``message: unknown`` — форма зависит от источника (обычное сообщение
+ *  сериализуется messenger_service, системное шлёт apps.messenger.interface). */
+interface MessagePayload {
+    sender_id?: number | string | null;
+    user_id?: number | string | null;
+    sender?: { id?: number | string | null } | null;
+}
+
 export function useMessengerSocket(activeRoomId: number | null): MessengerSocketApi {
     const queryClient = useQueryClient();
+    const { activeProfile } = useActiveProfile();
+
+    const activeRoomIdRef = useRef(activeRoomId);
+    activeRoomIdRef.current = activeRoomId;
+
+    const activeProfileRef = useRef(activeProfile);
+    activeProfileRef.current = activeProfile;
 
     useEffect(() => {
         const socket = getMessengerSocket();
@@ -37,6 +55,36 @@ export function useMessengerSocket(activeRoomId: number | null): MessengerSocket
         const handleNewMessage = (payload: MessageNewPayload) => {
             queryClient.invalidateQueries({ queryKey: ['messenger-messages', payload.room_id] });
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
+
+            // Звук — только на чужое сообщение.
+            //
+            // Три случая, и «не знаю» здесь ближе к «своё», а не к «чужое»:
+            //
+            //  * отправитель не указан — это системное сообщение
+            //    (apps/messenger/interface.py шлёт sender_id: null), оно звучит;
+            //  * отправитель — я сам: молчим;
+            //  * свой id неизвестен (профиль ещё грузится): тоже молчим.
+            //    Пикнуть человеку на его же сообщение заметно и раздражает, а
+            //    пропустить один сигнал в первые миллисекунды после загрузки —
+            //    нет. Раньше условие было открыто наружу и звучало именно в
+            //    этом случае.
+            const msg = (payload?.message ?? null) as MessagePayload | null;
+            const senderId = msg?.sender_id ?? msg?.sender?.id ?? msg?.user_id ?? null;
+            const myId = activeProfileRef.current?.id ?? null;
+
+            const isSystem = senderId === null || senderId === undefined;
+            if (!isSystem) {
+                // id профиля приходит строкой (users/profile_service отдаёт
+                // str(user.id)), sender_id — числом.
+                if (myId === null || myId === undefined) return;
+                if (Number(senderId) === Number(myId)) return;
+            }
+
+            if (activeRoomIdRef.current && payload.room_id === activeRoomIdRef.current) {
+                playMessengerPop();
+            } else {
+                playMessengerChime();
+            }
         };
         const handleMessageRead = (payload: MessageReadPayload) => {
             // Two query keys are affected by a read receipt:

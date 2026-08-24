@@ -6,6 +6,7 @@ import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { BackToProfile } from '@/components/BackToProfile';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Общая рамка раздела «Договоры»: шапка приложения, боковая панель
@@ -18,7 +19,7 @@ import { cn } from '@/lib/utils';
 
 interface NavItem {
   to: string;
-  label: string;
+  labelKey: string;
   icon: typeof Wallet;
   /** Активен и для вложенных путей (`/new` и будущие `/:id`). */
   matchPrefix?: string;
@@ -27,28 +28,29 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { to: '/contracts', label: 'Обзор', icon: LayoutDashboard },
+  { to: '/contracts', labelKey: 'contracts.nav.overview', icon: LayoutDashboard },
   {
     to: '/contracts/budgets',
-    label: 'Бюджеты',
+    labelKey: 'contracts.nav.budgets',
     icon: Wallet,
     matchPrefix: '/contracts/budgets',
   },
   {
     to: '/contracts/counterparties',
-    label: 'Реестр контрагентов',
+    labelKey: 'contracts.nav.counterparties',
     icon: Building2,
     matchPrefix: '/contracts/counterparties',
   },
   {
     to: '/contracts/agreements',
-    label: 'Договоры',
+    labelKey: 'contracts.nav.agreements',
     icon: FileText,
     matchPrefix: '/contracts/agreements',
   },
 ];
 
 export function ContractsShell({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const { pathname } = useLocation();
 
   const isActive = (item: NavItem) =>
@@ -62,7 +64,7 @@ export function ContractsShell({ children }: { children: ReactNode }) {
         <div className="flex flex-col gap-6 md:flex-row md:gap-8">
           <aside className="md:w-56 shrink-0">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3 px-3">
-              Договоры
+              {t('contracts.nav.title')}
             </h2>
             <nav className="flex flex-row gap-1 overflow-x-auto md:flex-col md:overflow-visible">
               {NAV.map((item) => {
@@ -79,7 +81,7 @@ export function ContractsShell({ children }: { children: ReactNode }) {
                   return (
                     <span key={item.to} className={classes} aria-disabled="true">
                       <Icon className="h-4 w-4 shrink-0" />
-                      {item.label}
+                      {t(item.labelKey)}
                       {item.hint && (
                         <span className="text-xs ml-auto hidden md:inline">
                           {item.hint}
@@ -92,7 +94,7 @@ export function ContractsShell({ children }: { children: ReactNode }) {
                 return (
                   <Link key={item.to} to={item.to} className={classes}>
                     <Icon className="h-4 w-4 shrink-0" />
-                    {item.label}
+                    {t(item.labelKey)}
                   </Link>
                 );
               })}

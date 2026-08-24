@@ -7,11 +7,13 @@ import {
   RemoteStream,
   VideoCodecPolicy,
 } from './MediaEngine';
+import { fallback } from '@/lib/fallback';
 import { Result, err, ok } from './result';
 import { WebRTCError, createWebRTCError } from './WebRTCError';
 import { QualityMetrics } from './BitrateController';
 import type { ISignalingClient } from './ISignalingClient';
 import { WebTransportSignalingClient } from './WebTransportSignalingClient';
+import i18next from '@/i18n';
 
 export interface WebRTCManagerEvents {
   onRemoteStream?: (stream: RemoteStream) => void;
@@ -116,7 +118,16 @@ export class WebRTCManager {
       return primaryResult;
     }
 
-    this.events.onInfo?.('Оптимизация видеопотока (fallback на VP8)...');
+    this.events.onInfo?.(i18next.t('conference.signaling.vp8Fallback'));
+    // Участник видит «оптимизация», а на деле звонок уехал с аппаратного
+    // H.264 на программный VP8: выше нагрузка на CPU, хуже картинка на слабых
+    // машинах. Снаружи это выглядит как «что-то подтормаживает», и связать
+    // одно с другим без этой строки невозможно.
+    fallback('conference.codec.vp8_retry', null, {
+      reason: 'основной кодек отвергнут — перезаходим на VP8',
+      cause: primaryResult.error,
+      context: { code: primaryResult.error.code, from: this.codecPolicy },
+    });
     this.codecPolicy = 'vp8-only';
     this.events.onCodecPolicyChanged?.(this.codecPolicy);
 
@@ -214,7 +225,7 @@ export class WebRTCManager {
       const attempt = this.signalingAttempts[idx];
       if (idx > 0) {
         this.events.onInfo?.(
-          `Пробуем резервный канал сигналинга: ${attempt.label}`
+          i18next.t('conference.signaling.tryingBackup', { label: attempt.label })
         );
       }
 
@@ -250,6 +261,21 @@ export class WebRTCManager {
 
       if (shouldTryNext) {
         const nextAttempt = this.signalingAttempts[idx + 1];
+        // expected: откат WebTransport → WebSocket заложен в архитектуру
+        // (см. CLAUDE.md), и на локальной машине QUIC отваливается штатно —
+        // строгий режим не должен из-за этого запирать конференцию. Но в
+        // телеметрию событие идёт: если откатываются ВСЕ, значит QUIC-мост
+        // лежит, а снаружи это видно только по лишним секундам на входе.
+        fallback('conference.signaling.next_channel', null, {
+          reason: 'канал сигналинга не поднялся — переходим на резервный',
+          expected: true,
+          cause: joinResult.error,
+          context: {
+            failed: attempt.label,
+            next: nextAttempt.label,
+            code: joinResult.error.code,
+          },
+        });
         await this.waitBeforeNextSignalingCandidate(
           idx,
           attempt.label,
@@ -495,11 +521,13 @@ export class WebRTCManager {
         normalizedPath === '/ws/sfu' || normalizedPath === '/ws/sfu/';
 
       if (shouldAddTrailingSlashVariant) {
-        const fallback = new URL(parsed.toString());
-        fallback.pathname = normalizedPath === '/ws/sfu' ? '/ws/sfu/' : '/ws/sfu';
-        const fallbackUrl = fallback.toString();
-        if (!candidates.includes(fallbackUrl)) {
-          candidates.push(fallbackUrl);
+        // Переименовано из `fallback`, чтобы не затенять импорт одноимённой
+        // функции: здесь это просто второе написание того же адреса.
+        const variant = new URL(parsed.toString());
+        variant.pathname = normalizedPath === '/ws/sfu' ? '/ws/sfu/' : '/ws/sfu';
+        const variantUrl = variant.toString();
+        if (!candidates.includes(variantUrl)) {
+          candidates.push(variantUrl);
         }
       }
     } catch {
@@ -526,7 +554,7 @@ export class WebRTCManager {
     const totalDelayMs = exponentialDelay + jitter;
 
     this.events.onInfo?.(
-      `Signaling retry: ${failedLabel} недоступен, ждём ${totalDelayMs} мс перед переходом на ${nextLabel}`
+      i18next.t('conference.signaling.retry', { failed: failedLabel, delay: totalDelayMs, next: nextLabel })
     );
 
     await new Promise<void>((resolve) => {

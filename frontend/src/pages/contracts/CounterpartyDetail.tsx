@@ -14,13 +14,15 @@ import { useParams } from 'react-router-dom';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import CounterpartyDetailView from '@/components/contracts/CounterpartyDetailView';
 import { BackLink } from '@/components/contracts/detail';
+import { useTranslation } from 'react-i18next';
 
 const CounterpartyDetail = () => {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
 
   return (
     <ContractsShell>
-      <BackLink to="/contracts/counterparties">Ко всему реестру</BackLink>
+      <BackLink to="/contracts/counterparties">{t('contracts.counterparty.backToList')}</BackLink>
       <CounterpartyDetailView id={Number(id)} />
     </ContractsShell>
   );

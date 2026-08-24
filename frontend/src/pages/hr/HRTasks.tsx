@@ -187,13 +187,13 @@ const HRTasks: React.FC = () => {
               size="sm"
               onClick={() => setShowFilters(!showFilters)}
               className="h-9 w-9 p-0 rounded-xl"
-              title="Фильтры"
+              title={t('hr.tasks.filters')}
             >
               <Filter className="h-4 w-4" />
             </Button>
 
             <div className="text-xs font-semibold text-muted-foreground whitespace-nowrap hidden md:block">
-              Всего: {tasks.length}
+              {t('hr.tasks.totalCount', { count: tasks.length })}
             </div>
           </div>
 
@@ -208,7 +208,7 @@ const HRTasks: React.FC = () => {
                 onClick={() => setViewMode('board')}
               >
                 <LayoutGrid className="h-3.5 w-3.5" />
-                Канбан
+                {t('hr.tasks.kanban')}
               </Button>
               <Button
                 variant={viewMode === 'table' ? 'secondary' : 'ghost'}
@@ -217,7 +217,7 @@ const HRTasks: React.FC = () => {
                 onClick={() => setViewMode('table')}
               >
                 <LayoutList className="h-3.5 w-3.5" />
-                Таблица
+                {t('hr.tasks.table')}
               </Button>
             </div>
 
@@ -289,7 +289,7 @@ const HRTasks: React.FC = () => {
 
             <Select value={contractorFilter} onValueChange={setContractorFilter}>
               <SelectTrigger className="h-9 text-xs rounded-xl bg-muted/30">
-                <SelectValue placeholder={t('tasks.pages.contractors.one', 'Подрядчик')} />
+                <SelectValue placeholder={t('tasks.pages.contractors.one', 'Партнёр')} />
               </SelectTrigger>
               <SelectContent className="rounded-2xl">
                 <SelectItem value="all">{t('tasks.pages.contractors.allPerformers', 'Все исполнители')}</SelectItem>

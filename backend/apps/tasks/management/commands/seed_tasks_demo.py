@@ -44,6 +44,7 @@ from django.apps import apps as django_apps
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
+from django.db.models import Q
 
 from apps.hr import interface as hr_interface
 from apps.tasks.models import (
@@ -60,6 +61,7 @@ from apps.tasks.models import (
     Priority,
     Project,
     ProjectSite,
+    ProjectStaffReport,
     ProjectStatus,
     ResourceAllocation,
     ResourceKind,
@@ -79,6 +81,7 @@ from apps.tasks.models import (
     WorkVolumeUnit,
 )
 from apps.tasks.services import daily_report_service
+from apps.tasks.services import staff_report_service
 from apps.tasks.services.reference_service import generate_unique_slug
 from apps.tasks.services.sequence_service import next_task_key
 
@@ -313,10 +316,10 @@ CONTRACTORS = [
      ]},
 ]
 
-# (подрядчик, проект, объект, номер договора, объём работ). Привлечение на
-# площадке — это то, из чего задача без своего подрядчика получает
+# (партнёр, проект, объект, номер договора, объём работ). Привлечение на
+# площадке — это то, из чего задача без своего партнёра получает
 # ЭФФЕКТИВНОГО (contractor_service.effective_contractors), поэтому Сазаган
-# здесь обязателен: половина его задач подрядчика не называет намеренно.
+# здесь обязателен: половина его задач партнёра не называет намеренно.
 ENGAGEMENTS = [
     ("ТОО «Алга-Строй-Монтаж»", "Алга-2026: подстанция 110/10", "Алга",
      "ДП-2026/014", "Фундаменты, металлоконструкции, монтаж оборудования"),
@@ -454,8 +457,8 @@ TASKS = [
      "requirements": [("human", "Монтажник", 1),
                       ("equipment", "Кара (вилопогрузчик)", 1)],
      "equipment": ["INV-0103"]},
-    # Подрядчика намеренно НЕ называют: он должен подтянуться привлечением
-    # на площадке (эффективный подрядчик).
+    # Партнёра намеренно НЕ называют: он должен подтянуться привлечением
+    # на площадке (эффективный партнёр).
     {"summary": "Развезти валы: ряды 17–24",
      "roadmap": ("Сазаган: СЭС, вторая очередь", "Блок I",
                  "Развозка валов трекерных конструкций"),
@@ -575,12 +578,82 @@ REPORT_EDITS = [
      "Пересчёт по факту приёмки: 6 валов забракованы"),
 ]
 
+# ── отчёты по персоналу ────────────────────────────────────────────────────
+#
+# Вторая ось факта: ежедневка выше отвечает «сколько сделано», эта — «какими
+# силами». Дни здесь НЕ повторяются в пределах блока, и это инвариант модели,
+# а не конвенция наполнения: у ``ProjectStaffReport`` есть
+# UNIQUE(проект, блок, дата), потому что численность — состояние, а не сумма
+# смен.
+#
+# Числа подобраны так, чтобы на доске было что сравнивать с планом
+# (``ResourceRequirement`` роудмапов выше):
+#   Блок А — ОРУ 110 кВ  план 6 (4 монтажника + 2 сварщика) → факт около 7,
+#                        прораб идёт сверх плана: его в потребностях нет;
+#   Блок Б — ЗРУ 10 кВ   план 3 электромонтажника          → факт скачет 2–4;
+#   Блок I (Сазаган)     план 2 монтажника                 → факт 2–4;
+#   Участок 12–19        план 4 монтажника, но работы встали три недели
+#                        назад → на сегодня «не заполнено» и провал против
+#                        плана. Ради этой строки блок и заведён SUSPENDED.
+#
+# Дни -4..0 — это Пн–Пт текущей недели, -8 и -7 — Чт и Пт прошлой.
+STAFF_REPORTS = [
+    {"project": "Алга-2026: подстанция 110/10", "site": "Алга",
+     "block": "Блок А — ОРУ 110 кВ", "days": [
+         (0, "", (("Монтажник", 4), ("Сварщик", 2), ("Прораб", 1))),
+         (-1, "", (("Монтажник", 4), ("Сварщик", 2), ("Прораб", 1))),
+         (-2, "", (("Монтажник", 4), ("Сварщик", 2), ("Прораб", 1))),
+         (-3, "", (("Монтажник", 4), ("Сварщик", 2))),
+         (-4, "Сварщик со второй смены переведён на Блок Б",
+          (("Монтажник", 4), ("Сварщик", 1), ("Прораб", 1))),
+         (-7, "", (("Монтажник", 4), ("Сварщик", 2), ("Прораб", 1))),
+     ]},
+    {"project": "Алга-2026: подстанция 110/10", "site": "Алга",
+     "block": "Блок Б — ЗРУ 10 кВ", "days": [
+         (0, "", (("Электромонтажник", 3),)),
+         (-1, "Один электромонтажник на переаттестации по ПТБ",
+          (("Электромонтажник", 2),)),
+         (-2, "", (("Электромонтажник", 3),)),
+         (-3, "Стропальщик на разгрузку барабанов с кабелем",
+          (("Электромонтажник", 3), ("Стропальщик", 1))),
+         (-4, "", (("Электромонтажник", 2),)),
+     ]},
+    {"project": "Сазаган: СЭС, вторая очередь", "site": "Сазаган",
+     "block": "Блок I", "days": [
+         (0, "", (("Монтажник", 2), ("Водитель погрузчика", 1))),
+         (-1, "", (("Монтажник", 2), ("Водитель погрузчика", 1))),
+         (-2, "", (("Монтажник", 2), ("Водитель погрузчика", 1))),
+         (-3, "Кара на ТО, развозили вручную", (("Монтажник", 2),)),
+         (-4, "Подтянули людей с Блока II под завершение развозки",
+          (("Монтажник", 3), ("Водитель погрузчика", 1))),
+     ]},
+    {"project": "Западный контур: ЛЭП и РП", "site": "Кандыагаш",
+     "block": "Участок 12–19", "days": [
+         (-21, "Последний выход перед приостановкой работ",
+          (("Монтажник", 4), ("Прораб", 1))),
+         (-22, "", (("Монтажник", 4),)),
+     ]},
+]
+
+# Правка отчёта по персоналу: (объект, блок, день, новый состав, комментарий).
+# Ровно та же причина, что у REPORT_EDITS: без хотя бы одной правки ленту
+# версий не на чем посмотреть, а ради неё ProjectStaffReportRevision и
+# заведена. День -2 в спеке выше намеренно засеян четырьмя монтажниками —
+# иначе правка совпала бы с исходным составом, и сервис (справедливо) не
+# создал бы вторую версию.
+STAFF_REPORT_EDITS = [
+    ("Алга", "Блок А — ОРУ 110 кВ", -2,
+     (("Монтажник", 3), ("Сварщик", 2), ("Прораб", 1)),
+     "Уточнено по табелю: один монтажник ушёл на больничный с обеда"),
+]
+
 
 class Command(BaseCommand):
     help = (
         "Наполнить домен задач демо-данными: объекты, блоки, проекты, "
-        "роудмапы, субподрядчиков, технику, задачи с объёмами и "
-        "ежедневными отчётами. Только для локальной среды."
+        "роудмапы, партнёров, технику, задачи с объёмами и "
+        "ежедневными отчётами, а также ежедневные отчёты по персоналу "
+        "проекта. Только для локальной среды."
     )
 
     def add_arguments(self, parser) -> None:
@@ -752,7 +825,7 @@ class Command(BaseCommand):
                 )
                 workers[last] = worker
         self.stdout.write(
-            f"  подрядчиков: {len(orgs)}, их работников: {len(workers)}")
+            f"  партнёров: {len(orgs)}, их работников: {len(workers)}")
         return orgs, workers
 
     def _seed_engagements(self, orgs, projects, sites) -> int:
@@ -979,6 +1052,63 @@ class Command(BaseCommand):
             f"исправлено {edited})")
         return total
 
+    def _seed_staff_reports(self, projects, blocks, roles, assignees) -> int:
+        """Отчёты по персоналу — вторая ось факта, рядом с ежедневкой.
+
+        Идут через ``staff_report_service``, а не прямым ``objects.create``,
+        по той же причине, что и ежедневка: протокол ревизий (первая пишется
+        вместе с отчётом) живёт в сервисе.
+
+        Проба на существование здесь проверяет ИНВАРИАНТ модели, а не
+        конвенцию наполнения: ``UNIQUE(проект, блок, дата)`` есть в базе, и
+        повторный прогон без пробы упёрся бы в него, а не просто создал
+        дубль.
+        """
+        author_ids = [e["user_id"] for e in assignees] or [None]
+        created = 0
+
+        for index, spec in enumerate(STAFF_REPORTS):
+            project = projects[spec["project"]]
+            block = blocks[(spec["site"], spec["block"])]
+            for day, comment, crew in spec["days"]:
+                work_date = _d(day)
+                if ProjectStaffReport.objects.filter(
+                        project=project, site_block=block,
+                        work_date=work_date, is_deleted=False).exists():
+                    continue
+                staff_report_service.create_report(
+                    project.id,
+                    {"site_block_id": block.id, "work_date": work_date,
+                     "comment": comment,
+                     "lines": [{"work_role_id": roles[name].id,
+                                "headcount": number} for name, number in crew]},
+                    author_id=author_ids[index % len(author_ids)],
+                )
+                created += 1
+
+        edited = 0
+        for site_name, block_name, day, crew, comment in STAFF_REPORT_EDITS:
+            report = ProjectStaffReport.objects.filter(
+                site_block=blocks[(site_name, block_name)],
+                work_date=_d(day), is_deleted=False).first()
+            if report is None:
+                continue
+            # update_report на неизменившемся составе ревизию не создаёт,
+            # поэтому повторный прогон оставляет номер версии прежним.
+            staff_report_service.update_report(
+                report.id,
+                {"comment": comment,
+                 "lines": [{"work_role_id": roles[name].id,
+                            "headcount": number} for name, number in crew]},
+                editor_id=author_ids[0])
+            edited += 1
+
+        total = ProjectStaffReport.objects.filter(is_deleted=False).count()
+        self.stdout.write(
+            f"  отчётов по персоналу: {total} (новых {created}, "
+            f"исправлено {edited})")
+        return total
+
     def _seed_roadmap_resources(self, roadmaps, roles, categories,
                                 equipment_by_inv, assignees) -> None:
         """Потребности и именные назначения на пакетах работ.
@@ -1025,6 +1155,13 @@ class Command(BaseCommand):
             contractor__name__in=org_names).delete()[0]
         orgs = Contractor.objects.filter(name__in=org_names).delete()[0]
 
+        # Отчёты по персоналу тоже держат блок через PROTECT. На проект у них
+        # CASCADE, но проект сносится ПОЗЖЕ блока, так что дождаться каскада
+        # нельзя — иначе удаление блоков упало бы с ProtectedError.
+        staff = ProjectStaffReport.objects.filter(
+            Q(project__name__in=project_names)
+            | Q(site_block__site__name__in=names)).delete()[0]
+
         # Роудмап держит блок через PROTECT, поэтому он уходит первым.
         # Ссылки задач на оба обнуляет сам Django: у ``Task.roadmap`` и
         # ``Task.site_block`` стоит SET_NULL.
@@ -1040,7 +1177,8 @@ class Command(BaseCommand):
 
         self.stdout.write(
             f"  снесено: задач {tasks}, техники {eq}, привлечений {eng}, "
-            f"работников {workers}, подрядчиков {orgs}, роудмапов {roadmaps}, "
+            f"работников {workers}, партнёров {orgs}, "
+            f"отчётов по персоналу {staff}, роудмапов {roadmaps}, "
             f"блоков {blocks}, проектов {projects}, объектов {sites}"
         )
 
@@ -1204,10 +1342,11 @@ class Command(BaseCommand):
             f"  потребностей в ресурсах: {ResourceRequirement.objects.count()}, "
             f"именных назначений: {ResourceAllocation.objects.count()}")
         self._seed_reports(tasks, volume_types, with_accounts)
+        self._seed_staff_reports(projects, blocks, roles, with_accounts)
 
         self.stdout.write(self.style.SUCCESS(
             f"\nГотово: объектов {len(sites)}, блоков {len(blocks)}, "
             f"проектов {len(projects)}, роудмапов {len(roadmaps)}, "
-            f"подрядчиков {len(orgs)} ({len(workers)} чел.), "
+            f"партнёров {len(orgs)} ({len(workers)} чел.), "
             f"техники {len(EQUIPMENT)}, задач {len(TASKS)}."
         ))

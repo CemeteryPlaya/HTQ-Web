@@ -19,8 +19,10 @@ import { requestsApi } from '@/api/requests';
 import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { QK, useProjects } from '@/features/requests/hooks';
 import type { Project, ProjectMember, ProjectMemberRole } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
 
 function CreateProjectForm({ onCreated }: { onCreated: (p: Project) => void }) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [budget, setBudget] = useState('');
   const [busy, setBusy] = useState(false);
@@ -28,7 +30,7 @@ function CreateProjectForm({ onCreated }: { onCreated: (p: Project) => void }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Создать проект</CardTitle>
+        <CardTitle>{t('requests.projects.create')}</CardTitle>
       </CardHeader>
       <CardContent>
         <form
@@ -44,9 +46,9 @@ function CreateProjectForm({ onCreated }: { onCreated: (p: Project) => void }) {
               onCreated(p);
               setName('');
               setBudget('');
-              toast.success(`Проект «${p.name}» создан`);
+              toast.success(t('requests.projects.created', { name: p.name }));
             } catch (e: any) {
-              toast.error(e?.response?.data?.detail ?? 'Не удалось создать проект');
+              toast.error(e?.response?.data?.detail ?? t('requests.projects.createError'));
             } finally {
               setBusy(false);
             }
@@ -54,11 +56,11 @@ function CreateProjectForm({ onCreated }: { onCreated: (p: Project) => void }) {
           className="grid gap-4 sm:grid-cols-[1fr_180px_auto] sm:items-end"
         >
           <div className="space-y-1.5">
-            <Label htmlFor="proj-name">Название</Label>
+            <Label htmlFor="proj-name">{t('hr.pmo.name')}</Label>
             <Input id="proj-name" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Q4 expansion" />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="proj-budget">Бюджет (KZT)</Label>
+            <Label htmlFor="proj-budget">{t('requests.projects.budget')}</Label>
             <Input
               id="proj-budget"
               type="number"
@@ -70,7 +72,7 @@ function CreateProjectForm({ onCreated }: { onCreated: (p: Project) => void }) {
             />
           </div>
           <Button type="submit" disabled={busy || !name.trim()}>
-            Создать проект
+            {t('requests.projects.create')}
           </Button>
         </form>
       </CardContent>
@@ -79,6 +81,7 @@ function CreateProjectForm({ onCreated }: { onCreated: (p: Project) => void }) {
 }
 
 function MembersPanel({ project }: { project: Project }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const membersKey = ['requests', 'projects', project.id, 'members'];
   const members = useQuery({
@@ -93,17 +96,17 @@ function MembersPanel({ project }: { project: Project }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: membersKey });
       setUserId('');
-      toast.success('Участник добавлен');
+      toast.success(t('messenger.memberAdded'));
     },
-    onError: (e: any) => toast.error(e?.response?.data?.detail ?? 'Не удалось добавить'),
+    onError: (e: any) => toast.error(e?.response?.data?.detail ?? t('requests.projects.addError')),
   });
   const remove = useMutation({
     mutationFn: (uid: number) => requestsApi.projects.removeMember(project.id, uid),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: membersKey });
-      toast.success('Удалено');
+      toast.success(t('requests.projects.deleted'));
     },
-    onError: (e: any) => toast.error(e?.response?.data?.detail ?? 'Не удалось удалить'),
+    onError: (e: any) => toast.error(e?.response?.data?.detail ?? t('requests.projects.deleteError')),
   });
 
   return (
@@ -121,7 +124,7 @@ function MembersPanel({ project }: { project: Project }) {
           />
         </div>
         <div className="space-y-1.5">
-          <Label>Роль</Label>
+          <Label>{t('requests.approverKind.role')}</Label>
           <Select value={role} onValueChange={(v) => setRole(v as ProjectMemberRole)}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -136,13 +139,13 @@ function MembersPanel({ project }: { project: Project }) {
           onClick={() => add.mutate()}
           className="bg-emerald-600 hover:bg-emerald-700"
         >
-          Добавить
+          {t('common.add')}
         </Button>
       </div>
 
       {members.isLoading && <Skeleton className="h-12" />}
       {members.data && members.data.length === 0 && (
-        <p className="text-sm text-muted-foreground">Участников пока нет.</p>
+        <p className="text-sm text-muted-foreground">{t('requests.projects.noMembers')}</p>
       )}
       {members.data && members.data.length > 0 && (
         <ul className="divide-y rounded-md border">
@@ -168,12 +171,13 @@ function MembersPanel({ project }: { project: Project }) {
 }
 
 export default function ProjectsPage() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const projects = useProjects();
   const [expanded, setExpanded] = useState<number | null>(null);
 
   return (
-    <RequestsLayout title="Проекты" subtitle="Заглушка проектов для шаблонов и финансовой статистики">
+    <RequestsLayout title={t('requests.nav.projects')} subtitle={t('requests.projects.subtitle')}>
       <CreateProjectForm onCreated={() => qc.invalidateQueries({ queryKey: QK.projects })} />
 
       <Card>
@@ -186,7 +190,7 @@ export default function ProjectsPage() {
           )}
           {projects.data && projects.data.length === 0 && (
             <div className="px-4 py-10 text-center text-sm text-muted-foreground">
-              Проектов пока нет.
+              {t('requests.projects.empty')}
             </div>
           )}
           {projects.data?.map((p) => {
@@ -202,7 +206,7 @@ export default function ProjectsPage() {
                     <div className="font-medium">{p.name}</div>
                     <div className="text-xs text-muted-foreground">
                       <Badge variant="outline" className="mr-2">{p.status}</Badge>
-                      бюджет {p.budget_limit ?? '—'} {p.currency}
+                      {t('requests.projects.budgetValue', { amount: p.budget_limit ?? '—', currency: p.currency })}
                     </div>
                   </div>
                   {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}

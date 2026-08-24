@@ -17,6 +17,7 @@ import {
 import type { EmployeeCard, EmployeeCardBrief } from '@/api/hr';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   card: EmployeeCard;
@@ -111,6 +112,7 @@ function PersonBrief({
 }
 
 export function EmployeeCardView({ card, mode, hideHeader }: Props) {
+  const { t } = useTranslation();
   const totalAllocation = card.pmos.reduce(
     (acc, p) => acc + (p.allocation_percent || 0),
     0,
@@ -163,13 +165,13 @@ export function EmployeeCardView({ card, mode, hideHeader }: Props) {
               <p className="truncate text-sm text-muted-foreground font-medium">
                 {[card.position?.title, card.department?.name]
                   .filter(Boolean)
-                  .join(' · ') || 'Без должности'}
+                  .join(' · ') || t('hr.card.noPosition')}
               </p>
 
               {card.position?.level !== undefined && (
                 <div className="pt-1">
                   <Badge variant="secondary" className="text-xs font-semibold">
-                    Уровень {card.position.level}
+                    {t('hr.card.level', { level: card.position.level })}
                   </Badge>
                 </div>
               )}
@@ -190,16 +192,16 @@ export function EmployeeCardView({ card, mode, hideHeader }: Props) {
         <section className="rounded-3xl border bg-card p-6 shadow-2xs hover:shadow-xs transition-all">
           <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-muted-foreground/80 flex items-center gap-2">
             <Briefcase className="h-4 w-4 text-primary" />
-            Контакты и должность
+            {t('hr.card.contactsAndPosition')}
           </h3>
           <div className="grid gap-4">
-            <FieldRow icon={Briefcase} label="Должность">
+            <FieldRow icon={Briefcase} label={t('hr.card.position')}>
               {card.position?.title || '—'}
             </FieldRow>
-            <FieldRow icon={Building2} label="Отдел">
+            <FieldRow icon={Building2} label={t('hr.card.department')}>
               {card.department?.name || '—'}
             </FieldRow>
-            <FieldRow icon={Calendar} label="Дата найма">
+            <FieldRow icon={Calendar} label={t('hr.card.hireDate')}>
               {fmtDate(card.hire_date)}
             </FieldRow>
             {isAuth && hasContacts && (
@@ -214,7 +216,7 @@ export function EmployeeCardView({ card, mode, hideHeader }: Props) {
                     </a>
                   ) : null}
                 </FieldRow>
-                <FieldRow icon={Phone} label="Телефон">
+                <FieldRow icon={Phone} label={t('profile.phone')}>
                   {card.phone ? (
                     <a
                       className="text-primary hover:underline font-medium"
@@ -228,7 +230,7 @@ export function EmployeeCardView({ card, mode, hideHeader }: Props) {
             )}
             {!isAuth && (
               <p className="text-xs italic text-muted-foreground pt-1">
-                Контакты доступны только сотрудникам компании.
+                {t('hr.card.contactsRestricted')}
               </p>
             )}
           </div>
@@ -239,20 +241,20 @@ export function EmployeeCardView({ card, mode, hideHeader }: Props) {
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground/80 flex items-center gap-2">
               <FolderGit2 className="h-4 w-4 text-primary" />
-              Проекты PMO
+              {t('hr.card.pmoProjects')}
             </h3>
             {card.pmos.length > 0 && (
               <Badge
                 variant={totalAllocation > 100 ? 'destructive' : 'outline'}
                 className="font-mono text-xs"
               >
-                Загрузка: {totalAllocation}%
+                {t('profile.pmoAllocation', { percent: totalAllocation })}
               </Badge>
             )}
           </div>
           {card.pmos.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center border rounded-xl bg-muted/20">
-              Сотрудник пока не закреплён ни за одним проектом.
+              {t('hr.card.noProjects')}
             </p>
           ) : (
             <ul className="space-y-2.5">
@@ -266,7 +268,7 @@ export function EmployeeCardView({ card, mode, hideHeader }: Props) {
                       <span className="truncate">{p.pmo_name}</span>
                       {p.is_primary && (
                         <Badge variant="secondary" className="h-4 text-[10px] font-semibold">
-                          Лид
+                          {t('profile.pmoLead')}
                         </Badge>
                       )}
                     </div>
@@ -290,21 +292,21 @@ export function EmployeeCardView({ card, mode, hideHeader }: Props) {
         <section className="rounded-3xl border bg-card p-6 shadow-2xs hover:shadow-xs transition-all">
           <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-muted-foreground/80 flex items-center gap-2">
             <Crown className="h-4 w-4 text-amber-500" />
-            Руководитель
+            {t('hr.orgChart.manager')}
           </h3>
           {card.manager ? (
             <PersonBrief
               person={card.manager}
               mode={mode}
               badge={
-                <span title="Руководитель">
+                <span title={t('hr.orgChart.manager')}>
                   <Crown className="h-3.5 w-3.5 text-amber-500" />
                 </span>
               }
             />
           ) : (
             <p className="text-sm text-muted-foreground py-4 text-center border rounded-xl bg-muted/20">
-              Прямой руководитель не назначен.
+              {t('hr.card.noManager')}
             </p>
           )}
         </section>
@@ -313,11 +315,11 @@ export function EmployeeCardView({ card, mode, hideHeader }: Props) {
         <section className="rounded-3xl border bg-card p-6 shadow-2xs hover:shadow-xs transition-all">
           <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-muted-foreground/80 flex items-center gap-2">
             <UserCheck className="h-4 w-4 text-primary" />
-            Прямые подчинённые ({card.subordinates.length})
+            {t('hr.card.directReports', { count: card.subordinates.length })}
           </h3>
           {card.subordinates.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center border rounded-xl bg-muted/20">
-              Сотрудник не руководит отделом.
+              {t('hr.card.notAHead')}
             </p>
           ) : (
             <ul className="space-y-2.5">

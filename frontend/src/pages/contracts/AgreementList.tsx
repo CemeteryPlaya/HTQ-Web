@@ -18,6 +18,7 @@ import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { formatAmount } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
 import type { AgreementStatus } from '@/types/contracts';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Список договоров.
@@ -40,6 +41,7 @@ const STATUS_VARIANTS: Record<
 };
 
 const AgreementList = () => {
+  const { t } = useTranslation();
   const { data: rows = [], isLoading, isError } = useQuery({
     queryKey: ['contracts', 'agreements'],
     queryFn: () => contractsApi.listAgreements().then((r) => r.data),
@@ -61,12 +63,12 @@ const AgreementList = () => {
       <div className="mb-6 flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <FileText className="h-7 w-7 text-muted-foreground" />
-          <h1 className="text-3xl font-bold">Договоры</h1>
+          <h1 className="text-3xl font-bold">{t('contracts.nav.agreements')}</h1>
         </div>
         <Button asChild>
           <Link to="/contracts/agreements/new">
             <Plus className="mr-2 h-4 w-4" />
-            Новый договор
+            {t('contracts.newAgreement')}
           </Link>
         </Button>
       </div>
@@ -80,31 +82,31 @@ const AgreementList = () => {
           </div>
         ) : isError ? (
           <p className="p-6 text-sm text-destructive">
-            Не удалось загрузить договоры.
+            {t('contracts.agreements.loadError')}
           </p>
         ) : rows.length === 0 ? (
           <div className="p-10 text-center">
-            <p className="text-muted-foreground mb-4">Договоров пока нет.</p>
+            <p className="text-muted-foreground mb-4">{t('contracts.agreements.empty')}</p>
             <Button asChild variant="outline">
-              <Link to="/contracts/agreements/new">Оформить первый</Link>
+              <Link to="/contracts/agreements/new">{t('contracts.agreements.createFirst')}</Link>
             </Button>
           </div>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Номер</TableHead>
-                <TableHead>Наименование</TableHead>
-                <TableHead>Контрагент</TableHead>
-                <TableHead>Бюджет</TableHead>
-                <TableHead className="text-right">Сумма</TableHead>
-                <TableHead>Оплата</TableHead>
-                <TableHead>Статус</TableHead>
+                <TableHead>{t('contracts.columns.number')}</TableHead>
+                <TableHead>{t('contracts.columns.title')}</TableHead>
+                <TableHead>{t('contracts.columns.counterparty')}</TableHead>
+                <TableHead>{t('contracts.columns.budget')}</TableHead>
+                <TableHead className="text-right">{t('contracts.columns.amount')}</TableHead>
+                <TableHead>{t('contracts.columns.payment')}</TableHead>
+                <TableHead>{t('contracts.columns.status')}</TableHead>
                 {/* Из трёх согласуемых типов только у договора согласование
                     имеет доменное последствие — оно двигает его же `status`.
                     Оси всё равно разные: согласованный по маршруту договор
                     бывает расторгнут по существу. */}
-                <TableHead className="text-right">Согласование</TableHead>
+                <TableHead className="text-right">{t('contracts.columns.approval')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

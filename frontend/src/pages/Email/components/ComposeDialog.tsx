@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/select';
 import { useSendMessage } from '@/pages/Email/hooks/useSendMessage';
 import type { EmailAccount } from '@/pages/Email/types';
+import { replaceSignature } from '@/pages/Email/components/signature';
 
 interface Props {
   open: boolean;
@@ -29,6 +30,7 @@ interface Props {
 }
 
 const LAST_SENDER_KEY = 'htq.email.compose.lastSenderId';
+
 
 export const ComposeDialog: React.FC<Props> = ({
   open,
@@ -66,6 +68,19 @@ export const ComposeDialog: React.FC<Props> = ({
       setSenderId(initialSenderId);
     }
   }, [open, initialSenderId]);
+
+  // Подпись того адреса, с которого пишем. Держим предыдущую, чтобы при
+  // смене отправителя заменить её, а не дописать вторую.
+  const previousSignature = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const next = writable.find((a) => a.id === senderId)?.signature ?? '';
+    setBody((current) => replaceSignature(current, previousSignature.current, next));
+    previousSignature.current = next;
+    // writable пересобирается каждый рендер — завязываться на него нельзя,
+    // иначе подпись переставлялась бы бесконечно.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, senderId]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

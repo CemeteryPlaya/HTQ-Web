@@ -20,13 +20,14 @@ import { BackToProfile } from '@/components/BackToProfile';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasAnyRole } from '@/lib/auth/roles';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 
 /** Те же роли, что считает администраторскими раздел «Запросы». */
 const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 interface NavItem {
   to: string;
-  label: string;
+  labelKey: string;
   icon: typeof Inbox;
   /** Активен и для вложенных путей. */
   matchPrefix?: string;
@@ -34,16 +35,16 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { to: '/signoff', label: 'Ждёт меня', icon: Inbox },
+  { to: '/signoff', labelKey: 'signoff.nav.inbox', icon: Inbox },
   {
     to: '/signoff/processes',
-    label: 'Согласования',
+    labelKey: 'signoff.nav.title',
     icon: ListChecks,
     matchPrefix: '/signoff/processes',
   },
   {
     to: '/signoff/routes',
-    label: 'Маршруты',
+    labelKey: 'signoff.nav.routes',
     icon: GitBranch,
     matchPrefix: '/signoff/routes',
     adminOnly: true,
@@ -51,6 +52,7 @@ const NAV: NavItem[] = [
 ];
 
 export function SignoffShell({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const { pathname } = useLocation();
   const { activeProfile } = useActiveProfile();
   const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
@@ -67,7 +69,7 @@ export function SignoffShell({ children }: { children: ReactNode }) {
         <div className="flex flex-col gap-6 md:flex-row md:gap-8">
           <aside className="md:w-56 shrink-0">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3 px-3">
-              Согласования
+              {t('signoff.nav.title')}
             </h2>
             <nav className="flex flex-row gap-1 overflow-x-auto md:flex-col md:overflow-visible">
               {items.map((item) => {
@@ -84,7 +86,7 @@ export function SignoffShell({ children }: { children: ReactNode }) {
                     )}
                   >
                     <Icon className="h-4 w-4 shrink-0" />
-                    {item.label}
+                    {t(item.labelKey)}
                   </Link>
                 );
               })}

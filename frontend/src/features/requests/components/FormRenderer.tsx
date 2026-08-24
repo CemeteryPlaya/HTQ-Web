@@ -16,6 +16,7 @@ import {
 
 import { useReferenceOptions } from '@/features/requests/hooks';
 import type { DisplayCondition, FormField, FormSchema } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   schema: FormSchema;
@@ -49,6 +50,7 @@ function isVisible(key: string, values: Record<string, unknown>, dcs: DisplayCon
 interface CtrlProps { field: FormField; value: unknown; setValue: (v: unknown) => void; readOnly: boolean; values: Record<string, unknown>; }
 
 function ReferenceControl({ field, value, setValue, readOnly, values }: CtrlProps) {
+  const { t } = useTranslation();
   const f = field as any;
   const dep: string | undefined = f.depends_on || undefined;
   const parentVal = dep ? values[dep] : undefined;
@@ -59,12 +61,12 @@ function ReferenceControl({ field, value, setValue, readOnly, values }: CtrlProp
     parentVal != null ? String(parentVal) : undefined,
   );
   const list = opts.data?.options ?? [];
-  if (!f.source) return <p className="text-xs text-muted-foreground">Справочник не задан.</p>;
+  if (!f.source) return <p className="text-xs text-muted-foreground">{t('requests.form.noReference')}</p>;
   return (
     <Select disabled={readOnly} value={typeof value === 'string' ? value : ''} onValueChange={(v) => setValue(v || null)}>
-      <SelectTrigger><SelectValue placeholder={opts.isLoading ? 'Загрузка…' : '—'} /></SelectTrigger>
+      <SelectTrigger><SelectValue placeholder={opts.isLoading ? t('signoff.loadingEllipsis') : '—'} /></SelectTrigger>
       <SelectContent>
-        {list.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">Нет вариантов</div>}
+        {list.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">{t('requests.form.noOptions')}</div>}
         {list.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
       </SelectContent>
     </Select>
@@ -96,6 +98,7 @@ function AmountControl({ field, value, setValue, readOnly }: CtrlProps) {
 }
 
 function GroupControl({ field, value, setValue, readOnly }: CtrlProps) {
+  const { t } = useTranslation();
   const f = field as any;
   const children: FormField[] = f.fields ?? [];
   const rows: Record<string, unknown>[] = Array.isArray(value) ? (value as any) : [];
@@ -109,15 +112,15 @@ function GroupControl({ field, value, setValue, readOnly }: CtrlProps) {
 
   return (
     <div className="space-y-3">
-      {rows.length === 0 && <p className="text-xs text-muted-foreground">Нет записей.</p>}
+      {rows.length === 0 && <p className="text-xs text-muted-foreground">{t('requests.form.noRows')}</p>}
       {rows.map((row, i) => (
         <div key={i} className="rounded-lg border bg-muted/20 p-3">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">{field.label} #{i + 1}</span>
             {!readOnly && (
               <div className="flex items-center gap-2">
-                <button type="button" onClick={() => copyRow(i)} className="flex items-center gap-1 text-xs text-primary" aria-label="Копировать"><Copy className="h-3.5 w-3.5" /> Копировать</button>
-                <button type="button" onClick={() => delRow(i)} className="flex items-center gap-1 text-xs text-destructive" aria-label="Удалить"><Trash2 className="h-3.5 w-3.5" /> Удалить</button>
+                <button type="button" onClick={() => copyRow(i)} className="flex items-center gap-1 text-xs text-primary" aria-label={t('requests.form.copyRow')}><Copy className="h-3.5 w-3.5" /> {t('requests.form.copyRow')}</button>
+                <button type="button" onClick={() => delRow(i)} className="flex items-center gap-1 text-xs text-destructive" aria-label={t('common.delete')}><Trash2 className="h-3.5 w-3.5" /> {t('common.delete')}</button>
               </div>
             )}
           </div>
@@ -130,7 +133,7 @@ function GroupControl({ field, value, setValue, readOnly }: CtrlProps) {
       ))}
       {!readOnly && (
         <Button type="button" variant="outline" size="sm" onClick={addRow}>
-          <Plus className="mr-1 h-4 w-4" /> Добавить сведения
+          <Plus className="mr-1 h-4 w-4" /> {t('requests.form.addRow')}
         </Button>
       )}
     </div>
@@ -138,6 +141,7 @@ function GroupControl({ field, value, setValue, readOnly }: CtrlProps) {
 }
 
 function ScalarControl({ field, value, setValue, readOnly }: CtrlProps) {
+  const { t } = useTranslation();
   const inputId = `field-${field.key}`;
   const f = field as any;
   switch (field.type) {
@@ -162,13 +166,13 @@ function ScalarControl({ field, value, setValue, readOnly }: CtrlProps) {
     case 'checkbox':
       return <Checkbox id={inputId} disabled={readOnly} checked={Boolean(value)} onCheckedChange={(c) => setValue(Boolean(c))} />;
     case 'serial':
-      return <Input id={inputId} disabled value={typeof value === 'string' ? value : '(генерируется автоматически)'} />;
+      return <Input id={inputId} disabled value={typeof value === 'string' ? value : t('requests.form.autoGenerated')} />;
     case 'file':
       return readOnly
         ? <div className="text-sm text-muted-foreground">{Array.isArray(value) ? (value as string[]).join(', ') : (value ? String(value) : '—')}</div>
         : <Input id={inputId} type="file" multiple onChange={(e) => setValue(Array.from(e.target.files ?? []).map((x) => x.name))} />;
     case 'formula':
-      return <Input id={inputId} disabled value={value == null ? '(вычисляется)' : String(value)} />;
+      return <Input id={inputId} disabled value={value == null ? t('requests.form.computed') : String(value)} />;
     case 'dropdown': {
       const opts: string[] = f.options ?? [];
       return (
@@ -208,8 +212,9 @@ function FieldRow({ field, value, setValue, readOnly, values }: CtrlProps) {
 }
 
 export function FormRenderer({ schema, values, onChange, readOnly = false }: Props) {
+  const { t } = useTranslation();
   if (schema.fields.length === 0) {
-    return <p className="text-sm text-muted-foreground">В этой форме пока нет полей.</p>;
+    return <p className="text-sm text-muted-foreground">{t('requests.form.empty')}</p>;
   }
   const dcs = schema.display_conditions ?? [];
   return (

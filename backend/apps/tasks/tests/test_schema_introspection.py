@@ -49,7 +49,7 @@ INDEXED_COLUMNS = [
     ("tasks_site", "manager_id"),
     ("tasks_projectsite", "project_id"),
     ("tasks_projectsite", "site_id"),
-    # contractors (субподрядчики)
+    # contractors (партнёры)
     ("tasks_contractor", "status"),
     ("tasks_contractorworker", "contractor_id"),
     ("tasks_contractorworker", "level"),
@@ -94,6 +94,10 @@ INDEXED_COLUMNS = [
     ("tasks_dailyreport", "work_date"),
     ("tasks_dailyreport", "author_id"),
     ("tasks_dailyreport", "is_deleted"),
+    # численность персонала по блокам — вторая ось факта
+    ("tasks_projectstaffreport", "work_date"),
+    ("tasks_projectstaffreport", "author_id"),
+    ("tasks_projectstaffreport", "is_deleted"),
     ("tasks_equipment", "is_active"),
     # notifications
     ("tasks_notification", "recipient_id"),
@@ -149,6 +153,11 @@ COLUMNS_REQUIRING_DB_DEFAULT = [
     ("tasks_dailyreport", "current_revision"),
     ("tasks_dailyreport", "is_deleted"),
     ("tasks_dailyreport", "comment"),
+    ("tasks_projectstaffreport", "current_revision"),
+    ("tasks_projectstaffreport", "is_deleted"),
+    ("tasks_projectstaffreport", "comment"),
+    ("tasks_projectstaffreportrevision", "total_headcount"),
+    ("tasks_projectstaffreportrevision", "lines"),
     ("tasks_notification", "is_read"),
     ("tasks_tasksequence", "current_value"),
     ("tasks_productionday", "day_type"),
@@ -189,6 +198,10 @@ EXPECTED_CONSTRAINTS = [
     ("tasks_taskvolume", "uq_task_volume"),
     ("tasks_dailyreport", "ck_daily_report_quantity_non_negative"),
     ("tasks_dailyreportrevision", "uq_daily_report_revision"),
+    ("tasks_projectstaffreportline", "uq_staff_report_line_role"),
+    ("tasks_projectstaffreportline",
+     "ck_staff_report_line_headcount_non_negative"),
+    ("tasks_projectstaffreportrevision", "uq_staff_report_revision"),
     ("tasks_calendarevent", "ck_calendar_event_type"),
     ("tasks_calendarevent", "ck_calendar_event_range"),
     ("tasks_calendareventparticipant", "uq_calendar_event_participant"),
@@ -247,3 +260,32 @@ def test_business_constraints_exist():
     present = set(rows)
     missing = [pair for pair in EXPECTED_CONSTRAINTS if pair not in present]
     assert missing == [], f"missing DB constraints: {missing}"
+
+
+@pytest.mark.django_db
+def test_staff_report_day_is_unique_per_block_but_only_while_alive():
+    """Численность — состояние, а не инкремент.
+
+    Осознанное расхождение с ``tasks_dailyreport``, где ``UNIQUE(task,
+    work_date)`` отсутствует намеренно (смены складываются): «12 монтажников»
+    от прораба и от бригадира — это одни и те же 12 человек, а не 24.
+
+    Проверяется отдельно от ``EXPECTED_CONSTRAINTS``, потому что партиальный
+    ``UniqueConstraint`` Postgres реализует уникальным ИНДЕКСОМ и строки в
+    ``pg_constraint`` под него не заводит. Условие ``WHERE NOT is_deleted``
+    здесь и стережётся: без него удалённый отчёт держал бы день занятым.
+    """
+    rows = _fetchall(
+        """
+        SELECT i.indisunique, pg_get_expr(i.indpred, i.indrelid)
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indexrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'uq_staff_report_project_block_date'
+        """
+    )
+    assert rows, "партиальный уникальный индекс отчёта по персоналу пропал"
+    is_unique, predicate = rows[0]
+    assert is_unique
+    assert "is_deleted" in (predicate or "")

@@ -33,6 +33,14 @@ import {
 } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MailConnectionSettings } from '@/components/mail/MailConnectionSettings';
+import { MailboxLookupNotice } from '@/components/mail/MailboxLookupNotice';
+import {
+    fetchMailboxLookup,
+    lookupIsAnswerable,
+    lookupSubmitsAttach,
+    lookupVerdict,
+    useDebounced,
+} from '@/components/mail/mailboxLookup';
 
 // Backend contract — services/email/app/api/v1/mailboxes.py
 type Mailbox = {
@@ -67,7 +75,7 @@ type MailboxStatus = {
 };
 
 type ReconcileDiff = {
-    kind: 'only_local' | 'only_remote' | 'mismatched';
+    kind: 'only_local' | 'only_remote' | 'mismatched' | 'unlinked';
     address: string;
     mailbox_id: number | null;
     user_id: number | null;
@@ -93,7 +101,8 @@ type ReconcileReport = {
     checked_local: number;
     checked_remote: number;
     in_sync: number;
-    counts: { only_local: number; only_remote: number; mismatched: number };
+    counts: { only_local: number; only_remote: number; mismatched: number;
+              unlinked: number; linked: number };
     differences: ReconcileDiff[];
     errors: string[];
     finished_at: string;
@@ -364,13 +373,42 @@ const CreateMailboxDialog: React.FC<{
         }
     }, [open]);
 
+    // Сверка: тот же вопрос, который бэкенд задаст себе при создании, только
+    // задаётся заранее — чтобы админ увидел «ящик уже есть» до нажатия кнопки,
+    // а не после. Debounce, иначе запрос уходит на каждую букву.
+    const dLocalPart = useDebounced(localPart, 400);
+    const dFirstName = useDebounced(firstName, 400);
+    const dLastName = useDebounced(lastName, 400);
+    const dUserId = useDebounced(userId, 400);
+    const lookupArgs = {
+        localPart: dLocalPart,
+        firstName: dFirstName,
+        lastName: dLastName,
+        userId: dUserId ? Number(dUserId) : null,
+    };
+    const { data: lookup, isFetching: lookupLoading } = useQuery({
+        queryKey: ['mailbox-lookup', dLocalPart, dFirstName, dLastName, dUserId],
+        queryFn: () => fetchMailboxLookup(lookupArgs),
+        enabled: open && lookupIsAnswerable(lookupArgs),
+        staleTime: 15_000,
+        retry: false,
+    });
+
     // На сервере без админ-API ящик уже существует — платформа обязана
-    // проверить его логином, поэтому пароль там не опционален.
-    const passwordRequired = status ? !status.can_create_remotely && status.provisioner !== 'none' : false;
+    // проверить его логином, поэтому пароль там не опционален. Сверка может
+    // потребовать пароль и отдельно: найденный ящик подключается только
+    // проверенной учёткой.
+    const passwordRequired = (status ? !status.can_create_remotely && status.provisioner !== 'none' : false)
+        || lookupVerdict(lookup) === 'needs-password';
+    const willAttach = lookupSubmitsAttach(lookup);
 
     const mutation = useMutation({
         mutationFn: async () => {
-            const res = await api.post<Mailbox & { generated_password?: string | null }>(
+            const res = await api.post<Mailbox & {
+                generated_password?: string | null;
+                attached?: boolean;
+                detail?: string | null;
+            }>(
                 'email/v1/mailboxes/',
                 {
                     local_part: localPart.trim(),
@@ -385,7 +423,14 @@ const CreateMailboxDialog: React.FC<{
         },
         onSuccess: (data) => {
             const pwd = data.generated_password;
-            if (pwd) {
+            if (data.attached) {
+                // Пароля здесь нет и быть не должно: ящик существовал до нас,
+                // сотрудник входит в него тем паролем, что у него уже есть.
+                toast.success(
+                    `${t('admin.mailboxes.attached', 'Подключён существующий ящик')}: ${data.address}`,
+                    { duration: 15_000 },
+                );
+            } else if (pwd) {
                 toast.success(
                     `${t('admin.mailboxes.created', 'Ящик создан')}: ${data.address}\n${t('admin.mailboxes.passwordOnce', 'Пароль (показывается один раз)')}: ${pwd}`,
                     { duration: 30_000 },
@@ -439,16 +484,17 @@ const CreateMailboxDialog: React.FC<{
                                 @{status?.domain || '…'}
                             </span>
                         </div>
+                        <MailboxLookupNotice lookup={lookup} loading={lookupLoading} />
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1.5">
                             <Label>{t('admin.users.firstName', 'Имя')}</Label>
-                            <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Иван" />
+                            <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder={t('admin.mailboxes.firstNamePlaceholder')} />
                         </div>
                         <div className="space-y-1.5">
                             <Label>{t('admin.users.lastName', 'Фамилия')}</Label>
-                            <Input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Иванов" />
+                            <Input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder={t('admin.mailboxes.lastNamePlaceholder')} />
                         </div>
                     </div>
 
@@ -502,7 +548,9 @@ const CreateMailboxDialog: React.FC<{
                     <Button onClick={() => mutation.mutate()} disabled={!canSubmit}>
                         {mutation.isPending
                             ? t('common.saving', 'Сохранение...')
-                            : t('admin.users.createBtn', 'Создать')}
+                            : willAttach
+                                ? t('admin.mailboxes.attachBtn', 'Подключить')
+                                : t('admin.users.createBtn', 'Создать')}
                     </Button>
                 </DialogFooter>
             </DialogContent>
@@ -586,6 +634,7 @@ const DIFF_VARIANT: Record<ReconcileDiff['kind'], 'default' | 'destructive' | 'o
     only_local: 'destructive',
     only_remote: 'secondary',
     mismatched: 'outline',
+    unlinked: 'default',
 };
 
 const ReconcileTab: React.FC<{ status?: MailboxStatus }> = ({ status }) => {
@@ -597,6 +646,7 @@ const ReconcileTab: React.FC<{ status?: MailboxStatus }> = ({ status }) => {
         only_local: t('admin.mailboxes.diffOnlyLocal', 'Только в платформе'),
         only_remote: t('admin.mailboxes.diffOnlyRemote', 'Только на сервере'),
         mismatched: t('admin.mailboxes.diffMismatched', 'Расходятся'),
+        unlinked: t('admin.mailboxes.diffUnlinked', 'Нашёлся владелец'),
     };
 
     const runMutation = useMutation({
@@ -628,7 +678,7 @@ const ReconcileTab: React.FC<{ status?: MailboxStatus }> = ({ status }) => {
                 <div className="flex items-start gap-2 text-sm text-muted-foreground">
                     <Info className="h-4 w-4 mt-0.5 shrink-0" />
                     <p>
-                        {t('admin.mailboxes.reconcileHelp', 'Сверка сравнивает ящики платформы с ящиками почтового сервера в обе стороны. Сначала посмотрите отчёт — он ничего не меняет, — и только потом применяйте выбранное направление.')}
+                        {t('admin.mailboxes.reconcileHelp', 'Сверка сравнивает ящики платформы с ящиками почтового сервера в обе стороны. Сначала посмотрите отчёт — он ничего не меняет, — и только потом применяйте выбранное направление. Заодно сверка ищет владельцев: если адрес ящика совпадает с email сотрудника, при применении ящик привяжется к нему сам и появится у него в почте.')}
                     </p>
                 </div>
 
@@ -679,6 +729,16 @@ const ReconcileTab: React.FC<{ status?: MailboxStatus }> = ({ status }) => {
                             {t('admin.mailboxes.reconcileInSync', 'Совпадают')}:{' '}
                             <span className="font-medium text-foreground">{report.in_sync}</span>
                         </span>
+                        {report.counts.unlinked > 0 && (
+                            <span className="text-muted-foreground">
+                                {report.applied
+                                    ? t('admin.mailboxes.reconcileLinked', 'Привязано к сотрудникам')
+                                    : t('admin.mailboxes.reconcileToLink', 'Найдены владельцы')}:{' '}
+                                <span className="font-medium text-foreground">
+                                    {report.applied ? report.counts.linked : report.counts.unlinked}
+                                </span>
+                            </span>
+                        )}
                     </div>
 
                     {report.mode === 'probe' && (

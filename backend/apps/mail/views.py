@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from django.http import HttpResponse, JsonResponse
 
+from htqweb.fallback import fallback
 from htqweb.http import api_view, json_error
 
 from . import schemas
@@ -44,8 +45,9 @@ from .services import account_service as acct_svc
 from .services import email_service as mail_svc
 from .services import mailbox_service as mbx_svc
 from .services import oauth_service as oauth_svc
-from .services import (connection_check, imap_account_service, provisioning,
-                       reconcile_service, self_service, settings_service)
+from .services import (connection_check, imap_account_service, lookup_service,
+                       provisioning, reconcile_service, self_service,
+                       settings_service)
 from .services.mailcow_client import MailcowClient
 
 _VALID_PROVIDERS = ("google", "microsoft")
@@ -115,6 +117,17 @@ def account_sync(request, account_id: int):
         return json_error("Account is inactive", 409)
 
 
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.AccountSignatureRequest)
+def account_signature(request, account_id: int, data: schemas.AccountSignatureRequest):
+    """Подпись, которой подписываются письма с этого адреса."""
+    try:
+        return acct_svc.update_signature(
+            request.token.user_id, account_id, data.signature,
+        )
+    except acct_svc.AccountNotFound:
+        return json_error("Account not found", 404)
+
+
 @api_view(methods=("DELETE",), auth="jwt")
 def account_detail(request, account_id: int):
     try:
@@ -143,12 +156,47 @@ def corporate_connect_info(request):
     без адресов серверов и прочих деталей инфраструктуры.
     """
     info = provisioning.describe()
-    mailbox = _current_mailbox(request.token.user_id)
+    user_id = request.token.user_id
+    mailbox = _current_mailbox(user_id)
+    awaiting = bool(mailbox and mailbox.get("awaiting_password"))
+    own_address = _own_corporate_address(user_id, info["domain"])
     return {
-        "allowed": info["allow_self_service"],
+        # Карточка показывается сотруднику, если админ разрешил подключать
+        # ящики самим, ЛИБО если ящик ему уже назначен и ждёт пароль, ЛИБО
+        # если его собственный рабочий адрес лежит в корпоративном домене.
+        # Последние два случая подделкой не грозят: адрес закреплён за ним
+        # админом, а пароль всё равно проверяется живым входом.
+        "allowed": bool(info["allow_self_service"] or awaiting or own_address),
+        "self_service": info["allow_self_service"],
         "domain": info["domain"],
+        # Адрес, который карточка подставит сама, — сотруднику незачем его
+        # набирать, а опечатка превратила бы понятный отказ в загадочный.
+        "own_address": own_address,
         "mailbox": mailbox,
+        "awaiting_password": awaiting,
     }
+
+
+def _own_corporate_address(user_id: int, domain: str) -> str:
+    """Рабочий адрес сотрудника, если он в корпоративном домене, иначе ``""``.
+
+    Берётся с сервера, а не из формы: адрес — это ещё и признак, по которому
+    разрешено подключение без ``allow_self_service`` (см. self_service), и
+    доверять тут присланному клиентом значению нельзя.
+    """
+    from apps.users import interface as users_interface
+
+    if not domain:
+        return ""
+    try:
+        brief = users_interface.get_user_brief(user_id)
+    except Exception as exc:  # noqa: BLE001 — карточка не должна ронять ответ
+        fallback("mail.connect_info.user_lookup_failed", "",
+                 reason="не удалось узнать рабочий адрес сотрудника",
+                 exc=exc, user_id=user_id)
+        return ""
+    email = ((brief or {}).get("email") or "").strip().lower()
+    return email if email.endswith(f"@{domain.strip().lower()}") else ""
 
 
 def _current_mailbox(user_id: int):
@@ -379,14 +427,27 @@ def _list_mailboxes(request):
 
 @api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.MailboxCreateRequest, status=201)
 def _create_mailbox(request, data: schemas.MailboxCreateRequest):
+    """Завести ящик — со сверкой «а такого ящика уже нет?».
+
+    ``provision`` вместо ``create``: если ящик с этим адресом уже существует
+    (в платформе или на почтовом сервере) и его есть кому отдать, он
+    подключается к пользователю, а дубль не создаётся. Ответ несёт
+    ``attached`` и ``detail``, чтобы интерфейс не говорил «ящик создан» про
+    ящик, который он не создавал, и ``awaiting_password`` — когда доступ к
+    найденному ящику платформа получить не смогла и его введёт сам сотрудник.
+    """
     try:
-        mb, generated_password = mbx_svc.create(data)
+        result = mbx_svc.provision(data)
     except mbx_svc.MailboxDomainNotConfigured:
         return json_error("MAILCOW_DOMAIN not configured", 500)
     except mbx_svc.MailboxUserConflict as exc:
         return json_error(exc.detail, 409)
+    except mbx_svc.MailboxUserSlotTaken as exc:
+        return json_error(exc.detail, 409)
     except mbx_svc.MailboxAddressTaken as exc:
         return json_error(exc.detail, 409)
+    except mbx_svc.MailboxVerificationFailed as exc:
+        return json_error(exc.detail, 400)
     except mbx_svc.InvalidLocalPart:
         return json_error("Invalid local_part", 400)
     except mbx_svc.RemoteProvisioningFailed as exc:
@@ -396,7 +457,12 @@ def _create_mailbox(request, data: schemas.MailboxCreateRequest):
         if exc.mailbox is not None:
             body["mailbox"] = mbx_svc.serialize(exc.mailbox)
         return JsonResponse(body, status=502)
-    return {**mbx_svc.serialize(mb), "generated_password": generated_password}
+    return {
+        **mbx_svc.serialize(result.mailbox),
+        "generated_password": result.generated_password,
+        "attached": result.attached,
+        "detail": result.detail,
+    }
 
 
 def mailboxes_collection(request):
@@ -499,6 +565,47 @@ def restore_mailbox(request, mailbox_id: int):
 @api_view(methods=("GET",), auth="jwt", admin=True)
 def mailbox_status(request):
     return provisioning.describe()
+
+
+# ── /mailboxes/lookup/ — сверка адреса до нажатия кнопки ──────────────────
+#
+# Отдельная ручка, а не поле в ответе создания: админ должен УВИДЕТЬ, что
+# ящик уже есть, прежде чем что-то произойдёт. Читает те же данные, по
+# которым потом примет решение ``mailbox_service.provision``, поэтому
+# показанный вердикт и фактическое поведение не могут разойтись.
+
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def mailbox_lookup(request):
+    """``?address=`` — готовый адрес, либо поля формы: ``?local_part=``,
+    ``?email=`` (корпоративный email пользователя — он же адрес ящика),
+    ``?first_name=&last_name=``. ``?user_id=`` уточняет, кому предназначен
+    ящик, — без него «занят другим сотрудником» не определить."""
+    raw_user_id = (request.GET.get("user_id") or "").strip()
+    user_id = None
+    if raw_user_id:
+        try:
+            user_id = int(raw_user_id)
+        except ValueError:
+            return json_error("Invalid query parameter: user_id", 422)
+
+    address = (request.GET.get("address") or "").strip()
+    try:
+        if address:
+            found = lookup_service.lookup(address, for_user_id=user_id)
+        else:
+            found = lookup_service.lookup_candidate(
+                local_part=request.GET.get("local_part", ""),
+                email=request.GET.get("email", ""),
+                first_name=request.GET.get("first_name", ""),
+                last_name=request.GET.get("last_name", ""),
+                user_id=user_id,
+            )
+    except mbx_svc.MailboxDomainNotConfigured:
+        return json_error("MAILCOW_DOMAIN not configured", 500)
+    except mbx_svc.InvalidLocalPart:
+        return json_error("Invalid local_part", 400)
+    return found.as_dict()
 
 
 # ── /mailboxes/settings/ — реквизиты почтового сервера из интерфейса ──────

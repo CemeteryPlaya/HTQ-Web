@@ -34,8 +34,10 @@ import logging
 import re
 import secrets
 import string
+from dataclasses import dataclass
 
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone as django_timezone
 
 from apps.mail.models import ProvisionedMailbox
@@ -102,6 +104,33 @@ class MailboxAddressTaken(Exception):
 
     def __init__(self, address: str) -> None:
         self.detail = f"Mailbox {address} already exists"
+        super().__init__(self.detail)
+
+
+class MailboxVerificationFailed(Exception):
+    """400 — сервер не принял пару адрес/пароль при подключении ящика."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+class MailboxUserSlotTaken(Exception):
+    """409 — у пользователя висит УДАЛЁННАЯ строка, а ``user_id`` уникален.
+
+    ``ProvisionedMailbox.user_id`` несёт БЕЗУСЛОВНЫЙ unique — он не исключает
+    строки со ``status="deleted"``, поэтому привязать пользователю другой ящик,
+    пока старая строка не вычищена, физически нельзя. В ``create()`` это
+    исторически вылезает необработанным 500 (задокументировано в
+    ``tests/test_mailboxes_api.py``); на новом пути привязки такой же 500 был
+    бы просто багом, поэтому здесь он назван вслух.
+    """
+
+    def __init__(self, user_id: int, address: str) -> None:
+        self.detail = (
+            f"У пользователя {user_id} осталась удалённая запись ящика "
+            f"{address} — сначала уберите её, затем подключайте новый ящик."
+        )
         super().__init__(self.detail)
 
 
@@ -191,6 +220,51 @@ def generate_password(length: int = 16) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+def corporate_local_part(email: str) -> str:
+    """Часть до ``@``, если адрес — из корпоративного домена, иначе ``""``.
+
+    Проверка домена обязательна: у пользователя платформы в ``email`` вполне
+    может стоять личная почта или адрес другого домена, и делать из неё
+    корпоративный ящик нельзя.
+    """
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return ""
+    local, _, domain = email.partition("@")
+    cfg_domain = (mail_config.get_config().domain or "").strip().lower()
+    return local if cfg_domain and domain == cfg_domain else ""
+
+
+def resolve_local_part(payload) -> str:
+    """Адрес до ``@``, каким его получит ящик, БЕЗ подбора свободного номера.
+
+    Вынесено из ``create()``, чтобы сверка (``provision``) считала ровно тот же
+    адрес, который создание собиралось занять: посчитай она его хоть немного
+    иначе — и проверка «такой ящик уже есть» проверяла бы не тот ящик.
+
+    Порядок источников — от самого явного к догадке:
+
+    1. ``local_part``, введённый руками;
+    2. **корпоративный ``email`` пользователя** — админ, вписавший
+       ``ruslan.amirov@htq.group``, уже НАЗВАЛ адрес, и подставлять вместо
+       него транслитерацию ``r.amirov`` значит завести ящик, не совпадающий
+       с логином сотрудника (а заодно промахнуться мимо сверки: искали бы
+       один адрес, существует другой);
+    3. транслитерация ФИО по настроенному шаблону — когда email не
+       корпоративный или его нет вовсе.
+    """
+    local = (payload.local_part or "").strip().lower()
+    if not local:
+        local = corporate_local_part(getattr(payload, "email", ""))
+    if not local:
+        local = autogen_local_part(payload.first_name, payload.last_name)
+    # Sanitize whatever was passed — Mailcow accepts a-z0-9._-
+    local = re.sub(r"[^a-z0-9._-]+", "", local)
+    if not local:
+        raise InvalidLocalPart
+    return local
+
+
 def _next_unique_local_part(base: str, domain: str) -> str:
     """Return base, base2, base3, … — first one whose address is unused."""
     candidate = base
@@ -201,6 +275,33 @@ def _next_unique_local_part(base: str, domain: str) -> str:
             return candidate
         candidate = f"{base}{n}"
         n += 1
+
+
+def awaits_password(mb: ProvisionedMailbox) -> bool:
+    """Ящик привязан к сотруднику, но читать его нечем — нужен пароль.
+
+    Это НЕ ошибка и не поломка, а честно названный промежуточный этап. Он
+    возникает там, где платформа не может добыть учётку сама:
+
+    * сервер без админ-API (IMAP) — пароль знает только сам сотрудник;
+    * Mailcow отказал в app-password (у API-ключа нет прав, сервер ответил
+      ошибкой) — автоподключение не вышло, остаётся спросить человека.
+
+    Состояние вычисляется, а не хранится: отдельный ``status`` пришлось бы
+    поддерживать в каждом переходе жизненного цикла ящика и он неизбежно
+    разошёлся бы с реальностью. Признак же ровно один — есть ли сохранённый
+    пароль, — и он всегда под рукой.
+
+    Режим ``none`` исключён намеренно: почтового сервера нет вовсе, читать
+    нечего и не откуда, требовать пароль было бы бессмысленной преградой.
+    """
+    from apps.mail.services.provisioning import resolve_provisioner_name
+
+    if mb.user_id is None or mb.status != "active":
+        return False
+    if mb.encrypted_smtp_app_password:
+        return False
+    return resolve_provisioner_name() != "none"
 
 
 def serialize(mb: ProvisionedMailbox) -> dict:
@@ -219,6 +320,9 @@ def serialize(mb: ProvisionedMailbox) -> dict:
         "updated_at": mb.updated_at.isoformat(),
         "archived_at": mb.archived_at.isoformat() if mb.archived_at else None,
         "deleted_at": mb.deleted_at.isoformat() if mb.deleted_at else None,
+        # Подключён, но пароля нет — почта не пойдёт, пока сотрудник его не
+        # введёт. Видно и админу в списке ящиков, и самому сотруднику.
+        "awaiting_password": awaits_password(mb),
     }
 
 
@@ -264,7 +368,7 @@ def stored_password(address: str) -> str | None:
     Нужен проверке подключения: админ, проверяющий существующий ящик, не
     должен вводить пароль заново — платформа его уже хранит.
     """
-    mb = ProvisionedMailbox.objects.filter(address=address).first()
+    mb = ProvisionedMailbox.objects.filter(address__iexact=address).first()
     if mb is None or not mb.encrypted_smtp_app_password:
         return None
     try:
@@ -312,13 +416,7 @@ def create(payload) -> tuple[ProvisionedMailbox, str | None]:
 
     provisioner = get_provisioner()
 
-    local = (payload.local_part or "").strip().lower()
-    if not local:
-        local = autogen_local_part(payload.first_name, payload.last_name)
-    # Sanitize whatever was passed — Mailcow accepts a-z0-9._-
-    local = re.sub(r"[^a-z0-9._-]+", "", local)
-    if not local:
-        raise InvalidLocalPart
+    local = resolve_local_part(payload)
     if getattr(provisioner, "requires_existing_mailbox", False):
         # Адрес обязан совпасть с реальным ящиком на сервере — подставить
         # свободный ``i.ivanov2`` нельзя, это была бы заведомо нерабочая
@@ -361,6 +459,272 @@ def create(payload) -> tuple[ProvisionedMailbox, str | None]:
     _issue_app_password(provisioner, mb, password)
     ensure_account(mb)
     return mb, generated
+
+
+# ── Подключение УЖЕ существующего ящика ──────────────────────────────────
+#
+# Единственная реализация «привязать готовый ящик к пользователю». До неё то
+# же самое было написано трижды и по-разному: сотрудник сам
+# (services/self_service.py), пакетная сверка (reconcile_service._link_orphans)
+# и ручной ввод user_id в форме создания. Расхождения были не косметические —
+# сверка, например, привязывала ящик, но не добывала ему пароль, и
+# «подключён» он оказывался только на бумаге.
+
+
+def attach_existing(
+    *, address: str, user_id: int | None, password: str = "", display_name: str = "",
+    quota_mb: int = 0, verify: bool = True,
+) -> ProvisionedMailbox:
+    """Подключить УЖЕ существующий ящик к пользователю платформы.
+
+    Ящик НЕ создаётся на почтовом сервере — предполагается, что он там уже
+    есть (это и выясняет сверка, ``lookup_service``). Функция приводит в
+    порядок локальную сторону: строку ``ProvisionedMailbox`` (создаёт или
+    переиспользует), сохранённый пароль и ``EmailAccount``, без которого ящик
+    не виден ни в разделе «Почта», ни синхронизации, ни отправке.
+
+    ``verify=True`` при непустом пароле → пара проверяется живым логином ДО
+    записи: нерабочая привязка хуже её отсутствия, потому что снаружи
+    выглядит рабочей. ``verify=False`` — для вызывающих, которые проверили
+    сами (``self_service``) или которым проверять нечем (пакетная сверка).
+    """
+    address = (address or "").strip().lower()
+    local_part, _, addr_domain = address.partition("@")
+    cfg = mail_config.get_config()
+
+    # ``iexact``, а не точное совпадение: почтовый сервер вправе писать адрес
+    # с заглавными (``Petrov@htq.group``), для почты это тот же ящик. Ищи мы
+    # побуквенно — рядом со строкой сервера завелась бы её копия в нижнем
+    # регистре, и владельца получила бы копия. Найденной строке её написание
+    # оставляем как есть: переименовывать ящик сверка не уполномочена.
+    existing = ProvisionedMailbox.objects.filter(address__iexact=address).first()
+    if (
+        existing is not None
+        and user_id is not None
+        and existing.user_id is not None
+        and existing.user_id != user_id
+    ):
+        raise MailboxAddressTaken(address)
+
+    # user_id уникален безусловно — занятый слот должен стать внятным 409, а
+    # не IntegrityError из середины транзакции.
+    if user_id is not None:
+        blocking = ProvisionedMailbox.objects.filter(user_id=user_id)
+        blocking = (blocking.exclude(pk=existing.pk) if existing is not None
+                    else blocking.exclude(address__iexact=address))
+        blocking = blocking.first()
+        if blocking is not None:
+            if blocking.status == "deleted":
+                raise MailboxUserSlotTaken(user_id, blocking.address)
+            raise MailboxUserConflict(user_id, blocking.address)
+
+    if verify and password:
+        ok, error = get_provisioner().verify(address=address, password=password)
+        if not ok:
+            raise MailboxVerificationFailed(
+                f"Почтовый сервер не принял эту пару адрес/пароль: {error}"
+            )
+
+    with transaction.atomic():
+        if existing is None:
+            existing = ProvisionedMailbox.objects.create(
+                user_id=user_id,
+                local_part=local_part,
+                domain=addr_domain or cfg.domain,
+                address=address,
+                status="active",
+                quota_mb=quota_mb or cfg.mailcow_default_quota_mb,
+                display_name=display_name or None,
+            )
+        else:
+            fields = []
+            if user_id is not None and existing.user_id != user_id:
+                existing.user_id = user_id
+                fields.append("user_id")
+            if existing.status != "active":
+                existing.status, existing.archived_at = "active", None
+                fields += ["status", "archived_at"]
+            if display_name and existing.display_name != display_name:
+                existing.display_name = display_name
+                fields.append("display_name")
+            if quota_mb and existing.quota_mb != quota_mb:
+                existing.quota_mb = quota_mb
+                fields.append("quota_mb")
+            if existing.last_error:
+                existing.last_error = None
+                fields.append("last_error")
+            if fields:
+                existing.save(update_fields=[*fields, "updated_at"])
+
+        store_password(existing, password)
+        ensure_account(existing)
+
+    log.info("mailbox_attached address=%s user_id=%s", address, user_id)
+    return existing
+
+
+def ensure_credentials(mb: ProvisionedMailbox) -> bool:
+    """Добыть подключённому ящику рабочий пароль там, где сервер это умеет.
+
+    Ради этого «подключение» и имеет смысл: без сохранённого пароля и
+    синхронизация писем, и отправка молча простаивают — обе берут учётку из
+    ``encrypted_smtp_app_password``.
+
+    У Mailcow есть отдельные app-password'ы, поэтому платформа выпускает СВОЙ
+    и не трогает интерактивный пароль сотрудника: его почтовый клиент и
+    телефон продолжают работать как работали. У остальных серверов взять
+    пароль неоткуда — возвращается ``False``, и что с этим делать, решает
+    вызывающий.
+    """
+    if stored_password(mb.address):
+        return True
+    _issue_app_password(get_provisioner(), mb, "")
+    return bool(stored_password(mb.address))
+
+
+def attach_by_email(*, user_id: int, email: str) -> ProvisionedMailbox | None:
+    """Подключить пользователю ящик, совпадающий с его корпоративным email.
+
+    Ядро сценария «ящик уже есть — подключить его сам». Ничего НЕ создаёт:
+    нет ящика — нет и действия. Возвращает ``None``, когда подключать нечего
+    (почта не корпоративная, ящика нет, занят другим сотрудником).
+
+    Найденный ящик привязывается ДАЖЕ ЕСЛИ пароль добыть не удалось — он
+    останется ``awaits_password``, и пароль введёт сам сотрудник. Отказаться
+    из-за этого от привязки было бы хуже: сотрудник просто не узнал бы, что
+    его ящик найден.
+
+    Общее для двух входов — автоматического (``interface`` при создании
+    пользователя) и ручного (сотрудник нажал «Подключить» у себя в
+    настройках). Разъедься они, «подключить» означало бы разное в
+    зависимости от того, кто нажал.
+    """
+    from apps.mail.services import lookup_service
+
+    if not corporate_local_part(email):
+        return None
+
+    found = lookup_service.lookup_candidate(email=email, user_id=user_id)
+    if not found.exists or not found.can_attach:
+        return None
+
+    mb = attach_existing(address=found.address, user_id=user_id)
+    ensure_credentials(mb)
+    return mb
+
+
+def kick_sync(mb: ProvisionedMailbox) -> bool:
+    """Забрать письма прямо сейчас, не дожидаясь периодического опроса.
+
+    Ради этого «подключение» и выглядит как подключение: без немедленной
+    синхронизации сотрудник видит пустой ящик до минуты и решает, что ничего
+    не сработало. Лучший из возможных результат — а не обязательный: письма
+    всё равно приедут опросом (``imap_poll_fallback``), поэтому недоступный
+    брокер не повод считать подключение неудавшимся.
+    """
+    from apps.mail.models import EmailAccount
+
+    if not mb.encrypted_smtp_app_password:
+        return False  # читать нечем — синхронизировать нечего
+    account = EmailAccount.objects.filter(
+        user_id=mb.user_id, mailbox_id=mb.id, is_active=True,
+    ).first()
+    if account is None:
+        return False
+    try:
+        from apps.mail.tasks import incremental_sync_account
+
+        incremental_sync_account.delay(account.id)
+    except Exception as exc:  # noqa: BLE001 — брокер недоступен
+        log.warning("kick_sync_enqueue_failed account=%s: %s", account.id, exc)
+        return False
+    return True
+
+
+# ── Заведение ящика со сверкой ───────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ProvisionResult:
+    """Что именно произошло по кнопке «Создать ящик».
+
+    ``attached=True`` означает «ящик уже был, мы его подключили» — интерфейс
+    обязан сказать это вслух, иначе админ решит, что завёл новый, и пойдёт
+    искать его на почтовом сервере.
+    """
+
+    mailbox: ProvisionedMailbox
+    generated_password: str | None
+    attached: bool
+    detail: str | None = None
+    #: подключён, но ждёт пароль от сотрудника (см. awaits_password)
+    awaiting_password: bool = False
+
+
+def provision(payload) -> ProvisionResult:
+    """Завести ящик — но сначала свериться, нет ли такого ящика уже.
+
+    Точка входа для формы «Создать ящик» и для галки «создать ящик» при
+    создании пользователя. ``create()`` под ней осталась нетронутой: она
+    по-прежнему означает ровно «завести НОВЫЙ ящик», вся новая логика — здесь,
+    поверх.
+
+    Существующий ящик подключается, только когда есть КОМУ подключать
+    (``user_id``): без владельца «подключение» неотличимо от бездействия, а
+    тихо переиспользовать чужую строку опаснее, чем создать ``i.ivanov2``, —
+    два однофамильца не должны получить один ящик на двоих. Исключение —
+    ящик, найденный ТОЛЬКО на почтовом сервере: там альтернатива подключению
+    не ``i.ivanov2``, а отказ mailcow на ``/add/mailbox`` (502), поэтому его
+    импортируем и без владельца.
+    """
+    from apps.mail.services import lookup_service
+
+    cfg = mail_config.get_config()
+    if not cfg.domain:
+        raise MailboxDomainNotConfigured
+
+    if payload.user_id is not None:
+        owned = get_by_user_id(payload.user_id)
+        if owned is not None and owned.status != "deleted":
+            raise MailboxUserConflict(payload.user_id, owned.address)
+
+    if not getattr(payload, "attach_if_exists", True):
+        mb, generated = create(payload)
+        return ProvisionResult(mb, generated, attached=False)
+
+    address = f"{resolve_local_part(payload)}@{cfg.domain}"
+    found = lookup_service.lookup(address, for_user_id=payload.user_id)
+    attachable = found.can_attach and (payload.user_id is not None or found.source == "remote")
+
+    if not attachable:
+        # Ящика нет, он принадлежит другому сотруднику, или подключать его
+        # некому — во всех трёх случаях поведение прежнее: create() либо
+        # заведёт новый (подобрав свободный адрес), либо честно вернёт 409.
+        mb, generated = create(payload)
+        return ProvisionResult(mb, generated, attached=False)
+
+    password = (getattr(payload, "password", "") or "").strip()
+    full_name = payload.full_name or f"{payload.first_name} {payload.last_name}".strip()
+    mb = attach_existing(
+        address=address,
+        user_id=payload.user_id,
+        password=password,
+        display_name=full_name,
+        quota_mb=payload.quota_mb or 0,
+    )
+    detail = found.detail
+    if not ensure_credentials(mb):
+        # Автоматом не вышло — значит спрашиваем человека. Ящик привязан и
+        # виден сотруднику, но письма пойдут только после того, как он введёт
+        # пароль (карточка в профиле, раздел «Почта», баннер после входа).
+        log.info("attached_mailbox_awaiting_password address=%s", address)
+        detail = (
+            f"{found.detail} Платформа не смогла получить доступ к ящику сама — "
+            f"сотрудник введёт пароль у себя в профиле."
+        )
+    return ProvisionResult(
+        mb, None, attached=True, detail=detail, awaiting_password=awaits_password(mb),
+    )
 
 
 def account_provider() -> str:

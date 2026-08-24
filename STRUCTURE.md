@@ -28,7 +28,8 @@ HTQWeb1/
 ├── frontend/             # React + Vite SPA (см. §4) — без изменений
 ├── backend/               # ⭐ ЕДИНЫЙ Django-backend (см. §3)
 │   ├── htqweb/            # Проектный пакет: settings/, urls.py, asgi.py/wsgi.py,
-│   │                       #   authn/ (JWT), http.py (api_view), middleware/, storage/
+│   │                       #   authn/ (JWT), http.py (api_view), middleware/, storage/,
+│   │                       #   fallback.py (громкие подмены, см. §8)
 │   ├── apps/               # Доменные Django-аппки — units изоляции (см. §3.1)
 │   ├── manage.py   requirements.txt   pytest.ini   conftest.py
 │   ├── Dockerfile   docker-entrypoint.sh
@@ -76,8 +77,9 @@ HTQWeb1/
 | **messenger** | `api/messenger/v1/` | `messenger` | Чат, Socket.IO (ASGI), presence, E2EE-ключи |
 | **contracts** | `api/contracts/v1/` | `contracts` | Бюджеты (программа × статья расходов × администратор), реестр контрагентов, договоры с контролем остатка бюджета (см. §3.5). Единственная аппка, появившаяся уже после обратной миграции — FastAPI-предка у неё нет |
 | **signoff** | `api/signoff/v1/` | `signoff` | ⭐ Универсальное многоэтапное согласование ЧУЖИХ объектов (см. §3.6). **Не путать с `approvals`**: та согласует собственные `RequestInstance` из своего конструктора форм, эта — строки в таблицах предметных аппок |
+| **conference** | `api/conference/v1/` | `conference` | ⭐ История видеоконференций, записи и протокол (см. §5). Данные заводит SFU через `internal/*`, а не пользователь |
 
-Полный список канонических имён сервисов — `apps.core.models.KNOWN_SERVICES` (включает ещё `conference`, зарезервированное под SFU-стек, у которого нет своей Django-аппки).
+Полный список канонических имён сервисов — `apps.core.models.KNOWN_SERVICES`. Имя `conference` долго стояло там «про запас», под SFU-стек без своей Django-аппки; теперь аппка есть (`apps.conference`, §5), и флаг гейтит уже её маршруты.
 
 ### 3.2 Анатомия одной Django-аппки
 
@@ -342,11 +344,12 @@ PATCH  /api/tasks/v1/tasks/{id}/progress/      body: {percent}
 Проект (Project)
 └── Площадка (Site, через ProjectSite M2M)
     └── Блок (SiteBlock) ── плановые объёмы (SiteBlockVolume): «250 валов на блок 1»
+        │                   факт по ЛЮДЯМ: ProjectStaffReport (численность за день)
         └── Роудмап (Roadmap) ── план: сроки + ResourceRequirement
             └── Задача (Task) ── план: TaskVolume; факт: DailyReport
                 └── Подзадача (Task.parent)
 
-Субподряд (Contractor) навешивается на проект / площадку / роудмап / задачу
+Партнёр (Contractor) навешивается на проект / площадку / роудмап / задачу
 и НАСЛЕДУЕТСЯ вниз (contractor_service.effective_contractors)
 ```
 ```
@@ -358,6 +361,11 @@ SiteBlock(id, site_id, name, code, order, status=planned|active|suspended|done, 
 DailyReport(id, task_id, volume_type_id, author_id, work_date, quantity,
             headcount, comment, current_revision, is_deleted)
 DailyReportRevision(id, report_id, revision_no, <снимок полей>, edited_by_id, edited_at)
+ProjectStaffReport(id, project_id, site_block_id, author_id, work_date,
+                   comment, current_revision, is_deleted)   # численность по блоку
+ProjectStaffReportLine(id, report_id, work_role_id, headcount)  # «монтажник — 12»
+ProjectStaffReportRevision(id, report_id, revision_no, work_date, comment,
+                           total_headcount, lines(JSON), edited_by_id, edited_at)
 Task.project_id    → Project(id)   ON DELETE SET NULL   # NULL = standalone
 Task.roadmap_id    → Roadmap(id)   ON DELETE SET NULL   # ЗАДАЁТ проект, площадку и блок задачи
 Task.site_block_id → SiteBlock(id) ON DELETE SET NULL
@@ -386,6 +394,9 @@ GET/POST …/sites/{id}/blocks   •   GET/PATCH/DELETE …/blocks/{id}   •   
 GET …/blocks/{id}/progress     •   GET/PUT …/tasks/{id}/volumes          # объёмы = ПЛАН
 GET/POST …/tasks/{id}/daily-reports  •  GET/PATCH/DELETE …/daily-reports/{id}   # факт
 GET …/daily-reports/{id}/revisions   •  GET …/roadmaps/{id}/daily-reports
+GET …/staff-reports/projects  •  GET …/projects/{id}/staff-board[?date=]   # ЧИСЛЕННОСТЬ
+GET/POST …/projects/{id}/staff-reports  •  GET/PATCH/DELETE …/staff-reports/{id}
+GET …/staff-reports/{id}/revisions
 GET /api/tasks/v1/plan-fact/{project,roadmap}/{id}[?date=]   # SPI, прогноз, отставание, S-кривая
 GET /api/tasks/v1/equipment-usage?…                          # что занято на дату D + история
 GET/POST/PATCH/DELETE /api/tasks/v1/resource-requirements/[{id}/]   # план количеством
@@ -393,7 +404,7 @@ GET/POST/DELETE       /api/tasks/v1/assignments/[{id}]              # факт �
 GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,volume-types}/[{id}/]
 ```
 
-**Сервисы** ([apps/tasks/services/](backend/apps/tasks/services/)): `task_service.py`, `task_content_service.py`, `task_response.py`, `project_service.py`, `roadmap_service.py` (план/факт пакета), `block_service.py` (блоки + прогресс по штукам), `daily_report_service.py` (факт + ревизии), `plan_fact_service.py` (SPI, прогноз, каскад, S-кривая), `resource_service.py` (потребности и назначения), `equipment_usage_service.py` (техника на дату D), `contractor_service.py` (в т.ч. наследование подрядчика), `site_service.py`, `sequence_service.py` (Jira-style ключи), `calendar_service.py` (в т.ч. рабочие/календарные дни), `production_calendar.py` (казахстанские праздники), `gantt_service.py`, `link_service.py`, `notification_service.py`, `reference_service.py`, `hydration.py`.
+**Сервисы** ([apps/tasks/services/](backend/apps/tasks/services/)): `task_service.py`, `task_content_service.py`, `task_response.py`, `project_service.py`, `roadmap_service.py` (план/факт пакета), `block_service.py` (блоки + прогресс по штукам), `daily_report_service.py` (факт + ревизии), `staff_report_service.py` (численность персонала по блокам: факт + ревизии со снимком строк, свёртки плана и сверка с `DailyReport.headcount`), `plan_fact_service.py` (SPI, прогноз, каскад, S-кривая), `resource_service.py` (потребности и назначения), `equipment_usage_service.py` (техника на дату D), `contractor_service.py` (в т.ч. наследование партнёра), `site_service.py`, `sequence_service.py` (Jira-style ключи), `calendar_service.py` (в т.ч. рабочие/календарные дни), `production_calendar.py` (казахстанские праздники), `gantt_service.py`, `link_service.py`, `notification_service.py`, `reference_service.py`, `hydration.py`.
 
 Вторая очередь сверялась со спецификацией модуля (`docs/SPEC-projects-module.md`, в репозитории её больше нет). Расхождения с ней были намеренными и сохраняются в коде: `Subcontractor`, `ProjectObject` и `EquipmentEngagement` из её §3.1 НЕ заводились — их роль играют уже существующие `Contractor`, `Site`+`SiteBlock` и `ResourceRequirement(kind=equipment)`. Ссылки вида «SPEC §N» в докстрингах указывают на тот же документ и остаются как объяснение, откуда взято решение.
 
@@ -411,6 +422,11 @@ GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,
 | **UI** | [frontend/src/pages/ConferencePage.tsx](./frontend/src/pages/ConferencePage.tsx) | Страница конференции. |
 | **Конфиг конференции** | `apps.cms.services.conference_service` ([backend/apps/cms/services/conference_service.py](backend/apps/cms/services/conference_service.py)), `GET /api/cms/v1/conference/config` | ICE/SFU-конфиг из `htqweb/settings/base.py` (`CONFERENCE_SFU_URL`/`_PATH`/`ICE_SERVERS` + `CONFERENCE_WT_*`) — порт `services/cms/app/data/conference.yaml`. `CONFERENCE_SFU_URL` пуст по умолчанию: фронт берёт сигналинг с того же origin (`/ws/sfu/`). Плюс `enabled` (сервис `conference` в реестре — включён миграцией `core/0003_enable_conference`) и адрес QUIC-моста с отпечатками его сертификата. |
 | **Аутентификация сигналинга** | [sfu/src/auth.ts](./sfu/src/auth.ts) | Проверка платформенного JWT (HS256, тот же `JWT_SECRET`, что у Django) на WS-upgrade: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=`. Без токена — 401. Выключается только `SIGNALING_REQUIRE_AUTH=false`. |
+| **Запись, история, протокол** | [apps/conference/](backend/apps/conference/), `/api/conference/v1/*` | ⭐ Аппка появилась под задачу «история + запись + протокол» (имя `conference` было зарезервировано в `KNOWN_SERVICES` под SFU-стек — теперь у него есть своя Django-аппка, и `ServiceGateMiddleware` гейтит её собственным флагом). Модели: `ConferenceSession` (кто собрал, когда, сколько длилась), `ConferenceParticipant`, `ConferenceRecording`, `ConferenceTranscriptSegment`, `ConferenceEvent`. Приглашения (`ConferenceInvite`) остались в `cms` — название встречи аппка берёт через `apps.cms.interface.get_conference_room_title`. |
+| **Захват записи** | [sfu/src/recording.ts](./sfu/src/recording.ts), [sfu/src/recording-api.ts](./sfu/src/recording-api.ts) | Запись **поучастниковая**: на каждый producer вешается `PlainTransport`, RTP уходит на localhost, ffmpeg ремуксит его в `.mkv` (`-c copy` — без перекодирования, CPU почти не тратится). `.mkv`, а не `.webm`, потому что комната поддерживает и H264, а webm его при `-c copy` не примет. Факты о встрече уходят в Django по `/api/conference/v1/internal/*` (общий секрет `CONFERENCE_INTERNAL_TOKEN`, не JWT — у SFU нет пользователя). Связь необязательная: недоступный Django не ломает звонок, деградация через `sfu/src/fallback.ts`. |
+| **Сборка и расшифровка** | [apps/conference/tasks.py](backend/apps/conference/tasks.py), `services/compose_service.py`, `services/transcript_service.py` | Отдельный контейнер `backend-media-worker` (образ `backend/Dockerfile.media` с ffmpeg и faster-whisper), очередь `conference_media` (`CELERY_TASK_ROUTES`). Сводит дорожки в одно mp4 (`xstack` сеткой, до `CONFERENCE_MAX_TILES` плиток, `amix` для звука) и распознаёт речь. **Диаризации нет и не нужно:** аудио каждого лежит отдельным файлом, поэтому «кто говорит» известно из того, чей это файл. |
+| **Ретенция** | `apps.conference.tasks.purge_expired`, миграция `conference/0002_conference_periodic_tasks` | Через `CONFERENCE_RETENTION_DAYS` (25) медиа удаляется из хранилища безвозвратно, состояние встречи → `purged`. История и текстовый протокол остаются навсегда. Отдельное состояние, а не удалённая строка, чтобы интерфейс отличал «не писали» от «записали и вычистили по сроку». |
+| **UI истории** | [frontend/src/pages/conference/](./frontend/src/pages/conference/) | `/conference/history` — список, `/conference/history/:sessionId` — карточка: плеер + протокол с кликабельными тайм-кодами. Видео играет по **подписанной** ссылке (`?sig=&exp=`, `services/signing.py`): `<video>` не отправляет `Authorization`, а скачивание blob'ом убило бы Range, то есть перемотку. |
 
 Открыть стенд наружу (Cloudflare для сигналинга + bore для медиа): [docs/TUNNEL_SETUP.md](./docs/TUNNEL_SETUP.md), оркестратор — [scripts/start-public-test.ps1](./scripts/start-public-test.ps1). Старый [scripts/start-sfu-tunnel.ps1](./scripts/start-sfu-tunnel.ps1) остался для SFU, запущенного на хосте без Docker.
 
@@ -473,7 +489,15 @@ URL-флоу приватных файлов: API возвращает стаб�
 | Конфиги стека логов/метрик | [infra/logging/](./infra/logging/) (Prometheus, Loki, Promtail, Grafana) |
 | Health checks | `GET /health/`, `/health/ready/`, `GET /api/core/v1/services/` (реестр отключаемости) — [apps/core/views.py](backend/apps/core/views.py) |
 | Request tracing | `X-Request-ID` через `htqweb/middleware/request_id.py` |
-| Метрики backend'а | ⚠️ Пока НЕТ: `/metrics` не выставлен (старая `libs/htqweb_metrics` снесена вместе с FastAPI; `django-prometheus` не установлен — задача закомментирована в `infra/logging/prometheus/prometheus.yml`). Prometheus сейчас скрейпит только себя + postgres/redis-exporter + MinIO + Loki + Grafana. |
+| Метрики backend'а | `GET /metrics` на `backend-web` и `backend-asgi` — [apps/core/views.py](backend/apps/core/views.py)`::metrics`, `django-prometheus`. ⚠️ `backend-web` = `gunicorn --workers 4`, поэтому мультипроцессный режим: `PROMETHEUS_MULTIPROC_DIR` + [htqweb/gunicorn_conf.py](backend/htqweb/gunicorn_conf.py) |
+| Метрики Celery | `/metrics` самого Flower (нужен `-E` у воркера); длина очереди — от redis-exporter (`REDIS_EXPORTER_CHECK_KEYS=9=celery`) |
+| Метрики хоста и контейнеров | `node-exporter` + `cadvisor` (диск, память, OOM, рестарты) |
+| Метрики шлюза и SFU | nginx `stub_status` → `nginx-exporter` (профиль `production`); SFU — [sfu/src/metrics.ts](sfu/src/metrics.ts) |
+| Бизнес-метрики | `apps/<домен>/metrics.py` (свои модели) + автодискавери в [apps/core/metrics.py](backend/apps/core/metrics.py); считает Celery-beat раз в 60 с в кэш, префикс `htqweb_*` |
+| Подмены значений (fallback) | Один примитив на три рантайма: [htqweb/fallback.py](backend/htqweb/fallback.py), [frontend/src/lib/fallback.ts](frontend/src/lib/fallback.ts), [sfu/src/fallback.ts](sfu/src/fallback.ts). На проде и стейдже — строка `FALLBACK …` + `htqweb_fallback_total`/`sfu_fallback_total`, пользователю не видно; у разработчика (`HTQ_ENV=development`) подмен нет вовсе — летит исключение. Среды разводит `HTQ_ENV`/`VITE_HTQ_ENV`, точечно — `FALLBACK_MODE`. Правила и список того, что через примитив НЕ проходит, — в CLAUDE.md §«Среды и политика fallback'ов» |
+| Тестовая среда (staging) | [docker-compose.staging.yml](./docker-compose.staging.yml) — прод-настройки и прод-поведение, отличается только меткой среды (`HTQ_ENV=staging`, `SERVICE_ENV`, `PROMETHEUS_ENV`), исходники не смонтированы |
+| Всего джобов Prometheus | **13** ([prometheus.yml](infra/logging/prometheus/prometheus.yml)); хранение 30 дней **или** 10 ГБ |
+| Доступ | Наружу только Grafana (`/grafana/`, JWT SSO). Prometheus/Loki/Flower/экспортеры портов в проде НЕ публикуют — их `ports:` вынесены в `docker-compose.dev.yml` |
 | Аудиты/анализы | [docs/audit-2026-04-28/](./docs/audit-2026-04-28/), [docs/static-analysis-2026-04-28.md](./docs/static-analysis-2026-04-28.md), [docs/dependency-audit-2026-04-28.md](./docs/dependency-audit-2026-04-28.md) — из FastAPI-эпохи, не обновлялись под Django |
 | План/журнал миграции | [PLAN.md](./PLAN.md) — теперь это журнал ЗАВЕРШЁННОЙ миграции, не план на будущее |
 
@@ -515,7 +539,8 @@ URL-флоу приватных файлов: API возвращает стаб�
 - **JWT issuer — `htqweb-auth`**, как и раньше (не `users`, не `django`). `apps.users` выпускает и валидирует сам, без отдельного identity-сервиса.
 - **Три compose-файла не наследуют друг друга.** Привычка `-f docker-compose.yml -f <оверлей>` больше не работает: каждый файл самодостаточен и запускается одиночным `-f`. Обратная сторона — общие сервисы продублированы трижды, и правку надо разносить руками (`git diff docker-compose*.yml`). `docker-compose.test-local.yml` жёстко пинит `DB_HOST: db`, `test-env` берёт БД из `.env` и по умолчанию НЕ мигрирует её.
 - **`docs/architecture.md` не в ногу с реальным деревом** — упоминает DRF ViewSets и `backend/tasks/viewsets/`, чего в репозитории нет (реальность: `htqweb.http.api_view`, `backend/apps/tasks/`). Похоже на неадаптированный шаблон; не источник истины по структуре, см. §1/CLAUDE.md.
-- **`scripts/generate-monitoring-traffic.sh`** всё ещё бьёт по старым портам микросервисов (`:8005`–`:8012`) — не работает против текущего `backend-web:8000`/`backend-asgi:8001` без переписывания.
+- **`scripts/generate-monitoring-traffic.sh`** бьёт по текущему `backend-web` (порт задаётся 4-м аргументом, по умолчанию `:8000`; `80` — через nginx). Часть ручек в списке намеренно отдаёт 404/401 — они питают панели ошибок.
 - **`apps.media_files` — общая точка отказа для файлов** трёх доменов (hr/mail/messenger) плюс аватарок users. Если он выключен через `ServiceStatus` (`manage.py service media --off`), у соседей это всплывёт как `ServiceDisabled`/503, а не как их собственная ошибка — смотреть на `service` в JSON-конверте, прежде чем искать баг в вызывающей аппке.
 - **Изоляция аппок — всё ещё исполняемое правило, не конвенция на доверии.** `apps/core/tests/test_app_isolation.py` гоняется в обычном test run'е (`pytest`, `cd backend`) — а не отдельным линтом, который можно забыть запустить.
-- **Метрик backend'а нет.** Не искать `/metrics` на `backend-web`/`backend-asgi` — не выставлен (см. §8). Дашборды Grafana, которые ссылаются на метрики Django-процесса, будут пустыми до тех пор, пока не поставят `django-prometheus`.
+- **`/metrics` — вне `/api/` намеренно.** Лежит в корне рядом с `/health/`, потому что `ServiceGateMiddleware` гейтит только `/api/<домен>/` и `/ws/`: выключенный через `ServiceStatus` домен не должен уносить с собой наблюдаемость всего процесса (проверяется тестом в `apps/core/tests/test_metrics.py`).
+- **Пустые бизнес-панели ≠ нули.** `apps/core/metrics.py` при пустом кэше не экспортирует метрику вовсе, а не отдаёт 0: «сборщик (Celery-beat) умер» и «задач ноль» обязаны выглядеть по-разному.

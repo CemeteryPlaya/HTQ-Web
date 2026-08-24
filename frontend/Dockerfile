@@ -27,6 +27,14 @@ ENV VITE_SFU_URL=$VITE_SFU_URL
 ARG VITE_WEBTRANSPORT_URL=
 ENV VITE_WEBTRANSPORT_URL=$VITE_WEBTRANSPORT_URL
 
+# Среда и политика подмен (src/lib/fallback.ts). Значение вшивается в бандл на
+# сборке — Vite подставляет import.meta.env.* статически, менять его в рантайме
+# нечем. Поэтому staging-сборка отличается от прод-сборки ровно этим аргументом.
+ARG VITE_HTQ_ENV=production
+ENV VITE_HTQ_ENV=$VITE_HTQ_ENV
+ARG VITE_FALLBACK_MODE=
+ENV VITE_FALLBACK_MODE=$VITE_FALLBACK_MODE
+
 RUN npm run build
 
 # ── Second stage: just holds the built dist files ──

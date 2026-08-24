@@ -15,6 +15,7 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { toast } from 'sonner';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   value: number[];
@@ -31,6 +32,7 @@ function slugify(name: string): string {
 }
 
 export function TagsMultiSelect({ value, onChange }: Props) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -55,9 +57,9 @@ export function TagsMultiSelect({ value, onChange }: Props) {
       qc.setQueryData<TagRef[]>(['cms', 'tags'], (prev) => [...(prev ?? []), tag]);
       onChange([...value, tag.id]);
       setSearch('');
-      toast.success(`Создан тег #${tag.name}`);
+      toast.success(t('news.tags.created', { name: tag.name }));
     },
-    onError: (err: any) => toast.error(err?.response?.data?.detail || 'Не удалось создать тег'),
+    onError: (err: any) => toast.error(err?.response?.data?.detail || t('news.tags.createError')),
   });
 
   const selected = tags.filter((t) => value.includes(t.id));
@@ -70,7 +72,7 @@ export function TagsMultiSelect({ value, onChange }: Props) {
     <div className="grid gap-2">
       <div className="flex flex-wrap gap-1.5">
         {selected.length === 0 && (
-          <span className="text-xs text-muted-foreground">Теги не выбраны</span>
+          <span className="text-xs text-muted-foreground">{t('news.tags.none')}</span>
         )}
         {selected.map((tag) => (
           <Badge key={tag.id} variant="secondary" className="gap-1 pr-1">
@@ -79,17 +81,23 @@ export function TagsMultiSelect({ value, onChange }: Props) {
               type="button"
               onClick={() => toggle(tag.id)}
               className="ml-0.5 rounded-full p-0.5 hover:bg-muted-foreground/20"
-              aria-label={`Убрать тег ${tag.name}`}
+              aria-label={t('news.tags.remove', { name: tag.name })}
             >
               <X className="h-3 w-3" />
             </button>
           </Badge>
         ))}
       </div>
-      <Popover open={open} onOpenChange={setOpen}>
+      {/* modal обязателен: этот выбор используется внутри диалога, а тот на
+    время открытия блокирует прокрутку документа и пропускает события
+    только внутри своего поддерева. Содержимое поповера рендерится
+    порталом в body, то есть снаружи, — и список тегов новости переставал
+    прокручиваться колесом, оставаясь прокручиваемым технически.
+    С modal поповер ставит собственную блокировку. */}
+      <Popover modal open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button type="button" variant="outline" size="sm" className="w-fit">
-            <Plus className="mr-1 h-3.5 w-3.5" /> Добавить тег
+            <Plus className="mr-1 h-3.5 w-3.5" /> {t('news.tags.add')}
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-72 p-0" align="start">
@@ -97,11 +105,11 @@ export function TagsMultiSelect({ value, onChange }: Props) {
             <CommandInput
               value={search}
               onValueChange={setSearch}
-              placeholder="Поиск или новое имя…"
+              placeholder={t('news.tags.searchPlaceholder')}
             />
             <CommandList>
               <CommandEmpty>
-                {search.trim() ? 'Ничего не найдено' : 'Начните вводить'}
+                {search.trim() ? t('common.nothingFound') : t('news.tags.startTyping')}
               </CommandEmpty>
               <CommandGroup>
                 {tags.map((tag) => {
@@ -120,7 +128,7 @@ export function TagsMultiSelect({ value, onChange }: Props) {
                     value={`__create__${search}`}
                     onSelect={() => createTag.mutate(search.trim())}
                   >
-                    <Plus className="mr-2 h-4 w-4" /> Создать «{search.trim()}»
+                    <Plus className="mr-2 h-4 w-4" /> {t('news.tags.createNamed', { name: search.trim() })}
                   </CommandItem>
                 )}
               </CommandGroup>

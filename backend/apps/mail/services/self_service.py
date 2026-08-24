@@ -9,7 +9,10 @@
 непривилегированный пользователь заводит строки. Ограничения:
 
 * режим должен быть включён админом (``allow_self_service``) — по умолчанию
-  выключен;
+  выключен. ЕДИНСТВЕННОЕ исключение: ящик уже назначен этому сотруднику
+  платформой и помечен «ждёт пароль» (``mailbox_service.awaits_password``) —
+  тогда ввод пароля разрешён всегда, иначе получилось бы «ящик ваш, но
+  пользоваться им нельзя»;
 * домен адреса обязан совпадать с корпоративным: подключить ``@gmail.com``
   под видом корпоративного ящика нельзя (для личной почты есть OAuth);
 * если ящик уже привязан к ДРУГОМУ пользователю — отказ. Иначе знание пароля
@@ -21,8 +24,6 @@
 from __future__ import annotations
 
 import logging
-
-from django.db import transaction
 
 from apps.mail.models import ProvisionedMailbox
 from apps.mail.services import mailbox_service as mbx_svc
@@ -67,17 +68,37 @@ def connect_own_mailbox(*, user_id: int, address: str, password: str) -> dict:
     затем пользуются синхронизация писем и отправка.
     """
     cfg = get_config()
-    if not cfg.allow_self_service:
-        raise SelfServiceDisabled
 
     address = (address or "").strip().lower()
     domain = (address.rsplit("@", 1)[-1] if "@" in address else "")
     if not cfg.domain or domain != cfg.domain.lower():
         raise WrongDomain(cfg.domain or "?")
 
-    existing = ProvisionedMailbox.objects.filter(address=address).first()
+    existing = ProvisionedMailbox.objects.filter(address__iexact=address).first()
     if existing is not None and existing.user_id not in (None, user_id):
         raise MailboxTakenByAnotherUser
+
+    # ``allow_self_service`` защищает от ОДНОГО: сотрудник подключает ЧУЖОЙ
+    # ящик. Два случая этим риском не обладают и потому разрешены всегда:
+    #
+    #  * ящик уже назначен ему платформой и без пароля не работает — запрет
+    #    означал бы «ящик ваш, но пользоваться им нельзя»;
+    #  * адрес совпадает с его собственным email на платформе — этот адрес за
+    #    ним закрепил админ, выдать себя за другого тут нечем.
+    #
+    # Пароль в обоих случаях всё равно обязателен и проверяется живым входом
+    # ниже: он и есть доказательство владения. Знание адреса доказательством
+    # не является — адреса сотрудников известны всем, кто получал от них
+    # письма, и подключение «по адресу» было бы подделкой на ровном месте.
+    finishing_pending = (
+        existing is not None
+        and existing.user_id == user_id
+        and mbx_svc.awaits_password(existing)
+    )
+    if not cfg.allow_self_service and not finishing_pending and not _is_own_address(
+        user_id, address,
+    ):
+        raise SelfServiceDisabled
 
     # Проверяем ДО записи: нерабочая привязка хуже её отсутствия — она молча
     # ломает и синхронизацию, и отправку.
@@ -87,36 +108,38 @@ def connect_own_mailbox(*, user_id: int, address: str, password: str) -> dict:
             f"Почтовый сервер не принял эту пару адрес/пароль: {error}"
         )
 
-    with transaction.atomic():
-        if existing is None:
-            local_part = address.split("@", 1)[0]
-            existing = ProvisionedMailbox.objects.create(
-                user_id=user_id,
-                local_part=local_part,
-                domain=cfg.domain,
-                address=address,
-                status="active",
-                quota_mb=cfg.mailcow_default_quota_mb,
-            )
-        else:
-            fields = []
-            if existing.user_id != user_id:
-                existing.user_id = user_id
-                fields.append("user_id")
-            if existing.status != "active":
-                existing.status, existing.archived_at = "active", None
-                fields += ["status", "archived_at"]
-            if existing.last_error:
-                existing.last_error = None
-                fields.append("last_error")
-            if fields:
-                existing.save(update_fields=[*fields, "updated_at"])
+    # verify=False — проверка уже сделана строкой выше, и повторять её значило
+    # бы ходить на почтовый сервер дважды за один запрос.
+    mailbox = mbx_svc.attach_existing(
+        address=address, user_id=user_id, password=password, verify=False,
+    )
 
-        mbx_svc.store_password(existing, password)
-        mbx_svc.ensure_account(existing)
+    # Забрать письма сразу: без этого сотрудник видит пустой ящик до минуты
+    # (периодический опрос) и решает, что подключение не сработало.
+    mbx_svc.kick_sync(mailbox)
 
     log.info("mailbox_self_connected user_id=%s address=%s", user_id, address)
-    return mbx_svc.serialize(existing)
+    return mbx_svc.serialize(mailbox)
+
+
+def _is_own_address(user_id: int, address: str) -> bool:
+    """Совпадает ли адрес с email этого сотрудника на платформе.
+
+    Через ``apps.users.interface`` — прямой импорт чужих моделей запрещён
+    (``apps/core/tests/test_app_isolation.py``). Тот же приём, что и у сверки
+    ящиков (``reconcile_service._link_orphans``).
+    """
+    from apps.users import interface as users_interface
+
+    try:
+        brief = users_interface.get_user_brief(user_id)
+    except Exception as exc:  # noqa: BLE001 — недоступный сосед не должен
+        # превращаться в «разрешено»: молчаливое падение в открытую дверь
+        # хуже отказа, который человек увидит и позовёт админа.
+        log.warning("own_address_check_failed user_id=%s: %s", user_id, exc)
+        return False
+    own = ((brief or {}).get("email") or "").strip().lower()
+    return bool(own) and own == address
 
 
 def disconnect_own_mailbox(*, user_id: int) -> bool:

@@ -1,0 +1,55 @@
+# ─── HTQWeb: Celery-воркер обработки записей конференций ────────────────────
+# Тот же код Django, что и в основном образе, но с ffmpeg и faster-whisper.
+#
+# Зачем отдельный образ, а не пара пакетов в backend/Dockerfile. ffmpeg плюс
+# ctranslate2 с зависимостями — это сотни мегабайт, а модель Whisper ещё
+# полтора гигабайта. Положив их в общий образ, мы утяжелили бы ВСЕ пять
+# backend-контейнеров (web, asgi, worker, beat, flower) ради задач, которые
+# выполняет один. Здесь же наоборот: этот образ не обслуживает HTTP и не
+# нужен никому, кроме очереди conference_media.
+#
+# Задачи попадают сюда маршрутизацией CELERY_TASK_ROUTES
+# (htqweb/settings/base.py). Общий backend-worker запущен без -Q, то есть
+# слушает только очередь celery, и этих задач не увидит.
+FROM python:3.14-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DJANGO_SETTINGS_MODULE=htqweb.settings.base \
+    # Куда faster-whisper складывает скачанные веса. Каталог смонтирован
+    # томом (whisper_models), иначе модель качалась бы заново при каждой
+    # пересборке образа.
+    HF_HOME=/models \
+    # ctranslate2 сам раскладывается по всем ядрам и на загруженном хосте
+    # отнимает их у воркеров Django. Ограничение снимается переменной,
+    # если машина выделена под обработку.
+    OMP_NUM_THREADS=4
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libpq5 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# faster-whisper держим ЗДЕСЬ, а не в requirements.txt: он не нужен ни
+# одному другому процессу платформы, а тянет за собой ctranslate2, onnxruntime
+# и tokenizers. Версия закреплена по той же причине, что и всё в requirements.
+RUN pip install "faster-whisper==1.1.1"
+
+COPY . .
+RUN chmod +x docker-entrypoint.sh
+
+# Каталог общего тома с сырыми дорожками (тот же смонтирован в sfu).
+RUN mkdir -p /recordings /models
+
+# ENTRYPOINT основного образа выполняет миграции и bootstrap под гейтом
+# RUN_MIGRATIONS/RUN_BOOTSTRAP — здесь оба выключены (см. docker-compose.yml),
+# так что вход тот же, а команда своя.
+ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD ["celery", "-A", "htqweb", "worker", "-l", "info", "-E", \
+     "-Q", "conference_media", "-c", "1"]

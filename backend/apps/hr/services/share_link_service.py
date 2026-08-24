@@ -291,6 +291,16 @@ def _strip_public_pii(tree: dict) -> dict:
                 if isinstance(h, dict)
             ]
         node["meta"] = meta
+    # relation_id адресует строку ReportingRelation/EmployeeReportingOverride
+    # через /org/relations, /org/employee-relations — ручки правки, которых
+    # у анонимного зрителя нет и быть не может (см. ручную правку
+    # оргструктуры). Belt-and-braces поверх auth="jwt" на тех ручках: сам
+    # id безвреден без доступа к API, но у этого файла принцип — резать на
+    # уровне схемы, а не полагаться на то, что снаружи никто не спросит.
+    # origin остаётся — он не адресует ничего, просто "явно"/"выведено", и
+    # даёт анонимному зрителю тот же честный пунктир на угаданных связях.
+    for edge in cleaned.get("edges") or []:
+        edge.pop("relation_id", None)
     return cleaned
 
 

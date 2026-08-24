@@ -101,9 +101,9 @@ const AdminUsers = () => {
                         </div>
                         <div className="flex items-center gap-3">
                             <div className="flex items-center gap-2 text-sm">
-                                <Link to="/admin/registrations" className="text-primary hover:underline">→ Заявки</Link>
+                                <Link to="/admin/registrations" className="text-primary hover:underline">{t('admin.users.toRegistrations')}</Link>
                                 <span className="text-muted-foreground">|</span>
-                                <Link to="/admin/chats" className="text-primary hover:underline">→ Чаты</Link>
+                                <Link to="/admin/chats" className="text-primary hover:underline">{t('admin.users.toChats')}</Link>
                             </div>
                             <Button onClick={openCreate} className="flex items-center gap-2">
                                 <UserPlus className="h-4 w-4" />
