@@ -108,6 +108,7 @@ def serialize_task(task: ApprovalTask, *, names: dict[int, dict] | None = None,
     card = {
         "id": task.pk,
         "user_id": task.user_id,
+        "position_id": task.position_id,
         "full_name": names.get(task.user_id, {}).get("full_name", ""),
         "state": task.state,
         "comment": task.comment,

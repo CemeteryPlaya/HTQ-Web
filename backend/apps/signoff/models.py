@@ -638,6 +638,14 @@ class ApprovalTask(models.Model):
     stage = models.ForeignKey(ApprovalProcessStage, on_delete=models.CASCADE,
                               related_name="tasks")
     user_id = models.IntegerField(verbose_name="Согласующий")
+    # The resolved position is part of the task snapshot.  A stage can select
+    # several positions and its quorum applies independently within each one,
+    # so the engine must never re-resolve this from current HR data.
+    # ``null`` is retained for tasks created before 0007 and for an initiator
+    # stage, which has no HR position.
+    position_id = models.IntegerField(
+        null=True, blank=True, db_index=True, verbose_name="Position of approver",
+    )
     state = models.CharField(max_length=16, choices=TaskState.choices,
                              default=TaskState.PENDING,
                              db_default=TaskState.PENDING)

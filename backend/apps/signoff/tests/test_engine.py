@@ -287,6 +287,62 @@ def test_quorum_any_closes_the_stage_on_the_first_approval():
     assert leftover.state == TaskState.SKIPPED
 
 
+def test_quorum_any_needs_one_approval_from_every_selected_position():
+    controller, deputy, manager = (make_user("controller"),
+                                   make_user("deputy"),
+                                   make_user("manager"))
+    # Two people hold the controller position; they represent one required
+    # role, whereas the manager position is a separate required role.
+    Employee.objects.filter(user_id=deputy.pk).update(position_id=controller.pk)
+    doc = make_doc()
+    simple_route(controller.pk, manager.pk, quorum=Quorum.ANY)
+    process = engine.start(subject_type=ProbeDoc.SIGNOFF_SUBJECT_TYPE,
+                           subject_id=doc.pk)
+
+    tasks = {task.user_id: task for task in process.stages.get().tasks.all()}
+    assert tasks[controller.pk].position_id == controller.pk
+    assert tasks[deputy.pk].position_id == controller.pk
+    assert tasks[manager.pk].position_id == manager.pk
+
+    engine.act(task_id=tasks[controller.pk].pk, actor_id=controller.pk,
+               decision=engine.APPROVE)
+    process.refresh_from_db()
+    assert process.state == ProcessState.PENDING
+    assert active_user_ids(process) == {deputy.pk, manager.pk}
+
+    engine.act(task_id=tasks[manager.pk].pk, actor_id=manager.pk,
+               decision=engine.APPROVE)
+    process.refresh_from_db()
+    assert process.state == ProcessState.APPROVED
+    tasks[deputy.pk].refresh_from_db()
+    assert tasks[deputy.pk].state == TaskState.SKIPPED
+
+
+def test_quorum_all_needs_every_holder_of_every_selected_position():
+    controller, deputy, manager = (make_user("controller"),
+                                   make_user("deputy"),
+                                   make_user("manager"))
+    Employee.objects.filter(user_id=deputy.pk).update(position_id=controller.pk)
+    doc = make_doc()
+    simple_route(controller.pk, manager.pk, quorum=Quorum.ALL)
+    process = engine.start(subject_type=ProbeDoc.SIGNOFF_SUBJECT_TYPE,
+                           subject_id=doc.pk)
+    tasks = {task.user_id: task for task in process.stages.get().tasks.all()}
+
+    engine.act(task_id=tasks[controller.pk].pk, actor_id=controller.pk,
+               decision=engine.APPROVE)
+    engine.act(task_id=tasks[manager.pk].pk, actor_id=manager.pk,
+               decision=engine.APPROVE)
+    process.refresh_from_db()
+    assert process.state == ProcessState.PENDING
+    assert active_user_ids(process) == {deputy.pk}
+
+    engine.act(task_id=tasks[deputy.pk].pk, actor_id=deputy.pk,
+               decision=engine.APPROVE)
+    process.refresh_from_db()
+    assert process.state == ProcessState.APPROVED
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Отказ решает судьбу всего процесса
 # ═══════════════════════════════════════════════════════════════════════

@@ -192,6 +192,7 @@ class ProcessStart(BaseModel):
 class TaskRead(BaseModel):
     id: int
     user_id: int
+    position_id: Optional[int] = None
     full_name: str = ""
     state: TaskState
     comment: str

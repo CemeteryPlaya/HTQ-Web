@@ -238,7 +238,7 @@ def start(*, subject_type: str, subject_id: int,
         ) from exc
 
     first_order = min(order for order, _, _, _ in plan)
-    for order, stage, matched_by, approver_ids in plan:
+    for order, stage, matched_by, approvers_by_position in plan:
         process_stage = ApprovalProcessStage.objects.create(
             process=process, order=order, name=stage.name, quorum=stage.quorum,
             condition=stage.condition, matched_by=matched_by,
@@ -250,8 +250,10 @@ def start(*, subject_type: str, subject_id: int,
             state=StageState.ACTIVE if order == first_order else StageState.WAITING,
         )
         ApprovalTask.objects.bulk_create([
-            ApprovalTask(stage=process_stage, user_id=user_id)
-            for user_id in approver_ids
+            ApprovalTask(stage=process_stage, user_id=user_id,
+                         position_id=position_id)
+            for position_id, user_ids in approvers_by_position.items()
+            for user_id in user_ids
         ])
 
     process.current_order = first_order
@@ -342,10 +344,10 @@ def _facts_hint(facts: dict) -> str:
 
 
 def _resolve_stages(selected, *,
-                    initiator_id: int | None) -> list[tuple[int, object, str, list[int]]]:
+                    initiator_id: int | None) -> list[tuple[int, object, str, dict[int | None, list[int]]]]:
     """Проверить исполнимость отобранных этапов и развернуть согласующих.
 
-    Возвращает ``(order, stage, matched_by, user_ids)``.
+    Возвращает ``(order, stage, matched_by, {position_id: user_ids})``.
 
     Здесь же ``ApproverKind`` превращается в конкретные id: дальше движок
     работает со списком пользователей и про вид согласующих не знает — ровно
@@ -358,16 +360,23 @@ def _resolve_stages(selected, *,
     Проверяются только ОТОБРАННЫЕ этапы — уволившийся согласующий в ветке,
     которая к этому объекту не относится, запуску не мешает.
     """
-    plan: list[tuple[int, object, str, list[int]]] = []
+    plan: list[tuple[int, object, str, dict[int | None, list[int]]]] = []
     all_ids: set[int] = set()
     for item in selected:
         stage = item.stage
-        user_ids = _approver_ids(stage, initiator_id=initiator_id)
-        all_ids.update(user_ids)
-        plan.append((stage.order, stage, item.matched_by, user_ids))
+        approvers_by_position = _approver_ids(stage, initiator_id=initiator_id)
+        all_ids.update(
+            user_id for user_ids in approvers_by_position.values()
+            for user_id in user_ids
+        )
+        plan.append((stage.order, stage, item.matched_by, approvers_by_position))
 
     active = _active_user_ids(all_ids)
-    for _, stage, _, user_ids in plan:
+    for _, stage, _, approvers_by_position in plan:
+        user_ids = [
+            user_id for ids in approvers_by_position.values()
+            for user_id in ids
+        ]
         if stage.approver_kind == ApproverKind.INITIATOR:
             if not any(user_id in active for user_id in user_ids):
                 raise RouteUnusable(
@@ -385,7 +394,7 @@ def _resolve_stages(selected, *,
     return plan
 
 
-def _approver_ids(stage, *, initiator_id: int | None) -> list[int]:
+def _approver_ids(stage, *, initiator_id: int | None) -> dict[int | None, list[int]]:
     """Кому адресовать запросы этого этапа.
 
     Названные поимённо согласующие берутся из маршрута; этап
@@ -401,7 +410,7 @@ def _approver_ids(stage, *, initiator_id: int | None) -> list[int]:
                 f"Этап «{stage.name}» подписывает инициатор, но согласование "
                 f"запущено без инициатора"
             )
-        return [initiator_id]
+        return {None: [initiator_id]}
 
     position_ids = [row.position_id for row in stage.roles.all()]
     if not position_ids:
@@ -416,10 +425,10 @@ def _approver_ids(stage, *, initiator_id: int | None) -> list[int]:
             f"На этапе «{stage.name}» нет активного сотрудника с активной "
             f"учётной записью для должности: " + ", ".join(map(str, missing))
         )
-    return list(dict.fromkeys(
-        user_id for position_id in position_ids
-        for user_id in resolved[position_id]
-    ))
+    return {
+        position_id: list(dict.fromkeys(resolved[position_id]))
+        for position_id in position_ids
+    }
 
 
 def _active_user_ids(user_ids) -> set[int]:
@@ -526,12 +535,21 @@ def _settle_stage(stage: ApprovalProcessStage) -> bool:
     процесса, а не одного этапа.
     """
     tasks = list(stage.tasks.all())
-    approved = [t for t in tasks if t.state == TaskState.APPROVED]
+    tasks_by_position: dict[int | None, list[ApprovalTask]] = {}
+    for item in tasks:
+        tasks_by_position.setdefault(item.position_id, []).append(item)
 
-    if stage.quorum == Quorum.ANY:
-        enough = bool(approved)
-    else:
-        enough = len(approved) == len(tasks)
+    # A selected HR position represents one required role in a stage.  The
+    # stage proceeds only after every selected role has met its quorum: ``any``
+    # means one current holder of *each* position; ``all`` means every current
+    # holder of *each* position.  Legacy tasks without a position snapshot stay
+    # in one group, preserving the semantics of processes already in flight.
+    def role_settled(role_tasks: list[ApprovalTask]) -> bool:
+        approved = sum(task.state == TaskState.APPROVED for task in role_tasks)
+        return bool(approved) if stage.quorum == Quorum.ANY else approved == len(role_tasks)
+
+    enough = all(role_settled(role_tasks)
+                 for role_tasks in tasks_by_position.values())
 
     if not enough:
         return False

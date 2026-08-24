@@ -214,6 +214,8 @@ export interface Subject {
 export interface ProcessTask {
   id: number;
   user_id: number;
+  /** HR position through which this task was assigned; null for legacy and initiator tasks. */
+  position_id: number | null;
   full_name: string;
   state: TaskState;
   comment: string;
