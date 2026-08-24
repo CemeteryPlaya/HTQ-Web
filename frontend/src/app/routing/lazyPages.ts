@@ -9,7 +9,6 @@ export const lazyPages = {
 
   Projects: React.lazy(() => import('@/pages/Projects')),
   Services: React.lazy(() => import('@/pages/Services')),
-  DesignPreview: React.lazy(() => import('@/pages/DesignPreview')),
   Contacts: React.lazy(() => import('@/pages/Contacts')),
   News: React.lazy(() => import('@/pages/News')),
   NewsDetail: React.lazy(() => import('@/pages/NewsDetail')),

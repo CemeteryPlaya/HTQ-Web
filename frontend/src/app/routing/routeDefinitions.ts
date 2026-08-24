@@ -7,7 +7,6 @@ export const publicRoutes: RouteConfig[] = [
   { path: '/news', component: lazyPages.News },
   { path: '/news/:slug', component: lazyPages.NewsDetail },
   { path: '/contacts', component: lazyPages.Contacts },
-  { path: '/design-preview', component: lazyPages.DesignPreview },
   { path: '/login', component: lazyPages.Login },
   { path: '/register', component: lazyPages.Register },
   // Public org view — shareable token, no auth required
