@@ -203,27 +203,10 @@ def attach_mailbox_by_email(*, user_id: int, email: str) -> dict | None:
         return None
 
     try:
-        # Проверка домена — до всего остального: у пользователя платформы в
-        # email вполне может стоять личная почта, корпоративным ящиком она не
-        # становится.
-        if not mbx_svc.corporate_local_part(email):
+        mb = mbx_svc.attach_by_email(user_id=user_id, email=email)
+        if mb is None:
             return None
-
-        from apps.mail.services import lookup_service
-
-        # lookup_candidate сам соберёт адрес тем же кодом, что и создание, —
-        # домен здесь знать не нужно.
-        found = lookup_service.lookup_candidate(email=email, user_id=user_id)
-        if not found.exists or not found.can_attach:
-            return None
-
-        # Пароль здесь не спрашиваем и подключение из-за него не отменяем:
-        # если платформа не сможет добыть учётку сама, ящик останется
-        # привязанным и «ждущим», а пароль введёт сам сотрудник. Отказаться
-        # от привязки было бы хуже — сотрудник вообще не узнал бы, что его
-        # ящик найден.
-        mb = mbx_svc.attach_existing(address=found.address, user_id=user_id)
-        mbx_svc.ensure_credentials(mb)
+        mbx_svc.kick_sync(mb)
     except Exception as exc:  # noqa: BLE001 — пользователь важнее ящика
         # Громко: снаружи «ящик не подключился» неотличимо от «ящика не было»,
         # и без этой записи причину не узнает никто.
@@ -234,8 +217,8 @@ def attach_mailbox_by_email(*, user_id: int, email: str) -> dict | None:
         return None
 
     log.info("mailbox_auto_attached user_id=%s address=%s awaiting_password=%s",
-             user_id, found.address, mbx_svc.awaits_password(mb))
-    return {**mbx_svc.serialize(mb), "attached": True, "detail": found.detail}
+             user_id, mb.address, mbx_svc.awaits_password(mb))
+    return {**mbx_svc.serialize(mb), "attached": True}
 
 
 def get_user_mailbox(user_id: int) -> dict | None:

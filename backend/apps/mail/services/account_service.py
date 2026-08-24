@@ -59,6 +59,7 @@ def serialize(account: EmailAccount, *, unread_count: int = 0) -> dict:
         "provider": account.provider,
         "address": account.address,
         "display_name": account.display_name,
+        "signature": account.signature,
         "is_default": account.is_default,
         "is_active": account.is_active,
         "last_sync_at": account.last_sync_at.isoformat() if account.last_sync_at else None,
@@ -67,6 +68,23 @@ def serialize(account: EmailAccount, *, unread_count: int = 0) -> dict:
         "connected_at": account.connected_at.isoformat(),
         "unread_count": unread_count,
     }
+
+
+def update_signature(user_id: int, account_id: int, signature: str) -> dict:
+    """Сохранить подпись для одного своего аккаунта.
+
+    Владение проверяется тем же ``_get_owned``, что и остальные действия над
+    аккаунтом: подпись видна получателям писем, и подставить её в чужой ящик
+    не должно быть возможно.
+
+    Текст сохраняется как есть, без обрезки хвостовых переводов строки:
+    пустая строка в конце подписи — осознанный отступ от неё до цитаты, и
+    «прибираться» тут значит спорить с автором.
+    """
+    account = _get_owned(user_id, account_id)
+    account.signature = signature or ""
+    account.save(update_fields=["signature", "updated_at"])
+    return serialize(account)
 
 
 def list_accounts(user_id: int) -> list[dict]:

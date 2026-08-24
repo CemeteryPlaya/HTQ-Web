@@ -45,6 +45,14 @@ class DraftIn(BaseModel):
 _EMAIL_RE = r"^[^\s@]+@[^\s@]+\.[^\s@]+$"
 
 
+class AccountSignatureRequest(BaseModel):
+    """Body for `PATCH /api/email/v1/accounts/{id}/signature/`."""
+
+    # Верхняя граница есть, но щедрая: подпись с адресом, телефоном и
+    # дисклеймером юротдела легко занимает пару тысяч знаков.
+    signature: str = Field(default="", max_length=4000)
+
+
 class MailboxCreateRequest(BaseModel):
     """Body for `POST /api/email/v1/mailboxes/`."""
 

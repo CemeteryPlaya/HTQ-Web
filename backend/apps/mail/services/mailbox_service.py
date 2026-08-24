@@ -582,6 +582,65 @@ def ensure_credentials(mb: ProvisionedMailbox) -> bool:
     return bool(stored_password(mb.address))
 
 
+def attach_by_email(*, user_id: int, email: str) -> ProvisionedMailbox | None:
+    """Подключить пользователю ящик, совпадающий с его корпоративным email.
+
+    Ядро сценария «ящик уже есть — подключить его сам». Ничего НЕ создаёт:
+    нет ящика — нет и действия. Возвращает ``None``, когда подключать нечего
+    (почта не корпоративная, ящика нет, занят другим сотрудником).
+
+    Найденный ящик привязывается ДАЖЕ ЕСЛИ пароль добыть не удалось — он
+    останется ``awaits_password``, и пароль введёт сам сотрудник. Отказаться
+    из-за этого от привязки было бы хуже: сотрудник просто не узнал бы, что
+    его ящик найден.
+
+    Общее для двух входов — автоматического (``interface`` при создании
+    пользователя) и ручного (сотрудник нажал «Подключить» у себя в
+    настройках). Разъедься они, «подключить» означало бы разное в
+    зависимости от того, кто нажал.
+    """
+    from apps.mail.services import lookup_service
+
+    if not corporate_local_part(email):
+        return None
+
+    found = lookup_service.lookup_candidate(email=email, user_id=user_id)
+    if not found.exists or not found.can_attach:
+        return None
+
+    mb = attach_existing(address=found.address, user_id=user_id)
+    ensure_credentials(mb)
+    return mb
+
+
+def kick_sync(mb: ProvisionedMailbox) -> bool:
+    """Забрать письма прямо сейчас, не дожидаясь периодического опроса.
+
+    Ради этого «подключение» и выглядит как подключение: без немедленной
+    синхронизации сотрудник видит пустой ящик до минуты и решает, что ничего
+    не сработало. Лучший из возможных результат — а не обязательный: письма
+    всё равно приедут опросом (``imap_poll_fallback``), поэтому недоступный
+    брокер не повод считать подключение неудавшимся.
+    """
+    from apps.mail.models import EmailAccount
+
+    if not mb.encrypted_smtp_app_password:
+        return False  # читать нечем — синхронизировать нечего
+    account = EmailAccount.objects.filter(
+        user_id=mb.user_id, mailbox_id=mb.id, is_active=True,
+    ).first()
+    if account is None:
+        return False
+    try:
+        from apps.mail.tasks import incremental_sync_account
+
+        incremental_sync_account.delay(account.id)
+    except Exception as exc:  # noqa: BLE001 — брокер недоступен
+        log.warning("kick_sync_enqueue_failed account=%s: %s", account.id, exc)
+        return False
+    return True
+
+
 # ── Заведение ящика со сверкой ───────────────────────────────────────────
 
 

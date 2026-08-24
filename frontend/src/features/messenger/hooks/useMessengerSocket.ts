@@ -30,6 +30,15 @@ interface MessengerSocketApi {
 }
 
 
+/** Поля сообщения, которые читает выбор звука. Сокет объявляет
+ *  ``message: unknown`` — форма зависит от источника (обычное сообщение
+ *  сериализуется messenger_service, системное шлёт apps.messenger.interface). */
+interface MessagePayload {
+    sender_id?: number | string | null;
+    user_id?: number | string | null;
+    sender?: { id?: number | string | null } | null;
+}
+
 export function useMessengerSocket(activeRoomId: number | null): MessengerSocketApi {
     const queryClient = useQueryClient();
     const { activeProfile } = useActiveProfile();
@@ -47,17 +56,34 @@ export function useMessengerSocket(activeRoomId: number | null): MessengerSocket
             queryClient.invalidateQueries({ queryKey: ['messenger-messages', payload.room_id] });
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
 
-            // Play sound if message was sent by another participant
-            const msg = payload?.message as Record<string, any> | undefined;
-            const senderId = msg?.sender_id ?? msg?.sender?.id ?? msg?.user_id ?? msg?.sender?.user_id;
-            const myId = activeProfileRef.current?.id ?? (activeProfileRef.current as any)?.user_id;
+            // Звук — только на чужое сообщение.
+            //
+            // Три случая, и «не знаю» здесь ближе к «своё», а не к «чужое»:
+            //
+            //  * отправитель не указан — это системное сообщение
+            //    (apps/messenger/interface.py шлёт sender_id: null), оно звучит;
+            //  * отправитель — я сам: молчим;
+            //  * свой id неизвестен (профиль ещё грузится): тоже молчим.
+            //    Пикнуть человеку на его же сообщение заметно и раздражает, а
+            //    пропустить один сигнал в первые миллисекунды после загрузки —
+            //    нет. Раньше условие было открыто наружу и звучало именно в
+            //    этом случае.
+            const msg = (payload?.message ?? null) as MessagePayload | null;
+            const senderId = msg?.sender_id ?? msg?.sender?.id ?? msg?.user_id ?? null;
+            const myId = activeProfileRef.current?.id ?? null;
 
-            if (!senderId || !myId || Number(senderId) !== Number(myId)) {
-                if (activeRoomIdRef.current && payload.room_id === activeRoomIdRef.current) {
-                    playMessengerPop();
-                } else {
-                    playMessengerChime();
-                }
+            const isSystem = senderId === null || senderId === undefined;
+            if (!isSystem) {
+                // id профиля приходит строкой (users/profile_service отдаёт
+                // str(user.id)), sender_id — числом.
+                if (myId === null || myId === undefined) return;
+                if (Number(senderId) === Number(myId)) return;
+            }
+
+            if (activeRoomIdRef.current && payload.room_id === activeRoomIdRef.current) {
+                playMessengerPop();
+            } else {
+                playMessengerChime();
             }
         };
         const handleMessageRead = (payload: MessageReadPayload) => {

@@ -78,17 +78,26 @@ def connect_own_mailbox(*, user_id: int, address: str, password: str) -> dict:
     if existing is not None and existing.user_id not in (None, user_id):
         raise MailboxTakenByAnotherUser
 
-    # ``allow_self_service`` запрещает сотруднику подключать ящики ПО СВОЕЙ
-    # инициативе. Ввод пароля к ящику, который платформа уже назначила ему
-    # сама и который без пароля не работает, — не та же самая свобода:
-    # подключение начато не сотрудником, адрес выбран не им, и запрет здесь
-    # означал бы «ящик ваш, но пользоваться им нельзя».
+    # ``allow_self_service`` защищает от ОДНОГО: сотрудник подключает ЧУЖОЙ
+    # ящик. Два случая этим риском не обладают и потому разрешены всегда:
+    #
+    #  * ящик уже назначен ему платформой и без пароля не работает — запрет
+    #    означал бы «ящик ваш, но пользоваться им нельзя»;
+    #  * адрес совпадает с его собственным email на платформе — этот адрес за
+    #    ним закрепил админ, выдать себя за другого тут нечем.
+    #
+    # Пароль в обоих случаях всё равно обязателен и проверяется живым входом
+    # ниже: он и есть доказательство владения. Знание адреса доказательством
+    # не является — адреса сотрудников известны всем, кто получал от них
+    # письма, и подключение «по адресу» было бы подделкой на ровном месте.
     finishing_pending = (
         existing is not None
         and existing.user_id == user_id
         and mbx_svc.awaits_password(existing)
     )
-    if not cfg.allow_self_service and not finishing_pending:
+    if not cfg.allow_self_service and not finishing_pending and not _is_own_address(
+        user_id, address,
+    ):
         raise SelfServiceDisabled
 
     # Проверяем ДО записи: нерабочая привязка хуже её отсутствия — она молча
@@ -105,8 +114,32 @@ def connect_own_mailbox(*, user_id: int, address: str, password: str) -> dict:
         address=address, user_id=user_id, password=password, verify=False,
     )
 
+    # Забрать письма сразу: без этого сотрудник видит пустой ящик до минуты
+    # (периодический опрос) и решает, что подключение не сработало.
+    mbx_svc.kick_sync(mailbox)
+
     log.info("mailbox_self_connected user_id=%s address=%s", user_id, address)
     return mbx_svc.serialize(mailbox)
+
+
+def _is_own_address(user_id: int, address: str) -> bool:
+    """Совпадает ли адрес с email этого сотрудника на платформе.
+
+    Через ``apps.users.interface`` — прямой импорт чужих моделей запрещён
+    (``apps/core/tests/test_app_isolation.py``). Тот же приём, что и у сверки
+    ящиков (``reconcile_service._link_orphans``).
+    """
+    from apps.users import interface as users_interface
+
+    try:
+        brief = users_interface.get_user_brief(user_id)
+    except Exception as exc:  # noqa: BLE001 — недоступный сосед не должен
+        # превращаться в «разрешено»: молчаливое падение в открытую дверь
+        # хуже отказа, который человек увидит и позовёт админа.
+        log.warning("own_address_check_failed user_id=%s: %s", user_id, exc)
+        return False
+    own = ((brief or {}).get("email") or "").strip().lower()
+    return bool(own) and own == address
 
 
 def disconnect_own_mailbox(*, user_id: int) -> bool:

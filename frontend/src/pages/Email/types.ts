@@ -16,6 +16,8 @@ export interface EmailAccount {
   provider: EmailAccountProvider;
   address: string;
   display_name: string | null;
+  /** Подпись, дописываемая в конец нового письма с этого адреса. */
+  signature?: string;
   is_default: boolean;
   is_active: boolean;
   last_sync_at: string | null;

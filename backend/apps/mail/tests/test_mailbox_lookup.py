@@ -748,3 +748,115 @@ def test_connect_corporate_info_tells_the_employee_the_mailbox_awaits_them(
     assert body["allowed"] is True        # карточку показать обязаны
     assert body["self_service"] is False  # но общий режим так и выключен
     assert body["mailbox"]["address"] == "ruslan.amirov@htq.group"
+
+
+@pytest.mark.django_db
+def test_employee_may_connect_their_own_address_with_a_password(use_provisioner):
+    """Свой рабочий адрес сотрудник подключает сам — но только паролем.
+
+    ``allow_self_service`` защищает от одного: подключения ЧУЖОГО ящика.
+    Собственный адрес закрепил за сотрудником админ, выдать себя за другого
+    тут нечем, а пароль всё равно проверяется живым входом — он и есть
+    доказательство владения.
+    """
+    from apps.mail.services import self_service
+
+    u = User.objects.create(
+        username="amirov", email="ruslan.amirov@htq.group", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    u.set_password("S3cret!")
+    u.save()
+    _mailbox(local_part="ruslan.amirov")
+    use_provisioner(_FakeImap(passwords={"ruslan.amirov@htq.group": "MailPass!"}))
+
+    with override_settings(
+        MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="imap", IMAP_HOST="mail.htq.group",
+    ):
+        result = self_service.connect_own_mailbox(
+            user_id=u.id, address="ruslan.amirov@htq.group", password="MailPass!",
+        )
+
+    assert result["address"] == "ruslan.amirov@htq.group"
+    mb = ProvisionedMailbox.objects.get(address="ruslan.amirov@htq.group")
+    assert mb.user_id == u.id
+    assert crypto_service.decrypt(mb.encrypted_smtp_app_password) == "MailPass!"
+
+
+@pytest.mark.django_db
+def test_knowing_the_address_alone_connects_nothing(use_provisioner):
+    """Подделка, от которой защищает пароль: адреса сотрудников известны
+    всем, кто получал от них письма, и подключение «по адресу» увело бы
+    чужую переписку."""
+    from apps.mail.services import self_service
+
+    u = User.objects.create(
+        username="amirov", email="ruslan.amirov@htq.group", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    u.set_password("S3cret!")
+    u.save()
+    mb = _mailbox(local_part="ruslan.amirov")
+    use_provisioner(_FakeImap(passwords={"ruslan.amirov@htq.group": "MailPass!"}))
+
+    with override_settings(
+        MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="imap", IMAP_HOST="mail.htq.group",
+    ):
+        with pytest.raises(self_service.VerificationFailed):
+            self_service.connect_own_mailbox(
+                user_id=u.id, address="ruslan.amirov@htq.group", password="угадал",
+            )
+
+    mb.refresh_from_db()
+    assert mb.user_id is None
+
+
+@pytest.mark.django_db
+def test_connect_info_hands_the_card_its_address_and_server(use_provisioner):
+    """Карточке нужны две вещи: какой адрес подставить и к какому серверу
+    она подключается. Сервер — не секрет от ВЛАДЕЛЬЦА ящика: тот же адрес он
+    вбивает в телефон."""
+    u = User.objects.create(
+        username="amirov", email="ruslan.amirov@htq.group", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    u.set_password("S3cret!")
+    u.save()
+    use_provisioner(_FakeImap())
+
+    with override_settings(
+        MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="imap", IMAP_HOST="mail.htq.group",
+    ):
+        resp = Client().get(
+            "/api/email/v1/accounts/connect-corporate/",
+            HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(u)['access']}",
+        )
+
+    body = resp.json()
+    assert body["own_address"] == "ruslan.amirov@htq.group"
+    assert body["allowed"] is True        # карточка открыта…
+    assert body["self_service"] is False  # …хотя общий режим выключен
+
+
+@pytest.mark.django_db
+def test_personal_email_gives_the_card_nothing_to_prefill(use_provisioner):
+    """Почта не корпоративная — подставлять нечего, и послабление не даётся."""
+    u = User.objects.create(
+        username="outsider", email="someone@gmail.com", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    u.set_password("S3cret!")
+    u.save()
+    use_provisioner(_FakeImap())
+
+    with override_settings(
+        MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="imap", IMAP_HOST="mail.htq.group",
+    ):
+        resp = Client().get(
+            "/api/email/v1/accounts/connect-corporate/",
+            HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(u)['access']}",
+        )
+
+    body = resp.json()
+    assert body["own_address"] == ""
+    assert body["allowed"] is False

@@ -55,6 +55,9 @@ urlpatterns = [
     path("accounts/<int:account_id>/imap-password/", views.imap_account_password),
     path("accounts/<int:account_id>/imap-password", views.imap_account_password),
 
+    path("accounts/<int:account_id>/signature/", views.account_signature),
+    path("accounts/<int:account_id>/signature", views.account_signature),
+
     path("accounts/<int:account_id>/set-default/", views.account_set_default),
     path("accounts/<int:account_id>/set-default", views.account_set_default),
 
