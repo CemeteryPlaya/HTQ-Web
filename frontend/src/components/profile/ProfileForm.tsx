@@ -121,7 +121,7 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({ profile, onSubmit, isL
                         name="phone"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>Телефон</FormLabel>
+                                <FormLabel>{t('profile.phone')}</FormLabel>
                                 <FormControl>
                                     <PhoneInput {...field} value={field.value || ''} />
                                 </FormControl>

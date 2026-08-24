@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { contractsApi } from '@/api/contracts';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Обзор раздела «Договоры».
@@ -34,6 +35,7 @@ function sumAmounts(values: string[]): string {
 }
 
 const ContractsOverview = () => {
+  const { t } = useTranslation();
   const { data: budgets, isLoading: budgetsLoading } = useQuery({
     queryKey: ['contracts', 'budgets'],
     queryFn: () => contractsApi.listBudgets().then((r) => r.data),
@@ -54,10 +56,9 @@ const ContractsOverview = () => {
   return (
     <ContractsShell>
       <div className="mb-8">
-        <h1 className="text-3xl font-bold">Договоры и бюджеты</h1>
+        <h1 className="text-3xl font-bold">{t('contracts.overview.title')}</h1>
         <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
-          Учёт договоров с контролем бюджета: сколько из выделенного уже
-          законтрактовано и сколько осталось.
+          {t('contracts.overview.subtitle')}
         </p>
       </div>
 
@@ -66,7 +67,7 @@ const ContractsOverview = () => {
           <CardHeader className="pb-3">
             <CardDescription className="flex items-center gap-2">
               <Wallet className="h-4 w-4" />
-              Бюджетных строк
+              {t('contracts.overview.budgetLines')}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -76,7 +77,7 @@ const ContractsOverview = () => {
               <>
                 <p className="text-3xl font-bold tabular-nums">{budgets?.length ?? 0}</p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  выделено {formatShort(allocated)} {currency}
+                  {t('contracts.overview.allocatedShort', { amount: formatShort(allocated), currency })}
                 </p>
               </>
             )}
@@ -85,7 +86,7 @@ const ContractsOverview = () => {
 
         <Card>
           <CardHeader className="pb-3">
-            <CardDescription>Свободно по бюджетам</CardDescription>
+            <CardDescription>{t('contracts.overview.free')}</CardDescription>
           </CardHeader>
           <CardContent>
             {budgetsLoading ? (
@@ -100,7 +101,7 @@ const ContractsOverview = () => {
                 </p>
                 {mixedCurrencies && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    только строки в {currency} — валюты не смешиваются
+                    {t('contracts.overview.currencyOnly', { currency })}
                   </p>
                 )}
               </>
@@ -112,7 +113,7 @@ const ContractsOverview = () => {
           <CardHeader className="pb-3">
             <CardDescription className="flex items-center gap-2">
               <Building2 className="h-4 w-4" />
-              Контрагентов в реестре
+              {t('contracts.overview.counterparties')}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -127,28 +128,27 @@ const ContractsOverview = () => {
         </Card>
       </div>
 
-      <h2 className="text-lg font-semibold mb-3">Что можно сделать</h2>
+      <h2 className="text-lg font-semibold mb-3">{t('contracts.overview.actions')}</h2>
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Wallet className="h-5 w-5 text-muted-foreground" />
-              Заявка на бюджет
+              {t('contracts.budgetRequest')}
             </CardTitle>
             <CardDescription>
-              Администратор, программа и сумма — одной формой. Справочники
-              заводятся прямо в ней.
+              {t('contracts.overview.budgetRequestHint')}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex gap-2">
             <Button asChild size="sm">
               <Link to="/contracts/budgets/new">
                 <Plus className="mr-2 h-4 w-4" />
-                Создать
+                {t('common.create')}
               </Link>
             </Button>
             <Button asChild size="sm" variant="outline">
-              <Link to="/contracts/budgets">Все бюджеты</Link>
+              <Link to="/contracts/budgets">{t('contracts.overview.allBudgets')}</Link>
             </Button>
           </CardContent>
         </Card>
@@ -157,21 +157,21 @@ const ContractsOverview = () => {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Building2 className="h-5 w-5 text-muted-foreground" />
-              Реестр контрагентов
+              {t('contracts.nav.counterparties')}
             </CardTitle>
             <CardDescription>
-              Карточки организаций и ИП: БИН/ИИН, НДС, адрес, контакты.
+              {t('contracts.overview.counterpartiesHint')}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex gap-2">
             <Button asChild size="sm">
               <Link to="/contracts/counterparties/new">
                 <Plus className="mr-2 h-4 w-4" />
-                Добавить
+                {t('common.add')}
               </Link>
             </Button>
             <Button asChild size="sm" variant="outline">
-              <Link to="/contracts/counterparties">Весь реестр</Link>
+              <Link to="/contracts/counterparties">{t('contracts.overview.wholeRegistry')}</Link>
             </Button>
           </CardContent>
         </Card>
@@ -180,11 +180,10 @@ const ContractsOverview = () => {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <FileText className="h-5 w-5 text-muted-foreground" />
-              Договоры
+              {t('contracts.nav.agreements')}
             </CardTitle>
             <CardDescription>
-              Оформление договора со списанием бюджетной строки. Страница ещё
-              не готова — API уже работает, интерфейса пока нет.
+              {t('contracts.overview.agreementsHint')}
             </CardDescription>
           </CardHeader>
         </Card>

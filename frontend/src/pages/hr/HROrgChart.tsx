@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { useHRLevel } from '@/hooks/useHRLevel';
+import { useTranslation } from 'react-i18next';
 
 type Mode = 'positions' | 'employees' | 'both';
 type OrgLanguage = 'ru' | 'en';
@@ -25,6 +26,7 @@ type OrgLanguage = 'ru' | 'en';
 interface Department { id: number; name: string }
 
 const HROrgChart = () => {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<Mode>('positions');
   const [rootId, setRootId] = useState<string>('all');
   const [depth, setDepth] = useState(5);
@@ -39,9 +41,9 @@ const HROrgChart = () => {
 
   useEffect(() => {
     if (editMode && mode === 'both') {
-      toast.info('Редактирование доступно в режимах «Должности» и «Сотрудники»');
+      toast.info(t('hr.orgChartPage.editModeHint'));
     }
-  }, [editMode, mode]);
+  }, [editMode, mode, t]);
 
   const queryClient = useQueryClient();
 
@@ -108,8 +110,8 @@ const HROrgChart = () => {
 
   return (
     <HRLayout
-      title="Структура компании"
-      subtitle="Интерактивное дерево должностей и сотрудников с гибким управлением связями"
+      title={t('hr.orgChartPage.title')}
+      subtitle={t('hr.orgChartPage.subtitle')}
     >
       {/* Edit mode active indicator banner */}
       {editable && (
@@ -117,11 +119,11 @@ const HROrgChart = () => {
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0" />
             <span>
-              <strong>Режим редактирования активен:</strong> протяните стрелку между узлами для установки связи или кликните по узлу для настройки руководителя и подчинённых.
+              <strong>{t('hr.orgChartPage.editModeOn')}</strong> {t('hr.orgChartPage.editModeHelp')}
             </span>
           </div>
           <Badge variant="outline" className="bg-white/80 dark:bg-neutral-900/80 text-[10px] shrink-0 font-medium">
-            Права подтверждены
+            {t('hr.orgChartPage.rightsConfirmed')}
           </Badge>
         </div>
       )}
@@ -129,13 +131,13 @@ const HROrgChart = () => {
       {/* Filters & Actions bar */}
       <div className="flex flex-wrap items-center gap-2.5 mb-4">
         <div className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground text-xs font-medium">Отдел:</span>
+          <span className="text-muted-foreground text-xs font-medium">{t('hr.orgChartPage.departmentLabel')}</span>
           <Select value={rootId} onValueChange={setRootId}>
             <SelectTrigger className="h-8 w-40 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Вся компания</SelectItem>
+              <SelectItem value="all">{t('hr.orgChartPage.wholeCompany')}</SelectItem>
               {departments?.map((d) => (
                 <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
               ))}
@@ -144,21 +146,21 @@ const HROrgChart = () => {
         </div>
 
         <div className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground text-xs font-medium">Показать:</span>
+          <span className="text-muted-foreground text-xs font-medium">{t('hr.orgChartPage.showLabel')}</span>
           <Select value={mode} onValueChange={(v) => setMode(v as Mode)}>
             <SelectTrigger className="h-8 w-36 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="positions">Должности</SelectItem>
-              <SelectItem value="employees">Сотрудники</SelectItem>
-              <SelectItem value="both">Оба варианта</SelectItem>
+              <SelectItem value="positions">{t('hr.orgChartPage.positions')}</SelectItem>
+              <SelectItem value="employees">{t('hr.nav.employees')}</SelectItem>
+              <SelectItem value="both">{t('hr.orgChartPage.both')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
         <div className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground text-xs font-medium">Уровней:</span>
+          <span className="text-muted-foreground text-xs font-medium">{t('hr.orgChartPage.levelsLabel')}</span>
           <Select value={String(depth)} onValueChange={(v) => setDepth(parseInt(v))}>
             <SelectTrigger className="h-8 w-20 text-xs">
               <SelectValue />
@@ -172,7 +174,7 @@ const HROrgChart = () => {
         </div>
 
         <div className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground text-xs font-medium">Язык:</span>
+          <span className="text-muted-foreground text-xs font-medium">{t('hr.orgChartPage.languageLabel')}</span>
           <Select value={language} onValueChange={(v) => setLanguage(v as OrgLanguage)}>
             <SelectTrigger className="h-8 w-20 text-xs">
               <SelectValue />
@@ -191,8 +193,8 @@ const HROrgChart = () => {
             value=""
             onChange={handleQuickSelect}
             options={searchOptions}
-            placeholder="Найти на схеме..."
-            searchPlaceholder="Поиск узла..."
+            placeholder={t('hr.orgChartPage.findOnChart')}
+            searchPlaceholder={t('hr.orgChartPage.searchNode')}
             className="h-8 text-xs bg-background/90"
           />
         </div>
@@ -200,7 +202,7 @@ const HROrgChart = () => {
         {canEdit && (
           <div className="flex items-center gap-1.5 text-xs font-medium rounded-lg border bg-muted/30 px-2.5 py-1">
             <Pencil className="h-3.5 w-3.5 text-primary" />
-            <span className="text-foreground">Редактировать:</span>
+            <span className="text-foreground">{t('hr.orgChartPage.editLabel')}</span>
             <Switch checked={editMode} onCheckedChange={setEditMode} className="scale-90" />
           </div>
         )}
@@ -212,13 +214,13 @@ const HROrgChart = () => {
           onClick={() => setShareOpen(true)}
         >
           <Share2 className="h-3.5 w-3.5" />
-          Поделиться
+          {t('common.share')}
         </Button>
       </div>
 
       {error && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-xs text-destructive mb-4">
-          Не удалось загрузить структуру компании
+          {t('hr.orgChartPage.loadError')}
         </div>
       )}
 

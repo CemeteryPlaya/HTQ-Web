@@ -63,6 +63,7 @@ import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasAnyRole } from '@/lib/auth/roles';
 import type { AgreementStatus } from '@/types/contracts';
+import { useTranslation } from 'react-i18next';
 
 const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
@@ -85,6 +86,7 @@ interface Props {
 }
 
 const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
+  const { t } = useTranslation();
   const enabled = Number.isFinite(agreementId);
   const queryClient = useQueryClient();
 
@@ -141,23 +143,23 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
         .then((r) => r.data),
     onSuccess: (row) => {
       setNextStatus('');
-      toast.success(`Статус изменён: ${statusLabel(row.status)}`);
+      toast.success(t('contracts.agreement.statusChanged', { status: statusLabel(row.status) }));
       invalidateAll();
     },
     // 409 — переход запрещён таблицей или сумма не помещается в остаток
     // (переход в занимающий бюджет статус лимит перепроверяет).
-    onError: (err) => reportApiError(err, 'Не удалось изменить статус'),
+    onError: (err) => reportApiError(err, t('contracts.agreement.statusError')),
   });
 
   const upload = useMutation({
     mutationFn: (file: File) =>
       contractsApi.uploadAgreementFile(agreementId, file).then((r) => r.data),
     onSuccess: () => {
-      toast.success('Файл договора загружен');
+      toast.success(t('contracts.agreement.fileUploaded'));
       invalidateAll();
     },
     // 403 — «заменить скан может только администратор» после отправки.
-    onError: (err) => reportApiError(err, 'Не удалось загрузить файл'),
+    onError: (err) => reportApiError(err, t('contracts.agreement.uploadError')),
   });
 
   /** Ссылка подписанная и живёт недолго, поэтому запрашивается по клику, а
@@ -166,7 +168,7 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
     mutationFn: () =>
       contractsApi.getAgreementFileUrl(agreementId).then((r) => r.data.url),
     onSuccess: (url) => window.open(url, '_blank', 'noopener,noreferrer'),
-    onError: (err) => reportApiError(err, 'Не удалось получить ссылку на файл'),
+    onError: (err) => reportApiError(err, t('contracts.agreement.linkError')),
   });
 
   const transitions = agreement
@@ -178,7 +180,7 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
 
   if (isLoading) return <DetailSkeleton />;
   if (isError || !agreement) {
-    return <p className="text-sm text-destructive">Договор не найден или недоступен.</p>;
+    return <p className="text-sm text-destructive">{t('contracts.agreement.notFound')}</p>;
   }
 
   const Heading = embedded ? 'h2' : 'h1';
@@ -225,29 +227,29 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Договор</CardTitle>
+          <CardTitle className="text-base">{t('contracts.agreement.title')}</CardTitle>
         </CardHeader>
         <CardContent>
           <FieldGrid>
-            <Field label="Сумма">
+            <Field label={t('contracts.columns.amount')}>
               <span className="text-lg font-semibold tabular-nums">
                 {formatMoney(agreement.amount, agreement.currency)}
               </span>
             </Field>
-            <Field label="Тип оплаты">{paymentLabel(agreement.payment_type)}</Field>
-            <Field label="Дата подписания">
+            <Field label={t('contracts.columns.paymentType')}>{paymentLabel(agreement.payment_type)}</Field>
+            <Field label={t('contracts.columns.signedAt')}>
               {formatDate(agreement.signed_date)}
             </Field>
-            <Field label="Наименование" className="sm:col-span-2">
+            <Field label={t('contracts.columns.title')} className="sm:col-span-2">
               {agreement.name}
             </Field>
-            <Field label="Автор">
+            <Field label={t('contracts.columns.author')}>
               {agreement.created_by !== null
-                ? `Пользователь #${agreement.created_by}`
+                ? t('signoff.userNumber', { id: agreement.created_by })
                 : '—'}
             </Field>
-            <Field label="Оформлен">{formatMoment(agreement.created_at)}</Field>
-            <Field label="Изменён">{formatMoment(agreement.updated_at)}</Field>
+            <Field label={t('contracts.columns.issuedAt')}>{formatMoment(agreement.created_at)}</Field>
+            <Field label={t('contracts.updatedAt')}>{formatMoment(agreement.updated_at)}</Field>
           </FieldGrid>
         </CardContent>
       </Card>
@@ -255,39 +257,39 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Источник денег</CardTitle>
+            <CardTitle className="text-base">{t('contracts.agreement.moneySource')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
               {/* Ссылка ведёт на БЮДЖЕТ, а не на строку: своей страницы
                   у строки нет, да и смотреть её в отрыве от соседних
                   программ незачем. */}
-              <Field label="Бюджет">
+              <Field label={t('contracts.columns.budget')}>
                 <Link
                   to={`/contracts/budgets/${agreement.budget_id}`}
                   className="hover:underline underline-offset-2"
                 >
-                  Бюджет {agreement.period_year}
+                  {t('contracts.budget.titleYear', { year: agreement.period_year })}
                 </Link>
               </Field>
-              <Field label="Администратор">{agreement.administrator_name}</Field>
-              <Field label="Программа">{agreement.program_name}</Field>
-              <Field label="Статья расходов">{agreement.expense_item}</Field>
+              <Field label={t('contracts.columns.administrator')}>{agreement.administrator_name}</Field>
+              <Field label={t('contracts.columns.programme')}>{agreement.program_name}</Field>
+              <Field label={t('contracts.columns.expenseItem')}>{agreement.expense_item}</Field>
             </dl>
             {line && (
               <div className="rounded-md border bg-muted/40 p-4 text-sm">
                 <div className="flex flex-wrap justify-between gap-2">
-                  <span className="text-muted-foreground">Выделено</span>
+                  <span className="text-muted-foreground">{t('contracts.columns.allocated')}</span>
                   <span className="tabular-nums">
                     {formatMoney(line.amount, line.currency)}
                   </span>
                 </div>
                 <div className="flex flex-wrap justify-between gap-2">
-                  <span className="text-muted-foreground">Законтрактовано</span>
+                  <span className="text-muted-foreground">{t('contracts.columns.contracted')}</span>
                   <span className="tabular-nums">{formatAmount(line.committed)}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap justify-between gap-2 border-t pt-1 font-medium">
-                  <span>Остаток строки</span>
+                  <span>{t('contracts.agreement.lineRemaining')}</span>
                   <span
                     className={`tabular-nums ${remainingTone(
                       line.remaining,
@@ -304,11 +306,11 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
 
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Контрагент</CardTitle>
+            <CardTitle className="text-base">{t('contracts.columns.counterparty')}</CardTitle>
           </CardHeader>
           <CardContent>
             <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-              <Field label="Наименование" className="sm:col-span-2">
+              <Field label={t('contracts.columns.title')} className="sm:col-span-2">
                 <Link
                   to={`/contracts/counterparties/${agreement.counterparty_id}`}
                   className="hover:underline underline-offset-2"
@@ -316,7 +318,7 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                   {agreement.counterparty_name}
                 </Link>
               </Field>
-              <Field label="БИН / ИИН">
+              <Field label={t('contracts.counterparty.bin')}>
                 <span className="tabular-nums">{agreement.counterparty_bin_iin}</span>
               </Field>
             </dl>
@@ -326,14 +328,14 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Скан договора</CardTitle>
+          <CardTitle className="text-base">{t('contracts.agreement.scan')}</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-3">
           {agreement.file_id ? (
             <>
               <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
                 <Paperclip className="h-4 w-4" />
-                Файл приложен
+                {t('contracts.agreement.fileAttached')}
               </span>
               <Button
                 variant="outline"
@@ -345,11 +347,11 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                 ) : (
                   <Download className="mr-1.5 h-4 w-4" />
                 )}
-                Открыть
+                {t('common.open')}
               </Button>
             </>
           ) : (
-            <span className="text-sm text-muted-foreground">Файл не приложен.</span>
+            <span className="text-sm text-muted-foreground">{t('contracts.agreement.noFile')}</span>
           )}
 
           {canUpload && (
@@ -376,11 +378,11 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                 ) : (
                   <Upload className="mr-1.5 h-4 w-4" />
                 )}
-                {agreement.file_id ? 'Заменить' : 'Загрузить'}
+                {agreement.file_id ? t('contracts.agreement.replaceFile') : t('contracts.agreement.uploadFile')}
               </Button>
               {agreement.file_id && (
                 <span className="text-xs text-muted-foreground">
-                  Замена вытеснит текущий файл из карточки.
+                  {t('contracts.agreement.replaceHint')}
                 </span>
               )}
             </>
@@ -391,19 +393,18 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
       {isAdmin && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Смена статуса</CardTitle>
+            <CardTitle className="text-base">{t('contracts.agreement.statusChange')}</CardTitle>
           </CardHeader>
           <CardContent>
             {transitions.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Из статуса «{statusLabel(agreement.status)}» переходов нет — он
-                терминальный.
+                {t('contracts.agreement.terminalStatus', { status: statusLabel(agreement.status) })}
               </p>
             ) : (
               <div className="flex flex-wrap items-center gap-3">
                 <Select value={nextStatus} onValueChange={setNextStatus}>
                   <SelectTrigger className="w-56">
-                    <SelectValue placeholder="Новый статус" />
+                    <SelectValue placeholder={t('contracts.agreement.newStatus')} />
                   </SelectTrigger>
                   <SelectContent>
                     {transitions.map((value) => (
@@ -420,11 +421,10 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                   {changeStatus.isPending && (
                     <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                   )}
-                  Применить
+                  {t('contracts.applyStatus')}
                 </Button>
                 <p className="w-full text-xs text-muted-foreground">
-                  Штатно статус двигает согласование. Руками — то, чего маршрут
-                  не покрывает: «подписан», «исполнен», «расторгнут».
+                  {t('contracts.agreement.statusHint')}
                 </p>
               </div>
             )}

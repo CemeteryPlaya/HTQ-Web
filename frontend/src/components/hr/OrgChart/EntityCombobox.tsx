@@ -15,6 +15,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
+import { useTranslation } from 'react-i18next';
 
 export interface EntityOption {
   id: number;
@@ -57,11 +58,12 @@ function getInitials(name: string): string {
 }
 
 export function EntityCombobox(props: EntityComboboxProps) {
+  const { t } = useTranslation();
   const {
     options,
-    placeholder = 'Выберите из списка...',
-    searchPlaceholder = 'Поиск по имени, должности, отделу...',
-    emptyText = 'Ничего не найдено',
+    placeholder = t('hr.orgChart.pickFromList'),
+    searchPlaceholder = t('hr.orgChart.searchEntity'),
+    emptyText = t('common.nothingFound'),
     className,
     disabled = false,
   } = props;
@@ -106,7 +108,7 @@ export function EntityCombobox(props: EntityComboboxProps) {
       return (
         <div className="flex items-center gap-1.5 overflow-hidden">
           <Badge variant="secondary" className="px-1.5 py-0 text-xs font-semibold">
-            Выбрано: {selectedIds.length}
+            {t('calendar.selectedCount', { count: selectedIds.length })}
           </Badge>
           <span className="truncate text-xs text-muted-foreground">
             {selectedIds.map((id) => optionMap.get(id)?.label ?? id).join(', ')}
@@ -294,7 +296,7 @@ export function EntityCombobox(props: EntityComboboxProps) {
           {isMulti && (
             <div className="flex items-center justify-between border-t p-2 bg-muted/30">
               <span className="text-xs text-muted-foreground">
-                Выбрано: {props.value.length}
+                {t('calendar.selectedCount', { count: props.value.length })}
               </span>
               <div className="flex gap-1.5">
                 {props.value.length > 0 && (
@@ -304,7 +306,7 @@ export function EntityCombobox(props: EntityComboboxProps) {
                     className="h-7 px-2 text-xs"
                     onClick={() => props.onChange([])}
                   >
-                    Сбросить
+                    {t('common.reset')}
                   </Button>
                 )}
                 <Button
@@ -312,7 +314,7 @@ export function EntityCombobox(props: EntityComboboxProps) {
                   className="h-7 px-3 text-xs"
                   onClick={() => setOpen(false)}
                 >
-                  Готово
+                  {t('common.done')}
                 </Button>
               </div>
             </div>

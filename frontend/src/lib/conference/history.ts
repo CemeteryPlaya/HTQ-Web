@@ -7,6 +7,7 @@
  * промахом на несколько секунд. Такое ловится тестом, а не глазами.
  */
 import type { RecordingState } from '@/api/conference';
+import i18next from '@/i18n';
 
 export const formatDateTime = (iso: string | null | undefined): string => {
   if (!iso) return '—';
@@ -26,13 +27,13 @@ export const formatDateTime = (iso: string | null | undefined): string => {
 /** Длительность встречи по-человечески: «1 ч 24 мин», «7 мин», «—». */
 export const formatDuration = (seconds: number | null | undefined): string => {
   if (seconds === null || seconds === undefined) return '—';
-  if (seconds < 60) return `${Math.max(0, Math.round(seconds))} сек`;
+  if (seconds < 60) return i18next.t('conference.duration.seconds', { seconds: Math.max(0, Math.round(seconds)) });
 
   const totalMinutes = Math.round(seconds / 60);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  if (hours === 0) return `${minutes} мин`;
-  return minutes === 0 ? `${hours} ч` : `${hours} ч ${minutes} мин`;
+  if (hours === 0) return i18next.t('conference.duration.minutes', { minutes });
+  return minutes === 0 ? i18next.t('conference.duration.hours', { hours }) : i18next.t('conference.duration.hoursMinutes', { hours, minutes });
 };
 
 /**

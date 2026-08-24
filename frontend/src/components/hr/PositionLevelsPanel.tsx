@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { errorDetail, reportApiError } from '@/lib/apiError';
 import type { LevelThreshold } from '@/types/hr';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Справочник уровней должностей — вкладка «Уровни» на странице /hr/positions.
@@ -54,6 +55,7 @@ function LevelRow({
   onDelete: (levelNumber: number, positionCount: number) => void;
   saving: boolean;
 }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState<LevelDraft>(() => toDraft(level));
 
   useEffect(() => {
@@ -66,7 +68,7 @@ function LevelRow({
         <span className="text-sm font-semibold tabular-nums">L{level.level_number}</span>
         <Input
           value={draft.label}
-          placeholder="Название уровня"
+          placeholder={t('hr.levels.namePlaceholder')}
           onChange={(e) => setDraft({ ...draft, label: e.target.value })}
         />
         <div className="flex items-center gap-2">
@@ -75,12 +77,12 @@ function LevelRow({
             value={draft.color}
             onChange={(e) => setDraft({ ...draft, color: e.target.value })}
             className="h-9 w-12 rounded border bg-background"
-            aria-label={`Цвет уровня L${level.level_number}`}
+            aria-label={t('hr.levels.colorAria', { level: level.level_number })}
           />
           <span className="font-mono text-xs text-muted-foreground">{draft.color}</span>
         </div>
         <span className="text-xs text-muted-foreground">
-          {positionCount} должн.
+          {t('hr.levels.positionsShort', { count: positionCount })}
         </span>
         <div className="flex justify-end gap-1">
           <Button
@@ -88,7 +90,7 @@ function LevelRow({
             variant="ghost"
             onClick={() => onSave(level.level_number, draft)}
             disabled={saving}
-            title="Сохранить"
+            title={t('common.save')}
           >
             <Save className="h-4 w-4" />
           </Button>
@@ -98,7 +100,7 @@ function LevelRow({
             className="text-destructive hover:text-destructive"
             onClick={() => onDelete(level.level_number, positionCount)}
             disabled={saving}
-            title="Удалить"
+            title={t('common.delete')}
           >
             <Trash2 className="h-4 w-4" />
           </Button>
@@ -106,15 +108,15 @@ function LevelRow({
       </div>
 
       <details className="mt-2">
-        <summary className="cursor-pointer text-xs text-muted-foreground">Служебное</summary>
+        <summary className="cursor-pointer text-xs text-muted-foreground">{t('hr.positions.internal')}</summary>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span>Диапазон весов</span>
+          <span>{t('hr.levels.weightRange')}</span>
           <Input
             type="number"
             min={0}
             className="h-8 w-24"
             value={draft.weight_from}
-            aria-label="Вес от"
+            aria-label={t('hr.levels.weightFrom')}
             onChange={(e) => setDraft({ ...draft, weight_from: e.target.value })}
           />
           <span>—</span>
@@ -123,10 +125,10 @@ function LevelRow({
             min={0}
             className="h-8 w-24"
             value={draft.weight_to}
-            aria-label="Вес до"
+            aria-label={t('hr.levels.weightTo')}
             onChange={(e) => setDraft({ ...draft, weight_to: e.target.value })}
           />
-          <span>сохраняется той же кнопкой</span>
+          <span>{t('hr.levels.savedTogether')}</span>
         </div>
       </details>
     </div>
@@ -139,6 +141,7 @@ interface PositionLevelOnly {
 }
 
 const PositionLevelsPanel = () => {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [createDraft, setCreateDraft] = useState<LevelDraft>(() => toDraft());
   const [createError, setCreateError] = useState<string | null>(null);
@@ -182,8 +185,8 @@ const PositionLevelsPanel = () => {
     onError: (err) => {
       // 409 «уровень уже существует» / «между L1 и L3 нет свободных весов» —
       // бэкенд объясняет причину, показываем текст прямо в строке создания.
-      setCreateError(errorDetail(err) ?? 'Не удалось добавить уровень');
-      reportApiError(err, 'Не удалось добавить уровень');
+      setCreateError(errorDetail(err) ?? t('hr.levels.addError'));
+      reportApiError(err, t('hr.levels.addError'));
     },
   });
 
@@ -197,13 +200,13 @@ const PositionLevelsPanel = () => {
       })
     ),
     onSuccess: invalidateAll,
-    onError: (err) => reportApiError(err, 'Не удалось сохранить уровень'),
+    onError: (err) => reportApiError(err, t('hr.levels.saveError')),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (levelNumber: number) => api.delete(`hr/v1/positions/levels/${levelNumber}`),
     onSuccess: invalidateAll,
-    onError: (err) => reportApiError(err, 'Не удалось удалить уровень'),
+    onError: (err) => reportApiError(err, t('hr.levels.deleteError')),
   });
 
   const sortedLevels = [...levels].sort((a, b) => a.level_number - b.level_number);
@@ -212,31 +215,29 @@ const PositionLevelsPanel = () => {
     // Удаление порога не удаляет должности — они пересчитываются и уезжают на
     // уровень без порога. Молчаливое «Удалить уровень?» об этом не говорило.
     const message = positionCount > 0
-      ? `На уровне L${levelNumber} ${positionCount} должн. После удаления они `
-        + 'окажутся на уровне без порога. Удалить?'
-      : `Удалить уровень L${levelNumber}?`;
+      ? t('hr.levels.confirmDeleteWithPositions', { level: levelNumber, count: positionCount })
+      : t('hr.levels.confirmDelete', { level: levelNumber });
     if (confirm(message)) deleteMutation.mutate(levelNumber);
   };
 
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Ступени иерархии должностей: название и цвет, которыми уровень показан в оргструктуре
-        и на вкладке «Должности».
+        {t('hr.levels.panelHint')}
       </p>
 
       <section className="rounded-lg border bg-card">
         <div className="hidden border-b px-4 py-2 text-xs font-medium uppercase text-muted-foreground lg:grid lg:grid-cols-[72px_1fr_136px_120px_112px]">
-          <span>Уровень</span>
-          <span>Название</span>
-          <span>Цвет</span>
-          <span>Должностей</span>
-          <span className="text-right">Действия</span>
+          <span>{t('hr.levels.level')}</span>
+          <span>{t('hr.pmo.name')}</span>
+          <span>{t('calendar.form.color')}</span>
+          <span>{t('hr.levels.positions')}</span>
+          <span className="text-right">{t('common.actions')}</span>
         </div>
         {isLoading ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">Загрузка...</div>
+          <div className="p-8 text-center text-sm text-muted-foreground">{t('common.loading')}</div>
         ) : sortedLevels.length === 0 ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">Нет уровней</div>
+          <div className="p-8 text-center text-sm text-muted-foreground">{t('hr.levels.empty')}</div>
         ) : (
           sortedLevels.map((level) => (
             <LevelRow
@@ -257,19 +258,19 @@ const PositionLevelsPanel = () => {
             type="number"
             min={1}
             placeholder="№"
-            aria-label="Номер уровня"
+            aria-label={t('hr.levels.numberAria')}
             value={createDraft.level_number}
             onChange={(e) => setCreateDraft({ ...createDraft, level_number: e.target.value })}
           />
           <Input
-            placeholder="Название уровня"
-            aria-label="Название уровня"
+            placeholder={t('hr.levels.namePlaceholder')}
+            aria-label={t('hr.levels.namePlaceholder')}
             value={createDraft.label}
             onChange={(e) => setCreateDraft({ ...createDraft, label: e.target.value })}
           />
           <input
             type="color"
-            aria-label="Цвет нового уровня"
+            aria-label={t('hr.levels.newColorAria')}
             value={createDraft.color}
             onChange={(e) => setCreateDraft({ ...createDraft, color: e.target.value })}
             className="h-9 w-16 rounded border bg-background"
@@ -279,11 +280,11 @@ const PositionLevelsPanel = () => {
             disabled={!createDraft.level_number || createMutation.isPending}
           >
             <Plus className="mr-2 h-4 w-4" />
-            Добавить
+            {t('common.add')}
           </Button>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Чем меньше номер, тем выше уровень в иерархии.
+          {t('hr.levels.orderHint')}
         </p>
         {createError && (
           <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">

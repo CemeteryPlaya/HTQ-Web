@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { EntityCombobox, type EntityOption } from './EntityCombobox';
 import type { OrgEdge, OrgNode } from '@/api/hr';
+import { useTranslation } from 'react-i18next';
 
 interface TransferSubordinatesDialogProps {
   open: boolean;
@@ -35,6 +36,7 @@ export function TransferSubordinatesDialog({
   onTransfer,
   isLoading = false,
 }: TransferSubordinatesDialogProps) {
+  const { t } = useTranslation();
   const [selectedReports, setSelectedReports] = useState<string[]>([]);
   const [targetManagerId, setTargetManagerId] = useState('');
 
@@ -87,10 +89,10 @@ export function TransferSubordinatesDialog({
         <DialogHeader className="space-y-1 text-left pr-6">
           <DialogTitle className="flex items-center gap-2 text-sm sm:text-base font-bold text-foreground">
             <Users className="h-4 w-4 text-primary shrink-0" />
-            <span className="truncate">Передача подчинённых</span>
+            <span className="truncate">{t('hr.orgChart.transfer.title')}</span>
           </DialogTitle>
           <DialogDescription className="text-[11px] text-muted-foreground leading-tight">
-            Переназначьте выбранных сотрудников или должности новому руководителю
+            {t('hr.orgChart.transfer.subtitle')}
           </DialogDescription>
         </DialogHeader>
 
@@ -98,7 +100,7 @@ export function TransferSubordinatesDialog({
           {/* Current Manager & Target selection */}
           <div className="space-y-2.5 rounded-xl border bg-muted/40 p-2.5 text-xs">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground text-[11px]">Текущий руководитель:</span>
+              <span className="text-muted-foreground text-[11px]">{t('hr.orgChart.transfer.currentManager')}</span>
               <span className="font-semibold text-foreground truncate max-w-[200px]" title={currentNode.label}>
                 {currentNode.label}
               </span>
@@ -107,15 +109,15 @@ export function TransferSubordinatesDialog({
             <div className="space-y-1 pt-1.5 border-t">
               <label className="text-[11px] font-semibold text-foreground flex items-center gap-1">
                 <Crown className="h-3 w-3 text-amber-500" />
-                Новый руководитель:
+                {t('hr.orgChart.newManager')}
               </label>
               <EntityCombobox
                 mode="single"
                 value={targetManagerId}
                 onChange={setTargetManagerId}
                 options={filteredCandidates}
-                placeholder="Выберите нового руководителя..."
-                searchPlaceholder="Поиск руководителя..."
+                placeholder={t('hr.orgChart.transfer.pickManager')}
+                searchPlaceholder={t('hr.orgChart.searchManager')}
                 className="h-8 text-xs"
               />
             </div>
@@ -125,9 +127,9 @@ export function TransferSubordinatesDialog({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5">
-                <span className="text-[11px] font-semibold text-foreground">Подчинённые для передачи:</span>
+                <span className="text-[11px] font-semibold text-foreground">{t('hr.orgChart.transfer.reportsToMove')}</span>
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
-                  {selectedReports.length} из {reportNodeIds.length}
+                  {t('hr.orgChart.transfer.counter', { selected: selectedReports.length, total: reportNodeIds.length })}
                 </Badge>
               </div>
               <Button
@@ -136,14 +138,14 @@ export function TransferSubordinatesDialog({
                 className="h-5 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
                 onClick={handleToggleAll}
               >
-                {selectedReports.length === reportNodeIds.length ? 'Снять все' : 'Выбрать все'}
+                {selectedReports.length === reportNodeIds.length ? t('hr.orgChart.transfer.clearAll') : t('hr.orgChart.transfer.selectAll')}
               </Button>
             </div>
 
             <div className="max-h-[160px] overflow-y-auto rounded-lg border p-1 space-y-0.5 bg-background/60">
               {reports.length === 0 ? (
                 <div className="py-4 text-center text-xs text-muted-foreground">
-                  У данного узла нет подчинённых
+                  {t('hr.orgChart.transfer.noReports')}
                 </div>
               ) : (
                 reports.map((r) => {
@@ -178,7 +180,7 @@ export function TransferSubordinatesDialog({
 
         <DialogFooter className="flex-row items-center justify-end gap-2 pt-1 sm:space-x-0">
           <Button variant="outline" size="sm" onClick={onClose} disabled={isLoading} className="h-8 text-xs px-3">
-            Отмена
+            {t('common.cancel')}
           </Button>
           <Button
             size="sm"
@@ -187,7 +189,7 @@ export function TransferSubordinatesDialog({
             className="h-8 text-xs px-3 gap-1"
           >
             <UserCheck className="h-3.5 w-3.5" />
-            {isLoading ? 'Передача...' : `Передать (${selectedReports.length})`}
+            {isLoading ? t('hr.orgChart.transfer.inProgress') : t('hr.orgChart.transfer.submit', { count: selectedReports.length })}
           </Button>
         </DialogFooter>
       </DialogContent>

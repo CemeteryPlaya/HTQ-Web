@@ -21,8 +21,10 @@ import { EmployeeCardView } from '@/components/hr/EmployeeCardView';
 import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
 import { Button } from '@/components/ui/button';
 import { useHRLevel } from '@/hooks/useHRLevel';
+import { useTranslation } from 'react-i18next';
 
 const HREmployeeCard = () => {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const employeeId = Number(id);
@@ -41,16 +43,16 @@ const HREmployeeCard = () => {
     enabled: !!employeeId && (hasPerm('hr.card.financial.view') || hasPerm('hr.card.personal.view')),
   });
 
-  const title = data?.full_name || 'Карточка сотрудника';
+  const title = data?.full_name || t('share.employee.title');
   const subtitle = [data?.position?.title, data?.department?.name]
     .filter(Boolean)
     .join(' · ');
 
   if (levelLoading || isLoading) {
     return (
-      <HRLayout title="Карточка сотрудника" subtitle="">
+      <HRLayout title={t('share.employee.title')} subtitle="">
         <div className="rounded-2xl border bg-card/70 p-8 text-center">
-          Загрузка...
+          {t('common.loading')}
         </div>
       </HRLayout>
     );
@@ -58,9 +60,9 @@ const HREmployeeCard = () => {
 
   if (!hasHrAccess) {
     return (
-      <HRLayout title="Карточка сотрудника" subtitle="">
+      <HRLayout title={t('share.employee.title')} subtitle="">
         <div className="rounded-2xl border bg-card/70 p-8 text-center text-muted-foreground">
-          Недостаточно прав для HR-раздела
+          {t('hr.employeeCard.noRights')}
         </div>
       </HRLayout>
     );
@@ -68,11 +70,11 @@ const HREmployeeCard = () => {
 
   if (error || !data) {
     return (
-      <HRLayout title="Карточка сотрудника" subtitle="">
+      <HRLayout title={t('share.employee.title')} subtitle="">
         <div className="rounded-2xl border bg-card/70 p-8 text-center text-destructive">
-          Не удалось загрузить карточку.{' '}
+          {t('hr.employeeCard.loadError')}{' '}
           <Link className="underline" to="/hr/employees">
-            Назад к списку
+            {t('hr.employeeCard.backToList')}
           </Link>
         </div>
       </HRLayout>
@@ -90,7 +92,7 @@ const HREmployeeCard = () => {
             className="gap-1.5"
           >
             <ArrowLeft className="h-4 w-4" />
-            Назад
+            {t('common.back')}
           </Button>
           <div className="ml-auto flex flex-wrap gap-2">
             {canWriteBasic && (
@@ -101,12 +103,12 @@ const HREmployeeCard = () => {
                 className="gap-1.5"
               >
                 <Pencil className="h-4 w-4" />
-                Редактировать
+                {t('common.edit')}
               </Button>
             )}
             <Button size="sm" onClick={() => setShareOpen(true)} className="gap-1.5">
               <Share2 className="h-4 w-4" />
-              Поделиться
+              {t('common.share')}
             </Button>
           </div>
         </div>
@@ -115,20 +117,20 @@ const HREmployeeCard = () => {
 
         {hasPerm('hr.card.financial.view') && cardT2?.financial && (
           <section className="rounded-lg border p-4">
-            <h3 className="font-semibold mb-2">Финансы</h3>
-            <div className="text-sm">Оклад: {cardT2.financial.salary ?? '—'}</div>
-            <div className="text-sm">Премия: {cardT2.financial.bonus ?? '—'}</div>
-            <div className="text-sm">Счёт: {cardT2.financial.bank_account ?? '—'}</div>
+            <h3 className="font-semibold mb-2">{t('hr.employeeCard.finance')}</h3>
+            <div className="text-sm">{t('hr.employeeCard.salary', { value: cardT2.financial.salary ?? '—' })}</div>
+            <div className="text-sm">{t('hr.employeeCard.bonus', { value: cardT2.financial.bonus ?? '—' })}</div>
+            <div className="text-sm">{t('hr.employeeCard.bankAccount', { value: cardT2.financial.bank_account ?? '—' })}</div>
           </section>
         )}
         {hasPerm('hr.card.personal.view') && cardT2?.personal && (
           <section className="rounded-lg border p-4">
-            <h3 className="font-semibold mb-2">Личные данные</h3>
-            <div className="text-sm">Паспорт: {cardT2.personal.passport_data ?? '—'}</div>
-            <div className="text-sm">ИНН: {cardT2.personal.inn ?? '—'}</div>
-            <div className="text-sm">Дата рождения: {cardT2.personal.birth_date ?? '—'}</div>
-            <div className="text-sm">Место рождения: {cardT2.personal.birth_place ?? '—'}</div>
-            <div className="text-sm">Гражданство: {cardT2.personal.citizenship ?? '—'}</div>
+            <h3 className="font-semibold mb-2">{t('hr.employeeCard.personal')}</h3>
+            <div className="text-sm">{t('hr.employeeCard.passport', { value: cardT2.personal.passport_data ?? '—' })}</div>
+            <div className="text-sm">{t('hr.employeeCard.inn', { value: cardT2.personal.inn ?? '—' })}</div>
+            <div className="text-sm">{t('hr.employeeCard.birthDate', { value: cardT2.personal.birth_date ?? '—' })}</div>
+            <div className="text-sm">{t('hr.employeeCard.birthPlace', { value: cardT2.personal.birth_place ?? '—' })}</div>
+            <div className="text-sm">{t('hr.employeeCard.citizenship', { value: cardT2.personal.citizenship ?? '—' })}</div>
           </section>
         )}
       </HRLayout>

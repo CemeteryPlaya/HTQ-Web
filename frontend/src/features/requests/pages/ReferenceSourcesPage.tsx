@@ -17,10 +17,12 @@ import { requestsApi } from '@/api/requests';
 import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { useReferenceRows, useReferenceSources } from '@/features/requests/hooks';
 import type { ReferenceSource } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
 
 const RK = { sources: ['requests', 'reference', 'sources'] as const, rows: (id: number) => ['requests', 'reference', 'rows', id] as const };
 
 export default function ReferenceSourcesPage() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const sources = useReferenceSources();
   // Template data tables (template_id set) live on the "Управление данными"
@@ -39,9 +41,9 @@ export default function ReferenceSourcesPage() {
       await requestsApi.reference.create({ name: name.trim(), columns });
       qc.invalidateQueries({ queryKey: RK.sources });
       setName(''); setCols('');
-      toast.success('Справочник создан');
+      toast.success(t('requests.reference.created'));
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? 'Не удалось создать');
+      toast.error(e?.response?.data?.detail ?? t('requests.reference.createError'));
     }
   }
 
@@ -50,30 +52,30 @@ export default function ReferenceSourcesPage() {
       await requestsApi.reference.remove(id);
       qc.invalidateQueries({ queryKey: RK.sources });
       if (selected?.id === id) setSelected(null);
-      toast.success('Справочник удалён');
+      toast.success(t('requests.reference.deleted'));
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? 'Не удалось удалить');
+      toast.error(e?.response?.data?.detail ?? t('requests.projects.deleteError'));
     }
   }
 
   return (
-    <RequestsLayout title="Справочники" subtitle="Источники данных для выпадающих списков">
+    <RequestsLayout title={t('requests.nav.reference')} subtitle={t('requests.reference.subtitle')}>
       <div className="grid gap-6 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] items-start">
         {/* left: sources list + create */}
         <div className="space-y-4">
           <Card>
-            <CardHeader><CardTitle className="text-base">Создать справочник</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-base">{t('requests.reference.create')}</CardTitle></CardHeader>
             <CardContent>
               <form onSubmit={createSource} className="space-y-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="rs-name">Название</Label>
-                  <Input id="rs-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Программы бюджета" />
+                  <Label htmlFor="rs-name">{t('hr.pmo.name')}</Label>
+                  <Input id="rs-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('requests.reference.namePlaceholder')} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="rs-cols">Колонки (через запятую)</Label>
+                  <Label htmlFor="rs-cols">{t('requests.reference.columns')}</Label>
                   <Input id="rs-cols" value={cols} onChange={(e) => setCols(e.target.value)} placeholder="admin, budget, spec" />
                 </div>
-                <Button type="submit" size="sm"><Plus className="mr-1 h-4 w-4" /> Создать</Button>
+                <Button type="submit" size="sm"><Plus className="mr-1 h-4 w-4" /> {t('common.create')}</Button>
               </form>
             </CardContent>
           </Card>
@@ -82,7 +84,7 @@ export default function ReferenceSourcesPage() {
             <CardContent className="p-0">
               {sources.isLoading && <div className="space-y-2 p-4"><Skeleton className="h-10" /><Skeleton className="h-10" /></div>}
               {!sources.isLoading && manual.length === 0 && (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">Справочников пока нет.</div>
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('requests.reference.empty')}</div>
               )}
               {manual.map((s) => (
                 <button
@@ -98,7 +100,7 @@ export default function ReferenceSourcesPage() {
                       <span className="block truncate text-xs text-muted-foreground">slug «{s.slug}» · {s.columns.join(', ')}</span>
                     </span>
                   </span>
-                  <span onClick={(e) => { e.stopPropagation(); removeSource(s.id); }} className="text-muted-foreground hover:text-destructive" role="button" aria-label="Удалить справочник">
+                  <span onClick={(e) => { e.stopPropagation(); removeSource(s.id); }} className="text-muted-foreground hover:text-destructive" role="button" aria-label={t('requests.reference.deleteSource')}>
                     <Trash2 className="h-4 w-4" />
                   </span>
                 </button>
@@ -110,7 +112,7 @@ export default function ReferenceSourcesPage() {
         {/* right: rows of the selected source */}
         <div>
           {selected ? <RowsEditor source={selected} /> : (
-            <Card><CardContent className="py-16 text-center text-sm text-muted-foreground">Выберите справочник слева, чтобы редактировать строки.</CardContent></Card>
+            <Card><CardContent className="py-16 text-center text-sm text-muted-foreground">{t('requests.reference.pickToEdit')}</CardContent></Card>
           )}
         </div>
       </div>
@@ -119,6 +121,7 @@ export default function ReferenceSourcesPage() {
 }
 
 function RowsEditor({ source }: { source: ReferenceSource }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const rows = useReferenceRows(source.id);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -130,7 +133,7 @@ function RowsEditor({ source }: { source: ReferenceSource }) {
       qc.invalidateQueries({ queryKey: RK.rows(source.id) });
       setDraft({});
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? 'Не удалось добавить строку');
+      toast.error(e?.response?.data?.detail ?? t('requests.reference.addRowError'));
     }
   }
   async function delRow(rowId: number) {
@@ -140,7 +143,7 @@ function RowsEditor({ source }: { source: ReferenceSource }) {
 
   return (
     <Card>
-      <CardHeader><CardTitle className="text-base">{source.name} — строки</CardTitle></CardHeader>
+      <CardHeader><CardTitle className="text-base">{t('requests.reference.rowsTitle', { name: source.name })}</CardTitle></CardHeader>
       <CardContent className="space-y-4">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -155,7 +158,7 @@ function RowsEditor({ source }: { source: ReferenceSource }) {
                 <tr key={r.id} className="border-b last:border-b-0">
                   {source.columns.map((c) => <td key={c} className="px-2 py-1.5">{String((r.data as any)[c] ?? '')}</td>)}
                   <td className="px-2 py-1.5">
-                    <button type="button" onClick={() => delRow(r.id)} className="text-muted-foreground hover:text-destructive" aria-label="Удалить строку">
+                    <button type="button" onClick={() => delRow(r.id)} className="text-muted-foreground hover:text-destructive" aria-label={t('requests.reference.deleteRow')}>
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </td>
@@ -175,7 +178,7 @@ function RowsEditor({ source }: { source: ReferenceSource }) {
             </tbody>
           </table>
         </div>
-        {rows.data?.length === 0 && <p className="text-xs text-muted-foreground">Строк пока нет — заполните поля и нажмите «+».</p>}
+        {rows.data?.length === 0 && <p className="text-xs text-muted-foreground">{t('requests.reference.noRows')}</p>}
       </CardContent>
     </Card>
   );

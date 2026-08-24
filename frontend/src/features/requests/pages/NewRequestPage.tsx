@@ -17,6 +17,7 @@ import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { FormRenderer } from '@/features/requests/components/FormRenderer';
 import { useTemplate, useTemplates, useTemplateVersion } from '@/features/requests/hooks';
 import type { FormTemplate } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
 
 function CatalogCard({ t, onPick }: { t: FormTemplate; onPick: () => void }) {
   return (
@@ -42,6 +43,7 @@ function CatalogCard({ t, onPick }: { t: FormTemplate; onPick: () => void }) {
 }
 
 export default function NewRequestPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const templates = useTemplates(null);
   const [tplId, setTplId] = useState<number | null>(null);
@@ -74,19 +76,19 @@ export default function NewRequestPage() {
       if (submitAfter) {
         try {
           const sent = await requestsApi.instances.submit(draft.id);
-          toast.success(`Запрос ${sent.code} отправлен на согласование`);
+          toast.success(t('requests.new.submitted', { code: sent.code }));
           navigate(`/requests/${sent.id}`);
           return;
         } catch (e: any) {
-          toast.error(e?.response?.data?.detail ?? 'Не удалось отправить — открыта страница черновика');
+          toast.error(e?.response?.data?.detail ?? t('requests.new.submitError'));
           navigate(`/requests/${draft.id}`);
           return;
         }
       }
-      toast.success('Черновик сохранён');
+      toast.success(t('requests.new.draftSaved'));
       navigate(`/requests/${draft.id}`);
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? e?.message ?? 'Не удалось создать запрос');
+      toast.error(e?.response?.data?.detail ?? e?.message ?? t('requests.new.createError'));
     } finally {
       setBusy(false);
     }
@@ -95,13 +97,13 @@ export default function NewRequestPage() {
   // ─── Catalog view — pick a form ─────────────────────────────────────────
   if (tplId == null) {
     return (
-      <RequestsLayout title="Отправить запрос" subtitle="Выберите форму запроса">
+      <RequestsLayout title={t('requests.new.title')} subtitle={t('requests.new.subtitle')}>
         <div className="relative max-w-md">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск формы…"
+            placeholder={t('requests.new.searchForm')}
             className="pl-9"
           />
         </div>
@@ -114,13 +116,13 @@ export default function NewRequestPage() {
           <Card>
             <CardContent className="py-10 text-center text-sm text-muted-foreground">
               {activeTemplates.length === 0
-                ? 'Нет опубликованных форм. Создайте шаблон в разделе «Шаблоны».'
-                : 'Ничего не найдено.'}
+                ? t('requests.new.noForms')
+                : t('messenger.search.empty')}
             </CardContent>
           </Card>
         ) : (
           <div className="space-y-3">
-            <div className="text-sm uppercase tracking-[0.2em] text-muted-foreground">Все запросы</div>
+            <div className="text-sm uppercase tracking-[0.2em] text-muted-foreground">{t('requests.new.allRequests')}</div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {filtered.map((t) => (
                 <CatalogCard
@@ -139,27 +141,27 @@ export default function NewRequestPage() {
   // ─── Fill view — the chosen form ────────────────────────────────────────
   return (
     <RequestsLayout
-      title={tpl.data?.name ?? 'Новый запрос'}
-      subtitle="Заполните форму запроса"
+      title={tpl.data?.name ?? t('requests.new.newRequest')}
+      subtitle={t('requests.new.fillForm')}
       actions={
         <Button variant="outline" onClick={() => setTplId(null)}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          К списку форм
+          {t('requests.new.backToForms')}
         </Button>
       }
     >
       <Card>
         <CardHeader>
-          <CardTitle>Заголовок</CardTitle>
+          <CardTitle>{t('requests.new.titleLabel')}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-1.5">
-            <Label htmlFor="title">Заголовок</Label>
+            <Label htmlFor="title">{t('requests.new.titleLabel')}</Label>
             <Input
               id="title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Краткое название запроса"
+              placeholder={t('requests.new.titlePlaceholder')}
             />
           </div>
         </CardContent>
@@ -169,7 +171,7 @@ export default function NewRequestPage() {
       {ver.data && (
         <Card>
           <CardHeader>
-            <CardTitle>Поля формы</CardTitle>
+            <CardTitle>{t('requests.builder.fields')}</CardTitle>
           </CardHeader>
           <CardContent>
             <FormRenderer schema={ver.data.schema_json} values={values} onChange={setValues} />
@@ -180,10 +182,10 @@ export default function NewRequestPage() {
       {ver.data && (
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" disabled={busy} onClick={() => persistAndOptionallySubmit(false)}>
-            Сохранить черновик
+            {t('requests.new.saveDraft')}
           </Button>
           <Button disabled={busy} onClick={() => persistAndOptionallySubmit(true)}>
-            Отправить на согласование
+            {t('requests.new.submit')}
           </Button>
         </div>
       )}

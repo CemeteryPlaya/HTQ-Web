@@ -87,10 +87,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { signoffApi } from '@/api/signoff';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasAnyRole } from '@/lib/auth/roles';
+import { useTranslation } from 'react-i18next';
 
 const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const ProcessDetail = () => {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const processId = Number(id);
   const queryClient = useQueryClient();
@@ -153,13 +155,13 @@ const ProcessDetail = () => {
   const cancel = useMutation({
     mutationFn: () => signoffApi.cancelProcess(processId).then((r) => r.data),
     onSuccess: () => {
-      toast.success('Согласование отозвано — объект вернулся в черновик');
+      toast.success(t('signoff.detail.withdrawn'));
       queryClient.invalidateQueries({ queryKey: ['signoff'] });
       queryClient.invalidateQueries({ queryKey: ['contracts'] });
     },
     // 403 — «отозвать может только инициатор или администратор»;
     // 409 — согласование уже завершено.
-    onError: (err) => reportApiError(err, 'Не удалось отозвать согласование'),
+    onError: (err) => reportApiError(err, t('signoff.detail.withdrawError')),
   });
 
   /** Мой запрос на активном этапе — если он есть, решение за мной.
@@ -212,7 +214,7 @@ const ProcessDetail = () => {
         .reworkProcess(processId, { comment: reworkComment })
         .then((r) => r.data),
     onSuccess: () => {
-      toast.success('Возвращено на доработку — объект открыт для правки');
+      toast.success(t('signoff.detail.reworked'));
       setReworkOpen(false);
       setReworkComment('');
       queryClient.invalidateQueries({ queryKey: ['signoff'] });
@@ -220,7 +222,7 @@ const ProcessDetail = () => {
     },
     // 403 — «может согласующий этого процесса или администратор»;
     // 409 — согласование ещё идёт либо объект и так открыт.
-    onError: (err) => reportApiError(err, 'Не удалось вернуть на доработку'),
+    onError: (err) => reportApiError(err, t('signoff.detail.reworkError')),
   });
 
   const subjectLabel = process
@@ -240,7 +242,7 @@ const ProcessDetail = () => {
         className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
       >
         <ArrowLeft className="h-4 w-4" />
-        Ко всем согласованиям
+        {t('signoff.detail.backToList')}
       </Link>
 
       {isLoading ? (
@@ -250,32 +252,32 @@ const ProcessDetail = () => {
         </div>
       ) : isError || !process ? (
         <p className="text-sm text-destructive">
-          Согласование не найдено или недоступно.
+          {t('signoff.detail.notFound')}
         </p>
       ) : (
         <>
           <div className="mb-6 min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-3xl font-bold">Согласование #{process.id}</h1>
+              <h1 className="text-3xl font-bold">{t('signoff.history.processNumber', { id: process.id })}</h1>
               <ProcessStateBadge
                 state={process.state}
                 label={labelMap(enums?.process_state)[process.state]}
               />
             </div>
             <p className="text-sm text-muted-foreground mt-1">
-              Запущено {formatMoment(process.created_at)}
+              {t('signoff.detail.startedAt', { stamp: formatMoment(process.created_at) })}
               {process.finished_at
-                && ` · завершено ${formatMoment(process.finished_at)}`}
+                && t('signoff.history.finishedAt', { stamp: formatMoment(process.finished_at) })}
             </p>
             {/* Кто отправил объект на согласование. Имя разворачивает бэкенд;
                 если пользователь удалён или неизвестен — остаётся id. */}
             {process.initiator_id !== null && (
               <p className="mt-1 inline-flex items-center gap-1.5 text-sm text-muted-foreground">
                 <User className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                Инициатор:{' '}
+                {t('signoff.detail.initiator')}{' '}
                 <span className="font-medium text-foreground">
                   {process.initiator_name
-                    ?? `Пользователь #${process.initiator_id}`}
+                    ?? t('signoff.userNumber', { id: process.initiator_id })}
                 </span>
               </p>
             )}
@@ -310,7 +312,7 @@ const ProcessDetail = () => {
                         {cancel.isPending || rework.isPending ? (
                           <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                         ) : null}
-                        Действия
+                        {t('common.actions')}
                         <ChevronDown className="ml-1.5 h-4 w-4 opacity-70" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -330,7 +332,7 @@ const ProcessDetail = () => {
                             }
                           >
                             <Check className="mr-2 h-4 w-4" />
-                            Согласовать
+                            {t('signoff.decision.approve.action')}
                           </DropdownMenuItem>
                           {/* Отклонить и вернуть на доработку — РАЗНЫЕ решения:
                               отклонённый объект остаётся запертым, возвращённый
@@ -345,7 +347,7 @@ const ProcessDetail = () => {
                             }
                           >
                             <Undo2 className="mr-2 h-4 w-4" />
-                            На доработку
+                            {t('signoff.decision.rework.action')}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             className="text-destructive focus:text-destructive"
@@ -358,7 +360,7 @@ const ProcessDetail = () => {
                             }
                           >
                             <X className="mr-2 h-4 w-4" />
-                            Отклонить
+                            {t('signoff.decision.reject.action')}
                           </DropdownMenuItem>
                         </>
                       )}
@@ -370,14 +372,14 @@ const ProcessDetail = () => {
                       {canRework && (
                         <DropdownMenuItem onClick={() => setReworkOpen(true)}>
                           <Undo2 className="mr-2 h-4 w-4" />
-                          Вернуть на доработку
+                          {t('signoff.decision.rework.title')}
                         </DropdownMenuItem>
                       )}
 
                       {canCancel && (
                         <DropdownMenuItem onClick={() => setCancelOpen(true)}>
                           <Undo2 className="mr-2 h-4 w-4" />
-                          Отозвать
+                          {t('signoff.detail.withdraw')}
                         </DropdownMenuItem>
                       )}
                     </DropdownMenuContent>
@@ -393,20 +395,16 @@ const ProcessDetail = () => {
                     >
                       <AlertDialogContent>
                         <AlertDialogHeader>
-                          <AlertDialogTitle>Вернуть на доработку?</AlertDialogTitle>
+                          <AlertDialogTitle>{t('signoff.detail.reworkConfirmTitle')}</AlertDialogTitle>
                           <AlertDialogDescription>
                             {process.state === 'approved'
-                              ? 'Объект согласован и сейчас не редактируется. '
-                                + 'Возврат откроет его автору для правки — '
-                                + 'согласование придётся пройти заново, новым кругом.'
-                              : 'Объект отклонён и сейчас не редактируется. '
-                                + 'Возврат откроет его автору для правки — '
-                                + 'доработанный, он отправляется заново.'}
+                              ? t('signoff.detail.reworkFromApproved')
+                              : t('signoff.detail.reworkFromRejected')}
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <div className="space-y-2">
                           <Label htmlFor="signoff-rework-comment">
-                            Что исправить
+                            {t('signoff.detail.whatToFix')}
                           </Label>
                           <Textarea
                             id="signoff-rework-comment"
@@ -414,11 +412,11 @@ const ProcessDetail = () => {
                             onChange={(event) => setReworkComment(event.target.value)}
                             maxLength={2000}
                             rows={4}
-                            placeholder="Автор увидит это в уведомлении"
+                            placeholder={t('signoff.detail.reworkPlaceholder')}
                           />
                         </div>
                         <AlertDialogFooter>
-                          <AlertDialogCancel>Не возвращать</AlertDialogCancel>
+                          <AlertDialogCancel>{t('signoff.detail.reworkCancel')}</AlertDialogCancel>
                           {/* Не `AlertDialogAction`: тот закрывает диалог сам,
                               и пустой комментарий закрыл бы его вместе с
                               подсказкой, ради которой всё и затевалось. */}
@@ -426,7 +424,7 @@ const ProcessDetail = () => {
                             disabled={!reworkComment.trim() || rework.isPending}
                             onClick={() => rework.mutate()}
                           >
-                            Вернуть
+                            {t('signoff.detail.reworkConfirm')}
                           </Button>
                         </AlertDialogFooter>
                       </AlertDialogContent>
@@ -437,17 +435,15 @@ const ProcessDetail = () => {
                     <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
                       <AlertDialogContent>
                         <AlertDialogHeader>
-                          <AlertDialogTitle>Отозвать согласование?</AlertDialogTitle>
+                          <AlertDialogTitle>{t('signoff.detail.withdrawConfirmTitle')}</AlertDialogTitle>
                           <AlertDialogDescription>
-                            Уже принятые решения погаснут, а объект вернётся в
-                            черновик — его можно будет доработать и отправить
-                            заново. Это не отказ: причину указывать не нужно.
+                            {t('signoff.detail.withdrawConfirmBody')}
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
-                          <AlertDialogCancel>Не отзывать</AlertDialogCancel>
+                          <AlertDialogCancel>{t('signoff.detail.withdrawCancel')}</AlertDialogCancel>
                           <AlertDialogAction onClick={() => cancel.mutate()}>
-                            Отозвать
+                            {t('signoff.detail.withdraw')}
                           </AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>
@@ -458,7 +454,7 @@ const ProcessDetail = () => {
 
               <Card>
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Что согласуется</CardTitle>
+                  <CardTitle className="text-base">{t('signoff.detail.whatIsApproved')}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-1">
                   <SubjectLink
@@ -471,24 +467,21 @@ const ProcessDetail = () => {
                   <p className="text-xs text-muted-foreground">
                     {process.subject_type} · id {process.subject_id}
                     {process.initiator_id !== null
-                      && ` · отправил ${
-                        process.initiator_name
-                          ?? `пользователь #${process.initiator_id}`
-                      }`}
+                      && t('signoff.detail.submittedBy', {
+                        name: process.initiator_name
+                          ?? t('signoff.userNumberLower', { id: process.initiator_id }),
+                      })}
                   </p>
                   {!process.subject_title && (
                     <p className="text-xs text-muted-foreground">
-                      Заголовок объекта недоступен — его аппка не смогла его
-                      построить (тип не зарегистрирован или строка удалена).
+                      {t('signoff.detail.titleUnavailable')}
                     </p>
                   )}
 
                   {readableFacts.length > 0 && (
                     <div className="pt-2">
                       <p className="text-xs text-muted-foreground mb-1.5">
-                        Каким объект был на момент отправки — по этим значениям
-                        выбирались этапы. Позднейшие правки объекта состав
-                        согласующих уже не меняют.
+                        {t('signoff.detail.snapshotHint')}
                       </p>
                       <dl className="flex flex-wrap gap-x-4 gap-y-1">
                         {readableFacts.map((fact) => (
@@ -506,7 +499,7 @@ const ProcessDetail = () => {
               </Card>
 
               <div>
-                <h2 className="text-lg font-semibold mb-3">Ход согласования</h2>
+                <h2 className="text-lg font-semibold mb-3">{t('signoff.detail.progress')}</h2>
                 <ProcessTimeline
                   process={process}
                   stageStateLabels={labelMap(enums?.stage_state)}
@@ -519,13 +512,13 @@ const ProcessDetail = () => {
 
             <section className="min-w-0 lg:order-1">
               <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-                <h2 className="text-lg font-semibold">Документ</h2>
+                <h2 className="text-lg font-semibold">{t('signoff.detail.document')}</h2>
                 {isRoutableUrl(process.subject_url) && (
                   <Link
                     to={process.subject_url as string}
                     className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline underline-offset-2"
                   >
-                    открыть карточку в своём разделе
+                    {t('signoff.openSubjectCard')}
                     <ExternalLink className="h-3 w-3 shrink-0 opacity-60" />
                   </Link>
                 )}
@@ -542,8 +535,7 @@ const ProcessDetail = () => {
                 // фронтенде не заявил. Согласовать всё равно можно — по
                 // заголовку, фактам и ссылке в панели.
                 <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-                  Показать документ этого типа интерфейс пока не умеет —
-                  откройте его карточку по ссылке выше.
+                  {t('signoff.detail.previewUnsupported')}
                 </p>
               )}
             </section>

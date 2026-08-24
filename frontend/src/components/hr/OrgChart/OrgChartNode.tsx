@@ -1,5 +1,8 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { useTranslation } from 'react-i18next';
+import i18next from '@/i18n';
+import { translatedMap } from '@/lib/i18n/translatedMap';
 import {
   BriefcaseBusiness,
   Building2,
@@ -30,12 +33,12 @@ export type OrgNodeData = {
   branchState?: 'in' | 'out' | null;
 };
 
-const UNIT_LABELS: Record<string, string> = {
-  headquarters: 'Головная структура',
-  division: 'Направление',
-  department: 'Подразделение',
-  pmo: 'PMO',
-};
+const UNIT_LABELS: Record<string, string> = translatedMap({
+  headquarters: 'hr.orgChart.unit.headquarters',
+  division: 'hr.orgChart.unit.division',
+  department: 'hr.orgChart.unit.department',
+  pmo: 'hr.orgChart.unit.pmo',
+});
 
 function getMetaString(meta: Record<string, unknown> | undefined, key: string): string | null {
   const value = meta?.[key];
@@ -73,7 +76,7 @@ function cardTone(data: OrgNodeData): string {
 
 function unitLabel(data: OrgNodeData): string {
   const key = data.type === 'department' ? data.unit_type ?? 'department' : data.type;
-  return UNIT_LABELS[key] ?? 'Структура';
+  return UNIT_LABELS[key] ?? i18next.t('hr.orgChart.unit.generic');
 }
 
 function resolveContent(data: OrgNodeData): {
@@ -93,13 +96,13 @@ function resolveContent(data: OrgNodeData): {
     const titleLine = data.label;
     let contextLine: string | null = null;
     if (headsDept) {
-      contextLine = `Руководит: ${headsDept}`;
+      contextLine = i18next.t('hr.orgChart.headsDepartment', { department: headsDept });
     } else if (ownDept) {
       contextLine = ownDept;
     }
     const secondary = holderName
       ? [titleLine, contextLine].filter(Boolean).join(' · ')
-      : 'Вакантно';
+      : i18next.t('hr.orgChart.vacant');
     return {
       primary: holderName ?? data.label,
       secondary,
@@ -113,7 +116,7 @@ function resolveContent(data: OrgNodeData): {
     const managerName = getMetaString(meta, 'manager_name');
     return {
       primary: data.label,
-      secondary: managerName ? `Руководитель: ${managerName}` : unitLabel(data),
+      secondary: managerName ? i18next.t('hr.orgChart.managerName', { name: managerName }) : unitLabel(data),
       avatarUrl: getMetaString(meta, 'manager_avatar_url'),
       icon: managerName ? UsersRound : Building2,
       extraCount: 0,
@@ -126,7 +129,7 @@ function resolveContent(data: OrgNodeData): {
       secondary:
         getMetaString(meta, 'position_title') ??
         getMetaString(meta, 'department_name') ??
-        'Сотрудник',
+        i18next.t('hr.orgChart.employee'),
       avatarUrl: getMetaString(meta, 'avatar_url'),
       icon: UserRound,
       extraCount: 0,
@@ -172,6 +175,7 @@ function AvatarMark({
 }
 
 export const OrgChartNode = memo(({ data, selected }: NodeProps) => {
+  const { t } = useTranslation();
   const d = data as OrgNodeData;
   const content = resolveContent(d);
   const holderEmail = getMetaString(d.meta, 'holder_email');
@@ -221,7 +225,7 @@ export const OrgChartNode = memo(({ data, selected }: NodeProps) => {
         type="target"
         position={targetPosition}
         className={handleClassName}
-        title={d.editable ? 'Подчинить этому узлу' : undefined}
+        title={d.editable ? t('hr.orgChart.reportToNode') : undefined}
       />
 
       {/* Level Tag (top-left) */}
@@ -241,7 +245,7 @@ export const OrgChartNode = memo(({ data, selected }: NodeProps) => {
         {reportsCount > 0 && (
           <span
             className="flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary ring-1 ring-primary/20"
-            title={`Прямых подчинённых: ${reportsCount}`}
+            title={t('hr.orgChart.directReportsCount', { count: reportsCount })}
           >
             <Users className="h-2.5 w-2.5" />
             {reportsCount}
@@ -290,7 +294,7 @@ export const OrgChartNode = memo(({ data, selected }: NodeProps) => {
         type="source"
         position={sourcePosition}
         className={handleClassName}
-        title={d.editable ? 'Потяните для назначения подчинённого' : undefined}
+        title={d.editable ? t('hr.orgChart.dragToAssign') : undefined}
       />
     </div>
   );

@@ -13,6 +13,7 @@ import { WebRTCError, createWebRTCError } from './WebRTCError';
 import { QualityMetrics } from './BitrateController';
 import type { ISignalingClient } from './ISignalingClient';
 import { WebTransportSignalingClient } from './WebTransportSignalingClient';
+import i18next from '@/i18n';
 
 export interface WebRTCManagerEvents {
   onRemoteStream?: (stream: RemoteStream) => void;
@@ -117,7 +118,7 @@ export class WebRTCManager {
       return primaryResult;
     }
 
-    this.events.onInfo?.('Оптимизация видеопотока (fallback на VP8)...');
+    this.events.onInfo?.(i18next.t('conference.signaling.vp8Fallback'));
     // Участник видит «оптимизация», а на деле звонок уехал с аппаратного
     // H.264 на программный VP8: выше нагрузка на CPU, хуже картинка на слабых
     // машинах. Снаружи это выглядит как «что-то подтормаживает», и связать
@@ -224,7 +225,7 @@ export class WebRTCManager {
       const attempt = this.signalingAttempts[idx];
       if (idx > 0) {
         this.events.onInfo?.(
-          `Пробуем резервный канал сигналинга: ${attempt.label}`
+          i18next.t('conference.signaling.tryingBackup', { label: attempt.label })
         );
       }
 
@@ -553,7 +554,7 @@ export class WebRTCManager {
     const totalDelayMs = exponentialDelay + jitter;
 
     this.events.onInfo?.(
-      `Signaling retry: ${failedLabel} недоступен, ждём ${totalDelayMs} мс перед переходом на ${nextLabel}`
+      i18next.t('conference.signaling.retry', { failed: failedLabel, delay: totalDelayMs, next: nextLabel })
     );
 
     await new Promise<void>((resolve) => {

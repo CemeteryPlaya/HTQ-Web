@@ -9,6 +9,7 @@
  */
 import api from '@/api/client';
 import { getAccessToken } from '@/lib/auth/profileStorage';
+import i18next from '@/i18n';
 
 export interface ConferenceInvite {
   id: number;
@@ -87,7 +88,7 @@ export const fetchInviteInfo = async (token: string): Promise<InvitePublicInfo> 
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || 'Ссылка недействительна');
+    throw new Error(body?.detail || i18next.t('conference.join.invalidLink'));
   }
   return res.json();
 };
@@ -105,7 +106,7 @@ export const requestGuestToken = async (
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || 'Не удалось войти по ссылке');
+    throw new Error(body?.detail || i18next.t('conference.join.failed'));
   }
   return res.json();
 };

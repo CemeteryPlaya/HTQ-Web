@@ -102,18 +102,23 @@ const HRDepartments = () => {
         detail && typeof detail === 'object' && detail.blockers ? detail.blockers : null;
       if (err?.response?.status === 409 && blockers) {
         const parts: string[] = [];
-        if (blockers.sub_departments) parts.push(`${blockers.sub_departments} подразделение(й)`);
-        if (blockers.positions) parts.push(`${blockers.positions} должность(ей)`);
-        if (blockers.employees) parts.push(`${blockers.employees} сотрудник(ов)`);
+        if (blockers.sub_departments) {
+          parts.push(t('hr.departments.blockerSubDepartments', { count: blockers.sub_departments }));
+        }
+        if (blockers.positions) {
+          parts.push(t('hr.departments.blockerPositions', { count: blockers.positions }));
+        }
+        if (blockers.employees) {
+          parts.push(t('hr.departments.blockerEmployees', { count: blockers.employees }));
+        }
         const ok = confirm(
-          `Подразделение «${name}» содержит ${parts.join(', ')}.\n` +
-            `Удалить вместе со всем содержимым? Это действие необратимо.`,
+          t('hr.departments.confirmCascadeDelete', { name, parts: parts.join(', ') }),
         );
         if (!ok) return;
         await deleteDeptMutation.mutateAsync({ id, cascade: true });
         return;
       }
-      const msg = typeof detail === 'string' ? detail : 'Не удалось удалить';
+      const msg = typeof detail === 'string' ? detail : t('hr.departments.deleteError');
       alert(msg);
     }
   };
@@ -271,7 +276,7 @@ const HRDepartments = () => {
                           : 'bg-muted/40 text-muted-foreground/70',
                       )}
                     >
-                      {posCount > 0 ? `${posCount} должностей` : 'нет должностей'}
+                      {posCount > 0 ? t('hr.departments.positionsCount', { count: posCount }) : t('hr.departments.noPositions')}
                     </span>
                   </div>
                   {dept.description && (
@@ -284,9 +289,9 @@ const HRDepartments = () => {
                 <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                   <Button size="sm" variant="outline" className="gap-1.5 text-xs rounded-xl h-8" onClick={() => startCreatePos(dept.id)} title={t('hr.pages.structure.addPosition')}>
                     <Plus className="h-3.5 w-3.5" />
-                    <span>Должность</span>
+                    <span>{t('hr.card.position')}</span>
                   </Button>
-                  <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-xl" onClick={() => startEditDept(dept)} title="Редактировать">
+                  <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-xl" onClick={() => startEditDept(dept)} title={t('common.edit')}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
                   {isSenior && (
@@ -295,7 +300,7 @@ const HRDepartments = () => {
                       variant="ghost"
                       className="h-8 w-8 p-0 rounded-xl text-destructive hover:text-destructive hover:bg-destructive/10"
                       onClick={() => handleDeleteDept(dept.id, dept.name)}
-                      title="Удалить"
+                      title={t('common.delete')}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>

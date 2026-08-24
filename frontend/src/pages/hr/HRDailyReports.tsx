@@ -109,7 +109,7 @@ const BoardRow: React.FC<{
             </Badge>
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">
-            {[row.project_name, row.site_name, row.block_name, row.roadmap_title].filter(Boolean).join(' / ') || 'Без привязки к объекту'}
+            {[row.project_name, row.site_name, row.block_name, row.roadmap_title].filter(Boolean).join(' / ') || t('hr.dailyReports.noSite')}
           </div>
         </div>
 
@@ -141,7 +141,7 @@ const BoardRow: React.FC<{
             <Label className="text-[11px] text-muted-foreground">{t('tasks.dailyReports.volumeType', 'Вид работ')}</Label>
             <Select value={draft.volume_type_id} onValueChange={(val) => setDraft({ ...draft, volume_type_id: val })}>
               <SelectTrigger className="h-8 text-xs rounded-xl bg-muted/30">
-                <SelectValue placeholder="Выберите..." />
+                <SelectValue placeholder={t('hr.dailyReports.choose')} />
               </SelectTrigger>
               <SelectContent className="rounded-2xl">
                 {row.volumes.map((v) => (
@@ -182,7 +182,7 @@ const BoardRow: React.FC<{
         <div className="grid gap-1 flex-1 min-w-[160px]">
           <Label className="text-[11px] text-muted-foreground">{t('tasks.dailyReports.comment', 'Комментарий')}</Label>
           <Input
-            placeholder="Примечание..."
+            placeholder={t('hr.dailyReports.notePlaceholder')}
             className="h-8 text-xs rounded-xl bg-muted/30"
             value={draft.comment}
             onChange={(e) => setDraft({ ...draft, comment: e.target.value })}
@@ -246,12 +246,12 @@ const HRDailyReports: React.FC = () => {
   const groups = useMemo(() => {
     const map = new Map<string, DailyReportBoardRow[]>();
     for (const r of visible) {
-      const key = [r.project_name, r.site_name, r.block_name].filter(Boolean).join(' / ') || 'Без привязки к объекту';
+      const key = [r.project_name, r.site_name, r.block_name].filter(Boolean).join(' / ') || t('hr.dailyReports.noSite');
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(r);
     }
     return Array.from(map.entries());
-  }, [visible]);
+  }, [visible, t]);
 
   const filed = visible.filter((r) => r.reports.length > 0).length;
   const filtered = search.trim() !== '' || place !== 'all';
@@ -295,7 +295,7 @@ const HRDailyReports: React.FC = () => {
 
             {date !== today() && (
               <Button size="sm" variant="ghost" className="h-8 text-xs rounded-xl" onClick={() => setDate(today())}>
-                Сегодня
+                {t('messenger.dateToday')}
               </Button>
             )}
           </div>

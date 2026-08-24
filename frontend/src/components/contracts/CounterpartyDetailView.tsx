@@ -31,6 +31,7 @@ import {
 } from '@/components/ui/table';
 import { contractsApi } from '@/api/contracts';
 import type { AgreementStatus, CounterpartyStatus } from '@/types/contracts';
+import { useTranslation } from 'react-i18next';
 
 const STATUS_VARIANTS: Record<
   CounterpartyStatus,
@@ -48,6 +49,7 @@ interface Props {
 }
 
 const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props) => {
+  const { t } = useTranslation();
   const enabled = Number.isFinite(counterpartyId);
 
   const {
@@ -93,7 +95,7 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
   if (isLoading) return <DetailSkeleton />;
   if (isError || !counterparty) {
     return (
-      <p className="text-sm text-destructive">Контрагент не найден или недоступен.</p>
+      <p className="text-sm text-destructive">{t('contracts.counterparty.notFound')}</p>
     );
   }
 
@@ -113,7 +115,7 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
             </Badge>
           </div>
           <p className="mt-1 text-sm text-muted-foreground tabular-nums">
-            БИН / ИИН {counterparty.bin_iin}
+            {t('contracts.counterparty.binValue', { value: counterparty.bin_iin })}
           </p>
         </div>
 
@@ -138,19 +140,19 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Реквизиты</CardTitle>
+          <CardTitle className="text-base">{t('contracts.counterparty.details')}</CardTitle>
         </CardHeader>
         <CardContent>
           <FieldGrid>
-            <Field label="БИН / ИИН">
+            <Field label={t('contracts.counterparty.bin')}>
               <span className="tabular-nums">{counterparty.bin_iin}</span>
             </Field>
-            <Field label="Страна">{countryName}</Field>
-            <Field label="НДС">{counterparty.vat_label}</Field>
-            <Field label="Генеральный директор">
+            <Field label={t('contracts.counterparty.country')}>{countryName}</Field>
+            <Field label={t('contracts.counterparty.vat')}>{counterparty.vat_label}</Field>
+            <Field label={t('contracts.counterparty.ceo')}>
               {counterparty.contact_name || '—'}
             </Field>
-            <Field label="Телефон">
+            <Field label={t('profile.phone')}>
               {counterparty.phone ? (
                 <a
                   href={`tel:${counterparty.phone.replace(/[^\d+]/g, '')}`}
@@ -174,11 +176,11 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
                 '—'
               )}
             </Field>
-            <Field label="Адрес" className="sm:col-span-2">
+            <Field label={t('contracts.counterparty.address')} className="sm:col-span-2">
               {counterparty.address || '—'}
             </Field>
-            <Field label="Заведён">{formatMoment(counterparty.created_at)}</Field>
-            <Field label="Изменён">{formatMoment(counterparty.updated_at)}</Field>
+            <Field label={t('contracts.counterparty.createdAt')}>{formatMoment(counterparty.created_at)}</Field>
+            <Field label={t('contracts.updatedAt')}>{formatMoment(counterparty.updated_at)}</Field>
           </FieldGrid>
         </CardContent>
       </Card>
@@ -186,7 +188,7 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">
-            Договоры с контрагентом
+            {t('contracts.counterparty.agreements')}
             <span className="ml-2 font-normal text-muted-foreground">
               {agreements.length}
             </span>
@@ -195,18 +197,18 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
         <CardContent className="px-0 pb-0">
           {agreements.length === 0 ? (
             <p className="px-6 pb-6 text-sm text-muted-foreground">
-              С этим контрагентом договоров пока нет.
+              {t('contracts.counterparty.noAgreements')}
             </p>
           ) : (
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Номер</TableHead>
-                    <TableHead>Наименование</TableHead>
-                    <TableHead>Бюджет</TableHead>
-                    <TableHead className="text-right">Сумма</TableHead>
-                    <TableHead>Статус</TableHead>
+                    <TableHead>{t('contracts.columns.number')}</TableHead>
+                    <TableHead>{t('contracts.columns.title')}</TableHead>
+                    <TableHead>{t('contracts.columns.budget')}</TableHead>
+                    <TableHead className="text-right">{t('contracts.columns.amount')}</TableHead>
+                    <TableHead>{t('contracts.columns.status')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

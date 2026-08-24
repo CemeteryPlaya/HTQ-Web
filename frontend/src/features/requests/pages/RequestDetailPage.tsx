@@ -18,8 +18,10 @@ import {
   QK, useInstance, useRequestsStream, useSubmitInstance, useTemplate, useTemplateVersion,
 } from '@/features/requests/hooks';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { useTranslation } from 'react-i18next';
 
 export default function RequestDetailPage() {
+  const { t } = useTranslation();
   useRequestsStream();
   const { id } = useParams<{ id: string }>();
   const instanceId = id ? parseInt(id, 10) : NaN;
@@ -37,14 +39,14 @@ export default function RequestDetailPage() {
 
   if (Number.isNaN(instanceId)) {
     return (
-      <RequestsLayout title="Запрос не найден">
-        <Card><CardContent className="py-6 text-sm text-destructive">Некорректный идентификатор запроса.</CardContent></Card>
+      <RequestsLayout title={t('requests.detail.notFound')}>
+        <Card><CardContent className="py-6 text-sm text-destructive">{t('requests.detail.badId')}</CardContent></Card>
       </RequestsLayout>
     );
   }
   if (inst.isLoading) {
     return (
-      <RequestsLayout title="Загрузка…">
+      <RequestsLayout title={t('signoff.loadingEllipsis')}>
         <Skeleton className="h-32" />
         <Skeleton className="h-48" />
       </RequestsLayout>
@@ -52,8 +54,8 @@ export default function RequestDetailPage() {
   }
   if (inst.error || !inst.data) {
     return (
-      <RequestsLayout title="Запрос не найден">
-        <Card><CardContent className="py-6 text-sm text-destructive">Запрос не найден или нет доступа.</CardContent></Card>
+      <RequestsLayout title={t('requests.detail.notFound')}>
+        <Card><CardContent className="py-6 text-sm text-destructive">{t('requests.detail.notFoundOrNoAccess')}</CardContent></Card>
       </RequestsLayout>
     );
   }
@@ -75,9 +77,9 @@ export default function RequestDetailPage() {
       const updated = await requestsApi.instances.update(instanceId, { form_values: draft });
       qc.setQueryData(QK.instance(instanceId), updated);
       setDraft(null);
-      toast.success('Черновик сохранён');
+      toast.success(t('requests.new.draftSaved'));
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? 'Не удалось сохранить черновик');
+      toast.error(e?.response?.data?.detail ?? t('requests.detail.draftSaveError'));
     } finally {
       setSaving(false);
     }
@@ -87,9 +89,9 @@ export default function RequestDetailPage() {
     if (draft) await persistDraft();
     try {
       await submit.mutateAsync();
-      toast.success('Запрос отправлен на согласование');
+      toast.success(t('requests.detail.submitted'));
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? 'Не удалось отправить');
+      toast.error(e?.response?.data?.detail ?? t('requests.detail.submitError'));
     }
   }
 
@@ -99,7 +101,7 @@ export default function RequestDetailPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Поля формы</CardTitle>
+          <CardTitle>{t('requests.builder.fields')}</CardTitle>
         </CardHeader>
         <CardContent>
           {ver.isLoading && <Skeleton className="h-24" />}
@@ -118,11 +120,11 @@ export default function RequestDetailPage() {
         <div className="flex flex-wrap gap-2">
           {draft && (
             <Button variant="outline" onClick={persistDraft} disabled={saving}>
-              Сохранить черновик
+              {t('requests.new.saveDraft')}
             </Button>
           )}
           <Button onClick={onSubmit} disabled={submit.isPending}>
-            {data.status === 'returned' ? 'Отправить повторно' : 'Отправить на согласование'}
+            {data.status === 'returned' ? t('requests.detail.submitAgain') : t('requests.new.submit')}
           </Button>
         </div>
       )}

@@ -32,6 +32,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { fetchPlatformAccounts, type PlatformAccount } from '@/api/accounts';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 
 function accountLabel(account: PlatformAccount): string {
   const full = [account.last_name, account.first_name].filter(Boolean).join(' ');
@@ -48,6 +49,7 @@ interface Props {
 }
 
 export function ApproverPicker({ value, onChange, knownNames = {}, disabled }: Props) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 
   const { data: accounts = [], isLoading } = useQuery({
@@ -66,7 +68,7 @@ export function ApproverPicker({ value, onChange, knownNames = {}, disabled }: P
 
   const nameOf = (id: number) => {
     const account = byId.get(id);
-    return account ? accountLabel(account) : knownNames[id] ?? `Пользователь #${id}`;
+    return account ? accountLabel(account) : knownNames[id] ?? t('signoff.userNumber', { id });
   };
 
   return (
@@ -88,17 +90,17 @@ export function ApproverPicker({ value, onChange, knownNames = {}, disabled }: P
             className="w-full justify-between font-normal"
           >
             {value.length === 0
-              ? 'Выберите согласующих'
-              : `Выбрано: ${value.length}`}
+              ? t('signoff.approvers.pick')
+              : t('calendar.selectedCount', { count: value.length })}
             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
           <Command>
-            <CommandInput placeholder="Поиск по имени или почте" />
+            <CommandInput placeholder={t('signoff.approvers.searchPlaceholder')} />
             <CommandList>
               <CommandEmpty>
-                {isLoading ? 'Загрузка…' : 'Никого не найдено'}
+                {isLoading ? t('signoff.loadingEllipsis') : t('messenger.nobodyFound')}
               </CommandEmpty>
               <CommandGroup>
                 {accounts.map((account) => {
@@ -125,7 +127,7 @@ export function ApproverPicker({ value, onChange, knownNames = {}, disabled }: P
                       </span>
                       {account.status !== 'active' && (
                         <Badge variant="outline" className="ml-2 text-muted-foreground">
-                          {account.status === 'pending' ? 'не активирован' : 'отключён'}
+                          {account.status === 'pending' ? t('signoff.approvers.statusPending') : t('signoff.approvers.statusDisabled')}
                         </Badge>
                       )}
                     </CommandItem>
@@ -149,12 +151,12 @@ export function ApproverPicker({ value, onChange, knownNames = {}, disabled }: P
                 className={cn('gap-1', inactive && 'opacity-60')}
               >
                 {nameOf(id)}
-                {inactive && ' (отключён)'}
+                {inactive && t('signoff.approvers.disabledSuffix')}
                 {!disabled && (
                   <button
                     type="button"
                     onClick={() => toggle(id)}
-                    aria-label={`Убрать ${nameOf(id)}`}
+                    aria-label={t('signoff.approvers.removeOne', { name: nameOf(id) })}
                     className="hover:text-destructive"
                   >
                     <X className="h-3 w-3" />

@@ -13,6 +13,7 @@ import { fetchEmployees } from '@/api/hr';
 import { searchFiles } from '@/api/fileManager';
 import { cmsApi } from '@/api/cms';
 import { fallback } from '@/lib/fallback';
+import i18next from '@/i18n';
 
 export type SearchCategory = 'task' | 'employee' | 'news' | 'file';
 
@@ -43,8 +44,8 @@ function settled<T>(label: string, p: Promise<T[]>): Promise<T[]> {
     // это не данные, и кардинальность не разъедется.
     return fallback(`search.global.${label}_unavailable`, [] as T[], {
       reason: denied
-        ? 'нет доступа к домену — категория выпала из выдачи'
-        : 'источник поиска не ответил — категория выпала из выдачи',
+        ? i18next.t('search.degraded.forbidden')
+        : i18next.t('search.degraded.unavailable'),
       expected: denied,
       cause: err,
       context: { status },

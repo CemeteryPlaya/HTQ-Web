@@ -22,6 +22,7 @@ import { X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import type { Notification } from '@/types/tasks';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
     toastId: string | number;
@@ -75,8 +76,9 @@ export const MessengerToast: React.FC<Props> = ({
     notification,
     onClick,
 }) => {
+    const { t } = useTranslation();
     const navigate = useNavigate();
-    const name = notification.actor_name || 'Сотрудник';
+    const name = notification.actor_name || t('messenger.unknownSender');
     const avatar = notification.actor_avatar_url || null;
     const body = extractMessageBody(notification.verb || '');
     const arrived = fmtTime(notification.created_at);
@@ -145,7 +147,7 @@ export const MessengerToast: React.FC<Props> = ({
                     toast.dismiss(toastId);
                 }}
                 className="absolute top-1.5 right-1.5 p-1 rounded-full text-muted-foreground/60 hover:bg-muted hover:text-foreground"
-                aria-label="Закрыть"
+                aria-label={t('common.close')}
             >
                 <X className="h-3 w-3" />
             </button>

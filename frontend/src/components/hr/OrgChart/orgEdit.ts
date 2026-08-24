@@ -6,17 +6,21 @@
  * onConnect, not node dragging).
  */
 import type { OrgEdge, OrgEdgeOrigin, OrgNode, OrgTree, RelationType } from '@/api/hr';
+import i18next from '@/i18n';
+import { translatedMap } from '@/lib/i18n/translatedMap';
 
-/** Human labels for the "how was this decided" badge in the edit panel. */
-export const ORIGIN_LABELS: Record<OrgEdgeOrigin, string> = {
-  employee: 'задано вручную',
-  position: 'из связи должностей',
-  department: 'руководитель отдела',
-  inferred: 'определено автоматически',
-  structural: 'структура отделов',
-  membership: 'состоит в отделе',
-  employment: 'состоит в отделе',
-};
+/** Human labels for the "how was this decided" badge in the edit panel.
+ *  Значения — ключи перевода: модуль импортируется раньше, чем загружен
+ *  словарь, поэтому подпись берётся на чтение (см. `translatedMap`). */
+export const ORIGIN_LABELS: Record<OrgEdgeOrigin, string> = translatedMap({
+  employee: 'hr.orgChart.origin.employee',
+  position: 'hr.orgChart.origin.position',
+  department: 'hr.orgChart.origin.department',
+  inferred: 'hr.orgChart.origin.inferred',
+  structural: 'hr.orgChart.origin.structural',
+  membership: 'hr.orgChart.origin.membership',
+  employment: 'hr.orgChart.origin.employment',
+});
 
 /** origin-значения, для которых relation_id адресует реальную строку в БД —
  * то есть ровно там, где кнопка «Убрать»/переподчинение имеет смысл. */
@@ -65,22 +69,22 @@ export type ConnectionCheck = { ok: true } | { ok: false; reason: string };
 export function isValidOrgConnection(
   nodes: OrgNode[], sourceId: string | null, targetId: string | null,
 ): ConnectionCheck {
-  if (!sourceId || !targetId) return { ok: false, reason: 'Не выбраны оба узла' };
-  if (sourceId === targetId) return { ok: false, reason: 'Нельзя подчинить узел самому себе' };
+  if (!sourceId || !targetId) return { ok: false, reason: i18next.t('hr.orgChart.connect.errors.bothNodes') };
+  if (sourceId === targetId) return { ok: false, reason: i18next.t('hr.orgChart.connect.errors.self') };
 
   const sourceKind = nodeKind(sourceId);
   const targetKind = nodeKind(targetId);
   if (sourceKind === 'dept' || targetKind === 'dept') {
-    return { ok: false, reason: 'Руководитель отдела назначается отдельно, не перетаскиванием' };
+    return { ok: false, reason: i18next.t('hr.orgChart.connect.errors.departmentHead') };
   }
   if (sourceKind === null || targetKind === null) {
-    return { ok: false, reason: 'Неизвестный тип узла' };
+    return { ok: false, reason: i18next.t('hr.orgChart.connect.errors.unknownKind') };
   }
   if (sourceKind !== targetKind) {
-    return { ok: false, reason: 'Можно соединять только должность с должностью или сотрудника с сотрудником' };
+    return { ok: false, reason: i18next.t('hr.orgChart.connect.errors.kindMismatch') };
   }
   if (!nodes.some((n) => n.id === sourceId) || !nodes.some((n) => n.id === targetId)) {
-    return { ok: false, reason: 'Узел не найден на текущей схеме' };
+    return { ok: false, reason: i18next.t('hr.orgChart.connect.errors.notOnChart') };
   }
   return { ok: true };
 }

@@ -19,6 +19,8 @@ import api from '@/api/client';
 import HRLayout from '@/components/hr/HRLayout';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { useTranslation } from 'react-i18next';
+import i18next from '@/i18n';
 import {
   Tooltip,
   TooltipContent,
@@ -61,89 +63,89 @@ const LEVEL_CONFIG: Record<
   NonNullable<DeptLevel>,
   {
     label: string;
-    labelRu: string;
+    labelKey: string;
     icon: React.ElementType;
     color: string;
     bg: string;
     border: string;
     ring: string;
     rank: number;
-    description: string;
-    permissions: string[];
+    descriptionKey: string;
+    permissionKeys: string[];
   }
 > = {
   lead: {
     label: 'Lead',
-    labelRu: 'Руководитель',
+    labelKey: 'hr.accessLevels.levels.lead',
     icon: Crown,
     color: 'text-amber-600 dark:text-amber-400',
     bg: 'bg-amber-50 dark:bg-amber-950/30',
     border: 'border-amber-200 dark:border-amber-800',
     ring: 'ring-amber-400',
     rank: 3,
-    description: 'Полный доступ к отделу, деструктивные операции, управление аккаунтами',
-    permissions: [
-      'Чтение всех отделов',
-      'Базовые изменения',
-      'Создание сотрудников',
-      'Перевод сотрудников',
-      'Удаление сотрудников',
-      'Управление аккаунтами',
-      'Просмотр аккаунтов',
+    descriptionKey: 'hr.accessLevels.descriptions.lead',
+    permissionKeys: [
+      'hr.accessLevels.permissions.readAll',
+      'hr.accessLevels.permissions.basicEdits',
+      'hr.accessLevels.permissions.createEmployees',
+      'hr.accessLevels.permissions.transferEmployees',
+      'hr.accessLevels.permissions.deleteEmployees',
+      'hr.accessLevels.permissions.manageAccounts',
+      'hr.accessLevels.permissions.viewAccounts',
     ],
   },
   senior: {
     label: 'Senior',
-    labelRu: 'Старший специалист',
+    labelKey: 'hr.accessLevels.levels.senior',
     icon: ShieldCheck,
     color: 'text-blue-600 dark:text-blue-400',
     bg: 'bg-blue-50 dark:bg-blue-950/30',
     border: 'border-blue-200 dark:border-blue-800',
     ring: 'ring-blue-400',
     rank: 2,
-    description: 'Запись по всем отделам, без деструктивных операций',
-    permissions: [
-      'Чтение всех отделов',
-      'Базовые изменения',
-      'Создание сотрудников',
-      'Перевод сотрудников',
-      'Просмотр аккаунтов',
+    descriptionKey: 'hr.accessLevels.descriptions.senior',
+    permissionKeys: [
+      'hr.accessLevels.permissions.readAll',
+      'hr.accessLevels.permissions.basicEdits',
+      'hr.accessLevels.permissions.createEmployees',
+      'hr.accessLevels.permissions.transferEmployees',
+      'hr.accessLevels.permissions.viewAccounts',
     ],
   },
   middle: {
     label: 'Middle',
-    labelRu: 'Специалист',
+    labelKey: 'hr.accessLevels.levels.middle',
     icon: Shield,
     color: 'text-green-600 dark:text-green-400',
     bg: 'bg-green-50 dark:bg-green-950/30',
     border: 'border-green-200 dark:border-green-800',
     ring: 'ring-green-400',
     rank: 1,
-    description: 'Базовые изменения только внутри своего отдела',
-    permissions: ['Чтение своего отдела', 'Базовые изменения'],
+    descriptionKey: 'hr.accessLevels.descriptions.middle',
+    permissionKeys: ['hr.accessLevels.permissions.readOwn', 'hr.accessLevels.permissions.basicEdits'],
   },
   junior: {
     label: 'Junior',
-    labelRu: 'Сотрудник',
+    labelKey: 'hr.accessLevels.levels.junior',
     icon: ShieldAlert,
     color: 'text-slate-500 dark:text-slate-400',
     bg: 'bg-slate-50 dark:bg-slate-900/30',
     border: 'border-slate-200 dark:border-slate-700',
     ring: 'ring-slate-400',
     rank: 0,
-    description: 'Чтение только своего отдела, без изменений',
-    permissions: ['Чтение своего отдела'],
+    descriptionKey: 'hr.accessLevels.descriptions.junior',
+    permissionKeys: ['hr.accessLevels.permissions.readOwn'],
   },
 };
 
-const ALL_PERMISSIONS = [
-  'Чтение всех отделов',
-  'Базовые изменения',
-  'Создание сотрудников',
-  'Перевод сотрудников',
-  'Удаление сотрудников',
-  'Просмотр аккаунтов',
-  'Управление аккаунтами',
+const ALL_PERMISSION_KEYS = [
+  'hr.accessLevels.permissions.readAll',
+  'hr.accessLevels.permissions.basicEdits',
+  'hr.accessLevels.permissions.createEmployees',
+  'hr.accessLevels.permissions.transferEmployees',
+  'hr.accessLevels.permissions.deleteEmployees',
+  'hr.accessLevels.permissions.viewAccounts',
+  'hr.accessLevels.permissions.manageAccounts',
 ];
 
 /* ─── Level inference ───────────────────────────────────────────────────── */
@@ -183,7 +185,7 @@ function inferLevelFull(employee: Employee): InferResult {
     return {
       level: 'lead',
       source: 'director',
-      reason: 'Директор/топ-менеджер — полный доступ как у администратора',
+      reason: i18next.t('hr.accessLevels.reasons.director'),
     };
   }
 
@@ -193,48 +195,49 @@ function inferLevelFull(employee: Employee): InferResult {
   );
 
   if (!isHr) {
-    return { level: null, source: 'no_access', reason: 'Не HR-отдел и не директор' };
+    return { level: null, source: 'no_access', reason: i18next.t('hr.accessLevels.reasons.noAccess') };
   }
 
   if (['co hr', 'cohr', 'chief hr', 'chief human resources', 'chief people', 'cpo',
     'hr director', 'director hr', 'руководитель hr', 'директор по персоналу',
   ].some((m) => haystack.includes(m))) {
-    return { level: 'lead', source: 'hr_lead', reason: 'Руководитель HR / CPO / HR-директор' };
+    return { level: 'lead', source: 'hr_lead', reason: i18next.t('hr.accessLevels.reasons.hrLead') };
   }
 
   if (['senior', 'lead', 'head', 'старш', 'ведущ'].some((m) => haystack.includes(m))) {
-    return { level: 'senior', source: 'hr_senior', reason: 'Старший HR-специалист / ведущий / руководитель группы' };
+    return { level: 'senior', source: 'hr_senior', reason: i18next.t('hr.accessLevels.reasons.hrSenior') };
   }
 
   if (['middle', 'middel', 'mid ', 'manager', 'менеджер', 'специалист'].some((m) =>
     haystack.includes(m))
   ) {
-    return { level: 'middle', source: 'hr_middle', reason: 'HR-менеджер / специалист по персоналу' };
+    return { level: 'middle', source: 'hr_middle', reason: i18next.t('hr.accessLevels.reasons.hrMiddle') };
   }
 
   if (['junior', 'assistant', 'trainee', 'младш', 'ассист', 'стаж'].some((m) =>
     haystack.includes(m))
   ) {
-    return { level: 'junior', source: 'hr_junior', reason: 'Начинающий HR-специалист / ассистент / стажёр' };
+    return { level: 'junior', source: 'hr_junior', reason: i18next.t('hr.accessLevels.reasons.hrJunior') };
   }
 
   // Default for unclassified HR employee
-  return { level: 'junior', source: 'hr_junior', reason: 'HR-сотрудник (уровень по умолчанию)' };
+  return { level: 'junior', source: 'hr_junior', reason: i18next.t('hr.accessLevels.reasons.hrDefault') };
 }
 
-const SOURCE_LABELS: Record<LevelSource, { label: string; color: string }> = {
-  director: { label: 'Директор', color: 'text-purple-600 dark:text-purple-400' },
-  hr_lead: { label: 'HR Lead', color: 'text-amber-600 dark:text-amber-400' },
-  hr_senior: { label: 'HR Senior', color: 'text-blue-600 dark:text-blue-400' },
-  hr_middle: { label: 'HR Middle', color: 'text-green-600 dark:text-green-400' },
-  hr_junior: { label: 'HR Junior', color: 'text-slate-500 dark:text-slate-400' },
-  no_access: { label: 'Нет доступа', color: 'text-muted-foreground' },
+const SOURCE_LABELS: Record<LevelSource, { labelKey: string; color: string }> = {
+  director: { labelKey: 'hr.accessLevels.sourceDirector', color: 'text-purple-600 dark:text-purple-400' },
+  hr_lead: { labelKey: 'hr.accessLevels.sourceHrLead', color: 'text-amber-600 dark:text-amber-400' },
+  hr_senior: { labelKey: 'hr.accessLevels.sourceHrSenior', color: 'text-blue-600 dark:text-blue-400' },
+  hr_middle: { labelKey: 'hr.accessLevels.sourceHrMiddle', color: 'text-green-600 dark:text-green-400' },
+  hr_junior: { labelKey: 'hr.accessLevels.sourceHrJunior', color: 'text-slate-500 dark:text-slate-400' },
+  no_access: { labelKey: 'hr.accessLevels.noAccess', color: 'text-muted-foreground' },
 };
 
 /* ─── Sub-components ───────────────────────────────────────────────────── */
 
 function LevelBadge({ level }: { level: DeptLevel }) {
-  if (!level) return <Badge variant="outline" className="text-muted-foreground">Нет доступа</Badge>;
+  const { t } = useTranslation();
+  if (!level) return <Badge variant="outline" className="text-muted-foreground">{t('hr.accessLevels.noAccess')}</Badge>;
   const cfg = LEVEL_CONFIG[level];
   const Icon = cfg.icon;
   return (
@@ -248,10 +251,11 @@ function LevelBadge({ level }: { level: DeptLevel }) {
 }
 
 function PermissionMatrix({ level }: { level: DeptLevel }) {
-  const granted = level ? LEVEL_CONFIG[level].permissions : [];
+  const { t } = useTranslation();
+  const granted = level ? LEVEL_CONFIG[level].permissionKeys : [];
   return (
     <div className="mt-3 grid grid-cols-1 gap-1">
-      {ALL_PERMISSIONS.map((perm) => {
+      {ALL_PERMISSION_KEYS.map((perm) => {
         const has = granted.includes(perm);
         return (
           <div key={perm} className={`flex items-center gap-2 text-xs rounded px-2 py-1 ${has ? 'text-foreground' : 'text-muted-foreground/50'}`}>
@@ -259,7 +263,7 @@ function PermissionMatrix({ level }: { level: DeptLevel }) {
               ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-500" />
               : <XCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30" />
             }
-            {perm}
+            {t(perm)}
           </div>
         );
       })}
@@ -268,6 +272,7 @@ function PermissionMatrix({ level }: { level: DeptLevel }) {
 }
 
 function LevelCard({ level, count }: { level: NonNullable<DeptLevel>; count: number }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const cfg = LEVEL_CONFIG[level];
   const Icon = cfg.icon;
@@ -281,7 +286,7 @@ function LevelCard({ level, count }: { level: NonNullable<DeptLevel>; count: num
           </div>
           <div>
             <div className={`font-semibold ${cfg.color}`}>{cfg.label}</div>
-            <div className="text-xs text-muted-foreground">{cfg.labelRu}</div>
+            <div className="text-xs text-muted-foreground">{t(cfg.labelKey)}</div>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -295,7 +300,7 @@ function LevelCard({ level, count }: { level: NonNullable<DeptLevel>; count: num
         </div>
       </div>
 
-      <p className="mt-2 text-xs text-muted-foreground">{cfg.description}</p>
+      <p className="mt-2 text-xs text-muted-foreground">{t(cfg.descriptionKey)}</p>
 
       {open && <PermissionMatrix level={level} />}
     </div>
@@ -303,6 +308,7 @@ function LevelCard({ level, count }: { level: NonNullable<DeptLevel>; count: num
 }
 
 function EmployeeRow({ employee }: { employee: Employee }) {
+  const { t } = useTranslation();
   const { level, source, reason } = inferLevelFull(employee);
   const cfg = level ? LEVEL_CONFIG[level] : null;
   const srcMeta = SOURCE_LABELS[source];
@@ -330,7 +336,7 @@ function EmployeeRow({ employee }: { employee: Employee }) {
 
       {/* Source tag */}
       <span className={`hidden sm:inline-block shrink-0 text-xs font-medium ${srcMeta.color}`}>
-        {srcMeta.label}
+        {t(srcMeta.labelKey)}
       </span>
 
       <div className="flex items-center gap-2 shrink-0">
@@ -343,8 +349,8 @@ function EmployeeRow({ employee }: { employee: Employee }) {
                 </div>
               </TooltipTrigger>
               <TooltipContent side="left" className="max-w-[220px] p-3">
-                <div className="font-semibold mb-1">{cfg?.labelRu}</div>
-                <div className="text-xs text-muted-foreground mb-1">{cfg?.description}</div>
+                <div className="font-semibold mb-1">{t(cfg.labelKey)}</div>
+                <div className="text-xs text-muted-foreground mb-1">{t(cfg.descriptionKey)}</div>
                 <div className="text-xs italic text-muted-foreground/70 mb-2 border-l-2 pl-2">{reason}</div>
                 <PermissionMatrix level={level} />
               </TooltipContent>
@@ -356,7 +362,7 @@ function EmployeeRow({ employee }: { employee: Employee }) {
               <TooltipTrigger asChild>
                 <span className="flex items-center gap-1 text-xs text-muted-foreground cursor-help">
                   <Lock className="h-3 w-3" />
-                  Нет доступа
+                  {t('hr.accessLevels.noAccess')}
                 </span>
               </TooltipTrigger>
               <TooltipContent side="left">
@@ -377,6 +383,7 @@ function EmployeeRow({ employee }: { employee: Employee }) {
 const LEVELS_ORDER: NonNullable<DeptLevel>[] = ['lead', 'senior', 'middle', 'junior'];
 
 export default function HRAccessLevels() {
+  const { t } = useTranslation();
   const [search, setSearch] = useState('');
   const [filterLevel, setFilterLevel] = useState<DeptLevel | 'all'>('all');
 
@@ -432,8 +439,8 @@ export default function HRAccessLevels() {
 
   return (
     <HRLayout
-      title="Управление уровнями доступа"
-      subtitle="Ролевая модель HR-отдела — кто что может делать"
+      title={t('hr.accessLevels.title')}
+      subtitle={t('hr.accessLevels.subtitle')}
     >
       <div className="space-y-6">
 
@@ -442,19 +449,19 @@ export default function HRAccessLevels() {
           <div className="flex gap-3">
             <Info className="h-5 w-5 shrink-0 text-blue-500 mt-0.5" />
             <div className="text-sm text-blue-800 dark:text-blue-300 space-y-1">
-              <p className="font-semibold">Как работает система уровней</p>
+              <p className="font-semibold">{t('hr.accessLevels.howItWorks')}</p>
               <p>
-                Уровень определяется <strong>автоматически</strong> по должности и отделу.
-                Чтобы изменить уровень — обновите должность в разделе{' '}
-                <a href="/hr/employees" className="underline">Сотрудники</a>.
+                {t('hr.accessLevels.levelIs')} <strong>{t('hr.accessLevels.automatically')}</strong>{' '}
+                {t('hr.accessLevels.byPositionHint')}{' '}
+                <a href="/hr/employees" className="underline">{t('hr.nav.employees')}</a>.
               </p>
               <div className="mt-2 grid grid-cols-1 gap-0.5 text-xs opacity-80 sm:grid-cols-2">
-                <span>🏛️ Ген. директор / CEO / COO / CTO / CFO → <strong>Lead</strong></span>
-                <span>👑 HR-директор / CPO / Руководитель HR → <strong>Lead</strong></span>
-                <span>🛡️ Старший HR / Ведущий / Head → <strong>Senior</strong></span>
-                <span>⚙️ HR-менеджер / Специалист / Middle → <strong>Middle</strong></span>
-                <span>📋 Junior HR / Ассистент / Стажёр → <strong>Junior</strong></span>
-                <span>🔒 Остальные сотрудники → <strong>Нет доступа</strong></span>
+                <span>{t('hr.accessLevels.mapDirector')} <strong>Lead</strong></span>
+                <span>{t('hr.accessLevels.mapHrLead')} <strong>Lead</strong></span>
+                <span>{t('hr.accessLevels.mapHrSenior')} <strong>Senior</strong></span>
+                <span>{t('hr.accessLevels.mapHrMiddle')} <strong>Middle</strong></span>
+                <span>{t('hr.accessLevels.mapHrJunior')} <strong>Junior</strong></span>
+                <span>{t('hr.accessLevels.mapOthers')} <strong>{t('hr.accessLevels.noAccess')}</strong></span>
               </div>
             </div>
           </div>
@@ -465,19 +472,19 @@ export default function HRAccessLevels() {
           <div className="rounded-xl border bg-card p-4">
             <div className="flex items-center gap-3">
               <Users className="h-5 w-5 text-muted-foreground" />
-              <span className="text-sm font-medium">Ваш уровень доступа:</span>
+              <span className="text-sm font-medium">{t('hr.accessLevels.yourLevel')}</span>
               <LevelBadge level={myLevel.level} />
             </div>
             {myLevel.level && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {[
-                  { key: 'can_read_all', label: 'Чтение всех' },
-                  { key: 'can_write_basic', label: 'Базовые изм.' },
-                  { key: 'can_create_employee', label: 'Создание' },
-                  { key: 'can_transfer_employee', label: 'Перевод' },
-                  { key: 'can_delete_employee', label: 'Удаление' },
-                  { key: 'can_list_user_options', label: 'Просм. акк.' },
-                  { key: 'can_manage_user_options', label: 'Упр. акк.' },
+                  { key: 'can_read_all', label: t('hr.accessLevels.flags.readAll') },
+                  { key: 'can_write_basic', label: t('hr.accessLevels.flags.basicEdits') },
+                  { key: 'can_create_employee', label: t('hr.accessLevels.flags.create') },
+                  { key: 'can_transfer_employee', label: t('hr.accessLevels.flags.transfer') },
+                  { key: 'can_delete_employee', label: t('hr.accessLevels.flags.delete') },
+                  { key: 'can_list_user_options', label: t('hr.accessLevels.flags.viewAccounts') },
+                  { key: 'can_manage_user_options', label: t('hr.accessLevels.flags.manageAccounts') },
                 ].map(({ key, label }) => {
                   const has = myLevel[key as keyof HRLevelResponse] as boolean;
                   return (
@@ -502,7 +509,7 @@ export default function HRAccessLevels() {
         <div>
           <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
             <Building2 className="h-4 w-4" />
-            Распределение по уровням
+            {t('hr.accessLevels.distribution')}
           </h2>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {LEVELS_ORDER.map((lvl) => (
@@ -514,13 +521,13 @@ export default function HRAccessLevels() {
         {/* Permission matrix table */}
         <div className="rounded-xl border bg-card overflow-hidden">
           <div className="border-b px-4 py-3">
-            <h2 className="text-sm font-semibold">Матрица разрешений</h2>
+            <h2 className="text-sm font-semibold">{t('hr.accessLevels.matrix')}</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/40">
-                  <th className="px-4 py-2 text-left font-medium text-muted-foreground">Разрешение</th>
+                  <th className="px-4 py-2 text-left font-medium text-muted-foreground">{t('hr.accessLevels.permissionColumn')}</th>
                   {LEVELS_ORDER.map((lvl) => {
                     const cfg = LEVEL_CONFIG[lvl];
                     const Icon = cfg.icon;
@@ -535,11 +542,11 @@ export default function HRAccessLevels() {
                 </tr>
               </thead>
               <tbody>
-                {ALL_PERMISSIONS.map((perm, i) => (
+                {ALL_PERMISSION_KEYS.map((perm, i) => (
                   <tr key={perm} className={i % 2 === 0 ? '' : 'bg-muted/20'}>
-                    <td className="px-4 py-2 text-sm">{perm}</td>
+                    <td className="px-4 py-2 text-sm">{t(perm)}</td>
                     {LEVELS_ORDER.map((lvl) => {
-                      const has = LEVEL_CONFIG[lvl].permissions.includes(perm);
+                      const has = LEVEL_CONFIG[lvl].permissionKeys.includes(perm);
                       return (
                         <td key={lvl} className="px-3 py-2 text-center">
                           {has
@@ -561,7 +568,7 @@ export default function HRAccessLevels() {
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
               <Users className="h-4 w-4" />
-              Сотрудники и их уровни
+              {t('hr.accessLevels.employeesAndLevels')}
             </h2>
             <div className="flex items-center gap-2">
               {/* Level filter pills */}
@@ -573,7 +580,7 @@ export default function HRAccessLevels() {
                     : 'border-muted text-muted-foreground hover:border-foreground/40'
                     }`}
                 >
-                  Все ({enriched.length})
+                  {t('hr.accessLevels.allCount', { count: enriched.length })}
                 </button>
                 {LEVELS_ORDER.map((lvl) => {
                   const cfg = LEVEL_CONFIG[lvl];
@@ -597,7 +604,7 @@ export default function HRAccessLevels() {
           <div className="relative mb-3">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Поиск по имени, должности, отделу..."
+              placeholder={t('hr.accessLevels.searchPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9"
@@ -607,11 +614,11 @@ export default function HRAccessLevels() {
           {isLoading ? (
             <div className="flex items-center justify-center py-12 text-muted-foreground">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mr-2" />
-              Загрузка...
+              {t('profile.loading')}
             </div>
           ) : filtered.length === 0 ? (
             <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-              Сотрудники не найдены
+              {t('hr.accessLevels.noEmployees')}
             </div>
           ) : (
             <div className="space-y-2">

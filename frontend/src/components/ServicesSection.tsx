@@ -106,7 +106,7 @@ export const ServicesSection = () => {
             />
             <div className="absolute inset-0 bg-gradient-to-t from-primary/40 to-transparent" />
             <div className="lg:hidden absolute bottom-3 right-3 bg-black/40 text-primary-foreground text-[11px] px-2.5 py-1 rounded-full backdrop-blur-xs">
-              Свайпайте ← →
+              {t('common.swipeHint')}
             </div>
           </div>
           <div

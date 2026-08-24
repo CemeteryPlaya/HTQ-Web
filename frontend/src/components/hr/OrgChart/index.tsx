@@ -28,6 +28,7 @@ import { applyDagreLayout } from './useOrgLayout';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ConnectDialog } from './ConnectDialog';
+import { useTranslation } from 'react-i18next';
 
 const nodeTypes = { orgNode: OrgChartNode };
 
@@ -162,6 +163,7 @@ export function OrgChart({
   editable = false,
   onConnectNodes,
 }: OrgChartProps) {
+  const { t } = useTranslation();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [levelFilter, setLevelFilter] = useState<number | null>(maxLevelFilter ?? null);
@@ -326,7 +328,7 @@ export function OrgChart({
       {!hideToolbar && (
         <div className="flex flex-wrap items-center gap-2 px-1">
           <div className="flex items-center gap-1.5 text-sm">
-            <span className="text-muted-foreground">Глубина:</span>
+            <span className="text-muted-foreground">{t('hr.orgChart.depth')}</span>
             <Select
               value={levelFilter == null ? 'all' : String(levelFilter)}
               onValueChange={(v) => setLevelFilter(v === 'all' ? null : parseInt(v))}
@@ -335,29 +337,29 @@ export function OrgChart({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Все</SelectItem>
+                <SelectItem value="all">{t('common.all')}</SelectItem>
                 {Array.from({ length: maxLevel }, (_, i) => i + 1).map((l) => (
-                  <SelectItem key={l} value={String(l)}>до L{l}</SelectItem>
+                  <SelectItem key={l} value={String(l)}>{t('hr.orgChart.upToLevel', { level: l })}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
 
           <div className="flex items-center gap-1.5 text-sm">
-            <span className="text-muted-foreground">Направление:</span>
+            <span className="text-muted-foreground">{t('hr.orgChart.direction')}</span>
             <Select value={direction} onValueChange={(v) => setDirection(v as Direction)}>
               <SelectTrigger className="h-8 w-28">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="TB">Сверху вниз</SelectItem>
-                <SelectItem value="LR">Слева направо</SelectItem>
+                <SelectItem value="TB">{t('hr.orgChart.topDown')}</SelectItem>
+                <SelectItem value="LR">{t('hr.orgChart.leftRight')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           <Button size="sm" variant="outline" onClick={() => fitView({ padding: 0.15, duration: 300 })}>
-            По экрану
+            {t('hr.orgChart.fitScreen')}
           </Button>
           <Button size="sm" variant="outline" onClick={exportPng}>PNG</Button>
           <Button size="sm" variant="outline" onClick={exportSvg}>SVG</Button>
@@ -365,16 +367,16 @@ export function OrgChart({
           {/* Legend */}
           <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">
-              <span className="inline-block w-6 h-0.5 bg-slate-500" /> прямое
+              <span className="inline-block w-6 h-0.5 bg-slate-500" /> {t('hr.orgChart.relationLower.direct')}
             </span>
             <span className="flex items-center gap-1">
-              <span className="inline-block w-6 h-0.5 border-t-2 border-dashed border-blue-400" /> функциональное
+              <span className="inline-block w-6 h-0.5 border-t-2 border-dashed border-blue-400" /> {t('hr.orgChart.relationLower.functional')}
             </span>
             <span className="flex items-center gap-1">
-              <span className="inline-block w-6 h-0.5 border-t-2 border-dotted border-amber-400" /> проектное
+              <span className="inline-block w-6 h-0.5 border-t-2 border-dotted border-amber-400" /> {t('hr.orgChart.relationLower.project')}
             </span>
             <span className="flex items-center gap-1 opacity-55">
-              <span className="inline-block w-6 h-0.5 border-t-2 border-dashed border-slate-400" /> выведено автоматически
+              <span className="inline-block w-6 h-0.5 border-t-2 border-dashed border-slate-400" /> {t('hr.orgChart.relationLower.inferred')}
             </span>
           </div>
         </div>
@@ -387,7 +389,7 @@ export function OrgChart({
       >
         {isLoading ? (
           <div className="flex h-full items-center justify-center text-muted-foreground text-sm">
-            Загрузка структуры…
+            {t('hr.orgChart.loading')}
           </div>
         ) : (
           <ReactFlow

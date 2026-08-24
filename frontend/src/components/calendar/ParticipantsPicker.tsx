@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   options: CalendarUserOption[];
@@ -34,6 +35,7 @@ export const ParticipantsPicker: React.FC<Props> = ({
   onChange,
   placeholder,
 }) => {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const byId = useMemo(() => {
     const m = new Map<number, CalendarUserOption>();
@@ -65,13 +67,13 @@ export const ParticipantsPicker: React.FC<Props> = ({
             className="w-full justify-start rounded-2xl h-12 bg-muted/30 border-none focus-visible:ring-primary/40 font-normal"
           >
             <Users className="mr-2 h-4 w-4 text-muted-foreground" />
-            {value.length > 0 ? `Выбрано: ${value.length}` : placeholder}
+            {value.length > 0 ? t('calendar.selectedCount', { count: value.length }) : placeholder}
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-[360px] p-0" align="start">
           <Command>
-            <CommandInput placeholder="Поиск по имени или email" />
-            <CommandEmpty>Никого не найдено</CommandEmpty>
+            <CommandInput placeholder={t('calendar.searchByNameOrEmail')} />
+            <CommandEmpty>{t('messenger.nobodyFound')}</CommandEmpty>
             <CommandList className="max-h-72">
               <CommandGroup>
                 {options.map((u) => {
@@ -118,7 +120,7 @@ export const ParticipantsPicker: React.FC<Props> = ({
                   type="button"
                   onClick={() => toggle(id)}
                   className="ml-0.5 rounded-full p-0.5 hover:bg-muted-foreground/10"
-                  aria-label="Убрать участника"
+                  aria-label={t('calendar.removeParticipant')}
                 >
                   <X className="h-3 w-3" />
                 </button>

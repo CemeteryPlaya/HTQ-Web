@@ -65,7 +65,7 @@ export const HRQuickActionsBar: React.FC = () => {
               <Sparkles className="h-4 w-4" />
             </div>
             <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              Быстрые действия
+              {t('hr.quickActions.title')}
             </span>
           </div>
 
@@ -73,15 +73,15 @@ export const HRQuickActionsBar: React.FC = () => {
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="flex items-center gap-1.5 bg-muted/60 px-2.5 py-1 rounded-lg font-medium text-foreground">
                 <Users className="h-3.5 w-3.5 text-primary" />
-                Сотрудников: <strong className="font-semibold">{stats.employeesCount}</strong>
+                {t('hr.quickActions.employeesCount')} <strong className="font-semibold">{stats.employeesCount}</strong>
               </span>
               <span className="flex items-center gap-1.5 bg-muted/60 px-2.5 py-1 rounded-lg font-medium text-foreground">
                 <Building2 className="h-3.5 w-3.5 text-primary" />
-                Отделов: <strong className="font-semibold">{stats.departmentsCount}</strong>
+                {t('hr.quickActions.departmentsCount')} <strong className="font-semibold">{stats.departmentsCount}</strong>
               </span>
               <span className="flex items-center gap-1.5 bg-muted/60 px-2.5 py-1 rounded-lg font-medium text-foreground">
                 <BriefcaseBusiness className="h-3.5 w-3.5 text-primary" />
-                Должностей: <strong className="font-semibold">{stats.positionsCount}</strong>
+                {t('hr.quickActions.positionsCount')} <strong className="font-semibold">{stats.positionsCount}</strong>
               </span>
             </div>
           )}
@@ -97,7 +97,7 @@ export const HRQuickActionsBar: React.FC = () => {
               onClick={() => navigate('/hr/employees?action=new')}
             >
               <UserPlus className="h-4 w-4" />
-              Добавить сотрудника
+              {t('hr.quickActions.addEmployee')}
             </Button>
           )}
 
@@ -109,7 +109,7 @@ export const HRQuickActionsBar: React.FC = () => {
             onClick={() => navigate('/hr/departments?action=new')}
           >
             <Building2 className="h-4 w-4 text-primary" />
-            Новый отдел
+            {t('hr.quickActions.newDepartment')}
           </Button>
 
           {/* Quick Dropdown with More Actions */}
@@ -117,13 +117,13 @@ export const HRQuickActionsBar: React.FC = () => {
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="ghost" className="gap-1.5 rounded-xl border border-muted min-h-[44px] sm:min-h-[36px] flex-1 sm:flex-none justify-center">
                 <PlusCircle className="h-4 w-4 text-muted-foreground" />
-                <span>Ещё действие</span>
+                <span>{t('hr.quickActions.more')}</span>
                 <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56 rounded-2xl p-2">
               <DropdownMenuLabel className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                Создание сущностей
+                {t('hr.quickActions.createGroup')}
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -131,21 +131,21 @@ export const HRQuickActionsBar: React.FC = () => {
                 onClick={() => navigate('/hr/positions')}
               >
                 <Briefcase className="h-4 w-4 text-primary" />
-                <span>Новая должность</span>
+                <span>{t('hr.quickActions.newPosition')}</span>
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="gap-2.5 cursor-pointer rounded-xl min-h-[44px] sm:min-h-[36px]"
                 onClick={() => navigate('/hr/recruitment?tab=vacancies')}
               >
                 <FileCheck className="h-4 w-4 text-emerald-600" />
-                <span>Открыть вакансию</span>
+                <span>{t('hr.quickActions.openVacancy')}</span>
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="gap-2.5 cursor-pointer rounded-xl min-h-[44px] sm:min-h-[36px]"
                 onClick={() => navigate('/hr/recruitment?tab=offers')}
               >
                 <UserPlus className="h-4 w-4 text-purple-600" />
-                <span>Сформировать оффер</span>
+                <span>{t('hr.quickActions.draftOffer')}</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

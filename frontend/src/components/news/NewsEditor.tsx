@@ -1,4 +1,5 @@
 import { useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import JoditEditor from 'jodit-react';
 import { API_ENDPOINTS } from '@/api/endpoints';
 
@@ -18,13 +19,14 @@ interface NewsEditorProps {
  * the shape it wants.
  */
 export function NewsEditor({ value, onChange, placeholder, height = 480 }: NewsEditorProps) {
+  const { t, i18n } = useTranslation();
   const editorRef = useRef(null);
 
   const config = useMemo(
     () => ({
       readonly: false,
-      language: 'ru',
-      placeholder: placeholder ?? 'Начните писать новость…',
+      language: i18n.language?.startsWith('en') ? 'en' : 'ru',
+      placeholder: placeholder ?? t('news.editor.placeholder'),
       height,
       // Force toolbar popups (font/fontsize/color/paragraph/align/link/image/
       // video/table/copyformat) to mount on <body>. By default Jodit walks
@@ -78,91 +80,91 @@ export function NewsEditor({ value, onChange, placeholder, height = 480 }: NewsE
       removeButtons: ['file', 'about', 'classSpan'],
       controls: {
         bold: {
-          tooltip: 'Жирный текст (Ctrl+B)',
+          tooltip: t('news.editor.tooltips.bold'),
         },
         italic: {
-          tooltip: 'Курсив (Ctrl+I)',
+          tooltip: t('news.editor.tooltips.italic'),
         },
         underline: {
-          tooltip: 'Подчёркнутый (Ctrl+U)',
+          tooltip: t('news.editor.tooltips.underline'),
         },
         strikethrough: {
-          tooltip: 'Зачёркнутый текст',
+          tooltip: t('news.editor.tooltips.strikethrough'),
         },
         eraser: {
-          tooltip: 'Очистить форматирование',
+          tooltip: t('news.editor.tooltips.eraser'),
         },
         ul: {
-          tooltip: 'Маркированный список',
+          tooltip: t('news.editor.tooltips.ul'),
         },
         ol: {
-          tooltip: 'Нумерованный список',
+          tooltip: t('news.editor.tooltips.ol'),
         },
         font: {
-          tooltip: 'Шрифт',
+          tooltip: t('news.editor.tooltips.font'),
         },
         fontsize: {
-          tooltip: 'Размер шрифта',
+          tooltip: t('news.editor.tooltips.fontsize'),
         },
         brush: {
-          tooltip: 'Цвет текста / фона',
+          tooltip: t('news.editor.tooltips.color'),
         },
         paragraph: {
-          tooltip: 'Стиль абзаца (H1–H4, параграф, цитата)',
+          tooltip: t('news.editor.tooltips.paragraph'),
         },
         align: {
-          tooltip: 'Выравнивание текста',
+          tooltip: t('news.editor.tooltips.align'),
         },
         link: {
-          tooltip: 'Вставить / редактировать ссылку',
+          tooltip: t('news.editor.tooltips.link'),
         },
         image: {
-          tooltip: 'Вставить изображение',
+          tooltip: t('news.editor.tooltips.image'),
         },
         video: {
-          tooltip: 'Вставить видео (YouTube, Vimeo)',
+          tooltip: t('news.editor.tooltips.video'),
         },
         table: {
-          tooltip: 'Вставить таблицу',
+          tooltip: t('news.editor.tooltips.table'),
         },
         hr: {
-          tooltip: 'Горизонтальная линия',
+          tooltip: t('news.editor.tooltips.hr'),
         },
         indent: {
-          tooltip: 'Увеличить отступ',
+          tooltip: t('news.editor.tooltips.indent'),
         },
         outdent: {
-          tooltip: 'Уменьшить отступ',
+          tooltip: t('news.editor.tooltips.outdent'),
         },
         superscript: {
-          tooltip: 'Верхний индекс',
+          tooltip: t('news.editor.tooltips.superscript'),
         },
         subscript: {
-          tooltip: 'Нижний индекс',
+          tooltip: t('news.editor.tooltips.subscript'),
         },
         copyformat: {
-          tooltip: 'Копировать формат',
+          tooltip: t('news.editor.tooltips.copyformat'),
         },
         selectall: {
-          tooltip: 'Выделить всё (Ctrl+A)',
+          tooltip: t('news.editor.tooltips.selectall'),
         },
         undo: {
-          tooltip: 'Отменить (Ctrl+Z)',
+          tooltip: t('news.editor.tooltips.undo'),
         },
         redo: {
-          tooltip: 'Повторить (Ctrl+Y)',
+          tooltip: t('news.editor.tooltips.redo'),
         },
         fullsize: {
-          tooltip: 'Полноэкранный режим',
+          tooltip: t('news.editor.tooltips.fullsize'),
         },
         preview: {
-          tooltip: 'Предпросмотр',
+          tooltip: t('news.editor.tooltips.preview'),
         },
         source: {
-          tooltip: 'HTML-код',
+          tooltip: t('news.editor.tooltips.source'),
         },
         print: {
-          tooltip: 'Распечатать',
+          tooltip: t('news.editor.tooltips.print'),
         },
       },
       uploader: {
@@ -203,7 +205,40 @@ export function NewsEditor({ value, onChange, placeholder, height = 480 }: NewsE
       },
       style: { font: '15px Inter, system-ui, sans-serif' },
     }),
-    [height, placeholder],
+    [height, placeholder, t, i18n.language],
+  );
+
+  // Подсказки по панели: подпись кнопки бывает символом (B, ¶, </>), а бывает
+  // словом — тогда переводится и она, и описание.
+  const hints = useMemo(
+    () => [
+      { term: 'B', descKey: 'news.editor.hints.bold' },
+      { term: 'I', descKey: 'news.editor.hints.italic' },
+      { term: 'U', descKey: 'news.editor.hints.underline' },
+      { term: 'S', descKey: 'news.editor.hints.strikethrough' },
+      { term: t('news.editor.terms.eraser'), descKey: 'news.editor.hints.clearFormat' },
+      { term: t('news.editor.terms.lists'), descKey: 'news.editor.hints.lists' },
+      { term: 'A', descKey: 'news.editor.hints.font' },
+      { term: 'TI', descKey: 'news.editor.hints.fontsize' },
+      { term: t('news.editor.terms.drop'), descKey: 'news.editor.hints.color' },
+      { term: '¶', descKey: 'news.editor.hints.paragraph' },
+      { term: t('news.editor.terms.lines'), descKey: 'news.editor.hints.align' },
+      { term: t('news.editor.terms.chain'), descKey: 'news.editor.hints.link' },
+      { term: t('news.editor.terms.picture'), descKey: 'news.editor.hints.image' },
+      { term: t('news.editor.terms.camera'), descKey: 'news.editor.hints.video' },
+      { term: t('news.editor.terms.grid'), descKey: 'news.editor.hints.table' },
+      { term: '—', descKey: 'news.editor.hints.hr' },
+      { term: t('news.editor.terms.indentArrows'), descKey: 'news.editor.hints.indent' },
+      { term: 'x² / x₂', descKey: 'news.editor.hints.script' },
+      { term: t('news.editor.terms.brush'), descKey: 'news.editor.hints.copyformat' },
+      { term: t('news.editor.terms.frame'), descKey: 'news.editor.hints.selectall' },
+      { term: '↺ / ↻', descKey: 'news.editor.hints.undoRedo' },
+      { term: '↔', descKey: 'news.editor.hints.fullsize' },
+      { term: t('news.editor.terms.eye'), descKey: 'news.editor.hints.preview' },
+      { term: '</>', descKey: 'news.editor.hints.source' },
+      { term: t('news.editor.terms.printer'), descKey: 'news.editor.hints.print' },
+    ],
+    [t],
   );
 
   // jodit-react re-mounts on every config object change, so memoize above.
@@ -220,34 +255,14 @@ export function NewsEditor({ value, onChange, placeholder, height = 480 }: NewsE
       />
       <details className="group border-t border-border/50 bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
         <summary className="cursor-pointer select-none font-semibold text-foreground/80 hover:text-primary">
-          Подсказки по кнопкам редактора
+          {t('news.editor.hintsTitle')}
         </summary>
         <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2 lg:grid-cols-3">
-          <div><b>B</b> — жирный (Ctrl+B)</div>
-          <div><b>I</b> — курсив (Ctrl+I)</div>
-          <div><b>U</b> — подчёркнутый (Ctrl+U)</div>
-          <div><b>S</b> — зачёркнутый</div>
-          <div><b>Ластик</b> — очистить форматирование</div>
-          <div><b>Списки</b> — маркированный / нумерованный</div>
-          <div><b>A</b> — шрифт</div>
-          <div><b>TI</b> — размер шрифта</div>
-          <div><b>Капля</b> — цвет текста и фона</div>
-          <div><b>¶</b> — стиль абзаца (H1–H4, цитата)</div>
-          <div><b>Линии</b> — выравнивание текста</div>
-          <div><b>Цепочка</b> — вставить / редактировать ссылку</div>
-          <div><b>Картинка</b> — загрузить изображение</div>
-          <div><b>Камера</b> — вставить видео (YouTube, Vimeo)</div>
-          <div><b>Сетка</b> — вставить таблицу</div>
-          <div><b>—</b> — горизонтальная линия</div>
-          <div><b>Стрелки отступа</b> — увеличить / уменьшить отступ</div>
-          <div><b>x²&nbsp;/&nbsp;x₂</b> — верхний / нижний индекс</div>
-          <div><b>Кисть</b> — копировать формат</div>
-          <div><b>Рамка</b> — выделить всё (Ctrl+A)</div>
-          <div><b>↺ / ↻</b> — отменить (Ctrl+Z) / повторить (Ctrl+Y)</div>
-          <div><b>↔</b> — полноэкранный режим</div>
-          <div><b>Глаз</b> — предпросмотр</div>
-          <div><b>&lt;/&gt;</b> — HTML-код</div>
-          <div><b>Принтер</b> — распечатать</div>
+          {hints.map((h) => (
+            <div key={h.descKey}>
+              <b>{h.term}</b> — {t(h.descKey)}
+            </div>
+          ))}
         </div>
       </details>
     </div>

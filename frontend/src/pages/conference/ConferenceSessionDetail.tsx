@@ -275,8 +275,7 @@ const RecordingPane: React.FC<{
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">
           {daysLeft > 0
-            ? t('conference.detail.expiresIn', 'Запись будет удалена через {{days}} дн.')
-              .replace('{{days}}', String(daysLeft))
+            ? t('conference.detail.expiresIn', { days: daysLeft })
             : t('conference.detail.expiresSoon', 'Срок хранения записи истёк')}
         </p>
         {session.download_url && (

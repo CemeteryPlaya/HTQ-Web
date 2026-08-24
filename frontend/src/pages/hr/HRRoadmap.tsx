@@ -162,7 +162,7 @@ const HRRoadmap: React.FC = () => {
             <Layers className="h-5 w-5" />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-foreground">Дерево объектов и задач</h2>
+            <h2 className="text-sm font-bold text-foreground">{t('hr.roadmap.treeTitle')}</h2>
             <p className="text-xs text-muted-foreground">
               {t('tasks.projects.intro', 'Раскройте проект для детализации по объектам, блокам и пакетам задач.')}
             </p>

@@ -389,7 +389,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
 
             {isSearching && totalResults === 0 && (
                 <div className="py-6 text-center text-xs text-muted-foreground">
-                    Ничего не найдено
+                    {t('common.nothingFound')}
                 </div>
             )}
 
@@ -465,7 +465,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
                             className="group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent/80 hover:text-foreground transition-all duration-150"
                         >
                             <Volume2 className="h-4 w-4 shrink-0 transition-transform duration-200 group-hover:scale-110" />
-                            <span className="flex-1 truncate text-left">Звуки уведомлений</span>
+                            <span className="flex-1 truncate text-left">{t('sound.title', 'Звуки уведомлений')}</span>
                         </button>
                     }
                 />

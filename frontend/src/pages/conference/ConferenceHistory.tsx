@@ -99,9 +99,7 @@ const ConferenceHistory: React.FC = () => {
   const recordedTotal = data?.recorded_total ?? 0;
 
   const summary = useMemo(() => (
-    t('conference.history.summary', 'Всего встреч: {{total}} · с записью: {{recorded}}')
-      .replace('{{total}}', String(total))
-      .replace('{{recorded}}', String(recordedTotal))
+    t('conference.history.summary', { total, recorded: recordedTotal })
   ), [t, total, recordedTotal]);
 
   return (

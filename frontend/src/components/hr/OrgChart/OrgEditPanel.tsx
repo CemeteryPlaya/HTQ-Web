@@ -64,6 +64,8 @@ import {
 import type { useOrgEditMutations } from './useOrgEditMutations';
 import { EntityCombobox, type EntityOption } from './EntityCombobox';
 import { TransferSubordinatesDialog } from './TransferSubordinatesDialog';
+import { translatedMap } from '@/lib/i18n/translatedMap';
+import { useTranslation } from 'react-i18next';
 
 interface Props {
   node: OrgRawNode | null;
@@ -73,11 +75,11 @@ interface Props {
   mutations: ReturnType<typeof useOrgEditMutations>;
 }
 
-const RELATION_LABELS: Record<RelationType, string> = {
-  direct: 'Прямое',
-  functional: 'Функциональное',
-  project: 'Проектное',
-};
+const RELATION_LABELS: Record<RelationType, string> = translatedMap({
+  direct: 'hr.orgChart.relation.direct',
+  functional: 'hr.orgChart.relation.functional',
+  project: 'hr.orgChart.relation.project',
+});
 
 const RELATION_BADGE_STYLES: Record<RelationType, string> = {
   direct: 'border-slate-400 bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-200',
@@ -110,6 +112,7 @@ export function OrgEditPanel({
   onSelectNode,
   mutations,
 }: Props) {
+  const { t } = useTranslation();
   const edges = tree?.edges ?? [];
   const nodes = tree?.nodes ?? [];
   const nodeId = node?.id ?? null;
@@ -357,16 +360,16 @@ export function OrgEditPanel({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <Badge variant="outline" className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0">
-                      {isDepartment ? 'Отдел' : isEmployee ? 'Сотрудник' : 'Должность'}
+                      {isDepartment ? t('hr.card.department') : isEmployee ? t('hr.orgChart.employee') : t('hr.card.position')}
                     </Badge>
                     {nodeLevel != null && (
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-medium">
-                        Уровень L{nodeLevel}
+                        {t('hr.orgChart.panel.levelBadge', { level: nodeLevel })}
                       </Badge>
                     )}
                     {nodeGrade != null && (
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-medium">
-                        Грейд G{nodeGrade}
+                        {t('hr.orgChart.panel.gradeBadge', { grade: nodeGrade })}
                       </Badge>
                     )}
                   </div>
@@ -407,7 +410,7 @@ export function OrgEditPanel({
               <div className="mt-3 pt-2.5 border-t border-border/50">
                 <div className="flex items-center gap-1 text-[11px] text-muted-foreground font-medium mb-1">
                   <GitBranch className="h-3 w-3" />
-                  <span>Цепочка подчинения:</span>
+                  <span>{t('hr.orgChart.panel.chain')}</span>
                 </div>
                 <div className="flex items-center gap-1 overflow-x-auto pb-1 text-xs text-muted-foreground scrollbar-none">
                   {hierarchyChain.map((cId, idx) => {
@@ -462,11 +465,11 @@ export function OrgEditPanel({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-sm font-bold text-foreground">
                     <Building2 className="h-4 w-4 text-primary" />
-                    Руководитель отдела
+                    {t('hr.orgChart.panel.departmentHead')}
                   </div>
                   {managerSource && (
                     <Badge variant="outline" className="text-[10px] font-normal">
-                      {managerSource === 'explicit' ? 'задан вручную' : 'определён автоматически'}
+                      {managerSource === 'explicit' ? t('hr.orgChart.origin.employee') : t('hr.orgChart.origin.inferred')}
                     </Badge>
                   )}
                 </div>
@@ -483,7 +486,7 @@ export function OrgEditPanel({
                       )}
                       <div className="min-w-0">
                         <div className="font-semibold text-xs text-foreground truncate">{managerName}</div>
-                        <div className="text-[11px] text-muted-foreground">Глава подразделения</div>
+                        <div className="text-[11px] text-muted-foreground">{t('hr.orgChart.panel.unitHead')}</div>
                       </div>
                     </div>
 
@@ -496,19 +499,19 @@ export function OrgEditPanel({
                         onClick={handleClearManager}
                       >
                         <UserMinus className="h-3.5 w-3.5 mr-1" />
-                        Снять
+                        {t('hr.orgChart.panel.unassign')}
                       </Button>
                     )}
                   </div>
                 ) : (
                   <div className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">
-                    Руководитель не назначен
+                    {t('hr.orgChart.panel.noManagerAssigned')}
                   </div>
                 )}
 
                 <div className="space-y-2 pt-2 border-t">
                   <label className="text-xs font-semibold text-foreground">
-                    {managerName ? 'Сменить руководителя отдела:' : 'Назначить руководителя отдела:'}
+                    {managerName ? t('hr.orgChart.changeDeptHead') : t('hr.orgChart.assignDeptHead')}
                   </label>
                   <div className="flex gap-2">
                     <div className="flex-1 min-w-0">
@@ -524,8 +527,8 @@ export function OrgEditPanel({
                           avatarUrl: e.avatar_url ?? undefined,
                           type: 'employee',
                         }))}
-                        placeholder="Выберите сотрудника..."
-                        searchPlaceholder="Поиск сотрудника..."
+                        placeholder={t('hr.orgChart.panel.pickEmployee')}
+                        searchPlaceholder={t('hr.orgChart.panel.searchEmployee')}
                       />
                     </div>
                     <Button
@@ -535,7 +538,7 @@ export function OrgEditPanel({
                       className="gap-1"
                     >
                       <UserCheck className="h-3.5 w-3.5" />
-                      Сохранить
+                      {t('common.save')}
                     </Button>
                   </div>
                 </div>
@@ -550,7 +553,7 @@ export function OrgEditPanel({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-sm font-bold text-foreground">
                       <Crown className="h-4 w-4 text-amber-500" />
-                      Руководитель
+                      {t('hr.orgChart.manager')}
                     </div>
                     {superiorEdge && (
                       <Badge
@@ -588,7 +591,10 @@ export function OrgEditPanel({
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button variant="outline" size="sm" className="h-7 text-xs px-2 gap-1">
-                                  Тип: {RELATION_LABELS[superiorEdge.relation_type as RelationType] || 'Прямое'}
+                                  {t('hr.orgChart.panel.relationTypeValue', {
+                                    type: RELATION_LABELS[superiorEdge.relation_type as RelationType]
+                                      || t('hr.orgChart.relation.direct'),
+                                  })}
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
@@ -608,10 +614,10 @@ export function OrgEditPanel({
                               size="sm"
                               variant="ghost"
                               className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
-                              title="Убрать руководителя"
+                              title={t('hr.orgChart.panel.removeManager')}
                               disabled={mutations.removeMutation.isPending}
                               onClick={() => {
-                                if (window.confirm('Убрать связь с руководителем?')) {
+                                if (window.confirm(t('hr.orgChart.panel.confirmRemoveManager'))) {
                                   mutations.removeMutation.mutate(superiorEdge);
                                 }
                               }}
@@ -631,19 +637,19 @@ export function OrgEditPanel({
                           onClick={() => setShowChangeSuperior(true)}
                         >
                           <RefreshCw className="h-3 w-3 mr-1.5" />
-                          Сменить руководителя
+                          {t('hr.orgChart.panel.changeManager')}
                         </Button>
                       ) : (
                         <div className="space-y-2 pt-2 border-t">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-semibold text-foreground">Новый руководитель:</span>
+                            <span className="text-xs font-semibold text-foreground">{t('hr.orgChart.newManager')}</span>
                             <Button
                               variant="ghost"
                               size="sm"
                               className="h-5 px-1.5 text-[11px] text-muted-foreground"
                               onClick={() => setShowChangeSuperior(false)}
                             >
-                              Отмена
+                              {t('common.cancel')}
                             </Button>
                           </div>
                           <div className="space-y-2">
@@ -652,8 +658,8 @@ export function OrgEditPanel({
                               value={pickedSuperior}
                               onChange={setPickedSuperior}
                               options={superiorOptions}
-                              placeholder="Выберите руководителя..."
-                              searchPlaceholder="Поиск..."
+                              placeholder={t('hr.orgChart.panel.pickManager')}
+                              searchPlaceholder={t('hr.orgChart.panel.search')}
                             />
                             <div className="flex items-center gap-2">
                               <Select
@@ -677,7 +683,7 @@ export function OrgEditPanel({
                                 onClick={handleAssignSuperior}
                                 className="h-8 text-xs"
                               >
-                                Назначить
+                                {t('hr.orgChart.panel.assign')}
                               </Button>
                             </div>
                           </div>
@@ -688,7 +694,7 @@ export function OrgEditPanel({
                     /* When there is no supervisor assigned */
                     <div className="space-y-3">
                       <div className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">
-                        Руководитель не определён
+                        {t('hr.orgChart.panel.noManagerResolved')}
                       </div>
                       <div className="space-y-2">
                         <EntityCombobox
@@ -696,8 +702,8 @@ export function OrgEditPanel({
                           value={pickedSuperior}
                           onChange={setPickedSuperior}
                           options={superiorOptions}
-                          placeholder="Назначить руководителя..."
-                          searchPlaceholder="Поиск руководителя..."
+                          placeholder={t('hr.orgChart.panel.assignManager')}
+                          searchPlaceholder={t('hr.orgChart.searchManager')}
                         />
                         <div className="flex items-center gap-2">
                           <Select
@@ -721,7 +727,7 @@ export function OrgEditPanel({
                             onClick={handleAssignSuperior}
                             className="h-8 text-xs"
                           >
-                            Назначить
+                            {t('hr.orgChart.panel.assign')}
                           </Button>
                         </div>
                       </div>
@@ -734,7 +740,7 @@ export function OrgEditPanel({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-sm font-bold text-foreground">
                       <Users className="h-4 w-4 text-primary" />
-                      Прямые подчинённые
+                      {t('hr.orgChart.panel.directReports')}
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-semibold">
                         {reports.length}
                       </Badge>
@@ -748,7 +754,7 @@ export function OrgEditPanel({
                         onClick={() => setTransferDialogOpen(true)}
                       >
                         <UserCheck className="h-3 w-3" />
-                        Передать
+                        {t('hr.orgChart.panel.transfer')}
                       </Button>
                     )}
                   </div>
@@ -760,7 +766,7 @@ export function OrgEditPanel({
                       <input
                         value={subordinateSearch}
                         onChange={(e) => setSubordinateSearch(e.target.value)}
-                        placeholder="Фильтр подчинённых..."
+                        placeholder={t('hr.orgChart.panel.filterReports')}
                         className="h-8 w-full rounded-md border bg-muted/30 pl-8 pr-3 text-xs outline-none focus:border-primary"
                       />
                     </div>
@@ -769,7 +775,7 @@ export function OrgEditPanel({
                   {/* Subordinates List */}
                   {reports.length === 0 ? (
                     <div className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">
-                      Подчинённых нет
+                      {t('hr.orgChart.panel.noReports')}
                     </div>
                   ) : (
                     <div className="space-y-1.5 max-h-[220px] overflow-y-auto p-0.5">
@@ -830,10 +836,10 @@ export function OrgEditPanel({
                                   size="sm"
                                   variant="ghost"
                                   className="h-6 w-6 p-0 text-destructive hover:bg-destructive/10"
-                                  title="Убрать подчинённого"
+                                  title={t('hr.orgChart.panel.removeReport')}
                                   disabled={mutations.removeMutation.isPending}
                                   onClick={() => {
-                                    if (window.confirm(`Убрать подчинённого ${targetName}?`)) {
+                                    if (window.confirm(t('hr.orgChart.panel.confirmRemoveReport', { name: targetName }))) {
                                       mutations.removeMutation.mutate(r);
                                     }
                                   }}
@@ -852,15 +858,15 @@ export function OrgEditPanel({
                   <div className="space-y-2 pt-3 border-t">
                     <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                       <UserPlus className="h-3.5 w-3.5 text-primary" />
-                      Добавить подчинённых:
+                      {t('hr.orgChart.panel.addReports')}
                     </label>
                     <EntityCombobox
                       mode="multi"
                       value={pickedReports}
                       onChange={setPickedReports}
                       options={subordinateOptions}
-                      placeholder="Выберите сотрудников/должности..."
-                      searchPlaceholder="Поиск для добавления..."
+                      placeholder={t('hr.orgChart.panel.pickEntities')}
+                      searchPlaceholder={t('hr.orgChart.panel.searchToAdd')}
                     />
                     <div className="flex items-center gap-2">
                       <Select
@@ -890,8 +896,8 @@ export function OrgEditPanel({
                       >
                         <Plus className="h-3.5 w-3.5" />
                         {pickedReports.length > 1
-                          ? `Добавить (${pickedReports.length})`
-                          : 'Добавить'}
+                          ? t('hr.orgChart.panel.addWithCount', { count: pickedReports.length })
+                          : t('common.add')}
                       </Button>
                     </div>
                   </div>

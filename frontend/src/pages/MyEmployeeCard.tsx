@@ -16,8 +16,10 @@ import { Footer } from '@/components/Footer';
 import { EmployeeCardView } from '@/components/hr/EmployeeCardView';
 import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
 import { Button } from '@/components/ui/button';
+import { useTranslation } from 'react-i18next';
 
 const MyEmployeeCard = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [shareOpen, setShareOpen] = useState(false);
 
@@ -32,13 +34,13 @@ const MyEmployeeCard = () => {
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6 lg:px-8">
         {isLoading ? (
           <div className="rounded-2xl border bg-card/70 p-8 text-center">
-            Загрузка...
+            {t('profile.loading')}
           </div>
         ) : error || !data ? (
           <div className="rounded-2xl border bg-card/70 p-8 text-center text-muted-foreground">
-            Карточка сотрудника не найдена.{' '}
+            {t('profile.employeeCardMissing')}{' '}
             <Link className="underline" to="/myprofile">
-              Вернуться в профиль
+              {t('common.backToProfile')}
             </Link>
           </div>
         ) : (
@@ -51,7 +53,7 @@ const MyEmployeeCard = () => {
                 className="gap-1.5"
               >
                 <ArrowLeft className="h-4 w-4" />
-                Назад
+                {t('common.back')}
               </Button>
 
               <h1 className="ml-2 text-2xl font-bold">{data.full_name}</h1>
@@ -63,7 +65,7 @@ const MyEmployeeCard = () => {
                   className="gap-1.5"
                 >
                   <Share2 className="h-4 w-4" />
-                  Поделиться
+                  {t('common.share')}
                 </Button>
               </div>
             </div>

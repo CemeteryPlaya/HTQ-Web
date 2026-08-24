@@ -20,6 +20,7 @@ import {
 } from '@/lib/auth/profileStorage';
 import { apiPath } from '@/api/endpoints';
 import { emitServiceDisabled } from '@/lib/serviceUnavailableBus';
+import i18next from '@/i18n';
 
 // ---------------------------------------------------------------------------
 // Конфигурация
@@ -88,7 +89,7 @@ let _refreshPromise: Promise<string> | null = null;
  */
 async function doTokenRefresh(): Promise<string> {
   const refresh = getRefreshToken();
-  if (!refresh) throw new Error('Refresh-токен отсутствует');
+  if (!refresh) throw new Error(i18next.t('auth.errors.noRefreshToken'));
 
   const res = await axios.post(
     API_BASE + apiPath('users', 'token/refresh/'),
@@ -203,7 +204,7 @@ client.interceptors.response.use(
     if (status !== undefined && status >= 500) {
       const serverMsg = extractServerErrorMessage(
         error.response?.data,
-        `Внутренняя ошибка сервера (${status}). Попробуйте позже.`,
+        i18next.t('common.errors.serverError', { status }),
       );
       console.error(`[api] Ошибка ${status} на ${url}:`, serverMsg);
       return Promise.reject(Object.assign(new Error(serverMsg), { status, isServerError: true }));

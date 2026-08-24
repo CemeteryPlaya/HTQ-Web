@@ -18,13 +18,13 @@ import { hasAnyRole } from '@/lib/auth/roles';
 const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const requestsNavItems = [
-  { to: '/requests',           icon: InboxIcon,    label: 'Запросы',        adminOnly: false },
-  { to: '/requests/my-stats',  icon: LineChart,    label: 'Моя статистика', adminOnly: false },
-  { to: '/requests/templates', icon: Layers,       label: 'Шаблоны',        adminOnly: true },
-  { to: '/requests/reference', icon: Database,     label: 'Справочники',    adminOnly: true },
-  { to: '/requests/data',      icon: Table2,       label: 'Управление данными', adminOnly: false },
-  { to: '/requests/projects',  icon: FolderKanban, label: 'Проекты',        adminOnly: true },
-  { to: '/requests/stats',     icon: BarChart3,    label: 'Статистика',     adminOnly: true },
+  { to: '/requests',           icon: InboxIcon,    labelKey: 'requests.nav.inbox',     adminOnly: false },
+  { to: '/requests/my-stats',  icon: LineChart,    labelKey: 'requests.nav.myStats',   adminOnly: false },
+  { to: '/requests/templates', icon: Layers,       labelKey: 'requests.nav.templates', adminOnly: true },
+  { to: '/requests/reference', icon: Database,     labelKey: 'requests.nav.reference', adminOnly: true },
+  { to: '/requests/data',      icon: Table2,       labelKey: 'requests.nav.data',      adminOnly: false },
+  { to: '/requests/projects',  icon: FolderKanban, labelKey: 'requests.nav.projects',  adminOnly: true },
+  { to: '/requests/stats',     icon: BarChart3,    labelKey: 'requests.nav.stats',     adminOnly: true },
 ];
 
 interface Props {
@@ -78,7 +78,7 @@ export const RequestsLayout: React.FC<Props> = ({ title, subtitle, actions, chil
                   }`}
                 >
                   <item.icon className="h-4 w-4" />
-                  {item.label}
+                  {t(item.labelKey)}
                 </Link>
               );
             })}
@@ -88,7 +88,7 @@ export const RequestsLayout: React.FC<Props> = ({ title, subtitle, actions, chil
             <aside className="hidden lg:block">
               <div className="rounded-2xl border bg-card/70 p-4 shadow-[var(--shadow-soft)]">
                 <div className="text-xs uppercase tracking-[0.25em] text-muted-foreground mb-3">
-                  Навигация
+                  {t('requests.navigation')}
                 </div>
                 <nav className="flex flex-col gap-2">
                   {visibleNavItems.map((item) => {
@@ -106,7 +106,7 @@ export const RequestsLayout: React.FC<Props> = ({ title, subtitle, actions, chil
                         }`}
                       >
                         <item.icon className="h-4 w-4" />
-                        {item.label}
+                        {t(item.labelKey)}
                       </Link>
                     );
                   })}

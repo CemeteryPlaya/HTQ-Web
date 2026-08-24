@@ -7,8 +7,10 @@ import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { Video } from 'lucide-react';
 import { playMeetingReminder } from '@/lib/sound/soundService';
+import { useTranslation } from 'react-i18next';
 
 export const ConferenceNotifier = () => {
+    const { t } = useTranslation();
     const { activeProfile } = useActiveProfile();
     const navigate = useNavigate();
     
@@ -56,11 +58,11 @@ export const ConferenceNotifier = () => {
                     playMeetingReminder();
 
                     // Show toast notification
-                    toast('🎥 Конференция начинается', {
-                        description: `«${ev.title}» начнётся через 5 минут.`,
+                    toast(t('conference.notify.starting'), {
+                        description: t('conference.notify.startsSoon', { title: ev.title }),
                         duration: 30000, // 30 seconds
                         action: {
-                            label: 'Войти',
+                            label: t('conference.notify.join'),
                             onClick: () => navigate(`/room/${ev.conference_room_id}`),
                         },
                     });
@@ -73,7 +75,7 @@ export const ConferenceNotifier = () => {
         const interval = setInterval(checkConferences, 30000);
         
         return () => clearInterval(interval);
-    }, [timeline, isAuth, navigate]);
+    }, [timeline, isAuth, navigate, t]);
 
     return null; // This is a logic-only component
 };

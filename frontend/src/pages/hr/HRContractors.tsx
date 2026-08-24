@@ -288,7 +288,7 @@ const HRContractors: React.FC = () => {
               className="h-8 gap-1.5 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 font-semibold text-xs shadow-2xs"
             >
               <Plus className="h-3.5 w-3.5" />
-              Добавить
+              {t('common.add')}
             </Button>
           </div>
 
@@ -304,7 +304,7 @@ const HRContractors: React.FC = () => {
             </div>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger className="h-8 text-xs rounded-xl bg-muted/30">
-                <SelectValue placeholder="Статус" />
+                <SelectValue placeholder={t('contracts.columns.status')} />
               </SelectTrigger>
               <SelectContent className="rounded-2xl">
                 <SelectItem value="all">{t('tasks.pages.contractors.allStatuses', 'Все статусы')}</SelectItem>
@@ -347,11 +347,11 @@ const HRContractors: React.FC = () => {
                       </Badge>
                     </div>
                     {c.bin_iin && (
-                      <div className="text-[11px] text-muted-foreground font-mono">БИН/ИИН: {c.bin_iin}</div>
+                      <div className="text-[11px] text-muted-foreground font-mono">{t('tasks.pages.contractors.binValue', { value: c.bin_iin })}</div>
                     )}
                     <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-                      <span>Людей: {c.workers_count}</span>
-                      <span>Объектов: {c.engagements_count}</span>
+                      <span>{t('tasks.pages.contractors.peopleCount', { count: c.workers_count })}</span>
+                      <span>{t('tasks.pages.contractors.siteCount', { count: c.engagements_count })}</span>
                     </div>
                   </div>
                 );
@@ -392,14 +392,14 @@ const HRContractors: React.FC = () => {
                       onClick={() => openEditContractor(selected)}
                     >
                       <Edit className="h-3.5 w-3.5" />
-                      Редактировать
+                      {t('common.edit')}
                     </Button>
                     <Button
                       size="sm"
                       variant="ghost"
                       className="h-8 w-8 p-0 text-destructive hover:text-destructive rounded-xl"
                       onClick={() => {
-                        if (confirm(t('tasks.pages.contractors.deleteConfirm', 'Удалить партнёра?'))) {
+                        if (confirm(t('tasks.pages.contractors.deleteConfirm', { name: selected.name }))) {
                           deleteContractorMutation.mutate(selected.id);
                         }
                       }}
@@ -412,19 +412,19 @@ const HRContractors: React.FC = () => {
                 <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 text-xs">
                   {selected.bin_iin && (
                     <div className="space-y-0.5">
-                      <div className="text-muted-foreground font-medium">БИН / ИИН</div>
+                      <div className="text-muted-foreground font-medium">{t('contracts.counterparty.bin')}</div>
                       <div className="font-mono font-semibold">{selected.bin_iin}</div>
                     </div>
                   )}
                   {selected.contact_person && (
                     <div className="space-y-0.5">
-                      <div className="text-muted-foreground font-medium">Контактное лицо</div>
+                      <div className="text-muted-foreground font-medium">{t('tasks.pages.contractors.contactPerson')}</div>
                       <div className="font-semibold">{selected.contact_person}</div>
                     </div>
                   )}
                   {selected.phone && (
                     <div className="space-y-0.5">
-                      <div className="text-muted-foreground font-medium">Телефон</div>
+                      <div className="text-muted-foreground font-medium">{t('profile.phone')}</div>
                       <div className="font-semibold">{selected.phone}</div>
                     </div>
                   )}
@@ -436,7 +436,7 @@ const HRContractors: React.FC = () => {
                   )}
                   {selected.address && (
                     <div className="space-y-0.5 sm:col-span-2">
-                      <div className="text-muted-foreground font-medium">Адрес</div>
+                      <div className="text-muted-foreground font-medium">{t('contracts.counterparty.address')}</div>
                       <div className="font-semibold">{selected.address}</div>
                     </div>
                   )}
@@ -444,7 +444,7 @@ const HRContractors: React.FC = () => {
 
                 {selected.notes && (
                   <div className="pt-2 border-t text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">Заметки: </span>{selected.notes}
+                    <span className="font-medium text-foreground">{t('tasks.pages.contractors.notesLabel')} </span>{selected.notes}
                   </div>
                 )}
               </div>
@@ -454,7 +454,7 @@ const HRContractors: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                     <MapPin className="h-4 w-4 text-primary" />
-                    Привлечения на объекты ({engagements.length})
+                    {t('tasks.pages.contractors.engagementsCount', { count: engagements.length })}
                   </h3>
                   <Button
                     size="sm"
@@ -462,21 +462,21 @@ const HRContractors: React.FC = () => {
                     className="h-8 gap-1 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-semibold"
                   >
                     <Plus className="h-3.5 w-3.5" />
-                    Назначить на объект
+                    {t('tasks.pages.contractors.assignToSite')}
                   </Button>
                 </div>
 
                 {engagements.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-6">Партнёр не привлечён ни к одному объекту</p>
+                  <p className="text-xs text-muted-foreground text-center py-6">{t('tasks.pages.contractors.noEngagements')}</p>
                 ) : (
                   <div className="overflow-x-auto">
                     <Table className="text-xs">
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Объект / Проект</TableHead>
-                          <TableHead>Договор</TableHead>
-                          <TableHead>Вид работ</TableHead>
-                          <TableHead>Сроки</TableHead>
+                          <TableHead>{t('tasks.pages.contractors.siteProject')}</TableHead>
+                          <TableHead>{t('tasks.pages.contractors.contractNo')}</TableHead>
+                          <TableHead>{t('tasks.pages.contractors.scope')}</TableHead>
+                          <TableHead>{t('tasks.pages.contractors.dates')}</TableHead>
                           <TableHead className="w-[50px]"></TableHead>
                         </TableRow>
                       </TableHeader>
@@ -514,7 +514,7 @@ const HRContractors: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                     <Users className="h-4 w-4 text-primary" />
-                    Сотрудники партнёра ({workers.length})
+                    {t('tasks.pages.contractors.workersCount', { count: workers.length })}
                   </h3>
                   <Button
                     size="sm"
@@ -522,21 +522,21 @@ const HRContractors: React.FC = () => {
                     className="h-8 gap-1 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-semibold"
                   >
                     <Plus className="h-3.5 w-3.5" />
-                    Добавить сотрудника
+                    {t('tasks.pages.contractors.addWorker')}
                   </Button>
                 </div>
 
                 {workers.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-6">Нет внесенных сотрудников</p>
+                  <p className="text-xs text-muted-foreground text-center py-6">{t('tasks.pages.contractors.noWorkers')}</p>
                 ) : (
                   <div className="overflow-x-auto">
                     <Table className="text-xs">
                       <TableHeader>
                         <TableRow>
-                          <TableHead>ФИО</TableHead>
-                          <TableHead>Должность</TableHead>
-                          <TableHead>Уровень</TableHead>
-                          <TableHead>Контакты</TableHead>
+                          <TableHead>{t('tasks.pages.contractors.fio')}</TableHead>
+                          <TableHead>{t('tasks.pages.contractors.position')}</TableHead>
+                          <TableHead>{t('tasks.pages.contractors.level.title')}</TableHead>
+                          <TableHead>{t('tasks.pages.contractors.contacts')}</TableHead>
                           <TableHead className="w-[80px] text-right"></TableHead>
                         </TableRow>
                       </TableHeader>
@@ -571,7 +571,7 @@ const HRContractors: React.FC = () => {
                                     variant="ghost"
                                     className="h-7 w-7 text-muted-foreground hover:text-destructive rounded-lg"
                                     onClick={() => deactivateWorkerMutation.mutate(w.id)}
-                                    title="Отключить"
+                                    title={t('tasks.pages.contractors.deactivate')}
                                   >
                                     <UserMinus className="h-3.5 w-3.5" />
                                   </Button>
@@ -581,7 +581,7 @@ const HRContractors: React.FC = () => {
                                     variant="ghost"
                                     className="h-7 w-7 text-muted-foreground hover:text-primary rounded-lg"
                                     onClick={() => restoreWorkerMutation.mutate(w.id)}
-                                    title="Восстановить"
+                                    title={t('tasks.pages.contractors.restore')}
                                   >
                                     <Check className="h-3.5 w-3.5" />
                                   </Button>
@@ -605,31 +605,31 @@ const HRContractors: React.FC = () => {
         <DialogContent className="max-w-lg rounded-3xl">
           <DialogHeader>
             <DialogTitle>
-              {editingContractor ? 'Редактирование партнёра' : 'Новый партнёр'}
+              {editingContractor ? t('tasks.pages.contractors.editTitle') : t('tasks.pages.contractors.newTitle')}
             </DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 text-xs">
             <div>
-              <Label className="text-xs">Название компании *</Label>
+              <Label className="text-xs">{t('tasks.pages.contractors.companyNameRequired')}</Label>
               <Input
                 value={contractorForm.name}
                 onChange={(e) => setContractorForm({ ...contractorForm, name: e.target.value })}
-                placeholder="ТОО «СтройГрупп»"
+                placeholder={t('tasks.pages.contractors.namePlaceholder')}
                 className="h-8 rounded-xl bg-muted/30 mt-1"
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <Label className="text-xs">Короткое название</Label>
+                <Label className="text-xs">{t('tasks.pages.contractors.shortName')}</Label>
                 <Input
                   value={contractorForm.short_name}
                   onChange={(e) => setContractorForm({ ...contractorForm, short_name: e.target.value })}
-                  placeholder="СтройГрупп"
+                  placeholder={t('tasks.pages.contractors.shortPlaceholder')}
                   className="h-8 rounded-xl bg-muted/30 mt-1"
                 />
               </div>
               <div>
-                <Label className="text-xs">БИН / ИИН</Label>
+                <Label className="text-xs">{t('contracts.counterparty.bin')}</Label>
                 <BinIinInput
                   value={contractorForm.bin_iin}
                   onChange={(v) => setContractorForm({ ...contractorForm, bin_iin: v })}
@@ -640,16 +640,16 @@ const HRContractors: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <Label className="text-xs">Контактное лицо</Label>
+                <Label className="text-xs">{t('tasks.pages.contractors.contactPerson')}</Label>
                 <Input
                   value={contractorForm.contact_person}
                   onChange={(e) => setContractorForm({ ...contractorForm, contact_person: e.target.value })}
-                  placeholder="Иван Иванов"
+                  placeholder={t('tasks.pages.contractors.contactPlaceholder')}
                   className="h-8 rounded-xl bg-muted/30 mt-1"
                 />
               </div>
               <div>
-                <Label className="text-xs">Статус</Label>
+                <Label className="text-xs">{t('contracts.columns.status')}</Label>
                 <Select value={contractorForm.status} onValueChange={(val: ContractorStatus) => setContractorForm({ ...contractorForm, status: val })}>
                   <SelectTrigger className="h-8 rounded-xl bg-muted/30 mt-1">
                     <SelectValue />
@@ -665,7 +665,7 @@ const HRContractors: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <Label className="text-xs">Телефон</Label>
+                <Label className="text-xs">{t('profile.phone')}</Label>
                 <PhoneInput
                   value={contractorForm.phone}
                   onChange={(v) => setContractorForm({ ...contractorForm, phone: v })}
@@ -683,7 +683,7 @@ const HRContractors: React.FC = () => {
             </div>
 
             <div>
-              <Label className="text-xs">Адрес</Label>
+              <Label className="text-xs">{t('contracts.counterparty.address')}</Label>
               <Input
                 value={contractorForm.address}
                 onChange={(e) => setContractorForm({ ...contractorForm, address: e.target.value })}
@@ -692,7 +692,7 @@ const HRContractors: React.FC = () => {
             </div>
 
             <div>
-              <Label className="text-xs">Заметки</Label>
+              <Label className="text-xs">{t('tasks.pages.contractors.notes')}</Label>
               <Textarea
                 value={contractorForm.notes}
                 onChange={(e) => setContractorForm({ ...contractorForm, notes: e.target.value })}
@@ -702,14 +702,14 @@ const HRContractors: React.FC = () => {
           </div>
           <DialogFooter className="mt-4 gap-2">
             <Button variant="outline" className="rounded-xl text-xs" onClick={() => setContractorDialog(false)}>
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button
               className="rounded-xl text-xs bg-primary"
               disabled={!contractorForm.name.trim() || contractorMutation.isPending}
               onClick={() => contractorMutation.mutate(contractorForm)}
             >
-              Сохранить
+              {t('common.save')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -719,14 +719,14 @@ const HRContractors: React.FC = () => {
       <Dialog open={engagementDialog} onOpenChange={setEngagementDialog}>
         <DialogContent className="max-w-md rounded-3xl">
           <DialogHeader>
-            <DialogTitle>Назначение партнёра на объект</DialogTitle>
+            <DialogTitle>{t('tasks.pages.contractors.assignTitle')}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 text-xs">
             <div>
-              <Label className="text-xs">Объект / Площадка</Label>
+              <Label className="text-xs">{t('tasks.pages.contractors.siteLocation')}</Label>
               <Select value={engagementForm.site_id} onValueChange={(val) => setEngagementForm({ ...engagementForm, site_id: val })}>
                 <SelectTrigger className="h-8 rounded-xl bg-muted/30 mt-1">
-                  <SelectValue placeholder="Выберите объект..." />
+                  <SelectValue placeholder={t('tasks.pages.contractors.pickSite')} />
                 </SelectTrigger>
                 <SelectContent className="rounded-2xl">
                   {sites.map((s) => (
@@ -737,10 +737,10 @@ const HRContractors: React.FC = () => {
             </div>
 
             <div>
-              <Label className="text-xs">Проект</Label>
+              <Label className="text-xs">{t('tasks.pages.contractors.project')}</Label>
               <Select value={engagementForm.project_id} onValueChange={(val) => setEngagementForm({ ...engagementForm, project_id: val })}>
                 <SelectTrigger className="h-8 rounded-xl bg-muted/30 mt-1">
-                  <SelectValue placeholder="Выберите проект..." />
+                  <SelectValue placeholder={t('tasks.pages.contractors.pickProject')} />
                 </SelectTrigger>
                 <SelectContent className="rounded-2xl">
                   {projects.map((p) => (
@@ -751,28 +751,28 @@ const HRContractors: React.FC = () => {
             </div>
 
             <div>
-              <Label className="text-xs">Номер договора</Label>
+              <Label className="text-xs">{t('tasks.pages.contractors.contractNumber')}</Label>
               <Input
                 value={engagementForm.contract_no}
                 onChange={(e) => setEngagementForm({ ...engagementForm, contract_no: e.target.value })}
-                placeholder="ДГ-2026/01"
+                placeholder={t('tasks.pages.contractors.contractPlaceholder')}
                 className="h-8 rounded-xl bg-muted/30 mt-1 font-mono"
               />
             </div>
 
             <div>
-              <Label className="text-xs">Вид выполняемых работ</Label>
+              <Label className="text-xs">{t('tasks.pages.contractors.workKind')}</Label>
               <Input
                 value={engagementForm.scope}
                 onChange={(e) => setEngagementForm({ ...engagementForm, scope: e.target.value })}
-                placeholder="Монолитные работы, кладка…"
+                placeholder={t('tasks.pages.contractors.workPlaceholder')}
                 className="h-8 rounded-xl bg-muted/30 mt-1"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <Label className="text-xs">Начало</Label>
+                <Label className="text-xs">{t('tasks.pages.contractors.start')}</Label>
                 <Input
                   type="date"
                   value={engagementForm.start_date}
@@ -781,7 +781,7 @@ const HRContractors: React.FC = () => {
                 />
               </div>
               <div>
-                <Label className="text-xs">Окончание</Label>
+                <Label className="text-xs">{t('tasks.pages.contractors.end')}</Label>
                 <Input
                   type="date"
                   value={engagementForm.end_date}
@@ -793,14 +793,14 @@ const HRContractors: React.FC = () => {
           </div>
           <DialogFooter className="mt-4 gap-2">
             <Button variant="outline" className="rounded-xl text-xs" onClick={() => setEngagementDialog(false)}>
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button
               className="rounded-xl text-xs bg-primary"
               disabled={engagementMutation.isPending}
               onClick={() => engagementMutation.mutate(engagementForm)}
             >
-              Сохранить
+              {t('common.save')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -811,13 +811,13 @@ const HRContractors: React.FC = () => {
         <DialogContent className="max-w-md rounded-3xl">
           <DialogHeader>
             <DialogTitle>
-              {editingWorker ? 'Редактирование сотрудника' : 'Новый сотрудник партнёра'}
+              {editingWorker ? t('tasks.pages.contractors.editWorker') : t('tasks.pages.contractors.newWorker')}
             </DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 text-xs">
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <Label className="text-xs">Фамилия *</Label>
+                <Label className="text-xs">{t('tasks.pages.contractors.lastName')}</Label>
                 <Input
                   value={workerForm.last_name}
                   onChange={(e) => setWorkerForm({ ...workerForm, last_name: e.target.value })}
@@ -825,7 +825,7 @@ const HRContractors: React.FC = () => {
                 />
               </div>
               <div>
-                <Label className="text-xs">Имя *</Label>
+                <Label className="text-xs">{t('tasks.pages.contractors.firstName')}</Label>
                 <Input
                   value={workerForm.first_name}
                   onChange={(e) => setWorkerForm({ ...workerForm, first_name: e.target.value })}
@@ -836,7 +836,7 @@ const HRContractors: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <Label className="text-xs">Отчество</Label>
+                <Label className="text-xs">{t('profile.patronymic')}</Label>
                 <Input
                   value={workerForm.middle_name}
                   onChange={(e) => setWorkerForm({ ...workerForm, middle_name: e.target.value })}
@@ -844,7 +844,7 @@ const HRContractors: React.FC = () => {
                 />
               </div>
               <div>
-                <Label className="text-xs">Квалификация</Label>
+                <Label className="text-xs">{t('tasks.pages.contractors.qualification')}</Label>
                 <Select value={workerForm.level} onValueChange={(val: ContractorLevel) => setWorkerForm({ ...workerForm, level: val })}>
                   <SelectTrigger className="h-8 rounded-xl bg-muted/30 mt-1">
                     <SelectValue />
@@ -859,18 +859,18 @@ const HRContractors: React.FC = () => {
             </div>
 
             <div>
-              <Label className="text-xs">Специальность / Должность</Label>
+              <Label className="text-xs">{t('tasks.pages.contractors.speciality')}</Label>
               <Input
                 value={workerForm.position_title}
                 onChange={(e) => setWorkerForm({ ...workerForm, position_title: e.target.value })}
-                placeholder="Сварщик 5 разряда"
+                placeholder={t('tasks.pages.contractors.specialityPlaceholder')}
                 className="h-8 rounded-xl bg-muted/30 mt-1"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <Label className="text-xs">Телефон</Label>
+                <Label className="text-xs">{t('profile.phone')}</Label>
                 <PhoneInput
                   value={workerForm.phone}
                   onChange={(v) => setWorkerForm({ ...workerForm, phone: v })}
@@ -888,14 +888,14 @@ const HRContractors: React.FC = () => {
           </div>
           <DialogFooter className="mt-4 gap-2">
             <Button variant="outline" className="rounded-xl text-xs" onClick={() => setWorkerDialog(false)}>
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button
               className="rounded-xl text-xs bg-primary"
               disabled={!workerForm.last_name.trim() || !workerForm.first_name.trim() || workerMutation.isPending}
               onClick={() => workerMutation.mutate(workerForm)}
             >
-              Сохранить
+              {t('common.save')}
             </Button>
           </DialogFooter>
         </DialogContent>

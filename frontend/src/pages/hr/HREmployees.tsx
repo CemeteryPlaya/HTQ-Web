@@ -328,7 +328,7 @@ const HREmployees = () => {
       setFormError(
         (typeof data?.detail === 'string' ? data.detail : null) ||
           err?.message ||
-          'Не удалось сохранить сотрудника',
+          t('hr.employees.saveError'),
       );
     },
   });
@@ -449,7 +449,7 @@ const HREmployees = () => {
         (typeof data?.detail === 'string' ? data.detail : null)
         || (Array.isArray(data?.detail) ? data.detail.map((d: any) => d.msg).join(' • ') : null)
         || err?.message
-        || 'Не удалось создать должность',
+        || t('hr.employees.createPositionError'),
       );
     },
   });
@@ -465,7 +465,7 @@ const HREmployees = () => {
         Number(prev.level) === levelNumber ? { ...prev, weight: String(res.data.weight) } : prev
       ));
     } catch {
-      setNewPositionError('Не удалось подобрать свободный вес — задайте его вручную.');
+      setNewPositionError(t('hr.employees.weightError'));
     }
   };
 
@@ -799,9 +799,9 @@ const HREmployees = () => {
                                   {pos.is_system && (
                                     <span
                                       className="ml-2 inline-flex items-center gap-1 rounded border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                      title="Системная должность — нельзя удалить или переименовать"
+                                      title={t('hr.positions.systemTitle')}
                                     >
-                                      <Lock className="h-3 w-3" /> сист.
+                                      <Lock className="h-3 w-3" /> {t('hr.employees.systemShort')}
                                     </span>
                                   )}
                                 </CommandItem>
@@ -1087,7 +1087,7 @@ const HREmployees = () => {
               {t('hr.pages.positions.fields.level')}
               <Select value={newPositionForm.level} onValueChange={changeNewPositionLevel}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Выберите уровень" />
+                  <SelectValue placeholder={t('hr.positions.pickLevel')} />
                 </SelectTrigger>
                 <SelectContent>
                   {sortedThresholds.map((threshold) => (
@@ -1108,7 +1108,7 @@ const HREmployees = () => {
               </Select>
               {sortedThresholds.length === 0 && (
                 <span className="text-xs text-muted-foreground">
-                  Уровни ещё не заведены — добавьте их в HR → Должности, вкладка «Уровни».
+                  {t('hr.employees.noLevelsHint')}
                 </span>
               )}
             </label>
@@ -1123,12 +1123,18 @@ const HREmployees = () => {
                 />
                 {newPositionWeightOutOfRange && newPositionThreshold ? (
                   <span className="text-xs text-destructive">
-                    Вес вне диапазона уровня L{newPositionThreshold.level_number}
-                    {' '}({newPositionThreshold.weight_from}–{newPositionThreshold.weight_to})
+                    {t('hr.positions.weightOutOfRange', {
+                      level: newPositionThreshold.level_number,
+                      from: newPositionThreshold.weight_from,
+                      to: newPositionThreshold.weight_to,
+                    })}
                   </span>
                 ) : newPositionThreshold ? (
                   <span className="text-xs text-muted-foreground">
-                    Порядок внутри уровня, {newPositionThreshold.weight_from}–{newPositionThreshold.weight_to}
+                    {t('hr.employees.orderWithinLevel', {
+                      from: newPositionThreshold.weight_from,
+                      to: newPositionThreshold.weight_to,
+                    })}
                   </span>
                 ) : null}
               </label>
@@ -1158,11 +1164,11 @@ const HREmployees = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">Без HR-доступа</SelectItem>
-                  <SelectItem value="junior">Junior — базовый просмотр</SelectItem>
-                  <SelectItem value="middle">Middle — редактирование своего отдела</SelectItem>
-                  <SelectItem value="senior">Senior — полный просмотр + создание</SelectItem>
-                  <SelectItem value="lead">Lead — полный доступ</SelectItem>
+                  <SelectItem value="none">{t('hr.positions.noHrAccess')}</SelectItem>
+                  <SelectItem value="junior">{t('hr.employees.accessJunior')}</SelectItem>
+                  <SelectItem value="middle">{t('hr.employees.accessMiddle')}</SelectItem>
+                  <SelectItem value="senior">{t('hr.employees.accessSenior')}</SelectItem>
+                  <SelectItem value="lead">{t('hr.employees.accessLead')}</SelectItem>
                 </SelectContent>
               </Select>
             </label>
@@ -1175,7 +1181,7 @@ const HREmployees = () => {
               />
             </label>
             <p className="text-xs text-muted-foreground">
-              Расширенную настройку прав можно сделать позже на странице <strong>HR → Должности</strong>.
+              {t('hr.employees.finerPermissions')} <strong>{t('hr.employees.hrPositionsPath')}</strong>.
             </p>
             {newPositionError && (
               <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">

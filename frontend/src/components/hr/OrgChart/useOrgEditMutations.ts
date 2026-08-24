@@ -27,6 +27,7 @@ import {
   type RelationType,
 } from '@/api/hr';
 import { reportApiError } from '@/lib/apiError';
+import i18next from '@/i18n';
 import {
   applyBatchSuperiorChange,
   applyDepartmentManagerChange,
@@ -56,7 +57,7 @@ export function useOrgEditMutations(treeKey: QueryKey) {
     }) => {
       const parentNum = numericIdFromNodeId(input.parentId);
       const childNum = numericIdFromNodeId(input.childId);
-      if (parentNum == null || childNum == null) throw new Error('Некорректный узел');
+      if (parentNum == null || childNum == null) throw new Error(i18next.t('hr.orgChart.errors.badNode'));
 
       const isPos = nodeKind(input.childId) === 'pos';
 
@@ -105,16 +106,16 @@ export function useOrgEditMutations(treeKey: QueryKey) {
     },
     onError: (err, _input, context) => {
       if (context?.previous) queryClient.setQueryData(treeKey, context.previous);
-      reportApiError(err, 'Не удалось изменить подчинение');
+      reportApiError(err, i18next.t('hr.orgChart.errors.changeReporting'));
     },
-    onSuccess: () => toast.success('Связь сохранена'),
+    onSuccess: () => toast.success(i18next.t('hr.orgChart.linkSaved')),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
   });
 
   const changeTypeMutation = useMutation({
     mutationFn: async (input: { edge: OrgEdge; newType: RelationType }) => {
       const relationId = input.edge.relation_id;
-      if (relationId == null) throw new Error('Невозможно изменить неявную связь');
+      if (relationId == null) throw new Error(i18next.t('hr.orgChart.errors.implicitLink'));
       const kind = nodeKind(input.edge.target);
       if (kind === 'pos') {
         return changePositionRelationType(relationId, input.newType);
@@ -134,9 +135,9 @@ export function useOrgEditMutations(treeKey: QueryKey) {
     },
     onError: (err, _input, context) => {
       if (context?.previous) queryClient.setQueryData(treeKey, context.previous);
-      reportApiError(err, 'Не удалось изменить тип связи');
+      reportApiError(err, i18next.t('hr.orgChart.errors.changeLinkType'));
     },
-    onSuccess: () => toast.success('Тип связи обновлён'),
+    onSuccess: () => toast.success(i18next.t('hr.orgChart.linkTypeUpdated')),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
   });
 
@@ -147,7 +148,7 @@ export function useOrgEditMutations(treeKey: QueryKey) {
       relationType: RelationType;
     }) => {
       const parentNum = numericIdFromNodeId(input.parentId);
-      if (parentNum == null) throw new Error('Некорректный руководитель');
+      if (parentNum == null) throw new Error(i18next.t('hr.orgChart.errors.badManager'));
       const isPos = nodeKind(input.parentId) === 'pos';
 
       const results = await Promise.all(
@@ -180,10 +181,10 @@ export function useOrgEditMutations(treeKey: QueryKey) {
     },
     onError: (err, _input, context) => {
       if (context?.previous) queryClient.setQueryData(treeKey, context.previous);
-      reportApiError(err, 'Не удалось добавить подчинённых');
+      reportApiError(err, i18next.t('hr.orgChart.errors.addReports'));
     },
     onSuccess: (_, input) => {
-      toast.success(`Добавлено подчинённых: ${input.childIds.length}`);
+      toast.success(i18next.t('hr.orgChart.reportsAdded', { count: input.childIds.length }));
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
   });
@@ -195,7 +196,7 @@ export function useOrgEditMutations(treeKey: QueryKey) {
       relationType?: RelationType;
     }) => {
       const targetManagerNum = numericIdFromNodeId(input.targetManagerId);
-      if (targetManagerNum == null) throw new Error('Некорректный целевой руководитель');
+      if (targetManagerNum == null) throw new Error(i18next.t('hr.orgChart.errors.badTargetManager'));
       const isPos = nodeKind(input.targetManagerId) === 'pos';
       const relType = input.relationType || 'direct';
 
@@ -229,10 +230,10 @@ export function useOrgEditMutations(treeKey: QueryKey) {
     },
     onError: (err, _input, context) => {
       if (context?.previous) queryClient.setQueryData(treeKey, context.previous);
-      reportApiError(err, 'Не удалось передать подчинённых');
+      reportApiError(err, i18next.t('hr.orgChart.errors.transferReports'));
     },
     onSuccess: (_, input) => {
-      toast.success(`Передано подчинённых: ${input.subordinateIds.length}`);
+      toast.success(i18next.t('hr.orgChart.reportsTransferred', { count: input.subordinateIds.length }));
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
   });
@@ -257,9 +258,9 @@ export function useOrgEditMutations(treeKey: QueryKey) {
     },
     onError: (err, _edge, context) => {
       if (context?.previous) queryClient.setQueryData(treeKey, context.previous);
-      reportApiError(err, 'Не удалось убрать связь');
+      reportApiError(err, i18next.t('hr.orgChart.errors.removeLink'));
     },
-    onSuccess: () => toast.success('Связь удалена'),
+    onSuccess: () => toast.success(i18next.t('hr.orgChart.linkRemoved')),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
   });
 
@@ -276,9 +277,9 @@ export function useOrgEditMutations(treeKey: QueryKey) {
     },
     onError: (err, _input, context) => {
       if (context?.previous) queryClient.setQueryData(treeKey, context.previous);
-      reportApiError(err, 'Не удалось изменить руководителя отдела');
+      reportApiError(err, i18next.t('hr.orgChart.errors.changeDeptHead'));
     },
-    onSuccess: () => toast.success('Руководитель отдела обновлён'),
+    onSuccess: () => toast.success(i18next.t('hr.orgChart.deptHeadUpdated')),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-tree'] }),
   });
 
@@ -299,7 +300,7 @@ export function useOrgEditMutations(treeKey: QueryKey) {
     );
 
     if (mustReplace && !skipConfirm) {
-      if (!window.confirm('У узла уже есть руководитель. Заменить его новым?')) return;
+      if (!window.confirm(i18next.t('hr.orgChart.confirmReplaceManager'))) return;
     }
     connectMutation.mutate({ parentId, childId, relationType, note });
   };

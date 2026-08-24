@@ -26,6 +26,7 @@ import { FormRenderer } from '@/features/requests/components/FormRenderer';
 import { WorkflowBuilder } from '@/features/requests/components/WorkflowBuilder';
 import { QK, useTemplate, useTemplateVersion } from '@/features/requests/hooks';
 import type { FormSchema, WorkflowGraph } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
 
 const EMPTY_SCHEMA: FormSchema = { fields: [] };
 const EMPTY_WF: WorkflowGraph = {
@@ -34,14 +35,15 @@ const EMPTY_WF: WorkflowGraph = {
 };
 
 const STEPS = [
-  { key: 'basic', label: 'Основное' },
-  { key: 'form', label: 'Дизайн формы' },
-  { key: 'process', label: 'Процесс' },
-  { key: 'more', label: 'Прочее' },
+  { key: 'basic', labelKey: 'requests.editor.tabBasic' },
+  { key: 'form', labelKey: 'requests.editor.tabForm' },
+  { key: 'process', labelKey: 'requests.editor.tabProcess' },
+  { key: 'more', labelKey: 'requests.editor.tabMore' },
 ] as const;
 type StepKey = (typeof STEPS)[number]['key'];
 
 export default function TemplateEditorPage() {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const templateId = id ? parseInt(id, 10) : NaN;
   const tpl = useTemplate(Number.isNaN(templateId) ? null : templateId);
@@ -89,7 +91,7 @@ export default function TemplateEditorPage() {
     const snap = JSON.stringify(basic);
     if (snap === savedRef.current) return;
     setSaveState('saving');
-    const t = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       try {
         await requestsApi.templates.update(templateId, {
           name: basic.name,
@@ -102,10 +104,10 @@ export default function TemplateEditorPage() {
         setSaveState('saved');
       } catch (e: any) {
         setSaveState('idle');
-        toast.error(e?.response?.data?.detail ?? 'Не удалось сохранить');
+        toast.error(e?.response?.data?.detail ?? t('requests.editor.saveError'));
       }
     }, 800);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basic]);
 
@@ -114,45 +116,45 @@ export default function TemplateEditorPage() {
     mutationFn: () => requestsApi.templates.publishVersion(templateId, schema, workflow),
     onSuccess: (v) => {
       qc.invalidateQueries({ queryKey: QK.template(templateId) });
-      toast.success(`Опубликована версия #${v.version}`);
+      toast.success(t('requests.editor.published', { version: v.version }));
     },
     onError: (e: any) => {
-      const detail = e?.response?.data?.detail ?? e?.message ?? 'Не удалось опубликовать';
+      const detail = e?.response?.data?.detail ?? e?.message ?? t('requests.editor.publishError');
       toast.error(typeof detail === 'string' ? detail : JSON.stringify(detail));
     },
   });
 
   if (Number.isNaN(templateId)) {
-    return <RequestsLayout title="Шаблон не найден"><Card><CardContent className="py-6 text-sm text-destructive">Некорректный идентификатор.</CardContent></Card></RequestsLayout>;
+    return <RequestsLayout title={t('requests.editor.notFound')}><Card><CardContent className="py-6 text-sm text-destructive">{t('requests.editor.badId')}</CardContent></Card></RequestsLayout>;
   }
   if (tpl.isLoading || !basic) {
-    return <RequestsLayout title="Загрузка…"><Skeleton className="h-32" /><Skeleton className="h-80" /></RequestsLayout>;
+    return <RequestsLayout title={t('signoff.loadingEllipsis')}><Skeleton className="h-32" /><Skeleton className="h-80" /></RequestsLayout>;
   }
   if (tpl.error || !tpl.data) {
-    return <RequestsLayout title="Шаблон не найден"><Card><CardContent className="py-6 text-sm text-destructive">Шаблон не найден или нет доступа.</CardContent></Card></RequestsLayout>;
+    return <RequestsLayout title={t('requests.editor.notFound')}><Card><CardContent className="py-6 text-sm text-destructive">{t('requests.editor.notFoundOrNoAccess')}</CardContent></Card></RequestsLayout>;
   }
 
   const patchBasic = (p: Partial<BasicInfoValue>) => setBasic((b) => (b ? { ...b, ...p } : b));
 
   return (
     <RequestsLayout
-      title={basic.name || 'Конструктор шаблона'}
+      title={basic.name || t('requests.editor.title')}
       subtitle={
-        saveState === 'saving' ? 'Сохранение…'
-        : saveState === 'saved' ? 'Сохранено'
+        saveState === 'saving' ? t('common.saving')
+        : saveState === 'saved' ? t('requests.editor.saved')
         : `slug «${tpl.data.slug}»`
       }
       actions={
         <>
           {tpl.data.current_version_id == null && (
-            <Badge variant="outline" className="bg-amber-100 text-amber-800 hover:bg-amber-100">черновик</Badge>
+            <Badge variant="outline" className="bg-amber-100 text-amber-800 hover:bg-amber-100">{t('requests.templates.draft')}</Badge>
           )}
           <Button variant="outline" onClick={() => setPreview(true)}>
-            <Eye className="mr-2 h-4 w-4" /> Превью
+            <Eye className="mr-2 h-4 w-4" /> {t('requests.editor.preview')}
           </Button>
           <Button disabled={publish.isPending} onClick={() => publish.mutate()}>
             {publish.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Опубликовать
+            {t('requests.editor.publish')}
           </Button>
         </>
       }
@@ -167,11 +169,11 @@ export default function TemplateEditorPage() {
             className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${step === s.key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
           >
             <span className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${step === s.key ? 'bg-primary-foreground/20' : 'bg-muted-foreground/20'}`}>{i + 1}</span>
-            {s.label}
+            {t(s.labelKey)}
           </button>
         ))}
         {saveState === 'saved' && (
-          <span className="ml-auto flex items-center gap-1 pr-2 text-xs text-emerald-600"><Check className="h-3.5 w-3.5" /> автосохранено</span>
+          <span className="ml-auto flex items-center gap-1 pr-2 text-xs text-emerald-600"><Check className="h-3.5 w-3.5" /> {t('requests.editor.autoSaved')}</span>
         )}
       </div>
 
@@ -191,7 +193,7 @@ export default function TemplateEditorPage() {
 
       <Dialog open={preview} onOpenChange={setPreview}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-          <DialogHeader><DialogTitle>Превью формы · {basic.name}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t('requests.editor.previewTitle', { name: basic.name })}</DialogTitle></DialogHeader>
           <FormRenderer schema={schema} values={{}} onChange={() => {}} readOnly />
         </DialogContent>
       </Dialog>

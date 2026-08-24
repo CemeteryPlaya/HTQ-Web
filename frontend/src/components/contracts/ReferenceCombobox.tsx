@@ -3,6 +3,7 @@ import { Check, ChevronsUpDown, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { useTranslation } from 'react-i18next';
 import {
   Command,
   CommandEmpty,
@@ -60,13 +61,14 @@ export function ReferenceCombobox({
   value,
   onChange,
   placeholder,
-  searchPlaceholder = 'Поиск…',
-  createLabel = (input) => `Создать «${input}»`,
+  searchPlaceholder,
+  createLabel,
   disabled = false,
   loading = false,
   invalid = false,
   id,
 }: Props) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
 
@@ -107,10 +109,10 @@ export function ReferenceCombobox({
           <span className="truncate">
             {value
               ? value.kind === 'new'
-                ? `${value.label} — новая запись`
+                ? t('contracts.combobox.newRecordSuffix', { label: value.label })
                 : value.label
               : loading
-                ? 'Загрузка…'
+                ? t('signoff.loadingEllipsis')
                 : placeholder}
           </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -125,15 +127,15 @@ export function ReferenceCombobox({
           }
         >
           <CommandInput
-            placeholder={searchPlaceholder}
+            placeholder={searchPlaceholder ?? t('contracts.combobox.search')}
             value={search}
             onValueChange={setSearch}
           />
           <CommandList>
-            {!canCreate && <CommandEmpty>Ничего не найдено</CommandEmpty>}
+            {!canCreate && <CommandEmpty>{t('common.nothingFound')}</CommandEmpty>}
 
             {options.length > 0 && (
-              <CommandGroup heading="Существующие">
+              <CommandGroup heading={t('contracts.combobox.existing')}>
                 {options.map((option) => (
                   <CommandItem
                     key={option.id}
@@ -164,13 +166,15 @@ export function ReferenceCombobox({
             )}
 
             {canCreate && (
-              <CommandGroup heading="Новая запись">
+              <CommandGroup heading={t('contracts.combobox.newRecord')}>
                 <CommandItem
                   value={trimmed}
                   onSelect={() => select({ kind: 'new', label: trimmed })}
                 >
                   <Plus className="mr-2 h-4 w-4" />
-                  {createLabel(trimmed)}
+                  {createLabel
+                    ? createLabel(trimmed)
+                    : t('contracts.combobox.createNamed', { input: trimmed })}
                 </CommandItem>
               </CommandGroup>
             )}

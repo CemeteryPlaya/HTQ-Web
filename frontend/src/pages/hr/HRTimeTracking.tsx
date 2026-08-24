@@ -18,6 +18,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useHRLevel } from '@/hooks/useHRLevel';
 import { reportApiError } from '@/lib/apiError';
+import i18next from '@/i18n';
 
 /**
  * Запись табеля так, как её отдаёт `GET /api/hr/v1/time-tracking/`
@@ -70,7 +71,9 @@ const formatMinutes = (minutes: number): string => {
   const safe = Math.max(0, Math.round(minutes || 0));
   const hours = Math.floor(safe / 60);
   const rest = safe % 60;
-  return rest ? `${hours} ч ${rest} мин` : `${hours} ч`;
+  return rest
+    ? i18next.t('hr.timeTracking.hoursMinutes', { hours, minutes: rest })
+    : i18next.t('hr.timeTracking.hours', { hours });
 };
 
 /** Отработано за запись: конец − начало − перерыв (та же формула, что в

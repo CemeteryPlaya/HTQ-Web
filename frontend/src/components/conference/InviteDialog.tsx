@@ -102,9 +102,9 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
     }),
     onSuccess: (result) => {
       const parts = [];
-      if (result.emails_sent) parts.push(`письма: ${result.emails_sent}`);
-      if (result.notified) parts.push(`в мессенджер: ${result.notified}`);
-      toast.success(`Приглашение отправлено (${parts.join(', ')})`);
+      if (result.emails_sent) parts.push(t('conference.invite.sentEmails', { count: result.emails_sent }));
+      if (result.notified) parts.push(t('conference.invite.sentMessenger', { count: result.notified }));
+      toast.success(t('conference.invite.sentToast', { details: parts.join(', ') }));
       // Отказ одного канала не отменяет другой — показываем оба исхода.
       result.errors.forEach((err) => toast.error(err));
       setEmails('');
@@ -117,7 +117,7 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
       const start = new Date(startAt);
       const end = new Date(start.getTime() + 60 * 60 * 1000);
       return createCalendarEvent({
-        title: title.trim() || 'Видеоконференция',
+        title: title.trim() || t('conference.join.defaultTitle'),
         start_at: start.toISOString(),
         end_at: end.toISOString(),
         event_type: 'conference',

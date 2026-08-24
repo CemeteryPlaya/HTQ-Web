@@ -36,28 +36,28 @@ export const BottomNav = () => {
     navItems.push({
         to: '/myprofile',
         icon: UserCircle,
-        label: t('profile.title') || 'Профиль',
+        label: t('profile.title'),
     });
 
     // Everyone gets Messenger
     navItems.push({
         to: '/messenger',
         icon: MessageCircle,
-        label: 'Чаты',
+        label: t('profile.sidebar.chats'),
     });
 
     // Everyone gets Email
     navItems.push({
         to: '/email',
         icon: Mail,
-        label: 'Почта',
+        label: t('profile.sidebar.email'),
     });
 
     // Everyone gets Calendar
     navItems.push({
         to: '/calendar',
         icon: Calendar,
-        label: 'Календарь',
+        label: t('profile.sidebar.calendar'),
     });
 
     // Files — accessible to employees with a department
@@ -65,7 +65,7 @@ export const BottomNav = () => {
         navItems.push({
             to: '/files',
             icon: FolderOpen,
-            label: 'Файлы',
+            label: t('profile.sidebar.files'),
         });
     }
 
@@ -74,7 +74,7 @@ export const BottomNav = () => {
         navItems.push({
             to: '/manage/news',
             icon: FileText,
-            label: t('header.news') || 'Новости',
+            label: t('header.news'),
         });
     }
 
@@ -83,7 +83,7 @@ export const BottomNav = () => {
         navItems.push({
             to: '/hr/employees',
             icon: Users,
-            label: t('profile.sidebar.employees') || 'Сотрудники',
+            label: t('profile.sidebar.employees'),
         });
     }
 
@@ -92,7 +92,7 @@ export const BottomNav = () => {
         navItems.push({
             to: '/tasks',
             icon: CheckSquare,
-            label: t('profile.sidebar.tasks') || 'Задачи',
+            label: t('profile.sidebar.tasks'),
         });
     }
 

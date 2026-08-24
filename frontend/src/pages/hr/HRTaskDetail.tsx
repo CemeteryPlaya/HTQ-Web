@@ -154,7 +154,7 @@ const HRTaskDetail: React.FC = () => {
       toast.success(t('tasks.pages.detail.linkSuccess', 'Связь добавлена'));
     },
     onError: (err: any) => {
-      const msg = err.response?.data?.non_field_errors?.[0] || 'Ошибка при создании связи';
+      const msg = err.response?.data?.non_field_errors?.[0] || t('hr.taskDetail.linkError');
       toast.error(msg);
     },
   });
@@ -309,7 +309,7 @@ const HRTaskDetail: React.FC = () => {
             <CardContent>
               {(!task.subtasks || task.subtasks.length === 0) ? (
                 <div className="text-sm text-muted-foreground italic mb-2">
-                  Нет подзадач
+                  {t('hr.taskDetail.noSubtasks')}
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -346,14 +346,14 @@ const HRTaskDetail: React.FC = () => {
                   <Select value={linkType} onValueChange={setLinkType}>
                     <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="blocks">Блокирует</SelectItem>
-                      <SelectItem value="is_blocked_by">Блокируется</SelectItem>
-                      <SelectItem value="relates_to">Относится к</SelectItem>
-                      <SelectItem value="duplicates">Дублирует</SelectItem>
+                      <SelectItem value="blocks">{t('hr.taskDetail.blocks')}</SelectItem>
+                      <SelectItem value="is_blocked_by">{t('hr.taskDetail.blockedBy')}</SelectItem>
+                      <SelectItem value="relates_to">{t('hr.taskDetail.relatesTo')}</SelectItem>
+                      <SelectItem value="duplicates">{t('hr.taskDetail.duplicates')}</SelectItem>
                     </SelectContent>
                   </Select>
                   <Input
-                    placeholder="ID Целевой задачи (напр. 15)"
+                    placeholder={t('hr.taskDetail.targetIdPlaceholder')}
                     value={linkTargetId}
                     onChange={e => setLinkTargetId(e.target.value)}
                     className="w-[220px]"
@@ -668,7 +668,7 @@ const HRTaskDetail: React.FC = () => {
                   />
                   {task.task_type === 'epic' && task.effective_start_date && task.effective_start_date !== task.start_date && (
                     <span className="text-xs text-amber-600 dark:text-amber-500">
-                      Аппроксимированная дата: {task.effective_start_date}
+                      {t('hr.taskDetail.approxStart', { date: task.effective_start_date })}
                     </span>
                   )}
                 </div>
@@ -687,7 +687,7 @@ const HRTaskDetail: React.FC = () => {
                   />
                   {task.task_type === 'epic' && task.effective_due_date && task.effective_due_date !== task.due_date && (
                     <span className="text-xs text-amber-600 dark:text-amber-500">
-                      Аппроксимированный срок: {task.effective_due_date}
+                      {t('hr.taskDetail.approxDue', { date: task.effective_due_date })}
                     </span>
                   )}
                   {task.date_warnings && task.date_warnings.length > 0 && (

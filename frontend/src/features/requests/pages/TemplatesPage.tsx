@@ -20,8 +20,10 @@ import { requestsApi } from '@/api/requests';
 import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { QK, useProjects, useTemplates } from '@/features/requests/hooks';
 import type { FormTemplate } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
 
 export default function TemplatesPage() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const projects = useProjects();
   const templates = useTemplates(null);
@@ -38,22 +40,22 @@ export default function TemplatesPage() {
       qc.invalidateQueries({ queryKey: QK.templates(null) });
       setName('');
       setProjectId('none');
-      toast.success(`Шаблон «${tpl.name}» создан`);
+      toast.success(t('requests.templates.created', { name: tpl.name }));
     },
     onError: (e: any) => {
-      const detail = e?.response?.data?.detail ?? e?.message ?? 'Не удалось создать шаблон';
+      const detail = e?.response?.data?.detail ?? e?.message ?? t('requests.templates.createError');
       toast.error(detail);
     },
   });
 
   return (
     <RequestsLayout
-      title="Шаблоны запросов"
-      subtitle="Конструктор форм и маршрутов согласования"
+      title={t('requests.templates.title')}
+      subtitle={t('requests.templates.subtitle')}
     >
       <Card>
         <CardHeader>
-          <CardTitle>Создать шаблон</CardTitle>
+          <CardTitle>{t('requests.templates.create')}</CardTitle>
         </CardHeader>
         <CardContent>
           <form
@@ -64,23 +66,23 @@ export default function TemplatesPage() {
             className="grid gap-4 sm:grid-cols-[1fr_220px_auto] sm:items-end"
           >
             <div className="space-y-1.5">
-              <Label htmlFor="tpl-name">Название</Label>
+              <Label htmlFor="tpl-name">{t('hr.pmo.name')}</Label>
               <Input
                 id="tpl-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
-                placeholder="Заявка на расходы"
+                placeholder={t('requests.templates.namePlaceholder')}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="tpl-project">Проект</Label>
+              <Label htmlFor="tpl-project">{t('requests.templates.project')}</Label>
               <Select value={projectId} onValueChange={setProjectId}>
                 <SelectTrigger id="tpl-project">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">— глобальный —</SelectItem>
+                  <SelectItem value="none">{t('requests.templates.globalOption')}</SelectItem>
                   {projects.data?.map((p) => (
                     <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
                   ))}
@@ -88,7 +90,7 @@ export default function TemplatesPage() {
               </Select>
             </div>
             <Button type="submit" disabled={create.isPending || !name.trim()}>
-              Создать шаблон
+              {t('requests.templates.create')}
             </Button>
           </form>
         </CardContent>
@@ -104,39 +106,39 @@ export default function TemplatesPage() {
           )}
           {!templates.isLoading && templates.data?.length === 0 && (
             <div className="px-4 py-10 text-center text-sm text-muted-foreground">
-              Шаблонов пока нет. Создайте первый формой выше.
+              {t('requests.templates.empty')}
             </div>
           )}
-          {templates.data?.map((t) => (
+          {templates.data?.map((tpl) => (
             <div
-              key={t.id}
+              key={tpl.id}
               className="flex items-center justify-between gap-3 border-b px-4 py-3 last:border-b-0 hover:bg-muted/40"
             >
-              <Link to={`/requests/templates/${t.id}/editor`} className="flex min-w-0 items-center gap-3">
+              <Link to={`/requests/templates/${tpl.id}/editor`} className="flex min-w-0 items-center gap-3">
                 <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
                 <div className="min-w-0">
-                  <div className="truncate font-medium">{t.name}</div>
+                  <div className="truncate font-medium">{tpl.name}</div>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span>slug «{t.slug}»</span>
+                    <span>slug «{tpl.slug}»</span>
                     <span>·</span>
-                    {t.project_id != null ? (
-                      <span>проект #{t.project_id}</span>
+                    {tpl.project_id != null ? (
+                      <span>{t('requests.templates.projectNumber', { id: tpl.project_id })}</span>
                     ) : (
-                      <Badge variant="secondary">глобальный</Badge>
+                      <Badge variant="secondary">{t('requests.templates.global')}</Badge>
                     )}
                     <span>·</span>
-                    {t.current_version_id == null ? (
-                      <Badge variant="outline" className="bg-amber-100 text-amber-800 hover:bg-amber-100">черновик</Badge>
+                    {tpl.current_version_id == null ? (
+                      <Badge variant="outline" className="bg-amber-100 text-amber-800 hover:bg-amber-100">{t('requests.templates.draft')}</Badge>
                     ) : (
-                      <span>версия #{t.current_version_id}</span>
+                      <span>{t('requests.templates.versionNumber', { id: tpl.current_version_id })}</span>
                     )}
-                    {t.status === 'inactive' && (
-                      <Badge variant="outline" className="bg-rose-100 text-rose-800 hover:bg-rose-100">деактивирован</Badge>
+                    {tpl.status === 'inactive' && (
+                      <Badge variant="outline" className="bg-rose-100 text-rose-800 hover:bg-rose-100">{t('requests.templates.deactivated')}</Badge>
                     )}
                   </div>
                 </div>
               </Link>
-              <TemplateActions t={t} />
+              <TemplateActions tpl={tpl} />
             </div>
           ))}
         </CardContent>
@@ -145,7 +147,8 @@ export default function TemplatesPage() {
   );
 }
 
-function TemplateActions({ t }: { t: FormTemplate }) {
+function TemplateActions({ tpl }: { tpl: FormTemplate }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
 
@@ -156,7 +159,7 @@ function TemplateActions({ t }: { t: FormTemplate }) {
       qc.invalidateQueries({ queryKey: QK.templates(null) });
       toast.success(ok);
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? 'Не удалось выполнить');
+      toast.error(e?.response?.data?.detail ?? t('requests.templates.actionError'));
     } finally {
       setBusy(false);
     }
@@ -164,23 +167,23 @@ function TemplateActions({ t }: { t: FormTemplate }) {
 
   return (
     <div className="flex shrink-0 items-center gap-2">
-      {t.status === 'inactive' ? (
+      {tpl.status === 'inactive' ? (
         <Button variant="outline" size="sm" disabled={busy}
-          onClick={() => run(() => requestsApi.templates.activate(t.id), 'Шаблон активирован')}>
-          Активировать
+          onClick={() => run(() => requestsApi.templates.activate(tpl.id), t('requests.templates.activated'))}>
+          {t('requests.templates.activate')}
         </Button>
       ) : (
         <Button variant="outline" size="sm" disabled={busy}
-          onClick={() => run(() => requestsApi.templates.deactivate(t.id), 'Шаблон деактивирован')}>
-          Деактивировать
+          onClick={() => run(() => requestsApi.templates.deactivate(tpl.id), t('requests.templates.deactivatedToast'))}>
+          {t('requests.templates.deactivate')}
         </Button>
       )}
       <Button
         variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={busy}
-        aria-label="Удалить шаблон"
+        aria-label={t('requests.templates.delete')}
         onClick={() => {
-          if (window.confirm(`Удалить шаблон «${t.name}»? Данные и справочники по нему сохранятся, но форма будет заблокирована.`)) {
-            run(() => requestsApi.templates.remove(t.id), 'Шаблон удалён');
+          if (window.confirm(t('requests.templates.confirmDelete', { name: tpl.name }))) {
+            run(() => requestsApi.templates.remove(tpl.id), t('requests.templates.deleted'));
           }
         }}
       >

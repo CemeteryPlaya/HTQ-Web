@@ -47,6 +47,7 @@ import {
 } from '@/components/ui/table';
 import { contractsApi } from '@/api/contracts';
 import type { AgreementStatus } from '@/types/contracts';
+import { useTranslation } from 'react-i18next';
 
 /** Доля занятого — только для полоски. Точность здесь не важна, сами суммы
  *  всегда показываются строками. */
@@ -66,6 +67,7 @@ interface Props {
 }
 
 const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
+  const { t } = useTranslation();
   const enabled = Number.isFinite(budgetId);
 
   const {
@@ -104,7 +106,7 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
   if (isLoading) return <DetailSkeleton />;
   if (isError || !budget) {
     return (
-      <p className="text-sm text-destructive">Бюджет не найден или недоступен.</p>
+      <p className="text-sm text-destructive">{t('contracts.budget.notFound')}</p>
     );
   }
 
@@ -118,19 +120,15 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
           <div className="flex flex-wrap items-center gap-3">
             <Wallet className="h-7 w-7 shrink-0 text-muted-foreground" />
             <Heading className="text-3xl font-bold">
-              Бюджет {budget.period_year}
+              {t('contracts.budget.titleYear', { year: budget.period_year })}
             </Heading>
             <Badge variant={budget.status === 'active' ? 'secondary' : 'outline'}>
               {budgetStatusLabel(budget.status)}
             </Badge>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            {budget.administrator_name} · {budget.lines.length}{' '}
-            {budget.lines.length === 1
-              ? 'программа'
-              : budget.lines.length < 5
-                ? 'программы'
-                : 'программ'}
+            {budget.administrator_name} ·{' '}
+            {t('contracts.budget.programmeCount', { count: budget.lines.length })}
           </p>
         </div>
 
@@ -155,24 +153,24 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Деньги</CardTitle>
+          <CardTitle className="text-base">{t('contracts.budget.money')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <FieldGrid>
-            <Field label="Выделено" hint="Сумма по всем программам бюджета">
+            <Field label={t('contracts.columns.allocated')} hint={t('contracts.budget.allocatedHint')}>
               <span className="text-lg font-semibold tabular-nums">
                 {formatMoney(budget.allocated, budget.currency)}
               </span>
             </Field>
             <Field
-              label="Законтрактовано"
-              hint="Сумма договоров бюджета в статусах, занимающих его"
+              label={t('contracts.columns.contracted')}
+              hint={t('contracts.budget.contractedHint')}
             >
               <span className="text-lg font-semibold tabular-nums">
                 {formatAmount(budget.committed)}
               </span>
             </Field>
-            <Field label="Остаток" hint="Выделено минус законтрактовано">
+            <Field label={t('contracts.columns.remaining')} hint={t('contracts.budget.remainingHint')}>
               <span
                 className={`text-lg font-semibold tabular-nums ${remainingTone(
                   budget.remaining,
@@ -190,7 +188,7 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">
-            Программы
+            {t('contracts.budget.programmes')}
             <span className="ml-2 font-normal text-muted-foreground">
               {budget.lines.length}
             </span>
@@ -201,11 +199,11 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Программа</TableHead>
-                  <TableHead>Статья расходов</TableHead>
-                  <TableHead className="text-right">Выделено</TableHead>
-                  <TableHead className="text-right">Законтрактовано</TableHead>
-                  <TableHead className="text-right">Остаток</TableHead>
+                  <TableHead>{t('contracts.columns.programme')}</TableHead>
+                  <TableHead>{t('contracts.columns.expenseItem')}</TableHead>
+                  <TableHead className="text-right">{t('contracts.columns.allocated')}</TableHead>
+                  <TableHead className="text-right">{t('contracts.columns.contracted')}</TableHead>
+                  <TableHead className="text-right">{t('contracts.columns.remaining')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -240,7 +238,7 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
                     своём месте: колонка сумм должна сходиться под самой
                     колонкой, а не только в шапке страницы. */}
                 <TableRow className="border-t-2 font-semibold">
-                  <TableCell colSpan={2}>Итого</TableCell>
+                  <TableCell colSpan={2}>{t('contracts.columns.total')}</TableCell>
                   <TableCell className="text-right tabular-nums whitespace-nowrap">
                     {formatAmount(budget.allocated)}
                   </TableCell>
@@ -259,18 +257,18 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Бюджет</CardTitle>
+          <CardTitle className="text-base">{t('contracts.columns.budget')}</CardTitle>
         </CardHeader>
         <CardContent>
           <FieldGrid>
-            <Field label="Администратор">{budget.administrator_name}</Field>
-            <Field label="Год">
+            <Field label={t('contracts.columns.administrator')}>{budget.administrator_name}</Field>
+            <Field label={t('contracts.columns.year')}>
               <span className="tabular-nums">{budget.period_year}</span>
             </Field>
-            <Field label="Валюта">{budget.currency}</Field>
-            <Field label="Примечание">{budget.note || '—'}</Field>
-            <Field label="Создан">{formatMoment(budget.created_at)}</Field>
-            <Field label="Изменён">{formatMoment(budget.updated_at)}</Field>
+            <Field label={t('contracts.columns.currency')}>{budget.currency}</Field>
+            <Field label={t('contracts.columns.note')}>{budget.note || '—'}</Field>
+            <Field label={t('contracts.createdAt')}>{formatMoment(budget.created_at)}</Field>
+            <Field label={t('contracts.updatedAt')}>{formatMoment(budget.updated_at)}</Field>
           </FieldGrid>
         </CardContent>
       </Card>
@@ -278,7 +276,7 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">
-            Договоры бюджета
+            {t('contracts.budget.agreements')}
             <span className="ml-2 font-normal text-muted-foreground">
               {agreements.length}
             </span>
@@ -287,19 +285,19 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
         <CardContent className="px-0 pb-0">
           {agreements.length === 0 ? (
             <p className="px-6 pb-6 text-sm text-muted-foreground">
-              К программам этого бюджета ещё не привязан ни один договор.
+              {t('contracts.budget.noAgreements')}
             </p>
           ) : (
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Номер</TableHead>
-                    <TableHead>Наименование</TableHead>
-                    <TableHead>Программа</TableHead>
-                    <TableHead>Контрагент</TableHead>
-                    <TableHead className="text-right">Сумма</TableHead>
-                    <TableHead>Статус</TableHead>
+                    <TableHead>{t('contracts.columns.number')}</TableHead>
+                    <TableHead>{t('contracts.columns.title')}</TableHead>
+                    <TableHead>{t('contracts.columns.programme')}</TableHead>
+                    <TableHead>{t('contracts.columns.counterparty')}</TableHead>
+                    <TableHead className="text-right">{t('contracts.columns.amount')}</TableHead>
+                    <TableHead>{t('contracts.columns.status')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -326,9 +324,9 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
                         {!isCommitting(row.status) && (
                           <span
                             className="ml-1.5 text-xs text-muted-foreground"
-                            title="Договор в этом статусе бюджет не занимает"
+                            title={t('contracts.budget.notConsumingTitle')}
                           >
-                            вне остатка
+                            {t('contracts.budget.notConsuming')}
                           </span>
                         )}
                       </TableCell>

@@ -14,6 +14,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 
 import { EmployeePicker } from '@/features/requests/components/EmployeePicker';
 import type { TemplateConfig } from '@/features/requests/types';
+import { useTranslation } from 'react-i18next';
 
 export interface BasicInfoValue {
   name: string;
@@ -36,12 +37,12 @@ const ICONS: { key: string; Icon: typeof FileText }[] = [
 
 const COLORS = ['#3b82f6', '#f97316', '#ec4899', '#10b981', '#a855f7', '#ef4444', '#64748b'];
 
-const KNOWN_GROUPS = [
-  'Документы для снабжения',
-  'Документы для проектного менеджера',
-  'Финансы/Бюджет',
-  'План закупок',
-  'Проектная документация',
+const KNOWN_GROUP_KEYS = [
+  'requests.basicInfo.groups.procurement',
+  'requests.basicInfo.groups.projectManager',
+  'requests.basicInfo.groups.finance',
+  'requests.basicInfo.groups.procurementPlan',
+  'requests.basicInfo.groups.design',
 ];
 
 interface Props {
@@ -51,6 +52,7 @@ interface Props {
 }
 
 export function BasicInfoStep({ value, onChange, createdBy }: Props) {
+  const { t } = useTranslation();
   const cfg = value.config ?? {};
   const patchCfg = (p: Partial<TemplateConfig>) => onChange({ config: { ...cfg, ...p } });
   const scope = cfg.who_can_submit ?? 'all';
@@ -59,7 +61,7 @@ export function BasicInfoStep({ value, onChange, createdBy }: Props) {
     <div className="mx-auto max-w-2xl space-y-6">
       {/* Icon */}
       <div className="space-y-2">
-        <Label>Иконка *</Label>
+        <Label>{t('requests.basicInfo.icon')}</Label>
         <div className="flex flex-wrap items-center gap-2">
           {ICONS.map(({ key, Icon }) => (
             <button
@@ -68,7 +70,7 @@ export function BasicInfoStep({ value, onChange, createdBy }: Props) {
               onClick={() => onChange({ icon: key })}
               className={`flex h-10 w-10 items-center justify-center rounded-lg text-white ring-offset-2 ${value.icon === key ? 'ring-2 ring-primary' : ''}`}
               style={{ backgroundColor: value.color || '#3b82f6' }}
-              aria-label={`Иконка ${key}`}
+              aria-label={t('requests.basicInfo.iconAria', { name: key })}
             >
               <Icon className="h-5 w-5" />
             </button>
@@ -82,7 +84,7 @@ export function BasicInfoStep({ value, onChange, createdBy }: Props) {
               onClick={() => onChange({ color: c })}
               className={`h-6 w-6 rounded-full ${value.color === c ? 'ring-2 ring-offset-2 ring-foreground' : ''}`}
               style={{ backgroundColor: c }}
-              aria-label={`Цвет ${c}`}
+              aria-label={t('requests.basicInfo.colorAria', { name: c })}
             />
           ))}
         </div>
@@ -90,38 +92,38 @@ export function BasicInfoStep({ value, onChange, createdBy }: Props) {
 
       {/* Name */}
       <div className="space-y-1.5">
-        <Label htmlFor="bi-name">Название *</Label>
-        <Input id="bi-name" value={value.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="Счёт на оплату KZ" />
+        <Label htmlFor="bi-name">{t('requests.basicInfo.name')}</Label>
+        <Input id="bi-name" value={value.name} onChange={(e) => onChange({ name: e.target.value })} placeholder={t('requests.basicInfo.namePlaceholder')} />
       </div>
 
       {/* Description */}
       <div className="space-y-1.5">
-        <Label htmlFor="bi-desc">Описание</Label>
-        <Input id="bi-desc" value={value.description} onChange={(e) => onChange({ description: e.target.value })} placeholder="Короткое описание" />
+        <Label htmlFor="bi-desc">{t('calendar.form.description')}</Label>
+        <Input id="bi-desc" value={value.description} onChange={(e) => onChange({ description: e.target.value })} placeholder={t('requests.basicInfo.descriptionPlaceholder')} />
       </div>
 
       {/* Group */}
       <div className="space-y-1.5">
-        <Label htmlFor="bi-group">Группа документов *</Label>
+        <Label htmlFor="bi-group">{t('requests.basicInfo.group')}</Label>
         <Input
           id="bi-group"
           list="bi-group-list"
           value={cfg.group ?? ''}
           onChange={(e) => patchCfg({ group: e.target.value })}
-          placeholder="Выберите или введите группу"
+          placeholder={t('requests.basicInfo.groupPlaceholder')}
         />
         <datalist id="bi-group-list">
-          {KNOWN_GROUPS.map((g) => <option key={g} value={g} />)}
+          {KNOWN_GROUP_KEYS.map((k) => <option key={k} value={t(k)} />)}
         </datalist>
       </div>
 
       {/* Who can submit */}
       <div className="space-y-2">
-        <Label>Кто может подавать этот запрос *</Label>
+        <Label>{t('requests.basicInfo.whoCanSubmit')}</Label>
         <RadioGroup value={scope} onValueChange={(v) => patchCfg({ who_can_submit: v as TemplateConfig['who_can_submit'] })}>
-          <label className="flex items-center gap-2 text-sm"><RadioGroupItem value="all" /> Все</label>
-          <label className="flex items-center gap-2 text-sm"><RadioGroupItem value="selected" /> Выбранные пользователи</label>
-          <label className="flex items-center gap-2 text-sm"><RadioGroupItem value="none" /> Никто</label>
+          <label className="flex items-center gap-2 text-sm"><RadioGroupItem value="all" /> {t('requests.submitScope.all')}</label>
+          <label className="flex items-center gap-2 text-sm"><RadioGroupItem value="selected" /> {t('requests.basicInfo.selectedUsers')}</label>
+          <label className="flex items-center gap-2 text-sm"><RadioGroupItem value="none" /> {t('requests.submitScope.none')}</label>
         </RadioGroup>
         {scope === 'selected' && (
           <EmployeePicker
@@ -134,22 +136,22 @@ export function BasicInfoStep({ value, onChange, createdBy }: Props) {
       {/* Toggles */}
       <label className="flex items-start gap-2 text-sm">
         <Checkbox checked={cfg.show_on_workplace ?? false} onCheckedChange={(v) => patchCfg({ show_on_workplace: Boolean(v) })} />
-        <span>Показывать в формах для заполнения (каталог «Отправить запрос»)</span>
+        <span>{t('requests.basicInfo.showInCatalogue')}</span>
       </label>
       <label className="flex items-start gap-2 text-sm">
         <Checkbox checked={cfg.prohibit_admin_manage ?? false} onCheckedChange={(v) => patchCfg({ prohibit_admin_manage: Boolean(v) })} />
-        <span>Запретить администраторам и субадминистраторам компании управлять процессами и данными</span>
+        <span>{t('requests.basicInfo.restrictAdmins')}</span>
       </label>
 
       {/* Process administrators */}
       <div className="space-y-1.5">
-        <Label>Администраторы процесса * <span className="text-xs font-normal text-muted-foreground">(до 5)</span></Label>
+        <Label>{t('requests.basicInfo.processAdmins')} <span className="text-xs font-normal text-muted-foreground">{t('requests.basicInfo.upToFive')}</span></Label>
         <EmployeePicker
           value={cfg.process_admin_ids ?? (createdBy != null ? [createdBy] : [])}
           onChange={(ids) => patchCfg({ process_admin_ids: ids })}
           max={5}
         />
-        <p className="text-xs text-muted-foreground">По умолчанию — создатель шаблона. Можно убрать себя и указать другого.</p>
+        <p className="text-xs text-muted-foreground">{t('requests.basicInfo.processAdminsHint')}</p>
       </div>
     </div>
   );

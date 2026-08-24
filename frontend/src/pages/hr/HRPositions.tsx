@@ -217,15 +217,15 @@ const HRPositions = () => {
     onError: (err) => {
       // 409 (вес занят / системная должность) и 422 (вес вне диапазона) —
       // бэкенд присылает готовое объяснение, показываем его, а не «ошибка».
-      setSaveError(errorDetail(err) ?? 'Не удалось сохранить должность');
-      reportApiError(err, 'Не удалось сохранить должность');
+      setSaveError(errorDetail(err) ?? t('hr.positions.saveError'));
+      reportApiError(err, t('hr.positions.saveError'));
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.delete(`hr/v1/positions/${id}/`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['hr-positions-v1'] }),
-    onError: (err) => reportApiError(err, 'Не удалось удалить должность'),
+    onError: (err) => reportApiError(err, t('hr.positions.deleteError')),
   });
 
   const moveMutation = useMutation({
@@ -258,7 +258,7 @@ const HRPositions = () => {
       }
       // Откат карточки на место без объяснения выглядел как «перетаскивание
       // не сработало»: 409 при коллизии веса внутри уровня тут реален.
-      reportApiError(err, 'Не удалось переместить должность');
+      reportApiError(err, t('hr.positions.moveError'));
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['hr-positions-v1'] });
@@ -269,7 +269,7 @@ const HRPositions = () => {
   const rebalanceMutation = useMutation({
     mutationFn: (level?: number) => api.post('hr/v1/positions/rebalance', level ? { level } : {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['hr-positions-v1'] }),
-    onError: (err) => reportApiError(err, 'Не удалось выровнять порядок'),
+    onError: (err) => reportApiError(err, t('hr.positions.normaliseError')),
   });
 
   /** Подставляет свободный вес выбранного уровня. Считает сервер: вес глобально
@@ -284,7 +284,7 @@ const HRPositions = () => {
       ));
       setLevelWeightError(null);
     } catch (err) {
-      setLevelWeightError(errorDetail(err, 'Не удалось подобрать вес — задайте его вручную.'));
+      setLevelWeightError(errorDetail(err, t('hr.positions.weightError')));
     }
   };
 
@@ -394,10 +394,10 @@ const HRPositions = () => {
             <div className="flex flex-wrap items-center gap-3">
               <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
                 <SelectTrigger className="h-9 w-48 text-xs rounded-xl bg-muted/30">
-                  <SelectValue placeholder="Все отделы" />
+                  <SelectValue placeholder={t('hr.positions.allDepartments')} />
                 </SelectTrigger>
                 <SelectContent className="rounded-2xl">
-                  <SelectItem value="all">Все отделы</SelectItem>
+                  <SelectItem value="all">{t('hr.positions.allDepartments')}</SelectItem>
                   {departments?.map((department) => (
                     <SelectItem key={department.id} value={String(department.id)}>
                       {department.name}
@@ -421,7 +421,7 @@ const HRPositions = () => {
                   disabled={rebalanceMutation.isPending}
                 >
                   <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                  Выровнять порядок
+                  {t('hr.positions.normalise')}
                 </Button>
                 <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                   <DialogTrigger asChild>
@@ -436,14 +436,14 @@ const HRPositions = () => {
                         {editingPos ? t('hr.pages.positions.edit') : t('hr.pages.positions.new')}
                         {editingIsSystem && (
                           <Badge variant="secondary" className="gap-1">
-                            <Lock className="h-3 w-3" /> Системная
+                            <Lock className="h-3 w-3" /> {t('hr.positions.system')}
                           </Badge>
                         )}
                       </DialogTitle>
                     </DialogHeader>
                     {editingIsSystem && (
                       <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                        Системные должности — это базовая структура организации. Название и отдел изменить нельзя, но вы можете настроить вес, грейд и права.
+                        {t('hr.positions.systemHint')}
                       </p>
                     )}
                     <div className="grid gap-4">
@@ -478,7 +478,7 @@ const HRPositions = () => {
                       {t('hr.pages.positions.fields.level')}
                       <Select value={form.level} onValueChange={changeLevel}>
                         <SelectTrigger>
-                          <SelectValue placeholder="Выберите уровень" />
+                          <SelectValue placeholder={t('hr.positions.pickLevel')} />
                         </SelectTrigger>
                         <SelectContent>
                           {sortedThresholds.map((threshold) => (
@@ -502,20 +502,20 @@ const HRPositions = () => {
                               не выглядел пустым и не терял текущее значение. */}
                           {form.level && !selectedThreshold && (
                             <SelectItem value={form.level}>
-                              L{form.level} — не заведён в справочнике
+                              {t('hr.positions.levelMissing', { level: form.level })}
                             </SelectItem>
                           )}
                         </SelectContent>
                       </Select>
                       <span className="text-xs text-muted-foreground">
                         {sortedThresholds.length === 0
-                          ? 'Уровни ещё не заведены — добавьте их на вкладке «Уровни».'
-                          : 'Место должности в иерархии оргструктуры.'}
+                          ? t('hr.positions.noLevelsHint')
+                          : t('hr.positions.levelHint')}
                       </span>
                     </label>
 
                     <label className="grid gap-2 text-sm">
-                      Грейд
+                      {t('hr.positions.grade')}
                       <Input
                         type="number"
                         min={1}
@@ -524,7 +524,7 @@ const HRPositions = () => {
                         onChange={(e) => setForm({ ...form, grade: e.target.value })}
                       />
                       <span className="text-xs text-muted-foreground">
-                        Квалификационный разряд 1–10. С уровнем в иерархии не связан.
+                        {t('hr.positions.gradeHint')}
                       </span>
                     </label>
 
@@ -534,26 +534,32 @@ const HRPositions = () => {
                         нештатных ситуаций и по умолчанию свёрнуто. */}
                     <details className="rounded-lg border bg-muted/30 p-3">
                       <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
-                        Служебное
+                        {t('hr.positions.internal')}
                       </summary>
                       <label className="mt-3 grid gap-2 text-sm">
-                        Вес
+                        {t('hr.positions.weight')}
                         <Input
                           type="number"
                           min={0}
-                          aria-label="Вес"
+                          aria-label={t('hr.positions.weight')}
                           value={form.weight}
                           onChange={(e) => setForm({ ...form, weight: e.target.value })}
                         />
                         {weightOutOfLevelRange && selectedThreshold ? (
                           <span className="text-xs text-destructive">
-                            Вес вне диапазона уровня L{selectedThreshold.level_number}
-                            {' '}({selectedThreshold.weight_from}–{selectedThreshold.weight_to})
+                            {t('hr.positions.weightOutOfRange', {
+                              level: selectedThreshold.level_number,
+                              from: selectedThreshold.weight_from,
+                              to: selectedThreshold.weight_to,
+                            })}
                           </span>
                         ) : selectedThreshold ? (
                           <span className="text-xs text-muted-foreground">
-                            Порядок внутри уровня. Диапазон L{selectedThreshold.level_number}:
-                            {' '}{selectedThreshold.weight_from}–{selectedThreshold.weight_to}
+                            {t('hr.positions.weightRangeHint', {
+                              level: selectedThreshold.level_number,
+                              from: selectedThreshold.weight_from,
+                              to: selectedThreshold.weight_to,
+                            })}
                           </span>
                         ) : null}
                         {levelWeightError && (
@@ -563,9 +569,9 @@ const HRPositions = () => {
                     </details>
 
                     <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
-                      <div className="text-sm font-semibold">Уровень доступа HR</div>
+                      <div className="text-sm font-semibold">{t('hr.positions.hrAccessLevel')}</div>
                       <p className="text-xs text-muted-foreground">
-                        Определяет, что сотрудник на этой должности видит и может делать в модуле HR.
+                        {t('hr.positions.hrAccessHint')}
                       </p>
                       <Select
                         value={form.hr_level || 'none'}
@@ -578,10 +584,10 @@ const HRPositions = () => {
                         }}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Без HR-доступа" />
+                          <SelectValue placeholder={t('hr.positions.noHrAccess')} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="none">Без HR-доступа</SelectItem>
+                          <SelectItem value="none">{t('hr.positions.noHrAccess')}</SelectItem>
                           {permissionsCatalog?.hr_levels.map((lvl) => (
                             <SelectItem key={lvl.value} value={lvl.value}>
                               {lvl.label} — {lvl.description}
@@ -592,9 +598,9 @@ const HRPositions = () => {
                     </div>
 
                     <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
-                      <div className="text-sm font-semibold">Дополнительные права</div>
+                      <div className="text-sm font-semibold">{t('hr.positions.extraPermissions')}</div>
                       <p className="text-xs text-muted-foreground">
-                        Отметьте конкретные действия, доступные носителю должности. Применяются поверх уровня доступа.
+                        {t('hr.positions.extraPermissionsHint')}
                       </p>
                       <div className="grid gap-3">
                         {groupedPermissions.map(([group, items]) => (
@@ -621,7 +627,7 @@ const HRPositions = () => {
                           </div>
                         ))}
                         {groupedPermissions.length === 0 && (
-                          <div className="text-xs text-muted-foreground">Каталог прав недоступен.</div>
+                          <div className="text-xs text-muted-foreground">{t('hr.positions.permissionsUnavailable')}</div>
                         )}
                       </div>
                     </div>
@@ -697,7 +703,7 @@ const HRPositions = () => {
                       </div>
                       {!threshold && (
                         <p className="mt-1 text-xs text-muted-foreground">
-                          Уровень не заведён в справочнике
+                          {t('hr.positions.levelNotInCatalogue')}
                         </p>
                       )}
                     </div>
@@ -707,7 +713,7 @@ const HRPositions = () => {
                         variant="ghost"
                         onClick={() => rebalanceMutation.mutate(level)}
                         disabled={rebalanceMutation.isPending}
-                        title="Выровнять порядок внутри уровня"
+                        title={t('hr.positions.normaliseWithinLevel')}
                       >
                         <RefreshCw className="h-4 w-4" />
                       </Button>
@@ -737,7 +743,7 @@ const HRPositions = () => {
                                 <button
                                   type="button"
                                   className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
-                                  title="Перетащить"
+                                  title={t('hr.positions.drag')}
                                   {...dragProvided.dragHandleProps}
                                 >
                                   <GripVertical className="h-4 w-4" />
@@ -746,8 +752,8 @@ const HRPositions = () => {
                                   <div className="flex items-center gap-2">
                                     <span className="truncate text-sm font-medium">{position.title}</span>
                                     {position.is_system && (
-                                      <Badge variant="secondary" className="gap-1 text-[10px]" title="Системная должность — нельзя удалить или переименовать">
-                                        <Lock className="h-3 w-3" /> Системная
+                                      <Badge variant="secondary" className="gap-1 text-[10px]" title={t('hr.positions.systemTitle')}>
+                                        <Lock className="h-3 w-3" /> {t('hr.positions.system')}
                                       </Badge>
                                     )}
                                     {position.permissions?.hr_level && (
@@ -757,7 +763,8 @@ const HRPositions = () => {
                                     )}
                                   </div>
                                   <div className="truncate text-xs text-muted-foreground">
-                                    {position.department_name ?? 'Без отдела'} · грейд {position.grade}
+                                    {position.department_name ?? t('hr.positions.noDepartment')}{' '}
+                        {t('hr.positions.gradeValue', { grade: position.grade })}
                                   </div>
                                 </div>
                                 {isSenior && (
@@ -776,7 +783,7 @@ const HRPositions = () => {
                                           deleteMutation.mutate(position.id);
                                         }
                                       }}
-                                      title={position.is_system ? 'Системную должность нельзя удалить' : t('hr.common.delete')}
+                                      title={position.is_system ? t('hr.positions.systemCannotDelete') : t('hr.common.delete')}
                                     >
                                       <Trash2 className="h-4 w-4" />
                                     </Button>
@@ -789,7 +796,7 @@ const HRPositions = () => {
                         {provided.placeholder}
                         {items.length === 0 && (
                           <div className="flex min-h-[64px] items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-                            Нет должностей
+                            {t('hr.positions.empty')}
                           </div>
                         )}
                       </div>

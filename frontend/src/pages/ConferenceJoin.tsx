@@ -103,7 +103,7 @@ const ConferenceJoin: React.FC = () => {
                   'По этой ссылке входят только сотрудники. Войдите в платформу под своей учётной записью.')}
               </p>
               <Button className="w-full rounded-xl" onClick={() => navigate('/login')}>
-                <LogIn className="mr-2 h-4 w-4" /> {t('nav.login', 'Войти')}
+                <LogIn className="mr-2 h-4 w-4" /> {t('auth.loginHere')}
               </Button>
             </div>
           )}

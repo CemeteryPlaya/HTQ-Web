@@ -490,11 +490,11 @@ const CreateMailboxDialog: React.FC<{
                     <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1.5">
                             <Label>{t('admin.users.firstName', 'Имя')}</Label>
-                            <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Иван" />
+                            <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder={t('admin.mailboxes.firstNamePlaceholder')} />
                         </div>
                         <div className="space-y-1.5">
                             <Label>{t('admin.users.lastName', 'Фамилия')}</Label>
-                            <Input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Иванов" />
+                            <Input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder={t('admin.mailboxes.lastNamePlaceholder')} />
                         </div>
                     </div>
 
