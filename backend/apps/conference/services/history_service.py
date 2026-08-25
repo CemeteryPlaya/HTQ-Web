@@ -89,11 +89,19 @@ def session_detail(session: ConferenceSession) -> schemas.SessionDetail:
     poster_url = (signing.poster_url(session.pk)
                   if playable and _has_poster(session) else None)
 
+    participants_read = []
+    for row in participants:
+        item = schemas.ParticipantRead.model_validate(row)
+        if row.left_at is not None:
+            delta = row.left_at - session.started_at
+            item.left_offset_ms = max(0, int(delta.total_seconds() * 1000))
+        participants_read.append(item)
+
     return schemas.SessionDetail(
         **base.model_dump(),
         error=session.error,
         purged_at=session.purged_at,
-        participants=[schemas.ParticipantRead.model_validate(p) for p in participants],
+        participants=participants_read,
         playable=playable,
         recording_url=recording_url,
         download_url=download_url,

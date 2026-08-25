@@ -88,6 +88,10 @@ class ParticipantRead(BaseModel):
     joined_at: datetime
     left_at: datetime | None
     joined_offset_ms: int
+    #: Момент выхода в миллисекундах от начала встречи. ``None`` — участник
+    #: досидел до конца. Считается ЗДЕСЬ, а не на фронте: два независимых
+    #: вычисления одной величины со временем разъезжаются.
+    left_offset_ms: int | None = None
 
 
 class SessionListItem(BaseModel):
