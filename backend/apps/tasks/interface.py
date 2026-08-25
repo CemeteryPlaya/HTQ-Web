@@ -145,9 +145,23 @@ def get_conference_event_for_room(room_id: str) -> dict | None:
     return _conference_payload(event, sorted(invitees))
 
 
-def list_user_conference_events(user_id: int | None, *, date_from, date_to,
+def list_user_conference_events(user_id: int | None, *, period_start, period_end,
                                 include_all: bool = False) -> list[dict]:
-    """Конференции за период, где человек участник или автор.
+    """Конференции периода ``[period_start, period_end)``, где человек участник
+    или автор.
+
+    ``period_start``/``period_end`` — это МОМЕНТЫ (aware ``datetime``), не
+    даты. Раньше здесь стояли даты и фильтр по ``start_at__date``/
+    ``end_at__date``, а ``__date`` Django вычисляет в АКТИВНОМ поясе — а
+    активного пояса в проекте нет (``timezone.activate()`` нигде не
+    вызывается), значит бралась дата в UTC. Вызывающие снаружи (обзор
+    конференций) считают границы суток в поясе платформы, и «дата события в
+    UTC» с «датой суток в Алматы» — разные числа в районе полуночи;
+    событие тихо выпадало из окна. Сравнение по моментам это убирает вовсе:
+    вопрос «в каком поясе брать дату» здесь просто не возникает — интервалы
+    либо пересекаются, либо нет, независимо от пояса. Пояс нужен ровно один
+    раз — там, где сутки превращаются в границы (см.
+    ``apps.conference.services.platform_time``), а не здесь.
 
     ``include_all=True`` — для администратора платформы: фильтр по человеку
     снимается целиком.
@@ -162,11 +176,14 @@ def list_user_conference_events(user_id: int | None, *, date_from, date_to,
 
     from .models import CalendarEvent
 
+    # Пересечение интервалов: событие входит в период, если начинается ДО
+    # его конца и заканчивается ПОСЛЕ его начала (конец периода —
+    # эксклюзивная граница).
     queryset = (CalendarEvent.objects
                 .filter(event_type="conference",
                         conference_room_id__isnull=False,
-                        start_at__date__lte=date_to,
-                        end_at__date__gte=date_from)
+                        start_at__lt=period_end,
+                        end_at__gt=period_start)
                 .exclude(exceptions__is_cancelled=True)
                 .prefetch_related("participants"))
     if not include_all:

@@ -56,6 +56,21 @@ def utc_offset_label(local_moment: datetime.datetime) -> str:
     return f"UTC{sign}{hours}"
 
 
+def day_bounds(day: datetime.date) -> tuple[datetime.datetime, datetime.datetime]:
+    """Начало и конец суток ``day`` в поясе платформы — МОМЕНТЫ, не даты.
+
+    Конец — полночь СЛЕДУЮЩИХ суток, эксклюзивно: тогда «событие попадает в
+    сутки» — это простое пересечение интервалов (``start < конец И
+    end > начало``, см. ``apps.tasks.interface.list_user_conference_events``),
+    без отдельной оговорки про границу. Возвращаются aware-моменты в поясе
+    платформы; Django одинаково верно сравнит их с UTC-полями в БД — часовой
+    пояс момента для сравнения значения не меняет, важен только для того,
+    ГДЕ прошла граница суток, а она уже посчитана здесь.
+    """
+    start = datetime.datetime.combine(day, datetime.time.min, tzinfo=_tz())
+    return start, start + datetime.timedelta(days=1)
+
+
 def today(moment: datetime.datetime | None = None) -> datetime.date:
     """Сегодняшняя дата в поясе платформы, а не сервера.
 

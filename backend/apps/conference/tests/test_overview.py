@@ -1,11 +1,14 @@
 """Сводный экран: что сегодня и что идёт прямо сейчас."""
 
+import datetime as dt
 from datetime import timedelta
 
 import pytest
 from django.utils import timezone
 
 from apps.conference.models import ConferenceSession
+from apps.conference.services import platform_time
+from apps.tasks.interface import list_user_conference_events
 from apps.tasks.models import CalendarEvent, CalendarEventParticipant
 
 from .conftest import BASE, auth_header
@@ -98,6 +101,38 @@ def test_admin_sees_every_meeting(client, organiser, admin_user):
 
     assert len(body["today"]) == 1
     assert len(body["active"]) == 1
+
+
+@pytest.mark.django_db
+def test_event_just_after_local_midnight_still_counts_as_today():
+    """Регресс: «сегодня» обзора считалось через ``timezone.localdate()``/
+    ``__date``-фильтр, а те вычисляются в АКТИВНОМ поясе Django — которого
+    нет (``timezone.activate()`` нигде не вызывается), то есть фактически в
+    UTC. 2026-08-25 20:00 UTC — это 2026-08-26 01:00 по Алматы: дата в UTC и
+    дата в поясе платформы РАЗНЫЕ. Момент фиксирован, а не ``timezone.now()``
+    — иначе тест был бы зелёным 19 часов в сутки из 24 и ловил бы регресс
+    только в пятичасовом окне.
+
+    Границы periода строятся ровно тем же способом, каким их строит
+    ``overview_service._today_range()`` (``platform_time.day_bounds`` +
+    ``platform_time.today``), только с подставленным фиксированным моментом
+    вместо реального «сейчас» — тестам не нужно замораживать системные часы,
+    чтобы проверить перевод на известной точке (тот же приём, что в
+    test_platform_time.py).
+    """
+    moment = dt.datetime(2026, 8, 25, 20, 0, tzinfo=dt.timezone.utc)
+    local_day = platform_time.today(moment)
+    period_start, period_end = platform_time.day_bounds(local_day)
+
+    event = CalendarEvent.objects.create(
+        title="Ночной созвон", start_at=moment, end_at=moment + timedelta(hours=1),
+        event_type="conference", conference_room_id="room-midnight",
+        creator_id=1, is_all_day=False)
+
+    rows = list_user_conference_events(
+        1, period_start=period_start, period_end=period_end)
+
+    assert [row["id"] for row in rows] == [event.pk]
 
 
 @pytest.mark.django_db

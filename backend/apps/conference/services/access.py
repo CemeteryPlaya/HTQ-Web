@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+import datetime
 
 from django.db.models import Q
 from django.http import Http404
@@ -29,9 +29,12 @@ def my_conference_event_ids(request) -> set[int]:
     должны переживать запрос, иначе снятое приглашение продолжало бы
     действовать.
 
-    ``date_from``/``date_to`` намеренно широкие: видимость истории не
+    ``period_start``/``period_end`` намеренно широкие: видимость истории не
     ограничена сегодняшним днём — человек вправе увидеть встречу, на которую
-    его звали в прошлом месяце.
+    его звали в прошлом месяце. Это МОМЕНТЫ, не даты — как и у
+    ``list_user_conference_events`` (см. её докстринг): интервал берётся с
+    огромным запасом, а не «весь диапазон дат», поэтому вопрос часового
+    пояса здесь не встаёт вовсе.
     """
     cached = getattr(request, "_conference_event_ids", None)
     if cached is not None:
@@ -43,10 +46,10 @@ def my_conference_event_ids(request) -> set[int]:
         try:
             from apps.tasks.interface import list_user_conference_events
 
-            far_past = date(2000, 1, 1)
-            far_future = date(2100, 1, 1)
+            far_past = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+            far_future = datetime.datetime(2100, 1, 1, tzinfo=datetime.timezone.utc)
             result = {row["id"] for row in list_user_conference_events(
-                token.user_id, date_from=far_past, date_to=far_future)}
+                token.user_id, period_start=far_past, period_end=far_future)}
         except ServiceDisabled as exc:
             # Предусмотренная деградация: сосед выключен в реестре. Встреча
             # просто исчезает из списка по третьему основанию, человек

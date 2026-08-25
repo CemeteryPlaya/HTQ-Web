@@ -18,11 +18,15 @@ from htqweb.fallback import fallback
 
 
 def _today_range():
-    # НЕ timezone.localdate() — она даёт дату UTC (см. docstring
-    # platform_time): встреча, начавшаяся ночью по местному времени,
-    # уезжала бы в блоке «Сегодня» на соседние сутки.
-    today = platform_time.today()
-    return today, today
+    """Границы сегодняшних суток в поясе платформы — МОМЕНТЫ, не даты.
+
+    НЕ timezone.localdate()/__date-фильтр — оба вычисляют дату в АКТИВНОМ
+    поясе Django, а активного пояса в проекте нет (timezone.activate() нигде
+    не вызывается), значит бралась дата в UTC. Встреча, начавшаяся ночью по
+    местному времени платформы, уезжала бы на соседние сутки — то есть
+    ровно тот баг, который эта функция и обязана не пускать обратно.
+    """
+    return platform_time.day_bounds(platform_time.today())
 
 
 def _calendar_events(request) -> list[dict]:
@@ -32,9 +36,9 @@ def _calendar_events(request) -> list[dict]:
 
     from apps.tasks.interface import list_user_conference_events
 
-    date_from, date_to = _today_range()
+    period_start, period_end = _today_range()
     return list_user_conference_events(
-        token.user_id, date_from=date_from, date_to=date_to,
+        token.user_id, period_start=period_start, period_end=period_end,
         include_all=bool(token.is_elevated))
 
 
