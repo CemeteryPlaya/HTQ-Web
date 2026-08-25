@@ -909,6 +909,11 @@ export const notificationTargetUrl = (
     return `/hr/employees/${n.target_id}`;
   if (n.target_type === 'messenger_room' && n.target_id)
     return `/messenger?room=${n.target_id}`;
+  // Именно карточка встречи, а не /room/<id>: уведомление могли открыть
+  // через час, и бросать человека в закончившийся звонок неправильно —
+  // кнопка «Войти» живёт на карточке, пока встреча идёт.
+  if (n.target_type === 'conference_session' && n.target_id)
+    return `/conference/history/${n.target_id}`;
   if (n.target_type === 'email_message') return `/email`;
   // Legacy: rows that only set the ``task_id`` FK column.
   if (n.task) return `/tasks/${n.task}`;
@@ -930,6 +935,8 @@ export const notificationSourceLabel = (
   if (n.target_type === 'calendar_event') return i18next.t('notifications.source.calendar');
   if (n.target_type === 'employee') return 'HR';
   if (n.target_type === 'messenger_room') return i18next.t('notifications.source.messenger');
+  if (n.target_type === 'conference_session')
+    return i18next.t('notifications.source.conference');
   if (n.target_type === 'email_message') return i18next.t('notifications.source.email');
   // Legacy verb fallback — same patterns as notificationTargetUrl.
   const verb = n.verb || '';

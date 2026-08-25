@@ -3966,6 +3966,7 @@
     "notify": {
       "starting": "🎥 Conference starting",
       "startsSoon": "“{{title}}” starts in 5 minutes.",
+      "started": "The meeting has started",
       "join": "Join"
     },
     "duration": {
@@ -4178,6 +4179,7 @@
       "calendar": "Calendar",
       "messenger": "Messenger",
       "email": "Email",
+      "conference": "Conferences",
       "generic": "Notification"
     },
     "verb": {

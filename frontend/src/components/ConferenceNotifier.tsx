@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom';
 import { Video } from 'lucide-react';
 import { playMeetingReminder } from '@/lib/sound/soundService';
 import { useTranslation } from 'react-i18next';
+import { getMessengerSocket } from '@/features/messenger/api/socket';
 
 export const ConferenceNotifier = () => {
     const { t } = useTranslation();
@@ -76,6 +77,51 @@ export const ConferenceNotifier = () => {
         
         return () => clearInterval(interval);
     }, [timeline, isAuth, navigate, t]);
+
+    // Канал был готов только наполовину: сервер шлёт «notification» в
+    // персональную комнату user:<id> с первого дня, а слушателя во фронте не
+    // было ни одного.
+    useEffect(() => {
+        if (!isAuth) return;
+        const socket = getMessengerSocket();
+
+        const onNotification = (raw: unknown) => {
+            const payload = raw as { type?: string; title?: string; join_url?: string };
+            if (payload?.type !== 'conference_started') return;
+
+            playMeetingReminder();
+            toast(t('conference.notify.started', 'Видеоконференция началась'), {
+                description: payload.title,
+                duration: 30000,
+                action: {
+                    label: t('conference.notify.join'),
+                    onClick: () => navigate(payload.join_url || '/conference'),
+                },
+            });
+
+            // Системное уведомление — чтобы встречу заметили при свёрнутой
+            // вкладке. Разрешение спрашиваем ЗДЕСЬ, а не на входе в приложение:
+            // просьба, которой человек не ждал, почти всегда отклоняется.
+            try {
+                if (typeof Notification === 'undefined') return;
+                const show = () => new Notification(
+                    t('conference.notify.started', 'Видеоконференция началась'),
+                    { body: payload.title || '' });
+                if (Notification.permission === 'granted') show();
+                else if (Notification.permission === 'default') {
+                    void Notification.requestPermission().then((granted) => {
+                        if (granted === 'granted') show();
+                    });
+                }
+            } catch {
+                // Браузер вправе запретить — это не причина ронять компонент,
+                // смонтированный на всё приложение.
+            }
+        };
+
+        socket.on('notification', onNotification);
+        return () => { socket.off('notification', onNotification); };
+    }, [isAuth, navigate, t]);
 
     return null; // This is a logic-only component
 };
