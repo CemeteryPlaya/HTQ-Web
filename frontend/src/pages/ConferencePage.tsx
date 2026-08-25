@@ -57,6 +57,27 @@ interface ChatMessage {
   isSelf: boolean;
 }
 
+export interface ParticipantInfo {
+  name: string;
+  isGuest: boolean;
+}
+
+/** Список участников от SFU → карта для отрисовки. */
+export const toParticipantsMap = (
+  rows: Array<{ peerId: string; displayName?: string; isGuest?: boolean }>,
+): Map<string, ParticipantInfo> => {
+  const map = new Map<string, ParticipantInfo>();
+  for (const row of rows) {
+    map.set(row.peerId, {
+      name: row.displayName || '',
+      // Отсутствующий флаг — это СТАРЫЙ SFU, а не гость: помечать человека
+      // внешним по недостающему полю нельзя.
+      isGuest: row.isGuest === true,
+    });
+  }
+  return map;
+};
+
 export interface RoomSettings {
   roomTitle: string;
   passwordProtection: boolean;
@@ -333,23 +354,25 @@ function useAudioActivity(
 /**
  * Single Video Tile Component
  */
-const VideoTile = ({ 
-  stream, 
-  isLocal = false, 
-  displayName, 
+const VideoTile = ({
+  stream,
+  isLocal = false,
+  displayName,
   isPrimary = false,
   isSpotlighted = false,
   isHost = false,
+  isGuest = false,
   micEnabled = true,
   camEnabled = true,
   onSpotlightToggle
-}: { 
-  stream: MediaStream | null; 
-  isLocal?: boolean; 
+}: {
+  stream: MediaStream | null;
+  isLocal?: boolean;
   displayName: string;
   isPrimary?: boolean;
   isSpotlighted?: boolean;
   isHost?: boolean;
+  isGuest?: boolean;
   micEnabled?: boolean;
   camEnabled?: boolean;
   onSpotlightToggle?: () => void;
@@ -599,6 +622,11 @@ const VideoTile = ({
                 {t('conference.page.host')}
               </span>
             )}
+            {isGuest && (
+              <Badge variant="outline" className="ml-2 text-[10px]">
+                {t('conference.page.guestBadge', 'Гость')}
+              </Badge>
+            )}
             {isLocal && <span className="text-emerald-400 font-normal opacity-90">{t('conference.page.youParen')}</span>}
           </span>
         </div>
@@ -696,7 +724,7 @@ export const ConferencePage = () => {
   const [connected, setConnected] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<RemoteStream[]>([]);
-  const [participants, setParticipants] = useState<Map<string, string>>(new Map());
+  const [participants, setParticipants] = useState<Map<string, ParticipantInfo>>(new Map());
   // Микрофон/камера остальных участников — по их собственным объявлениям
   // (сообщение `mediaState`). До первого объявления считаем включёнными.
   const [peerMediaState, setPeerMediaState] = useState<
@@ -730,9 +758,11 @@ export const ConferencePage = () => {
   const [previewCamEnabled, setPreviewCamEnabled] = useState(true);
   const [previewMicEnabled, setPreviewMicEnabled] = useState(true);
   const [previewAudioLevel, setPreviewAudioLevel] = useState(0);
-  // Предпросмотр включается ТОЛЬКО по явному действию. Раньше камера и
-  // микрофон захватывались на входе в комнату — человек ещё не решил,
-  // заходить ли в разговор, а лампочка камеры уже горела.
+  // Предпросмотр поднимается сам, но ТОЛЬКО в комнате ожидания (эффект
+  // ниже). Стартовое `false` — это состояние страницы `/conference`, где
+  // комната ещё не выбрана: там камера не должна включаться вообще, и
+  // человек не должен объяснять браузеру, зачем ему дали доступ к
+  // устройствам на экране со списком комнат.
   const [inviteOpen, setInviteOpen] = useState(false);
   const [previewActive, setPreviewActive] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -766,6 +796,22 @@ export const ConferencePage = () => {
   });
 
   useAudioActivity(previewStream, previewRingRef, setPreviewAudioLevel);
+
+  // Комната ожидания — это уже согласие показаться: сюда попадают по прямой
+  // ссылке на встречу или из списка комнат, то есть человек идёт в разговор,
+  // и лишний клик «включить предпросмотр» ничего не защищает.
+  //
+  // Зависимости здесь — весь смысл эффекта. Он срабатывает на СМЕНУ экрана
+  // (появилась комната; звонок закончился), а не на каждый ререндер, и
+  // поэтому не спорит с двумя случаями, где предпросмотр гасят намеренно:
+  //   • handleJoin отпускает устройства перед захватом в MediaEngine —
+  //     повторный автозапуск занял бы камеру собственной же вкладкой;
+  //   • handlePreviewFailure гасит его после отказа в доступе — иначе
+  //     страница бесконечно переспрашивала бы разрешение.
+  useEffect(() => {
+    if (!isRoomSelected || connected) return;
+    setPreviewActive(true);
+  }, [isRoomSelected, connected]);
 
   // Маршрут комнаты открыт без обязательной авторизации — иначе гость с
   // токеном в sessionStorage до неё бы не добрался. Право находиться здесь
@@ -1012,10 +1058,11 @@ export const ConferencePage = () => {
       onRemoteStreamRemoved: (consumerId: string) => {
         setRemoteStreams(prev => prev.filter(s => s.consumerId !== consumerId));
       },
-      onParticipantJoined: (peerId: string, name: string) => {
+      onParticipantJoined: (peerId: string, name: string, isGuest: boolean) => {
         setParticipants(prev => {
           const next = new Map(prev);
-          next.set(peerId, name);
+          const info = toParticipantsMap([{ peerId, displayName: name, isGuest }]).get(peerId)!;
+          next.set(peerId, info);
           return next;
         });
         toast({ description: t('conference.page.participantJoined', { name }) });
@@ -1295,9 +1342,12 @@ export const ConferencePage = () => {
         peerId,
         displayName: peerStreams[0]?.displayName || t('conference.media.participant'),
         stream: combinedStream,
+        // Плитка знает гостя по тому же журналу участников, что и панель
+        // справа — источник один, второй карты не заводим.
+        isGuest: participants.get(peerId)?.isGuest ?? false,
       };
     });
-  }, [remoteStreams, t]);
+  }, [remoteStreams, t, participants]);
 
   const localDisplayName = user?.firstName || t('conference.page.me');
 
@@ -1472,6 +1522,7 @@ export const ConferencePage = () => {
                           <VideoTile
                             stream={peer.stream}
                             displayName={peer.displayName}
+                            isGuest={peer.isGuest}
                             micEnabled={peerMediaState.get(peer.peerId)?.micEnabled ?? true}
                             camEnabled={peerMediaState.get(peer.peerId)?.camEnabled ?? true}
                             isSpotlighted={true}
@@ -1502,6 +1553,7 @@ export const ConferencePage = () => {
                           <VideoTile
                             stream={peer.stream}
                             displayName={peer.displayName}
+                            isGuest={peer.isGuest}
                             micEnabled={peerMediaState.get(peer.peerId)?.micEnabled ?? true}
                             camEnabled={peerMediaState.get(peer.peerId)?.camEnabled ?? true}
                           />
@@ -1537,6 +1589,7 @@ export const ConferencePage = () => {
                       key={peer.peerId}
                       stream={peer.stream}
                       displayName={peer.displayName}
+                      isGuest={peer.isGuest}
                       micEnabled={peerMediaState.get(peer.peerId)?.micEnabled ?? true}
                       camEnabled={peerMediaState.get(peer.peerId)?.camEnabled ?? true}
                       onSpotlightToggle={() => {
@@ -1671,13 +1724,20 @@ export const ConferencePage = () => {
                     </div>
 
                     {/* Remote users list */}
-                    {Array.from(participants.entries()).map(([peerId, name]) => (
+                    {Array.from(participants.entries()).map(([peerId, info]) => (
                       <div key={peerId} className="flex items-center justify-between p-2.5 rounded-xl hover:bg-white/5 border border-transparent transition-colors group">
                         <div className="flex items-center gap-2.5 truncate">
                           <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center font-bold text-white text-xs">
-                            {name.charAt(0).toUpperCase()}
+                            {info.name.charAt(0).toUpperCase()}
                           </div>
-                          <span className="text-xs font-medium text-gray-300 truncate">{name}</span>
+                          <span className="text-xs font-medium text-gray-300 truncate flex items-center">
+                            {info.name}
+                            {info.isGuest && (
+                              <Badge variant="outline" className="ml-2 text-[10px]">
+                                {t('conference.page.guestBadge', 'Гость')}
+                              </Badge>
+                            )}
+                          </span>
                         </div>
                         <div className="flex items-center gap-1">
                           {peerMediaState.get(peerId)?.micEnabled === false ? (
@@ -1694,10 +1754,10 @@ export const ConferencePage = () => {
                               </PopoverTrigger>
                               <PopoverContent side="left" className="w-44 bg-zinc-900 border-zinc-800 p-2 text-xs text-white">
                                 <div className="flex flex-col gap-1">
-                                  <button onClick={() => toast({ description: t('conference.page.participantMuted', { name }) })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-300">
+                                  <button onClick={() => toast({ description: t('conference.page.participantMuted', { name: info.name }) })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-300">
                                     <MicOff className="w-3.5 h-3.5" /> {t('conference.page.muteOne')}
                                   </button>
-                                  <button onClick={() => toast({ description: t('conference.page.participantKicked', { name }) })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-400 font-bold">
+                                  <button onClick={() => toast({ description: t('conference.page.participantKicked', { name: info.name }) })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-400 font-bold">
                                     <UserX className="w-3.5 h-3.5" /> {t('conference.page.kick')}
                                   </button>
                                 </div>
