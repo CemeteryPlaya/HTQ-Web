@@ -11,6 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { fetchOverview } from '@/api/conference';
 import ConferenceHistory from '../ConferenceHistory';
 
 vi.mock('@/api/conference', () => ({
@@ -55,6 +56,30 @@ describe('ConferenceHistory', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Сейчас никто не разговаривает/i)).toBeInTheDocument();
+    });
+  });
+
+  it('не утверждает «встреч нет», пока /overview ещё грузится', async () => {
+    // Отдельно от общего мока: ответ зависает, пока тест не решит его
+    // отпустить, — иначе не отличить «загрузка» от «данные уже пришли
+    // пустыми», которые и должны привести к одному и тому же тексту.
+    let resolveOverview: (value: unknown) => void = () => {};
+    vi.mocked(fetchOverview).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveOverview = resolve;
+    }));
+
+    renderPage();
+
+    expect(screen.queryByText(/Сегодня встреч нет/i)).not.toBeInTheDocument();
+
+    resolveOverview({
+      server_time: '2026-08-25T09:00:00Z',
+      today: [],
+      active: [],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Сегодня встреч нет/i)).toBeInTheDocument();
     });
   });
 });

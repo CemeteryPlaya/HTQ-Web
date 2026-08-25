@@ -89,7 +89,11 @@ const ConferenceHistory: React.FC = () => {
 
   // 30 секунд: «идёт сейчас» устаревает быстро, но чаще — это лишний трафик
   // на каждой открытой вкладке у всех сотрудников сразу.
-  const { data: overview } = useQuery({
+  const {
+    data: overview,
+    isLoading: overviewLoading,
+    error: overviewError,
+  } = useQuery({
     queryKey: ['conference-overview'],
     queryFn: fetchOverview,
     refetchInterval: 30_000,
@@ -112,6 +116,16 @@ const ConferenceHistory: React.FC = () => {
       + (detail ? `: ${detail}` : ''));
   }, [error, t]);
 
+  // Тот же приём для /overview: без тоста упавшая ручка выглядит как
+  // «сегодня встреч нет» и «никто не разговаривает» — то есть как спокойный
+  // рабочий день, а не как сломанная страница.
+  useEffect(() => {
+    if (!overviewError) return;
+    const detail = errorDetail(overviewError);
+    toast.error(t('conference.overview.loadError', 'Не удалось загрузить обзор конференций')
+      + (detail ? `: ${detail}` : ''));
+  }, [overviewError, t]);
+
   const items = data?.items ?? [];
   const totalPages = data?.pages ?? 1;
   const total = data?.total ?? 0;
@@ -133,7 +147,7 @@ const ConferenceHistory: React.FC = () => {
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
             <Video className="h-7 w-7 shrink-0 text-primary" />
             <span className="truncate">
-              {t('conference.history.title', 'История конференций')}
+              {t('conference.overview.pageTitle', 'Мои видеоконференции')}
             </span>
           </h1>
         </div>
@@ -155,36 +169,48 @@ const ConferenceHistory: React.FC = () => {
           </TabsList>
 
           <TabsContent value="today">
-            {todayItems.length === 0 ? (
+            {overviewLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <Skeleton key={index} className="h-16 w-full rounded-2xl" />
+                ))}
+              </div>
+            ) : todayItems.length > 0 ? (
+              <ul className="space-y-3">
+                {todayItems.map((item) => (
+                  <TodayRow key={item.event_id} item={item} />
+                ))}
+              </ul>
+            ) : !overviewError && (
               <div className="rounded-lg border border-dashed p-12 text-center">
                 <CalendarDays className="mx-auto h-10 w-10 text-muted-foreground/50" />
                 <p className="mt-4 text-muted-foreground">
                   {t('conference.overview.emptyToday', 'Сегодня встреч нет')}
                 </p>
               </div>
-            ) : (
-              <ul className="space-y-3">
-                {todayItems.map((item) => (
-                  <TodayRow key={item.event_id} item={item} />
-                ))}
-              </ul>
             )}
           </TabsContent>
 
           <TabsContent value="live">
-            {activeItems.length === 0 ? (
+            {overviewLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <Skeleton key={index} className="h-24 w-full rounded-lg" />
+                ))}
+              </div>
+            ) : activeItems.length > 0 ? (
+              <ul className="space-y-3">
+                {activeItems.map((session) => (
+                  <SessionRow key={session.id} session={session} />
+                ))}
+              </ul>
+            ) : !overviewError && (
               <div className="rounded-lg border border-dashed p-12 text-center">
                 <Radio className="mx-auto h-10 w-10 text-muted-foreground/50" />
                 <p className="mt-4 text-muted-foreground">
                   {t('conference.overview.emptyLive', 'Сейчас никто не разговаривает')}
                 </p>
               </div>
-            ) : (
-              <ul className="space-y-3">
-                {activeItems.map((session) => (
-                  <SessionRow key={session.id} session={session} />
-                ))}
-              </ul>
             )}
           </TabsContent>
 

@@ -3925,12 +3925,14 @@
       "stateNone": "Not recorded"
     },
     "overview": {
+      "pageTitle": "My meetings",
       "tabToday": "Today",
       "tabLive": "Live now",
       "tabHistory": "History",
       "join": "Join",
       "emptyToday": "No meetings today",
       "emptyLive": "Nobody is talking right now",
+      "loadError": "Could not load the conference overview",
       "status": {
         "scheduled": "Scheduled",
         "live": "Live",
