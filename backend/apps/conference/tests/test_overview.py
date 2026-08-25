@@ -98,3 +98,23 @@ def test_admin_sees_every_meeting(client, organiser, admin_user):
 
     assert len(body["today"]) == 1
     assert len(body["active"]) == 1
+
+
+@pytest.mark.django_db
+def test_room_reopened_after_finish_shows_the_live_session(client, organiser):
+    """Комнату закрыли и открыли повторно — у события две сессии.
+
+    session_service.start_session переиспользует открытую сессию только
+    пока она не завершена, поэтому одно и то же calendar_event_id может
+    встретиться у двух строк ConferenceSession за день. Блок «Сегодня»
+    обязан показать статус по ИДУЩЕЙ сессии, а не по первой попавшейся —
+    иначе человек увидит «Завершена» на встрече, которая идёт прямо сейчас.
+    """
+    event = _event("room-6", creator_id=organiser.pk)
+    _session("room-6", event_id=event.pk, ended=True)
+    live = _session("room-6", event_id=event.pk)
+
+    body = client.get(f"{BASE}/overview", **auth_header(organiser)).json()
+
+    assert body["today"][0]["status"] == "live"
+    assert body["today"][0]["session_id"] == live.pk

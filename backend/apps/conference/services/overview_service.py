@@ -65,9 +65,19 @@ def build(request) -> schemas.OverviewResponse:
         events = []
 
     # Сессии по событию — одним запросом, а не по одному на строку.
+    #
+    # Одно событие календаря может породить НЕСКОЛЬКО сессий за день:
+    # session_service.start_session переиспользует открытую сессию, только
+    # пока она не завершена, — комнату закрыли и через полчаса зашли снова,
+    # получилась вторая строка с тем же calendar_event_id. Поэтому выбор
+    # строки — явным условием «предпочесть незавершённую», а не порядком
+    # order_by: направление сортировки не должно быть единственным местом,
+    # где написано намерение «показываем идущую встречу, если она есть».
     by_event = {}
     for row in visible.filter(calendar_event_id__isnull=False).order_by("started_at"):
-        by_event.setdefault(row.calendar_event_id, row)
+        current = by_event.get(row.calendar_event_id)
+        if current is None or (current.ended_at is not None and row.ended_at is None):
+            by_event[row.calendar_event_id] = row
 
     token = getattr(request, "token", None)
     me = getattr(token, "user_id", None)
