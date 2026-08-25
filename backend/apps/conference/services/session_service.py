@@ -56,6 +56,23 @@ def _room_title(room_id: str) -> str:
         return ""
 
 
+def _calendar_event_for(room_id: str) -> dict | None:
+    """Событие календаря этой комнаты — или None.
+
+    Импорт внутри функции и широкий ``except``: связь с календарём —
+    обогащение, а не условие приёма встречи. Выключенный или упавший
+    ``tasks`` не должен мешать людям разговаривать.
+    """
+    try:
+        from apps.tasks.interface import get_conference_event_for_room
+
+        return get_conference_event_for_room(room_id)
+    except Exception:
+        logger.info("conference: календарное событие для комнаты %s недоступно",
+                    room_id, exc_info=True)
+        return None
+
+
 def start_session(*, room_id: str, started_at=None, created_by_id: int | None = None,
                   created_by_name: str = "", title: str = "") -> ConferenceSession:
     """Открыть сессию в комнате или вернуть уже открытую.
@@ -71,9 +88,12 @@ def start_session(*, room_id: str, started_at=None, created_by_id: int | None = 
     if existing is not None:
         return existing
 
+    event = _calendar_event_for(room_id)
+
     session = ConferenceSession(
         room_id=room_id,
-        title=title or _room_title(room_id),
+        title=title or (event or {}).get("title") or _room_title(room_id),
+        calendar_event_id=(event or {}).get("id"),
         created_by_id=created_by_id,
         created_by_name=created_by_name,
         started_at=started_at,
