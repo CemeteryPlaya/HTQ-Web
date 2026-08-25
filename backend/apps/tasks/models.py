@@ -1786,6 +1786,16 @@ class CalendarEvent(models.Model):
                 condition=models.Q(end_at__gte=models.F("start_at")),
                 name="ck_calendar_event_range",
             ),
+            # «1 событие — 1 комната»: по conference_room_id однозначно
+            # определяется, кого на встречу звали. Индекс ЧАСТИЧНЫЙ — у
+            # остальных типов события поле пустое, и обычная уникальность
+            # запретила бы второй NULL.
+            models.UniqueConstraint(
+                fields=["conference_room_id"],
+                condition=models.Q(event_type="conference")
+                & ~models.Q(conference_room_id=None),
+                name="uq_calendar_conference_room",
+            ),
         ]
 
 

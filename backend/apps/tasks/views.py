@@ -2140,8 +2140,13 @@ def _list_events(request):
 
 @api_view(methods=("POST",), body=schemas.CalendarEventCreate, status=201)
 def _create_event(request, data: schemas.CalendarEventCreate):
-    event_id = calendar_service.create_event(data.model_dump(),
-                                             creator_id=request.token.user_id)
+    try:
+        event_id = calendar_service.create_event(data.model_dump(),
+                                                 creator_id=request.token.user_id)
+    except ValueError as exc:
+        # Занятая комната — конфликт, а не ошибка валидации формы: 409, как у
+        # занятого slug'а типа задачи выше в этом же файле.
+        return json_error(str(exc), 409)
     return schemas.CalendarEventResponse.model_validate(
         calendar_service.reload_payload(event_id))
 
@@ -2156,9 +2161,12 @@ def events_collection(request):
 
 @api_view(methods=("PATCH",), body=schemas.CalendarEventUpdate)
 def _update_event(request, event_id: int, data: schemas.CalendarEventUpdate):
-    calendar_service.update_event(event_id,
-                                  data.model_dump(exclude_unset=True),
-                                  request.token)
+    try:
+        calendar_service.update_event(event_id,
+                                      data.model_dump(exclude_unset=True),
+                                      request.token)
+    except ValueError as exc:
+        return json_error(str(exc), 409)
     return schemas.CalendarEventResponse.model_validate(
         calendar_service.reload_payload(event_id))
 

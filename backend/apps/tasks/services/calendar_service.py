@@ -24,6 +24,7 @@ Two Р2 consequences:
 from __future__ import annotations
 
 import datetime as dt
+import secrets
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -299,11 +300,50 @@ def _sync_is_global(payload: dict) -> None:
         payload["is_global"] = False
 
 
+def allocate_conference_room_id() -> str:
+    """Свободный идентификатор комнаты в формате ``a1b2c3d4-e5f6``.
+
+    Формат совпадает с тем, что генерирует браузер
+    (``ConferencePage.generateRoomId``): ссылки на встречи, созданные с обеих
+    сторон, выглядят одинаково.
+    """
+    for _ in range(10):
+        candidate = f"{secrets.token_hex(4)}-{secrets.token_hex(2)}"
+        if not CalendarEvent.objects.filter(
+                event_type="conference",
+                conference_room_id=candidate).exists():
+            return candidate
+    raise RuntimeError("не удалось выдать свободный номер комнаты")
+
+
+def _ensure_conference_room(room_id: str | None, *, exclude_event_id: int | None = None) -> str:
+    """Проверить присланную комнату или выдать новую.
+
+    Клиентская генерация остаётся рабочей — она просто перестаёт быть
+    единственным источником. Занятая комната отбивается ``ValueError``,
+    который вьюха превращает в 409.
+    """
+    candidate = (room_id or "").strip()
+    if not candidate:
+        return allocate_conference_room_id()
+
+    taken = CalendarEvent.objects.filter(event_type="conference",
+                                         conference_room_id=candidate)
+    if exclude_event_id is not None:
+        taken = taken.exclude(pk=exclude_event_id)
+    if taken.exists():
+        raise ValueError("Эта комната уже занята другой встречей")
+    return candidate
+
+
 @transaction.atomic
 def create_event(payload: dict, *, creator_id: int | None) -> int:
     participants = payload.pop("participant_user_ids", None) or []
     if payload.get("event_type") == "common":
         payload["is_global"] = True
+    if payload.get("event_type") == "conference":
+        payload["conference_room_id"] = _ensure_conference_room(
+            payload.get("conference_room_id"))
     event = CalendarEvent.objects.create(**payload, creator_id=creator_id)
 
     invitees = {int(uid) for uid in participants if uid}
@@ -327,6 +367,11 @@ def update_event(event_id: int, changes: dict, token) -> int:
 
     participants = changes.pop("participant_user_ids", None)
     _sync_is_global(changes)
+    target_type = changes.get("event_type", event.event_type)
+    if target_type == "conference":
+        changes["conference_room_id"] = _ensure_conference_room(
+            changes.get("conference_room_id", event.conference_room_id),
+            exclude_event_id=event.pk)
     for field, value in changes.items():
         setattr(event, field, value)
     event.save()
