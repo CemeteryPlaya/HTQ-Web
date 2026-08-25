@@ -7,10 +7,13 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from django.utils import timezone
 
-from apps.conference.models import ConferenceParticipant
+from apps.conference.models import ConferenceParticipant, ConferenceSession
+from apps.tasks.models import CalendarEvent, CalendarEventParticipant
 from htqweb.authn.jwt import issue_guest_token
 
 from .conftest import BASE, auth_header
@@ -178,3 +181,60 @@ def test_participant_count_is_not_narrowed_by_the_visibility_filter(
 
     body = client.get(f"{BASE}/sessions/", **auth_header(attendee)).json()
     assert body["items"][0]["participant_count"] == 3
+
+
+# ── третье основание видимости: приглашение из календаря ───────────────────
+
+def test_invitee_sees_live_session_before_joining(client, attendee):
+    """Приглашённый, который ещё не заходил, обязан видеть идущую встречу.
+
+    До появления связи с календарём видимость держалась на факте участия —
+    то есть узнать о встрече можно было, только уже находясь на ней.
+    """
+    start = timezone.now()
+    event = CalendarEvent.objects.create(
+        title="Планёрка", start_at=start, end_at=start + timedelta(hours=1),
+        event_type="conference", conference_room_id="room-live",
+        creator_id=999, is_all_day=False)
+    CalendarEventParticipant.objects.create(event=event, user_id=attendee.pk)
+    live = ConferenceSession.objects.create(
+        room_id="room-live", title="Планёрка", created_by_id=999,
+        created_by_name="boss", started_at=start,
+        expires_at=start + timedelta(days=25), calendar_event_id=event.pk)
+
+    response = client.get(f"{BASE}/sessions/", **auth_header(attendee))
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [live.pk]
+
+
+def test_outsider_still_gets_404(client, outsider):
+    start = timezone.now()
+    event = CalendarEvent.objects.create(
+        title="Планёрка", start_at=start, end_at=start + timedelta(hours=1),
+        event_type="conference", conference_room_id="room-closed",
+        creator_id=999, is_all_day=False)
+    hidden = ConferenceSession.objects.create(
+        room_id="room-closed", title="Планёрка", created_by_id=999,
+        created_by_name="boss", started_at=start,
+        expires_at=start + timedelta(days=25), calendar_event_id=event.pk)
+
+    response = client.get(f"{BASE}/sessions/{hidden.pk}", **auth_header(outsider))
+
+    assert response.status_code == 404
+
+
+def test_disabled_tasks_app_does_not_break_the_list(client, attendee, monkeypatch):
+    """Выключенный сосед — деградация до прежних оснований, а не 500."""
+    from apps.conference.services import access
+
+    def boom(*args, **kwargs):
+        from apps.core.services import ServiceDisabled
+        raise ServiceDisabled("tasks")
+
+    monkeypatch.setattr(
+        "apps.tasks.interface.list_user_conference_events", boom)
+
+    response = client.get(f"{BASE}/sessions/", **auth_header(attendee))
+
+    assert response.status_code == 200

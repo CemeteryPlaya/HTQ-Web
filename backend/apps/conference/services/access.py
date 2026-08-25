@@ -12,10 +12,51 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from django.db.models import Q
 from django.http import Http404
 
 from apps.conference.models import ConferenceParticipant, ConferenceSession
+from htqweb.fallback import fallback
+
+
+def my_conference_event_ids(request) -> set[int]:
+    """Календарные события конференций, куда позвали автора запроса.
+
+    Мемоизация на объекте ``request``, а не в глобальном кэше: права не
+    должны переживать запрос, иначе снятое приглашение продолжало бы
+    действовать.
+
+    ``date_from``/``date_to`` намеренно широкие: видимость истории не
+    ограничена сегодняшним днём — человек вправе увидеть встречу, на которую
+    его звали в прошлом месяце.
+    """
+    cached = getattr(request, "_conference_event_ids", None)
+    if cached is not None:
+        return cached
+
+    token = getattr(request, "token", None)
+    result: set[int] = set()
+    if token is not None and token.user_id:
+        try:
+            from apps.tasks.interface import list_user_conference_events
+
+            far_past = date(2000, 1, 1)
+            far_future = date(2100, 1, 1)
+            result = {row["id"] for row in list_user_conference_events(
+                token.user_id, date_from=far_past, date_to=far_future)}
+        except Exception as exc:
+            # Молчаливая подмена: без календаря встреча просто исчезает из
+            # списка, и человек не может понять, почему. expected=True —
+            # деградация предусмотренная (сосед выключен), strict-режим
+            # разработчика она не роняет.
+            fallback("conference.access.calendar_unavailable", None,
+                     reason="календарь недоступен — видимость только по факту участия",
+                     expected=True, exc=exc)
+
+    request._conference_event_ids = result
+    return result
 
 
 def may_view(session: ConferenceSession, request) -> bool:
@@ -27,7 +68,12 @@ def may_view(session: ConferenceSession, request) -> bool:
         return True
     if session.created_by_id is not None and session.created_by_id == token.user_id:
         return True
-    return session.participants.filter(user_id=token.user_id).exists()
+    if session.participants.filter(user_id=token.user_id).exists():
+        return True
+    if (session.calendar_event_id is not None
+            and session.calendar_event_id in my_conference_event_ids(request)):
+        return True
+    return False
 
 
 def get_visible_session(session_id: int, request) -> ConferenceSession:
@@ -66,8 +112,11 @@ def visible_sessions(request):
     attended = (ConferenceParticipant.objects
                 .filter(user_id=token.user_id)
                 .values("session_id"))
+    invited_to = my_conference_event_ids(request)
     return queryset.filter(
         # Автор встречи виден себе, даже если журнал участников не доехал
         # (SFU упал между стартом сессии и первым participants-событием).
-        Q(created_by_id=token.user_id) | Q(pk__in=attended),
+        Q(created_by_id=token.user_id)
+        | Q(pk__in=attended)
+        | Q(calendar_event_id__in=invited_to),
     )
