@@ -106,3 +106,79 @@ def push_notification(*, recipient_id: int, verb: str,
     return {"id": row.id, "recipient_id": row.recipient_id, "verb": row.verb,
             "target_type": row.target_type, "target_id": row.target_id,
             "created_at": row.created_at}
+
+
+def _conference_payload(event, invitee_ids: list[int]) -> dict:
+    return {
+        "id": event.id,
+        "title": event.title,
+        "start_at": event.start_at,
+        "end_at": event.end_at,
+        "creator_id": event.creator_id,
+        "room_id": event.conference_room_id,
+        "invitee_ids": invitee_ids,
+    }
+
+
+def get_conference_event_for_room(room_id: str) -> dict | None:
+    """Событие календаря, которому принадлежит эта комната.
+
+    Поиск ТОЧНЫЙ, без разрешения неоднозначностей: комната уникальна среди
+    conference-событий (constraint ``uq_calendar_conference_room``). ``None``
+    — встречу собрали кнопкой «Создать комнату», минуя календарь; это
+    нормальный случай, а не ошибка.
+    """
+    require_service("tasks")
+    from .models import CalendarEvent
+
+    event = (CalendarEvent.objects
+             .filter(event_type="conference",
+                     conference_room_id=(room_id or "").strip())
+             .prefetch_related("participants")
+             .first())
+    if event is None:
+        return None
+
+    invitees = {p.user_id for p in event.participants.all()}
+    if event.creator_id:
+        invitees.add(event.creator_id)
+    return _conference_payload(event, sorted(invitees))
+
+
+def list_user_conference_events(user_id: int | None, *, date_from, date_to,
+                                include_all: bool = False) -> list[dict]:
+    """Конференции за период, где человек участник или автор.
+
+    ``include_all=True`` — для администратора платформы: фильтр по человеку
+    снимается целиком.
+
+    Отменённые экземпляры (``EventException``) выбрасываются: их участники не
+    должны ни видеть встречу в списке, ни получать письмо о её начале.
+    Механизма повторов у событий сейчас нет, поэтому «экземпляр» — это само
+    событие, отменённое на свою же дату.
+    """
+    require_service("tasks")
+    from django.db.models import Q
+
+    from .models import CalendarEvent
+
+    queryset = (CalendarEvent.objects
+                .filter(event_type="conference",
+                        conference_room_id__isnull=False,
+                        start_at__date__lte=date_to,
+                        end_at__date__gte=date_from)
+                .exclude(exceptions__is_cancelled=True)
+                .prefetch_related("participants"))
+    if not include_all:
+        if user_id is None:
+            return []
+        queryset = queryset.filter(
+            Q(creator_id=user_id) | Q(participants__user_id=user_id))
+
+    rows = []
+    for event in queryset.distinct().order_by("start_at"):
+        invitees = {p.user_id for p in event.participants.all()}
+        if event.creator_id:
+            invitees.add(event.creator_id)
+        rows.append(_conference_payload(event, sorted(invitees)))
+    return rows
