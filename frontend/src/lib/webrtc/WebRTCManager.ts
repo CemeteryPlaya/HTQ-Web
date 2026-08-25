@@ -19,7 +19,7 @@ export interface WebRTCManagerEvents {
   onRemoteStream?: (stream: RemoteStream) => void;
   onRemoteStreamRemoved?: (consumerId: string) => void;
   onActiveSpeakers?: (speakers: Array<{ peerId: string; isPrimary: boolean }>) => void;
-  onParticipantJoined?: (peerId: string, displayName: string) => void;
+  onParticipantJoined?: (peerId: string, displayName: string, isGuest: boolean) => void;
   onParticipantLeft?: (peerId: string) => void;
   onChatMessage?: (message: ChatMessagePayload) => void;
   onMediaState?: (state: PeerMediaState) => void;
@@ -306,8 +306,8 @@ export class WebRTCManager {
       onRemoteStreamRemoved: (consumerId) =>
         this.events.onRemoteStreamRemoved?.(consumerId),
       onActiveSpeakers: (speakers) => this.events.onActiveSpeakers?.(speakers),
-      onParticipantJoined: (peerId, displayName) =>
-        this.events.onParticipantJoined?.(peerId, displayName),
+      onParticipantJoined: (peerId, displayName, isGuest) =>
+        this.events.onParticipantJoined?.(peerId, displayName, isGuest),
       onParticipantLeft: (peerId) => this.events.onParticipantLeft?.(peerId),
       onChatMessage: (message) => this.events.onChatMessage?.(message),
       onMediaState: (state) => this.events.onMediaState?.(state),

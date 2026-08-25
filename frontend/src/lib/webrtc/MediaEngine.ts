@@ -88,7 +88,7 @@ export interface MediaEngineEvents {
   onRemoteStream: (stream: RemoteStream) => void;
   onRemoteStreamRemoved: (consumerId: string) => void;
   onActiveSpeakers: (speakers: Array<{ peerId: string; isPrimary: boolean }>) => void;
-  onParticipantJoined: (peerId: string, displayName: string) => void;
+  onParticipantJoined: (peerId: string, displayName: string, isGuest: boolean) => void;
   onParticipantLeft: (peerId: string) => void;
   onChatMessage: (message: ChatMessagePayload) => void;
   onMediaState: (state: PeerMediaState) => void;
@@ -100,7 +100,7 @@ export interface MediaEngineEvents {
 
 interface JoinRoomResult {
   routerRtpCapabilities: any;
-  participants: Array<{ peerId: string; displayName: string }>;
+  participants: Array<{ peerId: string; displayName: string; isGuest?: boolean }>;
   turnConfig?: TurnConfig;
 }
 
@@ -760,7 +760,12 @@ export class MediaEngine {
         // Skip self — getParticipants() includes the joining peer,
         // but the UI already counts the local user separately (+1).
         if (participant.peerId === this.signaling.peerId) continue;
-        this.events.onParticipantJoined?.(participant.peerId, participant.displayName);
+        // Отсутствующий флаг — старый SFU, а не гость: строгая проверка.
+        this.events.onParticipantJoined?.(
+          participant.peerId,
+          participant.displayName,
+          participant.isGuest === true
+        );
         // Состояние микрофона/камеры уже находившихся в комнате — иначе до
         // первого их переключения UI показывал бы «всё включено».
         const mediaState = (participant as any).mediaState;
@@ -3074,7 +3079,8 @@ export class MediaEngine {
     });
 
     this.signaling.on('participantJoined', (data: any) => {
-      this.events.onParticipantJoined?.(data.peerId, data.displayName);
+      // Тот же принцип: нет поля isGuest в сигнальном сообщении — не гость.
+      this.events.onParticipantJoined?.(data.peerId, data.displayName, data.isGuest === true);
       if (data?.peerId) {
         this.events.onMediaState?.({
           peerId: String(data.peerId),
