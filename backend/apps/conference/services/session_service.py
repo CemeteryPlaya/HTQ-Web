@@ -116,6 +116,15 @@ def start_session(*, room_id: str, started_at=None, created_by_id: int | None = 
                                                    ended_at__isnull=True).first()
         if session is None:  # pragma: no cover — только при гонке с finish()
             raise
+    else:
+        # Ставим ТОЛЬКО на ветке создания. start_session зовётся на каждом
+        # входе в комнату, и это единственное место, где новая встреча
+        # появляется ровно один раз, — значит идемпотентность рассылки
+        # получается даром, без флагов в БД.
+        if session.calendar_event_id is not None:
+            from apps.conference.tasks import notify_session_started
+
+            notify_session_started.delay(session.pk)
     return session
 
 
