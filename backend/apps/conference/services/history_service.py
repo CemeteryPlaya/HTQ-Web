@@ -17,7 +17,7 @@ def _playable(session: ConferenceSession) -> bool:
     return session.recording_state == RecordingState.READY
 
 
-def _to_list_item(session: ConferenceSession) -> schemas.SessionListItem:
+def to_list_item(session: ConferenceSession) -> schemas.SessionListItem:
     return schemas.SessionListItem(
         id=session.pk,
         room_id=session.room_id,
@@ -69,7 +69,7 @@ def list_sessions(request, *, page: int, limit: int, query: str = "",
     rows = list(queryset.order_by("-started_at")[offset:offset + limit])
 
     return schemas.SessionListResponse(
-        items=[_to_list_item(row) for row in rows],
+        items=[to_list_item(row) for row in rows],
         total=total, page=page, pages=pages, limit=limit,
         recorded_total=recorded_total, active_total=active_total,
     )
@@ -77,7 +77,7 @@ def list_sessions(request, *, page: int, limit: int, query: str = "",
 
 def session_detail(session: ConferenceSession) -> schemas.SessionDetail:
     participants = list(session.participants.all())
-    base = _to_list_item(session)
+    base = to_list_item(session)
     playable = _playable(session)
 
     # Ссылки подписываем ЗДЕСЬ, потому что права проверены прямо перед

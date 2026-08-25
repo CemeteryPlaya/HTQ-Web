@@ -22,7 +22,7 @@ from htqweb.http import _authenticate_jwt, api_view, json_error
 
 from . import schemas
 from .models import ConferenceSession, RecordingState
-from .services import access, history_service, internal_auth, session_service
+from .services import access, history_service, internal_auth, overview_service, session_service
 from .services import signing, storage_service
 
 
@@ -78,6 +78,13 @@ def _bool_param(request, name: str, default: bool = False) -> bool:
 
 
 # ── Публичные маршруты ─────────────────────────────────────────────────────
+
+
+@api_view(methods=("GET",))
+def overview(request):
+    """Сегодняшние и идущие сейчас встречи этого пользователя."""
+    require_service("conference")
+    return overview_service.build(request)
 
 
 @api_view(methods=("GET",))

@@ -29,6 +29,8 @@ urlpatterns = [
     path("internal/sessions/<int:session_id>/finish/", views.internal_session_finish),
 
     # ── Публичное чтение истории.
+    path("overview", views.overview),
+    path("overview/", views.overview),
     path("sessions", views.sessions),
     path("sessions/", views.sessions),
     path("sessions/<int:session_id>/transcript", views.session_transcript),
