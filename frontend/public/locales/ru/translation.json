@@ -3929,6 +3929,19 @@
       "statePurged": "Удалена по сроку",
       "stateNone": "Без записи"
     },
+    "overview": {
+      "tabToday": "Сегодня",
+      "tabLive": "Идут сейчас",
+      "tabHistory": "История",
+      "join": "Войти",
+      "emptyToday": "Сегодня встреч нет",
+      "emptyLive": "Сейчас никто не разговаривает",
+      "status": {
+        "scheduled": "Запланирована",
+        "live": "Идёт",
+        "finished": "Завершена"
+      }
+    },
     "detail": {
       "backToList": "К списку встреч",
       "notFound": "Встреча не найдена или у вас нет к ней доступа",

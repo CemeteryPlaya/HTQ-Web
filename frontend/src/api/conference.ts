@@ -206,6 +206,32 @@ export interface ConferenceSessionsPage {
   active_total: number;
 }
 
+export type TodayStatus = 'scheduled' | 'live' | 'finished';
+
+export interface ConferenceTodayItem {
+  event_id: number;
+  room_id: string;
+  title: string;
+  start_at: string;
+  end_at: string;
+  status: TodayStatus;
+  /** null, пока встреча не начиналась. */
+  session_id: number | null;
+  is_organizer: boolean;
+  /** 0 у неначавшейся. */
+  participant_count: number;
+}
+
+export interface ConferenceOverview {
+  /** Часы сервера: «идёт ли сейчас» считаем по ним, не по машине клиента. */
+  server_time: string;
+  today: ConferenceTodayItem[];
+  active: ConferenceSessionListItem[];
+}
+
+export const fetchOverview = async (): Promise<ConferenceOverview> =>
+  (await api.get<ConferenceOverview>('conference/v1/overview/')).data;
+
 /**
  * Страница истории.
  *
