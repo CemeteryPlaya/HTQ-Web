@@ -230,7 +230,7 @@ def test_disabled_tasks_app_does_not_break_the_list(client, attendee, monkeypatc
 
     def boom(*args, **kwargs):
         from apps.core.services import ServiceDisabled
-        raise ServiceDisabled("tasks")
+        raise ServiceDisabled("tasks", "выключено")
 
     monkeypatch.setattr(
         "apps.tasks.interface.list_user_conference_events", boom)
@@ -238,3 +238,27 @@ def test_disabled_tasks_app_does_not_break_the_list(client, attendee, monkeypatc
     response = client.get(f"{BASE}/sessions/", **auth_header(attendee))
 
     assert response.status_code == 200
+
+
+def test_unexpected_calendar_error_is_not_silently_swallowed(client, attendee, monkeypatch):
+    """Настоящая поломка соседа (не ``ServiceDisabled``) не маскируется под
+    предусмотренную деградацию.
+
+    В отличие от выключенной аппки (см. предыдущий тест), это НЕ ожидаемая
+    деградация: сосед включён, но упал по своей причине. Под pytest режим
+    строгий (``FALLBACK_MODE=strict``), поэтому ``expected=False`` бросает
+    ``FallbackNotAllowed`` — она долетает до общего `except Exception` в
+    ``api_view`` и превращается в 500. Так и задумано: сломанный сосед должен
+    быть громким у разработчика и попадать в алерт на проде (метка
+    ``expected="false"``), а не тихо оседать в INFO-логе рядом с
+    предусмотренными деградациями.
+    """
+    def boom(*args, **kwargs):
+        raise RuntimeError("сосед сломался")
+
+    monkeypatch.setattr(
+        "apps.tasks.interface.list_user_conference_events", boom)
+
+    response = client.get(f"{BASE}/sessions/", **auth_header(attendee))
+
+    assert response.status_code == 500

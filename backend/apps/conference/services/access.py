@@ -18,6 +18,7 @@ from django.db.models import Q
 from django.http import Http404
 
 from apps.conference.models import ConferenceParticipant, ConferenceSession
+from apps.core.services import ServiceDisabled
 from htqweb.fallback import fallback
 
 
@@ -46,14 +47,24 @@ def my_conference_event_ids(request) -> set[int]:
             far_future = date(2100, 1, 1)
             result = {row["id"] for row in list_user_conference_events(
                 token.user_id, date_from=far_past, date_to=far_future)}
-        except Exception as exc:
-            # Молчаливая подмена: без календаря встреча просто исчезает из
-            # списка, и человек не может понять, почему. expected=True —
-            # деградация предусмотренная (сосед выключен), strict-режим
-            # разработчика она не роняет.
+        except ServiceDisabled as exc:
+            # Предусмотренная деградация: сосед выключен в реестре. Встреча
+            # просто исчезает из списка по третьему основанию, человек
+            # видит её по-прежнему по факту участия. expected=True — strict
+            # режим разработчика её не роняет.
             fallback("conference.access.calendar_unavailable", None,
                      reason="календарь недоступен — видимость только по факту участия",
                      expected=True, exc=exc)
+        except Exception as exc:
+            # НЕ предусмотренная деградация: сосед включён, но упал по своей
+            # причине (баг, сломанный запрос). Отдельный site — чтобы не
+            # смешивать с expected=True в метрике — и expected=False: под
+            # pytest (strict) это осознанно бросит FallbackNotAllowed, чтобы
+            # настоящая поломка была громкой, а не тихо растворилась в
+            # INFO-логе, на который алерт не смотрит.
+            fallback("conference.access.calendar_failed", None,
+                     reason="сбой при обращении к календарю — не выключенный сосед, а ошибка",
+                     expected=False, exc=exc)
 
     request._conference_event_ids = result
     return result
