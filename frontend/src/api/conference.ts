@@ -159,6 +159,8 @@ export interface ConferenceParticipant {
   joined_at: string;
   left_at: string | null;
   joined_offset_ms: number;
+  /** Минута выхода от начала встречи; null — досидел до конца. */
+  left_offset_ms: number | null;
 }
 
 export interface ConferenceSessionDetail extends ConferenceSessionListItem {
