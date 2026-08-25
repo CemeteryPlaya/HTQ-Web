@@ -102,15 +102,31 @@ export const ConferenceNotifier = () => {
             // Системное уведомление — чтобы встречу заметили при свёрнутой
             // вкладке. Разрешение спрашиваем ЗДЕСЬ, а не на входе в приложение:
             // просьба, которой человек не ждал, почти всегда отклоняется.
+            //
+            // show() защищена своим собственным try/catch, а не общим для
+            // всей ветки: вызов из .then() исполняется уже ПОСЛЕ того, как
+            // окружающий try завершился, — бросок конструктора Notification
+            // там наружный catch не поймает, он уйдёт необработанным
+            // отклонением промиса. Поэтому обе точки вызова show() защищены
+            // отдельно, симметрично.
+            const show = () => {
+                try {
+                    new Notification(
+                        t('conference.notify.started', 'Видеоконференция началась'),
+                        { body: payload.title || '' });
+                } catch {
+                    // Браузер вправе запретить/бросить — это не причина
+                    // ронять компонент, смонтированный на всё приложение.
+                }
+            };
             try {
                 if (typeof Notification === 'undefined') return;
-                const show = () => new Notification(
-                    t('conference.notify.started', 'Видеоконференция началась'),
-                    { body: payload.title || '' });
                 if (Notification.permission === 'granted') show();
                 else if (Notification.permission === 'default') {
-                    void Notification.requestPermission().then((granted) => {
+                    Notification.requestPermission().then((granted) => {
                         if (granted === 'granted') show();
+                    }).catch(() => {
+                        // Запрос разрешения тоже вправе отклониться/упасть.
                     });
                 }
             } catch {
