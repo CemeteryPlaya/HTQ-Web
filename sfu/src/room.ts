@@ -20,6 +20,9 @@ import { config } from './config.js';
 export interface Peer {
   id: string;
   displayName: string;
+  /** Вошёл по гостевому токену: на встрече это надо видеть, а не только
+   *  в журнале. */
+  isGuest: boolean;
   transports: Map<string, mediasoupTypes.WebRtcTransport>;
   producers: Map<string, mediasoupTypes.Producer>;
   consumers: Map<string, mediasoupTypes.Consumer>;
@@ -30,7 +33,7 @@ export interface Peer {
 
 export interface RoomEvents {
   onActiveSpeakersChanged: (speakers: ActiveSpeakerInfo[]) => void;
-  onPeerJoined: (peerId: string, displayName: string) => void;
+  onPeerJoined: (peerId: string, displayName: string, isGuest: boolean) => void;
   onPeerLeft: (peerId: string) => void;
   onNewConsumerNeeded: (
     consumingPeerId: string,
@@ -115,11 +118,13 @@ export class Room {
   getParticipants(): Array<{
     peerId: string;
     displayName: string;
+    isGuest: boolean;
     producers: Array<{ producerId: string; kind: string }>;
   }> {
     const result: Array<{
       peerId: string;
       displayName: string;
+      isGuest: boolean;
       producers: Array<{ producerId: string; kind: string }>;
     }> = [];
 
@@ -128,7 +133,7 @@ export class Room {
       for (const [producerId, producer] of peer.producers) {
         producers.push({ producerId, kind: producer.kind });
       }
-      result.push({ peerId, displayName: peer.displayName, producers });
+      result.push({ peerId, displayName: peer.displayName, isGuest: peer.isGuest, producers });
     }
 
     return result;
@@ -164,7 +169,7 @@ export class Room {
   // Жизненный цикл участника
   // ─────────────────────────────────────────────────────
 
-  addPeer(peerId: string, displayName: string): void {
+  addPeer(peerId: string, displayName: string, isGuest = false): void {
     if (this.peers.has(peerId)) {
       console.warn(`[Room ${this.id}] Участник ${peerId} уже существует`);
       return;
@@ -173,6 +178,7 @@ export class Room {
     const peer: Peer = {
       id: peerId,
       displayName,
+      isGuest,
       transports: new Map(),
       producers: new Map(),
       consumers: new Map(),
@@ -181,7 +187,7 @@ export class Room {
     };
 
     this.peers.set(peerId, peer);
-    this.events.onPeerJoined(peerId, displayName);
+    this.events.onPeerJoined(peerId, displayName, isGuest);
     console.log(`[Room ${this.id}] Участник присоединился: ${displayName} (${peerId})`);
   }
 

@@ -259,7 +259,7 @@ async function getOrCreateRoom(roomId: string): Promise<Room> {
         data: { speakers },
       });
     },
-    onPeerJoined: (peerId: string, displayName: string) => {
+    onPeerJoined: (peerId: string, displayName: string, isGuest: boolean) => {
       broadcastToRoom(
         roomId,
         {
@@ -267,6 +267,7 @@ async function getOrCreateRoom(roomId: string): Promise<Room> {
           data: {
             peerId,
             displayName,
+            isGuest,
             mediaState:
               peerConnections.get(peerId)?.mediaState ??
               { micEnabled: true, camEnabled: true },
@@ -788,7 +789,8 @@ async function handleMessage(
           .getParticipants()
           .some((participant) => participant.peerId === peerId);
         if (!alreadyInRoom) {
-          room.addPeer(peerId, displayName);
+          room.addPeer(peerId, displayName,
+                       peerConn.identity?.token_type === 'guest');
         }
 
         // Журнал встречи (apps.conference). Намеренно БЕЗ await: ответ на
