@@ -34,7 +34,7 @@ from .models import (
     RecordingState,
     TranscriptState,
 )
-from .services import compose_service, session_service, storage_service
+from .services import compose_service, platform_time, session_service, storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +101,16 @@ def notify_session_started(session_id: int) -> int:
         emails = [row["email"] for row in get_users_brief(recipients)
                   if row.get("email")]
         if emails:
-            # Время с явной пометкой пояса: платформа живёт в UTC+5, а письмо
-            # может открыть внешний участник, у которого он другой.
-            local = timezone.localtime(session.started_at)
+            # Время — в поясе платформы (НЕ timezone.localtime(), см.
+            # apps.conference.services.platform_time), а подпись пояса
+            # выводится из того же объекта времени, а не хардкодом — письмо
+            # может открыть внешний участник, у которого пояс другой, и
+            # подпись обязана совпадать со значением, а не жить отдельно.
+            local = platform_time.to_platform(session.started_at)
+            tz_label = platform_time.utc_offset_label(local)
             send_mail(
                 f"Видеоконференция «{title}» началась",
-                f"Встреча началась в {local:%H:%M} (UTC+5).\n"
+                f"Встреча началась в {local:%H:%M} ({tz_label}).\n"
                 f"Подключиться: {settings.PUBLIC_BASE_URL.rstrip('/')}{join_url}",
                 None, emails, fail_silently=False)
     except Exception:

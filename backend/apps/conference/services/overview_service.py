@@ -12,13 +12,16 @@ from django.db.models import Count
 from django.utils import timezone
 
 from apps.conference import schemas
-from apps.conference.services import access, history_service
+from apps.conference.services import access, history_service, platform_time
 from apps.core.services import ServiceDisabled
 from htqweb.fallback import fallback
 
 
 def _today_range():
-    today = timezone.localdate()
+    # НЕ timezone.localdate() — она даёт дату UTC (см. docstring
+    # platform_time): встреча, начавшаяся ночью по местному времени,
+    # уезжала бы в блоке «Сегодня» на соседние сутки.
+    today = platform_time.today()
     return today, today
 
 

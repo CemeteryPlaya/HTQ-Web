@@ -84,6 +84,30 @@ def test_meeting_outside_calendar_notifies_nobody():
 
 
 @pytest.mark.django_db
+def test_mail_reports_platform_time_not_utc():
+    """Регресс на найденный ревью баг: время в письме было часом UTC под
+    хардкоженной подписью «(UTC+5)». Момент — 20:00 UTC, то есть 01:00
+    следующего дня по Алматы: если письмо снова начнёт печатать UTC-час,
+    "01:00" в теле не появится, а появится "20:00"."""
+    _event()
+    started = dt.datetime(2026, 8, 25, 20, 0, tzinfo=dt.timezone.utc)
+    with patch("apps.conference.tasks.notify_session_started.delay"):
+        session = session_service.start_session(room_id="room-notify",
+                                                created_by_id=ORGANISER,
+                                                started_at=started)
+
+    with patch("apps.tasks.interface.push_notification"), \
+         patch("apps.messenger.interface.dispatch_notification"), \
+         patch("apps.conference.tasks.send_mail") as mail:
+        notify_session_started(session.pk)
+
+    body = mail.call_args.args[1]
+    assert "01:00" in body
+    assert "(UTC+5)" in body
+    assert "20:00" not in body
+
+
+@pytest.mark.django_db
 def test_repeated_start_enqueues_once():
     _event()
     with patch("apps.conference.tasks.notify_session_started.delay") as queued:

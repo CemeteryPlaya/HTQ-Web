@@ -209,6 +209,14 @@ LANGUAGE_CODE = "ru"
 TIME_ZONE = "UTC"
 USE_TZ = True
 CELERY_TIMEZONE = TIME_ZONE
+# Хранение остаётся в UTC (TIME_ZONE выше не трогаем — смена задела бы
+# каждую дату на платформе). PLATFORM_TIME_ZONE — это пояс, в котором
+# физически живут люди: нужен только для ПОКАЗА времени и для границ
+# суток («сегодня» в календаре/обзоре конференций). Именованный пояс, а
+# не число смещения — офис может переехать или сместить закон о времени,
+# и тогда правка будет в одном месте, а не во всех местах, где кто-то
+# написал "+5" руками. См. apps/conference/services/platform_time.py.
+PLATFORM_TIME_ZONE = env("PLATFORM_TIME_ZONE", "Asia/Almaty")
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 # Своя статика проекта (фирменная тема админки). collectstatic сливает её
