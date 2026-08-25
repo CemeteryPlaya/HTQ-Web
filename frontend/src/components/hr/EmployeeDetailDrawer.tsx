@@ -21,6 +21,7 @@ import {
 
 import api from '@/api/client';
 import { Badge } from '@/components/ui/badge';
+import { formatTenure } from '@/components/hr/tenure';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import type { OrgRawNode } from './OrgChart';
 import { useTranslation } from 'react-i18next';
@@ -117,6 +118,7 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
   });
 
   const employee = employeeQuery.data;
+  const tenure = employee ? formatTenure(t, employee.hire_date) : null;
   const pmos = pmosQuery.data ?? [];
   const totalAllocation = pmos.reduce((acc, p) => acc + p.allocation_percent, 0);
 
@@ -210,7 +212,14 @@ export function EmployeeDetailDrawer({ node, mode, onClose }: Props) {
                       ? <a className="underline-offset-2 hover:underline" href={`tel:${employee.phone}`}>{employee.phone}</a>
                       : null
                   } />
-                  <Field icon={Calendar} label={t('hr.card.hireDate')} value={fmtDate(employee.hire_date)} />
+                  <Field icon={Calendar} label={t('hr.card.hireDate')} value={
+                    <>
+                      {fmtDate(employee.hire_date)}
+                      {tenure && (
+                        <span className="ml-2 text-xs text-muted-foreground">({tenure})</span>
+                      )}
+                    </>
+                  } />
                   {employee.bio && (
                     <div className="rounded-md bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                       {employee.bio}
