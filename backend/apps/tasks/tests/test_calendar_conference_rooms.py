@@ -14,7 +14,7 @@ from django.utils import timezone
 from apps.tasks.models import CalendarEvent
 from apps.tasks.services import calendar_service
 
-from .helpers import BASE, auth, post_json
+from .helpers import BASE, auth, patch_json, post_json
 
 USER = 7
 CAL = f"{BASE}/calendar"
@@ -82,3 +82,51 @@ def test_allocate_returns_free_id():
                                  conference_room_id=first, creator_id=USER)
 
     assert calendar_service.allocate_conference_room_id() != first
+
+
+# ── update_event: тот же инвариант, но при редактировании ────────────────
+
+@pytest.mark.django_db
+def test_switching_event_type_to_conference_allocates_a_room():
+    start = timezone.now()
+    event = CalendarEvent.objects.create(title="x", start_at=start, end_at=start,
+                                         event_type="personal", creator_id=USER)
+
+    resp = patch_json(Client(), f"{CAL}/{event.id}/",
+                      {"event_type": "conference"}, **auth())
+
+    assert resp.status_code == 200
+    room_id = resp.json()["conference_room_id"]
+    assert room_id, "смена типа на conference должна выдать комнату"
+
+
+@pytest.mark.django_db
+def test_update_refuses_a_room_taken_by_another_event():
+    start = timezone.now()
+    CalendarEvent.objects.create(title="a", start_at=start, end_at=start,
+                                 event_type="conference",
+                                 conference_room_id="taken-room", creator_id=USER)
+    event = CalendarEvent.objects.create(title="b", start_at=start, end_at=start,
+                                         event_type="conference",
+                                         conference_room_id="own-room",
+                                         creator_id=USER)
+
+    resp = patch_json(Client(), f"{CAL}/{event.id}/",
+                      {"conference_room_id": "taken-room"}, **auth())
+
+    assert resp.status_code == 409
+
+
+@pytest.mark.django_db
+def test_update_without_touching_the_room_does_not_conflict_with_itself():
+    start = timezone.now()
+    event = CalendarEvent.objects.create(title="x", start_at=start, end_at=start,
+                                         event_type="conference",
+                                         conference_room_id="own-room",
+                                         creator_id=USER)
+
+    resp = patch_json(Client(), f"{CAL}/{event.id}/",
+                      {"title": "Новое название"}, **auth())
+
+    assert resp.status_code == 200
+    assert resp.json()["conference_room_id"] == "own-room"

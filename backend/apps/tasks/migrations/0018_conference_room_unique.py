@@ -3,6 +3,44 @@
 from django.db import migrations, models
 
 
+def _free_duplicate_rooms(apps, schema_editor):
+    """Перевыдать комнаты дублям, оставив её самому раннему событию.
+
+    Без этого AddConstraint не встанет на базе, где комнату успели вписать
+    руками в два события. Затронутые строки логируются: у людей в календаре
+    меняется ссылка на встречу, и это должно быть видно в журнале выкатки.
+    """
+    import logging
+    import secrets
+
+    from django.db.models import Count
+
+    log = logging.getLogger("htqweb.migrations")
+    CalendarEvent = apps.get_model("tasks", "CalendarEvent")
+
+    duplicates = (CalendarEvent.objects
+                  .filter(event_type="conference",
+                          conference_room_id__isnull=False)
+                  .values("conference_room_id")
+                  .annotate(total=Count("id"))
+                  .filter(total__gt=1)
+                  .values_list("conference_room_id", flat=True))
+
+    for room_id in list(duplicates):
+        rows = list(CalendarEvent.objects
+                    .filter(event_type="conference", conference_room_id=room_id)
+                    .order_by("id"))
+        for event in rows[1:]:
+            event.conference_room_id = f"{secrets.token_hex(4)}-{secrets.token_hex(2)}"
+            event.save(update_fields=["conference_room_id"])
+            log.warning("calendar: событию %s перевыдана комната (было %s, стало %s)",
+                        event.pk, room_id, event.conference_room_id)
+
+
+def _noop(apps, schema_editor):
+    """Откат ничего не восстанавливает: прежние значения были дублями."""
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,6 +48,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunPython(_free_duplicate_rooms, _noop),
         migrations.AddConstraint(
             model_name='calendarevent',
             constraint=models.UniqueConstraint(condition=models.Q(('event_type', 'conference'), models.Q(('conference_room_id', None), _negated=True)), fields=('conference_room_id',), name='uq_calendar_conference_room'),
