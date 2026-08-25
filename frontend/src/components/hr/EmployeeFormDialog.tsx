@@ -12,6 +12,7 @@ import {
   fetchDepartments,
   fetchEmployeeUsers,
   fetchPositions,
+  fetchUserPrefill,
   updateEmployeeWithCard,
 } from '@/api/hr';
 import { Button } from '@/components/ui/button';
@@ -508,6 +509,36 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   const [userPopoverOpen, setUserPopoverOpen] = useState(false);
   const [createUserOpen, setCreateUserOpen] = useState(false);
   const [newUserForm, setNewUserForm] = useState(blankNewUser);
+  /** Поля, значения которых пришли из аккаунта, — для подписи под инпутом. */
+  const [prefilled, setPrefilled] = useState<Record<string, boolean>>({});
+
+  /**
+   * Досев формы данными выбранного аккаунта.
+   *
+   * Заполняются ТОЛЬКО пустые поля: смена выбранного пользователя не должна
+   * молча съедать то, что HR уже напечатал руками. Провал запроса — не ошибка
+   * формы: сотрудника всё ещё можно завести, просто телефон придётся ввести
+   * самому, поэтому здесь нет ни баннера, ни блокировки сохранения.
+   */
+  const prefillFromAccount = async (userId: number) => {
+    try {
+      const prefill = await fetchUserPrefill(userId);
+      setForm((prev) => {
+        const next = {
+          ...prev,
+          phone: prev.phone || prefill.phone || '',
+          notes: prev.notes || prefill.bio || '',
+        };
+        setPrefilled({
+          phone: !prev.phone && !!prefill.phone,
+          notes: !prev.notes && !!prefill.bio,
+        });
+        return next;
+      });
+    } catch {
+      setPrefilled({});
+    }
+  };
 
   const [positionPopoverOpen, setPositionPopoverOpen] = useState(false);
   const [createPositionOpen, setCreatePositionOpen] = useState(false);
@@ -705,6 +736,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                                 onSelect={() => {
                                   setForm({ ...form, user: String(u.id) });
                                   setUserPopoverOpen(false);
+                                  prefillFromAccount(u.id);
                                 }}
                               >
                                 <Check className={cn("mr-2 h-4 w-4", form.user === String(u.id) ? "opacity-100" : "opacity-0")} />
@@ -884,6 +916,11 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               <label className="grid gap-2 text-sm">
                 {t('hr.pages.employees.fields.phone')}
                 <PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
+                {prefilled.phone && (
+                  <span className="text-xs text-muted-foreground">
+                    {t('hr.pages.employees.fromAccount', 'Подставлено из аккаунта')}
+                  </span>
+                )}
               </label>
               <label className="grid gap-2 text-sm">
                 {t('hr.pages.employees.fields.dateHired')}
@@ -901,6 +938,11 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
             <label className="grid gap-2 text-sm">
               {t('hr.pages.employees.fields.notes')}
               <Textarea value={form.notes} readOnly={!canWriteBasic} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+              {prefilled.notes && (
+                <span className="text-xs text-muted-foreground">
+                  {t('hr.pages.employees.fromAccount', 'Подставлено из аккаунта')}
+                </span>
+              )}
             </label>
 
             {visibleSections.map((section) => {

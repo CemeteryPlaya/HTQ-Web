@@ -575,7 +575,8 @@
         "org": "Organisation",
         "tracking": "Time and attendance",
         "admin": "Logs and access"
-      }
+      },
+      "identityRequests": "Profile requests"
     },
     "calendar": {
       "title": "Production Calendar",
@@ -786,15 +787,12 @@
         "noDepartmentFound": "Department not found",
         "createDepartment": "Create new department",
         "createDepartmentTitle": "New department",
-        "openCard": "Open card",
-        "actions": {
-          "share": "Share"
-        },
         "usernameHint": "Username will be derived from the email:",
         "passwordPlaceholder": "Set or generate",
         "generatePassword": "Generate",
         "passwordHint": "The password is shown in clear — pass it to the employee. It cannot be viewed later.",
-        "mustChangePasswordNotice": "On first sign-in the employee must replace this password with their own — the one you gave stops working."
+        "mustChangePasswordNotice": "On first sign-in the employee must replace this password with their own — the one you gave stops working.",
+        "fromAccount": "Filled in from the account"
       },
       "structure": {
         "title": "Company Structure",
@@ -1166,6 +1164,37 @@
           "password": "Password",
           "status": "Status",
           "isActive": "Account active"
+        }
+      },
+      "identity": {
+        "title": "Profile change requests",
+        "subtitle": "The account owns identity data; an HR edit applies once approved",
+        "dialogTitle": "Account data change",
+        "nightlyHint": "Found by the nightly reconcile: a value reached the card bypassing the API. The copy has been restored from the account — decide whether the found value should go to the account.",
+        "stale": "Account changed",
+        "atRequest": "At submission",
+        "accountNow": "Currently in account",
+        "proposed": "Proposed by HR",
+        "apply": "Apply to account",
+        "reject": "Keep as is",
+        "notePlaceholder": "Decision comment (optional)",
+        "decideAll": "Decide every row",
+        "submit": "Apply decision",
+        "decideError": "Could not apply the decision",
+        "approver": "Approver",
+        "approverDefault": "Employee's department manager",
+        "approverError": "Could not set the approver",
+        "statusFilter": "Status",
+        "sourceNightly": "Nightly reconcile",
+        "sourceHr": "Card edit",
+        "empty": "No requests",
+        "open": "Review",
+        "view": "View",
+        "fields": {
+          "employee": "Employee",
+          "source": "Source",
+          "status": "Status",
+          "created": "Created"
         }
       }
     },

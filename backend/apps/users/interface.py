@@ -56,11 +56,11 @@ from django.db.models import Q
 
 from apps.core.services import require_service
 from apps.users.models import User, UserStatus
-from apps.users.services import admin_service
+from apps.users.services import admin_service, audit
 from apps.users.services.options_service import full_name_for
 
 _BRIEF_FIELDS = ("id", "username", "email", "first_name", "last_name",
-                 "display_name", "status")
+                 "patronymic", "phone", "display_name", "status")
 
 
 class DuplicateEmail(Exception):
@@ -101,6 +101,11 @@ def _option_from_user(user) -> dict:
         "email": user.email,
         "first_name": user.first_name,
         "last_name": user.last_name,
+        # patronymic/phone — для посева формы «создать сотрудника из
+        # пользователя»: без них HR перепечатывал бы отчество и телефон
+        # руками с того же экрана, где они уже есть.
+        "patronymic": getattr(user, "patronymic", "") or "",
+        "phone": getattr(user, "phone", "") or "",
         "full_name": full_name_for(user),
         "is_active": user.status == UserStatus.ACTIVE,
     }
@@ -109,6 +114,7 @@ def _option_from_user(user) -> dict:
 def _option_from_values(row: dict) -> dict:
     stub = SimpleNamespace(id=row["id"], username=row["username"], email=row["email"],
                           first_name=row["first_name"], last_name=row["last_name"],
+                          patronymic=row["patronymic"], phone=row["phone"],
                           display_name=row["display_name"], status=row["status"])
     return _option_from_user(stub)
 
@@ -272,5 +278,78 @@ def create_user(*, email: str, first_name: str = "", last_name: str = "",
     from apps.mail import interface as mail_interface
 
     mail_interface.attach_mailbox_by_email(user_id=user.id, email=email_norm)
+
+    return _option_from_user(user)
+
+
+class UserNotFound(Exception):
+    """``apply_profile_fields``: ``user_id`` не соответствует ни одной строке."""
+
+
+#: Поля профиля, которые сосед имеет право изменить. Список закрытый и живёт
+#: здесь, а не у вызывающего: даже если в hr появится баг или кто-то соберёт
+#: словарь полей из пользовательского ввода, email, логин, пароль и роли через
+#: эту дверь не пройдут. Это вторая линия обороны, а не проверка ввода.
+_WRITABLE_PROFILE_FIELDS = frozenset({
+    "first_name", "last_name", "patronymic", "phone", "bio", "avatar_url",
+})
+
+
+def get_user_profile_for_hr(user_id: int) -> dict | None:
+    """Расширенный профиль для кадровой копии и посева формы — то же, что
+    ``list_users_brief``, плюс ``bio``/``avatar_url``.
+
+    Отдельно от списка намеренно: bio и avatar_url нужны ровно в момент работы
+    с ОДНИМ пользователем, а в списке на сотни строк это лишний вес ответа.
+    ``None`` — пользователя нет (тот же контракт, что у ``get_user_brief``).
+    """
+    require_service("users")
+    row = (User.objects
+           .filter(pk=user_id)
+           .values(*_BRIEF_FIELDS, "bio", "avatar_url")
+           .first())
+    if row is None:
+        return None
+    option = _option_from_values({key: row[key] for key in _BRIEF_FIELDS})
+    option["bio"] = row["bio"] or ""
+    option["avatar_url"] = row["avatar_url"] or ""
+    return option
+
+
+def apply_profile_fields(*, user_id: int, fields: dict, actor_id: int | None) -> dict:
+    """Применить подтверждённую кадровую заявку к профилю пользователя.
+
+    ЕДИНСТВЕННЫЙ способ, которым ``apps.hr`` пишет в ``apps.users``. Поле вне
+    белого списка — ``ValueError``, а НЕ молчаливое игнорирование: тихо
+    проглоченное поле выглядело бы как успешно применённая заявка, которая
+    ничего не изменила, и расхождение осталось бы навсегда.
+
+    Переиспользует ``admin_service.update_user`` (проверки уникальности и
+    валидация статуса живут там), поэтому здесь только фильтр и аудит.
+    ``actor_id`` — тот, кто ПОДТВЕРДИЛ заявку, а не тот, кто её подал: в
+    журнале должен остаться человек, санкционировавший запись.
+    """
+    require_service("users")
+
+    unknown = set(fields) - _WRITABLE_PROFILE_FIELDS
+    if unknown:
+        raise ValueError(
+            f"apply_profile_fields: поля вне белого списка: {sorted(unknown)}"
+        )
+
+    user = User.objects.filter(pk=user_id).first()
+    if user is None:
+        raise UserNotFound(user_id)
+
+    if fields:
+        admin_service.update_user(user, dict(fields))
+        audit.record_action(
+            None,
+            user_id=actor_id,
+            action="profile.apply_from_hr",
+            resource_type="user",
+            resource_id=str(user_id),
+            changes={key: str(value) for key, value in fields.items()},
+        )
 
     return _option_from_user(user)

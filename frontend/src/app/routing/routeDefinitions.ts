@@ -186,6 +186,7 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/hr/history', component: lazyPages.HRHistory, requiresAuth: true, requiresRole: 'hr' },
   { path: '/hr/archive', component: lazyPages.HRArchive, requiresAuth: true, requiresRole: 'hr' },
   { path: '/hr/accounts', component: lazyPages.HRAccounts, requiresAuth: true, requiresRole: 'hr' },
+  { path: '/hr/identity-requests', component: lazyPages.HRIdentityRequests, requiresAuth: true, requiresRole: 'hr' },
   { path: '/hr/org-chart', component: lazyPages.HROrgChart, requiresAuth: true, requiresRole: 'hr' },
   { path: '/hr/pmo', component: lazyPages.HRPMO, requiresAuth: true, requiresRole: 'hr' },
   { path: '/hr/share-links', component: lazyPages.HRShareLinks, requiresAuth: true, requiresRole: 'hr' },

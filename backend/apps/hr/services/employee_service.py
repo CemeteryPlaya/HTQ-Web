@@ -155,6 +155,16 @@ def update_employee(id: int, data, *, changed_by_id: int) -> Employee:
     employee = get_employee(id)
     patch = data.model_dump(exclude_none=True)
 
+    # Идентичность связанного сотрудника принадлежит его аккаунту (спека
+    # 2026-08-25 §3): такие поля не пишутся в строку, а уходят заявкой, и
+    # дальше по коду patch содержит только трудовые поля. У «скелета» без
+    # user_id владельца нет — capture вернёт патч нетронутым.
+    from apps.hr.services import identity_request_service
+
+    patch, identity_request = identity_request_service.capture(
+        employee, patch, actor_id=changed_by_id,
+    )
+
     if "department_id" in patch:
         _assert_department_exists(patch["department_id"])
     if "position_id" in patch:
@@ -173,7 +183,13 @@ def update_employee(id: int, data, *, changed_by_id: int) -> Employee:
         entity_id=id,
         action="update",
         old_values={k: str(v) for k, v in old_values.items()},
-        new_values={k: str(v) for k, v in patch.items()},
+        new_values={
+            **{k: str(v) for k, v in patch.items()},
+            # След заявки в кадровом журнале: без него правка идентичности
+            # выглядела бы как «ничего не изменилось».
+            **({"identity_request_id": str(identity_request.id)}
+               if identity_request is not None else {}),
+        },
         changed_by=changed_by_id,
     )
     return get_employee(id)

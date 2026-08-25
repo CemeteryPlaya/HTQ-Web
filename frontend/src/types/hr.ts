@@ -102,6 +102,19 @@ export interface HRUserOption {
   first_name?: string;
   last_name?: string;
   patronymic?: string;
+  phone?: string;
+}
+
+/**
+ * Расширенный профиль аккаунта для посева формы создания сотрудника.
+ *
+ * Отдельный тип, а не поля в HRUserOption: bio и avatar_url приходят только с
+ * точечной ручки `employees/users/<id>/prefill/` — в списке на сотни строк их
+ * намеренно нет (вес ответа).
+ */
+export interface HRUserPrefill extends HRUserOption {
+  bio: string;
+  avatar_url: string;
 }
 
 export type VacancyStatus = 'open' | 'closed' | 'on_hold';

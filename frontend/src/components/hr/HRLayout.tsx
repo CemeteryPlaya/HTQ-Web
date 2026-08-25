@@ -41,6 +41,7 @@ const navItems: HRNavItem[] = [
   // ── Персонал
   { to: '/hr/employees', icon: Users, labelKey: 'hr.nav.employees', levels: ['junior', 'middle', 'senior', 'lead'], category: 'people' },
   { to: '/hr/accounts', icon: IdCard, labelKey: 'hr.nav.accounts', levels: ['lead'], category: 'people' },
+  { to: '/hr/identity-requests', icon: IdCard, labelKey: 'hr.nav.identityRequests', levels: ['senior', 'lead'], category: 'people' },
   { to: '/hr/recruitment', icon: ClipboardList, labelKey: 'hr.nav.recruitment', levels: ['middle', 'senior', 'lead'], category: 'people' },
   { to: '/hr/archive', icon: Archive, labelKey: 'hr.nav.archive', levels: ['senior', 'lead'], category: 'people' },
 

@@ -79,6 +79,7 @@ export const lazyPages = {
   HRHistory: React.lazy(() => import('@/pages/hr/HRHistory')),
   HRArchive: React.lazy(() => import('@/pages/hr/HRArchive')),
   HRAccounts: React.lazy(() => import('@/pages/hr/HRAccounts')),
+  HRIdentityRequests: React.lazy(() => import('@/pages/hr/HRIdentityRequests')),
   HRRoadmap: React.lazy(() => import('@/pages/hr/HRRoadmap')),
   HRRoadmapDetail: React.lazy(() => import('@/pages/hr/HRRoadmapDetail')),
   HRDailyReports: React.lazy(() => import('@/pages/hr/HRDailyReports')),

@@ -1,0 +1,227 @@
+"""HTTP-контракт очереди заявок и назначения подтверждающего (спека §10).
+
+План: docs/superpowers/plans/2026-08-25-hr-identity-sync.md, задача 8.
+"""
+from __future__ import annotations
+
+import datetime
+import json
+
+import pytest
+from django.test import Client
+
+from apps.hr.models import (
+    Department, Employee, IdentityApprover, IdentityChangeRequest, Position,
+)
+from apps.hr.services import identity_request_service as svc
+from apps.hr.tests.conftest import auth_headers, make_user
+
+BASE = "/api/hr/v1/identity-requests"
+APPROVER = "/api/hr/v1/identity-approver/"
+
+
+def _hr_auth(title: str, weight: int, email: str):
+    """HR-сотрудник нужного уровня: уровень считается из должности."""
+    dep = Department.objects.create(name=f"HR-{weight}", path=f"hr{weight}")
+    pos = Position.objects.create(title=title, department=dep, weight=weight)
+    user = make_user(email)
+    Employee.objects.create(
+        email=email, department=dep, position=pos, user_id=user.id,
+        hire_date=datetime.date(2024, 1, 9), first_name="Х", last_name="Р",
+    )
+    return user, auth_headers(user)
+
+
+@pytest.fixture
+def senior_auth(db):
+    return _hr_auth("Senior HR Manager", 30, "hr-senior-api@htq.test")[1]
+
+
+@pytest.fixture
+def lead_auth(db):
+    return _hr_auth("HR Director", 40, "hr-lead-api@htq.test")[1]
+
+
+@pytest.fixture
+def stranger_auth(db):
+    user = make_user("stranger@htq.test")
+    return auth_headers(user)
+
+
+@pytest.fixture
+def approver_auth(db, account):
+    """Назначенный подтверждающий — им же владеет карточка сотрудника."""
+    IdentityApprover.objects.create(pk=1, user_id=account.id)
+    return auth_headers(account)
+
+
+@pytest.fixture
+def pending_request(db, employee, approver_auth, fallback_log_mode):
+    _, request = svc.capture(employee, {"first_name": "Иннокентий"}, actor_id=1)
+    return request
+
+
+# ── доступ ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.django_db
+def test_requires_jwt():
+    assert Client().get(f"{BASE}/").status_code == 401
+
+
+@pytest.mark.django_db
+def test_list_is_visible_to_hr_with_view_permission(senior_auth, pending_request):
+    res = Client().get(f"{BASE}/", **senior_auth)
+
+    assert res.status_code == 200
+    assert [row["id"] for row in res.json()] == [pending_request.id]
+
+
+@pytest.mark.django_db
+def test_list_for_approver_contains_own_requests(approver_auth, pending_request):
+    res = Client().get(f"{BASE}/", **approver_auth)
+
+    assert res.status_code == 200
+    assert [row["id"] for row in res.json()] == [pending_request.id]
+
+
+@pytest.mark.django_db
+def test_stranger_sees_empty_queue(stranger_auth, pending_request):
+    res = Client().get(f"{BASE}/", **stranger_auth)
+
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+# ── карточка заявки ─────────────────────────────────────────────────────────
+
+@pytest.mark.django_db
+def test_detail_shows_stale_snapshot(approver_auth, pending_request, account):
+    # владелец успел измениться, пока заявка ждала
+    account.first_name = "Совсем другое"
+    account.save()
+
+    res = Client().get(f"{BASE}/{pending_request.id}/", **approver_auth)
+
+    assert res.status_code == 200
+    row = next(f for f in res.json()["fields"] if f["field"] == "first_name")
+    assert row["is_stale"] is True
+    assert row["account_value_now"] == "Совсем другое"
+
+
+@pytest.mark.django_db
+def test_detail_unknown_is_404(approver_auth):
+    assert Client().get(f"{BASE}/999999/", **approver_auth).status_code == 404
+
+
+@pytest.mark.django_db
+def test_detail_forbidden_for_stranger(stranger_auth, pending_request):
+    res = Client().get(f"{BASE}/{pending_request.id}/", **stranger_auth)
+    assert res.status_code == 403
+
+
+# ── решение ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.django_db
+def test_decide_requires_approver(stranger_auth, pending_request):
+    res = Client().post(
+        f"{BASE}/{pending_request.id}/decide",
+        data=json.dumps({"decisions": {"first_name": "apply"}}),
+        content_type="application/json", **stranger_auth,
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_hr_view_permission_alone_does_not_allow_deciding(senior_auth, pending_request):
+    """Вести очередь и решать — разные права (спека §9)."""
+    res = Client().post(
+        f"{BASE}/{pending_request.id}/decide",
+        data=json.dumps({"decisions": {"first_name": "apply"}}),
+        content_type="application/json", **senior_auth,
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_decide_applies(approver_auth, pending_request, account):
+    res = Client().post(
+        f"{BASE}/{pending_request.id}/decide",
+        data=json.dumps({"decisions": {"first_name": "apply"}}),
+        content_type="application/json", **approver_auth,
+    )
+
+    assert res.status_code == 200
+    account.refresh_from_db()
+    assert account.first_name == "Иннокентий"
+
+
+@pytest.mark.django_db
+def test_incomplete_decision_is_422(approver_auth, employee, fallback_log_mode):
+    _, request = svc.capture(
+        employee, {"first_name": "И", "phone": "+7 777 000-00-00"}, actor_id=1,
+    )
+    res = Client().post(
+        f"{BASE}/{request.id}/decide",
+        data=json.dumps({"decisions": {"first_name": "apply"}}),
+        content_type="application/json", **approver_auth,
+    )
+    assert res.status_code == 422
+
+
+@pytest.mark.django_db
+def test_second_decide_is_409(approver_auth, pending_request):
+    body = json.dumps({"decisions": {"first_name": "apply"}})
+    Client().post(f"{BASE}/{pending_request.id}/decide", data=body,
+                  content_type="application/json", **approver_auth)
+    res = Client().post(f"{BASE}/{pending_request.id}/decide", data=body,
+                        content_type="application/json", **approver_auth)
+    assert res.status_code == 409
+
+
+# ── подтверждающий ──────────────────────────────────────────────────────────
+
+@pytest.mark.django_db
+def test_approver_change_requires_manage_permission(senior_auth, account):
+    res = Client().put(APPROVER, data=json.dumps({"user_id": account.id}),
+                       content_type="application/json", **senior_auth)
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_approver_change_by_lead(lead_auth, account):
+    res = Client().put(APPROVER, data=json.dumps({"user_id": account.id}),
+                       content_type="application/json", **lead_auth)
+
+    assert res.status_code == 200
+    assert IdentityApprover.objects.get(pk=1).user_id == account.id
+
+
+@pytest.mark.django_db
+def test_approver_can_be_cleared(lead_auth, account):
+    Client().put(APPROVER, data=json.dumps({"user_id": account.id}),
+                 content_type="application/json", **lead_auth)
+
+    res = Client().put(APPROVER, data=json.dumps({"user_id": None}),
+                       content_type="application/json", **lead_auth)
+
+    assert res.status_code == 200
+    assert IdentityApprover.objects.get(pk=1).user_id is None
+
+
+@pytest.mark.django_db
+def test_approver_must_exist(lead_auth):
+    res = Client().put(APPROVER, data=json.dumps({"user_id": 999999}),
+                       content_type="application/json", **lead_auth)
+    assert res.status_code == 422
+
+
+@pytest.mark.django_db
+def test_approver_get_returns_current(lead_auth, account):
+    Client().put(APPROVER, data=json.dumps({"user_id": account.id}),
+                 content_type="application/json", **lead_auth)
+
+    res = Client().get(APPROVER, **lead_auth)
+
+    assert res.status_code == 200
+    assert res.json()["user_id"] == account.id
+    assert res.json()["user"]["email"] == account.email

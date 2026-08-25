@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from apps.mail import interface as mail_interface
 from htqweb.authn.jwt import AuthError, decode_token, issue_token_pair
+from htqweb.fallback import fallback
 from htqweb.http import api_view, json_error
 
 from . import schemas
@@ -191,7 +192,28 @@ def _update_profile(request):
         # must include updated_at explicitly whenever anything changed.
         update_fields.add("updated_at")
         user.save(update_fields=list(update_fields))
+        _notify_hr_identity_changed(user.id)
     return profile_service.build_response(user)
+
+
+def _notify_hr_identity_changed(user_id: int) -> None:
+    """Сообщить кадрам, что копия идентичности устарела (спека §8).
+
+    Через ``apps.hr.interface`` — прямой импорт чужих моделей запрещён
+    изоляцией аппок. Импорт внутри функции, а не в шапке: hr сам обращается к
+    ``apps.users.interface``, и модульный импорт замкнул бы цикл на старте.
+
+    Провал синка не должен ронять уже сохранённый профиль: пользователь свою
+    правку сделал, а копию догонит ночная сверка — поэтому expected=True.
+    """
+    from apps.hr import interface as hr_interface
+
+    try:
+        hr_interface.notice_user_profile_changed(user_id)
+    except Exception as exc:  # noqa: BLE001
+        fallback("users.profile.hr_sync_failed", None,
+                 reason="не удалось обновить кадровую копию идентичности",
+                 exc=exc, expected=True, user_id=user_id)
 
 
 @csrf_exempt

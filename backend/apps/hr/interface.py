@@ -225,3 +225,24 @@ def org_ancestors(department_id: int) -> list[dict]:
         for d in Department.objects.filter(path__in=prefixes).values(*_BRIEF_FIELDS)
     }
     return [by_path[p] for p in prefixes if p in by_path]
+
+
+def notice_user_profile_changed(user_id: int) -> None:
+    """Сосед (apps.users) сообщает, что профиль изменился — обновляем копию.
+
+    Вызывается ПОСЛЕ сохранения профиля. Ничего не возвращает: аккаунт —
+    владелец идентичности (спека 2026-05-29 §6), и кадровая копия обязана
+    догнать его, а не наоборот. Если сотрудника с таким аккаунтом нет —
+    обновлять нечего, это нормальный случай (аккаунт админа, внешний
+    пользователь).
+    """
+    require_service("hr")
+    from apps.hr.services import identity_sync_service
+
+    employee_id = (Employee.objects
+                   .filter(user_id=user_id, is_deleted=False)
+                   .values_list("id", flat=True)
+                   .first())
+    if employee_id is None:
+        return
+    identity_sync_service.sync_employee(employee_id)

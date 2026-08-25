@@ -1495,3 +1495,123 @@ class DepartmentFile(HrBase):
 
     def __str__(self) -> str:
         return f"<DepartmentFile(id={self.id}, department_id={self.department_id}, name='{self.name}')>"
+
+
+class IdentityChangeRequest(HrBase):
+    """Заявка на изменение идентичности в аккаунте (спека §6.1).
+
+    Копия идентичности в Employee не является источником правды (спека
+    2026-05-29 §6), поэтому кадровая правка не пишется в строку сотрудника, а
+    живёт здесь, пока её не подтвердят. Заявка ЗАМЕНЯЕТ запись, а не
+    сопровождает её: если бы значение сначала легло в копию, копия разъехалась
+    бы с владельцем ровно на то время, пока заявка ждёт решения — то есть
+    ровно то состояние, которое всё это должно устранять.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Ожидает подтверждения"
+        APPLIED = "applied", "Применена"
+        REJECTED = "rejected", "Отклонена"
+
+    class Source(models.TextChoices):
+        HR_FORM = "hr_form", "Правка в карточке"
+        NIGHTLY = "nightly", "Найдено ночной сверкой"
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="identity_requests",
+    )
+    # D7: связь с apps.users — обычный int, а НЕ межаппный FK.
+    user_id = models.IntegerField()
+    status = models.CharField(
+        max_length=16, choices=Status.choices,
+        default=Status.PENDING, db_default=Status.PENDING.value,
+    )
+    source = models.CharField(
+        max_length=16, choices=Source.choices,
+        default=Source.HR_FORM, db_default=Source.HR_FORM.value,
+    )
+    created_by = models.IntegerField(null=True, blank=True)
+    decided_by = models.IntegerField(null=True, blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Заявка на изменение профиля"
+        verbose_name_plural = "Заявки на изменение профиля"
+        constraints = [
+            # Частичный уникальный индекс, а не просто unique: три триггера
+            # (правка карточки, правка профиля, ночная сверка) иначе наплодят
+            # соседних заявок на одно расхождение, и подтверждающий будет
+            # закрывать их по одной. Закрытые заявки повторам не мешают.
+            models.UniqueConstraint(
+                fields=["employee"],
+                condition=models.Q(status="pending"),
+                name="uq_identity_request_one_pending_per_employee",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<IdentityChangeRequest(id={self.id}, employee_id={self.employee_id}, status='{self.status}')>"
+
+
+class IdentityChangeRequestField(HrBase):
+    """Строка заявки: одно поле, что предлагают и что было в аккаунте.
+
+    ``account_value_at_request`` — СНИМОК на момент подачи. Текущее значение
+    аккаунта не хранится, а читается живым при открытии карточки: расхождение
+    снимка с живым и означает, что владелец успел измениться, пока заявка
+    ждала, — подтверждающий обязан это увидеть, иначе вслепую откатит чужую
+    свежую правку.
+    """
+
+    class Decision(models.TextChoices):
+        APPLY = "apply", "Применить"
+        REJECT = "reject", "Отклонить"
+
+    request = models.ForeignKey(
+        IdentityChangeRequest, on_delete=models.CASCADE, related_name="fields",
+    )
+    field = models.CharField(max_length=32)
+    proposed_value = models.TextField(null=True, blank=True)
+    account_value_at_request = models.TextField(null=True, blank=True)
+    decision = models.CharField(
+        max_length=8, choices=Decision.choices, null=True, blank=True,
+    )
+
+    class Meta:
+        verbose_name = "Поле заявки на изменение профиля"
+        verbose_name_plural = "Поля заявок на изменение профиля"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["request", "field"], name="uq_identity_request_field",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<IdentityChangeRequestField(request_id={self.request_id}, field='{self.field}')>"
+
+
+class IdentityApprover(HrBase):
+    """Кто подтверждает заявки — одна строка на всю платформу (спека §6.2).
+
+    Singleton через CheckConstraint на pk: подтверждающий запрошен ровно один,
+    и вторая строка означала бы неопределённость, кто из них главный. Пустая
+    таблица — законное состояние: тогда подтверждает руководитель отдела
+    сотрудника, а админ платформы может решать всегда и сверх этой лестницы.
+    """
+
+    id = models.IntegerField(primary_key=True, default=1)
+    user_id = models.IntegerField(null=True, blank=True)
+    updated_by = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Подтверждающий изменения профиля"
+        verbose_name_plural = "Подтверждающий изменения профиля"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(id=1), name="ck_identity_approver_singleton",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<IdentityApprover(user_id={self.user_id})>"
