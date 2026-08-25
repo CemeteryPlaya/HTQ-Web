@@ -115,3 +115,19 @@ def test_repeated_start_enqueues_once():
         session_service.start_session(room_id="room-notify", created_by_id=ORGANISER)
 
     assert queued.call_count == 1
+
+
+@pytest.mark.django_db
+def test_broker_failure_does_not_break_start_session():
+    """Регресс: недоступный Redis/Celery в момент старта не должен уронить
+    start_session 500-й ошибкой наружу — сессия обязана остаться созданной,
+    а сбой постановки задачи — просто уйти в лог."""
+    _event()
+    with patch("apps.conference.tasks.notify_session_started.delay",
+               side_effect=RuntimeError("broker unavailable")):
+        session = session_service.start_session(room_id="room-notify",
+                                                created_by_id=ORGANISER)
+
+    assert session.pk is not None
+    assert session_service.ConferenceSession.objects.filter(
+        room_id="room-notify", ended_at__isnull=True).exists()

@@ -124,7 +124,15 @@ def start_session(*, room_id: str, started_at=None, created_by_id: int | None = 
         if session.calendar_event_id is not None:
             from apps.conference.tasks import notify_session_started
 
-            notify_session_started.delay(session.pk)
+            # Ошибка брокера не должна ронять start_session: сессия уже
+            # создана и сохранена, а из-за упавшего .delay() SFU получил бы
+            # 500 на успешно открытую встречу. Прецедент — enqueue_processing
+            # ниже в этом файле, обёрнут по той же причине.
+            try:
+                notify_session_started.delay(session.pk)
+            except Exception:
+                logger.exception("conference: не удалось поставить уведомление "
+                                 "о начале сессии %s", session.pk)
     return session
 
 

@@ -26,15 +26,28 @@ def _free_duplicate_rooms(apps, schema_editor):
                   .filter(total__gt=1)
                   .values_list("conference_room_id", flat=True))
 
+    room_count = 0
+    event_count = 0
     for room_id in list(duplicates):
         rows = list(CalendarEvent.objects
                     .filter(event_type="conference", conference_room_id=room_id)
                     .order_by("id"))
+        room_count += 1
         for event in rows[1:]:
             event.conference_room_id = f"{secrets.token_hex(4)}-{secrets.token_hex(2)}"
             event.save(update_fields=["conference_room_id"])
+            event_count += 1
             log.warning("calendar: событию %s перевыдана комната (было %s, стало %s)",
                         event.pk, room_id, event.conference_room_id)
+
+    # Построчные WARNING выше легко потерять в выводе migrate — это то, что
+    # реально видит человек, выкатывающий релиз, и по чему он должен понять,
+    # что нужно предупредить организаторов о смене ссылки на встречу.
+    if event_count:
+        log.warning("calendar: миграция 0018 нашла %d дублирующихся комнат(ы) и "
+                    "перевыдала новые id %d событию(ям) — ссылки на эти встречи "
+                    "изменились, нужно предупредить организаторов",
+                    room_count, event_count)
 
 
 def _noop(apps, schema_editor):
