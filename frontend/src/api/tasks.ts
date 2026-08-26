@@ -907,7 +907,11 @@ export const notificationTargetUrl = (
     return `/calendar?event=${n.target_id}`;
   if (n.target_type === 'employee' && n.target_id)
     return `/hr/employees/${n.target_id}`;
-  if (n.target_type === 'messenger_room' && n.target_id)
+  // 'messenger_room' — legacy-имя того же назначения, что 'chat' (см.
+  // NotificationTargetType); ни один сейчас работающий отправитель их не
+  // шлёт (см. отчёт по кликабельности уведомлений), но резолвер понимает
+  // оба, чтобы не оставить мёртвую ссылку на старую/будущую строку.
+  if ((n.target_type === 'chat' || n.target_type === 'messenger_room') && n.target_id)
     return `/messenger?room=${n.target_id}`;
   // Именно карточка встречи, а не /room/<id>: уведомление могли открыть
   // через час, и бросать человека в закончившийся звонок неправильно —
@@ -915,6 +919,12 @@ export const notificationTargetUrl = (
   if (n.target_type === 'conference_session' && n.target_id)
     return `/conference/history/${n.target_id}`;
   if (n.target_type === 'email_message') return `/email`;
+  // Заявка на изменение идентичности (apps.hr.services.identity_request_
+  // service.notify_approver) — ведём подтверждающего прямо на карточку
+  // заявки, а не просто в общий список: ?request=<id> открывает
+  // IdentityRequestDialog автоматически (см. HRIdentityRequests.tsx).
+  if (n.target_type === 'hr_identity_request' && n.target_id)
+    return `/hr/identity-requests?request=${n.target_id}`;
   // Legacy: rows that only set the ``task_id`` FK column.
   if (n.task) return `/tasks/${n.task}`;
   // Legacy verb format: pull the entity id out so old rows are still
@@ -934,10 +944,12 @@ export const notificationSourceLabel = (
   if (n.target_type === 'task' || n.task) return i18next.t('notifications.source.task');
   if (n.target_type === 'calendar_event') return i18next.t('notifications.source.calendar');
   if (n.target_type === 'employee') return 'HR';
-  if (n.target_type === 'messenger_room') return i18next.t('notifications.source.messenger');
+  if (n.target_type === 'chat' || n.target_type === 'messenger_room')
+    return i18next.t('notifications.source.messenger');
   if (n.target_type === 'conference_session')
     return i18next.t('notifications.source.conference');
   if (n.target_type === 'email_message') return i18next.t('notifications.source.email');
+  if (n.target_type === 'hr_identity_request') return i18next.t('notifications.source.hrIdentity');
   // Legacy verb fallback — same patterns as notificationTargetUrl.
   const verb = n.verb || '';
   if (/^calendar_(?:invited|updated):event:/.test(verb)) return i18next.t('notifications.source.calendar');

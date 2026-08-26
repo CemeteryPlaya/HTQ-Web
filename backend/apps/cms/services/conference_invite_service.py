@@ -46,6 +46,30 @@ log = logging.getLogger(__name__)
 #: берётся, а ссылка остаётся достаточно короткой, чтобы не ломать письма.
 TOKEN_BYTES = 16
 
+#: Единственные языки, которые реально понимает фронт (`frontend/src/i18n.js`,
+#: `supportedLngs: ['en', 'ru']`). Список сознательно короткий и живёт здесь,
+#: а не в модели: это бизнес-правило («что показываем»), а не ограничение
+#: хранения.
+SUPPORTED_LOCALES = frozenset({"ru", "en"})
+
+
+def normalize_locale(value: str | None) -> str:
+    """Привести язык к тому, что умеет фронт, либо к «не задано».
+
+    Неизвестное значение (опечатка, будущий язык, ручная правка в БД) не
+    должно ронять страницу входа — оно ведёт себя ровно как отсутствующее:
+    гость увидит язык, который определит его браузер, как это было до этой
+    функциональности.
+
+    Без подчёркивания и экспортируется намеренно: единственная публичная
+    ручка, отдающая ``locale`` до входа (``conference_invite_public`` в
+    ``views.py``, ``auth=None``), берёт значение отсюда же, а не читает
+    ``invite.locale`` напрямую — иначе ручная правка в БД дошла бы до
+    гостя, минуя нормализацию, которая есть везде, кроме неё.
+    """
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in SUPPORTED_LOCALES else ""
+
 
 class InviteInvalid(Exception):
     """Ссылка не работает. ``code`` объясняет почему — его показывает страница
@@ -70,7 +94,7 @@ def build_join_url(invite: ConferenceInvite, *, base_url: str = "") -> str:
 
 def create_invite(*, room_id: str, created_by_id: int | None, title: str = "",
                   allow_guests: bool = True, ttl_hours: int | None = None,
-                  max_uses: int = 0) -> ConferenceInvite:
+                  max_uses: int = 0, locale: str = "") -> ConferenceInvite:
     room = (room_id or "").strip()
     if not room:
         raise InviteInvalid("room_required", "Не указана комната")
@@ -84,6 +108,7 @@ def create_invite(*, room_id: str, created_by_id: int | None, title: str = "",
         allow_guests=allow_guests,
         expires_at=timezone.now() + timedelta(hours=hours),
         max_uses=max(0, int(max_uses or 0)),
+        locale=normalize_locale(locale),
     )
     log.info("conference_invite_created room=%s by=%s guests=%s",
              room, created_by_id, allow_guests)
@@ -135,6 +160,10 @@ def issue_guest_access(invite: ConferenceInvite, *, display_name: str) -> dict:
         "room_id": invite.room_id,
         "display_name": name,
         "title": invite.title,
+        # Гость окажется в комнате уже после этого ответа — фронт кладёт
+        # значение в guestSession и держит язык переключённым внутри звонка,
+        # без него интерфейс откатился бы на язык браузера при входе в комнату.
+        "locale": normalize_locale(invite.locale),
     }
 
 
@@ -164,6 +193,7 @@ def serialize(invite: ConferenceInvite, *, base_url: str = "") -> dict:
         "revoked": invite.revoked_at is not None,
         "max_uses": invite.max_uses,
         "uses": invite.uses,
+        "locale": normalize_locale(invite.locale),
         "created_at": invite.created_at,
     }
 

@@ -158,6 +158,13 @@ export async function ensureSession(params: {
   roomId: string;
   createdById?: number | null;
   createdByName?: string;
+  /**
+   * Название встречи из лобби. Учитывается только на СОЗДАНИИ сессии —
+   * если она уже открыта (кто-то вошёл раньше), `existing` вернётся ниже
+   * и title до Django вообще не долетит, что и нужно: второй вошедший не
+   * должен переименовывать чужую встречу.
+   */
+  title?: string;
 }): Promise<SessionRecorder | null> {
   const existing = sessions.get(params.roomId);
   if (existing) return existing;

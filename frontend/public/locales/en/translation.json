@@ -3872,6 +3872,8 @@
       "failed": "Could not join via the link"
     },
     "invite": {
+      "emailRemove": "Remove address",
+      "emailAdd": "External participant e-mail — press Enter to add",
       "title": "Invite to the conference",
       "subtitle": "Send the link to anyone. Only the person you give it to can see it, and you can revoke it.",
       "nameLabel": "Meeting name",
@@ -3879,6 +3881,8 @@
       "nameHint": "Shown to whoever opens the link, so they know what they were invited to.",
       "allowGuests": "Allow joining without an account",
       "allowGuestsHint": "An external participant enters a name and joins. Turn off when inviting employees only.",
+      "languageLabel": "Guest interface language",
+      "languageHint": "Whoever opens the link will see the platform in this language.",
       "create": "Create link",
       "created": "Link created and copied",
       "createError": "Could not create the link",
@@ -3892,7 +3896,7 @@
       "revoked": "Link revoked",
       "sendTitle": "Send the invitation",
       "emails": "Emails, comma separated — for external participants",
-      "staffSearch": "Find an employee",
+      "staffSearch": "Employee — name, login or e-mail",
       "send": "Send by email and messenger",
       "sendError": "Could not send",
       "schedule": "Add to calendar",
@@ -3929,7 +3933,10 @@
       "tabToday": "Today",
       "tabLive": "Live now",
       "tabHistory": "History",
+      "openFullHistory": "Full history",
       "join": "Join",
+      "start": "Start",
+      "openHistory": "Open",
       "emptyToday": "No meetings today",
       "emptyLive": "Nobody is talking right now",
       "loadError": "Could not load the conference overview",
@@ -4022,6 +4029,10 @@
       "guest": "Guest",
       "tryingH264": "VP8 is unavailable. Trying H.264…",
       "joinFailed": "Could not connect: {{message}}",
+      "guestAutoJoining": "Connecting you to the call…",
+      "guestAutoJoinFailedTitle": "Could not join the call",
+      "guestAutoJoinFailedHint": "Check the browser's camera and microphone permissions and try again.",
+      "retryJoin": "Retry",
       "muteOnEntryNotice": "The host turned on mute-on-entry",
       "micError": "Microphone error: {{message}}",
       "audioOnlyNotice": "The camera is unavailable. The conference runs in audio-only mode.",
@@ -4113,6 +4124,8 @@
       "joinByIdTitle": "Join by ID",
       "joinByIdHint": "Enter the room ID the host gave you",
       "roomIdPlaceholder": "For example: 12ab-34cd",
+      "meetingTitleLabel": "Meeting title",
+      "autoTitleTemplate": "{{name}}'s meeting",
       "previewTitle": "Camera and sound check",
       "previewBadge": "Preview",
       "previewHint": "Make sure you look and sound right before joining",
@@ -4285,7 +4298,13 @@
     },
     "selectedCount": "Selected: {{count}}",
     "searchByNameOrEmail": "Search by name or email",
-    "removeParticipant": "Remove participant"
+    "removeParticipant": "Remove participant",
+    "deepLink": {
+      "title": "Event",
+      "loading": "Loading event…",
+      "notFound": "Event not found or unavailable",
+      "enter": "Enter the room"
+    }
   },
   "files": {
     "unitB": "B",

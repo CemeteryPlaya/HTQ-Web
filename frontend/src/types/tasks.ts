@@ -663,11 +663,35 @@ export interface TaskLink {
   created_at: string;
 }
 
+/**
+ * Канонический словарь ``target_type`` уведомления. Единственный источник
+ * истины на фронте — держите в паре с бэкендом: канонические значения
+ * документированы в ``backend/apps/tasks/interface.py::push_notification`` и
+ * проверяются AST-тестом ``backend/apps/tasks/tests/
+ * test_notification_target_types.py``.
+ *
+ * Раньше здесь был хвост ``| string``, из-за которого весь union схлопывался
+ * в обычный ``string`` (TypeScript поглощает литералы более широким типом) —
+ * ни один из перечисленных вариантов реально ничего не проверял. Теперь
+ * список закрытый: новый ``target_type`` без записи здесь и в
+ * ``notificationTargetUrl``/``notificationSourceLabel`` не пройдёт
+ * тайпчек в местах, что строят/матчат ``Notification`` литералом.
+ *
+ * ``chat``/``employee``/``email_message`` сейчас ничем не отправляются
+ * (это зафиксировано в отчёте задачи о кликабельности уведомлений) —
+ * оставлены как заранее готовые направления резолвера, а не как
+ * подтверждение, что они уже используются.
+ * ``messenger_room`` — legacy-алиас ``chat`` для старых строк в БД.
+ */
 export type NotificationTargetType =
   | 'task'
   | 'calendar_event'
+  | 'conference_session'
+  | 'hr_identity_request'
+  | 'chat'
+  | 'messenger_room'
   | 'employee'
-  | string
+  | 'email_message'
   | null;
 
 export interface Notification {

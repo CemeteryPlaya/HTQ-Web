@@ -1,15 +1,36 @@
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { Mail, MapPin, Phone } from 'lucide-react';
+import { useHomeSection } from '@/hooks/useHomeContent';
+import { LucideIcon } from '@/components/ui/icon-picker';
 import { legalLinks, socialLinks } from '@/data/company';
 import { services } from '@/data/services';
 
 const logo = '/images/logo.webp';
 
+/**
+ * Футер — теперь редактируется со страницы «Главная страница» (`/manage/home`),
+ * а не программистом в коде. Пять секций ``footer-*`` заведены миграцией
+ * `0011_seed_footer_sections` (см. её докстринг для полного разбора раскладки):
+ * слоган, колонка «Компания», колонка «Услуги», колонка «Контакты» и нижняя
+ * строка (копирайт + правовые ссылки).
+ *
+ * ОТКАТ НА ПРЕЖНИЙ ВИД ОБЯЗАТЕЛЕН: футер показывается на каждой публичной
+ * странице, и пустой подвал из-за упавшего запроса или ещё не заполненной
+ * секции — слишком дорогая цена. Поэтому по каждому блоку данные берутся из
+ * БД, только если они там реально есть (``items.length`` для списков, иначе —
+ * прежний статический список); тексты откатываются на i18n через `text()` —
+ * ровно та же схема, что уже используют `StatsSection`/`AboutSection` и др.
+ */
 export const Footer = () => {
   const { t } = useTranslation();
 
-  const footerLinks = {
+  const brand = useHomeSection('footer-brand');
+  const companyNav = useHomeSection('footer-company');
+  const servicesNav = useHomeSection('footer-services');
+  const contact = useHomeSection('footer-contact');
+  const legal = useHomeSection('footer-legal');
+
+  const fallbackLinks = {
     // Футер рендерится на всех страницах, поэтому якоря главной пишем как
     // ``/#...`` — голый ``#about`` за пределами ``/`` никуда не ведёт.
     company: [
@@ -29,6 +50,30 @@ export const Footer = () => {
       })),
   };
 
+  // CMS-элемент даёт готовую пару «текст + ссылка»; из БД берём список только
+  // когда редактор его реально наполнил — иначе показываем прежний статический.
+  const companyLinks = companyNav.items.length
+    ? companyNav.items.map((i) => ({ label: i.title, href: i.link }))
+    : fallbackLinks.company;
+  const servicesLinks = servicesNav.items.length
+    ? servicesNav.items.map((i) => ({ label: i.title, href: i.link }))
+    : fallbackLinks.services;
+
+  // Три контакта по умолчанию: адрес без ссылки (просто текст), почта и
+  // телефон — с `mailto:`/`tel:`, уже собранными в поле `link` элемента.
+  const fallbackContact = [
+    { icon: 'MapPin', label: t('contact.info.location'), href: '' },
+    { icon: 'Mail', label: 'info@hi-techkz.com', href: 'mailto:info@hi-techkz.com' },
+    { icon: 'Phone', label: '+7 (727) 123-4567', href: 'tel:+77271234567' },
+  ];
+  const contactItems = contact.items.length
+    ? contact.items.map((i) => ({ icon: i.icon, label: i.title, href: i.link }))
+    : fallbackContact;
+
+  const legalItems = legal.items.length
+    ? legal.items.map((i) => ({ label: i.title, href: i.link }))
+    : legalLinks.map((link) => ({ label: t(link.labelKey), href: link.href }));
+
   return (
     <footer className="bg-foreground text-background">
       {/* Main Footer */}
@@ -45,8 +90,13 @@ export const Footer = () => {
               </div>
             </Link>
             <p className="text-background/60 text-sm leading-relaxed mb-6">
-              {t('footer.tagline')}
+              {brand.text('description', 'footer.tagline')}
             </p>
+            {/* Соцсети намеренно остаются в коде (`data/company.ts`), а не в
+                CMS: список сейчас пуст (реальных аккаунтов ещё нет), а редактор
+                иконок блоков лендинга (`IconPicker`) отдаёт только набор
+                lucide — логотипов соцсетей там нет, так что честно завести
+                это поле в общую форму сейчас нечем. */}
             {socialLinks.length > 0 && (
               <div className="flex gap-4">
                 {socialLinks.map((social) => (
@@ -67,9 +117,11 @@ export const Footer = () => {
 
           {/* Company Links */}
           <div>
-            <h4 className="font-display font-semibold text-background mb-6">{t('footer.company')}</h4>
+            <h4 className="font-display font-semibold text-background mb-6">
+              {companyNav.text('title', 'footer.company')}
+            </h4>
             <ul className="space-y-3">
-              {footerLinks.company.map((link) => (
+              {companyLinks.map((link) => (
                 <li key={link.label}>
                   <a href={link.href} className="text-background/60 hover:text-secondary transition-colors text-sm">
                     {link.label}
@@ -81,9 +133,11 @@ export const Footer = () => {
 
           {/* Services Links */}
           <div>
-            <h4 className="font-display font-semibold text-background mb-6">{t('footer.services')}</h4>
+            <h4 className="font-display font-semibold text-background mb-6">
+              {servicesNav.text('title', 'footer.services')}
+            </h4>
             <ul className="space-y-3">
-              {footerLinks.services.map((link) => (
+              {servicesLinks.map((link) => (
                 <li key={link.label}>
                   <a href={link.href} className="text-background/60 hover:text-secondary transition-colors text-sm">
                     {link.label}
@@ -95,24 +149,28 @@ export const Footer = () => {
 
           {/* Contact */}
           <div>
-            <h4 className="font-display font-semibold text-background mb-6">{t('footer.contact')}</h4>
+            <h4 className="font-display font-semibold text-background mb-6">
+              {contact.text('title', 'footer.contact')}
+            </h4>
             <ul className="space-y-4">
-              <li className="flex items-start gap-3">
-                <MapPin size={18} className="text-secondary flex-shrink-0 mt-0.5" />
-                <span className="text-background/60 text-sm">{t('contact.info.location')}</span>
-              </li>
-              <li className="flex items-start gap-3">
-                <Mail size={18} className="text-secondary flex-shrink-0 mt-0.5" />
-                <a href="mailto:info@hi-techkz.com" className="text-background/60 hover:text-secondary transition-colors text-sm">
-                  info@hi-techkz.com
-                </a>
-              </li>
-              <li className="flex items-start gap-3">
-                <Phone size={18} className="text-secondary flex-shrink-0 mt-0.5" />
-                <a href="tel:+77271234567" className="text-background/60 hover:text-secondary transition-colors text-sm">
-                  +7 (727) 123-4567
-                </a>
-              </li>
+              {contactItems.map((item) => (
+                <li key={item.label} className="flex items-start gap-3">
+                  {/* `LucideIcon` — тот же renderer по имени, что использует
+                      сама CMS-форма (`ManageHomeSections.tsx`); статический
+                      список задаёт те же имена (`MapPin`/`Mail`/`Phone`), так
+                      что вид не меняется, пока редактор ничего не менял. */}
+                  <span className="text-secondary flex-shrink-0 mt-0.5">
+                    <LucideIcon name={item.icon} className="w-[18px] h-[18px]" />
+                  </span>
+                  {item.href ? (
+                    <a href={item.href} className="text-background/60 hover:text-secondary transition-colors text-sm">
+                      {item.label}
+                    </a>
+                  ) : (
+                    <span className="text-background/60 text-sm">{item.label}</span>
+                  )}
+                </li>
+              ))}
             </ul>
           </div>
         </div>
@@ -126,17 +184,17 @@ export const Footer = () => {
       <div className="border-t border-background/10 pb-20 md:pb-0">
         <div className="container-custom py-6 flex flex-col md:flex-row justify-between items-center gap-4">
           <p className="text-background/40 text-sm text-center md:text-left">
-            © {new Date().getFullYear()} Hi-Tech Group. {t('footer.rights')}
+            © {new Date().getFullYear()} Hi-Tech Group. {legal.text('description', 'footer.rights')}
           </p>
-          {legalLinks.length > 0 && (
+          {legalItems.length > 0 && (
             <div className="flex flex-wrap justify-center gap-4 sm:gap-6">
-              {legalLinks.map((link) => (
+              {legalItems.map((link) => (
                 <a
-                  key={link.href}
+                  key={link.label}
                   href={link.href}
                   className="text-background/40 hover:text-background/80 transition-colors text-sm py-1.5 px-2 rounded-lg"
                 >
-                  {t(link.labelKey)}
+                  {link.label}
                 </a>
               ))}
             </div>

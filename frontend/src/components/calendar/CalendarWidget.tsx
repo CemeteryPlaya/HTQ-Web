@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format, addMonths, subMonths, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, startOfWeek, endOfWeek } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, Clock, CalendarDays, ListFilter, Video, Pencil, Trash2, Users, Check as CheckIcon, XCircle } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { fetchCalendarTimeline, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, fetchProductionCalendar, updateProductionDay, fetchCalendarUserOptions, rsvpCalendarEvent } from '@/api/calendar';
+import { fetchCalendarTimeline, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, fetchProductionCalendar, updateProductionDay, fetchCalendarUserOptions, rsvpCalendarEvent, fetchCalendarEvents } from '@/api/calendar';
 import { fetchDepartments } from '@/api/hr';
 import { CalendarEvent } from '@/types/calendar';
 import { cn } from '@/lib/utils';
@@ -98,6 +98,35 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
         enabled: isAnyEventDialogOpen,
         staleTime: 5 * 60 * 1000,
     });
+
+    // Диплинк из уведомления: notificationTargetUrl ведёт календарные
+    // уведомления на `/calendar?event=<id>` вместо прямого перехода в
+    // комнату — открыть комнату сразу по клику из списка уведомлений
+    // означало бы поднять предпросмотр камеры человеку, который мог просто
+    // просматривать список, не планируя входить прямо сейчас. Здесь вместо
+    // этого — карточка события с заметной кнопкой входа: один осознанный
+    // клик вместо неожиданного.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const deepLinkEventId = (() => {
+        const raw = searchParams.get('event');
+        const parsed = raw ? Number(raw) : NaN;
+        return Number.isFinite(parsed) ? parsed : null;
+    })();
+    // Диплинк может указывать на событие вне отображаемого сейчас месяца
+    // (уведомление могли открыть спустя недели) — `timeline` грузит только
+    // текущий месяц, поэтому здесь отдельный запрос по всем событиям
+    // пользователя, включённый лишь пока в URL есть `?event=`.
+    const { data: deepLinkEvents, isLoading: isDeepLinkLoading } = useQuery({
+        queryKey: ['calendar-deep-link-events'],
+        queryFn: fetchCalendarEvents,
+        enabled: deepLinkEventId !== null,
+    });
+    const deepLinkEvent = deepLinkEvents?.find((e) => e.id === deepLinkEventId) ?? null;
+    const closeDeepLink = () => {
+        const next = new URLSearchParams(searchParams);
+        next.delete('event');
+        setSearchParams(next, { replace: true });
+    };
 
     const createEventMutation = useMutation({
         mutationFn: createCalendarEvent,
@@ -482,23 +511,37 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                             const earlyJoin = new Date(start.getTime() - 5 * 60 * 1000);
                                                             const isActive = now >= earlyJoin && now <= end;
                                                             const isPast = now > end;
-                                                            if (isActive) {
-                                                                return (
+                                                            // Ссылка на комнату теперь видна всегда — заказчик хочет
+                                                            // входить в запланированные встречи в любой момент, а не
+                                                            // только в окне «за 5 минут до начала и до конца». Статус
+                                                            // времени убирать не нужно: полезно видеть, идёт разговор,
+                                                            // ещё не начался или уже закончился.
+                                                            return (
+                                                                <>
+                                                                    {!isActive && !isPast && (
+                                                                        <span className="inline-flex items-center gap-1.5 bg-muted/60 text-muted-foreground px-3 py-1.5 rounded-full text-xs font-medium">
+                                                                            <Clock className="h-3.5 w-3.5" />
+                                                                            {t('calendar.startsAt', { time: format(start, 'HH:mm') })}
+                                                                        </span>
+                                                                    )}
+                                                                    {isPast && (
+                                                                        <span className="inline-flex items-center gap-1.5 bg-muted/60 text-muted-foreground px-3 py-1.5 rounded-full text-xs font-medium">
+                                                                            {t('conference.overview.status.finished')}
+                                                                        </span>
+                                                                    )}
                                                                     <Link
                                                                         to={`/room/${ev.conference_room_id}`}
-                                                                        className="inline-flex items-center gap-1.5 bg-pink-500 text-white px-3 py-1.5 rounded-full text-xs font-bold hover:bg-pink-600 transition-colors shadow-sm animate-pulse"
+                                                                        className={cn(
+                                                                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-colors shadow-sm",
+                                                                            isActive
+                                                                                ? "bg-pink-500 text-white hover:bg-pink-600 animate-pulse"
+                                                                                : "bg-pink-500/10 text-pink-600 hover:bg-pink-500/20",
+                                                                        )}
                                                                     >
                                                                         <Video className="h-3.5 w-3.5" />
                                                                         {t('calendar.joinConference')}
                                                                     </Link>
-                                                                );
-                                                            }
-                                                            if (isPast) return null;
-                                                            return (
-                                                                <span className="inline-flex items-center gap-1.5 bg-muted/60 text-muted-foreground px-3 py-1.5 rounded-full text-xs font-medium">
-                                                                    <Clock className="h-3.5 w-3.5" />
-                                                                    {t('calendar.startsAt', { time: format(start, 'HH:mm') })}
-                                                                </span>
+                                                                </>
                                                             );
                                                         })()}
                                                     </div>
@@ -679,24 +722,35 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                                                     const earlyJoin = new Date(start.getTime() - 5 * 60 * 1000);
                                                                     const isActive = now >= earlyJoin && now <= end;
                                                                     const isPast = now > end;
-                                                                    if (isActive) {
-                                                                        return (
+                                                                    // Ссылка на комнату теперь видна всегда — см.
+                                                                    // комментарий у аналогичного блока в ленте выше.
+                                                                    return (
+                                                                        <>
+                                                                            {!isActive && !isPast && (
+                                                                                <span className="inline-flex items-center gap-1.5 bg-muted/60 text-muted-foreground px-3 py-1.5 rounded-lg text-xs font-medium mt-1 w-fit">
+                                                                                    <Clock className="h-3.5 w-3.5" />
+                                                                                    {t('calendar.startsAt', { time: format(start, 'HH:mm') })}
+                                                                                </span>
+                                                                            )}
+                                                                            {isPast && (
+                                                                                <span className="inline-flex items-center gap-1.5 bg-muted/60 text-muted-foreground px-3 py-1.5 rounded-lg text-xs font-medium mt-1 w-fit">
+                                                                                    {t('conference.overview.status.finished')}
+                                                                                </span>
+                                                                            )}
                                                                             <Link
                                                                                 to={`/room/${ev.conference_room_id}`}
-                                                                                className="inline-flex items-center gap-1.5 bg-pink-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-pink-600 transition-colors shadow-sm mt-1 w-fit animate-pulse"
+                                                                                className={cn(
+                                                                                    "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm mt-1 w-fit",
+                                                                                    isActive
+                                                                                        ? "bg-pink-500 text-white hover:bg-pink-600 animate-pulse"
+                                                                                        : "bg-pink-500/10 text-pink-600 hover:bg-pink-500/20",
+                                                                                )}
                                                                                 onClick={(e) => e.stopPropagation()}
                                                                             >
                                                                                 <Video className="h-3.5 w-3.5" />
                                                                                 {t('calendar.joinConference')}
                                                                             </Link>
-                                                                        );
-                                                                    }
-                                                                    if (isPast) return null;
-                                                                    return (
-                                                                        <span className="inline-flex items-center gap-1.5 bg-muted/60 text-muted-foreground px-3 py-1.5 rounded-lg text-xs font-medium mt-1 w-fit">
-                                                                            <Clock className="h-3.5 w-3.5" />
-                                                                            {t('calendar.startsAt', { time: format(start, 'HH:mm') })}
-                                                                        </span>
+                                                                        </>
                                                                     );
                                                                 })()}
                                                                 {canEditEvent(ev) && (
@@ -784,6 +838,50 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                             onSubmit={(data) => updateEventMutation.mutate({ id: editingEvent.id, data })}
                         />
                     )}
+                </DialogContent>
+            </Dialog>
+
+            {/* Диплинк из уведомления (?event=<id>) — карточка события с
+                кнопкой входа, см. комментарий у deepLinkEventId выше. */}
+            <Dialog open={deepLinkEventId !== null} onOpenChange={(open) => { if (!open) closeDeepLink(); }}>
+                <DialogContent className="max-w-md rounded-2xl p-0 overflow-hidden border-none shadow-2xl">
+                    <div className="bg-primary/10 p-6 border-b border-primary/20">
+                        <DialogHeader>
+                            <DialogTitle className="text-xl font-bold text-foreground">
+                                {t('calendar.deepLink.title')}
+                            </DialogTitle>
+                        </DialogHeader>
+                    </div>
+                    <div className="p-6 space-y-3">
+                        {isDeepLinkLoading ? (
+                            <p className="text-sm text-muted-foreground">{t('calendar.deepLink.loading')}</p>
+                        ) : !deepLinkEvent ? (
+                            <p className="text-sm text-muted-foreground">{t('calendar.deepLink.notFound')}</p>
+                        ) : (
+                            <>
+                                <h4 className="font-bold text-lg tracking-tight">
+                                    {deepLinkEvent.event_type === 'conference' && '🎥 '}{deepLinkEvent.title}
+                                </h4>
+                                {deepLinkEvent.description && (
+                                    <p className="text-sm text-muted-foreground">{deepLinkEvent.description}</p>
+                                )}
+                                <div className="text-sm font-semibold text-primary/80 flex items-center gap-1.5">
+                                    <Clock className="w-4 h-4" />
+                                    {format(new Date(deepLinkEvent.start_at), 'dd.MM.yyyy HH:mm')}
+                                    {' – '}
+                                    {format(new Date(deepLinkEvent.end_at), 'HH:mm')}
+                                </div>
+                                {deepLinkEvent.event_type === 'conference' && deepLinkEvent.conference_room_id && (
+                                    <Button asChild className="w-full mt-2 bg-pink-500 hover:bg-pink-600 text-white" onClick={closeDeepLink}>
+                                        <Link to={`/room/${deepLinkEvent.conference_room_id}`}>
+                                            <Video className="h-4 w-4 mr-2" />
+                                            {t('calendar.deepLink.enter')}
+                                        </Link>
+                                    </Button>
+                                )}
+                            </>
+                        )}
+                    </div>
                 </DialogContent>
             </Dialog>
         </div>

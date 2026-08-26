@@ -330,6 +330,16 @@ export default defineConfig(({ mode }) => {
       target: backendTarget,
       changeOrigin: true,
     },
+    // apps.conference: история встреч, сводный экран `/overview`, протоколы и
+    // записи. Та же история, что у `core` выше, — домен появился уже в
+    // Django-монолите, правила в этой таблице не было, и ВЕСЬ API конференций
+    // в dev упирался в catch-all ниже, получая синтетический 404 «API endpoint
+    // not found» от самого Vite. В проде nginx отдаёт его общим `location
+    // /api/`, поэтому там работало и расхождение жило незамеченным.
+    "^/api/conference/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
     "^/api/": {
       target: userServiceTarget,
       changeOrigin: true,

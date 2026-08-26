@@ -215,10 +215,19 @@ export const NotificationsViewer: React.FC = () => {
                         {topNotifications.map(n => {
                             const Icon = iconFor(n);
                             const source = notificationSourceLabel(n);
+                            // Есть ли куда вести. Уведомление без цели не должно
+                            // притворяться нажимаемым: курсор-указатель и
+                            // закрывающееся меню обещают переход, которого не
+                            // будет, и человек решает, что интерфейс сломан.
+                            const targetUrl = notificationTargetUrl(n);
                             return (
                                 <DropdownMenuItem
                                     key={n.id}
-                                    className={`flex flex-col items-start gap-1 p-3 cursor-pointer ${!n.is_read ? 'bg-primary/5 font-medium' : 'opacity-80'}`}
+                                    className={`flex flex-col items-start gap-1 p-3 ${targetUrl ? 'cursor-pointer' : 'cursor-default'} ${!n.is_read ? 'bg-primary/5 font-medium' : 'opacity-80'}`}
+                                    // Без цели меню не закрываем: отметить
+                                    // прочитанным полезно, а закрытие выглядело
+                                    // бы как неудавшийся переход.
+                                    onSelect={(event) => { if (!targetUrl) event.preventDefault(); }}
                                     onClick={() => handleNotificationClick(n)}
                                 >
                                     <div className="flex items-center gap-2 w-full">

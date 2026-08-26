@@ -38,6 +38,9 @@
 name: htqweb-local
 
 x-django-env: &django-env
+  # Секрет канала SFU -> Django. Пустой ЗАКРЫВАЕТ приём фактов о
+  # встречах (так задумано), поэтому без него нет ни истории, ни записей.
+  CONFERENCE_INTERNAL_TOKEN: ${CONFERENCE_INTERNAL_TOKEN:-}
   # DEBUG-настройки: подробные трейсбеки, без обязательного ALLOWED_HOSTS.
   DJANGO_SETTINGS_MODULE: htqweb.settings.dev
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
@@ -514,6 +517,11 @@ services:
       WEBRTC_ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-127.0.0.1}
       WEBRTC_SERVER_PORT: ${WEBRTC_SERVER_PORT:-44444}
       MEDIASOUP_WORKERS: ${MEDIASOUP_WORKERS:-1}
+      # Куда SFU шлёт факты о встрече. Пустой адрес выключает запись
+      # целиком: писать файлы, о которых некому рассказать, значит
+      # копить сирот на диске.
+      CONFERENCE_BACKEND_URL: ${CONFERENCE_BACKEND_URL:-http://backend-web:8000}
+      CONFERENCE_INTERNAL_TOKEN: ${CONFERENCE_INTERNAL_TOKEN:-}
     ports:
       - "4443:4443"
       - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/udp"

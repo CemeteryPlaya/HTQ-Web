@@ -380,6 +380,11 @@ class ConferenceInviteCreate(BaseModel):
     ttl_hours: Optional[int] = Field(None, ge=1, le=24 * 90)
     #: 0 — без ограничения на число входов.
     max_uses: int = Field(0, ge=0, le=1000)
+    #: Язык интерфейса для того, кто откроет ссылку — "ru"/"en" либо пусто
+    #: («не задано», прежнее поведение). Неизвестное значение сервис тихо
+    #: приводит к пустой строке — здесь намеренно нет строгого Literal:
+    #: опечатка или будущий язык не должны валить создание ссылки 422-й.
+    locale: str = Field("", max_length=8)
 
 
 class ConferenceInviteRead(BaseModel):
@@ -396,6 +401,7 @@ class ConferenceInviteRead(BaseModel):
     revoked: bool
     max_uses: int
     uses: int
+    locale: str
     created_at: datetime
 
 
@@ -411,6 +417,8 @@ class ConferenceInvitePublic(BaseModel):
     allow_guests: bool
     expires_at: datetime
     room_id: Optional[str] = None
+    #: Пусто — язык не задан, страница входа ведёт себя как раньше.
+    locale: str = ""
 
 
 class ConferenceGuestRequest(BaseModel):
@@ -423,6 +431,9 @@ class ConferenceGuestToken(BaseModel):
     room_id: str
     display_name: str
     title: str
+    #: Язык приглашения — фронт кладёт его в guestSession, чтобы он не
+    #: откатился при переходе со страницы входа в саму комнату.
+    locale: str = ""
     #: Рантайм-конфиг конференции отдаётся вместе с токеном намеренно:
     #: /conference/config закрыт платформенным JWT, которого у гостя нет, а
     #: открывать его наружу ради адреса сигналинга — лишняя дырка.

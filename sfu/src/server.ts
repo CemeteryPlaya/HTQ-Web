@@ -771,6 +771,11 @@ async function handleMessage(
         const displayName = String(
           data.displayName || peerConn.identity?.username || 'Guest'
         );
+        // Название встречи — необязательное поле: гость и повторное
+        // подключение его не шлют, а start_session на бэкенде и так решает,
+        // кто победил (первый вошедший, уже идущую встречу не переименовать).
+        const rawTitle = data.title;
+        const title = typeof rawTitle === 'string' && rawTitle.trim() ? rawTitle.trim() : undefined;
         if (!roomId) return respondError('roomId is required');
         if (!mayEnterRoom(peerConn, roomId)) {
           return respondError('guest token is not valid for this room');
@@ -803,6 +808,7 @@ async function handleMessage(
             roomId,
             createdById: peerConn.identity?.user_id ?? null,
             createdByName: peerConn.identity?.username ?? displayName,
+            title,
           });
           if (!session) return;
           await recording.reportParticipant(roomId, {

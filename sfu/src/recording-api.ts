@@ -101,6 +101,7 @@ export async function startSession(params: {
   roomId: string;
   createdById?: number | null;
   createdByName?: string;
+  title?: string;
 }): Promise<SessionHandle | null> {
   const data = await post<{
     session_id: number;
@@ -112,6 +113,7 @@ export async function startSession(params: {
       room_id: params.roomId,
       created_by_id: params.createdById ?? null,
       created_by_name: params.createdByName ?? '',
+      title: params.title ?? '',
     },
     'sfu.recording.session_start_failed'
   );

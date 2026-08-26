@@ -21,7 +21,9 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { fetchInviteInfo, requestGuestToken } from '@/api/conference';
 import { getAccessToken } from '@/lib/auth/profileStorage';
-import { saveGuestSession } from '@/lib/conference/guestSession';
+import {
+  applyGuestLocale, normalizeConferenceLocale, saveGuestSession,
+} from '@/lib/conference/guestSession';
 
 const ConferenceJoin: React.FC = () => {
   const { token = '' } = useParams<{ token: string }>();
@@ -29,6 +31,11 @@ const ConferenceJoin: React.FC = () => {
   const { t } = useTranslation();
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Пока язык приглашения не применён (или не нужен), форму для гостя не
+  // показываем — иначе она на мгновение отрисуется в текущем языке браузера
+  // и тут же переключится на язык из ссылки. Тому, для кого и делалась эта
+  // функциональность (иностранный гость), такой скачок виден лучше всего.
+  const [localeReady, setLocaleReady] = useState(false);
 
   const isEmployee = Boolean(getAccessToken());
 
@@ -44,6 +51,22 @@ const ConferenceJoin: React.FC = () => {
     if (invite?.room_id) navigate(`/room/${encodeURIComponent(invite.room_id)}`, { replace: true });
   }, [invite?.room_id, navigate]);
 
+  // Язык приглашения — только для гостя. Сотрудника, открывшего ту же
+  // ссылку, эффект выше уже уводит в комнату под своей учёткой и своим
+  // языком — до этой строки он не доходит, а значит, навязывать ему чужой
+  // выбор языка здесь и не получится: осознанно, а не по недосмотру.
+  useEffect(() => {
+    if (!invite || invite.room_id) return;
+    const target = normalizeConferenceLocale(invite.locale);
+    if (!target) {
+      setLocaleReady(true);
+      return;
+    }
+    let cancelled = false;
+    applyGuestLocale(target).finally(() => { if (!cancelled) setLocaleReady(true); });
+    return () => { cancelled = true; };
+  }, [invite]);
+
   const join = useMutation({
     mutationFn: () => requestGuestToken(token, name.trim()),
     onSuccess: (data) => {
@@ -54,11 +77,19 @@ const ConferenceJoin: React.FC = () => {
         title: data.title,
         expiresAt: Date.now() + data.expires_in * 1000,
         conference: data.conference,
+        // Тот же язык, что уже применён на этой странице, — чтобы при
+        // переходе в комнату (и тем более при обновлении вкладки в ней) он
+        // не откатился на язык браузера.
+        locale: normalizeConferenceLocale(data.locale),
       });
       navigate(`/room/${encodeURIComponent(data.room_id)}`, { replace: true });
     },
     onError: (err: Error) => setError(err.message),
   });
+
+  // Показываем форму, только когда и данные приглашения, и (если нужно)
+  // язык интерфейса уже готовы — см. комментарий у localeReady выше.
+  const pending = isLoading || (Boolean(invite) && !invite.room_id && !localeReady);
 
   const canJoin = name.trim().length > 0 && !join.isPending;
 
@@ -70,15 +101,19 @@ const ConferenceJoin: React.FC = () => {
             <Video className="h-7 w-7 text-emerald-600" />
           </div>
           <CardTitle className="text-xl">
-            {invite?.title || t('conference.join.defaultTitle', 'Видеоконференция')}
+            {pending
+              ? <Skeleton className="mx-auto h-6 w-40" />
+              : (invite?.title || t('conference.join.defaultTitle', 'Видеоконференция'))}
           </CardTitle>
           <CardDescription>
-            {t('conference.join.subtitle', 'Вас пригласили присоединиться к звонку')}
+            {pending
+              ? <Skeleton className="mx-auto mt-1 h-4 w-56" />
+              : t('conference.join.subtitle', 'Вас пригласили присоединиться к звонку')}
           </CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-4">
-          {isLoading && <Skeleton className="h-24 w-full rounded-2xl" />}
+          {pending && !isError && <Skeleton className="h-24 w-full rounded-2xl" />}
 
           {isError && (
             <div className="flex items-start gap-3 rounded-2xl border border-destructive/40 p-4 text-sm">
@@ -94,7 +129,7 @@ const ConferenceJoin: React.FC = () => {
             </div>
           )}
 
-          {invite && !invite.room_id && !invite.allow_guests && (
+          {!pending && invite && !invite.room_id && !invite.allow_guests && (
             // Ссылка «только для своих»: гостевой токен по ней не выдаётся,
             // и единственный честный выход — обычный вход в платформу.
             <div className="space-y-3 text-center">
@@ -108,7 +143,7 @@ const ConferenceJoin: React.FC = () => {
             </div>
           )}
 
-          {invite && !invite.room_id && invite.allow_guests && (
+          {!pending && invite && !invite.room_id && invite.allow_guests && (
             <form
               className="space-y-3"
               onSubmit={(e) => { e.preventDefault(); if (canJoin) join.mutate(); }}
