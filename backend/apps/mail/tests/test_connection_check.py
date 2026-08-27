@@ -521,3 +521,68 @@ def test_api_key_never_reaches_the_report(reachable, fake_mailcow):
         report = connection_check.run_check(timeout=1)
 
     assert SECRET not in str(report.to_dict())
+
+
+# ── куда стучаться, чтобы понять «можно ли сейчас проверить пароль» ───────
+#
+# Цель зависит от режима, потому что от него зависит и сама проверка пароля:
+# у Mailcow её делает API, у голого IMAP — живой логин. Постучись мы всегда в
+# один и тот же хост, гейт врал бы ровно в том режиме, для которого написан.
+
+
+@pytest.mark.django_db
+def test_imap_mode_probes_the_imap_host(monkeypatch, mail_server_reachable):
+    mail_server_reachable(None)
+    seen = []
+    monkeypatch.setattr(
+        connection_check, "_tcp_reachable",
+        lambda host, port, timeout: seen.append((host, port)) or None,
+    )
+    with override_settings(**TUNNEL_SETTINGS):
+        assert connection_check.verify_endpoint_reachable() is True
+
+    assert seen == [("mail-tunnel", 1143)]
+
+
+@pytest.mark.django_db
+def test_mailcow_mode_probes_the_api_host(monkeypatch, mail_server_reachable):
+    mail_server_reachable(None)
+    seen = []
+    monkeypatch.setattr(
+        connection_check, "_tcp_reachable",
+        lambda host, port, timeout: seen.append((host, port)) or None,
+    )
+    with override_settings(
+        MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="mailcow",
+        MAILCOW_API_URL="https://mail.htq.group/api/v1", MAILCOW_API_KEY="k",
+        IMAP_HOST="mail-tunnel", IMAP_PORT=1143,
+    ):
+        assert connection_check.verify_endpoint_reachable() is True
+
+    assert seen == [("mail.htq.group", 443)]
+
+
+@pytest.mark.django_db
+def test_without_a_server_there_is_nothing_to_probe(monkeypatch, mail_server_reachable):
+    """Режим none: сервера нет вовсе, и проверять пароль негде по определению.
+    Стучаться при этом никуда не надо."""
+    mail_server_reachable(None)
+    monkeypatch.setattr(
+        connection_check, "_tcp_reachable",
+        lambda *a, **kw: pytest.fail("зонд не должен был случиться"),
+    )
+    with override_settings(
+        MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="none", IMAP_HOST="", SMTP_HOST="",
+    ):
+        assert connection_check.verify_endpoint_reachable() is False
+
+
+@pytest.mark.django_db
+def test_closed_port_means_the_password_cannot_be_checked(monkeypatch, mail_server_reachable):
+    mail_server_reachable(None)
+    monkeypatch.setattr(
+        connection_check, "_tcp_reachable",
+        lambda host, port, timeout: "Connection refused",
+    )
+    with override_settings(**TUNNEL_SETTINGS):
+        assert connection_check.verify_endpoint_reachable() is False

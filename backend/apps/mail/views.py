@@ -195,7 +195,11 @@ def _suggest_connect(own_address: str, mailbox: dict | None, info: dict) -> bool
       платформы нет) или молчит — остаётся предположение. Тогда порядок
       обратный тому, каким его хочется видеть: сначала спрашиваем пароль, а
       успешный вход и есть доказательство, что ящик существует и принадлежит
-      спрашивающему.
+      спрашивающему. Но предположение имеет смысл, только если пароль будет
+      где проверить, — поэтому в этой ветке сервер ещё и опрашивается на
+      доступность. Спросить пароль, когда проверить его негде, значит
+      получить отказ на ВЕРНЫЙ пароль и отправить человека перебирать пароли
+      или жаловаться не на то.
 
     ``provisioner == "none"`` исключён: почтового сервера нет вовсе,
     подключаться некуда, и просьба ввести пароль была бы издевательством.
@@ -216,9 +220,25 @@ def _suggest_connect(own_address: str, mailbox: dict | None, info: dict) -> bool
             exc=exc, address=own_address,
         )
 
+    if exists is False:
+        return False
+    if exists is True:
+        # Сервер ответил — значит он на связи, второй раз спрашивать незачем.
+        return True
+
     # None — «не знаю», и это НЕ «ящика нет»: приравняй одно к другому, и на
-    # голом IMAP подсказка исчезла бы у всех разом.
-    return exists is not False
+    # голом IMAP подсказка исчезла бы у всех разом. Но и предлагать вслепую,
+    # когда сервер молчит, нельзя.
+    from apps.mail.services import connection_check
+
+    try:
+        return connection_check.verify_endpoint_reachable(use_cache=True)
+    except Exception as exc:  # noqa: BLE001 — карточка не должна ронять ответ
+        return fallback(
+            "mail.connect_info.reachability_failed", False,
+            reason="не удалось проверить доступность почтового сервера",
+            exc=exc,
+        )
 
 
 def _own_corporate_address(user_id: int, domain: str) -> str:

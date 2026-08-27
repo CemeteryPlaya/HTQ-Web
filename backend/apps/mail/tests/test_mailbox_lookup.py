@@ -1015,8 +1015,9 @@ def test_unknown_answer_keeps_the_guess(use_provisioner):
 
 
 @pytest.mark.django_db
-def test_unreachable_server_is_not_a_no(use_provisioner):
-    """Mailcow молчит → «не знаю», а не «ящика нет»."""
+def test_silent_server_is_not_a_no(use_provisioner):
+    """Mailcow не ответил на вопрос про ящик → «не знаю», а не «ящика нет».
+    Пока сам сервер на связи, предположение остаётся в силе."""
     use_provisioner(_FakeMailcow(remote=set(), unreachable="таймаут"))
     body = _connect_info(_amirov(), **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
 
@@ -1066,3 +1067,64 @@ def test_provisioning_decisions_never_read_the_cache(use_provisioner):
         lookup_service.lookup("ruslan.amirov@htq.group")
 
     assert prov.probes == ["ruslan.amirov@htq.group"] * 2
+
+
+# ── гейт по доступности: не просить пароль, когда проверить его негде ─────
+#
+# Худший исход подсказки — попросить пароль у человека, которому его негде
+# проверить: он вводит ВЕРНЫЙ пароль, получает отказ и решает, что ошибся.
+# Дальше либо перебирает пароли, либо идёт к администратору с неверной
+# жалобой. Поэтому в ветке «не знаю» сервер ещё и опрашивается.
+
+
+@pytest.mark.django_db
+def test_down_server_stops_the_suggestion(use_provisioner, mail_server_reachable):
+    """Сегодняшний прод: IMAP «не знает» про ящик, а сам сервер лежит."""
+    use_provisioner(_FakeImap())
+    mail_server_reachable(False)
+
+    assert _connect_info(_amirov())["suggest_connect"] is False
+
+
+@pytest.mark.django_db
+def test_live_server_keeps_the_guess(use_provisioner, mail_server_reachable):
+    """Тот же режим, но сервер отвечает — подсказка на месте."""
+    use_provisioner(_FakeImap())
+    mail_server_reachable(True)
+
+    assert _connect_info(_amirov())["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_found_mailbox_needs_no_second_probe(use_provisioner, mail_server_reachable):
+    """Сервер уже ответил «ящик есть» — значит он на связи по определению.
+    Второй вопрос о доступности был бы лишней задержкой в ручке, которую
+    дёргает каждая загрузка страницы."""
+    use_provisioner(_FakeMailcow(remote={"ruslan.amirov@htq.group"}))
+    mail_server_reachable(False)   # если бы зонд случился — подсказка пропала бы
+
+    body = _connect_info(_amirov(), **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
+    assert body["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_reachability_is_probed_once_per_server(
+    use_provisioner, monkeypatch, mail_server_reachable,
+):
+    """Адрес сервера у всех один, поэтому и зонд один — на минуту и на стенд,
+    а не на каждого сотрудника."""
+    from apps.mail.services import connection_check
+
+    mail_server_reachable(None)   # проверяем саму проверку, а не заглушку
+    probes = []
+    monkeypatch.setattr(
+        connection_check, "_tcp_reachable",
+        lambda host, port, timeout: probes.append((host, port)) or None,
+    )
+    use_provisioner(_FakeImap())
+    user = _amirov()
+
+    for _ in range(3):
+        assert _connect_info(user)["suggest_connect"] is True
+
+    assert probes == [("mail.htq.group", 993)]

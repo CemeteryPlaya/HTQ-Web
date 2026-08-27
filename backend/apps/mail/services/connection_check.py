@@ -26,6 +26,8 @@ import socket
 import ssl
 from dataclasses import asdict, dataclass, field
 
+from django.core.cache import cache
+
 from apps.mail.services import provisioning
 from apps.mail.services.imap_client import ImapClient, ImapError, ImapNotConfigured
 from apps.mail.services.mail_config import get_config
@@ -68,6 +70,64 @@ def _tcp_reachable(host: str, port: int, timeout: int) -> str | None:
             return None
     except OSError as exc:
         return str(exc)
+
+
+#: Доступность сервера меняется быстрее, чем состав ящиков, поэтому TTL
+#: короче, чем у ``lookup_service._REMOTE_TTL``: упавший сервер должен
+#: перестать порождать просьбы о пароле в течение минуты, а поднявшийся —
+#: так же быстро вернуть их.
+_REACHABLE_TTL = 60
+
+
+def verify_endpoint_reachable(*, use_cache: bool = False, timeout: int = 3) -> bool:
+    """Отвечает ли сервер, на котором будет проверяться пароль сотрудника.
+
+    Спросить пароль, когда проверить его негде, — худший из возможных
+    исходов: человек вводит ВЕРНЫЙ пароль, получает отказ и решает, что
+    ошибся. Дальше он либо перебирает пароли, либо идёт к администратору с
+    неверной жалобой.
+
+    Цель зависит от режима, потому что от него зависит и сама проверка:
+    у Mailcow пароль проверяет API (``MailcowProvisioner.verify`` ходит в
+    него), у голого IMAP — живой логин на imap-хост.
+
+    Зонд один на стенд и на минуту, а не на каждого сотрудника: адрес у всех
+    один. Таймаут короткий намеренно — этот вызов сидит в ручке, которую
+    дёргает каждая загрузка страницы, и ждать на ней нельзя.
+    """
+    cfg = get_config()
+    name = provisioning.describe()["provisioner"]
+
+    if name == "mailcow":
+        host, port, error = _api_host_port(cfg.mailcow_api_url)
+        if error or not host:
+            return False
+    elif name == "imap":
+        host, port = cfg.imap_host, cfg.imap_port
+        if not host:
+            return False
+    else:
+        # Сервера нет вовсе — проверять пароль негде и не у кого.
+        return False
+
+    if not use_cache:
+        return _tcp_reachable(host, port, timeout) is None
+
+    key = f"mail:verify-reachable:{host}:{port}"
+    try:
+        cached = cache.get(key)
+    except Exception:  # noqa: BLE001 — недоступный Redis не повод падать
+        return _tcp_reachable(host, port, timeout) is None
+
+    if cached is not None:
+        return bool(cached["reachable"])
+
+    reachable = _tcp_reachable(host, port, timeout) is None
+    try:
+        cache.set(key, {"reachable": reachable}, _REACHABLE_TTL)
+    except Exception:  # noqa: BLE001
+        pass
+    return reachable
 
 
 TUNNEL_HINT = (
