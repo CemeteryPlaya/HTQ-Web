@@ -11,13 +11,17 @@ from .base import *  # noqa: F403
 # Пакета migrations у неё нет намеренно: `migrate --run-syncdb`, который
 # pytest-django выполняет при создании тестовой БД, заводит таблицы именно
 # для аппок без миграций.
-INSTALLED_APPS = [*INSTALLED_APPS, "apps.signoff.tests.testapp"]  # noqa: F405
+INSTALLED_APPS = [
+    *INSTALLED_APPS,
+    "apps.signoff.tests.testapp.apps.SignoffTestAppConfig",
+]  # noqa: F405
 
 # Тесты бьют напрямую в Postgres контейнера htqweb1-db-1, не через PgBouncer:
 # pytest-django создаёт/дропает test_htqweb через CREATE/DROP DATABASE, а
 # PgBouncer в transaction-режиме такого не пропускает. Нативный Windows
 # postgresql-x64-18 занимает хостовый :5432, поэтому контейнер отдельно
-# публикуется на :55432 через `docker-compose.test.yml` (см. backend/README-tests.md).
+# публикуется на :55432 сервисом `db` из docker-compose.test-local.yml
+# (см. backend/README-tests.md).
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",

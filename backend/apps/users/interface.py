@@ -230,20 +230,26 @@ def list_users_brief(search: str | None = None, limit: int = 100) -> list[dict]:
 
 
 def create_user(*, email: str, first_name: str = "", last_name: str = "",
-                patronymic: str = "") -> dict:
+                patronymic: str = "", must_change_password: bool = True) -> dict:
     """Create a platform user from a neighbour app — hr's "create employee
-    from a brand-new user" dialog (``HRUserCreateRequest``: only ФИО +
-    email, no username/password prompt).
+    from a brand-new user" dialog (``HRUserCreateRequest``).
 
     Reuses ``apps.users.services.admin_service.create_user`` for the actual
     creation (uniqueness checks, ``set_password``, ``must_change_password``)
-    rather than duplicating it — this function only adds the bits the
+    rather than duplicating it — this function only adds the bit the
     source's ``create_user_option`` did locally before calling user-service:
     deriving ``username`` from the email local-part and minting a random
     temp password. Raises this module's own ``DuplicateEmail``/
     ``DuplicateUsername`` (never ``admin_service``'s — neighbours may not
     import ``apps.users.services``, only this module) so the caller can map
     them to 409 without knowing admin_service exists.
+
+    **Пароль генерируется ЗДЕСЬ и не принимается аргументом.** Обсуждалась и
+    обратная развязка — пусть HR задаёт пароль руками и сам передаёт его
+    сотруднику, — но она требует, чтобы пароль прошёл через форму, сеть и
+    глаза заводящего, а гарантия «первый вход заканчивается сменой» держалась
+    бы на клиенте. Здесь секрет не покидает сервер иначе как одним полем
+    ответа на создание, и подделать его вызывающему нечем.
 
     **``generated_password`` в ответе — единственный раз, когда этот модуль
     отдаёт секрет, и это исправление, а не послабление.** Раньше временный
@@ -276,7 +282,7 @@ def create_user(*, email: str, first_name: str = "", last_name: str = "",
             last_name=last_name,
             patronymic=patronymic,
             display_name=display_name,
-            must_change_password=True,
+            must_change_password=must_change_password,
         )
     except admin_service.DuplicateEmail:
         raise DuplicateEmail() from None

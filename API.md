@@ -55,7 +55,7 @@ document is checked against, not a FastAPI router. See
 [STRUCTURE.md](STRUCTURE.md) §3 and [backend/README.md](backend/README.md)
 for the app anatomy.
 
-## Access URLs (dev mode — `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`)
+## Access URLs (test stack — `docker compose -f docker-compose.test-local.yml up -d --build`)
 
 The Vite dev server binds `0.0.0.0:3000` with `allowedHosts: true`, so any
 of the following work identically over **plain HTTP**:
@@ -290,7 +290,7 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 
 | Endpoint                                  | Method | Notes                          |
 |-------------------------------------------|--------|---------------------------------|
-| `/api/hr/v1/employees/`                   | GET, POST | Employee CRUD               |
+| `/api/hr/v1/employees/`                   | GET, POST | Employee CRUD. Тело POST/PUT принимает опциональный `card_t2: {financial?, personal?, certs?}` — секции Т-2 пишутся в той же транзакции, посекционный RBAC `hr.card.<section>.edit` |
 | `/api/hr/v1/employees/{id}/`              | GET, PATCH, DELETE |                       |
 | `/api/hr/v1/employees/me`                 | GET    | Current user's own employee row |
 | `/api/hr/v1/employees/me/card`            | GET    | Т-2 employee card (field-gated) |
@@ -748,6 +748,17 @@ Every path is registered in **both** the slashed and bare spelling
 | `/api/contracts/v1/agreements/{id}/status`       | POST   | Manual status change — validates the transition. Approval drives the same machine automatically |
 | `/api/contracts/v1/agreements/{id}/file`         | POST   | multipart, field `file` → stored via `apps.media_files.interface.store_file` |
 | `/api/contracts/v1/agreements/{id}/file-url`     | GET    | Signed URL for the stored scan |
+| `/api/contracts/v1/advance-payments`             | GET, POST | Предоплата по договору; создание разрешено только когда `agreement.approval_state=approved` |
+| `/api/contracts/v1/advance-payments/{id}`        | GET    | Карточка предоплаты |
+| `/api/contracts/v1/advance-payments/{id}/submit` | POST   | **→ approval.** Возвращает карточку процесса (201) |
+| `/api/contracts/v1/advance-payments/{id}/payment-order` | POST multipart | После одобрения предоплаты: «Файл платёжного поручения» + `posting_number`; нужен permission `contracts.advance_payment.record_payment` (или admin) |
+| `/api/contracts/v1/advance-payments/{id}/payment-order-url` | GET | Signed URL платёжного поручения |
+| `/api/contracts/v1/contract-payments` | GET, POST multipart | Оплата по договору: `administrator_id`, `agreement_id`, `amount`, файл `invoice`; администратор обязан совпадать с администратором бюджета договора |
+| `/api/contracts/v1/contract-payments/{id}` | GET | Карточка оплаты |
+| `/api/contracts/v1/contract-payments/{id}/submit` | POST | **→ approval.** После одобрения документ ожидает бухгалтерию |
+| `/api/contracts/v1/contract-payments/{id}/invoice-url` | GET | Signed URL приложенного счёта |
+| `/api/contracts/v1/contract-payments/{id}/payment-order` | POST multipart | После одобрения: `posting_number` + файл `file`; нужен permission `contracts.contract_payment.record_payment` (или admin) |
+| `/api/contracts/v1/contract-payments/{id}/payment-order-url` | GET | Signed URL платёжного поручения |
 
 ### Approval fields and the two axes
 
@@ -823,9 +834,10 @@ so the dependency only ever points *domain → signoff*.
 
 **Route shape.** A route is an ordered list of stages. Stages with the
 **same `order` run in parallel**; different `order` runs sequentially. Each
-stage names its approvers explicitly (user ids — the platform has no groups;
-`User` deliberately omits `PermissionsMixin`) and a `quorum` of `any` or
-`all`. **Any negative decision at any stage closes the whole process
+stage names its HR positions explicitly. Their active employee accounts are
+resolved when the process starts, and a `quorum` applies within each selected
+position: `any` needs one holder of every position, while `all` needs every
+holder of every position. **Any negative decision at any stage closes the whole process
 immediately**; outstanding requests are marked `skipped`, not left hanging.
 Exactly one active route per subject type (partial unique index).
 
@@ -853,12 +865,13 @@ everything mid-flight, which matters because unlocking runs through signoff.
 **Signature stages.** Two independent stage flags cover "the author signs
 last, with the signed PDF attached":
 
-* `approver_kind` — `named` (the default: approvers listed in the route) or
+* `approver_kind` — `position` (the default: HR positions listed in the
+  route, whose current active employees/accounts are resolved **at start**) or
   `initiator`, where the single approver is resolved **at start** from
   `ApprovalProcess.initiator_id`. It is deliberately *initiator*, not
   "creator": signoff cannot read a domain model's `created_by`, and in
   contracts the two are the same person by business process. Such a stage
-  must carry **no** `approver_ids` (409/422 otherwise), and its `quorum` is
+  must carry **no** `position_ids` (409/422 otherwise), and its `quorum` is
   meaningless — there is exactly one task.
 * `requires_attachment` — the stage can only be **approved** with a PDF
   already attached to the task (`ApprovalTask.file_id`). Rejection needs no
@@ -904,8 +917,8 @@ or the subject — never disturbs approvals already in flight.
 | `/api/signoff/v1/routes`                    | GET    | jwt   | `?subject_type=&is_active=` |
 | `/api/signoff/v1/routes`                    | POST   | admin | 409 if the subject type isn't registered, or a second active route |
 | `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | jwt / admin | GET also returns `coverage_gaps[]` — `choice` values with no branch in their group — and `initiator_stage_not_last`. Both are warnings for the editor, not blocks; the list endpoint omits them (too costly per row) |
-| `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, approver_ids[], condition?, is_fallback?, approver_kind?, requires_attachment?}`; ≥1 approver for `named` and **none** for `initiator` — both enforced by the schema (422). Unknown ids → 409, and a condition naming an unknown field or an out-of-book value → 409 |
-| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `approver_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. Switching `approver_kind` to `initiator` clears the approver list for you; sending a non-empty list alongside it is a 409. The last stage of a route can't be deleted |
+| `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, position_ids[], condition?, is_fallback?, approver_kind?, requires_attachment?}`; ≥1 HR position for `position` and **none** for `initiator` — both enforced by the schema (422). Unknown ids → 409. The current active employee/account holders are resolved only when the process starts. |
+| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `position_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. Switching `approver_kind` to `initiator` clears the position list; sending a non-empty list alongside it is a 409. The last stage of a route can't be deleted |
 | `/api/signoff/v1/processes`                 | GET    | jwt   | `?subject_type=&subject_id=&state=&initiator_id=` |
 | `/api/signoff/v1/processes`                 | POST   | admin | Deliberately narrow — it accepts *any* `subject_id` of any type and so would bypass domain permissions. **The real submit path is the domain endpoint** (`/api/contracts/v1/budgets/{id}/submit`, …) |
 | `/api/signoff/v1/processes/{id}`            | GET    | jwt   | Full card: stages, tasks, approver names, subject title/url, plus `subject_facts` and each stage's `condition`/`matched_by` (`always`\|`condition`\|`fallback`) — the record of *why* these approvers |

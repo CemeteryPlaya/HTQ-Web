@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { useHomeSection } from '@/hooks/useHomeContent';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Leaf, Sun, Zap } from 'lucide-react';
 
@@ -6,6 +7,7 @@ const panels1 = '/images/panels1.webp';
 
 export const AboutSection = () => {
   const { t } = useTranslation();
+  const home = useHomeSection('about');
 
   const features = [
     {

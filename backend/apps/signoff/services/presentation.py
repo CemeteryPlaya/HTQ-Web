@@ -64,7 +64,9 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "condition": stage.condition or [],
                 "matched_by": stage.matched_by,
                 "approver_kind": stage.approver_kind,
+                "role_ids": stage.role_ids or [],
                 "requires_attachment": stage.requires_attachment,
+                "requires_comment": stage.requires_comment,
                 "decided_at": stage.decided_at,
                 "tasks": [
                     serialize_task(task, names=names, urls=enrich)
@@ -106,6 +108,7 @@ def serialize_task(task: ApprovalTask, *, names: dict[int, dict] | None = None,
     card = {
         "id": task.pk,
         "user_id": task.user_id,
+        "position_id": task.position_id,
         "full_name": names.get(task.user_id, {}).get("full_name", ""),
         "state": task.state,
         "comment": task.comment,
@@ -150,9 +153,10 @@ def list_inbox(user_id: int) -> list[dict]:
             "subject_url": info.get("url"),
             "stage_name": task.stage.name,
             "quorum": task.stage.quorum,
-            # Чтобы в очереди было видно, что решение потребует документа, —
-            # до того, как человек откроет диалог и упрётся в отказ.
+            # Чтобы в очереди было видно, что решение потребует документа или
+            # пояснения, — до того, как человек откроет диалог и упрётся в отказ.
             "requires_attachment": task.stage.requires_attachment,
+            "requires_comment": task.stage.requires_comment,
             "file_id": task.file_id or None,
             "initiator_id": process.initiator_id,
             "created_at": process.created_at,

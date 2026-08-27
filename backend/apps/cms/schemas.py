@@ -245,6 +245,130 @@ class NewsListQuery(BaseModel):
     page_size: int = Field(12, ge=1, le=100)
 
 
+# ── Блоки главной страницы ───────────────────────────────────────────────────
+#
+# Две формы одних и тех же данных:
+#   * публичная (``HomeSectionPublic``) — уже локализованная, по одному
+#     значению на поле: лендингу незачем знать про существование второго языка;
+#   * редакторская (``HomeSectionAdmin``) — оба языка сразу, чтобы форма
+#     показывала вкладки RU/EN без второго запроса.
+
+class HomeItemPublic(BaseModel):
+    id: int
+    title: str = ""
+    description: str = ""
+    value: str = ""
+    icon: str = ""
+    image: str = ""
+    link: str = ""
+
+
+class HomeSectionPublic(BaseModel):
+    id: int
+    key: str
+    layout: str = "features_grid"
+    is_system: bool = False
+    tag: str = ""
+    title: str = ""
+    description: str = ""
+    items: list[HomeItemPublic] = []
+
+
+class HomeItemAdmin(BaseModel):
+    id: int
+    title_ru: str = ""
+    title_en: str = ""
+    description_ru: str = ""
+    description_en: str = ""
+    value: str = ""
+    icon: str = ""
+    image: str = ""
+    link: str = ""
+    is_visible: bool = True
+    order: int = 0
+
+
+class HomeSectionAdmin(BaseModel):
+    id: int
+    key: str
+    layout: str = "features_grid"
+    is_system: bool = False
+    tag_ru: str = ""
+    tag_en: str = ""
+    title_ru: str = ""
+    title_en: str = ""
+    description_ru: str = ""
+    description_en: str = ""
+    is_visible: bool = True
+    order: int = 0
+    items: list[HomeItemAdmin] = []
+
+
+class HomeSectionUpdate(BaseModel):
+    """PATCH секции. Все поля необязательны — форма шлёт только изменённое.
+
+    ``key`` менять нельзя: по нему React-компонент находит свои данные, и
+    переименование молча оставило бы секцию без макета. В схеме его нет вовсе,
+    так что попытка прислать key просто игнорируется.
+    """
+    tag_ru: str | None = None
+    tag_en: str | None = None
+    title_ru: str | None = None
+    title_en: str | None = None
+    description_ru: str | None = None
+    description_en: str | None = None
+    is_visible: bool | None = None
+
+
+class HomeItemUpsert(BaseModel):
+    title_ru: str = ""
+    title_en: str = ""
+    description_ru: str = ""
+    description_en: str = ""
+    value: str = ""
+    icon: str = ""
+    image: str = ""
+    link: str = ""
+    is_visible: bool = True
+
+
+class HomeItemUpdate(BaseModel):
+    title_ru: str | None = None
+    title_en: str | None = None
+    description_ru: str | None = None
+    description_en: str | None = None
+    value: str | None = None
+    icon: str | None = None
+    image: str | None = None
+    link: str | None = None
+    is_visible: bool | None = None
+
+
+class HomeReorder(BaseModel):
+    """Массовая перестановка: список id в нужном порядке.
+
+    Одним запросом, а не PATCH на каждую строку: перетаскивание меняет позиции
+    сразу нескольким соседям, и построчная запись оставила бы порядок битым,
+    если часть запросов не дойдёт.
+    """
+    ids: list[int]
+
+
+class HomeSectionCreate(BaseModel):
+    """Создание блока из интерфейса.
+
+    ``key`` не спрашиваем: он служебный (по нему рендерер находит макет) и
+    редактору не нужен — сервер выведет его из заголовка и разведёт коллизии
+    сам. Ручной ввод дал бы поле, в котором нечего написать правильно.
+    """
+    title_ru: str
+    title_en: str = ""
+    layout: str = "features_grid"
+    tag_ru: str = ""
+    tag_en: str = ""
+    description_ru: str = ""
+    description_en: str = ""
+
 # ── Приглашения в конференцию ──────────────────────────────────────────────
 
 class ConferenceInviteCreate(BaseModel):

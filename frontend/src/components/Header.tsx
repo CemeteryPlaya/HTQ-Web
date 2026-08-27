@@ -1,10 +1,17 @@
 import React, { useState, useEffect, Suspense } from 'react';
-import { Menu, X, Search, ArrowLeft, UserCircle } from 'lucide-react';
+import { Menu, X, Search, ArrowLeft, UserCircle, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useHRLevel } from '@/hooks/useHRLevel';
 import { hasEmployeeTaskAccess, isEditor, isHrManager } from '@/lib/auth/roles';
+import { splitForHeader, visibleNavItems, type NavItem } from '@/app/navigation/navItems';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 const logo = '/images/logo.webp';
 
 // Lazy-load heavy components only needed by logged-in users
@@ -108,32 +115,31 @@ export const Header = () => {
     { label: t('header.news'), href: '/news', isInternal: false },
   ];
 
-  const employeeLinks = [
-    { label: t('header.news'), href: '/news', reqRole: null },
-    { label: t('hr.nav.calendar', 'Календарь'), href: '/calendar', reqRole: null },
-    // Раздел договоров/бюджетов. Пока без ролевого условия: тонкой роли
-    // «финансист» в платформе нет, а сами страницы всё равно закрыты
-    // requiresAuth, и запись на бэкенде требует админа (api_view(admin=True)).
-    { label: t('contracts.nav.title', 'Договоры'), href: '/contracts', reqRole: null },
-    // Согласования — без ролевого условия: очередь «ждёт меня» персональна,
-    // и решает названный в маршруте человек, а не администратор. Настройка
-    // маршрутов внутри раздела закрыта отдельно.
-    { label: t('signoff.nav.title', 'Согласования'), href: '/signoff', reqRole: null },
-  ];
+  // Разделы для залогиненного берём из единого списка (app/navigation/navItems),
+  // общего с мобильной нижней панелью — раньше два списка жили порознь и
+  // разошлись: из шапки были недостижимы чаты, почта и файлы.
+  const employeeNav = visibleNavItems({
+    isEditor: isEditor(activeProfile),
+    isHr: isHrManager(activeProfile) || hasHrAccess,
+    hasTasks: hasEmployeeTaskAccess(activeProfile),
+    hasDepartment: Boolean(activeProfile?.department),
+  });
 
-  if (activeProfile) {
-    if (isEditor(activeProfile)) {
-      employeeLinks.push({ label: t('profile.sidebar.manageNews', 'Упр. Новостями'), href: '/manage/news', reqRole: 'editor' });
-    }
-    if (isHrManager(activeProfile) || hasHrAccess) {
-      employeeLinks.push({ label: t('profile.sidebar.employees', 'Сотрудники'), href: '/hr/employees', reqRole: 'hr' });
-    }
-    if (hasEmployeeTaskAccess(activeProfile)) {
-      employeeLinks.push({ label: t('profile.sidebar.tasks', 'Задачи'), href: '/tasks', reqRole: 'tasks' });
-    }
-  }
+  // Вкладок стало больше, чем помещается в один ряд: держим в ряду первые
+  // четыре, остальное — под «Ещё». Ряд делит место с логотипом, поиском,
+  // бейджем мессенджера, уведомлениями, языком и кнопкой профиля, поэтому
+  // порог низкий намеренно.
+  const { primary, overflow } = splitForHeader(employeeNav, 4);
 
-  const navLinks = isLoggedIn ? employeeLinks : publicLinks;
+  const navLinkClass = 'link-underline font-medium transition-colors duration-300 text-foreground hover:text-primary whitespace-nowrap';
+
+  const renderEmployeeLink = (item: NavItem) => (
+    <Link key={item.id} to={item.href} className={navLinkClass}>
+      {t(item.labelKey, item.labelFallback)}
+    </Link>
+  );
+
+  const mobileLinkClass = 'text-foreground font-medium min-h-[44px] px-4 py-3 rounded-xl hover:bg-accent/60 hover:text-primary transition-colors flex items-center w-full text-base';
 
   return (
     <header
@@ -144,7 +150,7 @@ export const Header = () => {
     >
       <div className="container-custom flex items-center justify-between">
         {/* Logo & Mobile Back button */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {isSubpage && (
             <button
               type="button"
@@ -172,32 +178,58 @@ export const Header = () => {
             />
             <div className={`flex flex-col justify-center h-10 transition-colors duration-300 text-foreground ${isSubpage ? 'hidden sm:flex' : 'flex'}`}>
               <span className="font-display font-bold text-lg leading-tight">Hi-Tech Group</span>
-              <span className="text-[10px] align-center leading-tight opacity-80 max-w-[140px]">Construction services in energy sector</span>
+              {/* Подпись-слоган съедает ~140px в ряду, которому их не хватает.
+                  На рабочих экранах (залогинен, много разделов) она не нужна —
+                  показываем её только на широких, а гостю оставляем как было. */}
+              <span
+                className={`text-[10px] align-center leading-tight opacity-80 max-w-[140px] ${isLoggedIn ? 'hidden xl:block' : ''}`}
+              >
+                Construction services in energy sector
+              </span>
             </div>
           </a>
         </div>
 
         {/* Desktop Navigation */}
-        <nav className="hidden md:flex items-center gap-6">
-          {navLinks.map((link) => (
-            link.isInternal && !isLoggedIn && location.pathname !== '/' ? (
-              <a
-                key={link.label}
-                href={'/' + link.href}
-                className="link-underline font-medium transition-colors duration-300 text-foreground hover:text-primary whitespace-nowrap"
-              >
-                {link.label}
-              </a>
-            ) : (
-              <Link
-                key={link.label}
-                to={link.href.replace('/#', '#')}
-                className="link-underline font-medium transition-colors duration-300 text-foreground hover:text-primary whitespace-nowrap"
-              >
-                {link.label}
-              </Link>
-            )
-          ))}
+        <nav className="hidden md:flex items-center gap-4 lg:gap-6 min-w-0">
+          {isLoggedIn ? (
+            <>
+              {primary.map(renderEmployeeLink)}
+              {overflow.length > 0 && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    className={`${navLinkClass} inline-flex items-center gap-1 outline-none`}
+                    aria-label={t('header.more', 'Ещё')}
+                  >
+                    {t('header.more', 'Ещё')}
+                    <ChevronDown className="h-4 w-4" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    {overflow.map((item) => (
+                      <DropdownMenuItem key={item.id} asChild>
+                        <Link to={item.href} className="flex items-center gap-2">
+                          <item.icon className="h-4 w-4" />
+                          {t(item.labelKey, item.labelFallback)}
+                        </Link>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </>
+          ) : (
+            publicLinks.map((link) => (
+              link.isInternal && location.pathname !== '/' ? (
+                <a key={link.label} href={'/' + link.href} className={navLinkClass}>
+                  {link.label}
+                </a>
+              ) : (
+                <Link key={link.label} to={link.href.replace('/#', '#')} className={navLinkClass}>
+                  {link.label}
+                </Link>
+              )
+            ))
+          )}
           {isLoggedIn && (
             <button
               type="button"
@@ -257,27 +289,39 @@ export const Header = () => {
           />
           <div className="md:hidden absolute top-full left-0 right-0 z-50 glass shadow-elevated animate-fade-in border-b border-border/40">
             <nav className="container-custom py-6 flex flex-col gap-2 max-h-[80vh] overflow-y-auto">
-              {navLinks.map((link) => (
-                link.isInternal && !isLoggedIn && location.pathname !== '/' ? (
-                  <a
-                    key={link.label}
-                    href={'/' + link.href}
-                    className="text-foreground font-medium min-h-[44px] px-4 py-3 rounded-xl hover:bg-accent/60 hover:text-primary transition-colors flex items-center w-full text-base"
-                    onClick={() => setIsMobileMenuOpen(false)}
-                  >
-                    {link.label}
-                  </a>
-                ) : (
+              {isLoggedIn
+                ? employeeNav.map((item) => (
                   <Link
-                    key={link.label}
-                    to={link.href.replace('/#', '#')}
-                    className="text-foreground font-medium min-h-[44px] px-4 py-3 rounded-xl hover:bg-accent/60 hover:text-primary transition-colors flex items-center w-full text-base"
+                    key={item.id}
+                    to={item.href}
+                    className={`${mobileLinkClass} gap-3`}
                     onClick={() => setIsMobileMenuOpen(false)}
                   >
-                    {link.label}
+                    <item.icon className="h-4 w-4 shrink-0" />
+                    {t(item.labelKey, item.labelFallback)}
                   </Link>
-                )
-              ))}
+                ))
+                : publicLinks.map((link) => (
+                  link.isInternal && location.pathname !== '/' ? (
+                    <a
+                      key={link.label}
+                      href={'/' + link.href}
+                      className={mobileLinkClass}
+                      onClick={() => setIsMobileMenuOpen(false)}
+                    >
+                      {link.label}
+                    </a>
+                  ) : (
+                    <Link
+                      key={link.label}
+                      to={link.href.replace('/#', '#')}
+                      className={mobileLinkClass}
+                      onClick={() => setIsMobileMenuOpen(false)}
+                    >
+                      {link.label}
+                    </Link>
+                  )
+                ))}
               {isLoggedIn && (
                 <button
                   type="button"

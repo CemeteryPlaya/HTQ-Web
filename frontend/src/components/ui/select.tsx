@@ -66,9 +66,20 @@ const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        "relative z-50 max-h-[min(24rem,60vh)] min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+        // `flex flex-col` — обязательно, а не оформление: Radix задаёт вьюпорту
+        // инлайновый `flex: 1` вместе с `overflow: hidden auto`, то есть
+        // рассчитывает, что родитель — flex-колонка и ограничит его высоту.
+        // Без этого вьюпорт растёт по содержимому, перерастает лимит и молча
+        // обрезается `overflow-hidden` — список становится непрокручиваемым.
+        //
+        // Высота — `min(24rem,60vh)`, а не фиксированные 24rem: на невысоком
+        // экране (мобильный, ноутбук с открытой консолью) список иначе
+        // упирается в край окна.
+        "relative z-50 flex max-h-[min(24rem,60vh)] min-w-[8rem] flex-col overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
         position === "popper" &&
-          "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
+          // available-height не даёт списку вылезти за край экрана, когда
+          // триггер стоит низко: там места меньше, чем max-h-96.
+          "max-h-[var(--radix-select-content-available-height)] data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
         className,
       )}
       position={position}
@@ -80,16 +91,13 @@ const SelectContent = React.forwardRef<
           // Прокрутка живёт здесь, а не на Content: у того overflow-hidden
           // ради скруглений, и список просто обрезался бы.
           //
-          // Раньше на этом месте стояла ФИКСИРОВАННАЯ высота
+          // Раньше тут стояла ФИКСИРОВАННАЯ высота
           // `h-[var(--radix-select-trigger-height)]` — ровно в высоту поля.
-          // Пока поле было 40px, это ещё как-то мирилось с реальностью, но
-          // после перевода тач-целей на 44px (коммит 47183a8) выпадающий
-          // список стал ростом в одну строку: сотрудников двадцать, видно
-          // одного, прокрутить нечем. Теперь высота ограничена сверху, а всё,
-          // что не влезло, скроллится.
-          "p-1 max-h-[min(24rem,60vh)] overflow-y-auto",
-          position === "popper" &&
-            "w-full min-w-[var(--radix-select-trigger-width)]",
+          // Пока поле было 40px, это ещё мирилось с реальностью, но после
+          // перевода тач-целей на 44px (коммит 47183a8) список стал ростом в
+          // одну строку: сотрудников двадцать, виден один, прокрутить нечем.
+          "p-1 overflow-y-auto",
+          position === "popper" && "w-full min-w-[var(--radix-select-trigger-width)]",
         )}
       >
         {children}

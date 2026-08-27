@@ -57,7 +57,7 @@ SFU режет WS-upgrade без платформенного JWT. Публич�
 одобрит заявку. Поэтому учётка заводится заранее:
 
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend-web `
+docker compose -f docker-compose.test-env.yml exec backend-web `
   python manage.py create_user --email guest@example.com --name "Гость"
 ```
 
@@ -71,7 +71,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend-web 
 ## Проверка, что всё поехало
 
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.dev.yml logs sfu | Select-String "announced|TCP_TUNNEL"
+docker compose -f docker-compose.test-env.yml logs sfu | Select-String "announced|TCP_TUNNEL"
 ```
 
 Ожидается `TCP_TUNNEL_MODE=true → UDP отключён` и `announced as <IP bore.pub>`.

@@ -16,11 +16,11 @@ from django.http import Http404
 from apps.signoff.models import (
     ApprovalRoute,
     ApprovalRouteStage,
-    ApprovalRouteStageApprover,
+    ApprovalRouteStageRole,
     ApproverKind,
 )
 from apps.signoff.services import conditions, registry
-from apps.users import interface as users
+from apps.hr import interface as hr
 
 
 class RouteConflict(Exception):
@@ -48,7 +48,7 @@ def conflict_as(message: str):
 
 def list_routes(*, subject_type: str | None = None,
                 is_active: bool | None = None) -> list[ApprovalRoute]:
-    query = ApprovalRoute.objects.prefetch_related("stages__approvers")
+    query = ApprovalRoute.objects.prefetch_related("stages__roles")
     if subject_type is not None:
         query = query.filter(subject_type=subject_type)
     if is_active is not None:
@@ -57,7 +57,7 @@ def list_routes(*, subject_type: str | None = None,
 
 
 def get_route_or_404(route_id: int) -> ApprovalRoute:
-    route = (ApprovalRoute.objects.prefetch_related("stages__approvers")
+    route = (ApprovalRoute.objects.prefetch_related("stages__roles")
              .filter(pk=route_id).first())
     if route is None:
         raise Http404("Маршрут не найден")
@@ -106,7 +106,7 @@ def delete_route(route_id: int) -> None:
 
 def get_stage_or_404(stage_id: int) -> ApprovalRouteStage:
     stage = (ApprovalRouteStage.objects.select_related("route")
-             .prefetch_related("approvers").filter(pk=stage_id).first())
+             .prefetch_related("roles").filter(pk=stage_id).first())
     if stage is None:
         raise Http404("Этап маршрута не найден")
     return stage
@@ -114,27 +114,29 @@ def get_stage_or_404(stage_id: int) -> ApprovalRouteStage:
 
 @transaction.atomic
 def add_stage(route_id: int, *, order: int, name: str, quorum: str,
-              approver_ids: list[int], condition=None,
+              position_ids: list[int], condition=None,
               is_fallback: bool = False,
-              approver_kind: str = ApproverKind.NAMED,
-              requires_attachment: bool = False) -> ApprovalRouteStage:
+              approver_kind: str = ApproverKind.POSITION,
+              requires_attachment: bool = False,
+              requires_comment: bool = False) -> ApprovalRouteStage:
     route = get_route_or_404(route_id)
-    _check_approver_kind(approver_kind, approver_ids, stage_name=name)
-    if approver_kind == ApproverKind.NAMED:
-        _check_approvers_exist(approver_ids)
+    _check_approver_kind(approver_kind, position_ids, stage_name=name)
+    if approver_kind == ApproverKind.POSITION:
+        _check_positions_exist(position_ids)
     else:
         # Список к этому виду этапа не относится: согласующий вычисляется на
         # запуске. Хранить его «на случай переключения обратно» значило бы
         # держать в маршруте настройку, которую администратор в интерфейсе
         # не видит.
-        approver_ids = []
+        position_ids = []
     condition = _check_condition(route.subject_type, condition, is_fallback)
 
     stage = ApprovalRouteStage.objects.create(
         route=route, order=order, name=name, quorum=quorum,
         condition=condition, is_fallback=is_fallback,
-        approver_kind=approver_kind, requires_attachment=requires_attachment)
-    _set_approvers(stage, approver_ids)
+        approver_kind=approver_kind, requires_attachment=requires_attachment,
+        requires_comment=requires_comment)
+    _set_roles(stage, position_ids)
     return stage
 
 
@@ -142,7 +144,7 @@ def add_stage(route_id: int, *, order: int, name: str, quorum: str,
 def update_stage(stage_id: int, **fields) -> ApprovalRouteStage:
     stage = get_stage_or_404(stage_id)
 
-    approver_ids = fields.pop("approver_ids", None)
+    position_ids = fields.pop("position_ids", None)
 
     # Вид согласующих и список — свойство ПАРЫ, поэтому пересматриваются
     # вместе, даже когда пришло одно из двух (тот же случай, что у
@@ -150,25 +152,25 @@ def update_stage(stage_id: int, **fields) -> ApprovalRouteStage:
     # оставило бы в нём названных поимённо людей, которых движок игнорирует,
     # а редактор больше не показывает.
     kind = fields.get("approver_kind") or stage.approver_kind
-    if approver_ids is not None or "approver_kind" in fields:
-        if kind != ApproverKind.NAMED:
+    if position_ids is not None or "approver_kind" in fields:
+        if kind != ApproverKind.POSITION:
             # Явно присланный непустой список — противоречие в одном
             # запросе, и молча выбросить половину его нельзя. А вот
             # оставшийся от прежней настройки список стираем: он к новому
             # виду этапа не относится.
-            _check_approver_kind(kind, approver_ids or [], stage_name=stage.name)
-            _set_approvers(stage, [])
+            _check_approver_kind(kind, position_ids or [], stage_name=stage.name)
+            _set_roles(stage, [])
         else:
-            effective = (approver_ids if approver_ids is not None
-                         else [row.user_id for row in stage.approvers.all()])
+            effective = (position_ids if position_ids is not None
+                         else [row.position_id for row in stage.roles.all()])
             if not effective:
-                # Этап без согласующих не исполнится (engine._approver_ids) —
+                # Этап без должностей не исполнится (engine._approver_ids) —
                 # отказываем здесь, а не через час на отправке заявки.
                 raise RouteConflict(
-                    f"В этапе «{stage.name}» должен остаться хотя бы один "
-                    f"согласующий")
-            _check_approvers_exist(effective)
-            _set_approvers(stage, effective)
+                    f"В этапе «{stage.name}» должна остаться хотя бы одна "
+                    f"должность")
+            _check_positions_exist(effective)
+            _set_roles(stage, effective)
 
     # Условие и «иначе» проверяются вместе, даже когда меняется только одно
     # из них: их несочетаемость — свойство ПАРЫ, и проверить пришедшее поле
@@ -210,43 +212,43 @@ def delete_protected_last_stage(stage: ApprovalRouteStage) -> None:
     stage.delete()
 
 
-def _set_approvers(stage: ApprovalRouteStage, user_ids: list[int]) -> None:
-    """Заменить список согласующих этапа.
+def _set_roles(stage: ApprovalRouteStage, position_ids: list[int]) -> None:
+    """Заменить список HR-должностей согласующих этапа.
 
     Полная замена, а не вычисление разницы: список короткий, а разностная
     правка здесь означала бы лишний код ради экономии двух запросов.
     """
-    stage.approvers.all().delete()
-    ApprovalRouteStageApprover.objects.bulk_create([
-        ApprovalRouteStageApprover(stage=stage, user_id=user_id)
-        for user_id in dict.fromkeys(user_ids)  # порядок сохраняем, дубли убираем
+    stage.roles.all().delete()
+    ApprovalRouteStageRole.objects.bulk_create([
+        ApprovalRouteStageRole(stage=stage, position_id=position_id)
+        for position_id in dict.fromkeys(position_ids)
     ])
 
 
-def _check_approver_kind(approver_kind: str, approver_ids: list[int], *,
+def _check_approver_kind(approver_kind: str, position_ids: list[int], *,
                          stage_name: str) -> None:
     """Совместимость вида согласующих со списком.
 
-    Названный поимённо список у этапа, который согласует инициатор, —
+    Список должностей у этапа, который согласует инициатор, —
     настройка, которую невозможно исполнить так, как она читается: движок
     возьмёт инициатора и проигнорирует людей (``engine._approver_ids``).
     Отказываем на настройке, а не гадаем за администратора.
     """
-    if approver_kind == ApproverKind.NAMED:
-        if not approver_ids:
+    if approver_kind == ApproverKind.POSITION:
+        if not position_ids:
             raise RouteConflict(
-                f"На этапе «{stage_name}» не назначен ни один согласующий")
+            f"На этапе «{stage_name}» не назначена ни одна должность")
         return
-    if approver_ids:
+    if position_ids:
         raise RouteConflict(
-            f"На этапе «{stage_name}» согласует инициатор — названных "
-            f"поимённо согласующих у него быть не может")
+            f"На этапе «{stage_name}» согласует инициатор — должностей "
+            f"у него быть не может")
 
 
 def _check_condition(subject_type: str, condition, is_fallback: bool) -> list:
     """Проверить условие этапа против схемы фактов его типа.
 
-    Та же роль, что у ``_check_approvers_exist``: опечатку в настройке ловим
+    Та же роль, что у ``_check_positions_exist``: опечатку в настройке ловим
     у того, кто настраивает. Иначе условие про несуществующее поле дожило бы
     до отправки заявки и превратилось в отказ на ровном месте у пользователя,
     который к маршруту отношения не имеет.
@@ -315,24 +317,24 @@ def initiator_stage_not_last(route: ApprovalRoute) -> bool:
                for stage in route.stages.all())
 
 
-def _check_approvers_exist(user_ids: list[int]) -> None:
-    """Все ли перечисленные id — существующие пользователи.
+def _check_positions_exist(position_ids: list[int]) -> None:
+    """Все ли перечисленные id — существующие HR-должности.
 
     Проверяется на настройке: несуществующий id иначе дожил бы до запуска
     процесса и превратился в «на этапе не осталось активных согласующих» —
     сообщение, по которому не догадаться, что в маршруте просто опечатка.
     """
-    known = {row["id"] for row in users.get_users_brief(user_ids)}
-    unknown = [user_id for user_id in user_ids if user_id not in known]
+    known = {row["id"] for row in hr.get_positions_brief(position_ids)}
+    unknown = [position_id for position_id in position_ids if position_id not in known]
     if unknown:
         raise RouteConflict(
-            "Не найдены пользователи: " + ", ".join(str(x) for x in unknown))
+            "Не найдены должности: " + ", ".join(str(x) for x in unknown))
 
 
 # ── Представление ───────────────────────────────────────────────────────
 
 def serialize_route(route: ApprovalRoute, *,
-                    names: dict[int, dict] | None = None,
+                    roles: dict[int, dict] | None = None,
                     gaps: bool = False) -> dict:
     """``gaps=True`` добавляет подсказку о непокрытых значениях справочника.
 
@@ -341,10 +343,10 @@ def serialize_route(route: ApprovalRoute, *,
     Нужна она ровно в редакторе одного маршрута.
     """
     stages = list(route.stages.all())
-    if names is None:
-        names = _name_map([approver.user_id
+    if roles is None:
+        roles = _role_map([role.position_id
                            for stage in stages
-                           for approver in stage.approvers.all()])
+                           for role in stage.roles.all()])
     card = {
         "id": route.pk,
         "subject_type": route.subject_type,
@@ -352,7 +354,7 @@ def serialize_route(route: ApprovalRoute, *,
         "is_active": route.is_active,
         "created_at": route.created_at,
         "updated_at": route.updated_at,
-        "stages": [serialize_stage(stage, names=names) for stage in stages],
+        "stages": [serialize_stage(stage, roles=roles) for stage in stages],
     }
     if gaps:
         card["coverage_gaps"] = coverage_gaps(route)
@@ -361,10 +363,10 @@ def serialize_route(route: ApprovalRoute, *,
 
 
 def serialize_stage(stage: ApprovalRouteStage, *,
-                    names: dict[int, dict] | None = None) -> dict:
-    approver_ids = [approver.user_id for approver in stage.approvers.all()]
-    if names is None:
-        names = _name_map(approver_ids)
+                    roles: dict[int, dict] | None = None) -> dict:
+    position_ids = [role.position_id for role in stage.roles.all()]
+    if roles is None:
+        roles = _role_map(position_ids)
     return {
         "id": stage.pk,
         "order": stage.order,
@@ -374,27 +376,26 @@ def serialize_stage(stage: ApprovalRouteStage, *,
         "is_fallback": stage.is_fallback,
         "approver_kind": stage.approver_kind,
         "requires_attachment": stage.requires_attachment,
-        "approvers": [
+        "requires_comment": stage.requires_comment,
+        "roles": [
             {
-                "user_id": user_id,
-                "full_name": names.get(user_id, {}).get("full_name", ""),
-                # Отсутствующий в briefs id — удалённый пользователь; для
-                # настройки это то же самое, что неактивный: маршрут с ним
-                # не поедет, и в интерфейсе он должен быть виден красным.
-                "is_active": names.get(user_id, {}).get("is_active", False),
+                "position_id": position_id,
+                "title": roles.get(position_id, {}).get("title", ""),
+                "department_name": roles.get(position_id, {}).get("department_name"),
+                "is_active": roles.get(position_id, {}).get("is_active", False),
             }
-            for user_id in approver_ids
+            for position_id in position_ids
         ],
     }
 
 
-def _name_map(user_ids) -> dict[int, dict]:
-    """``{user_id: brief}`` одним запросом в соседа.
+def _role_map(position_ids) -> dict[int, dict]:
+    """``{position_id: brief}`` одним запросом в HR.
 
     Имена разворачиваются пачкой на весь маршрут, а не по согласующему:
     маршрут из пяти этапов иначе дал бы пять походов в apps.users.
     """
-    ids = list(dict.fromkeys(user_ids))
+    ids = list(dict.fromkeys(position_ids))
     if not ids:
         return {}
-    return {row["id"]: row for row in users.get_users_brief(ids)}
+    return {row["id"]: row for row in hr.get_positions_brief(ids)}

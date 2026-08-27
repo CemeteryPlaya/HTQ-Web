@@ -3,16 +3,8 @@ import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { hasEmployeeTaskAccess, isEditor, isHrManager } from '@/lib/auth/roles';
-import {
-    CheckSquare,
-    Users,
-    FileText,
-    UserCircle,
-    MessageCircle,
-    Mail,
-    Calendar,
-    FolderOpen,
-} from 'lucide-react';
+import { bottomNavItems } from '@/app/navigation/navItems';
+import { UserCircle } from 'lucide-react';
 
 export const BottomNav = () => {
     const { t } = useTranslation();
@@ -25,76 +17,26 @@ export const BottomNav = () => {
         return null;
     }
 
-    // Role definitions
-    const hasEditorAccess = isEditor(activeProfile);
-    const hasHrAccess = isHrManager(activeProfile);
-    const hasTasksAccess = hasEmployeeTaskAccess(activeProfile);
-
-    const navItems = [];
-
-    // Everyone gets Profile/Home
-    navItems.push({
-        to: '/myprofile',
-        icon: UserCircle,
-        label: t('profile.title'),
+    // Разделы берём из общего с шапкой списка (app/navigation/navItems) —
+    // раньше здесь был свой, и наборы разошлись: тут не было договоров и
+    // согласований, в шапке — чатов, почты и файлов.
+    const items = bottomNavItems({
+        isEditor: isEditor(activeProfile),
+        isHr: isHrManager(activeProfile),
+        hasTasks: hasEmployeeTaskAccess(activeProfile),
+        hasDepartment: Boolean(activeProfile.department),
     });
 
-    // Everyone gets Messenger
-    navItems.push({
-        to: '/messenger',
-        icon: MessageCircle,
-        label: t('profile.sidebar.chats'),
-    });
-
-    // Everyone gets Email
-    navItems.push({
-        to: '/email',
-        icon: Mail,
-        label: t('profile.sidebar.email'),
-    });
-
-    // Everyone gets Calendar
-    navItems.push({
-        to: '/calendar',
-        icon: Calendar,
-        label: t('profile.sidebar.calendar'),
-    });
-
-    // Files — accessible to employees with a department
-    if (activeProfile.department) {
-        navItems.push({
-            to: '/files',
-            icon: FolderOpen,
-            label: t('profile.sidebar.files'),
-        });
-    }
-
-    // Editor / News access
-    if (hasEditorAccess) {
-        navItems.push({
-            to: '/manage/news',
-            icon: FileText,
-            label: t('header.news'),
-        });
-    }
-
-    // HR Access
-    if (hasHrAccess) {
-        navItems.push({
-            to: '/hr/employees',
-            icon: Users,
-            label: t('profile.sidebar.employees'),
-        });
-    }
-
-    // Tasks Access
-    if (hasTasksAccess) {
-        navItems.push({
-            to: '/tasks',
-            icon: CheckSquare,
-            label: t('profile.sidebar.tasks'),
-        });
-    }
+    // Профиль — не раздел навигации, а точка входа в личный кабинет, поэтому
+    // он не в общем списке и всегда стоит первым.
+    const navItems = [
+        { to: '/myprofile', icon: UserCircle, label: t('profile.title', 'Профиль') },
+        ...items.map((item) => ({
+            to: item.href,
+            icon: item.icon,
+            label: t(item.labelKey, item.labelFallback),
+        })),
+    ];
 
     return (
         <>

@@ -34,6 +34,9 @@ export const protectedRoutes: RouteConfig[] = [
   // ─── CMS / marketing manage pages ─────────────────────────────────────
   // Editorial role (or higher) — protect against random users hitting
   // ``/manage/news`` directly and altering published content.
+  // Блоки лендинга: порядок, видимость, тексты. Роль editor — тот же
+  // контур, что новости и обращения; правит содержимое сайта, не систему.
+  { path: '/manage/home', component: lazyPages.ManageHomeSections, requiresAuth: true, requiresRole: 'editor' },
   { path: '/manage/news', component: lazyPages.AdminNews, requiresAuth: true, requiresRole: 'editor' },
   { path: '/manage/contacts', component: lazyPages.AdminContacts, requiresAuth: true, requiresRole: 'editor' },
   // ``/manage/projects`` keeps its historical path but is NOT a CMS page: it
@@ -101,15 +104,35 @@ export const protectedRoutes: RouteConfig[] = [
   // черновика. Роутером это не закрывается: право здесь зависит от строки, а
   // не от раздела.
   { path: '/contracts', component: lazyPages.ContractsOverview, requiresAuth: true },
+  { path: '/contracts/tasks', component: lazyPages.ContractsMyTasks, requiresAuth: true },
   { path: '/contracts/budgets', component: lazyPages.ContractsBudgetList, requiresAuth: true },
   { path: '/contracts/budgets/new', component: lazyPages.ContractsBudgetCreate, requiresAuth: true },
   { path: '/contracts/budgets/:id', component: lazyPages.ContractsBudgetDetail, requiresAuth: true },
+  { path: '/contracts/budgets/:id/edit', component: lazyPages.ContractsBudgetEdit, requiresAuth: true },
   { path: '/contracts/counterparties', component: lazyPages.ContractsCounterpartyList, requiresAuth: true },
   { path: '/contracts/counterparties/new', component: lazyPages.ContractsCounterpartyCreate, requiresAuth: true },
   { path: '/contracts/counterparties/:id', component: lazyPages.ContractsCounterpartyDetail, requiresAuth: true },
+  { path: '/contracts/counterparties/:id/edit', component: lazyPages.ContractsCounterpartyEdit, requiresAuth: true },
   { path: '/contracts/agreements', component: lazyPages.ContractsAgreementList, requiresAuth: true },
   { path: '/contracts/agreements/new', component: lazyPages.ContractsAgreementCreate, requiresAuth: true },
   { path: '/contracts/agreements/:id', component: lazyPages.ContractsAgreementDetail, requiresAuth: true },
+  { path: '/contracts/agreements/:id/edit', component: lazyPages.ContractsAgreementEdit, requiresAuth: true },
+  { path: '/contracts/invoices', component: lazyPages.ContractsInvoiceList, requiresAuth: true },
+  { path: '/contracts/invoices/new', component: lazyPages.ContractsInvoiceCreate, requiresAuth: true },
+  { path: '/contracts/invoices/:id', component: lazyPages.ContractsInvoiceDetail, requiresAuth: true },
+  { path: '/contracts/invoices/:id/edit', component: lazyPages.ContractsInvoiceEdit, requiresAuth: true },
+  { path: '/contracts/advance-payments', component: lazyPages.ContractsAdvancePaymentList, requiresAuth: true },
+  { path: '/contracts/advance-payments/new', component: lazyPages.ContractsAdvancePaymentCreate, requiresAuth: true },
+  { path: '/contracts/advance-payments/:id', component: lazyPages.ContractsAdvancePaymentDetail, requiresAuth: true },
+  { path: '/contracts/accountable-funds-requests', component: lazyPages.ContractsAccountableFundsRequestList, requiresAuth: true },
+  { path: '/contracts/accountable-funds-requests/new', component: lazyPages.ContractsAccountableFundsRequestCreate, requiresAuth: true },
+  { path: '/contracts/accountable-funds-requests/:id', component: lazyPages.ContractsAccountableFundsRequestDetail, requiresAuth: true },
+  { path: '/contracts/contract-payments', component: lazyPages.ContractsContractPaymentList, requiresAuth: true },
+  { path: '/contracts/contract-payments/new', component: lazyPages.ContractsContractPaymentCreate, requiresAuth: true },
+  { path: '/contracts/contract-payments/:id', component: lazyPages.ContractsContractPaymentDetail, requiresAuth: true },
+  { path: '/contracts/completion-acts', component: lazyPages.ContractsCompletionActList, requiresAuth: true },
+  { path: '/contracts/completion-acts/new', component: lazyPages.ContractsCompletionActCreate, requiresAuth: true },
+  { path: '/contracts/completion-acts/:id', component: lazyPages.ContractsCompletionActDetail, requiresAuth: true },
 
   // ─── Signoff (универсальное согласование, apps.signoff) ───────────────
   // Очередь и карточки открыты любому сотруднику: решает НАЗВАННЫЙ в

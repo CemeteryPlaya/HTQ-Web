@@ -59,7 +59,7 @@ export default defineConfig(({ mode }) => {
   const usePolling = env.VITE_USE_POLLING === "true";
 
   // HTTPS in dev is opt-in via VITE_DEV_HTTPS=true. Default: plain HTTP on :3000
-  // (matches the current docker-compose.dev.yml setup and avoids cert headaches).
+  // (matches the docker-compose.test-*.yml setup and avoids cert headaches).
   const httpsEnabledByEnv = (env.VITE_DEV_HTTPS || "").trim().toLowerCase() === "true";
   const _certCandidates = httpsEnabledByEnv ? [
     { cert: path.resolve(__dirname, "..", "infra", "certs", "cert.pem"), key: path.resolve(__dirname, "..", "infra", "certs", "key.pem") },

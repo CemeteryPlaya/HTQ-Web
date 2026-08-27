@@ -46,16 +46,15 @@ HTQWeb1/
 ├── scripts/              # PS/JS/bash-утилиты (TLS, firewall, туннели, monitoring traffic)
 ├── tools/                # Локальные бинари туннелей (gitignored)
 ├── docker-compose.yml       # Прод-стек (полный)
-├── docker-compose.dev.yml   # Dev-overlay (Vite HMR, MinIO, DEBUG-настройки Django)
-├── docker-compose.test.yml  # Test-overlay: публикует db на :55432 для pytest-django
+├── docker-compose.test-local.yml  # Тест-стек: Vite HMR + Postgres в контейнере (:55432)
+├── docker-compose.test-env.yml    # Тест-стек: Vite HMR, БД из .env (миграции по умолчанию OFF)
 ├── README.md   API.md   PLAN.md (журнал миграции, читать как историю, не как план "что впереди")
-└── docker-compose.django.yml, RUN-DJANGO-CHECK.md   # ⚠️ мёртвый снапшот промежуточного
-                                                        #   proof-of-concept'а (только users/cms/
-                                                        #   media/hr были перенесены) — вытеснен
-                                                        #   docker-compose.yml, не обновлять
+└── dev-up.sh                      # Обёртка над docker-compose.test-local.yml
 ```
 
-> ⚠️ Игнорировать на верхнем уровне: пустой `nginx/` (авторитетный конфиг только `infra/nginx/default.conf`), корневые `node_modules/`/`package.json` (служебный tooling, не фронтенд). `docker-compose.django.yml` и `RUN-DJANGO-CHECK.md` описывают промежуточное состояние миграции (до того, как `tasks`/`requests`/`mail`/`messenger` были перенесены) — оставлены как артефакт, реальный прод-стек — `docker-compose.yml`.
+> ⚠️ Игнорировать на верхнем уровне: пустой `nginx/` (авторитетный конфиг только `infra/nginx/default.conf`), корневые `node_modules/`/`package.json` (служебный tooling, не фронтенд).
+>
+> ⚠️ **Compose-файлов ровно три, и они самостоятельные** — запускаются одиночным `-f <файл>`, без цепочки `-f a -f b`, и НЕ наследуют друг друга. Следствие: правка сервиса, общего для сред (redis, minio, backend-*, grafana…), должна повторяться во всех трёх. Перед коммитом сверяйте `git diff docker-compose*.yml`. Старые `docker-compose.dev.yml`, `docker-compose.localdb.yml`, `docker-compose.test.yml`, `docker-compose.django.yml` удалены.
 
 ---
 
@@ -177,7 +176,7 @@ cd backend
 
 **Этап подписи** (`approver_kind` + `requires_attachment` на этапе). Два независимых флага, вместе дающие «последним подписывает автор, приложив PDF»:
 
-- **`approver_kind = initiator`** — согласующего в маршруте нет, он вычисляется на запуске из `ApprovalProcess.initiator_id`. Именно инициатор, а не «автор документа»: `Agreement.created_by` лежит за границей аппки, а в contracts эти двое совпадают по бизнес-процессу. Названных поимённо согласующих у такого этапа быть не может (409/422), кворум для него бессмыслен — задача ровно одна. Это НЕ роль и не группа: вычисляется один конкретный пользователь из данных самого процесса, ровно как разбирается ветвление.
+- **`approver_kind = position`** — маршрут хранит HR-должности, а не персональные аккаунты. На запуске `apps.hr.interface` разрешает их в текущих активных сотрудников с активными учётками; получившиеся `user_id` сохраняются в `ApprovalTask`, а `role_ids` — в снимке этапа. Поэтому смена сотрудника влияет на новые заявки, но не переписывает уже выданные задачи и их аудит. **`approver_kind = initiator`** — должностей в маршруте нет: согласующий вычисляется на запуске из `ApprovalProcess.initiator_id`.
 - **`requires_attachment`** — этап можно СОГЛАСОВАТЬ только с уже приложенным к задаче PDF (`ApprovalTask.file_id`). Для отказа документ не нужен: того, что отказавшему полагалось бы подписать, не существует. Файл прикладывается отдельным запросом ДО решения (`services/attachments.py`, `POST /tasks/{id}/attachment`) — загрузка в S3 не должна идти внутри транзакции, держащей блокировку процесса. PDF-only задаёт политика scope `signoff_doc` в media_files (она же включает проверку magic-байтов), а не проверка в signoff. Приложить может ТОЛЬКО адресат запроса: администраторского исключения нет — загрузка за согласующего была бы подделкой подписи.
 - **«Последний этап» — не сущность.** Процесс завершается, когда пройдена группа с наибольшим `order`, поэтому подпись, оказавшаяся не последней, тихо превращается в промежуточное подтверждение. Запрета на это нет (иначе после подписи нельзя было бы добавить ни одного этапа), есть предупреждение редактору — `initiator_stage_not_last` в `GET /routes/{id}`, рядом с `coverage_gaps`.
 
@@ -471,7 +470,7 @@ GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,
 
 > Манифест поменялся с миграцией: раньше было «1 микросервис = 1 бакет»; теперь файловый ввод-вывод **консолидирован** — большинство доменов (hr, mail, messenger) пишут через `apps.media_files.interface` (`store_file`/`get_file_url`/`delete_file`), а не держат свой собственный `s3_storage.py`-клон. Исключение — `cms`, у которого остался свой бакет и прямой доступ к `htqweb.storage` (пилотная аппка, появилась раньше `media_files`).
 
-В dev — контейнер **MinIO** в [docker-compose.dev.yml](./docker-compose.dev.yml) (консоль `:9001`). При первом запуске `minio-bootstrap` создаёт бакеты (в т.ч. исторические `htqweb-messenger`/`htqweb-mail-attachments`/`htqweb-conferences`, которые сейчас ничем не заполняются — см. ниже). В проде — настоящий S3, сменой `S3_ENDPOINT` без правок кода.
+В тестовых стеках — контейнер **MinIO** (консоль `:9001`), в обоих файлах `docker-compose.test-*.yml`. При первом запуске `minio-bootstrap` создаёт бакеты (в т.ч. исторические `htqweb-messenger`/`htqweb-mail-attachments`/`htqweb-conferences`, которые сейчас ничем не заполняются — см. ниже). В проде — настоящий S3, сменой `S3_ENDPOINT` без правок кода.
 
 | Бакет (env, `htqweb/settings/base.py`) | Кто пишет | Для чего |
 |---|---|---|
@@ -526,7 +525,7 @@ URL-флоу приватных файлов: API возвращает стаб�
 | SFU/медиа | `sfu/src/` |
 | Загрузить/отдать файл (из бэкенда) | `apps.media_files.interface.store_file()`/`.get_file_url()` (соседи); `htqweb.storage.get_storage()` напрямую — только `apps.cms` |
 | Шлюз/маршрутизация | `infra/nginx/default.conf` (прод) / `frontend/vite.config.ts` (dev) |
-| Compose / порты / переменные | `docker-compose.yml` (+ `docker-compose.dev.yml` dev, `docker-compose.test.yml` тесты) |
+| Compose / порты / переменные | `docker-compose.yml` (прод), `docker-compose.test-local.yml` (локальная БД), `docker-compose.test-env.yml` (БД из .env) |
 | Перелить legacy-данные (cutover) | `manage.py etl_<domain>` — см. `apps/core/etl.py` за общими хелперами |
 | Праздники РК (производственный календарь) | `apps/core/kz_holidays.py` — **единственный** источник для `apps.tasks` и `apps.hr`. Фиксированные даты + правило переноса с выходного считаются на любой год; плавающий Курбан-айт и разовые решения правительства — в `KZ_YEAR_OVERRIDES` (одна строка на год). Таблицы `tasks_productionday`/`hr_calendarday` — только ручные переопределения ПОВЕРХ этого |
 
@@ -538,7 +537,7 @@ URL-флоу приватных файлов: API возвращает стаб�
 - **`POST /api/users/v1/admin-session/login`/`/logout` — код существует, но реального потребителя больше нет.** Эти эндпойнты ставили `admin_session`-cookie для входа в sqladmin; сам sqladmin снесён, а `django-admin` использует свою обычную Django session-аутентификацию (не эту JWT-cookie). Не удивляться, что "рабочий" эндпойнт никуда не ведёт.
 - **Схема ≠ schema-per-service — эта проблема ИСЧЕЗЛА, а не "решена префиксами".** В FastAPI-эпоху PgBouncer (transaction-режим) сбрасывал `search_path`, что вынуждало держать все сервисы в `public` с ручными префиксами таблиц. В Django-монолите Postgres — прямое подключение, префиксы — стандартные Django `<app_label>_<model>`, руками ничего не мэнеджится. Если видишь код/комментарий про «schema-per-service» — это history, не текущая реальность.
 - **JWT issuer — `htqweb-auth`**, как и раньше (не `users`, не `django`). `apps.users` выпускает и валидирует сам, без отдельного identity-сервиса.
-- **`docker-compose.django.yml`/`RUN-DJANGO-CHECK.md`** описывают промежуточный, давно перегнанный proof-of-concept (только 4 домена из 8 были перенесены на момент их написания). Не путать с боевым `docker-compose.yml` — актуальны только `docker-compose.yml`+`docker-compose.dev.yml`(+`.test.yml`).
+- **Три compose-файла не наследуют друг друга.** Привычка `-f docker-compose.yml -f <оверлей>` больше не работает: каждый файл самодостаточен и запускается одиночным `-f`. Обратная сторона — общие сервисы продублированы трижды, и правку надо разносить руками (`git diff docker-compose*.yml`). `docker-compose.test-local.yml` жёстко пинит `DB_HOST: db`, `test-env` берёт БД из `.env` и по умолчанию НЕ мигрирует её.
 - **`docs/architecture.md` не в ногу с реальным деревом** — упоминает DRF ViewSets и `backend/tasks/viewsets/`, чего в репозитории нет (реальность: `htqweb.http.api_view`, `backend/apps/tasks/`). Похоже на неадаптированный шаблон; не источник истины по структуре, см. §1/CLAUDE.md.
 - **`scripts/generate-monitoring-traffic.sh`** бьёт по текущему `backend-web` (порт задаётся 4-м аргументом, по умолчанию `:8000`; `80` — через nginx). Часть ручек в списке намеренно отдаёт 404/401 — они питают панели ошибок.
 - **`apps.media_files` — общая точка отказа для файлов** трёх доменов (hr/mail/messenger) плюс аватарок users. Если он выключен через `ServiceStatus` (`manage.py service media --off`), у соседей это всплывёт как `ServiceDisabled`/503, а не как их собственная ошибка — смотреть на `service` в JSON-конверте, прежде чем искать баг в вызывающей аппке.

@@ -21,6 +21,7 @@ import datetime
 import json
 
 from django.conf import settings as django_settings
+from django.db import transaction
 from django.http import HttpResponse, JsonResponse
 from pydantic import ValidationError
 
@@ -208,6 +209,8 @@ _PERMISSION_CATALOG = {
 
         {"key": "hr.staffing.view",   "label": "Штатное расписание — просмотр",  "description": None, "group": "Штатное расписание"},
         {"key": "hr.staffing.manage", "label": "Штатное расписание — управление", "description": None, "group": "Штатное расписание"},
+
+        {"key": "contracts.advance_payment.record_payment", "label": "Оформление предоплат", "description": "Загрузка платёжного поручения и номера проводки после согласования", "group": "Договоры"},
     ],
     "level_presets": {lvl: sorted(keys) for lvl, keys in LEVEL_PRESETS.items()},
 }
@@ -559,13 +562,17 @@ def _create_user_option(request, data: schemas.HRUserCreateRequest):
 
     if not data.email or "@" not in data.email:
         return json_error("Email обязателен и должен быть валидным", 422)
-
     try:
         user = users_interface.create_user(
             email=data.email,
             first_name=data.first_name,
             last_name=data.last_name,
             patronymic=data.patronymic,
+            # Жёстко True, не из тела запроса: пароль сгенерирован сервером и
+            # показан заводящему открытым текстом, поэтому первый вход обязан
+            # заканчиваться сменой. См. докстринг HRUserCreateRequest — поля в
+            # схеме нет, чтобы гарантия не зависела от клиента.
+            must_change_password=True,
         )
     except (users_interface.DuplicateEmail, users_interface.DuplicateUsername):
         return json_error("Пользователь с такими данными уже существует", 409)
@@ -860,8 +867,24 @@ def _list_employees(request):
     }
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeCreate, status=201)
-def _create_employee(request, data: schemas.EmployeeCreate):
+def _apply_card_t2(employee_id: int, patch_model, access) -> None:
+    """Пишет секции Т-2, если они пришли в теле. Единственная точка, где
+    создание/обновление сотрудника встречается с Т-2.
+
+    Посекционный RBAC не проверяется здесь намеренно — это делает
+    ``card_t2_svc.upsert``, единственный владелец карты «секция -> ключи».
+    ``PermissionError``/``ValueError`` пробрасываются наружу, где внешняя
+    ``transaction.atomic()`` откатывает и сотрудника тоже.
+    """
+    if patch_model is None:
+        return
+    patch = patch_model.model_dump(exclude_unset=True)
+    if patch:
+        card_t2_svc.upsert(employee_id, patch, access)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeCreateRequest, status=201)
+def _create_employee(request, data: schemas.EmployeeCreateRequest):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
     except hr_access.HRAccessDenied as exc:
@@ -869,8 +892,11 @@ def _create_employee(request, data: schemas.EmployeeCreate):
     if not access.can_create_employee:
         return json_error("Senior HR access required", 403)
 
+    core = schemas.EmployeeCreate.model_validate(data.model_dump(exclude={"card_t2"}))
     try:
-        employee = emp_svc.create_employee(data, changed_by_id=request.token.user_id)
+        with transaction.atomic():
+            employee = emp_svc.create_employee(core, changed_by_id=request.token.user_id)
+            _apply_card_t2(employee.id, data.card_t2, access)
     except emp_svc.DepartmentNotFound:
         return json_error("Department not found", 422)
     except emp_svc.PositionNotFound:
@@ -880,11 +906,16 @@ def _create_employee(request, data: schemas.EmployeeCreate):
     # ``user_id`` в теле запроса раньше писался в модель как есть: несуществующая
     # учётка проходила молча, занятая другим сотрудником всплывала как
     # IntegrityError (500). Теперь сервис проверяет её заранее — здесь только
-    # раскладка в коды.
+    # раскладка в коды. Стоят ПЕРЕД ValueError ниже: обе — самостоятельные
+    # ветки Exception, и порядок здесь читается как «частное раньше общего».
     except prefill_svc.UserNotFound:
         return json_error("User not found", 422)
     except prefill_svc.UserAlreadyLinked:
         return json_error("User account is already linked to another employee", 409)
+    except PermissionError as exc:
+        return json_error(str(exc), 403)
+    except ValueError as exc:
+        return json_error(str(exc), 422)
     return svc.serialize_employee(employee)
 
 
@@ -911,8 +942,8 @@ def _get_employee(request, id: int):
     return svc.serialize_employee(employee)
 
 
-@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.EmployeeUpdate)
-def _update_employee(request, id: int, data: schemas.EmployeeUpdate):
+@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.EmployeeUpdateRequest)
+def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
     # PUT — задокументированный контракт исходника; PATCH регистрируем тоже
     # (аддитивно), как и в departments/positions.
     try:
@@ -935,14 +966,21 @@ def _update_employee(request, id: int, data: schemas.EmployeeUpdate):
             403,
         )
 
+    core = schemas.EmployeeUpdate.model_validate(data.model_dump(exclude={"card_t2"}))
     try:
-        employee = emp_svc.update_employee(id, data, changed_by_id=request.token.user_id)
+        with transaction.atomic():
+            employee = emp_svc.update_employee(id, core, changed_by_id=request.token.user_id)
+            _apply_card_t2(id, data.card_t2, access)
     except emp_svc.DepartmentNotFound:
         return json_error("Department not found", 422)
     except emp_svc.PositionNotFound:
         return json_error("Position not found", 422)
     except emp_svc.EmailAlreadyInUse:
         return json_error("Email already in use", 409)
+    except PermissionError as exc:
+        return json_error(str(exc), 403)
+    except ValueError as exc:
+        return json_error(str(exc), 422)
     return svc.serialize_employee(employee)
 
 

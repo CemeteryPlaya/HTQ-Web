@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
+import { useHomeSection } from '@/hooks/useHomeContent';
 import { ArrowRight, Target, Shield, Lightbulb } from 'lucide-react';
 import { Button } from './ui/button';
 import { companyStats, formatMw } from '@/data/company';
@@ -8,6 +9,7 @@ const panels4 = '/images/panels4.webp';
 
 export const MissionSection = () => {
   const { t } = useTranslation();
+  const home = useHomeSection('mission');
 
   const missionPoints = [
     {
@@ -38,7 +40,7 @@ export const MissionSection = () => {
             <div className="rounded-2xl overflow-hidden shadow-elevated">
               <img
                 src={panels4}
-                alt={t('mission.title')}
+                alt={home.text('title', 'mission.title')}
                 loading="lazy"
                 className="w-full h-[320px] sm:h-[420px] lg:h-[500px] object-cover"
               />
@@ -58,12 +60,12 @@ export const MissionSection = () => {
           {/* `min-w-0` обязателен: иначе max-content карусели (3 × 82vw) задаёт
               ширину колонки, заголовок ложится в одну строку и обрезается. */}
           <div className="order-1 lg:order-2 min-w-0">
-            <span className="text-secondary font-semibold text-xs sm:text-sm uppercase tracking-wider">{t('mission.tag')}</span>
+            <span className="text-secondary font-semibold text-xs sm:text-sm uppercase tracking-wider">{home.text('tag', 'mission.tag')}</span>
             <h2 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mt-2 mb-4 sm:mb-6">
-              {t('mission.title')}
+              {home.text('title', 'mission.title')}
             </h2>
             <p className="text-muted-foreground text-base sm:text-lg leading-relaxed mb-6 sm:mb-8">
-              {t('mission.desc')}
+              {home.text('description', 'mission.desc')}
             </p>
 
             {/* Points */}

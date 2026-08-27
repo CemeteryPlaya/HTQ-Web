@@ -123,7 +123,8 @@
     "logout": "Logout",
     "requests": "Requests",
     "profile": "Profile",
-    "tagline": "Construction services in energy sector"
+    "tagline": "Construction services in energy sector",
+    "more": "More"
   },
   "hero": {
     "tag": "Market Leader in Central Asia",
@@ -708,11 +709,17 @@
           "sroPermitNumber": "SRO permit number",
           "sroPermitExpiry": "SRO permit expiry",
           "safetyCertNumber": "Safety certificate number",
-          "safetyCertExpiry": "Safety certificate expiry"
+          "safetyCertExpiry": "Safety certificate expiry",
+          "inn": "TIN",
+          "birthDate": "Date of birth",
+          "birthPlace": "Place of birth",
+          "citizenship": "Citizenship",
+          "password": "Password"
         },
         "sections": {
           "sro": "SRO & Occupational Safety",
-          "financial": "Financial data (confidential)"
+          "financial": "Financial data (confidential)",
+          "personal": "Personal data"
         },
         "placeholders": {
           "selectUser": "Select user",
@@ -838,7 +845,24 @@
           "copied": "Copied",
           "done": "I saved the credentials",
           "copyFailed": "Could not copy — select the password and copy it manually."
-        }
+        },
+        "cardT2": {
+          "saved": "Saved",
+          "error": "Could not save",
+          "forbidden": "Not enough permissions to edit this section",
+          "badNumber": "Enter a number, e.g. 450000 or 450000.50",
+          "loading": "Loading…",
+          "sectionHasError": "Check the fields"
+        },
+        "searchDepartment": "Search department…",
+        "noDepartmentFound": "Department not found",
+        "createDepartment": "Create new department",
+        "createDepartmentTitle": "New department",
+        "openCard": "Open card",
+        "actions": {
+          "share": "Share"
+        },
+        "usernameHint": "Username will be derived from the email:"
       },
       "structure": {
         "title": "Company Structure",
@@ -4701,5 +4725,10 @@
       "cancelled": "Cancelled",
       "returned": "Returned"
     }
+  },
+  "nav": {
+    "messenger": "Chats",
+    "email": "Mail",
+    "files": "Files"
   }
 }

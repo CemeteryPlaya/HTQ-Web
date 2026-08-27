@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { useHomeSection } from '@/hooks/useHomeContent';
 import { ArrowRight, Leaf, TrendingUp, Globe } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from './ui/button';
@@ -7,6 +8,7 @@ const panels13 = '/images/panels13.webp';
 
 export const InvestCTA = () => {
   const { t } = useTranslation();
+  const home = useHomeSection('invest');
 
   return (
     <section className="relative py-24 md:py-32 overflow-hidden">
@@ -38,7 +40,7 @@ export const InvestCTA = () => {
           {/* Label */}
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-dark mb-6">
             <TrendingUp className="text-secondary" size={18} />
-            <span className="text-primary-foreground/80 text-sm font-medium">{t('invest.tag')}</span>
+            <span className="text-primary-foreground/80 text-sm font-medium">{home.text('tag', 'invest.tag')}</span>
           </div>
 
           {/* Heading */}
@@ -49,7 +51,7 @@ export const InvestCTA = () => {
 
           {/* Subheading */}
           <p className="text-xl md:text-2xl text-primary-foreground/80 mb-8 max-w-2xl mx-auto leading-relaxed">
-            {t('invest.desc')}
+            {home.text('description', 'invest.desc')}
           </p>
 
           {/* CTA Button */}

@@ -220,6 +220,36 @@ def test_counterparty_crud_and_search():
 
 
 @pytest.mark.django_db
+def test_counterparty_list_can_return_a_searchable_page():
+    country = make_country()
+    make_counterparty(country=country, bin_iin="100000000001", name="ТОО Альфа")
+    make_counterparty(country=country, bin_iin="100000000002", name="ТОО Бета")
+    make_counterparty(country=country, bin_iin="100000000003", name="ТОО Гамма")
+
+    response = Client().get(
+        f"{BASE}/counterparties?page=2&page_size=1",
+        **auth(token()),
+    )
+
+    assert response.status_code == 200, response.content
+    body = response.json()
+    assert body["pagination"] == {
+        "page": 2,
+        "page_size": 1,
+        "total": 3,
+        "total_pages": 3,
+    }
+    assert len(body["items"]) == 1
+
+    searched = Client().get(
+        f"{BASE}/counterparties?page=1&page_size=25&search=Бета",
+        **auth(token()),
+    )
+    assert searched.json()["pagination"]["total"] == 1
+    assert searched.json()["items"][0]["name"] == "ТОО Бета"
+
+
+@pytest.mark.django_db
 def test_counterparty_vat_defaults_to_false_and_is_togglable():
     """НДС — признак «с / без», а не текст: он необязателен в теле запроса,
     по умолчанию False, и PATCH'ем переключается в обе стороны (False здесь

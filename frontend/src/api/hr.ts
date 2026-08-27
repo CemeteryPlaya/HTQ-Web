@@ -143,9 +143,16 @@ export const fetchEmployeeUsers = async (params?: Record<string, string>): Promi
 /**
  * Завести учётку, не выходя из формы сотрудника.
  *
- * `generated_password` приходит ТОЛЬКО отсюда и только один раз: пароль
- * генерируется сервером и нигде не хранится в открытом виде. Показать его
- * человеку — обязанность вызывающего, второго шанса не будет.
+ * Пароль тут НЕ передаётся: его генерирует бэкенд и возвращает один раз в
+ * `generated_password`. Раньше он тоже генерировался, но не показывался
+ * никому — аккаунт существовал, а войти в него было невозможно до
+ * админского сброса.
+ *
+ * `must_change_password` тоже не передаётся: на этом маршруте бэкенд ставит
+ * его жёстко в true и поля в схеме нет. Пароль сгенерирован сервером и
+ * показан заводящему открытым, поэтому первый вход сотрудника обязан
+ * заканчиваться сменой — гарантия не должна зависеть от того, что пришлёт
+ * клиент.
  */
 export const createEmployeeUser = async (data: {
   first_name: string;
@@ -164,6 +171,28 @@ export const createEmployee = async (data: Partial<Employee>): Promise<Employee>
 
 export const updateEmployee = async (id: number, data: Partial<Employee>): Promise<Employee> => {
   const res = await api.put(`${HR}employees/${id}/`, toBackendRecord(data as Record<string, any>, EMPLOYEE_FIELD_ALIASES));
+  return normalizeEmployee(res.data);
+};
+
+/**
+ * Создаёт сотрудника вместе с опциональным блоком `card_t2`.
+ *
+ * Отдельно от `createEmployee`: тот прогоняет тело через
+ * `toBackendRecord(..., EMPLOYEE_FIELD_ALIASES)`, который переименовывает
+ * ключи по плоской карте алиасов и покалечил бы вложенный объект `card_t2`.
+ * Здесь payload собирает вызывающий — ровно в форме бэкендовой
+ * `EmployeeCreateRequest`.
+ */
+export const createEmployeeWithCard = async (payload: Record<string, unknown>): Promise<Employee> => {
+  const res = await api.post(`${HR}employees/`, payload);
+  return normalizeEmployee(res.data);
+};
+
+export const updateEmployeeWithCard = async (
+  id: number,
+  payload: Record<string, unknown>,
+): Promise<Employee> => {
+  const res = await api.put(`${HR}employees/${id}/`, payload);
   return normalizeEmployee(res.data);
 };
 
@@ -320,6 +349,29 @@ export interface CardT2 {
 
 export const fetchCardT2 = async (employeeId: number): Promise<CardT2> => {
   const res = await api.get(`${HR}employees/${employeeId}/card/t2`);
+  return res.data;
+};
+
+/** Секции Т-2 карточки — совпадают с ключами `EmployeeCardT2Patch` бэкенда. */
+export type CardT2Section = 'financial' | 'personal' | 'certs';
+
+/**
+ * Пишет ОДНУ секцию Т-2 карточки.
+ *
+ * Бэкенд (`employee_card_t2_service.upsert`) применяет патч целиком или никак:
+ * отказ прав на любой секции откатывает и уже применённые. Поэтому шлём по
+ * одной секции за запрос — иначе отказ на «Финансах» молча потерял бы и
+ * правки «Личных данных». Строку карточки upsert создаёт сам, если её ещё нет,
+ * так что сотруднику не требуется никакой предварительной подготовки.
+ *
+ * Возвращает секции, видимые вызывающему после записи (ответ эндпойнта).
+ */
+export const updateCardT2 = async (
+  employeeId: number,
+  section: CardT2Section,
+  values: Record<string, string | null>,
+): Promise<CardT2> => {
+  const res = await api.patch(`${HR}employees/${employeeId}/card/t2`, { [section]: values });
   return res.data;
 };
 

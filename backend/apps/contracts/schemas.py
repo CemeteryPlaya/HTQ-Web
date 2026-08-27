@@ -28,9 +28,11 @@ from pydantic import (
 )
 
 from apps.contracts.models import (
+    AdvancePayment,
     AgreementStatus,
     BudgetStatus,
     CounterpartyStatus,
+    InvoiceStatus,
     PaymentType,
 )
 
@@ -494,6 +496,10 @@ class AgreementRead(BaseModel):
     counterparty_bin_iin: str
     payment_type: str
     amount: Decimal
+    advance_payment_id: Optional[int]
+    advance_paid_amount: Decimal
+    contract_paid_amount: Decimal
+    remaining_amount: Decimal
     currency: str
     file_id: Optional[str]
     signed_date: Optional[date]
@@ -502,3 +508,197 @@ class AgreementRead(BaseModel):
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
+
+
+# ── Invoice (счёт на оплату без договора) ───────────────────────────────
+
+class InvoiceCreate(BaseModel):
+    # Ссылка на СТРОКУ бюджета, не на бюджет: деньги выделены программе (как
+    # у договора). ``number`` и ``status`` у счёта не принимаются: он всегда
+    # создаётся черновиком, а жизненный цикл идёт только через /status.
+    # ``currency`` снимается со строки бюджета на сервере.
+    name: str = Field(..., min_length=1, max_length=300)
+    note: str = ""
+    budget_line_id: int
+    counterparty_id: int
+    amount: Decimal = Field(..., gt=0)
+
+
+class InvoiceUpdate(BaseModel):
+    """Ни статуса (только через ``POST /invoices/{id}/status``), ни валюты
+    (она привязана к бюджету строки) здесь нет — по тем же причинам, что и у
+    ``AgreementUpdate``."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=300)
+    note: Optional[str] = None
+    budget_line_id: Optional[int] = None
+    counterparty_id: Optional[int] = None
+    amount: Optional[Decimal] = Field(None, gt=0)
+
+
+class InvoiceStatusChange(BaseModel):
+    status: InvoiceStatus
+
+
+class InvoiceRead(BaseModel):
+    """Собирается из ``invoice_service.serialize_invoice``: администратор и
+    программа развёрнуты, хотя на счёте их колонок нет — читаются через строку
+    бюджета. ``budget_id`` рядом — для ссылки на карточку бюджета."""
+
+    id: int
+    name: str
+    note: str
+    budget_line_id: int
+    budget_id: int
+    administrator_id: int
+    administrator_name: str
+    program_id: int
+    program_name: str
+    expense_item: str
+    period_year: int
+    counterparty_id: int
+    counterparty_name: str
+    counterparty_bin_iin: str
+    amount: Decimal
+    currency: str
+    file_id: Optional[str]
+    status: str
+    approval_state: str
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── Предоплата на основании договора ───────────────────────────────────
+
+class AdvancePaymentCreate(BaseModel):
+    agreement_id: int
+    amount: Decimal = Field(..., gt=0)
+
+
+class AdvancePaymentRead(BaseModel):
+    id: int
+    agreement_id: int
+    agreement_number: str
+    agreement_name: str
+    counterparty_name: str
+    amount: Decimal
+    currency: str
+    status: str
+    approval_state: str
+    payment_order_file_id: Optional[str]
+    posting_number: str
+    paid_by: Optional[int]
+    paid_at: Optional[datetime]
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── Заявка на подотчётные средства ────────────────────────────────────────
+
+class AccountableFundsRequestCreate(BaseModel):
+    budget_line_id: int
+    amount: Decimal = Field(..., gt=0)
+    goal: str = Field(..., min_length=1, max_length=5000)
+
+
+class AccountableFundsRequestBudgetLineAssign(BaseModel):
+    budget_line_id: int
+
+
+class AccountableFundsRequestRead(BaseModel):
+    id: int
+    budget_line_id: Optional[int]
+    administrator_id: int
+    administrator_name: str
+    program_id: int
+    program_name: str
+    expense_item: str
+    period_year: Optional[int]
+    currency: str
+    amount: Decimal
+    advance_reported_amount: Decimal
+    remaining_accountable_amount: Decimal
+    goal: str
+    status: str
+    approval_state: str
+    accounting_paid: bool
+    accounting_paid_by: Optional[int]
+    accounting_paid_at: Optional[datetime]
+    accountable_user_id: int
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdvanceReportRead(BaseModel):
+    id: int
+    accountable_funds_request_id: int
+    expense_name: str
+    amount: Decimal
+    currency: str
+    file_id: str
+    approval_state: str
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ContractPaymentRead(BaseModel):
+    id: int
+    administrator_id: int
+    administrator_name: str
+    agreement_id: int
+    agreement_number: str
+    agreement_name: str
+    counterparty_name: str
+    amount: Decimal
+    currency: str
+    invoice_file_id: Optional[str]
+    status: str
+    approval_state: str
+    payment_order_file_id: Optional[str]
+    posting_number: str
+    paid_by: Optional[int]
+    paid_at: Optional[datetime]
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+class CompletionActRead(BaseModel):
+    id: int
+    administrator_id: int
+    administrator_name: str
+    agreement_id: int
+    agreement_number: str
+    agreement_name: str
+    counterparty_name: str
+    amount: Decimal
+    currency: str
+    act_file_id: Optional[str]
+    status: str
+    approval_state: str
+    payment_order_file_id: Optional[str]
+    posting_number: str
+    paid_by: Optional[int]
+    paid_at: Optional[datetime]
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── Personal action queue ────────────────────────────────────────────────
+
+class WorkQueueItemRead(BaseModel):
+    """An actionable contracts record for the authenticated user."""
+
+    document_type: str
+    action: str
+    action_label: str
+    title: str
+    url: str
+    amount: Optional[Decimal] = None
+    currency: str = ""
+    created_at: datetime

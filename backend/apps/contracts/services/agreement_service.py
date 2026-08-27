@@ -26,6 +26,7 @@ from apps.contracts.models import (
     Counterparty,
     CounterpartyStatus,
 )
+from apps.contracts.services import advance_payment_service as advance_payment_svc
 from apps.contracts.services import budget_calc
 from apps.contracts.services.counterparty_service import get_counterparty_or_404
 from apps.contracts.services.reference_service import ReferenceConflict, conflict_as
@@ -215,6 +216,13 @@ def get_agreement_or_404(agreement_id: int) -> Agreement:
 def serialize_agreement(agreement: Agreement) -> dict:
     line = agreement.budget_line
     budget = line.budget
+    advance_payment_id = (agreement.advance_payments
+                          .order_by("-created_at")
+                          .values_list("pk", flat=True)
+                          .first())
+    advance_paid_amount = advance_payment_svc.closed_amount_for_agreement(agreement.pk)
+    contract_paid_amount = (advance_payment_svc.total_paid_amount_for_agreement(agreement.pk)
+                            - advance_paid_amount)
     return {
         "id": agreement.pk,
         "number": agreement.number,
@@ -239,6 +247,10 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "counterparty_bin_iin": agreement.counterparty.bin_iin,
         "payment_type": agreement.payment_type,
         "amount": agreement.amount,
+        "advance_payment_id": advance_payment_id,
+        "advance_paid_amount": advance_paid_amount,
+        "contract_paid_amount": contract_paid_amount,
+        "remaining_amount": agreement.amount - advance_paid_amount - contract_paid_amount,
         "currency": agreement.currency,
         "file_id": agreement.file_id,
         "signed_date": agreement.signed_date,
@@ -315,6 +327,11 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
         # сравнивалось бы с остатком, из которого уже вычтена вся старая
         # сумма, и почти всегда падало бы.
         budget_calc.check_capacity(line, amount, exclude_agreement_id=agreement.pk)
+
+    # Не даём уменьшить исходную сумму договора ниже уже закрытой
+    # предоплаты. Сам остаток не хранится: он считается из суммы договора и
+    # проведённой предоплаты, как остаток бюджетной строки для счетов.
+    advance_payment_svc.check_agreement_capacity(agreement, amount)
 
     changed = [key for key, value in fields.items() if value is not None]
     for key in changed:

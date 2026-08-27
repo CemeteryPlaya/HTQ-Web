@@ -15,11 +15,13 @@ from django.test import Client
 
 from apps.contracts.models import (
     Administrator,
+    AdvancePayment,
     Agreement,
     Budget,
     BudgetLine,
     Counterparty,
     Country,
+    Invoice,
     Program,
 )
 
@@ -125,4 +127,23 @@ def make_agreement(*, line: BudgetLine, counterparty: Counterparty | None = None
         counterparty=counterparty or make_counterparty(country=budget.administrator.country),
         amount=Decimal(amount), payment_type="postpayment",
         currency=budget.currency, status=status, **over,
+    )
+
+
+def make_invoice(*, line: BudgetLine, counterparty: Counterparty | None = None,
+                 name: str = "Канцелярия", amount="400000.00",
+                 status: str = "draft", **over) -> Invoice:
+    """Счёт на оплату без договора. Валюта снимается со строки бюджета — так
+    же, как это делает ``invoice_service.create_invoice``."""
+    budget = line.budget
+    return Invoice.objects.create(
+        name=name, budget_line=line,
+        counterparty=counterparty or make_counterparty(country=budget.administrator.country),
+        amount=Decimal(amount), currency=budget.currency, status=status, **over,
+    )
+
+
+def make_advance_payment(*, agreement: Agreement, amount="100000.00", **over) -> AdvancePayment:
+    return AdvancePayment.objects.create(
+        agreement=agreement, amount=Decimal(amount), **over,
     )

@@ -4,6 +4,8 @@ import { useLanguageTransition } from '@/hooks/use-language-transition';
 import { HeroSection } from '@/components/HeroSection';
 import { LazySection } from '@/components/LazySection';
 import { Footer } from '@/components/Footer';
+import { HomeBlock } from '@/components/HomeBlock';
+import { CustomHomeBlocks } from '@/components/CustomHomeBlocks';
 
 // Lazy load below-the-fold sections
 const ActivityDirections = React.lazy(() => import('@/components/ActivityDirections').then(m => ({ default: m.ActivityDirections })));
@@ -23,39 +25,59 @@ const Index = () => {
   return (
     <div className={`min-h-screen language-transition ${isChanging ? 'language-changing' : ''}`}>
       <Header />
-      <HeroSection />
+      <HomeBlock sectionKey="hero">
+        <HeroSection />
+      </HomeBlock>
 
       <LazySection height="min-h-[600px]">
-        <ActivityDirections />
+        <HomeBlock sectionKey="directions">
+          <ActivityDirections />
+        </HomeBlock>
       </LazySection>
 
       <LazySection height="min-h-[400px]">
-        <InvestCTA />
+        <HomeBlock sectionKey="invest">
+          <InvestCTA />
+        </HomeBlock>
       </LazySection>
 
       <LazySection height="min-h-[600px]">
-        <ProjectsSection />
+        <HomeBlock sectionKey="projects">
+          <ProjectsSection />
+        </HomeBlock>
       </LazySection>
 
       <LazySection height="min-h-[600px]">
-        <ServicesSection />
+        <HomeBlock sectionKey="services">
+          <ServicesSection />
+        </HomeBlock>
       </LazySection>
 
       <LazySection height="min-h-[300px]">
-        <StatsSection />
+        <HomeBlock sectionKey="stats">
+          <StatsSection />
+        </HomeBlock>
       </LazySection>
 
       <LazySection height="min-h-[600px]">
-        <MissionSection />
+        <HomeBlock sectionKey="mission">
+          <MissionSection />
+        </HomeBlock>
       </LazySection>
 
       <LazySection height="min-h-[600px]">
-        <AboutSection />
+        <HomeBlock sectionKey="about">
+          <AboutSection />
+        </HomeBlock>
       </LazySection>
 
       <LazySection height="min-h-[300px]">
-        <PartnersSection />
+        <HomeBlock sectionKey="partners">
+          <PartnersSection />
+        </HomeBlock>
       </LazySection>
+
+      <CustomHomeBlocks />
 
       <LazySection height="min-h-[500px]">
         <NewsSection />

@@ -75,3 +75,23 @@ if (!Element.prototype.hasPointerCapture) {
 if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
+
+// cmdk (the Command/combobox popovers used across the app, e.g. hr/EmployeeFormDialog)
+// measures its list with ResizeObserver, which jsdom doesn't implement. Any test that
+// actually opens one of these popovers needs the constructor to exist at all — a no-op
+// stub is enough since we never assert on resize callbacks in tests.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+Object.defineProperty(window, "ResizeObserver", {
+  writable: true,
+  value: ResizeObserverStub,
+});
+
+// Same cmdk gap: it calls scrollIntoView on the highlighted item, which jsdom
+// doesn't implement either.
+if (!window.HTMLElement.prototype.scrollIntoView) {
+  window.HTMLElement.prototype.scrollIntoView = () => {};
+}

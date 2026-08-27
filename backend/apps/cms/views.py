@@ -29,6 +29,7 @@ from htqweb.http import _authenticate_jwt, api_view, json_error
 from .models import ConferenceInvite
 from . import schemas
 from . import tasks
+from .services import home_service as home_svc
 from .services import audit
 from .services import conference_invite_service
 from .services import conference_service
@@ -507,6 +508,152 @@ def tag_detail(request, tag_id: int, *args, **kwargs):
         return _delete_tag(request, tag_id, *args, **kwargs)
     return json_error("Method Not Allowed", 405)
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Блоки главной страницы
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Чтение ПУБЛИЧНОЕ (auth=None): лендинг открыт анонимам, и требовать токен ради
+# заголовков было бы странно. Отдаём только видимые секции и уже локализованные
+# строки — скрытая секция не должна утекать в ответ, даже пустая.
+#
+# Запись — admin=True, как у новостей и contact-requests рядом: это тот же
+# редакторский контур.
+
+@api_view(methods=("GET",), auth=None)
+def home_sections_public(request):
+    lang = home_svc.normalize_lang(request.GET.get("lang"))
+    return [schemas.HomeSectionPublic(**s) for s in home_svc.public_sections(lang)]
+
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def _list_home_sections_admin(request):
+    return [schemas.HomeSectionAdmin(**s) for s in home_svc.admin_sections()]
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.HomeSectionCreate, status=201, admin=True)
+def _create_home_section(request, data: schemas.HomeSectionCreate):
+    section = home_svc.create_section(data.model_dump(), user_id=request.token.user_id)
+    audit.record_action(
+        request,
+        user_id=request.token.user_id,
+        action="home_section.created",
+        resource_type="HomeSection",
+        resource_id=str(section["id"]),
+        changes={"key": section["key"], "layout": section["layout"]},
+    )
+    return schemas.HomeSectionAdmin(**section)
+
+
+def home_sections_admin(request):
+    if request.method == "GET":
+        return _list_home_sections_admin(request)
+    if request.method == "POST":
+        return _create_home_section(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
+def _delete_home_section(request, section_id: int):
+    try:
+        home_svc.delete_section(section_id)
+    except home_svc.SectionNotFound:
+        return json_error("Section not found", 404)
+    except home_svc.SystemSectionProtected:
+        # 409, а не 403: дело не в правах вызывающего (он администратор), а в
+        # том, что у этой секции свой React-компонент и пересоздать её из
+        # интерфейса нельзя. Прятать — можно.
+        return json_error(
+            "Системный блок нельзя удалить — его можно только скрыть", 409,
+        )
+    audit.record_action(
+        request,
+        user_id=request.token.user_id,
+        action="home_section.deleted",
+        resource_type="HomeSection",
+        resource_id=str(section_id),
+    )
+    return HttpResponse(status=204)
+
+
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.HomeSectionUpdate, admin=True)
+def _update_home_section(request, section_id: int, data: schemas.HomeSectionUpdate):
+    patch = data.model_dump(exclude_unset=True)
+    try:
+        section = home_svc.update_section(section_id, patch, user_id=request.token.user_id)
+    except home_svc.SectionNotFound:
+        return json_error("Section not found", 404)
+    audit.record_action(
+        request,
+        user_id=request.token.user_id,
+        action="home_section.updated",
+        resource_type="HomeSection",
+        resource_id=str(section_id),
+        changes=patch,
+    )
+    return schemas.HomeSectionAdmin(**section)
+
+
+def home_section_detail(request, section_id: int):
+    if request.method == "PATCH":
+        return _update_home_section(request, section_id=section_id)
+    if request.method == "DELETE":
+        return _delete_home_section(request, section_id=section_id)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.HomeReorder, admin=True)
+def home_sections_reorder(request, data: schemas.HomeReorder):
+    home_svc.reorder_sections(data.ids)
+    return {"ok": True}
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.HomeItemUpsert, status=201, admin=True)
+def home_items_collection(request, section_id: int, data: schemas.HomeItemUpsert):
+    try:
+        item = home_svc.create_item(section_id, data.model_dump())
+    except home_svc.SectionNotFound:
+        return json_error("Section not found", 404)
+    return schemas.HomeItemAdmin(**item)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.HomeReorder, admin=True)
+def home_items_reorder(request, section_id: int, data: schemas.HomeReorder):
+    try:
+        home_svc.get_section(section_id)
+    except home_svc.SectionNotFound:
+        return json_error("Section not found", 404)
+    home_svc.reorder_items(section_id, data.ids)
+    return {"ok": True}
+
+
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.HomeItemUpdate, admin=True)
+def _update_home_item(request, item_id: int, data: schemas.HomeItemUpdate):
+    try:
+        item = home_svc.update_item(item_id, data.model_dump(exclude_unset=True))
+    except home_svc.ItemNotFound:
+        return json_error("Item not found", 404)
+    return schemas.HomeItemAdmin(**item)
+
+
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
+def _delete_home_item(request, item_id: int):
+    try:
+        home_svc.delete_item(item_id)
+    except home_svc.ItemNotFound:
+        return json_error("Item not found", 404)
+    # Явный HttpResponse, а не `None` + status=204: `api_view` не превращает
+    # None в ответ, и Django ронял бы запрос с "didn't return an HttpResponse".
+    # Так же сделаны соседние DELETE (новости, contact-requests).
+    return HttpResponse(status=204)
+
+
+def home_item_detail(request, item_id: int):
+    if request.method == "PATCH":
+        return _update_home_item(request, item_id=item_id)
+    if request.method == "DELETE":
+        return _delete_home_item(request, item_id=item_id)
+    return json_error("Method Not Allowed", 405)
 
 # ── Приглашения в конференцию ──────────────────────────────────────────────
 #

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
+import { useHomeSection } from '@/hooks/useHomeContent';
 import { ArrowRight, Shield, Settings, Wrench, Plug, ClipboardCheck, LucideIcon } from 'lucide-react';
 import { services } from '@/data/services';
 
@@ -14,6 +15,7 @@ const iconMap: Record<string, LucideIcon> = {
 
 export const ServicesSection = () => {
   const { t } = useTranslation();
+  const home = useHomeSection('services');
   const [activeService, setActiveService] = useState(0);
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
@@ -56,12 +58,12 @@ export const ServicesSection = () => {
       <div className="container-custom">
         {/* Header */}
         <div className="text-center max-w-3xl mx-auto mb-12 sm:mb-16">
-          <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{t('services.tag')}</span>
+          <span className="text-secondary font-semibold text-sm uppercase tracking-wider">{home.text('tag', 'services.tag')}</span>
           <h2 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mt-2 mb-4">
-            {t('services.title')}
+            {home.text('title', 'services.title')}
           </h2>
           <p className="text-muted-foreground text-base sm:text-lg">
-            {t('services.desc')}
+            {home.text('description', 'services.desc')}
           </p>
         </div>
 
