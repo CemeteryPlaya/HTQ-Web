@@ -21,7 +21,10 @@ class Command(BaseCommand):
         parser.add_argument("--company", help="slug одной компании")
         parser.add_argument("--app",
                             help="только эта аппка (hr/tasks/contracts/signoff)")
-        parser.add_argument("--to", help="целевая миграция, напр. 0042_x или zero")
+        parser.add_argument(
+            "--to",
+            help="довести аппку до этой миграции, напр. 0042_x. Только "
+                 "ВПЕРЁД: откат схемы компании запрещён")
         parser.add_argument("--plan", action="store_true",
                             help="сухой прогон: показать, что применилось бы")
 
@@ -42,7 +45,9 @@ class Command(BaseCommand):
                 )
             except Company.DoesNotExist as exc:
                 raise CommandError(f"Компании {slug!r} нет в реестре.") from exc
-            except (ValueError, migration_service.SchemaMissing) as exc:
+            except (ValueError,
+                    migration_service.SchemaMissing,
+                    migration_service.BackwardsMigrationRefused) as exc:
                 # Опечатка в аргументе или незаведённая схема — это работа
                 # для оператора, а не трассировка на пол-экрана. Ошибка самой
                 # миграции, наоборот, летит наверх целиком: там нужен

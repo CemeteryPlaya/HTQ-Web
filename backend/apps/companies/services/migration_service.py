@@ -30,6 +30,9 @@ Django перечисляет таблицы) для public-копии стан�
 общей таблице, здесь не упадёт, а тихо сработает по public. Инвариант
 «межаппных FK нет» это ограничивает, но не отменяет; CREATE TABLE при этом
 безопасен всегда — он идёт в ПЕРВУЮ схему пути, то есть в схему компании.
+Из этой же обратной стороны выросли две защиты: закрытое обратное
+направление (``BackwardsMigrationRefused``) и список
+``SHARED_EFFECT_MIGRATIONS`` — см. их докстринги.
 
 Миграции нетенантных аппок в схеме компании помечаются применёнными без
 выполнения (``_adopt_shared_state``). Причина не косметическая: Django
@@ -55,29 +58,70 @@ advisory lock снимается автоматически при обрыве 
 
 from __future__ import annotations
 
-import logging
-
 from django.conf import settings
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.recorder import MigrationRecorder
 from django.utils import timezone
 
+from htqweb.fallback import fallback
 from htqweb.tenancy.context import current_company_or_none
 from htqweb.tenancy.db import apply_search_path
 
 from ..models import Company, CompanySchemaVersion
 from .schema_service import schema_exists
 
-logger = logging.getLogger(__name__)
-
 # Произвольная, но фиксированная константа: два процесса должны выбирать
 # один и тот же ключ, иначе блокировка не блокирует.
 ADVISORY_LOCK_KEY = 0x48545143  # "HTQC"
 
+# Тенантные по принадлежности, но по эффекту — общие: это data-миграции,
+# которые не создают в схеме компании ничего, а пишут в public
+# (django_celery_beat). Их эффект глобален и уже достигнут обычным
+# manage.py migrate; повторное выполнение на каждую компанию — чистый
+# побочный эффект, причём вредный: defaults в обеих несут enabled=True и
+# crontab, то есть заведение новой компании молча вернуло бы выключенную
+# оператором задачу и сбросило бы изменённое им расписание.
+#
+# Поэтому они помечаются применёнными, но НЕ выполняются. Отметка ставится
+# ПОСЛЕ прогона, а не заранее вместе с нетенантными: hr.0019 — лист графа
+# hr, а лист, помеченный применённым заранее, уводит
+# MigrationExecutor.migration_plan в ветку отката (``elif target in
+# applied``), где детей у листа нет и план выходит ПУСТЫМ — hr не
+# мигрировался бы вовсе.
+SHARED_EFFECT_MIGRATIONS = frozenset({
+    ("hr", "0019_identity_sync_periodic_task"),
+    ("tasks", "0003_tasks_periodic_tasks"),
+})
+
 
 class SchemaMissing(RuntimeError):
     """Схемы компании нет — мигрировать некуда (см. докстринг модуля)."""
+
+
+class BackwardsMigrationRefused(RuntimeError):
+    """Откат схемы компании через этот модуль запрещён.
+
+    Не «пока не реализован», а именно запрещён: реверс тенантных
+    data-миграций выполняется по public (public второй в search_path), и
+    откат ОДНОЙ компании удалил бы платформенные строки PeriodicTask —
+    выключив периодические задачи всей группы. Пока это не покрыто тестами
+    и не осмыслено отдельно, направление закрыто.
+
+    Откатить схему одной компании можно вручную: выставить search_path на
+    неё и вызвать manage.py migrate <app> <migration>.
+    """
+
+
+class ForeignMigrationInPlan(RuntimeError):
+    """В плане прогона оказался шаг, которому в схеме компании не место.
+
+    Сегодня такого не бывает: нетенантные миграции помечаются применёнными
+    до построения плана и в него не попадают. Но если завтра появится
+    нетенантная миграция, зависящая от тенантной, молчаливый фильтр урезал
+    бы план — и схема разъехалась бы без единого следа. Это ровно тот класс
+    ошибок, из которого выросли SHARED_EFFECT_MIGRATIONS.
+    """
 
 
 def _acquire_lock() -> None:
@@ -94,24 +138,30 @@ def _release_lock() -> None:
         # пересоздалось посреди прогона. Само по себе не опасно (оборванная
         # сессия отдаёт свои блокировки), но означает, что взаимного
         # исключения между процессами в этот прогон не было.
-        logger.warning(
-            "pg_advisory_unlock(%s) вернул false: блокировку брало другое "
-            "соединение", ADVISORY_LOCK_KEY,
-        )
+        fallback("companies.migration.lock_not_held", None,
+                 reason="pg_advisory_unlock вернул false: блокировку брало "
+                        "другое соединение",
+                 expected=True, key=ADVISORY_LOCK_KEY)
 
 
-def _quietly(what: str, action) -> None:
+def _cleanup(step: str, action) -> None:
     """Уборка, которой запрещено заслонять настоящую ошибку прогона.
 
     Если миграция упала, соединение может остаться в оборванной транзакции,
     где ЛЮБОЙ следующий запрос — включая SET и снятие блокировки — тоже
-    падает. Такой вторичный сбой не должен подменять собой причину, поэтому
-    он только логируется.
+    падает. Такой вторичный сбой не должен подменять собой причину, но и
+    исчезать бесследно не имеет права: продолжение после проглоченного
+    исключения — это подмена по определению из CLAUDE.md, поэтому она идёт
+    через общий примитив (htqweb/fallback.py), а не через голый except.
+    ``expected=True`` — путь предусмотренный, но редкий: strict-режим на нём
+    не падает, зато подмена видна в логе и в htqweb_fallback_total.
     """
     try:
         action()
-    except Exception:
-        logger.exception("Не удалось выполнить: %s", what)
+    except Exception as exc:
+        fallback("companies.migration.cleanup_failed", None,
+                 reason="уборка после прогона миграций не отработала",
+                 exc=exc, expected=True, step=step)
 
 
 def _isolate_migration_state(slug: str) -> None:
@@ -120,51 +170,93 @@ def _isolate_migration_state(slug: str) -> None:
     MigrationRecorder(connection).ensure_schema()
 
 
-def _adopt_shared_state(loader, tenant_apps: frozenset[str]) -> int:
-    """Отметить миграции нетенантных аппок применёнными в схеме компании.
+def _mark_applied(keys) -> int:
+    """Отметить миграции применёнными в схеме компании, НЕ выполняя их.
 
-    Ничего не выполняет — только пишет строки в django_migrations схемы.
-    Зачем это нужно, см. докстринг модуля. Возвращает число добавленных
-    отметок, чтобы вызывающий знал, надо ли перечитывать граф.
+    Возвращает число добавленных отметок — по нему вызывающий понимает,
+    надо ли перечитывать граф.
     """
     recorder = MigrationRecorder(connection)
     known = set(recorder.applied_migrations())
-    missing = [key for key in loader.graph.nodes
-               if key[0] not in tenant_apps and key not in known]
+    missing = sorted(key for key in keys if key not in known)
     if missing:
         # bulk_create, а не record_applied в цикле: отметок полторы сотни, и
         # это ровно один раз на компанию.
         Migration = recorder.Migration
         recorder.migration_qs.bulk_create(
-            [Migration(app=app, name=name) for app, name in sorted(missing)]
+            [Migration(app=app, name=name) for app, name in missing]
         )
     return len(missing)
+
+
+def _adopt_shared_state(loader, tenant_apps: frozenset[str]) -> int:
+    """Принять состояние нетенантных аппок как есть (см. докстринг модуля)."""
+    return _mark_applied(key for key in loader.graph.nodes
+                         if key[0] not in tenant_apps)
 
 
 def _targets(loader, app_labels: tuple[str, ...], target: str | None) -> list[tuple]:
     if target is None:
         return sorted(n for n in loader.graph.leaf_nodes() if n[0] in app_labels)
-    # "zero" — язык самой команды migrate: откатить аппку целиком.
+    # "zero" (откатить аппку целиком) распознаётся не ради поддержки, а ради
+    # внятного отказа: без этой строки Django упал бы на «нет такой
+    # миграции», а с ней получается честный BackwardsMigrationRefused.
     return [(app_labels[0], None if target == "zero" else target)]
 
 
-def _tenant_plan(executor: MigrationExecutor, targets: list[tuple],
-                 tenant_apps: frozenset[str]) -> list[tuple]:
-    """План прогона, из которого выброшено всё нетенантное.
+def _split_plan(executor: MigrationExecutor, targets: list[tuple],
+                tenant_apps: frozenset[str], *, strict: bool) -> tuple[list, list]:
+    """Разложить план на «выполнить» и «пометить применённым».
 
-    После ``_adopt_shared_state`` фильтр обычно ничего не отсеивает — он
-    нужен режиму ``plan=True``, где отметки намеренно не ставятся (сухой
-    прогон не имеет права ничего писать), и служит страховкой в остальных.
+    ``strict=True`` (боевой прогон) требует, чтобы срезать было нечего сверх
+    SHARED_EFFECT_MIGRATIONS: нетенантные шаги к этому моменту уже помечены
+    применёнными и в плане появиться не могут. ``strict=False`` — сухой
+    прогон, где отметки намеренно не проставлены, поэтому нетенантные шаги
+    в плане штатны и просто не показываются.
     """
-    return [
-        step for step in executor.migration_plan(targets)
-        if step[0].app_label in tenant_apps
-    ]
+    steps: list = []
+    shared: list = []
+    foreign: list = []
+    for step in executor.migration_plan(targets):
+        migration = step[0]
+        key = (migration.app_label, migration.name)
+        if key in SHARED_EFFECT_MIGRATIONS:
+            shared.append(step)
+        elif migration.app_label in tenant_apps:
+            steps.append(step)
+        else:
+            foreign.append(step)
+    if strict and foreign:
+        raise ForeignMigrationInPlan(
+            "В плане прогона схемы компании оказались нетенантные миграции: "
+            + ", ".join(f"{m.app_label}.{m.name}" for m, _ in foreign)
+            + ". Их таблицы живут в public: выполнять их здесь нельзя, а "
+              "молча выбросить — значит разъехаться со схемой."
+        )
+    return steps, shared
+
+
+def _refuse_backwards(steps: list) -> None:
+    """Не выпустить обратный план дальше построения (см. исключение)."""
+    backwards = [m for m, is_backwards in steps if is_backwards]
+    if backwards:
+        raise BackwardsMigrationRefused(
+            "Откат схемы компании запрещён, а план получился обратным: "
+            + ", ".join(f"{m.app_label}.{m.name}" for m in backwards)
+            + ". Реверс тенантных data-миграций выполнился бы по public и "
+              "выключил бы периодические задачи всей группы."
+        )
 
 
 def _app_versions(loader, applied: set[tuple[str, str]],
                   tenant_apps: frozenset[str]) -> dict[str, tuple[str, str]]:
     """{аппка: (фактическая миграция, целевая)} по состоянию текущей схемы.
+
+    Аппка без единой применённой миграции попадает сюда с ПУСТОЙ фактической
+    версией, а не пропускается. Пропуск оставил бы в CompanySchemaVersion
+    прежнее значение — то есть строка утверждала бы, что схема на такой-то
+    версии, при пустой схеме. Ровно то отставание, ради видимости которого
+    таблица заведена, оказалось бы скрыто.
 
     «Фактическая» ищется по топологическому порядку графа, а не как max()
     по имени: порядок задаётся зависимостями, и склейка (squash) или
@@ -179,24 +271,35 @@ def _app_versions(loader, applied: set[tuple[str, str]],
         leaf = leaves[-1]
         ordered = [n for n in loader.graph.forwards_plan(leaf) if n[0] == app_label]
         done = [n[1] for n in ordered if n in applied]
-        if not done:
-            # Аппки в этой схеме нет вовсе — строку версии не заводим, чтобы
-            # «не мигрировали» и «мигрировали» не выглядели одинаково.
-            continue
-        versions[app_label] = (done[-1], leaf[1])
+        versions[app_label] = (done[-1] if done else "", leaf[1])
     return versions
 
 
-def _record(company: Company, app_label: str, applied: str, target: str) -> None:
-    CompanySchemaVersion.objects.update_or_create(
-        company=company, app_label=app_label,
-        defaults={
-            "applied_migration": applied,
-            "target_migration": target,
-            "last_run_at": timezone.now(),
-            "last_error": "",
-        },
-    )
+def _record_versions(company: Company, versions: dict[str, tuple[str, str]]) -> None:
+    """Записать версии схемы. Строка заводится только для живых аппок.
+
+    Пустая фактическая версия и отсутствие строки — разные вещи: первая
+    означает «в схеме этой аппки не осталось», вторая — «мы про неё ничего
+    не утверждаем». Заводить строку на аппку, которой в схеме никогда не
+    было, незачем; а вот ОБНУЛИТЬ уже существующую, если применённых
+    миграций не осталось, обязательно — иначе строка продолжит утверждать
+    прежнюю версию при пустой схеме.
+    """
+    for app_label, (applied, target) in versions.items():
+        exists = CompanySchemaVersion.objects.filter(
+            company=company, app_label=app_label,
+        ).exists()
+        if not applied and not exists:
+            continue
+        CompanySchemaVersion.objects.update_or_create(
+            company=company, app_label=app_label,
+            defaults={
+                "applied_migration": applied,
+                "target_migration": target,
+                "last_run_at": timezone.now(),
+                "last_error": "",
+            },
+        )
 
 
 def _record_failure(company: Company, app_labels: list[str], error: str) -> None:
@@ -208,20 +311,40 @@ def _record_failure(company: Company, app_labels: list[str], error: str) -> None
         )
 
 
+class _LastStarted:
+    """Последняя НАЧАТАЯ миграция — по ней видно, на чём прогон упал.
+
+    Нужна, чтобы ошибка попадала в строку той аппки, которая её вызвала, а
+    не размазывалась по всем аппкам плана, включая те, до которых прогон не
+    дошёл. MigrationExecutor зовёт колбэк и без миграции ("render_start"),
+    поэтому аргументы необязательные.
+    """
+
+    def __init__(self) -> None:
+        self.migration = None
+
+    def __call__(self, action: str, migration=None, fake: bool = False) -> None:
+        if action == "apply_start":
+            self.migration = migration
+
+
 def migrate_company(slug: str, *, app_label: str | None = None,
                     target: str | None = None, plan: bool = False) -> dict:
     """Довести схему компании до целевой версии.
 
     ``app_label`` сужает прогон до одной аппки, ``target`` — до конкретной
-    миграции (для отката вперёд-назад в expand/contract; ``"zero"`` — откат
-    аппки целиком). ``plan=True`` даёт сухой прогон: возвращает список того,
-    что применилось бы, ничего не меняя.
+    миграции (expand/contract). Направление ТОЛЬКО вперёд: план, оказавшийся
+    обратным, отвергается (``BackwardsMigrationRefused``). ``plan=True`` даёт
+    сухой прогон: возвращает список того, что применилось бы, ничего не меняя.
 
     Возвращает ``{"slug", "applied": {аппка: миграция}, "planned": [строки]}``.
-    ``applied`` — фактическое состояние схемы ПОСЛЕ прогона по всем тенантным
-    аппкам, а не перечень тронутого: сужение до одной аппки всё равно тянет
-    её тенантные зависимости (signoff тянет hr), и умолчать о них значило бы
-    оставить CompanySchemaVersion расходящимся с реальностью.
+    ``applied`` — фактическое состояние схемы ПОСЛЕ прогона по тем тенантным
+    аппкам, у которых в схеме что-то есть, а не перечень тронутого: сужение
+    до одной аппки всё равно тянет её тенантные зависимости (signoff тянет
+    hr), и умолчать о них значило бы оставить CompanySchemaVersion
+    расходящимся с реальностью. ``planned`` — только то, что будет
+    ВЫПОЛНЕНО; SHARED_EFFECT_MIGRATIONS туда не попадают, потому что
+    помечаются применёнными без выполнения.
     """
     tenant_apps = frozenset(settings.TENANT_APPS)
     if app_label is not None and app_label not in tenant_apps:
@@ -256,7 +379,9 @@ def migrate_company(slug: str, *, app_label: str | None = None,
             apply_search_path(slug, include_public=False)
             executor = MigrationExecutor(connection)
             targets = _targets(executor.loader, app_labels, target)
-            steps = _tenant_plan(executor, targets, tenant_apps)
+            steps, _shared = _split_plan(executor, targets, tenant_apps,
+                                         strict=False)
+            _refuse_backwards(steps)
             return {"slug": slug, "applied": {},
                     "planned": [f"{m.app_label}.{m.name}" for m, _ in steps]}
 
@@ -265,7 +390,8 @@ def migrate_company(slug: str, *, app_label: str | None = None,
         # общую, а нетенантные таблицы разрешаются в public.
         apply_search_path(slug)
 
-        executor = MigrationExecutor(connection)
+        progress = _LastStarted()
+        executor = MigrationExecutor(connection, progress_callback=progress)
         if _adopt_shared_state(executor.loader, tenant_apps):
             # Загрузчик кэширует applied_migrations на момент сборки графа —
             # после дописанных отметок его нужно перечитать, иначе план
@@ -273,13 +399,17 @@ def migrate_company(slug: str, *, app_label: str | None = None,
             executor.loader.build_graph()
 
         targets = _targets(executor.loader, app_labels, target)
-        steps = _tenant_plan(executor, targets, tenant_apps)
+        steps, shared = _split_plan(executor, targets, tenant_apps, strict=True)
+        _refuse_backwards(steps)
+        _refuse_backwards(shared)
         planned = [f"{m.app_label}.{m.name}" for m, _ in steps]
 
-        touched = sorted({m.app_label for m, _ in steps}) or list(app_labels)
         try:
             if steps:
                 executor.migrate(targets, plan=steps)
+            # Отметка ПОСЛЕ прогона: зависимости этих миграций к этому
+            # моменту применены, а сами они выполнению не подлежат.
+            _mark_applied((m.app_label, m.name) for m, _ in shared)
             # Состояние перечитывается из БД, а не берётся из загрузчика: тот
             # знает его на момент сборки графа, то есть ДО прогона.
             applied_keys = set(MigrationRecorder(connection).applied_migrations())
@@ -290,19 +420,23 @@ def migrate_company(slug: str, *, app_label: str | None = None,
                 # его не видно, поэтому путь восстанавливается здесь, ДО
                 # записи, а не в finally. Повтор там безвреден.
                 apply_search_path(previous)
+                failed = progress.migration
+                touched = ([failed.app_label] if failed is not None
+                           else sorted({m.app_label for m, _ in steps})
+                           or list(app_labels))
                 _record_failure(company, touched, f"{type(exc).__name__}: {exc}")
 
-            _quietly("отметка неудачи прогона", mark_failure)
+            _cleanup("отметка неудачи прогона", mark_failure)
             raise
     finally:
-        _quietly("сброс search_path", lambda: apply_search_path(previous))
-        _quietly("снятие advisory lock", _release_lock)
+        _cleanup("сброс search_path", lambda: apply_search_path(previous))
+        _cleanup("снятие advisory lock", _release_lock)
 
-    for label, (applied_name, target_name) in versions.items():
-        _record(company, label, applied_name, target_name)
+    _record_versions(company, versions)
 
     return {
         "slug": slug,
-        "applied": {label: names[0] for label, names in versions.items()},
+        "applied": {label: applied for label, (applied, _t) in versions.items()
+                    if applied},
         "planned": planned,
     }

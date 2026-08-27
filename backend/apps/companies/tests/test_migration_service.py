@@ -10,6 +10,7 @@
 """
 
 import io
+from types import SimpleNamespace
 
 import pytest
 from django.core.management import call_command
@@ -51,6 +52,34 @@ def _tables_in(schema: str) -> set[str]:
             [schema],
         )
         return {row[0] for row in cur.fetchall()}
+
+
+def _advisory_locks_held() -> int:
+    """Сколько раз ключ модуля сейчас взят в этой БД.
+
+    pg_locks раскладывает bigint-ключ на пару int'ов; ключ модуля влезает в
+    младшую половину, поэтому classid = 0. Проверять через
+    pg_try_advisory_lock нельзя: та же сессия берёт свой же ключ повторно
+    успешно (блокировки реентерабельны), и снятия это не докажет.
+    """
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' "
+            "AND classid = %s AND objid = %s",
+            [migration_service.ADVISORY_LOCK_KEY >> 32,
+             migration_service.ADVISORY_LOCK_KEY & 0xFFFFFFFF],
+        )
+        return cur.fetchone()[0]
+
+
+def _periodic_task_state() -> list[tuple]:
+    """Снимок платформенного расписания beat (public, одно на всю группу)."""
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT name, enabled FROM public.django_celery_beat_periodictask "
+            "ORDER BY name"
+        )
+        return cur.fetchall()
 
 
 def _migration_rows(schema: str) -> set[tuple[str, str]]:
@@ -206,3 +235,167 @@ def test_command_plan_prints_pending_migrations(alpha):
 def test_command_reports_unknown_app_without_traceback(alpha):
     with pytest.raises(CommandError):
         call_command("migrate_companies", "--company", "t-alpha", "--app", "cms")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_shared_effect_migrations_are_marked_but_not_run(alpha):
+    """hr.0019 и tasks.0003 пишут в public, а не в схему компании.
+
+    Они тенантные по принадлежности, но по эффекту общие: заводят
+    периодические задачи beat, одни на всю группу. Выполнить их на каждую
+    компанию значило бы молча вернуть выключенную оператором задачу и
+    сбросить изменённое им расписание — поэтому они помечаются
+    применёнными, но не выполняются.
+    """
+    # Расписание в public заводится миграциями при создании тестовой БД, но
+    # transaction=True-тест вычищает public целиком (TRUNCATE), поэтому
+    # состояние оператора воспроизводится здесь явно: задача заведена и
+    # ВЫКЛЮЧЕНА. Выполнись hr.0019 ещё раз — её update_or_create вернул бы
+    # enabled=True.
+    from django_celery_beat.models import CrontabSchedule, PeriodicTask
+
+    # update_or_create, а не create: заведена ли строка миграциями к этому
+    # моменту, зависит от того, вычистил ли public предыдущий
+    # transaction=True-тест, — и от порядка тестов зависеть здесь нечему.
+    schedule, _ = CrontabSchedule.objects.get_or_create(minute="30", hour="3")
+    PeriodicTask.objects.update_or_create(
+        name="hr.sync_identity",
+        defaults={"task": "apps.hr.tasks.sync_identity", "crontab": schedule,
+                  "enabled": False},
+    )
+    before = _periodic_task_state()
+    assert ("hr.sync_identity", False) in before
+
+    migration_service.migrate_company("t-alpha")
+
+    assert _periodic_task_state() == before
+    applied = _migration_rows("co_t_alpha")
+    for key in migration_service.SHARED_EFFECT_MIGRATIONS:
+        assert key in applied
+    # И при этом аппка считается доведённой до листа, а не отставшей.
+    hr_row = CompanySchemaVersion.objects.get(company=alpha, app_label="hr")
+    assert hr_row.applied_migration == hr_row.target_migration
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backwards_migration_is_refused(alpha):
+    """Откат закрыт целиком — и ничего не успевает изменить.
+
+    Реверс тенантных data-миграций пошёл бы по public (он второй в
+    search_path) и выключил бы периодические задачи ВСЕЙ группы, а не одной
+    компании.
+    """
+    migration_service.migrate_company("t-alpha", app_label="signoff")
+    tables_before = _tables_in("co_t_alpha")
+    beat_before = _periodic_task_state()
+
+    with pytest.raises(migration_service.BackwardsMigrationRefused):
+        migration_service.migrate_company(
+            "t-alpha", app_label="signoff", target="zero",
+        )
+
+    assert _tables_in("co_t_alpha") == tables_before
+    assert _periodic_task_state() == beat_before
+    assert _advisory_locks_held() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_failed_run_records_error_and_cleans_up(alpha, monkeypatch):
+    """Путь ошибки: строка версии с last_error, путь сброшен, замок снят.
+
+    Самый хрупкий участок модуля — замыкание, восстанавливающее search_path
+    ПЕРЕД записью в public, и глушитель поверх него. Без теста утверждение
+    «last_error реально пишется» остаётся утверждением.
+    """
+    from django.db.migrations.executor import MigrationExecutor
+
+    def explode(self, targets, plan=None, **kwargs):
+        # Колбэк дёргается руками: он и определяет, в чью строку ляжет
+        # ошибка, а настоящий прогон до него не дойдёт.
+        self.progress_callback("apply_start", plan[0][0], False)
+        raise RuntimeError("миграция не задалась")
+
+    monkeypatch.setattr(MigrationExecutor, "migrate", explode)
+
+    with pytest.raises(RuntimeError, match="миграция не задалась"):
+        migration_service.migrate_company("t-alpha")
+
+    rows = CompanySchemaVersion.objects.filter(company=alpha)
+    assert rows.count() == 1, "ошибка помечается у той аппки, на которой упало"
+    assert "RuntimeError: миграция не задалась" in rows[0].last_error
+
+    with connection.cursor() as cur:
+        cur.execute("SHOW search_path")
+        assert cur.fetchone()[0] == "public"
+    assert _advisory_locks_held() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_version_row_is_zeroed_when_app_left_the_schema(alpha):
+    """Строка версии обязана врать не больше, чем схема.
+
+    Аппка, у которой в схеме не осталось ни одной применённой миграции,
+    получает ПУСТУЮ фактическую версию, а не сохраняет прежнюю. Иначе
+    CompanySchemaVersion утверждала бы, что схема на такой-то версии, при
+    пустой схеме — то есть скрывала бы ровно то отставание, ради видимости
+    которого заведена.
+    """
+    migration_service.migrate_company("t-alpha", app_label="tasks")
+    assert CompanySchemaVersion.objects.get(
+        company=alpha, app_label="tasks",
+    ).applied_migration
+
+    # Схема заведена заново — в ней пусто, хотя строка версии осталась.
+    schema_service.drop_schema("t-alpha")
+    schema_service.create_schema("t-alpha")
+    migration_service.migrate_company("t-alpha", app_label="signoff")
+
+    assert CompanySchemaVersion.objects.get(
+        company=alpha, app_label="tasks",
+    ).applied_migration == ""
+    assert CompanySchemaVersion.objects.get(
+        company=alpha, app_label="signoff",
+    ).applied_migration
+    # А аппка, которой в схеме не было НИКОГДА, строки не заводит: «версии
+    # нет» и «версия пуста» — разные утверждения.
+    assert not CompanySchemaVersion.objects.filter(
+        company=alpha, app_label="contracts",
+    ).exists()
+
+
+class _FakeExecutor:
+    """План задаётся руками: настоящий Django такой ситуации не создаёт."""
+
+    def __init__(self, plan):
+        self._plan = plan
+
+    def migration_plan(self, targets):
+        return self._plan
+
+
+def _step(app_label, name, backwards=False):
+    return (SimpleNamespace(app_label=app_label, name=name), backwards)
+
+
+def test_split_plan_refuses_foreign_migrations():
+    """Фильтр плана не имеет права срезать молча.
+
+    Сегодня нетенантные миграции до плана не доходят — они помечены
+    применёнными. Но если завтра появится нетенантная миграция, зависящая от
+    тенантной, беззвучный срез увёл бы схему в расхождение. Это ровно тот
+    класс, из которого выросли SHARED_EFFECT_MIGRATIONS.
+    """
+    plan = [_step("hr", "0002_x"), _step("cms", "0007_y")]
+    tenant = frozenset({"hr", "tasks", "contracts", "signoff"})
+
+    with pytest.raises(migration_service.ForeignMigrationInPlan) as info:
+        migration_service._split_plan(_FakeExecutor(plan), [], tenant, strict=True)
+    assert "cms.0007_y" in str(info.value)
+
+    # Сухой прогон отметок не ставит, поэтому нетенантные шаги в его плане
+    # штатны и просто не показываются.
+    steps, shared = migration_service._split_plan(
+        _FakeExecutor(plan), [], tenant, strict=False,
+    )
+    assert [m.name for m, _ in steps] == ["0002_x"]
+    assert shared == []
