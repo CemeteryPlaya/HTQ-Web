@@ -22,7 +22,7 @@ def clear_service_status_cache():
 
 
 @pytest.fixture(autouse=True)
-def reset_company_context():
+def reset_company_context(request):
     """Контекст компании не должен переживать тест.
 
     ``htqweb.tenancy.context._current`` — процессная ContextVar, а не
@@ -37,6 +37,40 @@ def reset_company_context():
     token = _current.set(None)
     yield
     _current.reset(token)
+
+    # search_path — сессионное состояние соединения. Обычный @pytest.mark.
+    # django_db откатывает его сам: Postgres SET транзакционен (см. SQL SET
+    # в документации Postgres), а такой тест целиком обёрнут в atomic-блок,
+    # который на teardown ВСЕГДА откатывается — это подтверждено опытом
+    # (тест, выставивший co_htq_kz без ручного сброса, соседу его не оставляет).
+    # Явный сброс здесь — сеть на будущее для @pytest.mark.django_db(
+    # transaction=True): такие тесты не оборачиваются в atomic и не
+    # откатываются, а очищаются TRUNCATE'ом, который search_path не трогает,
+    # — поэтому им откат нужен сознательно, а не рассчитываться на Postgres.
+    #
+    # Проверяем МАРКЕР теста, а не connection.connection: pytest-django
+    # блокирует БД целиком подменой BaseDatabaseWrapper.ensure_connection на
+    # версию, которая безусловно бросает RuntimeError для тестов без
+    # django_db — она не смотрит на то, есть ли уже открытое соединение.
+    # А оно, как правило, есть: Django не закрывает соединение между тестами
+    # в рамках одного процесса, поэтому "connection.connection is not None"
+    # остаётся истинным для ЛЮБОГО теста, идущего после первого db-теста в
+    # сессии, — включая чисто-питоновские. Проверка по факту открытого
+    # соединения ловит RuntimeError на первом же не-db тесте после db-теста;
+    # маркер — это именно то условие, от которого зависит сама блокировка.
+    #
+    # needs_rollback пропускаем отдельно: тест, намеренно поймавший
+    # IntegrityError без savepoint (см. apps/companies/tests/test_models.py::
+    # test_slug_is_unique), оставляет транзакцию Postgres в aborted-состоянии,
+    # где ЛЮБОЙ следующий запрос, включая наш SET, запрещён до ROLLBACK —
+    # который и так неизбежен на выходе из atomic-блока этого теста.
+    marker = request.node.get_closest_marker("django_db")
+    if marker is not None:
+        from django.db import connection
+
+        if not connection.needs_rollback:
+            with connection.cursor() as cur:
+                cur.execute("SET search_path TO public")
 
 
 # Прод-режим подмен на один тест. Весь прогон идёт в strict (settings/test.py:

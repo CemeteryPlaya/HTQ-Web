@@ -68,7 +68,15 @@ def use_holding():
     Контекст компании при этом НЕ ставится: сводное чтение по определению
     находится над компаниями, и код, который его выполняет, не должен
     случайно считать себя работающим внутри одной из них.
+
+    Путь при выходе восстанавливается в ПРЕЖНЮЮ компанию, а не в public
+    (симметрично use_company): сводное чтение холдинга может выполняться
+    внутри уже открытого use_company, и жёсткий сброс в public оставил бы
+    contextvar и реальный search_path соединения в расхождении до конца
+    внешнего блока — запросы там молча ушли бы в public вместо схемы
+    компании.
     """
+    previous = current_company_or_none()
     with connection.cursor() as cur:
         cur.execute(
             sql.SQL("SET search_path TO {}, public").format(
@@ -78,5 +86,4 @@ def use_holding():
     try:
         yield
     finally:
-        with connection.cursor() as cur:
-            cur.execute(_PUBLIC_ONLY)
+        apply_search_path(previous)

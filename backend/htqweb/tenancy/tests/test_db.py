@@ -53,3 +53,23 @@ def test_use_holding_selects_holding_schema():
     with use_holding():
         assert _search_path().startswith("holding")
     assert _search_path().startswith("public")
+
+
+@pytest.mark.django_db
+def test_use_holding_restores_on_exception():
+    with pytest.raises(ValueError):
+        with use_holding():
+            raise ValueError("боом")
+    assert _search_path().startswith("public")
+
+
+@pytest.mark.django_db
+def test_use_holding_inside_a_company_restores_that_company():
+    """Именно этот сценарий и пропустили: сводное чтение холдинга вполне может
+    выполняться внутри запроса, где компания уже установлена, и после выхода
+    соединение обязано вернуться в её схему, а не в public."""
+    with use_company("htq-kz"):
+        with use_holding():
+            assert _search_path().startswith("holding")
+        assert _search_path().startswith("co_htq_kz")
+    assert _search_path().startswith("public")
