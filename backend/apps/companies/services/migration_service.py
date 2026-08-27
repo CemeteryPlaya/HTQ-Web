@@ -63,6 +63,7 @@ from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.recorder import MigrationRecorder
 from django.utils import timezone
 
+from htqweb.tenancy.context import current_company_or_none
 from htqweb.tenancy.db import apply_search_path
 
 from ..models import Company, CompanySchemaVersion
@@ -238,6 +239,11 @@ def migrate_company(slug: str, *, app_label: str | None = None,
         )
 
     app_labels = (app_label,) if app_label else tuple(settings.TENANT_APPS)
+    # Восстанавливается ПРЕЖНИЙ путь, а не public: прогон может идти внутри
+    # уже открытого use_company (та же логика, что в use_holding), и жёсткий
+    # сброс оставил бы contextvar и реальный search_path соединения в
+    # расхождении — запросы вызывающего молча ушли бы в public.
+    previous = current_company_or_none()
 
     _acquire_lock()
     try:
@@ -280,16 +286,16 @@ def migrate_company(slug: str, *, app_label: str | None = None,
             versions = _app_versions(executor.loader, applied_keys, tenant_apps)
         except Exception as exc:
             def mark_failure() -> None:
-                # CompanySchemaVersion лежит в public, поэтому путь
-                # сбрасывается здесь, ДО записи, а не в finally. Повторный
-                # сброс там безвреден.
-                apply_search_path(None)
+                # CompanySchemaVersion лежит в public, а во время прогона
+                # его не видно, поэтому путь восстанавливается здесь, ДО
+                # записи, а не в finally. Повтор там безвреден.
+                apply_search_path(previous)
                 _record_failure(company, touched, f"{type(exc).__name__}: {exc}")
 
             _quietly("отметка неудачи прогона", mark_failure)
             raise
     finally:
-        _quietly("сброс search_path", lambda: apply_search_path(None))
+        _quietly("сброс search_path", lambda: apply_search_path(previous))
         _quietly("снятие advisory lock", _release_lock)
 
     for label, (applied_name, target_name) in versions.items():
