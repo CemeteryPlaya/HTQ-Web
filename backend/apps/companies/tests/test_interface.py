@@ -59,3 +59,32 @@ def test_module_can_be_disabled_per_company(kz):
     )
     assert interface.module_enabled("htq-kz", "tasks") == (False, "Не оплачено")
     assert interface.module_enabled("htq-kz", "contracts") == (True, "")
+
+
+@pytest.mark.django_db
+def test_result_is_cached_within_ttl(kz):
+    """Кэш обязан быть проверяемым: без этого теста его исчезновение
+    не отличить от рабочего состояния."""
+    assert interface.get_company("htq-kz")["name"] == "Hi-Tech Qazaqstan"
+    Company.objects.filter(slug="htq-kz").update(name="Переименована")
+    assert interface.get_company("htq-kz")["name"] == "Hi-Tech Qazaqstan"
+
+
+@pytest.mark.django_db
+def test_missing_company_is_cached_as_empty_dict(kz):
+    """Отрицательное кэширование: cache.get не отличает «в кэше None» от
+    «в кэше пусто», поэтому отсутствие компании кладётся как {}."""
+    from django.core.cache import cache
+
+    assert interface.get_company("нет-такой") is None
+    assert cache.get("company:slug:нет-такой") == {}
+
+
+@pytest.mark.django_db
+def test_fresh_bypasses_the_cache(kz):
+    """Пересборка представлений идёт сразу после создания компании —
+    кэш отдал бы список без неё."""
+    assert interface.active_company_slugs() == ["htq-kz"]
+    Company.objects.create(slug="htq-uz", name="UZ", kind=CompanyKind.REGIONAL)
+    assert interface.active_company_slugs() == ["htq-kz"]
+    assert interface.active_company_slugs(fresh=True) == ["htq-kz", "htq-uz"]

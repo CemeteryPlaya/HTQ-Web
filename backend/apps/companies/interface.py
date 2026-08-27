@@ -15,6 +15,16 @@ require_service("companies"). Реестр компаний — фундамен
 apps.core.services.service_status: резолв дёргается на КАЖДЫЙ запрос
 (CompanyContextMiddleware), и ходить за ним в БД каждый раз незачем.
 Fail-open по кэшу: недоступный Redis не должен ронять весь трафик.
+
+Пространства имён ключей кэша обязаны быть непересекающимися. Ключ
+``company:slug:{slug}`` намеренно несёт статический сегмент "slug", а не
+голый ``company:{slug}`` — иначе slug компании, совпавший со статическим
+ключом другой функции (например, компания с slug "active"), читал бы или
+писал чужую запись кэша и подменял бы там тип значения (dict вместо list
+или наоборот) без единой ошибки. ``company:member:{user_id}`` и
+``company:module:{slug}:{app_label}`` от такой коллизии защищены тем, что
+двоеточие в slug запрещено валидатором (SLUG_VALIDATOR в models.py), а
+user_id — int, а не пользовательская строка.
 """
 
 from __future__ import annotations
@@ -65,24 +75,31 @@ def get_company(slug: str) -> dict | None:
         company = Company.objects.select_related("parent").filter(slug=slug).first()
         return _serialize(company) if company else {}
 
-    found = _cached(f"company:{slug}", produce)
+    found = _cached(f"company:slug:{slug}", produce)
     return found or None
 
 
-def active_company_slugs() -> list[str]:
+def active_company_slugs(*, fresh: bool = False) -> list[str]:
     """Slug'и всех действующих компаний, в алфавитном порядке.
 
     Порядок стабильный намеренно: этот список задаёт порядок веток в
     UNION ALL-представлениях схемы holding, и его дрожание заставляло бы
     представления пересоздаваться без причины.
+
+    ``fresh=True`` обходит кэш. Нужен пересборке представлений: она идёт
+    сразу после создания или архивации компании, и пятисекундный кэш отдал
+    бы ей список БЕЗ этой компании — представление собралось бы без неё
+    молча, без ошибки и без следа в логе.
     """
-    return _cached(
-        "company:active",
-        lambda: sorted(
+    def produce():
+        return sorted(
             Company.objects.filter(status=CompanyStatus.ACTIVE)
             .values_list("slug", flat=True)
-        ),
-    )
+        )
+
+    if fresh:
+        return produce()
+    return _cached("company:active", produce)
 
 
 def user_company_slugs(user_id: int) -> list[str]:
