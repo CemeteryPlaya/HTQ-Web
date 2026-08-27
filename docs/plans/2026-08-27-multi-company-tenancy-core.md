@@ -35,7 +35,12 @@ React + Vite, nginx.
   `docker compose -f docker-compose.test-local.yml up -d db`. **НЕ**
   `docker restart` — это роняет проброс порта.
 - **Python-окружение:** `backend/.venv/Scripts/python.exe`, все команды
-  запускаются из `backend/`.
+  запускаются из `backend/` (то есть `./.venv/Scripts/python.exe`).
+  ⚠️ В репозитории есть ВТОРОЙ, корневой `.venv` с Django 6.0.2 — это НЕ
+  окружение проекта. Запуск через него даёт 155 ошибок `ImproperlyConfigured`
+  на этапе collection, что выглядит как сломанный набор тестов, а не как
+  неверный интерпретатор. Проверка: `./.venv/Scripts/python.exe -c "import
+  django; print(django.__version__)"` обязан напечатать `5.2.7`.
 - **Режим подмен в тестах — `strict`** (`htqweb/settings/test.py`). Пустой
   контекст компании обязан падать, а не подставлять `public`.
 - **Ветка `structure-refactoring`.** Новые ветки не создавать.
@@ -161,7 +166,7 @@ def test_service_link_is_many_to_many_across_regions():
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_models.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_models.py -q
 ```
 
 Ожидается: `ModuleNotFoundError: No module named 'apps.companies'`.
@@ -393,7 +398,7 @@ KNOWN_SERVICES = ["users", "hr", "tasks", "approvals", "cms",
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe manage.py makemigrations companies
+./.venv/Scripts/python.exe manage.py makemigrations companies
 ```
 
 Ожидается: `companies/migrations/0001_initial.py` с пятью моделями.
@@ -402,7 +407,7 @@ cd backend
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_models.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_models.py -q
 ```
 
 Ожидается: 4 passed.
@@ -411,7 +416,7 @@ cd backend
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/core/tests/test_app_isolation.py -q
+./.venv/Scripts/python.exe -m pytest apps/core/tests/test_app_isolation.py -q
 ```
 
 Ожидается: passed. Новая аппка ничего чужого не импортирует.
@@ -492,7 +497,7 @@ def test_nesting_restores_outer_value():
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_context.py -q
+./.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_context.py -q
 ```
 
 Ожидается: `ModuleNotFoundError: No module named 'htqweb.tenancy'`.
@@ -589,7 +594,7 @@ touch htqweb/tenancy/tests/__init__.py
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_context.py -q
+./.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_context.py -q
 ```
 
 Ожидается: 4 passed.
@@ -683,7 +688,7 @@ def test_use_holding_selects_holding_schema():
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_db.py -q
+./.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_db.py -q
 ```
 
 Ожидается: `ImportError: cannot import name 'apply_search_path'`.
@@ -781,7 +786,7 @@ def use_holding():
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_db.py -q
+./.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_db.py -q
 ```
 
 Ожидается: 5 passed. Схем `co_htq_kz` и `holding` в тестовой БД ещё нет —
@@ -885,7 +890,7 @@ def test_module_can_be_disabled_per_company(kz):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_interface.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_interface.py -q
 ```
 
 Ожидается: `ModuleNotFoundError: No module named 'apps.companies.interface'`.
@@ -1021,7 +1026,7 @@ def module_enabled(slug: str, app_label: str) -> tuple[bool, str]:
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_interface.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_interface.py -q
 ```
 
 Ожидается: 6 passed.
@@ -1092,7 +1097,7 @@ def test_tenant_apps_are_the_four_domain_apps(settings):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_schema_service.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_schema_service.py -q
 ```
 
 Ожидается: `ModuleNotFoundError: No module named 'apps.companies.services'`.
@@ -1171,7 +1176,7 @@ def drop_schema(slug: str) -> None:
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_schema_service.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_schema_service.py -q
 ```
 
 Ожидается: 4 passed.
@@ -1290,7 +1295,7 @@ def test_second_run_is_a_noop(alpha):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_migration_service.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_migration_service.py -q
 ```
 
 Ожидается: `ImportError: cannot import name 'migration_service'`.
@@ -1405,7 +1410,7 @@ def migrate_company(slug: str, *, app_label: str | None = None,
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_migration_service.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_migration_service.py -q
 ```
 
 Ожидается: 6 passed.
@@ -1457,7 +1462,7 @@ class Command(BaseCommand):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe manage.py migrate_companies --plan
+./.venv/Scripts/python.exe manage.py migrate_companies --plan
 ```
 
 Ожидается: `CommandError: Нет действующих компаний.` — компаний в базе
@@ -1560,7 +1565,7 @@ def test_context_is_cleared_even_when_view_raises(kz, rf):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_middleware.py -q
+./.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_middleware.py -q
 ```
 
 Ожидается: `test_unknown_company_is_404` падает — сейчас middleware нет и
@@ -1651,7 +1656,7 @@ class CompanyContextMiddleware:
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_middleware.py -q
+./.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_middleware.py -q
 ```
 
 Ожидается: 5 passed.
@@ -1660,7 +1665,7 @@ cd backend
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest -q
+./.venv/Scripts/python.exe -m pytest -q
 ```
 
 Ожидается: количество упавших тестов не выросло относительно состояния до
@@ -1757,7 +1762,7 @@ def test_token_of_one_company_is_rejected_on_another(user, companies):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_token_company.py -q
+./.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_token_company.py -q
 ```
 
 Ожидается: `AttributeError: 'TokenPayload' object has no attribute 'company'`.
@@ -1819,7 +1824,7 @@ def _base_claims(user) -> dict:
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_token_company.py -q
+./.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_token_company.py -q
 ```
 
 Ожидается: 3 passed.
@@ -1904,7 +1909,7 @@ def test_without_company_context_only_global_switch_applies(kz):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/core/tests/test_company_module_gate.py -q
+./.venv/Scripts/python.exe -m pytest apps/core/tests/test_company_module_gate.py -q
 ```
 
 Ожидается: `ImportError: cannot import name 'CORE_MODULES'`.
@@ -1961,7 +1966,7 @@ def _require_company_module(name: str) -> None:
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/core/tests/test_company_module_gate.py -q
+./.venv/Scripts/python.exe -m pytest apps/core/tests/test_company_module_gate.py -q
 ```
 
 Ожидается: 4 passed.
@@ -1970,7 +1975,7 @@ cd backend
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/core/tests/test_app_isolation.py -q
+./.venv/Scripts/python.exe -m pytest apps/core/tests/test_app_isolation.py -q
 ```
 
 Ожидается: passed — импорт идёт через `apps.companies.interface`, что
@@ -2035,7 +2040,7 @@ def test_context_is_cleared_after_task():
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_celery.py -q
+./.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_celery.py -q
 ```
 
 Ожидается: `ModuleNotFoundError: No module named 'htqweb.tenancy.celery'`.
@@ -2102,7 +2107,7 @@ def company_task(fn):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_celery.py -q
+./.venv/Scripts/python.exe -m pytest htqweb/tenancy/tests/test_celery.py -q
 ```
 
 Ожидается: 3 passed.
@@ -2125,8 +2130,11 @@ git commit -m "feat(tenancy): компания в задачах Celery"
 - Тест: `backend/apps/companies/tests/test_holding_views.py`
 
 **Интерфейсы:**
-- Потребляет: `active_company_slugs` (задача 4), `schema_for` (задача 2),
-  `use_holding` (задача 3), `settings.TENANT_APPS` (задача 5).
+- Потребляет: `active_company_slugs` (задача 4), `schema_for` и
+  `HOLDING_SCHEMA` (задача 2), `settings.TENANT_APPS` (задача 5).
+  `use_holding` из задачи 3 здесь НЕ нужен: DDL пишет имена схем явно, а
+  `use_holding` понадобится потребителям представлений — читающим вьюхам
+  холдинга, которые строятся в подпроектах 2-3.
 - Производит:
   - `holding_models() -> list[type[Model]]`
   - `rebuild_holding_views() -> list[str]` — имена созданных представлений
@@ -2229,7 +2237,7 @@ def test_no_active_companies_means_no_views(db):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_holding_views.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_holding_views.py -q
 ```
 
 Ожидается: `ImportError: cannot import name 'holding_views'`.
@@ -2391,7 +2399,7 @@ def rebuild_holding_views() -> list[str]:
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_holding_views.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_holding_views.py -q
 ```
 
 Ожидается: 6 passed.
@@ -2400,7 +2408,7 @@ cd backend
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/core/tests/test_app_isolation.py -q
+./.venv/Scripts/python.exe -m pytest apps/core/tests/test_app_isolation.py -q
 ```
 
 Ожидается: passed. `holding_models()` берёт модели через
@@ -2476,7 +2484,7 @@ def test_rejects_duplicate_slug():
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_company_create.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_company_create.py -q
 ```
 
 Ожидается: `CommandError: Unknown command: 'company_create'`.
@@ -2550,7 +2558,7 @@ class Command(BaseCommand):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_company_create.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_company_create.py -q
 ```
 
 Ожидается: 3 passed.
@@ -2643,7 +2651,7 @@ def test_migration_state_travels_with_the_tables():
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_tenancy_bootstrap.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_tenancy_bootstrap.py -q
 ```
 
 Ожидается: `CommandError: Unknown command: 'tenancy_bootstrap'`.
@@ -2754,7 +2762,7 @@ class Command(BaseCommand):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_tenancy_bootstrap.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_tenancy_bootstrap.py -q
 ```
 
 Ожидается: 4 passed.
@@ -2835,7 +2843,7 @@ def test_data_written_in_one_company_is_invisible_in_another(two_company_schemas
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_fixtures.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_fixtures.py -q
 ```
 
 Ожидается: `fixture 'company_context' not found`.
@@ -2893,7 +2901,7 @@ def two_company_schemas(db):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_fixtures.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_fixtures.py -q
 ```
 
 Ожидается: 2 passed.
@@ -2902,7 +2910,7 @@ cd backend
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest -q
+./.venv/Scripts/python.exe -m pytest -q
 ```
 
 Ожидается: число падений не выросло относительно базового.
@@ -3162,8 +3170,15 @@ git commit -m "feat(frontend): переключение компании по п
 **Интерфейсы:**
 - Потребляет: `CompanySchemaVersion`, `Company` (задача 1),
   `settings.TENANT_APPS` (задача 5).
-- Производит: `collect() -> dict[str, float]` по соглашению
-  `apps/<domain>/metrics.py`; регистрация моделей в `/django-admin/`.
+- Производит: `collect() -> dict` по соглашению `apps/<domain>/metrics.py`;
+  регистрация моделей в `/django-admin/`.
+
+**Контракт сборщика — проверен по `apps/conference/metrics.py`, не выдуман.**
+Возвращается `dict[str, dict]`, где значение имеет форму
+`{"help": str, "labels": [str] (необязательно), "values": [(кортеж_меток, число)]}`.
+Имена метрик **без** префикса `htqweb_` — его навешивает `apps.core.metrics`
+при экспорте. Плоский `dict[str, float]` собрался бы без ошибки и молча не
+попал бы в экспорт.
 
 Спека требует, чтобы отставание схемы было видно **до** того, как проявится
 500-й ошибкой. Разные версии у разных компаний — штатный режим, поэтому
@@ -3182,16 +3197,34 @@ from apps.companies.models import (
 )
 
 
+def _single(result: dict, name: str) -> float:
+    """Значение метрики без меток. Форма values — [(кортеж_меток, число)]."""
+    return result[name]["values"][0][1]
+
+
 @pytest.mark.django_db
-def test_counts_active_companies_by_kind():
+def test_active_companies_are_grouped_by_kind():
     Company.objects.create(slug="htq", name="Холдинг", kind=CompanyKind.HOLDING)
     Company.objects.create(slug="htq-kz", name="KZ", kind=CompanyKind.REGIONAL)
     Company.objects.create(slug="dead", name="Банкрот", kind=CompanyKind.SERVICE,
                            status=CompanyStatus.ARCHIVED)
 
     result = metrics.collect()
-    assert result["htqweb_companies_active_total"] == 2
-    assert result["htqweb_companies_archived_total"] == 1
+    by_kind = dict(result["companies_active_by_kind"]["values"])
+    assert by_kind[("holding",)] == 1
+    assert by_kind[("regional",)] == 1
+    assert ("service",) not in by_kind  # архивная не считается действующей
+    assert _single(result, "companies_archived") == 1
+
+
+@pytest.mark.django_db
+def test_metric_names_carry_no_prefix():
+    """Префикс htqweb_ навешивает apps.core.metrics при экспорте.
+
+    Вшитый здесь префикс дал бы htqweb_htqweb_* и метрику, которую не
+    найдёт ни один дашборд.
+    """
+    assert all(not name.startswith("htqweb_") for name in metrics.collect())
 
 
 @pytest.mark.django_db
@@ -3205,7 +3238,7 @@ def test_counts_schemas_behind_target():
         company=kz, app_label="hr",
         applied_migration="0012_z", target_migration="0012_z",
     )
-    assert metrics.collect()["htqweb_company_schemas_behind_total"] == 1
+    assert _single(metrics.collect(), "company_schemas_behind") == 1
 
 
 @pytest.mark.django_db
@@ -3214,7 +3247,7 @@ def test_counts_schemas_with_error():
     CompanySchemaVersion.objects.create(
         company=kz, app_label="tasks", last_error="relation does not exist",
     )
-    assert metrics.collect()["htqweb_company_schema_errors_total"] == 1
+    assert _single(metrics.collect(), "company_schema_errors") == 1
 
 
 @pytest.mark.django_db
@@ -3222,14 +3255,16 @@ def test_empty_registry_reports_zeros_not_nothing():
     """Здесь ноль — настоящий ноль, а не «сборщик умер»: строк в реестре
     просто нет, и это отличается от случая пустого кэша в apps.core.metrics.
     """
-    assert metrics.collect()["htqweb_companies_active_total"] == 0
+    result = metrics.collect()
+    assert result["companies_active_by_kind"]["values"] == []
+    assert _single(result, "companies_archived") == 0
 ```
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_metrics.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_metrics.py -q
 ```
 
 Ожидается: `ModuleNotFoundError: No module named 'apps.companies.metrics'`.
@@ -3248,17 +3283,28 @@ cd backend
 Отставание схемы — не авария: разные компании намеренно обновляются с разной
 скоростью (см. expand/contract). Метрика нужна, чтобы отставание было ВИДНО;
 порог алерта задаётся в Grafana, а не здесь.
+
+Форма возврата — та же, что у apps/conference/metrics.py: словарь
+{имя: {"help", "labels"?, "values": [(кортеж_меток, число)]}}, имена БЕЗ
+префикса htqweb_ (его добавляет apps.core.metrics при экспорте).
 """
 
-from django.db.models import F, Q
+from django.db.models import Count, F
 
 from .models import Company, CompanySchemaVersion, CompanyStatus
 
 
-def collect() -> dict[str, float]:
-    active = Company.objects.filter(status=CompanyStatus.ACTIVE).count()
+def collect() -> dict:
+    by_kind = (Company.objects
+               .filter(status=CompanyStatus.ACTIVE)
+               .values("kind")
+               .annotate(n=Count("id"))
+               .order_by("kind"))
     archived = Company.objects.filter(status=CompanyStatus.ARCHIVED).count()
 
+    # Пустая target_migration означает «прогона ещё не было» — это не
+    # отставание, а отсутствие данных, и считать его отставанием значило бы
+    # поднимать тревогу на каждой только что заведённой компании.
     behind = (CompanySchemaVersion.objects
               .exclude(target_migration="")
               .exclude(applied_migration=F("target_migration"))
@@ -3266,10 +3312,23 @@ def collect() -> dict[str, float]:
     errors = CompanySchemaVersion.objects.exclude(last_error="").count()
 
     return {
-        "htqweb_companies_active_total": float(active),
-        "htqweb_companies_archived_total": float(archived),
-        "htqweb_company_schemas_behind_total": float(behind),
-        "htqweb_company_schema_errors_total": float(errors),
+        "companies_active_by_kind": {
+            "help": "Действующие компании по типу",
+            "labels": ["kind"],
+            "values": [((row["kind"],), row["n"]) for row in by_kind],
+        },
+        "companies_archived": {
+            "help": "Компании в архиве",
+            "values": [((), archived)],
+        },
+        "company_schemas_behind": {
+            "help": "Схемы компаний, отставшие от целевой миграции",
+            "values": [((), behind)],
+        },
+        "company_schema_errors": {
+            "help": "Схемы компаний с ошибкой последнего прогона миграций",
+            "values": [((), errors)],
+        },
     }
 ```
 
@@ -3277,7 +3336,7 @@ def collect() -> dict[str, float]:
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies/tests/test_metrics.py -q
+./.venv/Scripts/python.exe -m pytest apps/companies/tests/test_metrics.py -q
 ```
 
 Ожидается: 4 passed.
@@ -3349,8 +3408,8 @@ class CompanyServiceLinkAdmin(admin.ModelAdmin):
 
 ```bash
 cd backend
-../.venv/Scripts/python.exe -m pytest apps/companies -q
-../.venv/Scripts/python.exe manage.py check
+./.venv/Scripts/python.exe -m pytest apps/companies -q
+./.venv/Scripts/python.exe manage.py check
 ```
 
 Ожидается: тесты зелёные, `System check identified no issues`.

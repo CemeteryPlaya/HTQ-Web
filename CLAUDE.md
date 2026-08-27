@@ -79,19 +79,21 @@ Playwright: the chromium binary isn't installed; launch with `{ channel: 'msedge
 ```bash
 docker compose -f docker-compose.test-local.yml up -d db   # ТОЛЬКО Postgres на :55432 (НЕ docker restart!)
 cd backend
-../.venv/Scripts/python.exe -m pytest -q                                   # whole suite
-../.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
+./.venv/Scripts/python.exe -m pytest -q                                   # whole suite
+./.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
 ```
 `DJANGO_SETTINGS_MODULE=htqweb.settings.test` and `JWT_SECRET` are both fixed by `pytest.ini`/`settings/test.py` — nothing to export by hand. Full detail (including the `max_connections=300` bump): [backend/README-tests.md](backend/README-tests.md).
 
+⚠️ **The interpreter is `backend/.venv`, not the repo-root `.venv`.** Both exist. The root one carries Django 6.0.2 and is NOT the project environment: every command run through it dies at import with 155 `ImproperlyConfigured` collection errors, which looks like a broken test suite rather than a wrong interpreter. `backend/.venv` has the pinned Django 5.2.7. All commands in this section are relative to `backend/`, hence `./.venv/…`.
+
 **Django management** (`cd backend`, same venv):
 ```bash
-../.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
-../.venv/Scripts/python.exe manage.py migrate
-../.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
-../.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
-../.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
-../.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
+./.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
+./.venv/Scripts/python.exe manage.py migrate
+./.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
+./.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
+./.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
+./.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
 ```
 Mail-server credentials live in **two layers**: `MailServerConfig` (one DB row, edited at `/admin/mailboxes` → «Подключение») **over** the env vars, merged by `apps/mail/services/mail_config.py` with the rule *empty field in the DB = take it from env*. Never read `settings.IMAP_HOST` (or any other `MAILCOW_*`/`IMAP_*`/`SMTP_*`) directly from `apps/mail` — go through `mail_config.get_config()`, or UI-set values will be silently ignored.
 
@@ -104,7 +106,7 @@ Mail-server credentials live in **two layers**: `MailServerConfig` (one DB row, 
 cd backend
 DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
   DB_NAME=htqweb DB_USER=htqweb DB_PASSWORD=change-me JWT_SECRET=dev PYTHONIOENCODING=utf-8 \
-  ../.venv/Scripts/python.exe manage.py <command>
+  ./.venv/Scripts/python.exe manage.py <command>
 ```
 (`:55432` comes up with `docker compose -f docker-compose.test-local.yml up -d db`. `PYTHONIOENCODING=utf-8` is needed or Russian output comes out mojibake on the Windows console.)
 
