@@ -3262,14 +3262,14 @@ git commit -m "feat(frontend): переключение компании по п
 ## Задача 17: Видимость отставания схем — админка и метрика
 
 **Файлы:**
-- Создать: `backend/apps/companies/admin.py`, `backend/apps/companies/metrics.py`
+- Создать: `backend/apps/companies/metrics.py`
 - Тест: `backend/apps/companies/tests/test_metrics.py`
+- ~~`backend/apps/companies/admin.py`~~ — **сделано досрочно**, см. шаг 5
 
 **Интерфейсы:**
 - Потребляет: `CompanySchemaVersion`, `Company` (задача 1),
   `settings.TENANT_APPS` (задача 5).
-- Производит: `collect() -> dict` по соглашению `apps/<domain>/metrics.py`;
-  регистрация моделей в `/django-admin/`.
+- Производит: `collect() -> dict` по соглашению `apps/<domain>/metrics.py`.
 
 **Контракт сборщика — проверен по `apps/conference/metrics.py`, не выдуман.**
 Возвращается `dict[str, dict]`, где значение имеет форму
@@ -3441,7 +3441,19 @@ cd backend
 
 - [ ] **Шаг 5: Зарегистрировать модели в админке**
 
-`backend/apps/companies/admin.py`:
+⚠️ **Этот шаг выполнен досрочно, отдельным коммитом, и здесь оставлен только
+как справка.** Причина: в репозитории есть инвариант
+`apps/core/tests/test_invariants.py::test_every_domain_model_admin_has_service_gate_mixin`
+— каждая доменная аппка обязана либо зарегистрировать `ModelAdmin` **под
+`ServiceGatedAdminMixin`**, либо стоять в задокументированном списке
+`_KNOWN_UNREGISTERED`. Задача 1 завела аппку с пятью моделями, не сделав ни
+того, ни другого, и уронила этот тест — красный тест не может ждать до задачи
+17, он маскирует последующие регрессии.
+
+Второе, важнее: код ниже использует **обычный `admin.ModelAdmin`**, то есть
+инвариант он всё равно НЕ удовлетворял бы. Реальная регистрация обязана
+наследовать `htqweb.admin_gate.ServiceGatedAdminMixin`. Смотрите
+закоммиченный `apps/companies/admin.py`, а не этот блок.
 
 ```python
 from django.contrib import admin
