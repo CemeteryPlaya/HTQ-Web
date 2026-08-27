@@ -19,8 +19,14 @@ holding целиком, и только потом схемы компаний.
 тестами, а схемы ``co_*`` не трогает, потому что не знает о них.
 """
 
+import io
+
 import pytest
-from django.db import connection
+from django.conf import settings as django_settings
+from django.core.exceptions import ImproperlyConfigured
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.db import DatabaseError, ProgrammingError, connection
 
 from apps.companies.models import Company, CompanyKind, CompanyStatus
 from apps.companies.services import holding_views, migration_service, schema_service
@@ -56,6 +62,17 @@ def _view_names() -> set[str]:
 def _viewdef(name: str) -> str:
     with connection.cursor() as cur:
         cur.execute("SELECT pg_get_viewdef(%s::regclass, true)", [f"holding.{name}"])
+        return cur.fetchone()[0]
+
+
+def _name_column_type(slug: str) -> str:
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT character_maximum_length FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = 'hr_department' "
+            "AND column_name = 'name'",
+            [f"co_{slug.replace('-', '_')}"],
+        )
         return cur.fetchone()[0]
 
 
@@ -111,37 +128,59 @@ def _truncate_company_tables() -> None:
     (``hr_department`` и всё, что на него ссылается) — не «всё подряд»:
     список тенантных таблиц в тесте пришлось бы поддерживать руками, и он
     разъезжался бы с миграциями молча.
+
+    ``include_public=False`` не косметика: с public в пути имя
+    ``hr_department`` разрешилось бы в ОБЩУЮ таблицу тестовой БД, если бы в
+    схеме компании её вдруг не оказалось, и ``CASCADE`` вычистил бы её.
+    Сегодня недостижимо, стоит ноль.
     """
     from htqweb.tenancy.db import use_company
 
     for slug in SLUGS:
-        with use_company(slug):
+        with use_company(slug, include_public=False):
             with connection.cursor() as cur:
                 cur.execute("TRUNCATE hr_department CASCADE")
 
 
-def test_holding_models_covers_every_tenant_app():
-    """Имена из apps/<домен>/holding.py резолвятся в настоящие модели.
+# --------------------------------------------------------------------------
+# Автообнаружение сводимых моделей
+# --------------------------------------------------------------------------
 
-    Опечатка в HOLDING_MODELS иначе всплыла бы только LookupError'ом внутри
-    пересборки — то есть в момент заведения компании, а не в тестах.
+def test_holding_models_covers_every_tenant_app():
+    """КАЖДАЯ тенантная аппка объявляет состав, и имена резолвятся в модели.
+
+    Сверка идёт с settings.TENANT_APPS, а не с захардкоженным списком:
+    пятая тенантная аппка, заведённая без holding.py, обязана уронить этот
+    тест, а не пройти мимо него.
     """
     labels = {model._meta.app_label for model in holding_views.holding_models()}
-    assert labels == {"hr", "tasks", "contracts", "signoff"}
+    assert labels == set(django_settings.TENANT_APPS)
+
+
+def test_tenant_app_without_holding_module_is_an_error(settings):
+    """Тенантная аппка без holding.py — ошибка, а не «нечего сводить».
+
+    Молчаливый пропуск убрал бы из сводок целую аппку: цифры у директоров
+    стали бы НЕВЕРНЫМИ, а не отсутствующими. Аппке, которой сводить нечего,
+    положено написать HOLDING_MODELS = () явно.
+    """
+    settings.TENANT_APPS = (*settings.TENANT_APPS, "cms")
+    with pytest.raises(ImproperlyConfigured, match="cms"):
+        holding_views.holding_models()
 
 
 def test_holding_module_without_declaration_is_an_error(monkeypatch):
-    """holding.py без HOLDING_MODELS — опечатка, а не «нечего сводить».
-
-    Молчаливый пропуск убрал бы из сводок целую аппку: цифры стали бы
-    неверными, а не отсутствующими.
-    """
+    """holding.py без HOLDING_MODELS — опечатка, и стоит того же."""
     import apps.signoff.holding as module
 
     monkeypatch.delattr(module, "HOLDING_MODELS")
-    with pytest.raises(AttributeError, match="HOLDING_MODELS"):
+    with pytest.raises(ImproperlyConfigured, match="HOLDING_MODELS"):
         holding_views.holding_models()
 
+
+# --------------------------------------------------------------------------
+# Сборка представлений
+# --------------------------------------------------------------------------
 
 @pytest.mark.django_db(transaction=True)
 def test_rebuild_creates_view_with_company_column(two_companies):
@@ -155,6 +194,10 @@ def test_rebuild_creates_view_with_company_column(two_companies):
 def test_rebuild_creates_a_view_per_declared_model(two_companies):
     created = holding_views.rebuild_holding_views()
     expected = {model._meta.db_table for model in holding_views.holding_models()}
+    # Без проверки на дубликаты коллизия db_table между двумя объявленными
+    # моделями была бы невидима: вторая затёрла бы первую через DROP+CREATE,
+    # а множества всё равно совпали бы.
+    assert len(created) == len(set(created))
     assert set(created) == expected
     assert _view_names() == expected
 
@@ -232,11 +275,73 @@ def test_rebuild_uses_a_fresh_company_list(two_companies):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_rebuild_takes_the_lock_before_reading_the_company_list(two_companies,
+                                                               monkeypatch):
+    """Список компаний читается ПОД взаимным исключением, а не до него.
+
+    Иначе две параллельные пересборки читают состав независимо: A увидела
+    [x], B увидела [x, y], B закоммитилась первой, A легла поверх — компания
+    y пропала из сводок без ошибки и без следа. fresh=True закрывает кэш, но
+    не эту гонку.
+
+    Проверяется из ВТОРОГО соединения: pg_try_advisory_lock оттуда обязан
+    вернуть false в тот момент, когда пересборка читает список.
+    """
+    import psycopg
+
+    from apps.companies.interface import active_company_slugs
+    from apps.companies.services.migration_service import ADVISORY_LOCK_KEY
+
+    seen: dict[str, bool] = {}
+    db = connection.settings_dict
+
+    def probe(*, fresh: bool = False):
+        with psycopg.connect(host=db["HOST"], port=db["PORT"], dbname=db["NAME"],
+                             user=db["USER"], password=db["PASSWORD"],
+                             autocommit=True) as other:
+            with other.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(%s)", [ADVISORY_LOCK_KEY])
+                got = cur.fetchone()[0]
+                seen["free"] = got
+                if got:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", [ADVISORY_LOCK_KEY])
+        return active_company_slugs(fresh=fresh)
+
+    monkeypatch.setattr(holding_views, "active_company_slugs", probe)
+    holding_views.rebuild_holding_views()
+    assert seen["free"] is False
+
+
+@pytest.mark.django_db(transaction=True)
 def test_rebuild_is_idempotent(two_companies):
     first = holding_views.rebuild_holding_views()
+    before = _viewdef("tasks_task")
     second = holding_views.rebuild_holding_views()
     assert first == second
     assert first == sorted(first)
+    # Совпадения имён мало: пересборка, давшая те же имена, но другой состав
+    # веток, прошла бы такую проверку.
+    assert _viewdef("tasks_task") == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rebuild_removes_orphan_views(two_companies):
+    """Представление модели, убранной из HOLDING_MODELS, не остаётся жить.
+
+    Сирота продолжала бы блокировать contract-миграции по своей таблице,
+    причём пересборка о ней бы уже не знала — то есть блокировка была бы
+    вечной и без видимой причины.
+    """
+    holding_views.rebuild_holding_views()
+    with connection.cursor() as cur:
+        cur.execute(
+            "CREATE VIEW holding.zz_orphan AS "
+            "SELECT id FROM co_t_alpha.hr_department"
+        )
+    assert "zz_orphan" in _view_names()
+
+    holding_views.rebuild_holding_views()
+    assert "zz_orphan" not in _view_names()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -276,8 +381,6 @@ def test_lagging_company_schema_fails_loudly(two_companies):
     одной компании, и цифры у директоров были бы неверными, а не
     отсутствующими.
     """
-    from django.db import ProgrammingError
-
     with connection.cursor() as cur:
         cur.execute("ALTER TABLE co_t_beta.hr_department DROP COLUMN description")
     try:
@@ -299,8 +402,6 @@ def test_failed_rebuild_leaves_previous_views_intact(two_companies):
     представлений снесённой, часть — старой. Сбой подстраивается штатным
     для реестра способом: компания заведена, а схема ей ещё не создана.
     """
-    from django.db import ProgrammingError
-
     before = set(holding_views.rebuild_holding_views())
     assert before
 
@@ -326,3 +427,151 @@ def test_no_active_companies_means_no_views(db):
             assert cur.fetchone() is not None
     finally:
         _drop_holding_schema()
+
+
+# --------------------------------------------------------------------------
+# Снос: представления блокируют contract-миграции
+# --------------------------------------------------------------------------
+
+@pytest.mark.django_db(transaction=True)
+def test_views_block_contract_migrations(two_companies):
+    """Главная цена решения, закреплённая тестом.
+
+    Пока представление существует, Postgres запрещает удалить столбец его
+    таблицы и сменить его тип — то есть RemoveField и AlterField по любой
+    сводимой модели. Ради этого и заведена пара drop/rebuild; если Postgres
+    когда-нибудь перестанет так делать, тест обязан покраснеть, а не тихо
+    оставить в коде лишнюю машинерию.
+    """
+    holding_views.rebuild_holding_views()
+
+    with connection.cursor() as cur:
+        with pytest.raises(DatabaseError, match="depend"):
+            cur.execute("ALTER TABLE co_t_alpha.hr_department "
+                        "DROP COLUMN description")
+    with connection.cursor() as cur:
+        with pytest.raises(DatabaseError, match="used by a view"):
+            cur.execute("ALTER TABLE co_t_alpha.hr_department "
+                        "ALTER COLUMN name TYPE varchar(300)")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_drop_holding_views_unblocks_contract_migrations(two_companies):
+    """Пара «снести до, собрать после» действительно расшивает contract."""
+    built = set(holding_views.rebuild_holding_views())
+    assert "hr_department" in built
+
+    dropped = holding_views.drop_holding_views()
+    assert set(dropped) == built
+    assert _view_names() == set()
+
+    try:
+        with connection.cursor() as cur:
+            cur.execute("ALTER TABLE co_t_alpha.hr_department "
+                        "ALTER COLUMN name TYPE varchar(300)")
+        assert _name_column_type("t-alpha") == 300
+        assert set(holding_views.rebuild_holding_views()) == built
+    finally:
+        holding_views.drop_holding_views()
+        with connection.cursor() as cur:
+            cur.execute("ALTER TABLE co_t_alpha.hr_department "
+                        "ALTER COLUMN name TYPE varchar(255)")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_drop_holding_views_is_idempotent(two_companies):
+    holding_views.rebuild_holding_views()
+    assert holding_views.drop_holding_views()
+    assert holding_views.drop_holding_views() == []
+    assert _view_names() == set()
+
+
+# --------------------------------------------------------------------------
+# Команда migrate_companies
+# --------------------------------------------------------------------------
+
+@pytest.mark.django_db(transaction=True)
+def test_command_drops_views_before_migrating_and_rebuilds_after(two_companies,
+                                                                 monkeypatch):
+    """Единственный тест, который ловит регресс порядка в команде.
+
+    Настоящей contract-миграции в наборе нет, поэтому прогон подменяется
+    функцией, выполняющей ровно тот SQL, который порождает AlterField со
+    сменой типа. Утверждение при этом поведенческое, а не «вызвался ли
+    метод»: без предварительного сноса Postgres этот ALTER просто запретит.
+    """
+    holding_views.rebuild_holding_views()
+    built = _view_names()
+    assert built
+
+    def fake_migrate(slug, *, app_label=None, target=None, plan=False):
+        schema = "co_" + slug.replace("-", "_")
+        with connection.cursor() as cur:
+            cur.execute(f"ALTER TABLE {schema}.hr_department "
+                        f"ALTER COLUMN name TYPE varchar(300)")
+        return {"applied": {}, "planned": []}
+
+    monkeypatch.setattr(migration_service, "migrate_company", fake_migrate)
+    try:
+        call_command("migrate_companies", stdout=io.StringIO())
+        for slug in SLUGS:
+            assert _name_column_type(slug) == 300
+        assert _view_names() == built
+    finally:
+        holding_views.drop_holding_views()
+        with connection.cursor() as cur:
+            for slug in SLUGS:
+                schema = "co_" + slug.replace("-", "_")
+                cur.execute(f"ALTER TABLE {schema}.hr_department "
+                            f"ALTER COLUMN name TYPE varchar(255)")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_command_plan_leaves_views_untouched(two_companies):
+    """Сухой прогон ничего не меняет — ронять ради него сводки нельзя."""
+    holding_views.rebuild_holding_views()
+    before = (_view_names(), _viewdef("tasks_task"))
+
+    call_command("migrate_companies", "--plan", stdout=io.StringIO())
+
+    assert (_view_names(), _viewdef("tasks_task")) == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_command_leaves_views_dropped_when_rebuild_fails(two_companies):
+    """Частичный прогон: миграции прошли, сводку собрать нельзя.
+
+    Вьюхи остаются снесёнными намеренно — снесённая даёт читателю громкую
+    ошибку, то есть верно отражает состояние группы, а собранная по старому
+    составу молча врёт. Код возврата ненулевой: работа не доведена.
+    """
+    holding_views.rebuild_holding_views()
+    assert _view_names()
+
+    # Компания заведена, схема ей ещё не создана — финальная пересборка на
+    # ней и споткнётся, хотя миграции обработанных компаний прошли.
+    Company.objects.create(slug="t-gamma", name="t-gamma",
+                           kind=CompanyKind.SERVICE)
+    with pytest.raises(CommandError, match="сводки холдинга собрать нельзя"):
+        call_command("migrate_companies", "--company", "t-alpha",
+                     stdout=io.StringIO())
+
+    assert _view_names() == set()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_command_checks_slug_before_dropping_views(two_companies):
+    """Опечатка в --company не имеет права ронять сводки холдинга.
+
+    Проверка реестра идёт ДО сноса: иначе неверный аргумент оставлял бы
+    холдинг без цифр до следующего успешного прогона.
+    """
+    holding_views.rebuild_holding_views()
+    before = _view_names()
+    assert before
+
+    with pytest.raises(CommandError, match="Нет в реестре"):
+        call_command("migrate_companies", "--company", "t-nope",
+                     stdout=io.StringIO())
+
+    assert _view_names() == before
