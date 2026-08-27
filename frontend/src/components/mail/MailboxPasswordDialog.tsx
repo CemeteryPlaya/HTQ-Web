@@ -7,9 +7,16 @@
  * что инвалидируется после успеха, — сотрудник получал бы разный результат в
  * зависимости от того, откуда нажал.
  *
- * ``fixedAddress`` — ящик, который платформа УЖЕ назначила сотруднику. Тогда
- * адрес не редактируется: выбирать нечего, а опечатка в нём превратила бы
- * понятный отказ сервера в загадочный.
+ * ``fixedAddress`` — адрес, который выбирать не нужно: либо ящик, уже
+ * назначенный сотруднику платформой, либо его собственный рабочий адрес.
+ * Тогда поле не редактируется — опечатка в нём превратила бы понятный отказ
+ * сервера в загадочный.
+ *
+ * ``kind`` различает эти два случая ТОЛЬКО в тексте, и это не косметика:
+ * «ящик закреплён за вами» — утверждение, которое в случае ``suggest`` было
+ * бы неправдой. Там платформа лишь предполагает, что ящик есть (проверить
+ * без пароля она не может), и обещать сотруднику найденный ящик, которого
+ * может не оказаться, значит подставить его под непонятную ошибку.
  */
 import React, { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
@@ -34,7 +41,9 @@ export const MailboxPasswordDialog: React.FC<{
     onOpenChange: (open: boolean) => void;
     domain?: string;
     fixedAddress?: string | null;
-}> = ({ open, onOpenChange, domain, fixedAddress }) => {
+    /** ``pending`` — ящик найден и ждёт пароль; ``suggest`` — предположение. */
+    kind?: 'pending' | 'suggest';
+}> = ({ open, onOpenChange, domain, fixedAddress, kind = 'pending' }) => {
     const { t } = useTranslation();
     const invalidate = useInvalidateCorporateMailbox();
     const [address, setAddress] = useState('');
@@ -73,14 +82,18 @@ export const MailboxPasswordDialog: React.FC<{
             <DialogContent>
                 <DialogHeader>
                     <DialogTitle>
-                        {fixedAddress
-                            ? t('mail.connect.pendingTitle', 'Введите пароль от вашего ящика')
-                            : t('mail.connect.connect', 'Подключить ящик')}
+                        {!fixedAddress
+                            ? t('mail.connect.connect', 'Подключить ящик')
+                            : kind === 'suggest'
+                                ? t('mail.connect.suggestTitle', 'Подключить рабочую почту')
+                                : t('mail.connect.pendingTitle', 'Введите пароль от вашего ящика')}
                     </DialogTitle>
                     <DialogDescription>
-                        {fixedAddress
-                            ? t('mail.connect.pendingHint', 'Ящик уже закреплён за вами на почтовом сервере. Введите пароль, которым вы входите в него, — платформа проверит его и начнёт показывать вашу почту здесь.')
-                            : t('mail.connect.hint', 'Введите адрес и пароль вашего рабочего ящика — те же, что вы используете в почтовом клиенте. Платформа проверит их на почтовом сервере и сохранит в зашифрованном виде.')}
+                        {!fixedAddress
+                            ? t('mail.connect.hint', 'Введите адрес и пароль вашего рабочего ящика — те же, что вы используете в почтовом клиенте. Платформа проверит их на почтовом сервере и сохранит в зашифрованном виде.')
+                            : kind === 'suggest'
+                                ? t('mail.connect.suggestHint', 'Введите пароль от ящика {{address}} — тот же, что вы используете в почтовом клиенте. Платформа войдёт в него на почтовом сервере: если ящик существует, почта появится здесь, а пароль сохранится зашифрованным.', { address: fixedAddress })
+                                : t('mail.connect.pendingHint', 'Ящик уже закреплён за вами на почтовом сервере. Введите пароль, которым вы входите в него, — платформа проверит его и начнёт показывать вашу почту здесь.')}
                     </DialogDescription>
                 </DialogHeader>
 

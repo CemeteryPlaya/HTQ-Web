@@ -838,6 +838,106 @@ def test_connect_info_hands_the_card_its_address_and_server(use_provisioner):
     assert body["self_service"] is False  # …хотя общий режим выключен
 
 
+# ── suggest_connect: предложить подключить, пока ящика нет ────────────────
+#
+# Сценарий: у Амирова Руслана рабочий адрес ruslan.amirov@htq.group, а ящика
+# в платформе нет — учётку завели раньше автоподключения либо оно не
+# сработало. Раньше он не узнавал об этом ниоткуда: подсказка показывалась
+# ТОЛЬКО при ``awaiting_password``, то есть когда строка ящика уже есть.
+#
+# Утверждать «ящик найден» здесь нельзя: на голом IMAP существование ящика
+# без пароля не проверяется вообще. Поэтому флаг называется «предложить», а
+# доказательством служит успешный вход при подключении.
+
+
+def _amirov():
+    u = User.objects.create(
+        username="amirov", email="ruslan.amirov@htq.group", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    u.set_password("S3cret!")
+    u.save()
+    return u
+
+
+def _connect_info(user, **env):
+    settings = {"MAILCOW_DOMAIN": "htq.group", "MAIL_PROVISIONER": "imap",
+                "IMAP_HOST": "mail.htq.group"}
+    settings.update(env)
+    with override_settings(**settings):
+        return Client().get(
+            "/api/email/v1/accounts/connect-corporate/",
+            HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(user)['access']}",
+        ).json()
+
+
+@pytest.mark.django_db
+def test_corporate_address_without_a_mailbox_suggests_connecting(use_provisioner):
+    use_provisioner(_FakeImap())
+    body = _connect_info(_amirov())
+
+    assert body["suggest_connect"] is True
+    assert body["own_address"] == "ruslan.amirov@htq.group"
+    # Именно предложение, а не найденный ящик: подставлять в диалог нечего,
+    # кроме собственного адреса сотрудника.
+    assert body["mailbox"] is None
+    assert body["awaiting_password"] is False
+
+
+@pytest.mark.django_db
+def test_personal_address_is_never_suggested(use_provisioner):
+    """Личная почта — не корпоративный ящик. Просить у человека пароль от
+    его gmail платформа не должна ни при каких обстоятельствах."""
+    u = User.objects.create(
+        username="outsider", email="someone@gmail.com", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    u.set_password("S3cret!")
+    u.save()
+    use_provisioner(_FakeImap())
+
+    assert _connect_info(u)["suggest_connect"] is False
+
+
+@pytest.mark.django_db
+def test_connected_mailbox_stops_the_suggestion(use_provisioner):
+    """Ящик уже подключён и работает — предлагать нечего."""
+    use_provisioner(_FakeImap())
+    u = _amirov()
+    _mailbox(
+        local_part="ruslan.amirov", user_id=u.id, status=MailboxStatus.ACTIVE,
+        encrypted_smtp_app_password=crypto_service.encrypt("MailPass!"),
+    )
+
+    body = _connect_info(u)
+    assert body["suggest_connect"] is False
+    assert body["awaiting_password"] is False
+
+
+@pytest.mark.django_db
+def test_pending_mailbox_wins_over_the_suggestion(use_provisioner):
+    """Ящик найден и ждёт пароль — это факт, а не догадка, и подсказка
+    обязана быть одна: два разных сообщения об одном и том же ящике
+    сотрудник читает как две разные проблемы."""
+    use_provisioner(_FakeMailcow())
+    u = _amirov()
+    _mailbox(local_part="ruslan.amirov", user_id=u.id, status=MailboxStatus.ACTIVE)
+
+    body = _connect_info(u, **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
+    assert body["awaiting_password"] is True
+    assert body["suggest_connect"] is False
+
+
+@pytest.mark.django_db
+def test_no_mail_server_no_suggestion(use_provisioner):
+    """Почтового сервера нет вовсе — подключаться некуда, и просьба ввести
+    пароль была бы издевательством."""
+    use_provisioner(_FakeImap())
+    assert _connect_info(
+        _amirov(), MAIL_PROVISIONER="none", IMAP_HOST="",
+    )["suggest_connect"] is False
+
+
 @pytest.mark.django_db
 def test_personal_email_gives_the_card_nothing_to_prefill(use_provisioner):
     """Почта не корпоративная — подставлять нечего, и послабление не даётся."""

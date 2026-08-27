@@ -858,10 +858,6 @@
         "noDepartmentFound": "Department not found",
         "createDepartment": "Create new department",
         "createDepartmentTitle": "New department",
-        "openCard": "Open card",
-        "actions": {
-          "share": "Share"
-        },
         "usernameHint": "Username will be derived from the email:"
       },
       "structure": {
@@ -3130,7 +3126,10 @@
       "security": "The password is stored encrypted and is used only to fetch and send your mail.",
       "subtitle": "Connect your work mailbox @{{domain}} to read and send mail here.",
       "title": "Corporate mail",
-      "update": "Update password"
+      "update": "Update password",
+      "suggestTitle": "Connect work mail",
+      "suggestBody": "Your work address {{address}} is on the corporate domain, but mail is not connected here yet. Enter the mailbox password: the platform will verify it against the mail server and start showing your correspondence.",
+      "suggestHint": "Enter the password for {{address}} — the same one you use in your mail client. The platform will sign in to it on the mail server: if the mailbox exists, your mail appears here and the password is stored encrypted."
     },
     "imap": {
       "address": "Address",
