@@ -88,3 +88,17 @@ def test_fresh_bypasses_the_cache(kz):
     Company.objects.create(slug="htq-uz", name="UZ", kind=CompanyKind.REGIONAL)
     assert interface.active_company_slugs() == ["htq-kz"]
     assert interface.active_company_slugs(fresh=True) == ["htq-kz", "htq-uz"]
+
+
+@pytest.mark.django_db
+def test_get_company_exposes_is_active_predicate(kz):
+    """Потребитель (например, CompanyContextMiddleware) не должен импортировать
+    CompanyStatus из apps.companies.models, чтобы проверить действующая ли
+    компания — get_company отдаёт готовый предикат is_active."""
+    assert interface.get_company("htq-kz")["is_active"] is True
+
+    Company.objects.create(
+        slug="dead", name="Банкрот", kind=CompanyKind.SERVICE,
+        status=CompanyStatus.ARCHIVED,
+    )
+    assert interface.get_company("dead")["is_active"] is False

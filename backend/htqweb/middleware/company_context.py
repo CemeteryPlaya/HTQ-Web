@@ -4,8 +4,17 @@
 и должен уже знать компанию, чтобы спросить не только глобальный рубильник
 (ServiceStatus), но и компанейский (CompanyModule).
 
-Middleware, а не api_view: контекст нужен также /django-admin/ и /ws/, а они
-через api_view не проходят.
+Middleware, а не api_view: контекст нужен также /django-admin/, который
+через api_view не проходит.
+
+⚠️ WebSocket-пути этим middleware НЕ покрыты. Socket.IO мессенджера
+смонтирован в htqweb/asgi.py как `socketio.ASGIApp(sio, other_asgi_app=...,
+socketio_path="ws/messenger/socket.io")` и перехватывает такие запросы ДО
+передачи в django_asgi_app — то есть до применения settings.MIDDLEWARE
+вообще (тот же файл прямо говорит, что ServiceGateMiddleware по той же
+причине не покрывает WS-scope). `/ws/sfu/` обслуживается отдельным
+Node-контейнером вне Django и Python не касается. Контекст компании для
+WS-путей — отдельная, ещё не решённая задача.
 
 Сброс в finally безусловен. CONN_MAX_AGE=0 уже гарантирует, что соединение
 не переживёт запрос, но contextvar под ASGI переживает — и утёкшее значение
@@ -17,7 +26,6 @@ from __future__ import annotations
 from django.http import JsonResponse
 
 from apps.companies.interface import get_company
-from apps.companies.models import CompanyStatus
 from htqweb.tenancy.context import reset_company, set_company
 from htqweb.tenancy.db import apply_search_path
 
@@ -46,7 +54,7 @@ class CompanyContextMiddleware:
             return self.get_response(request)
 
         company = get_company(slug)
-        if company is None or company["status"] != CompanyStatus.ACTIVE:
+        if company is None or not company["is_active"]:
             # 404, а не 403: существование компании — само по себе сведение,
             # которое незачем подтверждать анонимному запросу.
             return JsonResponse({"detail": "Компания не найдена"}, status=404)

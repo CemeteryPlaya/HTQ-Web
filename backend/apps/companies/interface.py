@@ -64,6 +64,10 @@ def _serialize(company: Company) -> dict:
         "name": company.name,
         "kind": company.kind,
         "status": company.status,
+        # Готовый предикат, чтобы потребителю не требовался импорт
+        # CompanyStatus: enum — деталь модели, и её протечка за границу аппки
+        # ломает то же правило, что и прямой импорт apps.<other>.models.
+        "is_active": company.status == CompanyStatus.ACTIVE,
         "country": company.country,
         "parent_slug": company.parent.slug if company.parent_id else None,
     }
