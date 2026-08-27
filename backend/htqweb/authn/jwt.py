@@ -12,6 +12,10 @@ class AuthError(Exception):
 
 
 def _base_claims(user) -> dict:
+    # Локальный импорт: htqweb.authn грузится очень рано, а apps.companies —
+    # обычная аппка, чьи модели к тому моменту ещё не готовы.
+    from apps.companies.interface import default_company_slug
+
     return {
         "sub": str(user.id),
         "user_id": user.id,
@@ -20,6 +24,9 @@ def _base_claims(user) -> dict:
         "is_staff": user.is_staff,
         "is_superuser": user.is_superuser,
         "is_admin": user.is_staff or user.is_superuser,
+        # Компания по умолчанию. При переключении компании фронт получает
+        # новый access-токен обменом refresh-cookie — см. задачу 13.
+        "company": default_company_slug(user.id),
         "iss": settings.JWT_ISSUER,
     }
 

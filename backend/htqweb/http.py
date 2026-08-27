@@ -91,6 +91,13 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                 if payload is None:
                     return json_error("Not authenticated", 401)
                 request.token = payload
+                # Поддомен подменяется тривиально, подпись токена — нет.
+                # Токен, выпущенный для одной компании, не должен работать
+                # в другой, даже если у пользователя есть членство в обеих:
+                # переключение обязано пройти через выдачу нового токена.
+                current = getattr(request, "company", None)
+                if current is not None and payload.company != current["slug"]:
+                    return json_error("Forbidden", 403)
                 # Single platform admin-gate seam (R1): every admin route
                 # goes through this one predicate — htqweb.authn.rbac.
                 # require_admin — instead of each app keeping its own
