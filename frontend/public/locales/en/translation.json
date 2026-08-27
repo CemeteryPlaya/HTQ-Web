@@ -3129,7 +3129,8 @@
       "update": "Update password",
       "suggestTitle": "Connect work mail",
       "suggestBody": "Your work address {{address}} is on the corporate domain, but mail is not connected here yet. Enter the mailbox password: the platform will verify it against the mail server and start showing your correspondence.",
-      "suggestHint": "Enter the password for {{address}} — the same one you use in your mail client. The platform will sign in to it on the mail server: if the mailbox exists, your mail appears here and the password is stored encrypted."
+      "suggestHint": "Enter the password for {{address}} — the same one you use in your mail client. The platform will sign in to it on the mail server: if the mailbox exists, your mail appears here and the password is stored encrypted.",
+      "suggestFailedHint": "The mail server does not distinguish \"wrong password\" from \"no such mailbox\", so there are two possible causes. If the password is definitely correct, the mailbox may not exist yet — ask your administrator."
     },
     "imap": {
       "address": "Address",

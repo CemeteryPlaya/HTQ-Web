@@ -70,11 +70,25 @@ export const MailboxPasswordDialog: React.FC<{
         },
         // Отказ сервера показываем дословно: «не тот пароль» и «сервер
         // недоступен» требуют разных действий от сотрудника.
-        onError: (e: ApiError) => toast.error(
-            e?.response?.data?.detail
-            || t('mail.connect.failed', 'Не удалось подключить ящик'),
-            { duration: 15_000 },
-        ),
+        //
+        // На пути `suggest` к этому добавляется вторая причина. Платформа там
+        // не знала, есть ли ящик вообще (у голого IMAP это нельзя выяснить без
+        // пароля), и отказ означает ЛИБО неверный пароль, ЛИБО отсутствие
+        // ящика — почтовые серверы эти случаи намеренно не различают, чтобы по
+        // ответу нельзя было перебирать существующие адреса. Умолчи мы об
+        // этом — человек стал бы перебирать пароли от ящика, которого нет.
+        onError: (e: ApiError) => {
+            const detail = e?.response?.data?.detail
+                || t('mail.connect.failed', 'Не удалось подключить ящик');
+            toast.error(
+                kind === 'suggest'
+                    ? `${detail}
+
+${t('mail.connect.suggestFailedHint', 'Почтовый сервер не различает «неверный пароль» и «нет такого ящика», поэтому причин может быть две. Если пароль точно верный — возможно, ящика с этим адресом ещё не существует: обратитесь к администратору.')}`
+                    : detail,
+                { duration: 15_000 },
+            );
+        },
     });
 
     return (
@@ -98,9 +112,15 @@ export const MailboxPasswordDialog: React.FC<{
                 </DialogHeader>
 
                 <div className="space-y-3">
+                    {/* htmlFor/id обязательны: без них подпись не связана с
+                        полем — её не читает скринридер и по ней не работает
+                        клик-фокус. Для поля пароля это особенно неприятно. */}
                     <div className="space-y-1.5">
-                        <Label>{t('mail.connect.address', 'Адрес ящика')}</Label>
+                        <Label htmlFor="mailbox-connect-address">
+                            {t('mail.connect.address', 'Адрес ящика')}
+                        </Label>
                         <Input
+                            id="mailbox-connect-address"
                             value={effectiveAddress}
                             onChange={(e) => setAddress(e.target.value)}
                             disabled={Boolean(fixedAddress)}
@@ -109,8 +129,11 @@ export const MailboxPasswordDialog: React.FC<{
                         />
                     </div>
                     <div className="space-y-1.5">
-                        <Label>{t('mail.connect.password', 'Пароль ящика')}</Label>
+                        <Label htmlFor="mailbox-connect-password">
+                            {t('mail.connect.password', 'Пароль ящика')}
+                        </Label>
                         <Input
+                            id="mailbox-connect-password"
                             type="password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
