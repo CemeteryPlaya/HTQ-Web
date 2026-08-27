@@ -65,7 +65,7 @@ def _viewdef(name: str) -> str:
         return cur.fetchone()[0]
 
 
-def _name_column_type(slug: str) -> str:
+def _name_column_type(slug: str) -> int:
     with connection.cursor() as cur:
         cur.execute(
             "SELECT character_maximum_length FROM information_schema.columns "
@@ -574,4 +574,25 @@ def test_command_checks_slug_before_dropping_views(two_companies):
         call_command("migrate_companies", "--company", "t-nope",
                      stdout=io.StringIO())
 
+    assert _view_names() == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_command_checks_app_argument_before_dropping_views(two_companies):
+    """Опечатка в --app тоже не имеет права ронять сводки холдинга.
+
+    migration_service проверяет этот аргумент сам, но уже внутри цикла — то
+    есть после сноса. Симметрично проверке --company, разница только в том,
+    что тот аргумент резолвится по реестру, а этот по TENANT_APPS.
+    """
+    holding_views.rebuild_holding_views()
+    before = _view_names()
+    assert before
+
+    with pytest.raises(CommandError, match="не тенантная аппка"):
+        call_command("migrate_companies", "--app", "cms", stdout=io.StringIO())
+    assert _view_names() == before
+
+    with pytest.raises(CommandError, match="неоднозначен"):
+        call_command("migrate_companies", "--to", "0002_x", stdout=io.StringIO())
     assert _view_names() == before

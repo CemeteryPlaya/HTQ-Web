@@ -14,6 +14,7 @@ migration_service.migrate_company: та работает по ОДНОЙ ком�
 advisory-lock'а, а снос и пересборка нужны по одному разу на весь прогон.
 """
 
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import ProgrammingError
 
@@ -55,6 +56,19 @@ class Command(BaseCommand):
         if missing:
             raise CommandError(
                 "Нет в реестре: " + ", ".join(repr(s) for s in missing) + ".")
+
+        # --app и --to migration_service проверяет сам, но делает это уже
+        # ВНУТРИ цикла, то есть после сноса: опечатка в аргументе гасила бы
+        # сводки холдинга ровно так же, как гасила бы её опечатка в
+        # --company. Обработчик ValueError ниже остаётся второй линией.
+        app_label = opts["app"]
+        if app_label is not None and app_label not in settings.TENANT_APPS:
+            raise CommandError(
+                f"{app_label!r} не тенантная аппка; в схеме компании живут "
+                "только " + ", ".join(sorted(settings.TENANT_APPS)) + "."
+            )
+        if opts["to"] is not None and app_label is None:
+            raise CommandError("target без app_label неоднозначен: укажите аппку.")
 
         # Сухой прогон ничего не меняет — ронять ради него сводки нельзя.
         dry_run = opts["plan"]
