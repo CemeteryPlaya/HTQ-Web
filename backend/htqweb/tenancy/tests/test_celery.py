@@ -27,3 +27,19 @@ def test_missing_company_raises_instead_of_defaulting_to_public():
 def test_context_is_cleared_after_task():
     _echo_company(company_slug="htq-kz")
     assert current_company_or_none() is None
+
+
+@pytest.mark.django_db
+def test_positional_company_slug_is_not_accepted():
+    """Позиционная передача не работает намеренно — декоратор читает kwargs.
+
+    Тест фиксирует это как поведение, а не как случайность, и заодо
+    проверяет, что сообщение подсказывает настоящую причину.
+    """
+    @company_task
+    def _echo(company_slug):
+        return current_company_or_none()
+
+    with pytest.raises(MissingCompanyArgument) as exc:
+        _echo("htq-kz")
+    assert "именованный" in str(exc.value).lower()
