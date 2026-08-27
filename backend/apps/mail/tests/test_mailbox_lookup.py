@@ -1128,3 +1128,113 @@ def test_reachability_is_probed_once_per_server(
         assert _connect_info(user)["suggest_connect"] is True
 
     assert probes == [("mail.htq.group", 993)]
+
+
+# ── лимит попыток: перестать навязываться ────────────────────────────────
+#
+# Две первые неудачи бывают опечаткой, третья означает, что пароля человек не
+# знает либо ящика не существует. В обоих случаях следующая попытка ничего не
+# изменит, а полоса «введите пароль» на каждой странице превращается в тот
+# самый фоновый шум, из-за которого подсказки перестают читать.
+#
+# Гасится ТОЛЬКО подсказка. Форма подключения остаётся: сходивший к
+# администратору за паролем должен ввести его сразу, а не ждать неделю.
+
+
+def _try_connect(user, password: str):
+    with override_settings(
+        MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="imap", IMAP_HOST="mail.htq.group",
+    ):
+        return Client().post(
+            "/api/email/v1/accounts/connect-corporate/",
+            data=f'{{"address": "ruslan.amirov@htq.group", "password": "{password}"}}',
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(user)['access']}",
+        )
+
+
+@pytest.mark.django_db
+def test_three_failures_stop_the_suggestion(use_provisioner):
+    use_provisioner(_FakeImap(passwords={"ruslan.amirov@htq.group": "MailPass!"}))
+    user = _amirov()
+
+    for _ in range(2):
+        assert _try_connect(user, "не тот").status_code == 400
+        # Две неудачи — ещё не повод замолчать: обычная опечатка.
+        assert _connect_info(user)["suggest_connect"] is True
+
+    assert _try_connect(user, "не тот").status_code == 400
+    assert _connect_info(user)["suggest_connect"] is False
+
+
+@pytest.mark.django_db
+def test_successful_connect_resets_the_count(use_provisioner):
+    """Сотрудник сходил за паролем и подключился — серия закрыта."""
+    use_provisioner(_FakeImap(passwords={"ruslan.amirov@htq.group": "MailPass!"}))
+    user = _amirov()
+
+    for _ in range(2):
+        _try_connect(user, "не тот")
+    assert _try_connect(user, "MailPass!").status_code == 201
+
+    from apps.mail.services import self_service
+    assert self_service.attempts_exhausted(user.id) is False
+
+
+@pytest.mark.django_db
+def test_silenced_user_can_still_connect(use_provisioner):
+    """Главная граница: мы прекращаем навязываться, а не запираем дверь.
+    Ручка подключения обязана работать и после лимита — иначе человек,
+    получивший пароль у администратора, ждал бы неделю."""
+    use_provisioner(_FakeImap(passwords={"ruslan.amirov@htq.group": "MailPass!"}))
+    user = _amirov()
+
+    for _ in range(3):
+        _try_connect(user, "не тот")
+    assert _connect_info(user)["suggest_connect"] is False
+
+    assert _try_connect(user, "MailPass!").status_code == 201
+
+
+@pytest.mark.django_db
+def test_refusals_that_are_not_about_the_password_do_not_count(use_provisioner):
+    """Чужой домен — не «не угадал пароль». Причина, которая повтором не
+    лечится, к настойчивости подсказки отношения не имеет, и засчитывать её
+    значило бы гасить подсказку за чужую ошибку."""
+    use_provisioner(_FakeImap())
+    user = _amirov()
+
+    for _ in range(3):
+        with override_settings(
+            MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="imap",
+            IMAP_HOST="mail.htq.group",
+        ):
+            resp = Client().post(
+                "/api/email/v1/accounts/connect-corporate/",
+                data='{"address": "someone@gmail.com", "password": "x"}',
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(user)['access']}",
+            )
+        assert resp.status_code == 400
+
+    assert _connect_info(user)["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_the_count_is_per_user(use_provisioner):
+    """Счёт по учётке, а не общий: неудачи одного не должны гасить подсказку
+    у соседа."""
+    use_provisioner(_FakeImap(passwords={"ruslan.amirov@htq.group": "MailPass!"}))
+    user = _amirov()
+    other = User.objects.create(
+        username="other", email="other.person@htq.group", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    other.set_password("S3cret!")
+    other.save()
+
+    for _ in range(3):
+        _try_connect(user, "не тот")
+
+    assert _connect_info(user)["suggest_connect"] is False
+    assert _connect_info(other)["suggest_connect"] is True

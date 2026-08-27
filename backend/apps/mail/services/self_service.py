@@ -25,12 +25,72 @@ from __future__ import annotations
 
 import logging
 
+from django.core.cache import cache
+
 from apps.mail.models import ProvisionedMailbox
 from apps.mail.services import mailbox_service as mbx_svc
 from apps.mail.services.mail_config import get_config
 from apps.mail.services.provisioning import ProvisioningError, get_provisioner
 
 log = logging.getLogger(__name__)
+
+
+#: После скольких неудач подряд платформа перестаёт ПРЕДЛАГАТЬ подключение.
+#: Три — потому что две первые бывают опечаткой, а третья означает, что пароля
+#: человек не знает либо ящика не существует; в обоих случаях следующая попытка
+#: ничего не изменит.
+_MAX_FAILED_ATTEMPTS = 3
+
+#: Неделя от ПОСЛЕДНЕЙ неудачи: TTL обновляется на каждой, поэтому счётчик
+#: живёт, пока человек продолжает пробовать, и истекает, когда он бросил.
+_FAILED_TTL = 7 * 24 * 3600
+
+
+def _attempts_key(user_id: int) -> str:
+    return f"mail:connect-failures:{user_id}"
+
+
+def note_failed_attempt(user_id: int) -> int:
+    """Запомнить неудачную попытку подключения. Возвращает их число.
+
+    Считается на СЕРВЕРЕ, а не в браузере, потому что решение «хватит
+    спрашивать» принимает ручка ``connect-corporate``: у одного человека
+    несколько устройств, и подсказка, погашенная на ноутбуке, не должна
+    заново мучить его с телефона.
+    """
+    key = _attempts_key(user_id)
+    try:
+        count = int(cache.get(key) or 0) + 1
+        # set, а не incr: incr не обновляет TTL, и счётчик истёк бы через
+        # неделю после ПЕРВОЙ неудачи, а не после последней.
+        cache.set(key, count, _FAILED_TTL)
+        return count
+    except Exception:  # noqa: BLE001 — недоступный Redis не повод падать
+        log.warning("connect_failures_bump_failed user_id=%s", user_id, exc_info=True)
+        return 0
+
+
+def clear_failed_attempts(user_id: int) -> None:
+    """Успешное подключение обнуляет счёт: следующая серия начнётся заново."""
+    try:
+        cache.delete(_attempts_key(user_id))
+    except Exception:  # noqa: BLE001
+        log.warning("connect_failures_clear_failed user_id=%s", user_id, exc_info=True)
+
+
+def attempts_exhausted(user_id: int) -> bool:
+    """Пора ли перестать предлагать подключение этому сотруднику.
+
+    Гасится ТОЛЬКО подсказка. Форма подключения в профиле и в настройках почты
+    остаётся на месте: человек, который сходил за паролем к администратору,
+    должен иметь возможность ввести его сразу, а не ждать неделю. Разница
+    важная — мы прекращаем навязываться, а не запираем дверь.
+    """
+    try:
+        return int(cache.get(_attempts_key(user_id)) or 0) >= _MAX_FAILED_ATTEMPTS
+    except Exception:  # noqa: BLE001 — не смогли узнать, значит не мешаем
+        log.warning("connect_failures_read_failed user_id=%s", user_id, exc_info=True)
+        return False
 
 
 class SelfServiceDisabled(Exception):

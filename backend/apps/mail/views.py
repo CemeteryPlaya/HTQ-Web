@@ -174,11 +174,13 @@ def corporate_connect_info(request):
         "own_address": own_address,
         "mailbox": mailbox,
         "awaiting_password": awaiting,
-        "suggest_connect": _suggest_connect(own_address, mailbox, info),
+        "suggest_connect": _suggest_connect(own_address, mailbox, info, user_id),
     }
 
 
-def _suggest_connect(own_address: str, mailbox: dict | None, info: dict) -> bool:
+def _suggest_connect(
+    own_address: str, mailbox: dict | None, info: dict, user_id: int,
+) -> bool:
     """Предлагать ли сотруднику подключить рабочий ящик паролем.
 
     Повод возникает, когда ящика у человека нет, а его рабочий адрес —
@@ -205,6 +207,12 @@ def _suggest_connect(own_address: str, mailbox: dict | None, info: dict) -> bool
     подключаться некуда, и просьба ввести пароль была бы издевательством.
     """
     if not own_address or mailbox is not None or info["provisioner"] == "none":
+        return False
+
+    # Трижды не вышло — перестаём навязываться. Форма в профиле остаётся: тот,
+    # кто сходил за паролем к администратору, вводит его сразу, а не ждёт
+    # неделю (см. self_service.attempts_exhausted).
+    if self_service.attempts_exhausted(user_id):
         return False
 
     from apps.mail.services import lookup_service
@@ -273,9 +281,10 @@ def _current_mailbox(user_id: int):
 
 @api_view(methods=("POST",), auth="jwt", body=schemas.MailboxConnectRequest, status=201)
 def _corporate_connect(request, data: schemas.MailboxConnectRequest):
+    user_id = request.token.user_id
     try:
-        return self_service.connect_own_mailbox(
-            user_id=request.token.user_id, address=data.address, password=data.password,
+        result = self_service.connect_own_mailbox(
+            user_id=user_id, address=data.address, password=data.password,
         )
     except self_service.SelfServiceDisabled:
         return json_error(
@@ -286,7 +295,14 @@ def _corporate_connect(request, data: schemas.MailboxConnectRequest):
     except self_service.MailboxTakenByAnotherUser as exc:
         return json_error(exc.detail, 409)
     except self_service.VerificationFailed as exc:
+        # Считаем только отказы СЕРВЕРА. Отключённый режим, чужой домен и
+        # занятый ящик — не «не угадал пароль», а причины, которые повтором
+        # не лечатся и к настойчивости подсказки отношения не имеют.
+        self_service.note_failed_attempt(user_id)
         return json_error(exc.detail, 400)
+
+    self_service.clear_failed_attempts(user_id)
+    return result
 
 
 @api_view(methods=("DELETE",), auth="jwt")
