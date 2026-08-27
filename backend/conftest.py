@@ -21,6 +21,24 @@ def clear_service_status_cache():
     cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def reset_company_context():
+    """Контекст компании не должен переживать тест.
+
+    ``htqweb.tenancy.context._current`` — процессная ContextVar, а не
+    состояние БД: транзакция теста её не откатывает. Тест, который поставил
+    компанию и упал на ассерте до reset_company, оставил бы её установленной
+    до конца прогона — и все последующие тесты, ожидающие пустой контекст,
+    падали бы по чужой причине. Живёт рядом с clear_service_status_cache по
+    той же причине: одно значение на процесс, общее для всех аппок.
+    """
+    from htqweb.tenancy.context import _current
+
+    token = _current.set(None)
+    yield
+    _current.reset(token)
+
+
 # Прод-режим подмен на один тест. Весь прогон идёт в strict (settings/test.py:
 # fallback поднимает FallbackNotAllowed вместо подмены), и это правильный
 # дефолт — но тесту, который проверяет ПОВЕДЕНИЕ деградации (что вьюха отдала
