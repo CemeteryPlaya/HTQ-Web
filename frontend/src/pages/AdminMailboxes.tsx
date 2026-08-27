@@ -34,6 +34,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MailConnectionSettings } from '@/components/mail/MailConnectionSettings';
 import { MailboxLookupNotice } from '@/components/mail/MailboxLookupNotice';
+import { MailboxCoverage } from '@/components/mail/MailboxCoverage';
 import {
     fetchMailboxLookup,
     lookupIsAnswerable,
@@ -182,6 +183,7 @@ const AdminMailboxes: React.FC = () => {
                 <TabsList>
                     <TabsTrigger value="mailboxes">{t('admin.mailboxes.tabMailboxes', 'Ящики')}</TabsTrigger>
                     <TabsTrigger value="connection">{t('admin.mailboxes.tabConnection', 'Подключение')}</TabsTrigger>
+                    <TabsTrigger value="coverage">{t('admin.mailboxes.tabCoverage', 'Покрытие')}</TabsTrigger>
                     <TabsTrigger value="reconcile">{t('admin.mailboxes.tabReconcile', 'Сверка')}</TabsTrigger>
                     <TabsTrigger value="aliases">{t('admin.mailboxes.tabAliases', 'Алиасы')}</TabsTrigger>
                 </TabsList>
@@ -253,6 +255,10 @@ const AdminMailboxes: React.FC = () => {
 
                 <TabsContent value="connection" className="mt-4">
                     <MailConnectionSettings />
+                </TabsContent>
+
+                <TabsContent value="coverage" className="mt-4">
+                    <MailboxCoverage />
                 </TabsContent>
 
                 <TabsContent value="reconcile" className="mt-4">

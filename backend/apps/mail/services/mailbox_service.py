@@ -901,3 +901,74 @@ def delete(mailbox_id: int) -> None:
         get_provisioner().delete(address=mb.address)
     except ProvisioningError as exc:
         mark_error(mb, str(exc))
+
+
+# ── Покрытие: у кого из сотрудников нет рабочей почты ─────────────────────
+
+
+#: Почему у сотрудника нет рабочей почты. Причина, а не просто «нет ящика»:
+#: действия администратора в трёх случаях разные, и без неё список
+#: превращается в загадку.
+COVERAGE_NO_MAILBOX = "no_mailbox"          # завести ящик
+COVERAGE_NOT_LINKED = "not_linked"          # ящик есть, но ничей — свести
+COVERAGE_AWAITING_PASSWORD = "awaiting_password"   # спросить пароль у сотрудника
+
+
+def users_without_mailbox(limit: int = 500) -> list[dict]:
+    """Сотрудники с корпоративным адресом, у которых почта не работает.
+
+    Зачем это админу: до сих пор проблема адресовалась сотруднику по одному —
+    полосой «введите пароль». Админ не видел ни масштаба, ни того, что часть
+    случаев решается им самим за минуту (завести ящик), а не хождением
+    сотрудника за паролем.
+
+    Личная почта в список не попадает: делать корпоративный ящик из
+    ``@gmail.com`` платформа не умеет и не должна. Уволенные — тоже: ящик им
+    больше не нужен.
+
+    Ящик ищется ДВУМЯ путями — по владельцу и по адресу, — потому что это
+    разные состояния. Строка, привязанная к сотруднику, означает «почта его»,
+    даже если адрес с тех пор сменился; строка с совпадающим адресом, но без
+    владельца, означает «ящик на сервере есть, сверка его ещё не связала», и
+    заводить второй такой было бы дублем.
+    """
+    from apps.users import interface as users_interface
+
+    domain = (mail_config.get_config().domain or "").strip().lower()
+    if not domain:
+        return []
+
+    suffix = f"@{domain}"
+    users = [
+        u for u in users_interface.list_users_brief(limit=limit)
+        if u["is_active"] and (u["email"] or "").strip().lower().endswith(suffix)
+    ]
+    if not users:
+        return []
+
+    live = list(ProvisionedMailbox.objects.exclude(status="deleted"))
+    by_address = {mb.address.strip().lower(): mb for mb in live}
+    by_user = {mb.user_id: mb for mb in live if mb.user_id is not None}
+
+    out: list[dict] = []
+    for user in users:
+        email = (user["email"] or "").strip().lower()
+        mb = by_user.get(user["id"]) or by_address.get(email)
+
+        if mb is None:
+            reason = COVERAGE_NO_MAILBOX
+        elif mb.user_id is None:
+            reason = COVERAGE_NOT_LINKED
+        elif awaits_password(mb):
+            reason = COVERAGE_AWAITING_PASSWORD
+        else:
+            continue        # почта работает — в списке проблем ему не место
+
+        out.append({
+            "user_id": user["id"],
+            "email": user["email"],
+            "full_name": user["full_name"],
+            "reason": reason,
+            "mailbox_id": mb.id if mb is not None else None,
+        })
+    return out

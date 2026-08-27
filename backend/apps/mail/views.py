@@ -741,6 +741,27 @@ def test_mail_connection(request, data: schemas.MailConnectionTestRequest):
 
 
 @api_view(methods=("GET",), auth="jwt", admin=True)
+def mailbox_coverage(request):
+    """``GET /mailboxes/coverage/`` — кто из сотрудников без рабочей почты.
+
+    Обратная сторона подсказки «введите пароль»: та адресует проблему
+    сотруднику по одному, эта показывает администратору всю картину разом и
+    то, что часть случаев он закрывает сам, не дёргая людей.
+
+    ``can_create_remotely`` отдаётся вместе со списком, чтобы интерфейс не
+    гадал, показывать ли кнопку «завести пачкой»: на голом IMAP платформа
+    ящики не создаёт, и предлагать это было бы обманом.
+    """
+    info = provisioning.describe()
+    return {
+        "domain": info["domain"],
+        "provisioner": info["provisioner"],
+        "can_create_remotely": info["can_create_remotely"],
+        "users": mbx_svc.users_without_mailbox(),
+    }
+
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
 def _reconcile_report(request):
     return reconcile_service.reconcile(apply=False).to_dict()
 

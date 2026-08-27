@@ -2951,7 +2951,28 @@
       "userIdHint": "With a user set, the mailbox shows up in their Mail section: the platform creates a mail account for them.",
       "userIdPlaceholder": "optional",
       "firstNamePlaceholder": "John",
-      "lastNamePlaceholder": "Smith"
+      "lastNamePlaceholder": "Smith",
+      "tabCoverage": "Coverage",
+      "coverage": {
+        "loading": "Counting…",
+        "error": "Could not load the list",
+        "noDomain": "The corporate domain is not configured, so the platform cannot tell who is supposed to have work mail. Set the domain on the Connection tab.",
+        "empty": "Every employee with an address on the corporate domain has working mail.",
+        "summary": "Employees on @{{domain}} whose mail does not work: {{count}}",
+        "columnName": "Employee",
+        "columnEmail": "Work address",
+        "reason": {
+          "no_mailbox": "No mailbox",
+          "not_linked": "Mailbox has no owner",
+          "awaiting_password": "Waiting for a password"
+        },
+        "advice": {
+          "createHere": "Create the mailbox on the Mailboxes tab — the platform will create it on the server.",
+          "createOnServer": "The mail administrator creates the mailbox on the server. The platform will connect it on its own afterwards.",
+          "reconcile": "The mailbox exists but has no owner set. Reconciliation does that — see the Reconcile tab.",
+          "password": "The mailbox is linked, but the platform could not get access on its own. The employee enters the password in their own mail settings."
+        }
+      }
     },
     "news": {
       "status": {
