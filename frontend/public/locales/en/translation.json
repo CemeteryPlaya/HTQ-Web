@@ -765,7 +765,79 @@
           "departmentRequired": "Select a department",
           "positionRequired": "Select a position",
           "hireDateRequired": "Specify the hire date",
-          "fillRequired": "Fill in the required fields"
+          "fillRequired": "Fill in the required fields",
+          "lastNameRequired": "Enter the last name",
+          "emailRequired": "Enter the email"
+        },
+        "prefill": {
+          "open": "Pull data",
+          "title": "Pull existing data",
+          "description": "Choose where to take the data from. Filled-in fields stay as they are until you tick them.",
+          "sources": {
+            "user": "User account",
+            "employee": "Employee",
+            "mailbox": "Mailbox"
+          },
+          "searchPlaceholder": "Start typing (2 characters minimum)",
+          "searchHint": "Type at least 2 characters",
+          "nothingFound": "Nothing found",
+          "nothingToTransfer": "This source has no data to transfer",
+          "hasCard": "already has a card",
+          "noAccount": "No account linked",
+          "columnField": "Field",
+          "columnCurrent": "Current",
+          "columnIncoming": "New",
+          "stateConflict": "differs",
+          "stateSame": "same",
+          "fillableCount": "Will be filled: {{count}}",
+          "conflictsCount": "Differences: {{count}}",
+          "apply": "Transfer selected",
+          "applyError": "Could not transfer the data",
+          "fields": {
+            "avatar": "Avatar"
+          }
+        },
+        "import": {
+          "open": "Import from users",
+          "title": "Import from users",
+          "description": "Showing user accounts that have no employee card yet.",
+          "search": "Search by name or email",
+          "empty": "Every user account already has an employee card",
+          "selectAll": "Select all",
+          "submit": "Create cards",
+          "created": "Created: {{count}}",
+          "skipped": "Skipped: {{count}}",
+          "importMore": "Import more",
+          "error": "Import failed",
+          "reason": {
+            "user_not_found": "User account not found",
+            "no_email": "The account has no email",
+            "already_linked": "A card is already linked to this account",
+            "email_taken": "An employee with this email already exists",
+            "create_failed": "Could not create the card"
+          }
+        },
+        "match": {
+          "duplicateTitle": "This employee may already exist",
+          "userTitle": "There is a matching user account",
+          "openCard": "Open",
+          "useUser": "Pull data",
+          "reason": {
+            "email": "email matches",
+            "phone": "phone matches",
+            "full_name": "name matches",
+            "patronymic": "middle name matches"
+          }
+        },
+        "newAccount": {
+          "warning": "Pass these details on to the employee. The password is shown once — after that it can only be reset.",
+          "login": "Login",
+          "password": "Temporary password",
+          "hint": "The employee should change this password in their profile after the first sign-in.",
+          "copy": "Copy",
+          "copied": "Copied",
+          "done": "I saved the credentials",
+          "copyFailed": "Could not copy — select the password and copy it manually."
         }
       },
       "structure": {
@@ -1138,7 +1210,8 @@
           "password": "Password",
           "status": "Status",
           "isActive": "Account active"
-        }
+        },
+        "copyFailed": "Could not copy — select the password and copy it manually"
       }
     },
     "timeTracking": {

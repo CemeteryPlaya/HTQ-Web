@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { useTranslation } from 'react-i18next';
+import { copyText } from '@/lib/clipboard';
 import {
   Select,
   SelectContent,
@@ -102,7 +103,7 @@ export function ShareEmployeeDialog({ open, employee, onClose }: Props) {
 
   const copy = async (url: string) => {
     if (!url) return;
-    await navigator.clipboard.writeText(url);
+    await copyText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

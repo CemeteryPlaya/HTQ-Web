@@ -791,7 +791,19 @@ def test_id_pmos_admin_sees_active_membership(admin_auth, hr_dep):
 # access.can_list_user_options (senior+)/can_manage_user_options (lead) —
 # ровно как HR-исходник, НЕ грубый api_view(admin=True).
 
-USER_OPTION_FIELDS = {"id", "full_name", "email", "first_name", "last_name"}
+# Форма пункта пикера. Поля после last_name добавлены задачей «подтянуть
+# данные из Пользователей»: пикер теперь не только называет учётку, но и
+# несёт то, что из неё переносится в карточку, плюс employee_id — «карточка
+# у этого пользователя уже есть». Набор проверяется целиком (==, не <=):
+# лишнее поле на границе аппок так же нежелательно, как недостающее.
+USER_OPTION_FIELDS = {"id", "full_name", "email", "first_name", "last_name",
+                      "patronymic", "phone", "avatar_url", "bio", "employee_id"}
+
+# Ответ на СОЗДАНИЕ шире ровно на временный пароль. Он есть только здесь:
+# без него заведённая через HR-форму учётка никому не по зубам — пароль
+# генерируется случайным, а ``must_change_password`` срабатывает уже ПОСЛЕ
+# входа, которого не будет.
+USER_CREATED_FIELDS = USER_OPTION_FIELDS | {"generated_password"}
 
 
 @pytest.mark.django_db
@@ -893,7 +905,7 @@ def test_users_post_201_for_lead_creates_user(lead):
     )
     assert resp.status_code == 201
     body = resp.json()
-    assert set(body) == USER_OPTION_FIELDS
+    assert set(body) == USER_CREATED_FIELDS
     assert body["email"] == "new-hire@htq.test"
     assert body["first_name"] == "New"
     assert body["last_name"] == "Hire"
@@ -1094,3 +1106,60 @@ def test_id_card_admin_sees_all_t2_sections_and_pmos(admin_auth, hr_dep):
 def test_id_card_trailing_slash_variant(admin_auth, hr_dep):
     target = _emp(hr_dep, _pos("C4", hr_dep, weight=293), "card-target4@htq.test")
     assert Client().get(f"{BASE}/{target.id}/card/", **admin_auth).status_code == 200
+
+
+@pytest.mark.django_db
+def test_users_post_returns_a_password_that_actually_works(lead):
+    """Смысл ответа — не поле в JSON, а возможность войти.
+
+    До этого HR заводил сотрудника, а войти было нечем: пароль генерировался
+    случайным и не показывался никому, оставался только сброс через
+    /admin/users.
+    """
+    _emp, headers = lead
+    resp = Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "Login", "last_name": "Works", "email": "login-works@htq.test"}',
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 201
+    password = resp.json()["generated_password"]
+    assert password
+
+    token = Client().post(
+        "/api/users/v1/token/",
+        data='{"email": "login-works@htq.test", "password": "%s"}' % password,
+        content_type="application/json",
+    )
+    assert token.status_code == 200, token.content
+    assert token.json()["access"]
+
+
+@pytest.mark.django_db
+def test_users_get_never_leaks_the_password(senior):
+    """Пароль отдаётся ТОЛЬКО в ответе на создание.
+
+    Список строит тот же ``_serialize_user_option``, и если однажды пароль
+    заведётся внутри него, утечёт он именно здесь — в справочнике учёток,
+    доступном каждому senior HR.
+    """
+    _emp, headers = senior
+    body = Client().get(f"{BASE}/users/", **headers).json()
+    assert body
+    for row in body:
+        assert "generated_password" not in row
+
+
+@pytest.mark.django_db
+def test_created_user_must_change_password(lead):
+    """Временный пароль остаётся временным: флаг смены выставлен."""
+    _emp, headers = lead
+    Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "Temp", "last_name": "Pass", "email": "temp-pass@htq.test"}',
+        content_type="application/json",
+        **headers,
+    )
+    user = User.objects.get(email="temp-pass@htq.test")
+    assert user.must_change_password is True

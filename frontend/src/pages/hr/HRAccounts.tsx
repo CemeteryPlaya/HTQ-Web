@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { RefreshCw, Copy, Check } from 'lucide-react';
+import { copyText } from '@/lib/clipboard';
 
 const HRAccounts = () => {
   const { t } = useTranslation();
@@ -91,15 +92,24 @@ const HRAccounts = () => {
                   <code className="bg-muted px-2 py-1 rounded text-sm">{a.username}</code>
                   {tempPassword?.id === a.id && (
                     <div className="mt-1 flex items-center gap-2 text-xs">
-                      <code className="bg-amber-100 px-2 py-1 rounded">{tempPassword.pw}</code>
+                      <code className="select-all bg-amber-100 px-2 py-1 rounded">{tempPassword.pw}</code>
                       <Button
                         size="icon"
                         variant="ghost"
                         className="h-6 w-6"
                         onClick={async () => {
-                          await navigator.clipboard.writeText(tempPassword.pw);
-                          setCopiedId(a.id);
-                          setTimeout(() => setCopiedId(null), 2000);
+                          // Пароль показывается один раз — молчаливый отказ
+                          // здесь означает потерянный доступ, поэтому неудачу
+                          // проговариваем и подсказываем выделить вручную.
+                          if (await copyText(tempPassword.pw)) {
+                            setCopiedId(a.id);
+                            setTimeout(() => setCopiedId(null), 2000);
+                          } else {
+                            toast.error(t(
+                              'hr.pages.accounts.copyFailed',
+                              'Не удалось скопировать — выделите пароль и скопируйте вручную',
+                            ));
+                          }
                         }}
                       >
                         {copiedId === a.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}

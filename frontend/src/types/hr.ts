@@ -101,6 +101,98 @@ export interface HRUserOption {
   first_name?: string;
   last_name?: string;
   patronymic?: string;
+  /** Данные для переноса в карточку — их отдаёт GET /employees/users/. */
+  phone?: string;
+  avatar_url?: string;
+  bio?: string;
+  /** Карточка сотрудника у этой учётки уже есть; null — ещё нет. */
+  employee_id?: number | null;
+}
+
+/* ---------- Префилл: перенос уже имеющихся данных в карточку ---------- */
+
+/** Откуда берём данные. Совпадает с SOURCE_* бэкенда. */
+export type PrefillSourceType = 'user' | 'employee' | 'mailbox';
+
+export interface PrefillSourceRef {
+  type: PrefillSourceType;
+  id: number;
+}
+
+/**
+ * Состояние одного поля в предпросмотре:
+ * - `fill`     — у сотрудника пусто, можно просто заполнить (отмечено по умолчанию);
+ * - `conflict` — значения расходятся, решает человек (по умолчанию снято);
+ * - `same`     — совпадает, переносить нечего.
+ */
+export type PrefillFieldState = 'fill' | 'conflict' | 'same';
+
+export interface PrefillFieldDiff {
+  field: string;
+  current: string | number | null;
+  incoming: string | number | null;
+  /** Человекочитаемые значения: id отделов/должностей уже развёрнуты в названия. */
+  current_display: string;
+  incoming_display: string;
+  state: PrefillFieldState;
+}
+
+export interface PrefillPreview {
+  source: { type: PrefillSourceType; id: number; title: string; subtitle: string };
+  values: Record<string, string | number>;
+  fields: PrefillFieldDiff[];
+  fillable: number;
+  conflicts: number;
+}
+
+/** Ящик как источник (GET /employees/sources/mailboxes). */
+export interface MailboxSource {
+  id: number;
+  address: string;
+  local_part: string;
+  domain: string;
+  display_name: string;
+  user_id: number | null;
+  status: string;
+}
+
+export interface UserMatch extends HRUserOption {
+  match_on: string[];
+  match_kind: 'exact' | 'similar';
+}
+
+export interface EmployeeMatch {
+  id: number;
+  full_name: string;
+  email: string;
+  phone: string | null;
+  user_id: number | null;
+  department_name: string;
+  position_title: string;
+  status: string;
+  match_on: string[];
+  match_kind: 'exact' | 'similar';
+}
+
+/**
+ * `employees` — карточка уже есть (заводить второй раз не надо);
+ * `users` — карточки нет, но есть учётка (вот откуда взять данные).
+ */
+export interface MatchSuggestions {
+  users: UserMatch[];
+  employees: EmployeeMatch[];
+}
+
+export interface BulkImportSkipped {
+  user_id: number;
+  reason: 'user_not_found' | 'no_email' | 'already_linked' | 'email_taken' | 'create_failed';
+}
+
+export interface BulkImportResult {
+  created: Employee[];
+  skipped: BulkImportSkipped[];
+  created_count: number;
+  skipped_count: number;
 }
 
 export type VacancyStatus = 'open' | 'closed' | 'on_hold';

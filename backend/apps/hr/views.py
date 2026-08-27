@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 from htqweb.http import api_view, json_error
 
+from apps.mail import interface as mail_interface
 from apps.users import interface as users_interface
 
 from . import access as hr_access
@@ -48,6 +49,7 @@ from .services import document_service as doc_svc
 from .services import employee_card_service as card_svc
 from .services import employee_card_t2_service as card_t2_svc
 from .services import employee_groups_service as groups_svc
+from .services import employee_prefill_service as prefill_svc
 from .services import employee_service as emp_svc
 from .services import org_service
 from .services import personnel_history_service as ph_svc
@@ -492,17 +494,40 @@ def my_employee(request):
 # pydantic молча игнорирует лишние поля конструктора).
 
 def _serialize_user_option(user: dict) -> dict:
+    """Пункт пикера учёток.
+
+    Поля после ``last_name`` — данные для переноса в карточку
+    (``users.interface.list_user_prefills``). Через ``.get`` потому, что тем
+    же сериализатором отвечает POST этой же ручки, а ``create_user``
+    возвращает более узкую option-форму: у только что заведённой учётки
+    телефона и аватара и не может быть.
+
+    ``employee_id`` отвечает на вопрос, который раньше приходилось решать
+    глазами по списку сотрудников, — «у этого пользователя карточка уже
+    есть?». ``None`` значит «нет», а не «не проверяли».
+    """
     return {
         "id": user["id"],
         "full_name": user["full_name"],
         "email": user["email"],
         "first_name": user.get("first_name", ""),
         "last_name": user.get("last_name", ""),
+        "patronymic": user.get("patronymic", ""),
+        "phone": user.get("phone", ""),
+        "avatar_url": user.get("avatar_url") or "",
+        "bio": user.get("bio", ""),
+        "employee_id": user.get("employee_id"),
     }
 
 
 @api_view(methods=("GET",), auth="jwt")
 def _list_user_options(request):
+    """Учётки для пикера «создать сотрудника из пользователя».
+
+    ``?search=`` фильтрует НА СЕРВЕРЕ. Раньше форма тянула справочник
+    целиком и искала по нему в браузере — это работало ровно до тех пор,
+    пока учёток было меньше сотни.
+    """
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
     except hr_access.HRAccessDenied as exc:
@@ -510,7 +535,16 @@ def _list_user_options(request):
     if not access.can_list_user_options:
         return json_error("Senior HR access required", 403)
 
-    users = users_interface.list_users_brief()
+    search = (request.GET.get("search") or "").strip() or None
+    try:
+        limit = int(request.GET.get("limit") or 200)
+    except (TypeError, ValueError):
+        return json_error("limit must be an integer", 422)
+    limit = max(1, min(limit, 500))
+
+    users = prefill_svc.annotate_employee_links(
+        users_interface.list_user_prefills(search=search, limit=limit)
+    )
     return [_serialize_user_option(u) for u in users]
 
 
@@ -535,7 +569,18 @@ def _create_user_option(request, data: schemas.HRUserCreateRequest):
         )
     except (users_interface.DuplicateEmail, users_interface.DuplicateUsername):
         return json_error("Пользователь с такими данными уже существует", 409)
-    return _serialize_user_option(user)
+
+    # Временный пароль — единственный раз, когда он покидает сервер. До этого
+    # HR заводил учётку, а войти ею было нечем: пароль генерировался случайным
+    # и не показывался никому (см. users.interface.create_user).
+    #
+    # Добавляется ЗДЕСЬ, а не в ``_serialize_user_option``: тем же
+    # сериализатором отвечает GET-список учёток, и пароль в него попасть не
+    # должен ни при какой будущей правке.
+    return {
+        **_serialize_user_option(user),
+        "generated_password": user.get("generated_password"),
+    }
 
 
 def employees_users_collection(request):
@@ -544,6 +589,236 @@ def employees_users_collection(request):
     if request.method == "POST":
         return _create_user_option(request)
     return json_error("Method Not Allowed", 405)
+
+
+# ── /employees/sources/mailboxes — корпоративные ящики как источник ──────────
+
+@api_view(methods=("GET",), auth="jwt")
+def employee_mailbox_sources(request):
+    """Ящики, из которых можно взять рабочий адрес (и имя, если оно там есть).
+
+    ``?unassigned=1`` — только ничейные: обычный случай «ящик почтовый
+    администратор завёл, человека в платформе ещё нет». Выключенная аппка
+    mail отдаёт пустой список, а не 503 (см. ``mail.interface``): вкладка
+    источника просто пуста, форма сотрудника работает.
+    """
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    if not access.can_list_user_options:
+        return json_error("Senior HR access required", 403)
+
+    search = (request.GET.get("search") or "").strip()
+    unassigned = request.GET.get("unassigned", "").lower() in ("1", "true", "yes")
+    return mail_interface.list_mailboxes_brief(
+        search=search, limit=200, unassigned_only=unassigned,
+    )
+
+
+# ── /employees/prefill — предпросмотр переноса ───────────────────────────────
+#
+# Предпросмотр и применение — ДВА вызова, а не один с флагом ``dry_run``:
+# человек должен увидеть «было → станет» и снять галочки прежде, чем что-то
+# запишется. Причина, по которой это вообще отдельная ручка, а не расширение
+# PATCH: PATCH принимает готовые значения, а здесь сервер сам решает, что
+# может дать источник, и какие из этих полей конфликтуют с уже заполненными.
+
+def _source_access_error(source_type: str, access):
+    """Учётки и ящики — данные людей из соседних аппок, их закрывает то же
+    право, что и пикер учёток (``hr.users.list``). Источник «сотрудник» —
+    свои же карточки, он закрыт обычной видимостью отдела (ниже)."""
+    if source_type in (prefill_svc.SOURCE_USER, prefill_svc.SOURCE_MAILBOX) \
+            and not access.can_list_user_options:
+        return json_error("Senior HR access required", 403)
+    return None
+
+
+def _check_source_visible(source, access):
+    """Из чужого отдела шаблон не копируется — 404, как и везде в этом домене."""
+    if source.type == prefill_svc.SOURCE_EMPLOYEE:
+        _require_visible_employee(source.id, access)
+
+
+def _prefill_error(exc):
+    """Единая раскладка исключений сервиса префилла в коды ответа."""
+    if isinstance(exc, prefill_svc.SourceNotFound):
+        return json_error("Source not found", 404)
+    if isinstance(exc, prefill_svc.UnknownSourceType):
+        return json_error("Unknown source type", 422)
+    if isinstance(exc, prefill_svc.UserNotFound):
+        return json_error("User not found", 422)
+    if isinstance(exc, prefill_svc.UserAlreadyLinked):
+        return json_error("User account is already linked to another employee", 409)
+    if isinstance(exc, emp_svc.EmailAlreadyInUse):
+        return json_error("Email already in use", 409)
+    if isinstance(exc, emp_svc.DepartmentNotFound):
+        return json_error("Department not found", 422)
+    if isinstance(exc, emp_svc.PositionNotFound):
+        return json_error("Position not found", 422)
+    raise exc
+
+
+_PREFILL_ERRORS = (
+    prefill_svc.SourceNotFound, prefill_svc.UnknownSourceType,
+    prefill_svc.UserNotFound, prefill_svc.UserAlreadyLinked,
+    emp_svc.EmailAlreadyInUse, emp_svc.DepartmentNotFound, emp_svc.PositionNotFound,
+)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.PrefillPreviewRequest)
+def employee_prefill_preview(request, data: schemas.PrefillPreviewRequest):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+
+    employee = None
+    if data.employee_id is None:
+        # Карточку ещё создают — право то же, что и на само создание.
+        if not access.can_create_employee:
+            return json_error("Senior HR access required", 403)
+    else:
+        if not access.can_write_basic:
+            return json_error("HR write access required", 403)
+        try:
+            employee = _require_visible_employee(data.employee_id, access)
+        except emp_svc.EmployeeNotFound:
+            return json_error("Employee not found", 404)
+
+    denied = _source_access_error(data.source.type, access)
+    if denied is not None:
+        return denied
+
+    try:
+        _check_source_visible(data.source, access)
+        return prefill_svc.preview(employee, data.source.type, data.source.id)
+    except emp_svc.EmployeeNotFound:
+        return json_error("Source not found", 404)
+    except _PREFILL_ERRORS as exc:
+        return _prefill_error(exc)
+
+
+# ── /employees/{id}/prefill/apply — применение отмеченного ───────────────────
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.PrefillApplyRequest)
+def employee_prefill_apply(request, id: int, data: schemas.PrefillApplyRequest):
+    try:
+        access = hr_access.require_can_write_basic(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    try:
+        _require_visible_employee(id, access)
+    except emp_svc.EmployeeNotFound:
+        return json_error("Employee not found", 404)
+
+    # Отдел и должность через префилл меняются по тому же праву, что и через
+    # PATCH (_update_employee выше): иначе «подтянуть данные» стало бы
+    # обходным путём для перевода сотрудника.
+    if not access.can_transfer_employee and (set(data.fields) & prefill_svc.TRANSFER_FIELDS):
+        return json_error(
+            "Transferring, changing position, or terminating requires the transfer permission",
+            403,
+        )
+
+    denied = _source_access_error(data.source.type, access)
+    if denied is not None:
+        return denied
+
+    try:
+        _check_source_visible(data.source, access)
+        employee = prefill_svc.apply_prefill(
+            id, data.source.type, data.source.id, data.fields,
+            changed_by_id=request.token.user_id,
+        )
+    except emp_svc.EmployeeNotFound:
+        return json_error("Source not found", 404)
+    except _PREFILL_ERRORS as exc:
+        return _prefill_error(exc)
+    return svc.serialize_employee(employee)
+
+
+# ── /employees/match-suggestions — «кажется, этот человек уже есть» ──────────
+
+@api_view(methods=("GET",), auth="jwt")
+def employee_match_suggestions(request):
+    """Подсказка по мере заполнения формы: похожие учётки и похожие карточки.
+
+    GET, а не POST, хотя параметров много: запрос ничего не меняет и
+    вызывается на каждый ввод (с дебаунсом на фронте) — кэшируемость и
+    отменяемость здесь важнее компактного тела.
+    """
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    if not access.can_create_employee:
+        return json_error("Senior HR access required", 403)
+
+    try:
+        query = schemas.MatchSuggestQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+
+    return prefill_svc.suggest_matches(
+        email=query.email, phone=query.phone, first_name=query.first_name,
+        last_name=query.last_name, patronymic=query.patronymic,
+        exclude_employee_id=query.exclude_employee_id, limit=query.limit,
+    )
+
+
+# ── /employees/import-candidates — учётки без карточки ──────────────────────
+
+@api_view(methods=("GET",), auth="jwt")
+def employee_import_candidates(request):
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    if not access.can_create_employee:
+        return json_error("Senior HR access required", 403)
+
+    try:
+        query = schemas.ImportCandidatesQuery.model_validate(dict(request.GET.items()))
+    except ValidationError as exc:
+        return _query_error(exc)
+
+    return prefill_svc.import_candidates(search=query.search, limit=query.limit)
+
+
+# ── /employees/bulk-import — карточки пачкой ────────────────────────────────
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.BulkImportRequest)
+def employee_bulk_import(request, data: schemas.BulkImportRequest):
+    """Ответ — 200 с отчётом, а не 201: пачка почти всегда частично успешна,
+    и «создано 38, пропущено 2 с причинами» — это результат, а не ошибка."""
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    if not access.can_create_employee:
+        return json_error("Senior HR access required", 403)
+    if not access.can_see_department(data.department_id):
+        return json_error("Department not found", 404)
+
+    try:
+        result = prefill_svc.bulk_import(
+            user_ids=data.user_ids,
+            department_id=data.department_id,
+            position_id=data.position_id,
+            hire_date=data.hire_date,
+            status=data.status,
+            changed_by_id=request.token.user_id,
+        )
+    except _PREFILL_ERRORS as exc:
+        return _prefill_error(exc)
+
+    return {
+        "created": [svc.serialize_employee(emp) for emp in result["created"]],
+        "skipped": result["skipped"],
+        "created_count": len(result["created"]),
+        "skipped_count": len(result["skipped"]),
+    }
 
 
 # ── /employees/ — коллекция ───────────────────────────────────────────────
@@ -602,6 +877,14 @@ def _create_employee(request, data: schemas.EmployeeCreate):
         return json_error("Position not found", 422)
     except emp_svc.EmailAlreadyInUse:
         return json_error("Email already in use", 409)
+    # ``user_id`` в теле запроса раньше писался в модель как есть: несуществующая
+    # учётка проходила молча, занятая другим сотрудником всплывала как
+    # IntegrityError (500). Теперь сервис проверяет её заранее — здесь только
+    # раскладка в коды.
+    except prefill_svc.UserNotFound:
+        return json_error("User not found", 422)
+    except prefill_svc.UserAlreadyLinked:
+        return json_error("User account is already linked to another employee", 409)
     return svc.serialize_employee(employee)
 
 

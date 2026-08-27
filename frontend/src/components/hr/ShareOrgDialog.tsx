@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useTranslation } from 'react-i18next';
+import { copyText } from '@/lib/clipboard';
 
 interface CreatedLink {
   id: string;
@@ -97,7 +98,7 @@ export function ShareOrgDialog({ open, onClose, defaultLanguage = 'ru' }: Props)
 
   const copy = async () => {
     if (!shareUrl) return;
-    await navigator.clipboard.writeText(shareUrl);
+    await copyText(shareUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

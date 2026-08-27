@@ -6,6 +6,8 @@ import { API_ENDPOINTS } from '@/api/endpoints';
 import type {
   Department, Position, Employee, EmployeeStats, HRUserOption,
   Vacancy, Application,
+  PrefillSourceRef, PrefillPreview, MailboxSource, MatchSuggestions,
+  BulkImportResult,
 } from '@/types/hr';
 
 const HR = `${API_ENDPOINTS.hr}/`;
@@ -138,12 +140,19 @@ export const fetchEmployeeUsers = async (params?: Record<string, string>): Promi
   return unwrap<HRUserOption>(res.data);
 };
 
+/**
+ * Завести учётку, не выходя из формы сотрудника.
+ *
+ * `generated_password` приходит ТОЛЬКО отсюда и только один раз: пароль
+ * генерируется сервером и нигде не хранится в открытом виде. Показать его
+ * человеку — обязанность вызывающего, второго шанса не будет.
+ */
 export const createEmployeeUser = async (data: {
   first_name: string;
   last_name: string;
   patronymic?: string;
   email: string;
-}): Promise<HRUserOption> => {
+}): Promise<HRUserOption & { generated_password?: string | null }> => {
   const res = await api.post(`${HR}employees/users/`, data);
   return res.data;
 };
@@ -160,6 +169,89 @@ export const updateEmployee = async (id: number, data: Partial<Employee>): Promi
 
 export const deleteEmployee = async (id: number): Promise<void> => {
   await api.delete(`${HR}employees/${id}/`);
+};
+
+/* ---------- Префилл: перенос уже имеющихся данных в карточку ---------- */
+/*
+ * Предпросмотр и применение — два вызова, а не один: сначала показать
+ * «было → станет», потом записать ровно то, что человек оставил отмеченным.
+ * Заполненное поле не перезаписывается молча — в этом весь смысл разделения.
+ */
+
+/** Корпоративные ящики как источник. `unassigned` — только ничейные. */
+export const fetchMailboxSources = async (
+  params?: { search?: string; unassigned?: boolean },
+): Promise<MailboxSource[]> => {
+  const query = new URLSearchParams();
+  if (params?.search) query.set('search', params.search);
+  if (params?.unassigned) query.set('unassigned', '1');
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  const res = await api.get(`${HR}employees/sources/mailboxes/${suffix}`);
+  return unwrap<MailboxSource>(res.data);
+};
+
+/**
+ * Предпросмотр переноса. `employeeId` не передан — карточку ещё создают,
+ * и все поля вернутся как `fill`.
+ */
+export const previewPrefill = async (
+  source: PrefillSourceRef,
+  employeeId?: number | null,
+): Promise<PrefillPreview> => {
+  const res = await api.post(`${HR}employees/prefill/`, {
+    source,
+    employee_id: employeeId ?? null,
+  });
+  return res.data;
+};
+
+/** Применить отмеченные поля к существующей карточке. */
+export const applyPrefill = async (
+  employeeId: number,
+  source: PrefillSourceRef,
+  fields: string[],
+): Promise<Employee> => {
+  const res = await api.post(`${HR}employees/${employeeId}/prefill/apply`, { source, fields });
+  return normalizeEmployee(res.data);
+};
+
+/** Подсказка «кажется, этот человек уже есть» по тому, что набрано в форме. */
+export const fetchMatchSuggestions = async (params: {
+  email?: string;
+  phone?: string;
+  first_name?: string;
+  last_name?: string;
+  patronymic?: string;
+  exclude_employee_id?: number | null;
+}): Promise<MatchSuggestions> => {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+  });
+  const res = await api.get(`${HR}employees/match-suggestions/?${query.toString()}`);
+  return res.data;
+};
+
+/** Учётки, для которых карточки сотрудника ещё нет. */
+export const fetchImportCandidates = async (search?: string): Promise<HRUserOption[]> => {
+  const query = search ? `?search=${encodeURIComponent(search)}` : '';
+  const res = await api.get(`${HR}employees/import-candidates/${query}`);
+  return unwrap<HRUserOption>(res.data);
+};
+
+/** Завести карточки пачкой. Ответ почти всегда частично успешен — см. `skipped`. */
+export const bulkImportEmployees = async (payload: {
+  user_ids: number[];
+  department_id: number;
+  position_id: number;
+  hire_date: string;
+  status?: string;
+}): Promise<BulkImportResult> => {
+  const res = await api.post(`${HR}employees/bulk-import/`, payload);
+  return {
+    ...res.data,
+    created: (res.data?.created ?? []).map(normalizeEmployee),
+  };
 };
 
 /* ---------- Employee Card ---------- */

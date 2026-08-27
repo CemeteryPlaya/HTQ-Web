@@ -13,10 +13,16 @@ import {
   Plus,
   Search,
   Share2,
+  Sparkles,
   Trash2,
   UserPlus,
+  UsersRound,
 } from 'lucide-react';
 import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
+import EmployeeBulkImportDialog from '@/components/hr/EmployeeBulkImportDialog';
+import EmployeeMatchNotice from '@/components/hr/EmployeeMatchNotice';
+import EmployeePrefillDialog from '@/components/hr/EmployeePrefillDialog';
+import NewAccountCredentials from '@/components/hr/NewAccountCredentials';
 import {
   createEmployee,
   createEmployeeUser,
@@ -241,7 +247,14 @@ const HREmployees = () => {
     date_dismissed: '',
     status: 'active',
     notes: '',
+    last_name: '',
+    first_name: '',
+    middle_name: '',
+    email: '',
+    avatar_url: '',
   });
+  const [prefillOpen, setPrefillOpen] = useState(false);
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
 
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -251,46 +264,46 @@ const HREmployees = () => {
       const backendStatus = STATUS_TO_BACKEND[form.status] || 'active';
 
       if (editing) {
-        // EmployeeUpdate — every field optional. Only send what changed.
+        // EmployeeUpdate — все поля необязательны, шлём только заполненное.
         const patch: Record<string, unknown> = {
           status: backendStatus,
           phone: form.phone || undefined,
           bio: form.notes || undefined,
+          first_name: form.first_name || undefined,
+          last_name: form.last_name || undefined,
+          middle_name: form.middle_name || undefined,
+          email: form.email || undefined,
+          avatar_url: form.avatar_url || undefined,
         };
         if (form.position !== 'none') patch.position_id = Number(form.position);
         if (form.department !== 'none') patch.department_id = Number(form.department);
         if (form.date_dismissed) patch.termination_date = form.date_dismissed;
-        // eslint-disable-next-line no-console
-        console.debug('[hr.employees] update payload', editing.id, patch);
-        const res = await api.put(`hr/v1/employees/${editing.id}/`, patch);
-        return res.data;
+        return updateEmployee(editing.id, patch as Partial<Employee>);
       }
 
       // EmployeeCreate — first_name / last_name / email / department_id /
-      // position_id / hire_date are all REQUIRED by the backend. We pull
-      // name+email from the selected user record.
+      // position_id / hire_date обязательны на бэкенде. Значения берутся из
+      // формы: их туда либо ввели руками, либо перенесли из источника
+      // (учётка, коллега, почтовый ящик) — форме незачем знать, откуда.
       const selected = users?.find((u) => String(u.id) === form.user);
-      if (!selected) throw new Error('user_required');
 
-      const [splitFirst = '', ...splitRest] = (selected.full_name || '').trim().split(/\s+/);
-      const splitLast = splitRest.join(' ');
-
-      const payload = {
-        user_id: selected.id,
-        first_name: selected.first_name || splitFirst || 'Unknown',
-        last_name: selected.last_name || splitLast || '',
-        email: selected.email,
+      const payload: Record<string, unknown> = {
+        first_name: form.first_name || selected?.first_name || 'Unknown',
+        last_name: form.last_name || selected?.last_name || '',
+        middle_name: form.middle_name || undefined,
+        email: form.email || selected?.email,
         phone: form.phone || undefined,
+        avatar_url: form.avatar_url || undefined,
         department_id: Number(form.department),
         position_id: Number(form.position),
         hire_date: form.date_hired,
         status: backendStatus,
         bio: form.notes || undefined,
       };
-      // eslint-disable-next-line no-console
-      console.debug('[hr.employees] create payload', payload);
-      const res = await api.post('hr/v1/employees/', payload);
-      return res.data;
+      // Учётка необязательна: карточку заводят и на человека, которого в
+      // платформе ещё нет, — привязать её можно позже.
+      if (selected) payload.user_id = selected.id;
+      return createEmployee(payload as Partial<Employee>);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['hr-employees'] });
@@ -302,6 +315,7 @@ const HREmployees = () => {
       setForm({
         user: 'none', position: 'none', department: 'none', phone: '',
         date_hired: '', date_dismissed: '', status: 'active', notes: '',
+        last_name: '', first_name: '', middle_name: '', email: '', avatar_url: '',
       });
     },
     onError: (err: any) => {
@@ -350,8 +364,14 @@ const HREmployees = () => {
   const handleSave = () => {
     const errs: Record<string, string> = {};
     if (!editing) {
-      if (form.user === 'none' || !form.user) {
-        errs.user = t('hr.pages.employees.errors.userRequired', 'Выберите пользователя');
+      // Учётка больше НЕ обязательна: карточку заводят и на человека, которого
+      // в платформе ещё нет (данные пришли из ящика или введены руками), а
+      // привязать учётку можно позже. Обязательно то, что требует модель.
+      if (!form.last_name.trim()) {
+        errs.last_name = t('hr.pages.employees.errors.lastNameRequired', 'Укажите фамилию');
+      }
+      if (!form.email.trim()) {
+        errs.email = t('hr.pages.employees.errors.emailRequired', 'Укажите email');
       }
       if (form.department === 'none') {
         errs.department = t('hr.pages.employees.errors.departmentRequired', 'Выберите отдел');
@@ -376,6 +396,12 @@ const HREmployees = () => {
   const [userPopoverOpen, setUserPopoverOpen] = useState(false);
   const [createUserOpen, setCreateUserOpen] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ first_name: '', last_name: '', patronymic: '', email: '' });
+  // Доступы только что заведённой учётки. Живут до закрытия диалога:
+  // пароль нигде больше не хранится, и тост здесь не годится —
+  // случайно смахнув его, человек теряет единственный способ войти.
+  const [createdCredentials, setCreatedCredentials] = useState<
+    { email: string; password: string } | null
+  >(null);
 
   const [positionPopoverOpen, setPositionPopoverOpen] = useState(false);
   const [createPositionOpen, setCreatePositionOpen] = useState(false);
@@ -503,10 +529,25 @@ const HREmployees = () => {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['hr-employee-users'] });
-      setForm((prev) => ({ ...prev, user: String(data.id) }));
-      setCreateUserOpen(false);
+      // Учётка выбрана в форме, а её данные сразу уезжают в поля карточки —
+      // ради этого её и заводили, не выходя из формы сотрудника.
+      setForm((prev) => ({
+        ...prev,
+        user: String(data.id),
+        first_name: data.first_name || prev.first_name,
+        last_name: data.last_name || prev.last_name,
+        middle_name: data.patronymic || prev.middle_name,
+        email: data.email || prev.email,
+      }));
       setNewUserForm({ first_name: '', last_name: '', patronymic: '', email: '' });
       setUserPopoverOpen(false);
+      // Диалог НЕ закрывается: сначала человек забирает пароль. Без него
+      // заведённая учётка бесполезна — войти ею будет нечем.
+      if (data.generated_password) {
+        setCreatedCredentials({ email: data.email, password: data.generated_password });
+      } else {
+        setCreateUserOpen(false);
+      }
     },
   });
 
@@ -517,6 +558,7 @@ const HREmployees = () => {
     setForm({
       user: 'none', position: 'none', department: 'none', phone: '',
       date_hired: '', date_dismissed: '', status: 'active', notes: '',
+      last_name: '', first_name: '', middle_name: '', email: '', avatar_url: '',
     });
     setDialogOpen(true);
   };
@@ -543,6 +585,11 @@ const HREmployees = () => {
       date_dismissed: emp.termination_date || emp.date_dismissed || '',
       status: emp.status || 'active',
       notes: emp.bio || emp.notes || '',
+      last_name: emp.last_name || '',
+      first_name: emp.first_name || '',
+      middle_name: emp.middle_name || '',
+      email: emp.email || '',
+      avatar_url: emp.avatar_url || '',
     });
     setDialogOpen(true);
   };
@@ -620,6 +667,16 @@ const HREmployees = () => {
               </div>
             </div>
 
+            {canCreateEmployee && canListUserOptions && (
+              <Button
+                variant="outline"
+                className="h-9 gap-2 rounded-xl font-semibold shrink-0"
+                onClick={() => setBulkImportOpen(true)}
+              >
+                <UsersRound className="h-4 w-4" />
+                {t('hr.pages.employees.import.open', 'Импорт из пользователей')}
+              </Button>
+            )}
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               {canCreateEmployee && (
                 <DialogTrigger asChild>
@@ -634,14 +691,31 @@ const HREmployees = () => {
                 <DialogTitle>{editing ? t('hr.pages.employees.edit') : t('hr.pages.employees.new')}</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
+                {/* «Подтянуть данные» доступно и при создании, и при
+                    редактировании: в режиме правки это единственный способ
+                    привязать учётку к уже заведённой карточке (PATCH поле
+                    user_id не принимает). */}
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => setPrefillOpen(true)}
+                    disabled={editing ? !canWriteBasic : !canCreateEmployee}
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {t('hr.pages.employees.prefill.open', 'Подтянуть данные')}
+                  </Button>
+                </div>
                 <div className="grid gap-4 md:grid-cols-2">
                   {editing ? (
                     <label className="grid gap-2 text-sm">
                       {t('hr.pages.employees.fields.user')}
                       <Input
-                        value={`${editing.full_name
-                          || [editing.last_name, editing.first_name, editing.middle_name].filter(Boolean).join(' ')
-                          || editing.email} (${editing.email})`}
+                        value={editing.user_id
+                          ? `${users?.find((u) => u.id === editing.user_id)?.full_name || `#${editing.user_id}`}`
+                          : t('hr.pages.employees.prefill.noAccount', 'Учётная запись не привязана')}
                         readOnly
                       />
                     </label>
@@ -692,7 +766,22 @@ const HREmployees = () => {
                                     key={u.id}
                                     value={`${u.full_name} ${u.email}`}
                                     onSelect={() => {
-                                      setForm({ ...form, user: String(u.id) });
+                                      // Выбор учётки — это и есть «подтянуть»:
+                                      // раньше отсюда уезжали только имя,
+                                      // фамилия и почта, хотя телефон, отчество
+                                      // и аватар в учётке уже были. Пустое поле
+                                      // учётки не затирает введённое руками.
+                                      setForm({
+                                        ...form,
+                                        user: String(u.id),
+                                        first_name: u.first_name || form.first_name,
+                                        last_name: u.last_name || form.last_name,
+                                        middle_name: u.patronymic || form.middle_name,
+                                        email: u.email || form.email,
+                                        phone: u.phone || form.phone,
+                                        avatar_url: u.avatar_url || form.avatar_url,
+                                        notes: u.bio || form.notes,
+                                      });
                                       setUserPopoverOpen(false);
                                     }}
                                   >
@@ -735,6 +824,68 @@ const HREmployees = () => {
                     </Select>
                   </label>
                 </div>
+
+                {/* ФИО и почта — собственные поля карточки. Раньше их
+                    брали из выбранной учётки в момент отправки, и завести
+                    сотрудника без учётки было нельзя в принципе. */}
+                <div className="grid gap-4 md:grid-cols-3">
+                  <label className="grid gap-2 text-sm">
+                    {t('hr.pages.employees.fields.lastName')}
+                    <Input
+                      value={form.last_name}
+                      readOnly={!canWriteBasic}
+                      onChange={(e) => setForm({ ...form, last_name: e.target.value })}
+                    />
+                    {fieldErrors.last_name && (
+                      <span className="text-xs text-destructive">{fieldErrors.last_name}</span>
+                    )}
+                  </label>
+                  <label className="grid gap-2 text-sm">
+                    {t('hr.pages.employees.fields.firstName')}
+                    <Input
+                      value={form.first_name}
+                      readOnly={!canWriteBasic}
+                      onChange={(e) => setForm({ ...form, first_name: e.target.value })}
+                    />
+                  </label>
+                  <label className="grid gap-2 text-sm">
+                    {t('hr.pages.employees.fields.patronymic')}
+                    <Input
+                      value={form.middle_name}
+                      readOnly={!canWriteBasic}
+                      onChange={(e) => setForm({ ...form, middle_name: e.target.value })}
+                    />
+                  </label>
+                </div>
+
+                <label className="grid gap-2 text-sm">
+                  {t('hr.pages.employees.fields.email')}
+                  <Input
+                    type="email"
+                    value={form.email}
+                    readOnly={!canWriteBasic}
+                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  />
+                  {fieldErrors.email && (
+                    <span className="text-xs text-destructive">{fieldErrors.email}</span>
+                  )}
+                </label>
+
+                {/* Подсказка о совпадении. Появляется, только когда набрано
+                    что-то опознающее (почта, телефон или ФИО целиком) — см.
+                    matchQueryIsAnswerable. */}
+                {canCreateEmployee && (
+                  <EmployeeMatchNotice
+                    email={form.email}
+                    phone={form.phone}
+                    firstName={form.first_name}
+                    lastName={form.last_name}
+                    patronymic={form.middle_name}
+                    excludeEmployeeId={editing?.id ?? null}
+                    onOpenEmployee={(employee) => navigate(`/hr/employees/${employee.id}`)}
+                    onUseUser={() => setPrefillOpen(true)}
+                  />
+                )}
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="grid gap-2 text-sm">
@@ -871,13 +1022,50 @@ const HREmployees = () => {
                 )}
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" onClick={() => setDialogOpen(false)}>{t('hr.common.cancel')}</Button>
-                  <Button onClick={handleSave} disabled={(!editing && form.user === 'none') || saveMutation.isPending}>
+                  <Button onClick={handleSave} disabled={saveMutation.isPending}>
                     {saveMutation.isPending ? t('hr.common.saving') : t('hr.common.save')}
                   </Button>
                 </div>
               </div>
             </DialogContent>
           </Dialog>
+
+          {/* Диалог префилла обслуживает оба режима: при создании отдаёт
+              значения в форму, при правке сам сохраняет отмеченное. */}
+          <EmployeePrefillDialog
+            open={prefillOpen}
+            onOpenChange={setPrefillOpen}
+            employeeId={editing?.id ?? null}
+            canUseAccountSources={canListUserOptions}
+            onApplyToForm={(values) => {
+              setForm((prev) => ({
+                ...prev,
+                last_name: (values.last_name as string) ?? prev.last_name,
+                first_name: (values.first_name as string) ?? prev.first_name,
+                middle_name: (values.middle_name as string) ?? prev.middle_name,
+                email: (values.email as string) ?? prev.email,
+                phone: (values.phone as string) ?? prev.phone,
+                avatar_url: (values.avatar_url as string) ?? prev.avatar_url,
+                notes: (values.bio as string) ?? prev.notes,
+                department: values.department_id ? String(values.department_id) : prev.department,
+                position: values.position_id ? String(values.position_id) : prev.position,
+                user: values.user_id ? String(values.user_id) : prev.user,
+              }));
+            }}
+            onApplied={(employee) => {
+              queryClient.invalidateQueries({ queryKey: ['hr-employees'] });
+              // Карточка уже сохранена сервером — перечитываем её в форму,
+              // чтобы «Сохранить» не отправил следом устаревшие значения.
+              startEdit(employee);
+            }}
+          />
+
+          <EmployeeBulkImportDialog
+            open={bulkImportOpen}
+            onOpenChange={setBulkImportOpen}
+            departments={departments ?? []}
+            positions={positions ?? []}
+          />
         </div>
         </div>
 
@@ -1209,11 +1397,26 @@ const HREmployees = () => {
       </Dialog>
 
       {/* Create User Dialog */}
-      <Dialog open={createUserOpen} onOpenChange={setCreateUserOpen}>
+      <Dialog
+        open={createUserOpen}
+        onOpenChange={(open) => {
+          setCreateUserOpen(open);
+          if (!open) setCreatedCredentials(null);
+        }}
+      >
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t('hr.pages.employees.createUserTitle')}</DialogTitle>
           </DialogHeader>
+          {createdCredentials ? (
+            <NewAccountCredentials
+              credentials={createdCredentials}
+              onDone={() => {
+                setCreatedCredentials(null);
+                setCreateUserOpen(false);
+              }}
+            />
+          ) : (
           <div className="grid gap-4">
             <label className="grid gap-2 text-sm">
               {t('hr.pages.employees.fields.lastName')}
@@ -1261,6 +1464,7 @@ const HREmployees = () => {
               </p>
             )}
           </div>
+          )}
         </DialogContent>
       </Dialog>
     </>

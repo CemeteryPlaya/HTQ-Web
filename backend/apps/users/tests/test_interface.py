@@ -217,12 +217,40 @@ def test_list_users_brief_raises_when_users_disabled(alice):
 @pytest.mark.django_db
 def test_create_user_shape():
     row = interface.create_user(email="Newton@HTQ.test", first_name="Isaac", last_name="Newton")
-    assert set(row) == OPTION_FIELDS
+    # Шире option-формы ровно на временный пароль: без него заведённой
+    # учёткой невозможно войти — он генерируется случайным и в базе лежит
+    # только хешем (см. докстринг create_user).
+    assert set(row) == OPTION_FIELDS | {"generated_password"}
     assert row["email"] == "newton@htq.test"
     assert row["first_name"] == "Isaac"
     assert row["last_name"] == "Newton"
     assert row["full_name"] == "Isaac Newton"
     assert row["is_active"] is True
+
+
+@pytest.mark.django_db
+def test_create_user_password_authenticates():
+    """Пароль в ответе — не украшение: им должно получаться войти."""
+    from apps.users.services import auth_service
+
+    row = interface.create_user(email="works@htq.test", first_name="It", last_name="Works")
+    user = auth_service.authenticate("works@htq.test", row["generated_password"])
+    assert user.id == row["id"]
+
+
+@pytest.mark.django_db
+def test_listing_functions_never_return_a_password(alice):
+    """Пароль отдаётся ТОЛЬКО при создании.
+
+    Списки и брифы строятся другими построителями словаря, и если пароль
+    однажды просочится в общую форму, утечёт он именно здесь.
+    """
+    interface.create_user(email="secret@htq.test", first_name="No", last_name="Leak")
+
+    for row in interface.list_users_brief() + interface.list_user_prefills():
+        assert "generated_password" not in row
+    assert "generated_password" not in interface.get_user_brief(alice.id)
+    assert "generated_password" not in interface.get_user_prefill(alice.id)
 
 
 @pytest.mark.django_db
@@ -265,3 +293,119 @@ def test_create_user_raises_when_users_disabled():
     _disable_users()
     with pytest.raises(ServiceDisabled):
         interface.create_user(email="whatever@htq.test")
+
+
+# ── prefill-группа: учётка как источник данных для карточки сотрудника ─────
+
+PREFILL_FIELDS = {"id", "username", "email", "full_name", "first_name", "last_name",
+                  "patronymic", "phone", "avatar_url", "bio", "is_active"}
+
+
+@pytest.fixture
+def rich(db):
+    """Учётка со всем, что вообще может уехать в карточку сотрудника."""
+    u = User.objects.create(
+        username="rich", email="rich@htq.test", status=UserStatus.ACTIVE,
+        first_name="Пётр", last_name="Петров", patronymic="Сергеевич",
+        phone="+7 (700) 483-55-81", avatar_url="/media/a.png", bio="Про меня",
+    )
+    u.set_password("S3cret!")
+    u.save()
+    return u
+
+
+@pytest.mark.django_db
+def test_get_user_prefill_shape(rich):
+    row = interface.get_user_prefill(rich.id)
+    assert set(row) == PREFILL_FIELDS
+    assert row["patronymic"] == "Сергеевич"
+    assert row["phone"] == "+7 (700) 483-55-81"
+    assert row["bio"] == "Про меня"
+
+
+@pytest.mark.django_db
+def test_get_user_prefill_unknown_id_is_none(db):
+    assert interface.get_user_prefill(999999) is None
+
+
+@pytest.mark.django_db
+def test_get_user_prefill_raises_when_users_disabled(rich):
+    _disable_users()
+    with pytest.raises(ServiceDisabled):
+        interface.get_user_prefill(rich.id)
+
+
+@pytest.mark.django_db
+def test_list_user_prefills_searches_like_brief(rich, alice):
+    rows = interface.list_user_prefills(search="петров")
+    assert [row["id"] for row in rows] == [rich.id]
+
+
+@pytest.mark.django_db
+def test_list_user_prefills_includes_inactive(db):
+    """Статус не фильтруется намеренно: карточку заводят и на неподтверждённую
+    учётку, иначе её нечем связать (см. докстринг функции)."""
+    pending = User.objects.create(username="pending", email="pending@htq.test",
+                                  status=UserStatus.PENDING, last_name="Ждущий")
+    rows = interface.list_user_prefills(search="Ждущий")
+    assert [row["id"] for row in rows] == [pending.id]
+    assert rows[0]["is_active"] is False
+
+
+@pytest.mark.django_db
+def test_find_user_matches_empty_input_returns_nothing(rich):
+    """Пустая форма не должна превращаться в выгрузку справочника."""
+    assert interface.find_user_matches() == []
+
+
+@pytest.mark.django_db
+def test_find_user_matches_by_email_is_exact(rich):
+    rows = interface.find_user_matches(email="RICH@HTQ.TEST")
+    assert [row["id"] for row in rows] == [rich.id]
+    assert rows[0]["match_kind"] == "exact"
+    assert rows[0]["match_on"] == ["email"]
+
+
+@pytest.mark.django_db
+def test_find_user_matches_phone_ignores_formatting(rich):
+    """``+7 (700) 483-55-81`` и ``87004835581`` — один и тот же номер."""
+    rows = interface.find_user_matches(phone="8 700 483 55 81")
+    assert [row["id"] for row in rows] == [rich.id]
+    assert rows[0]["match_on"] == ["phone"]
+
+
+@pytest.mark.django_db
+def test_find_user_matches_short_phone_is_not_answered(rich):
+    assert interface.find_user_matches(phone="5581") == []
+
+
+@pytest.mark.django_db
+def test_find_user_matches_by_name_is_only_similar(rich):
+    """Однофамильцы реальны — совпадение по ФИО не выдаётся за точное."""
+    rows = interface.find_user_matches(first_name="Пётр", last_name="Петров")
+    assert [row["id"] for row in rows] == [rich.id]
+    assert rows[0]["match_kind"] == "similar"
+
+
+@pytest.mark.django_db
+def test_find_user_matches_merges_reasons_and_prefers_exact(rich):
+    rows = interface.find_user_matches(
+        email="rich@htq.test", first_name="Пётр", last_name="Петров",
+        patronymic="Сергеевич",
+    )
+    assert len(rows) == 1
+    assert set(rows[0]["match_on"]) == {"email", "full_name", "patronymic"}
+    assert rows[0]["match_kind"] == "exact"
+
+
+@pytest.mark.django_db
+def test_find_user_matches_orders_exact_email_first(rich, db):
+    """Порядок оснований: сначала точный email, потом однофамильцы."""
+    namesake = User.objects.create(username="namesake", email="other@htq.test",
+                                   status=UserStatus.ACTIVE,
+                                   first_name="Пётр", last_name="Петров")
+    rows = interface.find_user_matches(
+        email="rich@htq.test", first_name="Пётр", last_name="Петров",
+    )
+    assert [row["id"] for row in rows][0] == rich.id
+    assert namesake.id in [row["id"] for row in rows]

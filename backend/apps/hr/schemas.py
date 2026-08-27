@@ -208,6 +208,81 @@ class EmployeeListQuery(BaseModel):
     limit: int = Field(default=20, ge=1, le=200)
 
 
+# ── префилл сотрудника (перенос уже имеющихся данных) ───────────────────────
+#
+# Схемы для apps/hr/services/employee_prefill_service.py. Тип источника
+# валидируется паттерном, а не Literal, — тем же приёмом, что ``status`` выше
+# (``_STATUS_PATTERN``): 422 с внятным сообщением вместо голого
+# "Input should be 'user', 'employee' or 'mailbox'".
+
+_SOURCE_TYPE_PATTERN = r"^(user|employee|mailbox)$"
+
+
+class PrefillSource(BaseModel):
+    """Откуда берём данные: учётка, соседняя карточка или почтовый ящик."""
+
+    type: str = Field(..., pattern=_SOURCE_TYPE_PATTERN)
+    id: int
+
+
+class PrefillPreviewRequest(BaseModel):
+    """``POST /employees/prefill`` — показать «было → станет», ничего не писать.
+
+    ``employee_id=None`` означает «карточку ещё создают»: сравнивать не с чем,
+    все поля вернутся как ``fill``.
+    """
+
+    source: PrefillSource
+    employee_id: int | None = None
+
+
+class PrefillApplyRequest(BaseModel):
+    """``POST /employees/{id}/prefill/apply`` — записать отмеченные поля.
+
+    ``fields`` — то, что человек оставил отмеченным в предпросмотре. Сервис
+    всё равно сверит список с собственным diff: поле, которого в предпросмотре
+    не было, в карточку не попадёт (см. докстринг ``apply_prefill``).
+    """
+
+    source: PrefillSource
+    fields: list[str] = Field(default_factory=list)
+
+
+class MatchSuggestQuery(BaseModel):
+    """``GET /employees/match-suggestions`` — подсказка по мере заполнения.
+
+    Все поля необязательны: форма спрашивает по тому, что уже набрано. Всё
+    пустое → пустой ответ (см. ``suggest_matches``), а не выгрузка справочника.
+    """
+
+    email: str = ""
+    phone: str = ""
+    first_name: str = ""
+    last_name: str = ""
+    patronymic: str = ""
+    exclude_employee_id: int | None = None
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+class ImportCandidatesQuery(BaseModel):
+    search: str | None = None
+    limit: int = Field(default=200, ge=1, le=500)
+
+
+class BulkImportRequest(BaseModel):
+    """``POST /employees/bulk-import`` — карточки пачкой из выбранных учёток.
+
+    Отдел, должность, дата приёма и статус — общие на всю пачку: это ровно
+    те поля, которых учётка не знает.
+    """
+
+    user_ids: list[int] = Field(..., min_length=1, max_length=200)
+    department_id: int
+    position_id: int
+    hire_date: date
+    status: str = Field(default="active", pattern=_STATUS_PATTERN)
+
+
 # ── org — порт services/hr/app/api/v1/org.py (схемы были inline в роутере) ──
 
 RelationTypeLiteral = Literal["direct", "functional", "project"]

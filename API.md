@@ -294,7 +294,13 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/hr/v1/employees/{id}/`              | GET, PATCH, DELETE |                       |
 | `/api/hr/v1/employees/me`                 | GET    | Current user's own employee row |
 | `/api/hr/v1/employees/me/card`            | GET    | Т-2 employee card (field-gated) |
-| `/api/hr/v1/employees/users/`             | GET, POST | User picker for "create employee from user"; POST creates the platform user via `apps.users.interface.create_user` |
+| `/api/hr/v1/employees/users/`             | GET, POST | User picker for "create employee from user" (`?search=`, `?limit=`); each row carries the data that can be pulled into a card plus `employee_id` ("already has a card"). POST creates the platform user via `apps.users.interface.create_user` |
+| `/api/hr/v1/employees/sources/mailboxes`  | GET    | Corporate mailboxes as a prefill source (`?search=`, `?unassigned=1`). Empty list — not 503 — when `apps.mail` is disabled |
+| `/api/hr/v1/employees/prefill`            | POST   | Preview a transfer: `{source: {type: user\|employee\|mailbox, id}, employee_id?}` → per-field `fill`/`conflict`/`same` diff. Writes nothing |
+| `/api/hr/v1/employees/{id}/prefill/apply` | POST   | Apply the ticked fields only; a field absent from the preview is ignored. `department_id`/`position_id` additionally require the transfer permission |
+| `/api/hr/v1/employees/match-suggestions`  | GET    | "This person may already exist": similar user accounts and similar employee cards, by email/phone/name |
+| `/api/hr/v1/employees/import-candidates`  | GET    | User accounts that have no employee card yet |
+| `/api/hr/v1/employees/bulk-import`        | POST   | Create cards in one batch; answers with `{created, skipped: [{user_id, reason}]}` — a partially successful batch is a result, not an error |
 | `/api/hr/v1/departments/`                 | GET, POST | Tree (`ltree path`)         |
 | `/api/hr/v1/departments/tree`             | GET    | Full tree                      |
 | `/api/hr/v1/positions/`                   | GET, POST |                              |

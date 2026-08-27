@@ -14,7 +14,9 @@ from __future__ import annotations
 import datetime
 
 import pytest
+from django.core.cache import cache
 
+from apps.core.models import ServiceStatus
 from apps.mail import interface
 from apps.mail.models import AccountType, EmailAccount, OAuthToken, ProvisionedMailbox
 
@@ -109,3 +111,83 @@ def test_archive_user_mailboxes_does_both_cascades_together():
     mb.refresh_from_db()
     assert personal.is_active is False
     assert mb.status == "archived"
+
+
+# ── ящик как источник данных для карточки сотрудника ──────────────────────
+#
+# Потребитель — apps.hr (форма сотрудника, вкладка «Почтовый ящик»). Главное
+# в контракте не форма ответа, а поведение при выключенной аппке: «источника
+# нет» вместо 503 на всю форму.
+
+BRIEF_FIELDS = {"id", "address", "local_part", "domain", "display_name",
+                "user_id", "status"}
+
+
+def _mailbox(local_part: str, **kw) -> ProvisionedMailbox:
+    defaults = dict(local_part=local_part, domain="htq.group",
+                    address=f"{local_part}@htq.group")
+    defaults.update(kw)
+    return ProvisionedMailbox.objects.create(**defaults)
+
+
+@pytest.mark.django_db
+def test_list_mailboxes_brief_shape():
+    _mailbox("i.ivanov", display_name="Иван Иванов")
+    rows = interface.list_mailboxes_brief()
+    assert len(rows) == 1
+    assert set(rows[0]) == BRIEF_FIELDS
+    assert rows[0]["address"] == "i.ivanov@htq.group"
+    assert rows[0]["display_name"] == "Иван Иванов"
+
+
+@pytest.mark.django_db
+def test_list_mailboxes_brief_excludes_deleted():
+    """Удалённая строка — надгробие, а не ящик, который можно выбрать."""
+    _mailbox("alive")
+    _mailbox("gone", status="deleted")
+    assert [row["local_part"] for row in interface.list_mailboxes_brief()] == ["alive"]
+
+
+@pytest.mark.django_db
+def test_list_mailboxes_brief_unassigned_only():
+    _mailbox("free")
+    _mailbox("taken", user_id=42)
+    rows = interface.list_mailboxes_brief(unassigned_only=True)
+    assert [row["local_part"] for row in rows] == ["free"]
+
+
+@pytest.mark.django_db
+def test_list_mailboxes_brief_search_covers_address_and_name():
+    _mailbox("s.sidorov", display_name="Семён Сидоров")
+    _mailbox("other", display_name="Кто-то Другой")
+    assert len(interface.list_mailboxes_brief(search="sidorov")) == 1
+    assert len(interface.list_mailboxes_brief(search="Семён")) == 1
+
+
+@pytest.mark.django_db
+def test_get_mailbox_brief_unknown_is_none():
+    assert interface.get_mailbox_brief(999999) is None
+
+
+@pytest.mark.django_db
+def test_get_mailbox_brief_deleted_is_none():
+    mb = _mailbox("gone", status="deleted")
+    assert interface.get_mailbox_brief(mb.id) is None
+
+
+@pytest.mark.django_db
+def test_brief_functions_degrade_quietly_when_mail_disabled():
+    """Выключенная почта = «выбирать не из чего», а НЕ 503 на форму соседа.
+
+    Отличие от остальных функций этого модуля намеренное — тот же принцип,
+    что у ``provision_mailbox``.
+    """
+    mb = _mailbox("x")
+    ServiceStatus.objects.update_or_create(app_label="mail", defaults={"enabled": False})
+    cache.clear()  # флаг сервиса кэшируется на 5 секунд
+    try:
+        assert interface.list_mailboxes_brief() == []
+        assert interface.get_mailbox_brief(mb.id) is None
+    finally:
+        ServiceStatus.objects.filter(app_label="mail").update(enabled=True)
+        cache.clear()

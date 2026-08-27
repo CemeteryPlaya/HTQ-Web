@@ -26,6 +26,7 @@ import {
   ConferenceInvite, createInvite, joinUrl, listInvites, revokeInvite, sendInvite,
 } from '@/api/conference';
 import { createCalendarEvent, fetchCalendarUserOptions } from '@/api/calendar';
+import { copyText } from '@/lib/clipboard';
 
 interface Props {
   roomId: string;
@@ -138,7 +139,7 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
 
   const copy = async (url: string) => {
     try {
-      await navigator.clipboard.writeText(url);
+      await copyText(url);
       setCopied(url);
       window.setTimeout(() => setCopied(null), 2000);
     } catch {

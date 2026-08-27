@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { cmsApi } from '@/api/cms';
 import type { NewsItem } from '@/types/news';
 import { useTranslation } from 'react-i18next';
+import { copyText } from '@/lib/clipboard';
 
 type Lang = 'ru' | 'en' | 'kk';
 
@@ -177,7 +178,7 @@ const NewsDetail = () => {
                             url: window.location.href,
                           }).catch(console.error);
                         } else {
-                          navigator.clipboard.writeText(window.location.href);
+                          void copyText(window.location.href);
                           toast.success(t('common.linkCopied'));
                         }
                       }}

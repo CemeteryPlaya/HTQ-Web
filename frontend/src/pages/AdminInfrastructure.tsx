@@ -38,6 +38,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
+import { copyText } from '@/lib/clipboard';
 
 type CredentialField = {
     key: string;
@@ -316,7 +317,7 @@ const AdminInfrastructure = () => {
 
     const copyValue = async (field: CredentialField) => {
         if (!field.copyable || !field.value) return;
-        await navigator.clipboard.writeText(field.value);
+        await copyText(field.value);
         toast.success(t('admin.infrastructure.copied', { label: field.label }));
     };
 

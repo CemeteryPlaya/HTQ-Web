@@ -45,6 +45,11 @@ email, временный пароль генерируется здесь же,
 права ловить исключения из ``apps.users.services.admin_service`` напрямую
 (test_app_isolation.py запрещает даже импорт), только из ``apps.users.
 interface``.
+
+``get_user_prefill``/``list_user_prefills``/``find_user_matches`` — третья
+группа: учётка как ИСТОЧНИК ДАННЫХ для карточки сотрудника (apps.hr), а не
+как пункт списка. Отдельная форма ответа, шире брифа ровно на те колонки,
+которые есть и в ``Employee``; подробности — в комментарии над ними.
 """
 from __future__ import annotations
 
@@ -53,6 +58,8 @@ from types import SimpleNamespace
 from typing import Iterable
 
 from django.db.models import Q
+
+from htqweb import phone as phone_utils
 
 from apps.core.services import require_service
 from apps.users.models import User, UserStatus
@@ -233,21 +240,38 @@ def create_user(*, email: str, first_name: str = "", last_name: str = "",
     rather than duplicating it — this function only adds the bits the
     source's ``create_user_option`` did locally before calling user-service:
     deriving ``username`` from the email local-part and minting a random
-    temp password the caller never sees or needs (``must_change_password``
-    forces a reset on first login). Raises this module's own
-    ``DuplicateEmail``/``DuplicateUsername`` (never ``admin_service``'s —
-    neighbours may not import ``apps.users.services``, only this module) so
-    the caller can map them to 409 without knowing admin_service exists."""
+    temp password. Raises this module's own ``DuplicateEmail``/
+    ``DuplicateUsername`` (never ``admin_service``'s — neighbours may not
+    import ``apps.users.services``, only this module) so the caller can map
+    them to 409 without knowing admin_service exists.
+
+    **``generated_password`` в ответе — единственный раз, когда этот модуль
+    отдаёт секрет, и это исправление, а не послабление.** Раньше временный
+    пароль генерировался «для себя» и не показывался никому: HR заводил
+    сотрудника, сотрудник не мог войти, а узнать пароль было неоткуда —
+    оставался только сброс через ``/admin/users``. Флаг
+    ``must_change_password`` эту дыру не закрывает: он срабатывает ПОСЛЕ
+    входа, а входа-то и не было.
+
+    Пароль возвращается ТОЛЬКО отсюда и ТОЛЬКО при создании — ни
+    ``get_user_prefill``, ни ``list_user_prefills``, ни ``list_users_brief``
+    его не несут и нести не могут (у них другой построитель словаря). Тот
+    же приём уже применён к почтовым ящикам: ``mailbox_service`` отдаёт
+    ``generated_password`` в ответе на создание и нигде больше.
+
+    Вызывающий обязан показать пароль человеку сразу — второго шанса нет,
+    в базе лежит только хеш."""
     require_service("users")
     email_norm = (email or "").strip().lower()
     username = _derive_username(email_norm)
     display_name = f"{first_name} {last_name}".strip() or username
+    password = secrets.token_urlsafe(12)
 
     try:
         user = admin_service.create_user(
             username=username,
             email=email_norm,
-            password=secrets.token_urlsafe(12),
+            password=password,
             first_name=first_name,
             last_name=last_name,
             patronymic=patronymic,
@@ -267,4 +291,155 @@ def create_user(*, email: str, first_name: str = "", last_name: str = "",
 
     mail_interface.attach_mailbox_by_email(user_id=user.id, email=email_norm)
 
-    return _option_from_user(user)
+    # Отдельным ключом, а не полем option-формы: ``_option_from_user`` строит
+    # и строки СПИСКА тоже, и пароль в них попасть не должен ни при какой
+    # правке этой функции.
+    return {**_option_from_user(user), "generated_password": password}
+
+
+# ── Префилл карточки сотрудника ───────────────────────────────────────────
+#
+# Третья группа функций (задача «подтянуть уже имеющиеся данные из
+# Пользователей в Сотрудников»). Отличие от ``list_users_brief``/
+# ``_option_from_user`` — не в наборе потребителей, а в НАЗНАЧЕНИИ формы:
+# brief/option описывают пользователя как ПУНКТ СПИСКА (кого выбрать), а
+# prefill — как ИСТОЧНИК ДАННЫХ (что перенести в чужую карточку). Поэтому
+# сюда добавлены ровно те колонки, которые есть и у сотрудника
+# (``patronymic``→``middle_name``, ``phone``, ``avatar_url``, ``bio``), и ни
+# одной сверх: settings/roles/пароль к переносу отношения не имеют.
+#
+# Расширять brief-форму вместо новой было нельзя: её потребители (messenger,
+# tasks, approvals, signoff) рисуют имя в списке, и таскать ради них био с
+# телефоном каждого участника чата — лишние данные на границе аппок.
+
+_PREFILL_FIELDS = ("id", "username", "email", "first_name", "last_name",
+                   "patronymic", "phone", "avatar_url", "bio",
+                   "display_name", "status")
+
+
+def _prefill_from_values(row: dict) -> dict:
+    stub = SimpleNamespace(first_name=row["first_name"], last_name=row["last_name"],
+                           display_name=row["display_name"], username=row["username"])
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "email": row["email"],
+        "full_name": full_name_for(stub),
+        "first_name": row["first_name"],
+        "last_name": row["last_name"],
+        "patronymic": row["patronymic"],
+        "phone": row["phone"],
+        "avatar_url": row["avatar_url"],
+        "bio": row["bio"],
+        "is_active": row["status"] == UserStatus.ACTIVE,
+    }
+
+
+def get_user_prefill(user_id: int) -> dict | None:
+    """Данные учётки как источник для чужой карточки, либо ``None``.
+
+    Форма — ``{id, username, email, full_name, first_name, last_name,
+    patronymic, phone, avatar_url, bio, is_active}``. Потребитель —
+    ``apps.hr.services.employee_prefill_service``.
+    """
+    require_service("users")
+    row = User.objects.filter(pk=user_id).values(*_PREFILL_FIELDS).first()
+    return _prefill_from_values(row) if row is not None else None
+
+
+def list_user_prefills(search: str | None = None, limit: int = 100) -> list[dict]:
+    """``get_user_prefill`` для списка — пикер источника в HR-форме.
+
+    Поиск и порядок — те же, что у ``list_users_brief`` (icontains OR по
+    username/first_name/last_name/email, сортировка по фамилии): пикер
+    сотрудника и пикер участника чата ищут людей одинаково, расходится только
+    форма ответа. Статус так же НЕ фильтруется — HR должен видеть и
+    неактивные учётки (каждая строка несёт ``is_active``), иначе завести
+    карточку человеку, чей аккаунт ещё не подтверждён, будет нечем.
+    """
+    require_service("users")
+    qs = User.objects.all()
+    if search:
+        qs = qs.filter(
+            Q(username__icontains=search)
+            | Q(first_name__icontains=search)
+            | Q(last_name__icontains=search)
+            | Q(email__icontains=search)
+        )
+    rows = qs.order_by("last_name", "first_name").values(*_PREFILL_FIELDS)[:limit]
+    return [_prefill_from_values(row) for row in rows]
+
+
+def find_user_matches(*, email: str = "", phone: str = "", first_name: str = "",
+                      last_name: str = "", patronymic: str = "",
+                      limit: int = 5) -> list[dict]:
+    """Кандидаты «похоже, это тот же человек» по частично заполненной форме.
+
+    Отвечает на вопрос HR-формы «а нет ли уже учётки у того, кого я сейчас
+    завожу». Это НЕ поиск (``list_user_prefills``): там человек ищет осознанно
+    и вводит запрос, здесь система сама сверяет уже набранное в полях и
+    предлагает совпадение.
+
+    Каждая строка — обычный prefill плюс два поля:
+
+    * ``match_on`` — по чему совпало (``email``/``phone``/``full_name``/
+      ``patronymic``): без него подсказка «похоже, это Иванов» выглядит
+      гаданием, а с ним видно основание;
+    * ``match_kind`` — ``exact`` (email или телефон: совпал идентификатор)
+      либо ``similar`` (ФИО: однофамильцы реальны, и выдавать это за точное
+      попадание нельзя).
+
+    Порядок — от надёжного основания к слабому: email, телефон, ФИО. Пустые
+    аргументы просто не участвуют; всё пустое → пустой ответ (а НЕ «все
+    пользователи»: подсказка на пустой форме — это выгрузка справочника).
+    """
+    require_service("users")
+
+    email_norm = (email or "").strip().lower()
+    phone_tail = phone_utils.comparable_tail(phone)
+    first = (first_name or "").strip()
+    last = (last_name or "").strip()
+    middle = (patronymic or "").strip()
+
+    probes: list[tuple[str, str, object]] = []
+    if email_norm:
+        probes.append(("email", "exact", User.objects.filter(email__iexact=email_norm)))
+    if phone_tail:
+        probes.append((
+            "phone", "exact",
+            User.objects.exclude(phone="")
+            .annotate(_phone_digits=phone_utils.digits_expr())
+            .filter(_phone_digits__endswith=phone_tail),
+        ))
+    if first and last:
+        probes.append((
+            "full_name", "similar",
+            User.objects.filter(first_name__iexact=first, last_name__iexact=last),
+        ))
+
+    if not probes:
+        return []
+
+    found: dict[int, dict] = {}
+    order: list[int] = []
+    for reason, kind, qs in probes:
+        # Кап на КАЖДУЮ пробу, а не только на итог: однофамильцев может быть
+        # больше, чем limit, и вытаскивать их всех ради пяти строк незачем.
+        for row in qs.order_by("last_name", "first_name").values(*_PREFILL_FIELDS)[:limit]:
+            entry = found.get(row["id"])
+            if entry is None:
+                entry = {**_prefill_from_values(row), "match_on": [], "match_kind": kind}
+                found[row["id"]] = entry
+                order.append(row["id"])
+                # Отчество — не отдельная проба (само по себе оно никого не
+                # опознаёт), но если совпало и оно, основание сильнее, и
+                # подсказка вправе это показать.
+                if middle and row["patronymic"] \
+                        and row["patronymic"].strip().lower() == middle.lower():
+                    entry["match_on"].append("patronymic")
+            if reason not in entry["match_on"]:
+                entry["match_on"].append(reason)
+            if kind == "exact":
+                entry["match_kind"] = "exact"
+
+    return [found[user_id] for user_id in order[:limit]]

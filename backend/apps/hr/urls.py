@@ -91,11 +91,32 @@ urlpatterns = [
     path("employees/users/", views.employees_users_collection),
     path("employees/users", views.employees_users_collection),
 
+    # ── префилл: перенос уже имеющихся данных в карточку ──────────────────
+    # Литеральные роуты, поэтому здесь — ДО ``employees/<int:id>/`` (общее
+    # правило этого файла). Каждый в двух написаниях: APPEND_SLASH = False.
+    path("employees/sources/mailboxes/", views.employee_mailbox_sources),
+    path("employees/sources/mailboxes", views.employee_mailbox_sources),
+
+    path("employees/prefill/", views.employee_prefill_preview),
+    path("employees/prefill", views.employee_prefill_preview),
+
+    path("employees/match-suggestions/", views.employee_match_suggestions),
+    path("employees/match-suggestions", views.employee_match_suggestions),
+
+    path("employees/import-candidates/", views.employee_import_candidates),
+    path("employees/import-candidates", views.employee_import_candidates),
+
+    path("employees/bulk-import/", views.employee_bulk_import),
+    path("employees/bulk-import", views.employee_bulk_import),
+
     path("employees/", views.employees_collection),
     path("employees", views.employees_collection),
 
     path("employees/<int:id>/transfer", views.transfer_employee),
     path("employees/<int:id>/transfer/", views.transfer_employee),
+
+    path("employees/<int:id>/prefill/apply", views.employee_prefill_apply),
+    path("employees/<int:id>/prefill/apply/", views.employee_prefill_apply),
 
     path("employees/<int:id>/history", views.employee_history),
     path("employees/<int:id>/history/", views.employee_history),

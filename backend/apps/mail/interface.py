@@ -22,6 +22,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from django.db.models import Q
+
 from htqweb.fallback import fallback
 
 from apps.core.services import ServiceDisabled, require_service
@@ -226,3 +228,68 @@ def get_user_mailbox(user_id: int) -> dict | None:
     require_service("mail")
     mb = ProvisionedMailbox.objects.filter(user_id=user_id).exclude(status="deleted").first()
     return mbx_svc.serialize(mb) if mb is not None else None
+
+
+# ── Ящик как источник данных о человеке ───────────────────────────────────
+#
+# Потребитель — ``apps.hr``: заводя карточку сотрудника, HR может взять
+# адрес и имя из уже существующего корпоративного ящика (его завёл почтовый
+# администратор мимо платформы — тот же сценарий, что у
+# ``attach_mailbox_by_email`` выше, только со стороны HR-формы).
+#
+# Обе функции ГЛОТАЮТ ``ServiceDisabled`` вместо 503 — по тому же принципу,
+# что ``provision_mailbox``: выключенный почтовый модуль означает «источника
+# нет», а не «форма сотрудника сломана». Пустой список честно описывает
+# положение дел, и вызывающему не нужно знать, включена ли аппка mail.
+# Это НЕ ``htqweb.fallback``: подмены значения не происходит — выбирать
+# просто не из чего (см. CLAUDE.md, что через fallback не проходит).
+
+def _mailbox_brief(mb: ProvisionedMailbox) -> dict:
+    return {
+        "id": mb.id,
+        "address": mb.address,
+        "local_part": mb.local_part,
+        "domain": mb.domain,
+        "display_name": mb.display_name or "",
+        "user_id": mb.user_id,
+        "status": mb.status,
+    }
+
+
+def list_mailboxes_brief(search: str = "", limit: int = 100,
+                         unassigned_only: bool = False) -> list[dict]:
+    """Корпоративные ящики как пункты пикера: ``{id, address, local_part,
+    domain, display_name, user_id, status}``.
+
+    ``unassigned_only`` оставляет только ящики без владельца — именно они
+    интересны при заведении нового сотрудника («ящик есть, человека в
+    платформе ещё нет»). По умолчанию отдаются все, включая привязанные:
+    HR должен видеть и их, иначе непонятно, почему нужного адреса нет в
+    списке.
+
+    Удалённые (``status="deleted"``) не отдаются никогда — это надгробие
+    строки, а не ящик.
+    """
+    try:
+        require_service("mail")
+    except ServiceDisabled:
+        return []
+
+    qs = ProvisionedMailbox.objects.exclude(status="deleted")
+    if unassigned_only:
+        qs = qs.filter(user_id__isnull=True)
+    if search:
+        qs = qs.filter(Q(address__icontains=search) | Q(display_name__icontains=search))
+    return [_mailbox_brief(mb) for mb in qs.order_by("address")[:limit]]
+
+
+def get_mailbox_brief(mailbox_id: int) -> dict | None:
+    """Один ящик в той же форме, что ``list_mailboxes_brief``, либо ``None``
+    (нет такого, удалён или почтовый модуль выключен)."""
+    try:
+        require_service("mail")
+    except ServiceDisabled:
+        return None
+
+    mb = ProvisionedMailbox.objects.filter(id=mailbox_id).exclude(status="deleted").first()
+    return _mailbox_brief(mb) if mb is not None else None
