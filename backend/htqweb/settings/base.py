@@ -94,6 +94,14 @@ INSTALLED_APPS = [
     "apps.signoff",
 ]
 
+# Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное
+# (users, cms, media_files, mail, messenger, conference, core, companies)
+# общее для группы — см. docs/multi-company-tenancy-design.md §3.
+#
+# Кортеж, а не список: набор фиксирован архитектурным решением, и случайный
+# .append() в чужом модуле не должен его расширять.
+TENANT_APPS = ("hr", "tasks", "contracts", "signoff")
+
 MIDDLEWARE = [
     # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —
     # последней. Иначе замеряется не полное время запроса, а только то, что
