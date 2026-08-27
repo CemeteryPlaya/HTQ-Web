@@ -1,4 +1,5 @@
 import pytest
+from django.http import HttpResponse
 from django.test import Client
 
 from apps.companies.models import Company, CompanyKind, CompanyStatus
@@ -22,24 +23,53 @@ def test_health_works_without_company_header():
 
 @pytest.mark.django_db
 def test_unknown_company_is_404(kz):
-    response = Client().get("/api/users/v1/me", HTTP_X_HTQ_COMPANY="нет-такой")
+    response = Client().get("/api/users/v1/profile/me", HTTP_X_HTQ_COMPANY="нет-такой")
     assert response.status_code == 404
     assert response.json()["detail"]
 
 
 @pytest.mark.django_db
 def test_archived_company_is_404():
+    """Архивная компания отклоняется ДО разрешения URL.
+
+    Проверяется тело, а не только код: без него тест прошёл бы и в случае,
+    когда middleware не сработал вовсе, — Django сам отдаёт 404 на
+    неизвестный путь, и отличить одно от другого по коду невозможно.
+    """
     Company.objects.create(
         slug="dead", name="Банкрот", kind=CompanyKind.SERVICE,
         status=CompanyStatus.ARCHIVED,
     )
-    response = Client().get("/api/users/v1/me", HTTP_X_HTQ_COMPANY="dead")
+    response = Client().get("/api/users/v1/profile/me", HTTP_X_HTQ_COMPANY="dead")
     assert response.status_code == 404
+    assert response.json() == {"detail": "Компания не найдена"}
 
 
 @pytest.mark.django_db
-def test_context_is_cleared_after_response(kz):
-    Client().get("/api/users/v1/me", HTTP_X_HTQ_COMPANY="htq-kz")
+def test_context_is_cleared_after_response(kz, rf):
+    """Контекст компании при обычном (не аварийном) ответе стоит НА ВРЕМЯ
+    запроса и снимается сразу после.
+
+    Проверяется оба конца, а не только пустота contextvar после ответа:
+    одной этой пустоты было бы мало — она осталась бы правдой и в мире,
+    где middleware вообще не выставляет контекст (например, если бы
+    set_company молча не сработал). Middleware вызывается напрямую с
+    вьюхой-шпионом, которая читает контекст изнутри запроса, — так тест
+    ловит и «контекст не выставлен», и «контекст не снят».
+    """
+    from htqweb.middleware.company_context import CompanyContextMiddleware
+
+    seen = {}
+
+    def spy(request):
+        seen["slug"] = current_company_or_none()
+        return HttpResponse("ok")
+
+    middleware = CompanyContextMiddleware(spy)
+    request = rf.get("/api/tasks/v1/", HTTP_X_HTQ_COMPANY="htq-kz")
+    middleware(request)
+
+    assert seen["slug"] == "htq-kz"
     assert current_company_or_none() is None
 
 
