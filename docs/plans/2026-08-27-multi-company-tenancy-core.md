@@ -682,6 +682,29 @@ def test_use_holding_selects_holding_schema():
     with use_holding():
         assert _search_path().startswith("holding")
     assert _search_path().startswith("public")
+
+
+@pytest.mark.django_db
+def test_use_holding_restores_on_exception():
+    with pytest.raises(ValueError):
+        with use_holding():
+            raise ValueError("боом")
+    assert _search_path().startswith("public")
+
+
+@pytest.mark.django_db
+def test_use_holding_inside_a_company_restores_that_company():
+    """Сводное чтение холдинга может выполняться внутри запроса, где компания
+    уже установлена, — после выхода соединение обязано вернуться в её схему.
+
+    Именно этого теста не хватало: без него жёсткий возврат в public выглядел
+    корректным, потому что верхнеуровневый вызов и правда должен вести в public.
+    """
+    with use_company("htq-kz"):
+        with use_holding():
+            assert _search_path().startswith("holding")
+        assert _search_path().startswith("co_htq_kz")
+    assert _search_path().startswith("public")
 ```
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
@@ -768,7 +791,15 @@ def use_holding():
     Контекст компании при этом НЕ ставится: сводное чтение по определению
     находится над компаниями, и код, который его выполняет, не должен
     случайно считать себя работающим внутри одной из них.
+
+    Путь восстанавливается в ПРЕЖНЮЮ компанию, а не в public. Разница
+    существенна: сводный запрос холдинга вполне может выполняться внутри
+    запроса, где middleware уже поставил компанию. Жёсткий возврат в public
+    оставил бы contextvar с компанией при соединении в public, а
+    ``use_company.finally`` берёт, куда возвращаться, ИЗ contextvar — то
+    есть расхождение не исправилось бы само, а жило до конца внешнего блока.
     """
+    previous = current_company_or_none()
     with connection.cursor() as cur:
         cur.execute(
             sql.SQL("SET search_path TO {}, public").format(
@@ -778,8 +809,7 @@ def use_holding():
     try:
         yield
     finally:
-        with connection.cursor() as cur:
-            cur.execute(_PUBLIC_ONLY)
+        apply_search_path(previous)
 ```
 
 - [ ] **Шаг 4: Прогнать тест**
