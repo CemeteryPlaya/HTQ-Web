@@ -35,8 +35,8 @@ def disabled_payload(service: str, message: str) -> dict:
             "code": "service_disabled", "service": service}
 
 
-def service_status(name: str) -> tuple[bool, str]:
-    """Публичный геттер статуса сервиса (кэш 5с, БД — источник истины).
+def _global_status(name: str) -> tuple[bool, str]:
+    """Глобальный рубильник (кэш 5с, БД — источник истины).
 
     Fail-open по кэшу: недоступный Redis не должен ронять весь трафик
     (см. ServiceGateMiddleware, который дёргает это на каждый запрос) —
@@ -61,18 +61,7 @@ def service_status(name: str) -> tuple[bool, str]:
     return cached
 
 
-def service_enabled(name: str) -> bool:
-    return service_status(name)[0]
-
-
-def require_service(name: str) -> None:
-    enabled, message = service_status(name)
-    if not enabled:
-        raise ServiceDisabled(name, message)
-    _require_company_module(name)
-
-
-def _require_company_module(name: str) -> None:
+def _company_module_status(name: str) -> tuple[bool, str]:
     """Второй, независимый слой рубильника — на уровне компании.
 
     Импорт локальный: apps.core грузится раньше apps.companies, а на уровне
@@ -84,13 +73,45 @@ def _require_company_module(name: str) -> None:
     молчаливой подменой.
     """
     if name in CORE_MODULES:
-        return
+        return (True, "")
     from apps.companies.interface import module_enabled
     from htqweb.tenancy.context import current_company_or_none
 
     slug = current_company_or_none()
     if slug is None:
-        return
-    enabled, message = module_enabled(slug, name)
+        return (True, "")
+    return module_enabled(slug, name)
+
+
+def service_status(name: str) -> tuple[bool, str]:
+    """Статус домена: глобальный рубильник И рубильник текущей компании.
+
+    Два независимых слоя. Глобальный (ServiceStatus) гасит домен на всей
+    платформе; компанейский (CompanyModule) — у одной компании.
+
+    Компанейский слой живёт ЗДЕСЬ, а не только в require_service, потому
+    что HTTP-гейт (ServiceGateMiddleware) спрашивает именно эту функцию.
+    Будь проверка только в require_service, запрос к /api/<домен>/ у
+    компании с выключенным модулем прошёл бы гейт насквозь: вьюхи зовут
+    свои сервисы напрямую, а не через interface, и require_service для
+    собственных эндпоинтов аппки может не сработать вовсе.
+
+    Кэш не объединяется: глобальный ключ svc-status:{name} остаётся
+    честно глобальным (иначе он отравился бы значением одной компании),
+    а компанейский слой уже кэшируется внутри module_enabled по ключу со
+    слагом компании.
+    """
+    enabled, message = _global_status(name)
+    if not enabled:
+        return (False, message)
+    return _company_module_status(name)
+
+
+def service_enabled(name: str) -> bool:
+    return service_status(name)[0]
+
+
+def require_service(name: str) -> None:
+    enabled, message = service_status(name)
     if not enabled:
         raise ServiceDisabled(name, message)
