@@ -843,7 +843,8 @@ git commit -m "feat(tenancy): перевод соединения в схему 
 - Потребляет: модели из задачи 1.
 - Производит:
   - `get_company(slug: str) -> dict | None` — `{id, slug, name, kind, status, parent_slug, country}`
-  - `active_company_slugs() -> list[str]`
+  - `active_company_slugs(*, fresh: bool = False) -> list[str]`
+    (`fresh=True` обходит кэш — нужен пересборке представлений)
   - `user_company_slugs(user_id: int) -> list[str]`
   - `default_company_slug(user_id: int) -> str | None`
   - `module_enabled(slug: str, app_label: str) -> tuple[bool, str]`
@@ -2160,7 +2161,7 @@ git commit -m "feat(tenancy): компания в задачах Celery"
 - Тест: `backend/apps/companies/tests/test_holding_views.py`
 
 **Интерфейсы:**
-- Потребляет: `active_company_slugs` (задача 4), `schema_for` и
+- Потребляет: `active_company_slugs(fresh=True)` (задача 4), `schema_for` и
   `HOLDING_SCHEMA` (задача 2), `settings.TENANT_APPS` (задача 5).
   `use_holding` из задачи 3 здесь НЕ нужен: DDL пишет имена схем явно, а
   `use_holding` понадобится потребителям представлений — читающим вьюхам
@@ -2393,7 +2394,11 @@ def rebuild_holding_views() -> list[str]:
     восстановили. Возвращает имена созданных представлений в стабильном
     порядке — на него опирается тест идемпотентности.
     """
-    slugs = active_company_slugs()
+    # fresh=True обязателен: пересборка идёт сразу после создания или
+    # архивации компании, и пятисекундный кэш отдал бы список БЕЗ неё —
+    # представление собралось бы без этой компании молча, без ошибки и
+    # без следа в логе.
+    slugs = active_company_slugs(fresh=True)
     created: list[str] = []
 
     with connection.cursor() as cur:
