@@ -8,6 +8,14 @@ logger = logging.getLogger(__name__)
 
 _CACHE_TTL = 5  # секунд; рубильник срабатывает быстро, но БД не дёргается на каждый запрос
 
+# Обязательное ядро платформы: эти домены есть у КАЖДОЙ компании и на уровне
+# компании не выключаются (требование заказчика — «основной монолит функций,
+# который точно будет у всех»). Глобальный рубильник ServiceStatus на них
+# по-прежнему действует: он гасит домен на всей платформе, а не у одной
+# компании, и нужен для регламентных работ.
+CORE_MODULES = frozenset({"users", "companies", "core", "hr", "messenger",
+                          "media", "cms"})
+
 
 class ServiceDisabled(Exception):
     def __init__(self, service: str, message: str):
@@ -59,5 +67,30 @@ def service_enabled(name: str) -> bool:
 
 def require_service(name: str) -> None:
     enabled, message = service_status(name)
+    if not enabled:
+        raise ServiceDisabled(name, message)
+    _require_company_module(name)
+
+
+def _require_company_module(name: str) -> None:
+    """Второй, независимый слой рубильника — на уровне компании.
+
+    Импорт локальный: apps.core грузится раньше apps.companies, а на уровне
+    модуля это была бы циклическая зависимость фундамента от реестра.
+
+    Вне контекста компании (Celery без company_slug, служебные роуты,
+    общие домены) проверка не выполняется — там компанейского рубильника
+    просто нет, и подставлять вместо него какой-либо дефолт было бы
+    молчаливой подменой.
+    """
+    if name in CORE_MODULES:
+        return
+    from apps.companies.interface import module_enabled
+    from htqweb.tenancy.context import current_company_or_none
+
+    slug = current_company_or_none()
+    if slug is None:
+        return
+    enabled, message = module_enabled(slug, name)
     if not enabled:
         raise ServiceDisabled(name, message)
