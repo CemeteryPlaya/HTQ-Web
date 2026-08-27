@@ -71,6 +71,7 @@ class MailConfig:
 
     allow_self_service: bool = False
     reconcile_auto_apply: bool = False
+    reconcile_auto_link: bool = True
     local_part_pattern: str = "f.last"
 
     #: какие поля реально пришли из БД — показывается в UI, чтобы админ видел,
@@ -237,6 +238,7 @@ def get_config() -> MailConfig:
 
         allow_self_service=bool(row.get("allow_self_service")) if row is not None else False,
         reconcile_auto_apply=bool(getattr(settings, "MAIL_RECONCILE_AUTO_APPLY", False)),
+        reconcile_auto_link=bool(getattr(settings, "MAIL_RECONCILE_AUTO_LINK", True)),
 
         overridden=frozenset(overridden),
     )

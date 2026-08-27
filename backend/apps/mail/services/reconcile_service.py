@@ -84,6 +84,12 @@ class ReconcileReport:
     provisioner: str
     domain: str
     applied: bool = False
+    #: выполнялась ли привязка бесхозных ящиков к владельцам
+    #:
+    #: Отдельно от ``applied``: она разрешена сама по себе, и отчёт с
+    #: ``applied=false`` при непустом ``counts.linked`` иначе выглядел бы
+    #: противоречием.
+    linked_orphans: bool = False
     direction: str = "report"
     checked_local: int = 0
     checked_remote: int = 0
@@ -98,6 +104,7 @@ class ReconcileReport:
             "provisioner": self.provisioner,
             "domain": self.domain,
             "applied": self.applied,
+            "linked_orphans": self.linked_orphans,
             "direction": self.direction,
             "checked_local": self.checked_local,
             "checked_remote": self.checked_remote,
@@ -160,7 +167,10 @@ def _stored_password(mb: ProvisionedMailbox) -> str | None:
 
 # ── сверка ───────────────────────────────────────────────────────────────
 
-def reconcile(*, apply: bool = False, direction: str = "report") -> ReconcileReport:
+def reconcile(
+    *, apply: bool = False, direction: str = "report",
+    link_orphans: bool | None = None,
+) -> ReconcileReport:
     """Сверить платформу с почтовым сервером.
 
     ``direction`` управляет тем, что делать с найденными расхождениями при
@@ -176,13 +186,28 @@ def reconcile(*, apply: bool = False, direction: str = "report") -> ReconcileRep
                    ``only_local`` на сервере (push). Расхождения полей при
                    этом выравниваются по серверу — трогать чужие настройки
                    молча опаснее, чем подтянуть их к себе.
+
+    ``link_orphans`` — привязывать ли найденных владельцев
+    (``_link_orphans``), и это ОТДЕЛЬНОЕ разрешение, а не следствие
+    ``apply``. Причина в разной цене ошибки: ``apply`` меняет ящики на
+    почтовом сервере, а привязка лишь проставляет владельца там, где его
+    не было, и адрес в точности совпал с email пользователя. Пока обеими
+    управлял один флаг, безопасную половину нельзя было получить без
+    опасной — и она не работала вовсе.
+
+    ``None`` (по умолчанию) означает «как ``apply``» — прежнее поведение
+    для вызовов из интерфейса, где админ нажал «Применить» и ждёт, что
+    применится всё сразу.
     """
+    link = apply if link_orphans is None else link_orphans
+
     provisioner = get_provisioner()
     report = ReconcileReport(
         mode="listing",
         provisioner=resolve_provisioner_name(),
         domain=mail_config.get_config().domain,
         applied=apply,
+        linked_orphans=link,
         direction=direction,
     )
 
@@ -197,7 +222,7 @@ def reconcile(*, apply: bool = False, direction: str = "report") -> ReconcileRep
         _reconcile_by_probe(provisioner, local_rows, report, apply=apply, direction=direction)
         # Владельцев ищем и здесь: для этого сервер списка ящиков не нужен —
         # сверяются адреса строк, которые у платформы уже есть.
-        _link_orphans(report, apply=apply)
+        _link_orphans(report, apply=link)
         report.errors.append(str(exc))
         report.finished_at = timezone.now().isoformat()
         return report
@@ -256,13 +281,14 @@ def reconcile(*, apply: bool = False, direction: str = "report") -> ReconcileRep
     # ── сторона 3: у кого из бесхозных ящиков есть владелец ─────────────
     # После импорта намеренно: свежепритянутые с сервера ящики проходят тот
     # же поиск владельца, что и висящие с прошлых прогонов.
-    _link_orphans(report, apply=apply)
+    _link_orphans(report, apply=link)
 
     report.finished_at = timezone.now().isoformat()
     log.info(
-        "mail_reconcile mode=%s local=%d remote=%d in_sync=%d diffs=%d applied=%s",
+        "mail_reconcile mode=%s local=%d remote=%d in_sync=%d diffs=%d "
+        "applied=%s linked_orphans=%s",
         report.mode, report.checked_local, report.checked_remote,
-        report.in_sync, len(report.differences), apply,
+        report.in_sync, len(report.differences), apply, link,
     )
     return report
 
@@ -379,7 +405,9 @@ def _link_orphans(report: ReconcileReport, *, apply: bool) -> None:
 
     Без ``apply`` ничего не меняется: найденные пары попадают в отчёт как
     ``kind="unlinked"``, и админ видит, кому что достанется, до того как
-    нажмёт «Принять данные сервера».
+    нажмёт «Принять данные сервера». Решает это уже вызывающий — см.
+    ``reconcile(link_orphans=...)``: разрешение отдельное от того, которым
+    правят ящики на почтовом сервере.
     """
     orphans = list(ProvisionedMailbox.objects
                    .filter(user_id__isnull=True)

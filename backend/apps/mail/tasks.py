@@ -344,17 +344,27 @@ def reconcile_mailboxes() -> dict:
     удаляла ящики без ведома админа. Применение делается руками из админки
     (``POST /api/email/v1/mailboxes/reconcile/``) или включается флагом, если
     команда осознанно хочет автосведение.
+
+    Единственное исключение — привязка бесхозных ящиков к владельцам
+    (``MAIL_RECONCILE_AUTO_LINK``, по умолчанию ВКЛЮЧЕНА). На почтовом сервере
+    она ничего не меняет: у ящика не было владельца, а его адрес в точности
+    совпал с email пользователя. Ради неё и заведён отдельный флаг — пока
+    разрешение было общим, включить её можно было только вместе с
+    автосозданием ящиков, и потому она не работала никогда.
     """
     require_service("mail")
 
-    auto_apply = bool(mail_config.get_config().reconcile_auto_apply)
+    cfg = mail_config.get_config()
+    auto_apply = bool(cfg.reconcile_auto_apply)
+    auto_link = bool(cfg.reconcile_auto_link)
     report = reconcile_service.reconcile(
         apply=auto_apply, direction="both" if auto_apply else "report",
+        link_orphans=auto_link,
     )
     if report.differences:
         logger.warning(
             "mail_reconcile_differences mode=%s only_local=%d only_remote=%d "
-            "mismatched=%d unlinked=%d linked=%d applied=%s",
+            "mismatched=%d unlinked=%d linked=%d applied=%s auto_link=%s",
             report.mode,
             sum(1 for d in report.differences if d.kind == "only_local"),
             sum(1 for d in report.differences if d.kind == "only_remote"),
@@ -364,6 +374,7 @@ def reconcile_mailboxes() -> dict:
             sum(1 for d in report.differences if d.kind == "unlinked"),
             sum(1 for d in report.differences if d.action == "linked"),
             auto_apply,
+            auto_link,
         )
     return report.to_dict()
 

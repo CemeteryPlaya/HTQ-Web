@@ -571,3 +571,144 @@ def test_counts_expose_linking_to_the_admin_page(use_provisioner):
 
     assert body["counts"]["unlinked"] == 1
     assert body["counts"]["linked"] == 1
+
+
+# ── разрешение на привязку отдельно от разрешения менять сервер ───────────
+#
+# Раньше обе операции сидели на одном флаге ``MAIL_RECONCILE_AUTO_APPLY``:
+# чтобы получить безобидную привязку владельцев, пришлось бы разрешить
+# фоновой задаче ещё и создавать ящики на почтовом сервере. Флаг держали
+# выключенным — и привязка не работала никогда.
+#
+# ``_FakeProvisioner.calls`` пуст ровно тогда, когда сервер не тронут; это и
+# есть доказательство безопасности привязки.
+
+
+@pytest.mark.django_db
+def test_orphans_are_linked_without_touching_the_server(use_provisioner):
+    """Главное обещание А2: владелец проставлен, на сервере — ни одного
+    вызова."""
+    user = _user("ruslan.amirov@htq.group")
+    _mailbox(local_part="ruslan.amirov", address="ruslan.amirov@htq.group",
+             user_id=None, status=MailboxStatus.ACTIVE)
+    prov = use_provisioner(_FakeProvisioner([]))
+
+    report = reconcile_service.reconcile(apply=False, link_orphans=True)
+
+    assert ProvisionedMailbox.objects.get(
+        address="ruslan.amirov@htq.group").user_id == user.id
+    assert [d.action for d in _unlinked(report)] == ["linked"]
+    assert prov.calls == []
+
+
+@pytest.mark.django_db
+def test_applying_can_still_refuse_to_link(use_provisioner):
+    """Обратное разрешение тоже раздельное: сводим ящики, владельцев — нет."""
+    _user("ruslan.amirov@htq.group")
+    _mailbox(local_part="ruslan.amirov", address="ruslan.amirov@htq.group",
+             user_id=None, status=MailboxStatus.ACTIVE)
+    use_provisioner(_FakeProvisioner([
+        RemoteMailbox.from_address("ruslan.amirov@htq.group", quota_mb=1024),
+    ]))
+
+    report = reconcile_service.reconcile(
+        apply=True, direction="pull", link_orphans=False,
+    )
+
+    assert ProvisionedMailbox.objects.get(
+        address="ruslan.amirov@htq.group").user_id is None
+    assert [d.action for d in _unlinked(report)] == [None]
+
+
+@pytest.mark.django_db
+def test_default_follows_apply_for_the_admin_button(use_provisioner):
+    """Ручка ``POST /mailboxes/reconcile/`` ничего не передаёт — и должна
+    работать как раньше: нажал «Применить» → применилось всё сразу."""
+    user = _user("ruslan.amirov@htq.group")
+    _mailbox(local_part="ruslan.amirov", address="ruslan.amirov@htq.group",
+             user_id=None, status=MailboxStatus.ACTIVE)
+    use_provisioner(_FakeProvisioner([]))
+
+    assert reconcile_service.reconcile(apply=False).linked_orphans is False
+    assert ProvisionedMailbox.objects.get(
+        address="ruslan.amirov@htq.group").user_id is None
+
+    reconcile_service.reconcile(apply=True, direction="pull")
+    assert ProvisionedMailbox.objects.get(
+        address="ruslan.amirov@htq.group").user_id == user.id
+
+
+@pytest.mark.django_db
+def test_report_says_whether_it_linked(use_provisioner):
+    """``applied=false`` при непустом ``counts.linked`` выглядело бы
+    противоречием — отчёт обязан назвать оба разрешения."""
+    _user("ruslan.amirov@htq.group")
+    _mailbox(local_part="ruslan.amirov", address="ruslan.amirov@htq.group",
+             user_id=None, status=MailboxStatus.ACTIVE)
+    use_provisioner(_FakeProvisioner([]))
+
+    body = reconcile_service.reconcile(apply=False, link_orphans=True).to_dict()
+
+    assert body["applied"] is False
+    assert body["linked_orphans"] is True
+    assert body["counts"]["linked"] == 1
+
+
+@pytest.mark.django_db
+def test_probe_mode_links_too(use_provisioner):
+    """Сегодняшний режим — голый IMAP без списка ящиков. Владельца там ищут
+    по строкам, которые у платформы уже есть, и сервер для этого не нужен."""
+    user = _user("ruslan.amirov@htq.group")
+    _mailbox(local_part="ruslan.amirov", address="ruslan.amirov@htq.group",
+             user_id=None, status=MailboxStatus.ACTIVE)
+    use_provisioner(_ProbeProvisioner())
+
+    report = reconcile_service.reconcile(apply=False, link_orphans=True)
+
+    assert report.mode == "probe"
+    assert ProvisionedMailbox.objects.get(
+        address="ruslan.amirov@htq.group").user_id == user.id
+
+
+@pytest.mark.django_db
+def test_scheduled_task_links_but_does_not_change_the_server(use_provisioner):
+    """Задача уже стоит в расписании beat. С новым флагом она начинает
+    привязывать сама, оставаясь безопасной: AUTO_APPLY выключен."""
+    from apps.mail import tasks
+
+    user = _user("ruslan.amirov@htq.group")
+    _mailbox(local_part="ruslan.amirov", address="ruslan.amirov@htq.group",
+             user_id=None, status=MailboxStatus.ACTIVE)
+    prov = use_provisioner(_FakeProvisioner([]))
+
+    with override_settings(
+        MAIL_RECONCILE_AUTO_APPLY=False, MAIL_RECONCILE_AUTO_LINK=True,
+    ):
+        body = tasks.reconcile_mailboxes()
+
+    assert body["applied"] is False
+    assert body["linked_orphans"] is True
+    assert ProvisionedMailbox.objects.get(
+        address="ruslan.amirov@htq.group").user_id == user.id
+    assert prov.calls == []
+
+
+@pytest.mark.django_db
+def test_scheduled_task_can_be_told_not_to_link(use_provisioner):
+    """Флаг выключаемый: команда, которой автопривязка не нужна, снимает
+    её, не трогая всё остальное."""
+    from apps.mail import tasks
+
+    _user("ruslan.amirov@htq.group")
+    _mailbox(local_part="ruslan.amirov", address="ruslan.amirov@htq.group",
+             user_id=None, status=MailboxStatus.ACTIVE)
+    use_provisioner(_FakeProvisioner([]))
+
+    with override_settings(
+        MAIL_RECONCILE_AUTO_APPLY=False, MAIL_RECONCILE_AUTO_LINK=False,
+    ):
+        body = tasks.reconcile_mailboxes()
+
+    assert body["linked_orphans"] is False
+    assert ProvisionedMailbox.objects.get(
+        address="ruslan.amirov@htq.group").user_id is None
