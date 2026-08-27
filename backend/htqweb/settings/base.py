@@ -60,6 +60,9 @@ INSTALLED_APPS = [
     # потому что под gunicorn'ом нужен multiprocess-реестр (см. там же).
     "django_prometheus",
     "apps.core",
+    # Реестр компаний группы. Живёт в public и обязателен для всех: именно
+    # он резолвит поддомен в схему Postgres, поэтому стоит до доменных аппок.
+    "apps.companies",
     "apps.users",
     "apps.cms",
     "apps.media_files",
