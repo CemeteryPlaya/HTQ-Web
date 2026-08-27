@@ -10,6 +10,11 @@
 значит утопить настоящую причину в производных. Каждый шаг несёт ``hint`` —
 конкретное действие, а не констатацию.
 
+Веток две, и они НЕ зависят друг от друга: Mailcow API отвечает за заведение и
+поиск ящиков, IMAP/SMTP — за чтение и отправку. Провал одной ничего не говорит
+про другую, поэтому обрыв «на первом провале» действует внутри ветки, а не
+поперёк. В режиме без Mailcow его ветка сворачивается в один пропуск.
+
 Секреты сюда попадают (пароль ящика для проверки логина), но НАРУЖУ не
 уходят никогда: в ``CheckStep`` кладётся только текст без пароля, и это
 закреплено тестом.
@@ -108,7 +113,10 @@ def run_check(
             detail=f"Режим {info['provisioner']}, домен {cfg.domain}", data=info,
         ))
 
-    # ── 2. доступность портов ───────────────────────────────────────────
+    # ── 2. Mailcow API ──────────────────────────────────────────────────
+    _check_mailcow(report, cfg, info, timeout)
+
+    # ── 3. доступность портов ───────────────────────────────────────────
     imap_error = None
     if not cfg.imap_host:
         report.add(CheckStep(
@@ -143,7 +151,7 @@ def run_check(
             hint=TUNNEL_HINT if smtp_error else "",
         ))
 
-    # ── 3. IMAP ─────────────────────────────────────────────────────────
+    # ── 4. IMAP ─────────────────────────────────────────────────────────
     if imap_error:
         report.add(CheckStep(
             key="imap", title="IMAP", status=SKIP,
@@ -152,7 +160,7 @@ def run_check(
     else:
         _check_imap(report, cfg, mailbox, password)
 
-    # ── 4. SMTP ─────────────────────────────────────────────────────────
+    # ── 5. SMTP ─────────────────────────────────────────────────────────
     if smtp_error:
         report.add(CheckStep(
             key="smtp", title="SMTP", status=SKIP,
@@ -162,6 +170,177 @@ def run_check(
         _check_smtp(report, cfg, mailbox, password, send_to, timeout)
 
     return report
+
+
+MAILCOW_IP_HINT = (
+    "Mailcow пускает по API только с адресов из своего списка:\n"
+    "  панель → Configuration → Access → API → «Allowed IPs»\n"
+    "Впишите внешний адрес, с которого ходит backend. У прода и у разработчика\n"
+    "он разный — ключ, работающий локально, в проде может молчать."
+)
+
+
+def _api_host_port(url: str) -> tuple[str, int, str | None]:
+    """Хост и порт из адреса API — чтобы проверить доступность до HTTP.
+
+    Схема достраивается, если её забыли: в поле формы легко вписать голый
+    ``mail.htq.group/api/v1``, и падать на этом было бы придиркой.
+    """
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url if "://" in url else f"https://{url}")
+    try:
+        host, port = parts.hostname, parts.port
+    except ValueError as exc:            # порт не число
+        return "", 0, str(exc)
+    if not host:
+        return "", 0, "адрес не разбирается"
+    return host, port or (80 if parts.scheme == "http" else 443), None
+
+
+def _check_mailcow(report: CheckReport, cfg, info: dict, timeout: int) -> None:
+    """Цепочка Mailcow API: адрес → хост → ключ → домен → ящики.
+
+    Отдельная ветка, а не продолжение IMAP-цепочки: API отвечает за ЗАВЕДЕНИЕ
+    и поиск ящиков, IMAP/SMTP — за чтение и отправку. Они независимы, и провал
+    одного ничего не говорит про другое.
+
+    В режиме, отличном от ``mailcow``, — ОДИН пропуск вместо пяти: печатать
+    пять «не проверялось» там, где API не используется вовсе, значит закопать
+    настоящие шаги в шум.
+    """
+    if info["provisioner"] != "mailcow":
+        # Ключ задан, а режим другой — типовая половина настройки, после
+        # которой ждут, что заработает само.
+        half_done = bool(cfg.mailcow_api_url and cfg.mailcow_api_key)
+        report.add(CheckStep(
+            key="mailcow", title="Mailcow API", status=SKIP,
+            detail=f"Режим {info['provisioner']} — API не используется",
+            hint=("Адрес и ключ Mailcow заданы, но режим другой. Чтобы платформа "
+                  "пользовалась API (поиск ящиков, app-пароли), переключите режим "
+                  "на «mailcow» в «Подключении»." if half_done else ""),
+        ))
+        return
+
+    if not cfg.mailcow_api_url:
+        report.add(CheckStep(
+            key="mailcow", title="Mailcow API", status=FAIL,
+            detail="Адрес API не задан",
+            hint="Укажите «Mailcow API URL» вида https://mail.htq.group/api/v1 — "
+                 "именно с путём /api/v1: к нему дописываются методы.",
+        ))
+        return
+    if not cfg.mailcow_api_key:
+        report.add(CheckStep(
+            key="mailcow", title="Mailcow API", status=FAIL,
+            detail="Ключ API не задан",
+            hint="Вставьте ключ в «Подключении». Нужен read-write: read-only не даёт "
+                 "выписать app-password, без которого почта не синхронизируется.",
+        ))
+        return
+
+    host, port, url_error = _api_host_port(cfg.mailcow_api_url)
+    if url_error:
+        report.add(CheckStep(
+            key="mailcow", title="Mailcow API", status=FAIL,
+            detail=f"Адрес API не разбирается: {url_error}",
+            hint="Ожидается https://<хост>/api/v1 — без пробелов и лишних символов.",
+        ))
+        return
+
+    net_error = _tcp_reachable(host, port, timeout)
+    report.add(CheckStep(
+        key="mailcow", title="Mailcow API: адрес",
+        status=FAIL if net_error else OK,
+        detail=(f"{host}:{port} — "
+                + (f"недоступен ({net_error})" if net_error else "отвечает")),
+        hint=("Проверьте, что панель Mailcow доступна с этой машины и что имя "
+              "разрешается в DNS." if net_error else ""),
+    ))
+    if net_error:
+        return
+
+    _check_mailcow_api(report, cfg)
+
+
+def _check_mailcow_api(report: CheckReport, cfg) -> None:
+    """Ключ, домен и список ящиков — три шага после того, как хост ответил."""
+    from apps.mail.services.mailcow_client import MailcowError, get_mailcow_client
+
+    try:
+        status_code, body = get_mailcow_client().probe()
+    except Exception as exc:  # noqa: BLE001 — сеть/TLS/таймаут
+        report.add(CheckStep(
+            key="mailcow_auth", title="Mailcow API: ключ", status=FAIL,
+            detail=f"Запрос не удался: {exc}",
+        ))
+        return
+
+    if status_code in (401, 403):
+        report.add(CheckStep(
+            key="mailcow_auth", title="Mailcow API: ключ", status=FAIL,
+            detail=f"Ключ не принят (HTTP {status_code})", hint=MAILCOW_IP_HINT,
+        ))
+        return
+    if status_code >= 400:
+        report.add(CheckStep(
+            key="mailcow_auth", title="Mailcow API: ключ", status=FAIL,
+            detail=f"Сервер ответил HTTP {status_code}",
+        ))
+        return
+    if isinstance(body, str):
+        report.add(CheckStep(
+            key="mailcow_auth", title="Mailcow API: ключ", status=FAIL,
+            detail="Ответ не JSON — похоже, это страница панели, а не API",
+            hint="В адресе, скорее всего, забыт путь /api/v1: "
+                 "https://mail.htq.group/api/v1",
+        ))
+        return
+    # Mailcow отвечает 200 и на неудачную аутентификацию — отказ лежит в теле.
+    if isinstance(body, dict) and body.get("type") not in ("success", "info"):
+        report.add(CheckStep(
+            key="mailcow_auth", title="Mailcow API: ключ", status=FAIL,
+            detail=f"Отказ: {body.get('type')}: {body.get('msg')}",
+            hint=MAILCOW_IP_HINT,
+        ))
+        return
+
+    domains = ([d.get("domain_name", "") for d in body if isinstance(d, dict)]
+               if isinstance(body, list) else [])
+    report.add(CheckStep(
+        key="mailcow_auth", title="Mailcow API: ключ", status=OK,
+        detail=f"Принят, доменов видно: {len(domains)}",
+    ))
+
+    wanted = (cfg.domain or "").strip().lower()
+    seen = {str(d).strip().lower() for d in domains if d}
+    if wanted not in seen:
+        report.add(CheckStep(
+            key="mailcow_domain", title="Mailcow API: домен", status=FAIL,
+            detail=f"Домена {cfg.domain} нет среди видимых ключу",
+            hint="Ключ выписан для другого домена либо домен не заведён в Mailcow. "
+                 "Видны: " + (", ".join(sorted(seen)) or "ни одного"),
+            data={"available": sorted(seen)},
+        ))
+        return
+    report.add(CheckStep(
+        key="mailcow_domain", title="Mailcow API: домен", status=OK,
+        detail=f"{cfg.domain} — виден", data={"available": sorted(seen)},
+    ))
+
+    try:
+        rows = get_mailcow_client().list_mailboxes(cfg.domain)
+    except MailcowError as exc:
+        report.add(CheckStep(
+            key="mailcow_list", title="Mailcow API: ящики", status=FAIL,
+            detail=f"Список не получен: {exc}",
+        ))
+        return
+    report.add(CheckStep(
+        key="mailcow_list", title="Mailcow API: ящики", status=OK,
+        detail=f"На сервере ящиков: {len(rows)}",
+        data={"mailboxes": len(rows)},
+    ))
 
 
 def _check_imap(report: CheckReport, cfg, mailbox: str | None, password: str | None) -> None:

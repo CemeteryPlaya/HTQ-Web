@@ -134,6 +134,57 @@ def fake_smtp(monkeypatch):
     return _FakeSMTP
 
 
+MAILCOW_SETTINGS = dict(
+    MAILCOW_DOMAIN="htq.group",
+    MAIL_PROVISIONER="mailcow",
+    MAILCOW_API_URL="https://mail.htq.group/api/v1",
+    MAILCOW_API_KEY="test-key",
+    IMAP_HOST="", SMTP_HOST="",
+)
+
+
+class _FakeResponse:
+    """Ровно то, что читает ``MailcowClient.probe``: код и тело."""
+
+    def __init__(self, status_code: int, payload=None, text: str = ""):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
+
+
+@pytest.fixture
+def fake_mailcow(monkeypatch):
+    """Подменяет единственный сетевой шов клиента (``_request``).
+
+    Ходить в живой Mailcow тесты не должны, а разбор ответа — как раз то, что
+    здесь и проверяется: сервер отвечает 200 и на отказ в доступе.
+    """
+    from apps.mail.services import mailcow_client as mc
+
+    def _install(*, probe: _FakeResponse, mailboxes=None):
+        calls = []
+
+        def _request(self, method, url, *, headers, json=None):
+            calls.append(url)
+            if url.endswith("/get/domain/all"):
+                return probe
+            return _FakeResponse(200, mailboxes if mailboxes is not None else [])
+
+        monkeypatch.setattr(mc.MailcowClient, "_request", _request)
+        return calls
+
+    return _install
+
+
+def _domains(*names):
+    return _FakeResponse(200, [{"domain_name": n} for n in names])
+
+
 # ── настройки ────────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
@@ -321,3 +372,152 @@ def test_probe_email_is_sent_from_the_mailbox(reachable, fake_imap, fake_smtp):
     assert len(sent) == 1
     assert sent[0]["From"] == "i.ivanov@htq.group"
     assert sent[0]["To"] == "boss@example.com"
+
+
+# ── Mailcow API ──────────────────────────────────────────────────────────
+#
+# Цепочка нужна ровно в тот день, когда ключ вписывают впервые, и проверять её
+# приходится до того, как этот день настанет: живого Mailcow у платформы пока
+# нет. Отсюда двойник на ``_request`` — единственном сетевом шве клиента.
+
+
+@pytest.mark.django_db
+def test_imap_mode_folds_mailcow_into_one_skip(unreachable):
+    """Пять «не проверялось» там, где API не используется, закопали бы
+    настоящие шаги в шум. Пропуск ровно один."""
+    with override_settings(**TUNNEL_SETTINGS):
+        report = connection_check.run_check(timeout=1)
+
+    statuses = _statuses(report)
+    assert statuses["mailcow"] == connection_check.SKIP
+    assert "mailcow_auth" not in statuses
+    assert "mailcow_domain" not in statuses
+    assert "mailcow_list" not in statuses
+    # Пропуск не должен ронять отчёт: режим IMAP — законный.
+    assert _step(report, "mailcow").status != connection_check.FAIL
+
+
+@pytest.mark.django_db
+def test_key_set_but_mode_is_imap_says_so(unreachable):
+    """Половина настройки: ключ вписали, режим переключить забыли. Молчать
+    здесь — значит оставить человека ждать, что заработает само."""
+    with override_settings(
+        **{**TUNNEL_SETTINGS,
+           "MAILCOW_API_URL": "https://mail.htq.group/api/v1",
+           "MAILCOW_API_KEY": "test-key"},
+    ):
+        report = connection_check.run_check(timeout=1)
+
+    step = _step(report, "mailcow")
+    assert step.status == connection_check.SKIP
+    assert "переключите режим" in step.hint
+
+
+@pytest.mark.django_db
+def test_missing_api_url_is_a_failure(unreachable):
+    with override_settings(**{**MAILCOW_SETTINGS, "MAILCOW_API_URL": ""}):
+        report = connection_check.run_check(timeout=1)
+
+    step = _step(report, "mailcow")
+    assert step.status == connection_check.FAIL
+    assert "/api/v1" in step.hint
+
+
+@pytest.mark.django_db
+def test_missing_api_key_explains_which_key_is_needed(unreachable):
+    """read-only не даёт выписать app-password — почта всё равно не пойдёт."""
+    with override_settings(**{**MAILCOW_SETTINGS, "MAILCOW_API_KEY": ""}):
+        report = connection_check.run_check(timeout=1)
+
+    step = _step(report, "mailcow")
+    assert step.status == connection_check.FAIL
+    assert "read-write" in step.hint
+
+
+@pytest.mark.django_db
+def test_unreachable_api_host_stops_the_chain(unreachable):
+    """Хост не отвечает — спрашивать про ключ и домен нечего."""
+    with override_settings(**MAILCOW_SETTINGS):
+        report = connection_check.run_check(timeout=1)
+
+    statuses = _statuses(report)
+    assert statuses["mailcow"] == connection_check.FAIL
+    assert "mailcow_auth" not in statuses
+
+
+@pytest.mark.django_db
+def test_rejected_key_points_at_the_ip_allowlist(reachable, fake_mailcow):
+    """Самая частая причина «ключ есть, а не работает»."""
+    fake_mailcow(probe=_FakeResponse(403))
+    with override_settings(**MAILCOW_SETTINGS):
+        report = connection_check.run_check(timeout=1)
+
+    step = _step(report, "mailcow_auth")
+    assert step.status == connection_check.FAIL
+    assert "Allowed IPs" in step.hint
+
+
+@pytest.mark.django_db
+def test_error_in_a_200_body_is_still_a_rejection(reachable, fake_mailcow):
+    """Mailcow отвечает 200 и на отказ — по коду одному судить нельзя."""
+    fake_mailcow(probe=_FakeResponse(200, {"type": "error", "msg": "authentication failed"}))
+    with override_settings(**MAILCOW_SETTINGS):
+        report = connection_check.run_check(timeout=1)
+
+    step = _step(report, "mailcow_auth")
+    assert step.status == connection_check.FAIL
+    assert "Allowed IPs" in step.hint
+
+
+@pytest.mark.django_db
+def test_html_answer_means_the_url_lost_its_api_path(reachable, fake_mailcow):
+    """Забыли /api/v1 — запрос ушёл в панель и вернул страницу входа."""
+    fake_mailcow(probe=_FakeResponse(200, None, text="<!DOCTYPE html><html>"))
+    with override_settings(**MAILCOW_SETTINGS):
+        report = connection_check.run_check(timeout=1)
+
+    step = _step(report, "mailcow_auth")
+    assert step.status == connection_check.FAIL
+    assert "/api/v1" in step.hint
+
+
+@pytest.mark.django_db
+def test_key_that_cannot_see_our_domain_lists_what_it_sees(reachable, fake_mailcow):
+    """Ключ выписан для другого домена — сказать, для какого, обязательно:
+    иначе «домена нет» неотличимо от «ключ не тот»."""
+    fake_mailcow(probe=_domains("other.example"))
+    with override_settings(**MAILCOW_SETTINGS):
+        report = connection_check.run_check(timeout=1)
+
+    step = _step(report, "mailcow_domain")
+    assert step.status == connection_check.FAIL
+    assert "other.example" in step.hint
+    assert _statuses(report).get("mailcow_list") is None
+
+
+@pytest.mark.django_db
+def test_working_key_counts_the_mailboxes(reachable, fake_mailcow):
+    """Зелёная цепочка целиком — то, что должно быть видно в день Х."""
+    fake_mailcow(
+        probe=_domains("htq.group"),
+        mailboxes=[{"username": "a@htq.group"}, {"username": "b@htq.group"}],
+    )
+    with override_settings(**MAILCOW_SETTINGS):
+        report = connection_check.run_check(timeout=1)
+
+    statuses = _statuses(report)
+    assert statuses["mailcow"] == connection_check.OK
+    assert statuses["mailcow_auth"] == connection_check.OK
+    assert statuses["mailcow_domain"] == connection_check.OK
+    assert statuses["mailcow_list"] == connection_check.OK
+    assert "2" in _step(report, "mailcow_list").detail
+
+
+@pytest.mark.django_db
+def test_api_key_never_reaches_the_report(reachable, fake_mailcow):
+    """Правило файла: секреты наружу не уходят, в том числе в ошибках."""
+    fake_mailcow(probe=_FakeResponse(403))
+    with override_settings(**{**MAILCOW_SETTINGS, "MAILCOW_API_KEY": SECRET}):
+        report = connection_check.run_check(timeout=1)
+
+    assert SECRET not in str(report.to_dict())
