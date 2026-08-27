@@ -27,6 +27,8 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict, dataclass
 
+from django.core.cache import cache
+
 from apps.mail.models import ProvisionedMailbox
 from apps.mail.services import mail_config
 from apps.mail.services import mailbox_service as mbx_svc
@@ -170,6 +172,55 @@ def _exists_remote(address: str) -> tuple[bool | None, str | None]:
     except Exception as exc:  # noqa: BLE001 — сверка не должна ронять создание
         log.warning("exists_remote_failed address=%s: %s", address, exc)
         return None, f"почтовый сервер не ответил: {exc}"
+
+
+#: Сколько держать ответ почтового сервера про адрес. Пять минут — компромисс
+#: между «не долбить Mailcow на каждой загрузке страницы» и «увидеть только что
+#: заведённый ящик, не дожидаясь конца дня».
+_REMOTE_TTL = 300
+
+
+def remote_exists(address: str, *, use_cache: bool = False) -> bool | None:
+    """Есть ли ящик на почтовом сервере: ``True`` / ``False`` / ``None``.
+
+    Третье состояние — не отговорка, а единственный честный ответ у голого
+    IMAP (проверить можно только логином, а пароля нет) и у недоступного
+    сервера. Подробнее — в докстринге модуля.
+
+    ``use_cache`` для тех, кто спрашивает ЧАСТО и по неважному поводу: ручка
+    ``connect-corporate`` дёргается на каждой загрузке страницы каждым
+    сотрудником. Решения о ЗАВЕДЕНИИ ящика кэш не используют намеренно —
+    там устаревшее «ящик есть» стоило бы дубля или потерянной почты.
+
+    Кэшируется только ответ сервера: он одинаков для всех спрашивающих.
+    Класть в кэш весь ``MailboxLookup`` было бы ошибкой — ``owner_conflict``
+    в нём считается относительно конкретного пользователя, и один ключ
+    отдавал бы соседу чужой вердикт.
+    """
+    address = (address or "").strip().lower()
+    if not address:
+        return None
+    if not use_cache:
+        return _exists_remote(address)[0]
+
+    key = f"mail:remote-exists:{address}"
+    try:
+        cached = cache.get(key)
+    except Exception:  # noqa: BLE001 — недоступный Redis не повод падать
+        log.warning("remote_exists_cache_get_failed address=%s", address, exc_info=True)
+        return _exists_remote(address)[0]
+
+    if cached is not None:
+        return cached["exists"]
+
+    exists = _exists_remote(address)[0]
+    try:
+        # Словарь-обёртка, потому что сам ответ бывает None, а None в кэше
+        # неотличим от «ничего не лежит».
+        cache.set(key, {"exists": exists}, _REMOTE_TTL)
+    except Exception:  # noqa: BLE001
+        log.warning("remote_exists_cache_set_failed address=%s", address, exc_info=True)
+    return exists
 
 
 def _needs_password(address: str) -> bool:

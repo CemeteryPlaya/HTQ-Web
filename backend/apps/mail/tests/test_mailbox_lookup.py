@@ -960,3 +960,109 @@ def test_personal_email_gives_the_card_nothing_to_prefill(use_provisioner):
     body = resp.json()
     assert body["own_address"] == ""
     assert body["allowed"] is False
+
+
+# ── suggest_connect: спрашиваем сервер там, где он умеет отвечать ─────────
+#
+# До этого подсказка считалась только по локальным данным и появлялась у
+# всех, у кого адрес корпоративный. С Mailcow вопрос «есть ли такой ящик»
+# задать МОЖНО — и тогда «нет» означает, что просить пароль не за чем:
+# человек будет перебирать пароли от несуществующего ящика.
+#
+# Голый IMAP отвечает «не знаю», и это НЕ «нет»: приравняй одно к другому —
+# и подсказка исчезла бы разом у всех, кому она сейчас и адресована.
+
+
+class _CountingMailcow(_FakeMailcow):
+    """Считает обращения к серверу — иначе кэш нечем проверить."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.probes: list[str] = []
+
+    def exists_remote(self, *, address):
+        self.probes.append(address.lower())
+        return super().exists_remote(address=address)
+
+
+@pytest.mark.django_db
+def test_server_that_says_no_stops_the_suggestion(use_provisioner):
+    """Главное изменение А3: ящика на сервере нет — молчим."""
+    use_provisioner(_FakeMailcow(remote=set()))
+    body = _connect_info(_amirov(), **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
+
+    assert body["suggest_connect"] is False
+    assert body["own_address"] == "ruslan.amirov@htq.group"
+
+
+@pytest.mark.django_db
+def test_server_that_says_yes_keeps_the_suggestion(use_provisioner):
+    use_provisioner(_FakeMailcow(remote={"ruslan.amirov@htq.group"}))
+    body = _connect_info(_amirov(), **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
+
+    assert body["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_unknown_answer_keeps_the_guess(use_provisioner):
+    """Сегодняшний прод: голый IMAP проверить существование не может.
+    Подсказка обязана остаться — иначе А3 сломал бы ровно тот сценарий,
+    ради которого всё писалось."""
+    use_provisioner(_FakeImap())
+    body = _connect_info(_amirov())
+
+    assert body["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_unreachable_server_is_not_a_no(use_provisioner):
+    """Mailcow молчит → «не знаю», а не «ящика нет»."""
+    use_provisioner(_FakeMailcow(remote=set(), unreachable="таймаут"))
+    body = _connect_info(_amirov(), **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
+
+    assert body["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_server_is_asked_once_per_address(use_provisioner):
+    """Ручку дёргает каждая загрузка страницы каждым сотрудником — без кэша
+    это столько же обращений к Mailcow."""
+    prov = use_provisioner(_CountingMailcow(remote={"ruslan.amirov@htq.group"}))
+    user = _amirov()
+
+    for _ in range(3):
+        assert _connect_info(user, **MAILCOW_ENV,
+                             MAIL_PROVISIONER="mailcow")["suggest_connect"] is True
+
+    assert prov.probes == ["ruslan.amirov@htq.group"]
+
+
+@pytest.mark.django_db
+def test_cache_does_not_answer_for_another_address(use_provisioner):
+    """Ключ по адресу, а не общий: иначе первый спросивший решал бы за всех."""
+    prov = use_provisioner(_CountingMailcow(remote={"ruslan.amirov@htq.group"}))
+    other = User.objects.create(
+        username="other", email="other.person@htq.group", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    other.set_password("S3cret!")
+    other.save()
+
+    assert _connect_info(_amirov(), **MAILCOW_ENV,
+                         MAIL_PROVISIONER="mailcow")["suggest_connect"] is True
+    assert _connect_info(other, **MAILCOW_ENV,
+                         MAIL_PROVISIONER="mailcow")["suggest_connect"] is False
+
+    assert prov.probes == ["ruslan.amirov@htq.group", "other.person@htq.group"]
+
+
+@pytest.mark.django_db
+def test_provisioning_decisions_never_read_the_cache(use_provisioner):
+    """Кэш — только для подсказки. Заведение ящика должно видеть сервер
+    сейчас: устаревшее «ящик есть» стоило бы дубля или потерянной почты."""
+    prov = use_provisioner(_CountingMailcow(remote={"ruslan.amirov@htq.group"}))
+
+    for _ in range(2):
+        lookup_service.lookup("ruslan.amirov@htq.group")
+
+    assert prov.probes == ["ruslan.amirov@htq.group"] * 2
