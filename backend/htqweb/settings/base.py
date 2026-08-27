@@ -108,6 +108,9 @@ MIDDLEWARE = [
     # осталось внутри их «скобок», и латентность систематически занижается.
     "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "htqweb.middleware.request_id.RequestIDMiddleware",
+    # Ставится ДО ServiceGateMiddleware: тот гейтит домены и должен уже
+    # знать компанию, чтобы спросить и глобальный рубильник, и компанейский.
+    "htqweb.middleware.company_context.CompanyContextMiddleware",
     "htqweb.middleware.service_gate.ServiceGateMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # WhiteNoise отдаёт собранную (collectstatic) статику прямо из WSGI/ASGI-процесса
