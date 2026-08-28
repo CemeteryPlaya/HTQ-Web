@@ -10,115 +10,64 @@ apps.contracts/apps.signoff. Идут с ``transaction=True``: DDL из неск
 Уборка — САМАЯ важная часть этого файла, важнее самих проверок. Если она не
 вернёт таблицы обратно в public, весь ОСТАЛЬНОЙ набор тестов в сборке не
 найдёт своих таблиц — это не "осиротевшая схема", а сломанная тестовая база
-для всех, кто запускает `pytest` после этого файла.
+для всех, кто запускает `pytest` после этого файла. Реализация уборки —
+``_tenancy_test_support.restore_public`` (общая с ``test_migrate_shared.py``):
+переносит найденные в схеме компании таблицы и строки ``django_migrations``
+обратно в public тем же инструментом (``ALTER TABLE ... SET SCHEMA`` /
+INSERT), каким их туда забрала команда, и только потом сносит опустевшую
+схему — НЕ голый ``schema_service.drop_schema``, тот снёс бы перенесённые
+таблицы ВМЕСТЕ со схемой каскадом.
 
-Поэтому уборка НЕ идёт через ``schema_service.drop_schema`` напрямую: DROP
-SCHEMA ... CASCADE снёс бы перенесённые таблицы ВМЕСТЕ со схемой, а не
-вернул бы их в public — ровно та ошибка, которую этот докстринг предупреждает
-не совершать. Вместо этого ``_restore_public`` переносит найденные в схеме
-компании таблицы и строки ``django_migrations`` обратно в public тем же
-инструментом (``ALTER TABLE ... SET SCHEMA`` / INSERT), каким их туда забрала
-команда, и только потом сносит опустевшую схему. Она читает состав схемы
-компании через ``information_schema`` вместо того, чтобы полагаться на
-список тенантных моделей — так уборка остаётся верной даже если перенос
-запнулся на середине (что не должно происходить благодаря
-``transaction.atomic()`` внутри команды, но проверяется отдельным тестом
-ниже, а не только предполагается).
-
-Фикстура ``cleanup`` — autouse и вызывает ``_restore_public()`` в teardown
+Фикстура ``cleanup`` — autouse и вызывает ``restore_public()`` в teardown
 (после ``yield``): pytest гарантирует, что код после ``yield`` отработает,
 даже если сам тест упал на assert — это и есть защита от "половина таблиц
 осталась в чужой схеме".
+
+Оракул полноты переноса (``_tenancy_test_support.public_tenant_leftovers``)
+намеренно не использует Django-реестр моделей: он читает Postgres напрямую
+по имени таблицы. Если бы тест сверял результат со списком, добытым ТОЙ ЖЕ
+функцией, что и сама команда (``Command._tenant_tables``), он доказывал бы
+только то, что команда перенесла ровно то, что сама решила переносить, а не
+то, что перенос полон — ровно так остался бы незамеченным пропуск
+auto-created M2M-таблицы (``tasks_task_labels``, поле без ``through``),
+которую ``get_models()`` без ``include_auto_created=True`` не возвращает.
 """
 
 import pytest
-from django.apps import apps as django_apps
 from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
-from psycopg import sql
 
 import apps.companies.management.commands.tenancy_bootstrap as tenancy_bootstrap
 from apps.companies.models import Company
-from apps.companies.services import holding_views, schema_service
+from apps.companies.services import schema_service
+from apps.companies.tests._tenancy_test_support import (
+    public_tenant_leftovers,
+    restore_public,
+)
 from htqweb.tenancy.context import schema_for
 
 SLUG = "t-root"
 SCHEMA = schema_for(SLUG)
 
 
-def _tenant_tables() -> list[str]:
-    tables = []
-    for label in settings.TENANT_APPS:
-        for model in django_apps.get_app_config(label).get_models():
-            tables.append(model._meta.db_table)
-    return sorted(tables)
-
-
 def _schema_of(table: str) -> str | None:
+    """Схема таблицы (НЕ вьюхи — ``holding`` держит одноимённые вьюхи)."""
     with connection.cursor() as cur:
         cur.execute(
-            "SELECT table_schema FROM information_schema.tables WHERE table_name = %s",
+            "SELECT table_schema FROM information_schema.tables "
+            "WHERE table_name = %s AND table_type = 'BASE TABLE'",
             [table],
         )
         row = cur.fetchone()
         return row[0] if row else None
 
 
-def _restore_public() -> None:
-    """Вернуть всё, что нашлось в схеме компании, обратно в public.
-
-    Состав схемы читается по факту (``information_schema``), а не по списку
-    тенантных моделей — иначе уборка сама повторила бы ту же ошибку, от
-    которой защищает: предположение, что перенос прошёл целиком.
-    """
-    if not schema_service.schema_exists(SLUG):
-        Company.objects.filter(slug=SLUG).delete()
-        return
-
-    with connection.cursor() as cur:
-        cur.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = %s AND table_name != 'django_migrations'",
-            [SCHEMA],
-        )
-        tables = [row[0] for row in cur.fetchall()]
-        for table in tables:
-            cur.execute(
-                sql.SQL("ALTER TABLE {}.{} SET SCHEMA public").format(
-                    sql.Identifier(SCHEMA), sql.Identifier(table),
-                )
-            )
-
-        cur.execute("SELECT to_regclass(%s)", [f"{SCHEMA}.django_migrations"])
-        if cur.fetchone()[0] is not None:
-            cur.execute(
-                sql.SQL(
-                    "INSERT INTO public.django_migrations (app, name, applied) "
-                    "SELECT app, name, applied FROM {}.django_migrations AS moved "
-                    "WHERE NOT EXISTS ("
-                    "  SELECT 1 FROM public.django_migrations AS existing "
-                    "  WHERE existing.app = moved.app AND existing.name = moved.name"
-                    ")"
-                ).format(sql.Identifier(SCHEMA))
-            )
-
-    # Схема компании пуста (таблицы разъехались по public выше) — можно
-    # безопасно сносить её CASCADE, но снос холдинга сначала: он мог
-    # собраться поверх этой схемы (тест rebuild), и DROP SCHEMA ... CASCADE
-    # утащил бы вьюхи holding, оставив её в неопределённом состоянии для
-    # следующего теста.
-    holding_views.drop_holding_views()
-    schema_service.drop_schema(SLUG)
-    Company.objects.filter(slug=SLUG).delete()
-    holding_views.rebuild_holding_views()
-
-
 @pytest.fixture(autouse=True)
 def cleanup():
     yield
-    _restore_public()
+    restore_public(SLUG)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -153,10 +102,11 @@ def test_moves_tenant_tables_out_of_public():
     assert _schema_of("contracts_budget") == SCHEMA
     assert _schema_of("signoff_approvalprocess") == SCHEMA
 
-    # Полнота переноса — не выборочная проверка двух-трёх таблиц: каждая
-    # модель тенантных аппок обязана оказаться в схеме компании.
-    for table in _tenant_tables():
-        assert _schema_of(table) == SCHEMA, f"{table} не переехала в {SCHEMA}"
+    # Полнота переноса — по факту Postgres (см. докстринг модуля), а не по
+    # тому же реестру моделей, которым пользуется сама команда: в public не
+    # должно остаться НИ ОДНОЙ таблицы с именем тенантной аппки, включая
+    # auto-created M2M вроде tasks_task_labels.
+    assert public_tenant_leftovers() == set()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -265,6 +215,8 @@ def test_partial_failure_leaves_public_untouched(monkeypatch):
     бы в co_t_root и остались бы там НАВСЕГДА, хотя сама команда завершилась
     бы ошибкой "relation does not exist" на выдуманной таблице.
     """
+    before = public_tenant_leftovers()
+
     real_tenant_tables = tenancy_bootstrap.Command._tenant_tables
 
     def poisoned(self):
@@ -281,5 +233,7 @@ def test_partial_failure_leaves_public_untouched(monkeypatch):
 
     assert not Company.objects.filter(slug=SLUG).exists()
     assert not schema_service.schema_exists(SLUG)
-    for table in _tenant_tables():
-        assert _schema_of(table) == "public", f"{table} не осталась в public"
+    # Сравнение с "до", а не перебор по (потенциально патченному) реестру
+    # моделей — оракул независим от того, что именно решила переносить
+    # сама команда.
+    assert public_tenant_leftovers() == before

@@ -49,7 +49,7 @@ from django.apps import apps as django_apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
-from django.db import connection, transaction
+from django.db import ProgrammingError, connection, transaction
 from psycopg import sql
 
 from apps.companies.models import Company, CompanyKind
@@ -75,10 +75,23 @@ class Command(BaseCommand):
         и ``migration_service`` — ``settings.TENANT_APPS`` — чтобы список
         таблиц к переносу не разъезжался с тем, что считается тенантным в
         остальной платформе.
+
+        ``include_auto_created=True`` обязателен: без него ``get_models()``
+        молчит про auto-created M2M-таблицы (поле ``ManyToManyField`` без
+        явного ``through``) — например, ``tasks_task_labels`` для
+        ``Task.labels``. Без этого флага такая таблица осталась бы в
+        ``public`` рядом с уже переехавшими ``tasks_task``/``tasks_label``:
+        первой компании это сошло бы с рук (``public`` всё ещё виден по
+        ``search_path``), но вторая компания завела бы СВОЮ
+        ``co_y.tasks_task_labels``, а первая навсегда осталась бы на
+        public-копии — молчаливый, но фатальный разъезд данных между
+        компаниями.
         """
         tables = []
         for label in settings.TENANT_APPS:
-            for model in django_apps.get_app_config(label).get_models():
+            for model in django_apps.get_app_config(label).get_models(
+                include_auto_created=True,
+            ):
                 tables.append(model._meta.db_table)
         return sorted(tables)
 
@@ -162,7 +175,26 @@ class Command(BaseCommand):
         # rebuild_holding_views. drop_holding_views() здесь не нужен — см.
         # докстринг модуля: до этого bootstrap'а представлений холдинга не
         # существует вовсе.
-        holding_views.rebuild_holding_views()
+        try:
+            holding_views.rebuild_holding_views()
+        except ProgrammingError as exc:
+            # Перенос УЖЕ зафиксирован (мы вне transaction.atomic()) — это
+            # не повод откатывать что-либо и не повод молчать голой
+            # трассировкой. Оператор в окне обслуживания обязан увидеть, что
+            # именно уже сделано (таблицы и компания на месте) и что делать
+            # дальше, а не решить, что перенос не сработал, и полезть
+            # откатывать зафиксированные данные. Тот же приём и тот же дух
+            # сообщения, что и в company_create.py на симметричном месте.
+            raise CommandError(
+                f"Таблицы перенесены и компания {slug} создана — это уже "
+                "зафиксировано и откатывать нечего. Но собрать сводки "
+                "холдинга не удалось: состав столбцов разошёлся с другой "
+                "компанией, отставшей по миграциям (маловероятно для самой "
+                "первой компании, но возможно при повторном bootstrap "
+                "хранилища с остатками старых представлений). Выполните "
+                f"`manage.py migrate_companies`. Причина: {exc}"
+            ) from exc
+
         self.stdout.write(self.style.SUCCESS(
             f"Перенесено {len(tables)} таблиц в {schema}. Компания {slug} создана."
         ))
