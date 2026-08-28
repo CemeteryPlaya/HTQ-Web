@@ -29,6 +29,7 @@ HTQWeb1/
 ├── backend/               # ⭐ ЕДИНЫЙ Django-backend (см. §3)
 │   ├── htqweb/            # Проектный пакет: settings/, urls.py, asgi.py/wsgi.py,
 │   │                       #   authn/ (JWT), http.py (api_view), middleware/, storage/,
+│   │                       #   tenancy/ (контекст компании и схема Postgres, см. §3.7),
 │   │                       #   fallback.py (громкие подмены, см. §8)
 │   ├── apps/               # Доменные Django-аппки — units изоляции (см. §3.1)
 │   ├── manage.py   requirements.txt   pytest.ini   conftest.py
@@ -78,6 +79,7 @@ HTQWeb1/
 | **contracts** | `api/contracts/v1/` | `contracts` | Бюджеты (программа × статья расходов × администратор), реестр контрагентов, договоры с контролем остатка бюджета (см. §3.5). Единственная аппка, появившаяся уже после обратной миграции — FastAPI-предка у неё нет |
 | **signoff** | `api/signoff/v1/` | `signoff` | ⭐ Универсальное многоэтапное согласование ЧУЖИХ объектов (см. §3.6). **Не путать с `approvals`**: та согласует собственные `RequestInstance` из своего конструктора форм, эта — строки в таблицах предметных аппок |
 | **conference** | `api/conference/v1/` | `conference` | ⭐ История видеоконференций, записи и протокол (см. §5). Данные заводит SFU через `internal/*`, а не пользователь |
+| **companies** | `api/companies/v1/` | `companies` | ⭐ Реестр компаний группы и мультикомпанейность — схема Postgres на компанию (см. §3.7). Часть `CORE_MODULES`: на уровне компании не выключается, только глобально |
 
 Полный список канонических имён сервисов — `apps.core.models.KNOWN_SERVICES`. Имя `conference` долго стояло там «про запас», под SFU-стек без своей Django-аппки; теперь аппка есть (`apps.conference`, §5), и флаг гейтит уже её маршруты.
 
@@ -195,6 +197,47 @@ cd backend
 Что сейчас объявлено в `apps/contracts/approval_hooks.py`: бюджет — `admin_country_id`, `period_year`, `currency`, `amount`; контрагент — `counterparty_country_id`, `vat`; договор — `admin_country_id`, `counterparty_country_id`, `program_id`, `amount`, `currency`, `payment_type`. Ветвить бюджет по программе нельзя и не будет: бюджет — контейнер из N строк, то есть N программ, а `conditions.normalize_facts` принимает только скаляры. Это упёрлось бы в новый тип факта-списка и операторы вида `contains` в самом signoff, а не в правку contracts.
 
 ⚠️ **Справочник под choice-полем обязан быть непустым.** `conditions.validate_fields` роняет ВЕСЬ список полей типа, если у любого `choice` пустые `options`, а `SubjectsView._fields` глушит это в `[]`. Практический эффект: на свежей установке без заведённых стран И программ редактор маршрута для «Договора» не покажет ни одного условия — включая те, чьи справочники заполнены. Данные это чинят сами (ни бюджет, ни договор не завести без страны и программы), но при настройке маршрутов ДО ввода данных выглядит как сломанный редактор.
+
+### 3.7 Companies — мультикомпанейность (реестр компаний + схема Postgres на компанию)
+
+Полный дизайн и «почему» — [docs/multi-company-tenancy-design.md](docs/multi-company-tenancy-design.md) и CLAUDE.md §«Мультикомпанейность». Здесь — только карта каталогов, двух новых на платформе.
+
+```
+backend/htqweb/tenancy/       # Контекст компании и перевод соединения в её схему — часть фундамента
+│                              #   htqweb, не Django-аппка и не гейтится ServiceStatus/require_service
+├── __init__.py                 # ре-экспорт: current_company, current_company_or_none,
+│                                #   set_company/reset_company, schema_for, NoCompanyContext, HOLDING_SCHEMA
+├── context.py                   # contextvars-хранилище slug'а (не threading.local — под ASGI
+│                                #   поток обслуживает много корутин) + schema_for("co_" + slug)
+├── db.py                         # apply_search_path()/use_company()/use_holding() — SET search_path
+│                                #   на соединении БД, безопасно при CONN_MAX_AGE=0
+├── celery.py                     # @company_task — разворачивает kwarg company_slug в контекст задачи;
+│                                #   без него MissingCompanyArgument, а не молчаливый public
+└── tests/                        # контекст, БД, celery, middleware, claim company в JWT
+
+backend/apps/companies/        # Реестр компаний (схема public) — API_PREFIX=api/companies/v1/
+├── models.py                    # Company (дерево владения), CompanyServiceLink (граф ТМЗ),
+│                                #   CompanyMembership, CompanyModule (рубильник на уровне компании),
+│                                #   CompanySchemaVersion (факт/цель миграций по компании)
+├── interface.py                  # get_company, active_company_slugs, user_company_slugs,
+│                                #   default_company_slug, module_enabled — точка входа соседей
+├── admin.py                       # django-admin, под ServiceGatedAdminMixin
+├── metrics.py                      # collect() — автодискавери apps/core/metrics.py
+├── services/
+│   ├── schema_service.py             # CREATE/DROP SCHEMA co_<slug>
+│   ├── migration_service.py           # migrate_company() — прогон по схеме одной компании,
+│   │                                   #   advisory-lock, BackwardsMigrationRefused/SchemaMissing
+│   └── holding_views.py                # drop_holding_views()/rebuild_holding_views() — сводные
+│                                        #   UNION ALL представления схемы holding
+└── management/commands/
+    ├── company_create.py                # завести компанию: реестр + схема + миграции + сводки
+    ├── migrate_companies.py              # довести схемы компаний до текущей версии (снос/сборка
+    │                                     #   сводок холдинга вокруг прогона)
+    ├── migrate_shared.py                  # migrate только нетенантных аппок — этим стартует
+    │                                      #   контейнер вместо голого migrate (RUN_MIGRATIONS=1)
+    └── tenancy_bootstrap.py                # разовый перенос hr/tasks/contracts/signoff из public
+                                             #   в схему первой компании (ALTER TABLE ... SET SCHEMA)
+```
 
 ---
 
