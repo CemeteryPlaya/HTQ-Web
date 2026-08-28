@@ -18,14 +18,31 @@
 Та же пара «снести до / собрать после» и в той же мотивации уже есть в
 ``manage.py migrate_companies`` (задача 11) — здесь она возникает по той же
 причине, а не скопирована ради единообразия.
+
+Шаги 3 и 4 — в ОДНОМ ``try``: падение любого из них означает, что схема без
+таблиц (или без снесённых представлений) опаснее её отсутствия, и оба случая
+обязаны откатываться одинаково.
+
+Откат — три НЕЗАВИСИМЫХ шага (снос схемы, удаление строки реестра, пересборка
+сводок), каждый обёрнут ``migration_service._cleanup``: сбой одного не должен
+мешать остальным отработать и не должен подменить собой исходную причину
+падения ``migrate_company`` — та же логика и тот же примитив
+(``htqweb/fallback.py``, ``expected=True``), которым сам ``migration_service``
+уже защищает свою собственную уборку после прогона (см. его докстринг).
+Переиспользуется приватная функция соседнего модуля той же аппки, а не её
+копия: это внутриаппочный импорт (``apps.companies`` -> ``apps.companies``),
+инвариант межаппных границ (``apps/core/tests/test_app_isolation.py``) его не
+касается, а порождать вторую реализацию того же примитива было бы обманчивым
+дублированием.
 """
 
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import ProgrammingError, transaction
 
 from apps.companies.models import Company, CompanyKind
 from apps.companies.services import holding_views, migration_service, schema_service
+from apps.companies.services.migration_service import _cleanup
 
 
 class Command(BaseCommand):
@@ -67,29 +84,54 @@ class Command(BaseCommand):
             company.save()
             schema_service.create_schema(slug)
 
-        # Снести сводки ДО прогона миграций: пока представление существует,
-        # Postgres запрещает удалять столбцы его таблиц и менять их типы —
-        # то есть любая contract-миграция упала бы здесь же.
-        holding_views.drop_holding_views()
-
         try:
+            # Снести сводки ДО прогона миграций: пока представление
+            # существует, Postgres запрещает удалять столбцы его таблиц и
+            # менять их типы — то есть любая contract-миграция упала бы
+            # здесь же. Сбой самого сноса (обрыв блокировки, соединения) —
+            # тоже повод для отката: без него компания осталась бы активной
+            # строкой реестра со схемой без единой мигрированной таблицы.
+            holding_views.drop_holding_views()
             migration_service.migrate_company(slug)
         except Exception:
             # Схема без таблиц опаснее её отсутствия: компания выглядела бы
-            # заведённой и падала бы на первом же запросе.
-            schema_service.drop_schema(slug)
-            company.delete()
+            # заведённой и падала бы на первом же запросе. Три шага ниже —
+            # НЕЗАВИСИМЫЕ: падение любого (например, обрыв соединения на
+            # DROP SCHEMA) не должно ни остановить остальные, ни подменить
+            # собой исходную причину падения migrate_company/drop_holding_views
+            # — именно поэтому они идут через _cleanup, а не голыми вызовами
+            # подряд.
+            _cleanup("снос схемы после отката",
+                     lambda: schema_service.drop_schema(slug))
             # Компания уже попала в active_company_slugs (status по
             # умолчанию — ACTIVE), а представления холдинга сейчас сняты
             # шагом выше. Не пересобрать их здесь значило бы оставить
             # ДЕЙСТВУЮЩИЕ компании без сводок из-за отката ЧУЖОГО, только
             # что не состоявшегося заведения — rebuild_holding_views сам
-            # читает список свежим (fresh=True) и новой компании в нём уже
-            # нет, потому что строка выше её удалила.
-            holding_views.rebuild_holding_views()
+            # читает список свежим (fresh=True), поэтому важно, чтобы
+            # удаление строки реестра шло РАНЬШЕ пересборки.
+            _cleanup("удаление строки реестра после отката", company.delete)
+            _cleanup("пересборка сводок холдинга после отката",
+                     holding_views.rebuild_holding_views)
             raise
 
-        holding_views.rebuild_holding_views()
+        try:
+            holding_views.rebuild_holding_views()
+        except ProgrammingError as exc:
+            # Компания X (эта) создана и мигрирована успешно — откатывать
+            # её не за что. Падает СВОДКА, потому что другая, ранее
+            # заведённая компания отстала по миграциям и состав столбцов
+            # разошёлся; тот же сценарий и то же сообщение по духу, что и в
+            # manage.py migrate_companies (задача 11).
+            raise CommandError(
+                f"Компания {slug} создана и мигрирована, но сводки холдинга "
+                "собрать нельзя: состав столбцов разошёлся с другой "
+                "компанией, отставшей по миграциям. Представления оставлены "
+                "снесёнными: читатель получит громкую ошибку вместо цифр по "
+                "полумигрированной группе. Доведите остальные компании — "
+                f"`manage.py migrate_companies` без фильтров. Причина: {exc}"
+            ) from exc
+
         self.stdout.write(self.style.SUCCESS(
             f"Компания {slug} создана, схема co_{slug.replace('-', '_')} готова."
         ))

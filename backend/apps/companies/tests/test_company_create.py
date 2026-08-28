@@ -94,6 +94,69 @@ def test_rolls_back_schema_and_row_on_migration_failure(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_rollback_survives_schema_drop_failure(monkeypatch):
+    """Сбой ОДНОГО шага отката не должен останавливать остальные.
+
+    Если ``drop_schema`` во время отката упадёт (обрыв соединения,
+    блокировка) — это не повод оставить строку реестра висеть и сводки
+    холдинга снесёнными. Остальные шаги отката обязаны выполниться, а
+    наружу обязана долететь ИСХОДНАЯ причина падения migrate_company, а не
+    вторичная ошибка уборки.
+    """
+    def migration_boom(slug, **kwargs):
+        raise RuntimeError("миграция сломалась")
+
+    def drop_schema_boom(slug):
+        raise RuntimeError("не смогли снести схему")
+
+    monkeypatch.setattr(migration_service, "migrate_company", migration_boom)
+    monkeypatch.setattr(schema_service, "drop_schema", drop_schema_boom)
+
+    with pytest.raises(RuntimeError, match="миграция сломалась"):
+        call_command("company_create", "t-new", name="Авария", kind="service")
+
+    # Патч снят ЯВНО и до фикстуры cleanup, а не понадеявшись на порядок
+    # финализации фикстур: teardown автоюзной cleanup может отработать
+    # раньше teardown'а monkeypatch, и тогда её собственный, настоящий
+    # drop_schema("t-new") наткнулся бы на всё ещё подменённую функцию.
+    monkeypatch.undo()
+
+    # Снос схемы не удался (это и проверяем) — строка реестра при этом всё
+    # равно должна была уйти: другие шаги отката не зависят от этого.
+    assert not Company.objects.filter(slug="t-new").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rollback_survives_company_delete_failure(monkeypatch):
+    """Сбой удаления строки реестра не должен останавливать снос схемы.
+
+    Худший случай отката: строка реестра остаётся ACTIVE, хотя схемы под ней
+    уже нет (частичный откат). Это ровно тот фантом, ради которого весь
+    откат существует — но раз уж он случился с ОДНИМ шагом, снос схемы
+    обязан был отработать, а наружу обязана долететь исходная ошибка
+    миграции, а не сбой удаления строки.
+    """
+    def migration_boom(slug, **kwargs):
+        raise RuntimeError("миграция сломалась")
+
+    def delete_boom(self, *a, **kw):
+        raise RuntimeError("не смогли удалить строку")
+
+    monkeypatch.setattr(migration_service, "migrate_company", migration_boom)
+    monkeypatch.setattr(Company, "delete", delete_boom)
+
+    with pytest.raises(RuntimeError, match="миграция сломалась"):
+        call_command("company_create", "t-new", name="Авария", kind="service")
+
+    # См. предыдущий тест: снимаем патч явно, до того как за дело возьмётся
+    # cleanup — её teardown не гарантированно идёт после teardown monkeypatch.
+    monkeypatch.undo()
+
+    # Снос схемы прошёл независимо от того, что удаление строки не удалось.
+    assert not schema_service.schema_exists("t-new")
+
+
+@pytest.mark.django_db(transaction=True)
 def test_rebuilds_holding_views_after_success():
     """Сводки холдинга обязаны включать только что созданную компанию.
 
