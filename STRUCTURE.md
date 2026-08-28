@@ -231,6 +231,11 @@ backend/apps/companies/        # Реестр компаний (схема publi
 │                                        #   UNION ALL представления схемы holding
 └── management/commands/
     ├── company_create.py                # завести компанию: реестр + схема + миграции + сводки
+    ├── company_grant.py                   # выдать/пополнить CompanyMembership пользователю
+    │                                     #   или всем активным, идемпотентно
+    ├── company_archive.py                 # архивировать компанию: status + пересборка сводок
+    │                                     #   холдинга одной операцией, идемпотентно
+    ├── company_restore.py                 # вернуть компанию из архива — симметрично company_archive
     ├── migrate_companies.py              # довести схемы компаний до текущей версии (снос/сборка
     │                                     #   сводок холдинга вокруг прогона)
     ├── migrate_shared.py                  # migrate только нетенантных аппок — этим стартует
