@@ -8,12 +8,37 @@
 # Основной default.conf слушает только :80, потому что без сертификата
 # nginx с блоком 443 просто не стартует.
 #
+# КОМПАНИЯ И ЗДЕСЬ ОПРЕДЕЛЯЕТСЯ ПОДДОМЕНОМ, как в default.conf: $company
+# идёт в X-HTQ-Company, который читает CompanyContextMiddleware. Регулярка
+# ниже — тот же паттерн, что в default.conf, но привязанный к конкретному
+# домену (сертификат выпускается на него, а не на произвольный хост).
+# ⚠️ nginx не наследует proxy_set_header в location, если внутри него
+# объявлен хотя бы один свой proxy_set_header — поэтому X-HTQ-Company
+# продублирован в КАЖДОМ location ниже, который проксирует на
+# backend/backend_asgi. Забыть один — заголовок в нём молча пропадёт, и
+# запросы через этот location уйдут в public-схему вместо схемы компании.
+#
+# СЕРТИФИКАТ — ОБЯЗАТЕЛЬНО WILDCARD. Компаний много, поддоменов для них
+# заранее не перечислить, значит нужен *.<домен>, а не сертификат на один
+# конкретный хост.
+#   ⚠️ HTTP-01 (webroot, как в шаге 3 default.conf) wildcard-сертификаты
+#   НЕ выдаёт — это ограничение протокола ACME, не Let's Encrypt конкретно.
+#   Единственный путь — DNS-01: certbot кладёт TXT-запись через API вашего
+#   DNS-провайдера, поэтому потребуется API-токен провайдера и его certbot
+#   DNS-плагин (см. §13 docs/multi-company-tenancy-design.md — это
+#   зафиксированная блокирующая внешняя зависимость, не забытая деталь).
+#
 # КАК ВКЛЮЧИТЬ
-#   1. SERVER_DOMAIN=<домен> в корневом .env, домен направлен на сервер (A-запись).
+#   1. SERVER_DOMAIN=<домен> в корневом .env, wildcard DNS (*.<домен>, A/CNAME)
+#      направлен на сервер.
 #   2. Поднять стек: docker compose --profile production up -d
-#   3. Выпустить сертификат (nginx уже отдаёт /.well-known/acme-challenge/):
-#        docker compose exec certbot certbot certonly --webroot \
-#          -w /var/www/certbot -d <домен> --email <почта> --agree-tos
+#   3. Выпустить wildcard-сертификат через DNS-01 (пример для провайдера с
+#      готовым certbot-плагином; имя плагина и файл с токеном — под ваш DNS):
+#        docker compose exec certbot certbot certonly \
+#          --dns-<провайдер> --dns-<провайдер>-credentials /path/to/creds.ini \
+#          -d '*.<домен>' -d <домен> --email <почта> --agree-tos
+#      Без плагина под ваш DNS — `--manual --preferred-challenges dns` и
+#      вручную прописать TXT-запись, которую certbot попросит на экране.
 #   4. Скопировать этот файл рядом с основным конфигом и заменить <домен>:
 #        cp infra/nginx/tls.conf.example infra/nginx/tls.conf
 #        sed -i 's/ВАШ_ДОМЕН/<домен>/g' infra/nginx/tls.conf
@@ -30,7 +55,11 @@ server {
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
-    server_name ВАШ_ДОМЕН;
+
+    # Тот же паттерн, что в default.conf: ВАШ_ДОМЕН без поддомена — общий
+    # public-режим (пустой $company); <company>.ВАШ_ДОМЕН — конкретная
+    # компания. "www" как company исключён тем же негативным lookahead'ом.
+    server_name ВАШ_ДОМЕН ~^(?!www\.)(?<company>[a-z][a-z0-9-]*)\.ВАШ_ДОМЕН$;
 
     ssl_certificate     /etc/letsencrypt/live/ВАШ_ДОМЕН/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/ВАШ_ДОМЕН/privkey.pem;
@@ -44,6 +73,7 @@ server {
     # ── Сигналинг конференции (WSS) ────────────────────────────────────────
     # Тот же upstream, что в default.conf. Таймауты суточные: соединение
     # держится всю встречу, и обычные 60 секунд рвали бы её на молчании.
+    # SFU не Django и X-HTQ-Company не читает — не дублируется.
     location /ws/sfu/ {
         proxy_pass http://sfu:4443;
         proxy_http_version 1.1;
@@ -65,6 +95,7 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-HTQ-Company $company;
         proxy_read_timeout 86400s;
     }
 
@@ -74,6 +105,7 @@ server {
         proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-HTQ-Company $company;
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 3600s;
@@ -88,12 +120,14 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Request-ID $request_id;
+        proxy_set_header X-HTQ-Company $company;
     }
 
     location /django-admin/ {
         proxy_pass http://backend;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-HTQ-Company $company;
     }
 
     location /static/ {
