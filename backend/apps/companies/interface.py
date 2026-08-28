@@ -117,6 +117,20 @@ def user_company_slugs(user_id: int) -> list[str]:
     )
 
 
+def user_may_enter_company(user_id: int, slug: str) -> bool:
+    """Пускать ли пользователя в компанию ``slug``.
+
+    Единственное место, где решается «пускать ли пользователя в компанию» —
+    им пользуется и обмен refresh-токена (``apps.users.views.refresh_token``),
+    и любой будущий вызывающий, которому нужен тот же вопрос. Сегодня ответ —
+    голое членство (``CompanyMembership``); когда появятся роли (должность из
+    HR как носитель прав) и механизм для не-сотрудников, это тело обрастёт
+    условиями, а сигнатура и место вызова останутся прежними — вызывающему
+    не придётся ничего переписывать.
+    """
+    return slug in user_company_slugs(user_id)
+
+
 def default_company_slug(user_id: int) -> str | None:
     """Компания, куда пользователя пускать сразу после входа."""
     row = (CompanyMembership.objects

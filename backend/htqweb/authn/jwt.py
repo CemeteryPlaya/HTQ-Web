@@ -11,7 +11,7 @@ class AuthError(Exception):
     pass
 
 
-def _base_claims(user) -> dict:
+def _base_claims(user, company_slug: str | None = None) -> dict:
     # Локальный импорт: htqweb.authn грузится очень рано, а apps.companies —
     # обычная аппка, чьи модели к тому моменту ещё не готовы.
     from apps.companies.interface import default_company_slug
@@ -24,9 +24,11 @@ def _base_claims(user) -> dict:
         "is_staff": user.is_staff,
         "is_superuser": user.is_superuser,
         "is_admin": user.is_staff or user.is_superuser,
-        # Компания по умолчанию. При переключении компании фронт получает
-        # новый access-токен обменом refresh-cookie — см. задачу 13.
-        "company": default_company_slug(user.id),
+        # Компания запроса, если вызывающий её знает и проверил членство
+        # (см. issue_token_pair); иначе — компания по умолчанию. При
+        # переключении компании фронт получает новый access-токен обменом
+        # refresh-cookie — см. задачу 13.
+        "company": company_slug if company_slug is not None else default_company_slug(user.id),
         "iss": settings.JWT_ISSUER,
     }
 
@@ -58,9 +60,19 @@ def _encode(claims: dict, ttl: timedelta, token_type: str) -> str:
         settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-def issue_token_pair(user) -> dict:
+def issue_token_pair(user, *, company_slug: str | None = None) -> dict:
+    """Выпустить пару access/refresh-токенов.
+
+    ``company_slug`` — компания, для которой выпускается access-токен.
+    Опционален: без него (обычный логин) claim ``company`` берётся из
+    компании по умолчанию, как раньше. Вызывающий, знающий компанию запроса
+    (обмен refresh-токена на поддомене — ``apps.users.views.refresh_token``),
+    обязан сам проверить членство ДО вызова (см.
+    ``apps.companies.interface.user_may_enter_company``) — здесь она
+    принимается как есть, без повторной проверки.
+    """
     return {
-        "access": _encode(_base_claims(user), timedelta(minutes=settings.JWT_ACCESS_TTL_MIN), "access"),
+        "access": _encode(_base_claims(user, company_slug), timedelta(minutes=settings.JWT_ACCESS_TTL_MIN), "access"),
         "refresh": _encode(_refresh_claims(user), timedelta(days=settings.JWT_REFRESH_TTL_DAYS), "refresh"),
         "token_type": "Bearer",
     }

@@ -12,6 +12,7 @@ import pytest
 from django.conf import settings
 from django.test import Client
 
+from apps.companies.models import Company, CompanyKind, CompanyMembership
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import decode_token, issue_token_pair
 
@@ -194,3 +195,67 @@ def test_refresh_with_garbage_401(db):
     }, content_type="application/json")
     assert resp.status_code == 401
     assert "detail" in resp.json()
+
+
+# ── POST token/refresh/ — компания запроса (findings #2: переключение между
+#    компаниями через X-HTQ-Company при обмене refresh-cookie) ─────────────
+
+
+@pytest.fixture
+def companies(db):
+    kz = Company.objects.create(slug="htq-kz", name="KZ", kind=CompanyKind.REGIONAL)
+    uz = Company.objects.create(slug="htq-uz", name="UZ", kind=CompanyKind.REGIONAL)
+    return kz, uz
+
+
+@pytest.mark.django_db
+def test_refresh_with_company_header_issues_token_for_that_company(active_user, companies):
+    """Пользователь состоит в обеих компаниях. Переход на uz.-поддомен должен
+    обменять refresh на access ИМЕННО для uz, а не для компании по умолчанию
+    (kz) — именно это было дефектом."""
+    kz, uz = companies
+    CompanyMembership.objects.create(user_id=active_user.id, company=kz, is_default=True)
+    CompanyMembership.objects.create(user_id=active_user.id, company=uz)
+    pair = issue_token_pair(active_user)  # refresh несёт только user_id, без company
+
+    resp = Client().post(f"{BASE}/token/refresh/", data={
+        "refresh": pair["refresh"],
+    }, content_type="application/json", HTTP_X_HTQ_COMPANY="htq-uz")
+
+    assert resp.status_code == 200
+    new_payload = decode_token(resp.json()["access"])
+    assert new_payload.company == "htq-uz"
+
+
+@pytest.mark.django_db
+def test_refresh_with_company_header_not_a_member_403_forbidden(active_user, companies):
+    """Без проверки членства обмен выдал бы токен любой компании, чей
+    поддомен просто открыли — дыра, которую закрывает это ревью."""
+    kz, uz = companies
+    CompanyMembership.objects.create(user_id=active_user.id, company=kz, is_default=True)
+    pair = issue_token_pair(active_user)
+
+    resp = Client().post(f"{BASE}/token/refresh/", data={
+        "refresh": pair["refresh"],
+    }, content_type="application/json", HTTP_X_HTQ_COMPANY="htq-uz")
+
+    assert resp.status_code == 403
+    assert resp.json() == {"detail": "Forbidden"}
+
+
+@pytest.mark.django_db
+def test_refresh_without_company_header_keeps_default_company_behaviour(active_user, companies):
+    """Заголовка нет (общий домен, переходный период) — поведение прежнее:
+    компания по умолчанию, без отказа."""
+    kz, uz = companies
+    CompanyMembership.objects.create(user_id=active_user.id, company=kz, is_default=True)
+    CompanyMembership.objects.create(user_id=active_user.id, company=uz)
+    pair = issue_token_pair(active_user)
+
+    resp = Client().post(f"{BASE}/token/refresh/", data={
+        "refresh": pair["refresh"],
+    }, content_type="application/json")
+
+    assert resp.status_code == 200
+    new_payload = decode_token(resp.json()["access"])
+    assert new_payload.company == "htq-kz"

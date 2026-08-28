@@ -47,6 +47,15 @@ def test_user_company_slugs_lists_only_own(kz):
 
 
 @pytest.mark.django_db
+def test_user_may_enter_company_requires_membership(kz):
+    other = Company.objects.create(slug="htq-uz", name="UZ", kind=CompanyKind.REGIONAL)
+    CompanyMembership.objects.create(user_id=7, company=kz, is_default=True)
+    assert interface.user_may_enter_company(7, "htq-kz") is True
+    assert interface.user_may_enter_company(7, "htq-uz") is False
+    assert interface.user_may_enter_company(8, "htq-kz") is False
+
+
+@pytest.mark.django_db
 def test_module_without_row_is_enabled(kz):
     """Отсутствие строки означает «включено» — так же, как у ServiceStatus."""
     assert interface.module_enabled("htq-kz", "tasks") == (True, "")

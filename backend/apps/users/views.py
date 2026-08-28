@@ -18,6 +18,7 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
 
+from apps.companies.interface import user_may_enter_company
 from apps.mail import interface as mail_interface
 from htqweb.authn.jwt import AuthError, decode_token, issue_token_pair
 from htqweb.fallback import fallback
@@ -68,7 +69,26 @@ def refresh_token(request, data: schemas.TokenRefreshRequest):
     if user is None or user.status != UserStatus.ACTIVE:
         return json_error("User not found or inactive", 401)
 
-    tokens = issue_token_pair(user)
+    # Компания ЗАПРОСА (заголовок X-HTQ-Company, resolved by
+    # CompanyContextMiddleware), а не компания старого refresh-токена: этим
+    # эндпоинтом фронт меняет cookie на access при переходе на другой
+    # поддомен (см. §9 спеки), и новый access обязан нести компанию, в
+    # которую пользователь сейчас переходит. Заголовка нет (общий домен,
+    # переходный период) — company_slug=None и issue_token_pair сама
+    # откатится на компанию по умолчанию, как раньше.
+    company_slug = None
+    if request.company is not None:
+        slug = request.company["slug"]
+        # Проверка членства обязательна: без неё любой пользователь получал
+        # бы токен любой компании, просто открыв её поддомен. Молчаливый
+        # откат на компанию по умолчанию здесь бессмыслен — токен всё равно
+        # не совпал бы с запрошенным поддоменом, и api_view отдал бы 403, но
+        # уже без понятной причины.
+        if not user_may_enter_company(user.id, slug):
+            return json_error("Forbidden", 403)
+        company_slug = slug
+
+    tokens = issue_token_pair(user, company_slug=company_slug)
     return schemas.TokenRefreshResponse(access=tokens["access"])
 
 
