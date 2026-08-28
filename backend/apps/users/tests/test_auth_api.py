@@ -197,8 +197,12 @@ def test_refresh_with_garbage_401(db):
     assert "detail" in resp.json()
 
 
-# ── POST token/refresh/ — компания запроса (findings #2: переключение между
-#    компаниями через X-HTQ-Company при обмене refresh-cookie) ─────────────
+# ── Компания запроса (findings #2): и login, и refresh обязаны выдать токен
+#    компании X-HTQ-Company, а не компании по умолчанию — иначе пользователь
+#    на чужом (для default_company_slug) поддомене либо заперт после
+#    переключения (refresh), либо вовсе не может войти (login, см.
+#    followup-b-report.md — координатор указал на этот же дефект во входе).
+# ─────────────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
@@ -206,6 +210,56 @@ def companies(db):
     kz = Company.objects.create(slug="htq-kz", name="KZ", kind=CompanyKind.REGIONAL)
     uz = Company.objects.create(slug="htq-uz", name="UZ", kind=CompanyKind.REGIONAL)
     return kz, uz
+
+
+@pytest.mark.django_db
+def test_login_with_company_header_issues_token_for_that_company(active_user, companies):
+    """Вход на uz.-поддомене должен сразу выдать токен uz, а не компании по
+    умолчанию (kz) — иначе следующий же запрос получает 403 без всякого
+    refresh, который мог бы это поправить (login выдаёт первый токен)."""
+    kz, uz = companies
+    CompanyMembership.objects.create(user_id=active_user.id, company=kz, is_default=True)
+    CompanyMembership.objects.create(user_id=active_user.id, company=uz)
+
+    resp = Client().post(f"{BASE}/token/", data={
+        "email": "alice@htq.test", "password": "S3cret!",
+    }, content_type="application/json", HTTP_X_HTQ_COMPANY="htq-uz")
+
+    assert resp.status_code == 200
+    payload = decode_token(resp.json()["access"])
+    assert payload.company == "htq-uz"
+
+
+@pytest.mark.django_db
+def test_login_with_company_header_not_a_member_403_forbidden(active_user, companies):
+    """Вход на поддомене чужой компании отказывает, а не выдаёт токен с
+    компанией по умолчанию, который всё равно не совпал бы с поддоменом."""
+    kz, uz = companies
+    CompanyMembership.objects.create(user_id=active_user.id, company=kz, is_default=True)
+
+    resp = Client().post(f"{BASE}/token/", data={
+        "email": "alice@htq.test", "password": "S3cret!",
+    }, content_type="application/json", HTTP_X_HTQ_COMPANY="htq-uz")
+
+    assert resp.status_code == 403
+    assert resp.json() == {"detail": "Forbidden"}
+
+
+@pytest.mark.django_db
+def test_login_without_company_header_keeps_default_company_behaviour(active_user, companies):
+    """Заголовка нет (общий домен, переходный период) — поведение прежнее:
+    компания по умолчанию, без отказа."""
+    kz, uz = companies
+    CompanyMembership.objects.create(user_id=active_user.id, company=kz, is_default=True)
+    CompanyMembership.objects.create(user_id=active_user.id, company=uz)
+
+    resp = Client().post(f"{BASE}/token/", data={
+        "email": "alice@htq.test", "password": "S3cret!",
+    }, content_type="application/json")
+
+    assert resp.status_code == 200
+    payload = decode_token(resp.json()["access"])
+    assert payload.company == "htq-kz"
 
 
 @pytest.mark.django_db

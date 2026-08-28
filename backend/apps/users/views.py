@@ -38,6 +38,42 @@ from .services import (
 logger = logging.getLogger(__name__)
 
 
+# ── Компания запроса для выдачи токена — общий шаг login и refresh ─────────
+#
+# Обе двери (вход по паролю и обмен refresh-cookie) обязаны выдать токен
+# КОМПАНИИ ЗАПРОСА, а не компании по умолчанию — иначе пользователь на чужом
+# для его токена поддомене получает валидный, но бесполезный токен, который
+# api_view тут же отвергнет по X-HTQ-Company (403). Для входа по паролю это
+# особенно жёстко: там нет последующего обмена по refresh, который мог бы
+# исправить компанию — фронт вызывает refresh только на 401, а тут сразу 403,
+# то есть без этой проверки пользователь на чужом (для default_company_slug)
+# поддомене не может войти вообще.
+
+
+def _company_slug_for_token(request, user_id: int):
+    """Компания, для которой выпускать токен, по заголовку запроса.
+
+    Возвращает ``(company_slug, None)`` при успехе — ``company_slug`` может
+    быть ``None``, если заголовка ``X-HTQ-Company`` нет (общий домен,
+    переходный период): тогда ``issue_token_pair`` сама откатится на
+    компанию по умолчанию, как до этой правки. Если заголовок есть, но
+    пользователь в этой компании не состоит — ``(None, error_response)``, и
+    вызывающий обязан вернуть ``error_response`` как есть, не выпуская
+    токен: молчаливый откат на компанию по умолчанию здесь бессмыслен —
+    токен всё равно не совпал бы с запрошенным поддоменом, и api_view отдал
+    бы 403, но уже без понятной причины.
+
+    Проверка членства обязательна: без неё любой пользователь получал бы
+    токен любой компании, просто открыв её поддомен.
+    """
+    if request.company is None:
+        return None, None
+    slug = request.company["slug"]
+    if not user_may_enter_company(user_id, slug):
+        return None, json_error("Forbidden", 403)
+    return slug, None
+
+
 # ── POST token/ — login by email or username ────────────────────────────────
 
 @api_view(methods=("POST",), auth=None, body=schemas.TokenObtainRequest)
@@ -49,7 +85,11 @@ def obtain_token(request, data: schemas.TokenObtainRequest):
     except auth_service.InvalidCredentials:
         return json_error("Invalid credentials", 401)
 
-    tokens = issue_token_pair(user)
+    company_slug, error = _company_slug_for_token(request, user.id)
+    if error is not None:
+        return error
+
+    tokens = issue_token_pair(user, company_slug=company_slug)
     return schemas.TokenResponse(access=tokens["access"], refresh=tokens["refresh"])
 
 
@@ -69,24 +109,13 @@ def refresh_token(request, data: schemas.TokenRefreshRequest):
     if user is None or user.status != UserStatus.ACTIVE:
         return json_error("User not found or inactive", 401)
 
-    # Компания ЗАПРОСА (заголовок X-HTQ-Company, resolved by
-    # CompanyContextMiddleware), а не компания старого refresh-токена: этим
-    # эндпоинтом фронт меняет cookie на access при переходе на другой
-    # поддомен (см. §9 спеки), и новый access обязан нести компанию, в
-    # которую пользователь сейчас переходит. Заголовка нет (общий домен,
-    # переходный период) — company_slug=None и issue_token_pair сама
-    # откатится на компанию по умолчанию, как раньше.
-    company_slug = None
-    if request.company is not None:
-        slug = request.company["slug"]
-        # Проверка членства обязательна: без неё любой пользователь получал
-        # бы токен любой компании, просто открыв её поддомен. Молчаливый
-        # откат на компанию по умолчанию здесь бессмыслен — токен всё равно
-        # не совпал бы с запрошенным поддоменом, и api_view отдал бы 403, но
-        # уже без понятной причины.
-        if not user_may_enter_company(user.id, slug):
-            return json_error("Forbidden", 403)
-        company_slug = slug
+    # Компания старого refresh-токена здесь не участвует: этим эндпоинтом
+    # фронт меняет cookie на access при переходе на другой поддомен (см. §9
+    # спеки), поэтому важна компания ЗАПРОСА, а не компания, с которой
+    # refresh был выпущен изначально (refresh_claims её и не несёт).
+    company_slug, error = _company_slug_for_token(request, user.id)
+    if error is not None:
+        return error
 
     tokens = issue_token_pair(user, company_slug=company_slug)
     return schemas.TokenRefreshResponse(access=tokens["access"])
