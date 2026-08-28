@@ -153,7 +153,8 @@ def _truncate_schema(schema: str) -> None:
     with connection.cursor() as cur:
         cur.execute(
             "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = %s AND table_name != 'django_migrations'",
+            "WHERE table_schema = %s AND table_type = 'BASE TABLE' "
+            "AND table_name != 'django_migrations'",
             [schema],
         )
         tables = [row[0] for row in cur.fetchall()]
