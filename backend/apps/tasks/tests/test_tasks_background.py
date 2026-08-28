@@ -31,16 +31,29 @@ def _disable_tasks():
 
 
 # ── deadline reminder ───────────────────────────────────────────────────
+#
+# tasks is a TENANT_APPS member (Task/CalendarEvent/Notification live in a
+# company's schema), and both reminders are now ``@company_task``
+# (htqweb/tenancy/celery.py) — beat no longer calls them directly, it calls
+# the ``*_dispatch`` companions (see test_tasks_dispatch.py). These tests
+# exercise the real per-company task body, so they need an actual migrated
+# company schema (``company_context``) rather than the default public
+# search_path the old, company-less versions relied on.
+# ``transaction=True``: the fixture's teardown TRUNCATEs the company schema
+# on a separate connection state; without it, a still-open outer test
+# transaction leaves pending trigger events and TRUNCATE fails (same reason
+# apps/companies/tests/test_fixtures.py uses it for every test consuming
+# these fixtures).
 
-@pytest.mark.django_db
-def test_deadline_reminder_notifies_assignees_due_today_and_tomorrow():
+@pytest.mark.django_db(transaction=True)
+def test_deadline_reminder_notifies_assignees_due_today_and_tomorrow(company_context):
     today = dt.date.today()
     due_today = _mk_task(due_date=today, assignee_id=11)
     due_tomorrow = _mk_task(due_date=today + dt.timedelta(days=1),
                             assignee_id=12)
     _mk_task(due_date=today + dt.timedelta(days=5), assignee_id=13)   # later
 
-    assert celery_tasks.task_deadline_reminder() == 2
+    assert celery_tasks.task_deadline_reminder(company_slug=company_context["slug"]) == 2
     verbs = dict(Notification.objects.values_list("recipient_id", "verb"))
     assert verbs[11] == "task_due_0d"
     assert verbs[12] == "task_due_1d"
@@ -49,24 +62,38 @@ def test_deadline_reminder_notifies_assignees_due_today_and_tomorrow():
         due_today.id, due_tomorrow.id}
 
 
-@pytest.mark.django_db
-def test_deadline_reminder_skips_closed_deleted_and_unassigned():
+@pytest.mark.django_db(transaction=True)
+def test_deadline_reminder_skips_closed_deleted_and_unassigned(company_context):
     today = dt.date.today()
     _mk_task(due_date=today, assignee_id=11, status=Status.DONE)
     _mk_task(due_date=today, assignee_id=12, status=Status.CANCELLED)
     _mk_task(due_date=today, assignee_id=13, is_deleted=True)
     _mk_task(due_date=today, assignee_id=None)
-    assert celery_tasks.task_deadline_reminder() == 0
+    assert celery_tasks.task_deadline_reminder(company_slug=company_context["slug"]) == 0
 
 
 @pytest.mark.django_db
 def test_deadline_reminder_refuses_to_run_when_the_service_is_off():
-    """A gated HTTP surface is not enough — background work must stop too."""
-    _mk_task(due_date=dt.date.today(), assignee_id=11)
+    """A gated HTTP surface is not enough — background work must stop too.
+
+    ``require_service`` runs before any query touches the company schema
+    (see ``@company_task``'s ordering in htqweb/tenancy/celery.py), so this
+    does not need a real migrated schema — any well-formed slug does, since
+    ``ServiceDisabled`` fires first.
+    """
     _disable_tasks()
     with pytest.raises(ServiceDisabled):
+        celery_tasks.task_deadline_reminder(company_slug="t-fixture-off-check")
+
+
+@pytest.mark.django_db
+def test_deadline_reminder_requires_company_slug():
+    """@company_task is mandatory: no company_slug means MissingCompanyArgument,
+    never a silent fall-through to public."""
+    from htqweb.tenancy.celery import MissingCompanyArgument
+
+    with pytest.raises(MissingCompanyArgument):
         celery_tasks.task_deadline_reminder()
-    assert Notification.objects.count() == 0
 
 
 # ── calendar reminder ───────────────────────────────────────────────────
@@ -77,8 +104,8 @@ def _upcoming_event(minutes: int) -> CalendarEvent:
         title="Планёрка", start_at=start, end_at=start + dt.timedelta(hours=1))
 
 
-@pytest.mark.django_db
-def test_calendar_reminder_notifies_participants_in_the_window():
+@pytest.mark.django_db(transaction=True)
+def test_calendar_reminder_notifies_participants_in_the_window(company_context):
     soon = _upcoming_event(10)
     later = _upcoming_event(90)
     CalendarEventParticipant.objects.create(event=soon, user_id=11,
@@ -90,7 +117,7 @@ def test_calendar_reminder_notifies_participants_in_the_window():
     CalendarEventParticipant.objects.create(event=later, user_id=14,
                                             rsvp_status="accepted")
 
-    assert celery_tasks.calendar_event_reminder() == 2
+    assert celery_tasks.calendar_event_reminder(company_slug=company_context["slug"]) == 2
     recipients = set(Notification.objects.values_list("recipient_id", flat=True))
     assert recipients == {11, 12}          # declined and out-of-window skipped
     row = Notification.objects.get(recipient_id=11)
@@ -99,32 +126,42 @@ def test_calendar_reminder_notifies_participants_in_the_window():
     assert row.verb.startswith("calendar_event_starts_in_")
 
 
-@pytest.mark.django_db
-def test_calendar_reminder_deduplicates_across_runs():
+@pytest.mark.django_db(transaction=True)
+def test_calendar_reminder_deduplicates_across_runs(company_context):
     """The original de-duplicated in a process-local list, so a restart or a
     second worker re-spammed everyone. This does it on the database."""
     event = _upcoming_event(10)
     CalendarEventParticipant.objects.create(event=event, user_id=11,
                                             rsvp_status="accepted")
-    assert celery_tasks.calendar_event_reminder() == 1
-    assert celery_tasks.calendar_event_reminder() == 0
+    slug = company_context["slug"]
+    assert celery_tasks.calendar_event_reminder(company_slug=slug) == 1
+    assert celery_tasks.calendar_event_reminder(company_slug=slug) == 0
     assert Notification.objects.count() == 1
 
 
-@pytest.mark.django_db
-def test_calendar_reminder_re_notifies_once_the_first_was_read():
+@pytest.mark.django_db(transaction=True)
+def test_calendar_reminder_re_notifies_once_the_first_was_read(company_context):
     event = _upcoming_event(10)
     CalendarEventParticipant.objects.create(event=event, user_id=11,
                                             rsvp_status="accepted")
-    celery_tasks.calendar_event_reminder()
+    slug = company_context["slug"]
+    celery_tasks.calendar_event_reminder(company_slug=slug)
     Notification.objects.update(is_read=True)
-    assert celery_tasks.calendar_event_reminder() == 1
+    assert celery_tasks.calendar_event_reminder(company_slug=slug) == 1
 
 
 @pytest.mark.django_db
 def test_calendar_reminder_refuses_to_run_when_the_service_is_off():
     _disable_tasks()
     with pytest.raises(ServiceDisabled):
+        celery_tasks.calendar_event_reminder(company_slug="t-fixture-off-check")
+
+
+@pytest.mark.django_db
+def test_calendar_reminder_requires_company_slug():
+    from htqweb.tenancy.celery import MissingCompanyArgument
+
+    with pytest.raises(MissingCompanyArgument):
         celery_tasks.calendar_event_reminder()
 
 
@@ -132,6 +169,11 @@ def test_calendar_reminder_refuses_to_run_when_the_service_is_off():
 
 @pytest.mark.django_db
 def test_both_jobs_are_registered_in_beat():
+    """beat calls the dispatchers, not the (now company-aware) real tasks —
+    followups.md п.1 + apps/tasks/migrations/
+    0019_tasks_periodic_tasks_use_dispatchers.py. The row names are
+    unchanged: only ``task`` was repointed, so anything keyed on the old
+    name (admin, monitoring) keeps working."""
     from django_celery_beat.models import PeriodicTask
 
     jobs = {row.name: row for row in PeriodicTask.objects.filter(
@@ -142,6 +184,10 @@ def test_both_jobs_are_registered_in_beat():
     # Schedules carried over from the APScheduler originals.
     assert jobs["tasks.task_deadline_reminder"].crontab.minute == "0"
     assert jobs["tasks.calendar_event_reminder"].crontab.minute == "*/5"
+    assert jobs["tasks.task_deadline_reminder"].task == \
+        "apps.tasks.tasks.task_deadline_reminder_dispatch"
+    assert jobs["tasks.calendar_event_reminder"].task == \
+        "apps.tasks.tasks.calendar_event_reminder_dispatch"
 
 
 # ── interface ───────────────────────────────────────────────────────────
