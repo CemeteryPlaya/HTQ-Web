@@ -13,10 +13,13 @@
  */
 
 /**
- * Та же регулярка, что и nginx `server_name` в infra/nginx/default.conf.
- * Оба конца обязаны сходиться в том, что считается компанией: если фронт
- * посчитает хост компанией, а шлюз — нет, заголовок X-HTQ-Company не
- * появится, и запрос молча уйдёт в схему public вместо своей компании.
+ * Та же регулярка, что и nginx `server_name` в infra/nginx/default.conf, —
+ * и вход нормализуется так же, как это делает nginx (он приводит `Host` к
+ * нижнему регистру до сравнения с `server_name`, отсюда `.toLowerCase()`
+ * в companyFromHost/parentDomain ниже). Оба конца обязаны сходиться в том,
+ * что считается компанией: если фронт посчитает хост компанией, а шлюз —
+ * нет, заголовок X-HTQ-Company не появится, и запрос молча уйдёт в схему
+ * public вместо своей компании.
  *
  *   - компания начинается с буквы — этим отсечены IP-адреса ("192.168...");
  *   - "www" зарезервирован под общий домен и компанией не считается;
@@ -28,7 +31,7 @@ const COMPANY_HOST_PATTERN = /^(?!www\.)([a-z][a-z0-9-]*)\.(?:localhost|[^.]+(?:
 
 /** Компания из имени хоста, или null если поддомена-компании нет. */
 export const companyFromHost = (host: string): string | null => {
-  const withoutPort = host.split(':')[0];
+  const withoutPort = host.split(':')[0].toLowerCase();
   const match = COMPANY_HOST_PATTERN.exec(withoutPort);
   return match ? match[1] : null;
 };
@@ -40,7 +43,7 @@ export const companyFromHost = (host: string): string | null => {
  * поэтому там домен указывается без ведущей точки.
  */
 export const parentDomain = (host: string): string => {
-  const withoutPort = host.split(':')[0];
+  const withoutPort = host.split(':')[0].toLowerCase();
   const labels = withoutPort.split('.');
   const tail = labels.length > 2 ? labels.slice(1) : labels;
   const joined = tail.join('.');
@@ -56,10 +59,10 @@ export const parentDomain = (host: string): string => {
 export const REFRESH_COOKIE_DOMAIN: string =
   typeof window !== 'undefined' ? parentDomain(window.location.host) : '';
 
-/** Перейти в другую компанию, сохранив текущий путь и query-параметры. */
+/** Перейти в другую компанию, сохранив текущий путь, query-параметры и hash. */
 export const switchCompany = (slug: string): void => {
-  const { host, pathname, search, protocol } = window.location;
+  const { host, pathname, search, hash, protocol } = window.location;
   const tail = parentDomain(host).replace(/^\./, '');
   const port = host.includes(':') ? `:${host.split(':')[1]}` : '';
-  window.location.assign(`${protocol}//${slug}.${tail}${port}${pathname}${search}`);
+  window.location.assign(`${protocol}//${slug}.${tail}${port}${pathname}${search}${hash}`);
 };

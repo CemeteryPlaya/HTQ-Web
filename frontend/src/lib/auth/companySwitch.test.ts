@@ -43,6 +43,10 @@ describe('companyFromHost', () => {
     // это не матчится вовсе (и не должно матчиться на фронте).
     expect(companyFromHost('kz.co')).toBeNull();
   });
+
+  it('не зависит от регистра хоста — nginx приводит Host к нижнему регистру до сравнения', () => {
+    expect(companyFromHost('KZ.EXAMPLE.KZ')).toBe('kz');
+  });
 });
 
 describe('parentDomain', () => {
