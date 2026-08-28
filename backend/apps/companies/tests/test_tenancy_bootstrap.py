@@ -40,16 +40,37 @@ from django.core.management.base import CommandError
 from django.db import connection
 
 import apps.companies.management.commands.tenancy_bootstrap as tenancy_bootstrap
-from apps.companies.models import Company
+from apps.companies.models import Company, CompanyMembership
 from apps.companies.services import schema_service
 from apps.companies.tests._tenancy_test_support import (
     public_tenant_leftovers,
     restore_public,
 )
+from apps.users.models import User, UserStatus
 from htqweb.tenancy.context import schema_for
 
 SLUG = "t-root"
 SCHEMA = schema_for(SLUG)
+
+
+@pytest.fixture
+def make_user():
+    """Пользователь платформы, удаляется в teardown сам — cleanup ниже
+    убирает только компанию/схему (см. ``restore_public``), а Users в её
+    орбиту не входят."""
+    created = []
+
+    def _make(email: str, *, status: str = UserStatus.ACTIVE) -> User:
+        user = User.objects.create(
+            username=email.split("@")[0], email=email, password="x",
+            status=status,
+        )
+        created.append(user)
+        return user
+
+    yield _make
+    for user in created:
+        user.delete()
 
 
 def _schema_of(table: str) -> str | None:
@@ -237,3 +258,113 @@ def test_partial_failure_leaves_public_untouched(monkeypatch):
     # моделей — оракул независим от того, что именно решила переносить
     # сама команда.
     assert public_tenant_leftovers() == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grant_all_is_on_by_default(make_user):
+    """Правка 2 итогового ревью: без --grant-all токены выходили бы с
+    company: null и 403 на любой запрос. Дефолт — включено."""
+    active = make_user("active@example.test")
+    call_command("tenancy_bootstrap", slug=SLUG, name="Корень", kind="holding")
+
+    membership = CompanyMembership.objects.get(user_id=active.id, company__slug=SLUG)
+    assert membership.is_default is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grant_all_skips_inactive_users(make_user):
+    active = make_user("active2@example.test")
+    inactive = make_user("suspended@example.test", status=UserStatus.SUSPENDED)
+    call_command("tenancy_bootstrap", slug=SLUG, name="Корень", kind="holding")
+
+    assert CompanyMembership.objects.filter(
+        user_id=active.id, company__slug=SLUG,
+    ).exists()
+    assert not CompanyMembership.objects.filter(
+        user_id=inactive.id, company__slug=SLUG,
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_no_grant_all_skips_membership_entirely(make_user):
+    active = make_user("active3@example.test")
+    call_command("tenancy_bootstrap", slug=SLUG, name="Корень", kind="holding",
+                 grant_all=False)
+
+    assert not CompanyMembership.objects.filter(company__slug=SLUG).exists()
+    assert not CompanyMembership.objects.filter(user_id=active.id).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_dry_run_reports_invalid_slug_format():
+    """Правка 4б итогового ревью: --dry-run — единственный шаг рантбука
+    необратимой операции, который раньше не касался БД вовсе."""
+    import io
+
+    out = io.StringIO()
+    call_command("tenancy_bootstrap", slug="Плохой_Slug", name="X",
+                 kind="holding", dry_run=True, stdout=out)
+    assert "ОШИБКА" in out.getvalue()
+    assert "Плохой_Slug" in out.getvalue()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_dry_run_reports_already_registered_company():
+    import io
+
+    Company.objects.create(slug=SLUG, name="Корень", kind="holding")
+    out = io.StringIO()
+    call_command("tenancy_bootstrap", slug=SLUG, name="Корень",
+                 kind="holding", dry_run=True, stdout=out)
+    printed = out.getvalue()
+    assert "ОШИБКА" in printed
+    assert "уже есть в реестре" in printed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_dry_run_reports_existing_schema():
+    import io
+
+    schema_service.create_schema(SLUG)
+    try:
+        out = io.StringIO()
+        call_command("tenancy_bootstrap", slug=SLUG, name="Корень",
+                     kind="holding", dry_run=True, stdout=out)
+        printed = out.getvalue()
+        assert "ОШИБКА" in printed
+        assert "уже существует" in printed
+    finally:
+        schema_service.drop_schema(SLUG)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_dry_run_reports_missing_public_table(monkeypatch):
+    import io
+
+    real_tenant_tables = tenancy_bootstrap.Command._tenant_tables
+
+    def poisoned(self):
+        return real_tenant_tables(self) + ["nonexistent_table_zzz"]
+
+    monkeypatch.setattr(tenancy_bootstrap.Command, "_tenant_tables", poisoned)
+    try:
+        out = io.StringIO()
+        call_command("tenancy_bootstrap", slug=SLUG, name="Корень",
+                     kind="holding", dry_run=True, stdout=out)
+        printed = out.getvalue()
+        assert "ОШИБКА" in printed
+        assert "nonexistent_table_zzz" in printed
+    finally:
+        monkeypatch.undo()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_dry_run_reports_all_ok_on_clean_base():
+    import io
+
+    out = io.StringIO()
+    call_command("tenancy_bootstrap", slug=SLUG, name="Корень",
+                 kind="holding", dry_run=True, stdout=out)
+    printed = out.getvalue()
+    assert "ОШИБКА" not in printed
+    assert printed.count("[ок]") == 4

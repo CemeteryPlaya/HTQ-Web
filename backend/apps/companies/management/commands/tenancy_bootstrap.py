@@ -43,7 +43,19 @@ Postgres резолвит объекты представления по OID, а
 схема-квалифицированному имени, и продолжает работать после переноса схемы
 объекта. Сама пересборка после переноса нужна: компания появилась, и её
 таблицы (уже в новой схеме) обязаны быть видны сводкам.
+
+``--grant-all`` (по умолчанию ВКЛЮЧЁН). Bootstrap сводит ВСЮ текущую
+платформу в одну компанию — значит все её сегодняшние пользователи по
+определению участники этой компании; без членства ``htqweb/authn/jwt.py``
+выпустит токен с ``company: null``, и ``htqweb/http.py`` ответит 403 на
+любой запрос любому пользователю сразу после перевода на поддомен. Дефолт
+"включено" именно потому, что забыть флаг здесь равносильно запереть на 403
+всех сразу — а не признак того, что операция безобидна и не требует
+внимания. ``--no-grant-all`` — явный отказ, если членства планируется
+выдавать отдельно (``manage.py company_grant``).
 """
+
+import argparse
 
 from django.apps import apps as django_apps
 from django.conf import settings
@@ -52,8 +64,8 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import ProgrammingError, connection, transaction
 from psycopg import sql
 
-from apps.companies.models import Company, CompanyKind
-from apps.companies.services import holding_views, schema_service
+from apps.companies.models import Company, CompanyKind, SLUG_VALIDATOR
+from apps.companies.services import holding_views, membership_service, schema_service
 from htqweb.tenancy.context import schema_for
 
 
@@ -67,6 +79,13 @@ class Command(BaseCommand):
         parser.add_argument("--kind", default=CompanyKind.HOLDING,
                             choices=[c.value for c in CompanyKind])
         parser.add_argument("--dry-run", action="store_true", dest="dry_run")
+        parser.add_argument(
+            "--grant-all", action=argparse.BooleanOptionalAction,
+            default=True, dest="grant_all",
+            help="Завести CompanyMembership(is_default=True) всем активным "
+                 "пользователям платформы (см. докстринг модуля — включено "
+                 "по умолчанию намеренно). --no-grant-all отключает.",
+        )
 
     def _tenant_tables(self) -> list[str]:
         """Таблицы тенантных аппок по факту наличия моделей, а не по имени.
@@ -95,6 +114,76 @@ class Command(BaseCommand):
                 tables.append(model._meta.db_table)
         return sorted(tables)
 
+    def _missing_public_tables(self, tables: list[str]) -> list[str]:
+        """Какие из ожидаемых таблиц физически ОТСУТСТВУЮТ в public.
+
+        Разведка не должна доверять реестру моделей на слово: расхождение
+        схемы БД с кодом (см. комментарий у ``ALTER TABLE`` без ``IF
+        EXISTS`` ниже) обязано быть видно ДО окна обслуживания, а не в
+        момент, когда боевой прогон падает посреди транзакции.
+        """
+        if not tables:
+            return []
+        with connection.cursor() as cur:
+            cur.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_type = 'BASE TABLE' "
+                "AND table_name = ANY(%s)",
+                [tables],
+            )
+            present = {row[0] for row in cur.fetchall()}
+        return sorted(set(tables) - present)
+
+    def _report_preflight_checks(self, slug: str, schema: str,
+                                  tables: list[str]) -> None:
+        """Правка 4б итогового ревью: раньше ``--dry-run`` печатал только
+        список таблиц из реестра моделей, не касаясь БД вовсе — единственный
+        шаг рантбука необратимой операции, который не проверял НИЧЕГО против
+        реальной базы. Здесь только чтение и печать: ни одна из этих
+        проверок не имеет права ничего менять (ни в БД, ни в реестре) —
+        разведка обязана оставаться безопасной для повторного запуска на
+        любой базе, включая ту, где что-то из проверяемого уже не так (см.
+        ``test_dry_run_works_even_if_company_already_exists``).
+        """
+        self.stdout.write("")
+        self.stdout.write("Проверки перед боевым прогоном (только чтение):")
+
+        try:
+            SLUG_VALIDATOR(slug)
+        except ValidationError as exc:
+            self.stdout.write(self.style.WARNING(
+                f"  [ОШИБКА] slug {slug!r} не пройдёт валидацию: "
+                + "; ".join(exc.messages)
+            ))
+        else:
+            self.stdout.write(f"  [ок] slug {slug!r} проходит формат.")
+
+        if Company.objects.filter(slug=slug).exists():
+            self.stdout.write(self.style.WARNING(
+                f"  [ОШИБКА] компания {slug!r} уже есть в реестре — боевой "
+                "прогон откажет (bootstrap одноразовый)."
+            ))
+        else:
+            self.stdout.write(f"  [ок] slug {slug!r} свободен в реестре.")
+
+        if schema_service.schema_exists(slug):
+            self.stdout.write(self.style.WARNING(
+                f"  [ОШИБКА] схема {schema} уже существует — боевой прогон "
+                "упадёт на CREATE SCHEMA."
+            ))
+        else:
+            self.stdout.write(f"  [ок] схема {schema} ещё не создана.")
+
+        missing = self._missing_public_tables(tables)
+        if missing:
+            self.stdout.write(self.style.WARNING(
+                f"  [ОШИБКА] {len(missing)} из {len(tables)} таблиц нет в "
+                "public — боевой прогон упадёт на ALTER TABLE: "
+                + ", ".join(missing)
+            ))
+        else:
+            self.stdout.write(f"  [ок] все {len(tables)} таблиц физически в public.")
+
     def handle(self, *args, **opts):
         slug, schema = opts["slug"], schema_for(opts["slug"])
         tables = self._tenant_tables()
@@ -107,6 +196,7 @@ class Command(BaseCommand):
             self.stdout.write(f"Таблиц к переносу: {len(tables)}")
             for table in tables:
                 self.stdout.write(f"  {table}")
+            self._report_preflight_checks(slug, schema, tables)
             return
 
         if Company.objects.filter(slug=slug).exists():
@@ -130,8 +220,22 @@ class Command(BaseCommand):
         # перенос — худший исход из возможных (часть боевых таблиц пропала
         # бы из public, не появившись при этом полностью в схеме компании),
         # поэтому вся операция — один transaction.atomic().
+        granted = 0
         with transaction.atomic():
             company.save()
+
+            if opts["grant_all"]:
+                # См. докстринг модуля: bootstrap сводит всю платформу в
+                # одну компанию, поэтому все её текущие активные
+                # пользователи — участники по определению. is_default=True
+                # у КАЖДОГО: это единственная компания, в которую им есть
+                # куда входить.
+                for user_id in membership_service.active_user_ids():
+                    if membership_service.grant_membership(
+                        company, user_id, is_default=True,
+                    ):
+                        granted += 1
+
             schema_service.create_schema(slug)
 
             with connection.cursor() as cur:
@@ -195,6 +299,11 @@ class Command(BaseCommand):
                 f"`manage.py migrate_companies`. Причина: {exc}"
             ) from exc
 
+        grant_note = (f" Выдано членство {granted} активным пользователям."
+                      if opts["grant_all"] else
+                      " Членство НЕ выдавалось (--no-grant-all) — "
+                      "используйте manage.py company_grant.")
         self.stdout.write(self.style.SUCCESS(
             f"Перенесено {len(tables)} таблиц в {schema}. Компания {slug} создана."
+            f"{grant_note}"
         ))
