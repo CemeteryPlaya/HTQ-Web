@@ -16,7 +16,19 @@
 
 ## Блокирует запуск на бою
 
-### 1. Задачи Celery не переведены на контекст компании
+### 1. Задачи Celery не переведены на контекст компании — ЗАКРЫТО
+
+См. `.superpowers/sdd/2026-08-27-multi-company-tenancy-core/followup-a-report.md`.
+Все три носителя переведены на шаблон «диспетчер + веер»: `sync_identity`,
+`task_deadline_reminder`, `calendar_event_reminder` помечены `@company_task`,
+рядом заведены диспетчеры (`sync_identity_dispatch`,
+`task_deadline_reminder_dispatch`, `calendar_event_reminder_dispatch`), beat
+переключён на них миграциями `hr/0020_sync_identity_dispatch_periodic_task` и
+`tasks/0019_tasks_periodic_tasks_use_dispatchers` (обе — в
+`SHARED_EFFECT_MIGRATIONS`). Мета-тест
+`apps/core/tests/test_invariants.py::test_tenant_app_tasks_use_company_task_or_are_marked_dispatchers`
+падает в CI на любой tenant-задаче без `@company_task`/`@company_dispatch_task`.
+Ниже — исходная постановка, оставлена для истории.
 
 `grep` по `htqweb.tenancy` в `apps/{hr,tasks,contracts,signoff}` даёт ноль
 совпадений. После `tenancy_bootstrap` тенантных таблиц в `public` нет, а у задач
