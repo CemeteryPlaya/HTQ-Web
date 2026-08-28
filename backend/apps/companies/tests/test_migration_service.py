@@ -300,6 +300,34 @@ def test_backwards_migration_is_refused(alpha):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_plan_refuses_backwards_shared_effect_migration(alpha):
+    """Правка 4а итогового ревью: ``--plan`` обязан отказывать на обратном
+    направлении ровно там же, где откажет боевой прогон — включая план,
+    срезанный ИСКЛЮЧИТЕЛЬНО до shared-effect шага.
+
+    ``hr.0019`` — лист графа hr и одна из ``SHARED_EFFECT_MIGRATIONS``:
+    после полного прогона она отмечена применённой (без выполнения). Откат
+    ровно на один шаг (target — предыдущая миграция) даёт план из ОДНОГО
+    обратного шага, и этот шаг попадает не в ``steps``, а в ``shared`` —
+    ``_split_plan`` кладёт ключи из SHARED_EFFECT_MIGRATIONS туда. До
+    исправления сухой прогон проверял на обратное направление только
+    ``steps`` (пустой здесь) и молча отчитывался «нечего делать», хотя тот
+    же вызов без ``plan=True`` уже отказывал ``BackwardsMigrationRefused``
+    (см. ``_refuse_backwards(shared)`` в боевой ветке).
+    """
+    migration_service.migrate_company("t-alpha")
+    assert ("hr", "0019_identity_sync_periodic_task") in \
+        migration_service.SHARED_EFFECT_MIGRATIONS
+
+    with pytest.raises(migration_service.BackwardsMigrationRefused):
+        migration_service.migrate_company(
+            "t-alpha", app_label="hr",
+            target="0018_identityapprover_identitychangerequest_and_more",
+            plan=True,
+        )
+
+
+@pytest.mark.django_db(transaction=True)
 def test_failed_run_records_error_and_cleans_up(alpha, monkeypatch):
     """Путь ошибки: строка версии с last_error, путь сброшен, замок снят.
 

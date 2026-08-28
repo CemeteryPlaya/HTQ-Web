@@ -379,9 +379,19 @@ def migrate_company(slug: str, *, app_label: str | None = None,
             apply_search_path(slug, include_public=False)
             executor = MigrationExecutor(connection)
             targets = _targets(executor.loader, app_labels, target)
-            steps, _shared = _split_plan(executor, targets, tenant_apps,
-                                         strict=False)
+            steps, shared = _split_plan(executor, targets, tenant_apps,
+                                        strict=False)
+            # Боевой прогон (strict=True, ниже) проверяет на обратное
+            # направление ОБА списка — steps и shared — потому что
+            # SHARED_EFFECT_MIGRATIONS всё равно помечаются применёнными
+            # (см. _mark_applied после executor.migrate) и падение
+            # BackwardsMigrationRefused ждёт их точно так же, как обычные
+            # тенантные шаги. Без этой строки --plan проверял только steps
+            # и молчал бы «всё применено» на плане, срезанном исключительно
+            # до shared-миграций в обратном направлении — там, где боевой
+            # прогон откажет.
             _refuse_backwards(steps)
+            _refuse_backwards(shared)
             return {"slug": slug, "applied": {},
                     "planned": [f"{m.app_label}.{m.name}" for m, _ in steps]}
 
