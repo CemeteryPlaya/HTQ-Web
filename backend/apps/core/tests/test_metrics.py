@@ -100,7 +100,44 @@ def test_business_metrics_are_discovered_across_apps():
 
     collected = business.collect_all()
     assert "core" in collected                # реестр сервисов
-    assert {"tasks", "approvals", "mail"} <= set(collected)
+    assert {"approvals", "mail"} <= set(collected)
+
+
+@pytest.mark.django_db
+def test_tenant_apps_are_not_collected():
+    """Правка: тенантные аппки (settings.TENANT_APPS) сборщик пропускает
+    явно, вместо падения на модели без контекста компании (см. докстринг
+    apps/core/metrics.py). Сегодня metrics.py среди тенантных аппок есть
+    только у tasks, но правило проверяется по TENANT_APPS, а не по имени."""
+    from django.conf import settings
+
+    from apps.core import metrics as business
+
+    collected = business.collect_all()
+    assert set(settings.TENANT_APPS) & set(collected) == set()
+    assert "tasks" not in collected
+
+
+@pytest.mark.django_db
+def test_tenant_apps_are_skipped_without_calling_collect(monkeypatch, caplog):
+    """Пропуск — до вызова collect(), не после её падения: tasks.metrics.collect
+    вообще не должен быть вызван, а в логе должна остаться внятная запись,
+    не fallback."""
+    import logging
+
+    from apps.core import metrics as business
+    from apps.tasks import metrics as tasks_metrics
+
+    def boom():
+        raise AssertionError("collect() тенантной аппки не должен вызываться")
+
+    monkeypatch.setattr(tasks_metrics, "collect", boom)
+    with caplog.at_level(logging.INFO, logger="apps.core.metrics"):
+        collected = business.collect_all()
+
+    assert "tasks" not in collected
+    assert any("tasks" in record.message and "тенант" in record.message
+               for record in caplog.records)
 
 
 @pytest.mark.django_db
@@ -114,7 +151,8 @@ def test_business_metrics_reach_the_endpoint_through_the_cache():
 
     dump = Client().get("/metrics").content.decode()
     assert "htqweb_service_enabled" in dump
-    assert "htqweb_tasks" in dump
+    assert "htqweb_mail_accounts_active" in dump
+    assert "htqweb_tasks" not in dump
 
 
 @pytest.mark.django_db
@@ -158,7 +196,7 @@ def test_empty_cache_exports_nothing_rather_than_zeros():
 
     cache.delete(business.CACHE_KEY)
     dump = Client().get("/metrics").content.decode()
-    assert "htqweb_tasks" not in dump
+    assert "htqweb_mail_accounts_active" not in dump
     # Технические метрики при этом на месте — отвалилась только бизнес-часть.
     assert "django_http_responses_total_by_status" in dump
 
@@ -169,6 +207,11 @@ def test_a_failing_app_collector_does_not_sink_the_rest(
     """Сбор — это диагностика; «нет ничего, потому что в одной аппке
     ошибка» — худший исход из возможных.
 
+    Падающая аппка здесь — ``mail`` (нетенантная): ``tasks`` теперь
+    пропускается ДО вызова ``collect()`` (см. тесты пропуска тенантных
+    аппок выше) и для проверки живучести остальных сборщиков при реальном
+    падении не подходит.
+
     Прод-режим подмен здесь обязателен (фикстура ``fallback_log_mode``), и
     это не обход строгого режима, а суть проверки: терпимость к упавшему
     сборщику нужна ИМЕННО на проде. У разработчика она, наоборот, снята —
@@ -176,16 +219,16 @@ def test_a_failing_app_collector_does_not_sink_the_rest(
     сразу; за это отвечает соседний тест.
     """
     from apps.core import metrics as business
-    from apps.tasks import metrics as tasks_metrics
+    from apps.mail import metrics as mail_metrics
 
     def boom():
-        raise RuntimeError("подсчёт задач упал")
+        raise RuntimeError("подсчёт почты упал")
 
-    monkeypatch.setattr(tasks_metrics, "collect", boom)
+    monkeypatch.setattr(mail_metrics, "collect", boom)
     collected = business.collect_all()
 
-    assert "tasks" not in collected
-    assert "mail" in collected and "core" in collected
+    assert "mail" not in collected
+    assert "approvals" in collected and "core" in collected
 
 
 @pytest.mark.django_db
@@ -194,13 +237,13 @@ def test_a_failing_app_collector_is_loud_for_developers(monkeypatch):
     разработчика, тесты) упавший сборщик не заминается, а падает — иначе
     автор узнал бы о нём по дырке на графике неделю спустя."""
     from apps.core import metrics as business
-    from apps.tasks import metrics as tasks_metrics
+    from apps.mail import metrics as mail_metrics
     from htqweb.fallback import FallbackNotAllowed
 
     def boom():
-        raise RuntimeError("подсчёт задач упал")
+        raise RuntimeError("подсчёт почты упал")
 
-    monkeypatch.setattr(tasks_metrics, "collect", boom)
+    monkeypatch.setattr(mail_metrics, "collect", boom)
     with pytest.raises(FallbackNotAllowed) as info:
         business.collect_all()
 
