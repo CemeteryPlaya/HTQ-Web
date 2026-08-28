@@ -153,9 +153,10 @@
 - глобально выключено → 503 везде;
 - глобально включено, у компании выключено → 503 только в этой компании.
 
-`apps.core.services.require_service()` опрашивает оба. Ядро (`users`, `hr`,
-`messenger`, `media_files`, `cms`) записями `CompanyModule` не управляется и
-выключению на уровне компании не подлежит.
+`apps.core.services.require_service()` опрашивает оба. Ядро — `CORE_MODULES`
+в `apps/core/services.py` (`users`, `companies`, `core`, `hr`, `messenger`,
+`media`, `cms`) — записями `CompanyModule` не управляется и выключению на
+уровне компании не подлежит.
 
 **`CompanySchemaVersion`** — `company` + `app_label` + фактическая миграция +
 целевая миграция + статус + время последнего прогона. Делает отставание схемы
