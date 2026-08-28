@@ -55,7 +55,15 @@ Celery нет HTTP-запроса, значит контекст компани�
 `require_service` первой строкой. Задача tenant-аппки без `@company_task` обязана
 падать в CI, а не на бою.
 
-### 2. Обновление токена игнорирует компанию запроса
+### 2. Обновление токена игнорирует компанию запроса — ЗАКРЫТО
+
+См. `.superpowers/sdd/2026-08-27-multi-company-tenancy-core/followup-b-report.md`.
+`issue_token_pair` принимает необязательный `company_slug`; `refresh_token` берёт
+`request.company`, проверяет членство через новый предикат
+`apps.companies.interface.user_may_enter_company(user_id, slug)` и **отказывает
+403 `{"detail": "Forbidden"}`**, если пользователь в компании не состоит, — вместо
+молчаливого отката на компанию по умолчанию. Заголовка нет — поведение прежнее
+(компания по умолчанию). Ниже — исходная постановка, оставлена для истории.
 
 `apps/users/views.py::refresh_token` зовёт `issue_token_pair(user)`, который берёт
 `default_company_slug(user.id)`. Заголовок `X-HTQ-Company` до вьюхи доходит (nginx
