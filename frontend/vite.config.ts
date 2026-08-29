@@ -344,6 +344,18 @@ export default defineConfig(({ mode }) => {
       target: signoffServiceTarget,
       changeOrigin: true,
     },
+    // Доступ и роли (apps.access). Легаси-путей без /v1/ здесь нет, поэтому
+    // одной строки достаточно.
+    //
+    // ⚠️ Без этого правила запросы к /api/access/ уходят НЕ в бэкенд, а в сам
+    // dev-сервер: у таблицы ниже нет общего правила "^/api/" — в отличие от
+    // прод-nginx, где такой location есть. Клиент получает index.html вместо
+    // JSON, страница ролей молча пуста, и симптом на причину не указывает.
+    // Сторож — src/api/endpoints.proxy.test.ts.
+    "^/api/access/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
     "^/api/requests/v1/stream": {
       target: asgiTarget,
       changeOrigin: true,
