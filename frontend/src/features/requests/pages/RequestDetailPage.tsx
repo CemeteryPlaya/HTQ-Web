@@ -18,6 +18,7 @@ import {
   QK, useInstance, useRequestsStream, useSubmitInstance, useTemplate, useTemplateVersion,
 } from '@/features/requests/hooks';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { usePermissions } from '@/hooks/usePermissions';
 import { useTranslation } from 'react-i18next';
 
 export default function RequestDetailPage() {
@@ -32,6 +33,7 @@ export default function RequestDetailPage() {
     inst.data?.template_version_id ?? null,
   );
   const profile = useActiveProfile();
+  const permissions = usePermissions();
   const qc = useQueryClient();
   const submit = useSubmitInstance(instanceId);
   const [draft, setDraft] = useState<Record<string, unknown> | null>(null);
@@ -62,9 +64,7 @@ export default function RequestDetailPage() {
 
   const data = inst.data;
   const currentUserId = parseInt(profile.activeProfile?.id ?? '0', 10) || 0;
-  const isElevated = (profile.activeProfile?.roles ?? []).some((r) =>
-    ['admin', 'staff', 'superuser'].includes(r),
-  );
+  const isElevated = permissions.atLeast('approvals', 'admin');
   const isInitiator = data.initiator_id === currentUserId;
   const isEditable = isInitiator && (data.status === 'draft' || data.status === 'returned');
   const values = draft ?? (data.form_values_json as Record<string, unknown>);

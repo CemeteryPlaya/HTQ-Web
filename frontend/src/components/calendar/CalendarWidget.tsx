@@ -17,7 +17,7 @@ import { fetchDepartments } from '@/api/hr';
 import { CalendarEvent } from '@/types/calendar';
 import { cn } from '@/lib/utils';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { isHrManager } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import { EventForm } from './EventForm';
 
 
@@ -52,9 +52,10 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
     const { activeProfile } = useActiveProfile({
         staleTime: 5 * 60 * 1000,
     });
+    const permissions = usePermissions();
     
     // Check if the current user has permission to edit holidays
-    const isAuthorized = isHrManager(activeProfile);
+    const isAuthorized = permissions.atLeast('hr', 'read');
 
     const dateLocale = i18n.language === 'ru' ? ru : enUS;
     const startDate = startOfMonth(currentDate);

@@ -16,13 +16,11 @@ import { GitBranch, Inbox, ListChecks } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { BackToProfile } from '@/components/BackToProfile';
-import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
 
 /** Те же роли, что считает администраторскими раздел «Запросы». */
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 interface NavItem {
   to: string;
@@ -53,8 +51,8 @@ const NAV: NavItem[] = [
 export function SignoffShell({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const { pathname } = useLocation();
-  const { activeProfile } = useActiveProfile();
-  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
+  const permissions = usePermissions();
+  const isAdmin = permissions.atLeast('signoff', 'admin');
 
   const items = NAV.filter((item) => !item.adminOnly || isAdmin);
   const isActive = (item: NavItem) =>

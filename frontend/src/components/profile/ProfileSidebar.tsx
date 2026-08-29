@@ -51,8 +51,8 @@ import { Input } from '@/components/ui/input';
 import { DjangoIcon } from '@/components/icons/DjangoIcon';
 import { ServiceUnavailableDialog } from '@/components/ServiceUnavailableDialog';
 import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { useServiceStatus } from '@/hooks/useServiceStatus';
-import { hasEmployeeTaskAccessFromParts } from '@/lib/auth/roles';
 import { grafanaSsoUrl } from '@/lib/monitoring';
 import { cn } from '@/lib/utils';
 
@@ -61,18 +61,6 @@ type Props = {
     department?: string;
     position?: string;
 };
-
-// ── Role buckets — mirror values returned by user-service
-const ADMIN_ROLES = ['admin', 'superuser'];
-const STAFF_OR_ADMIN_ROLES = [...ADMIN_ROLES, 'staff'];
-const HR_ROLES = [
-    ...STAFF_OR_ADMIN_ROLES,
-    'hr_manager', 'senior_hr', 'junior_hr', 'senior_manager', 'junior_manager',
-];
-const EDITOR_ROLES = [...STAFF_OR_ADMIN_ROLES, 'editors'];
-
-const hasAnyRole = (roles?: string[], expected: string[] = []) =>
-    Boolean(roles?.some(r => expected.includes(r)));
 
 type IconComponent = LucideIcon | React.FC<React.SVGProps<SVGSVGElement>>;
 
@@ -243,11 +231,14 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     const { t } = useTranslation();
     const [searchQuery, setSearchQuery] = useState('');
 
-    const editor = hasAnyRole(roles, EDITOR_ROLES);
-    const hrManager = hasAnyRole(roles, HR_ROLES);
-    const admin = hasAnyRole(roles, ADMIN_ROLES);
-    const elevated = hasAnyRole(roles, STAFF_OR_ADMIN_ROLES);
-    const hasTasksAccess = hasEmployeeTaskAccessFromParts(roles, department, position);
+    // Пункты меню открываются уровнем модуля, а не ролью. Скрытие здесь —
+    // удобство, а не защита: рубеж стоит на бэкенде и на гейте маршрута.
+    const permissions = usePermissions();
+    const editor = permissions.atLeast('cms', 'write');
+    const hrManager = permissions.atLeast('hr', 'read');
+    const admin = permissions.atLeast('users', 'admin');
+    const elevated = permissions.atLeast('tasks', 'admin');
+    const hasTasksAccess = permissions.atLeast('tasks', 'read');
     const { level, hasHrAccess } = useHRLevel({ enabled: Boolean(roles?.length) });
     const showHrItem = (levels: string[]) => admin || !hasHrAccess || (level ? levels.includes(level) : false);
 

@@ -12,10 +12,8 @@ import {
   BarChart3, ClipboardList, Database, FolderKanban, Layers, LineChart, Table2, Inbox as InboxIcon,
 } from 'lucide-react';
 
-import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const requestsNavItems = [
   { to: '/requests',           icon: InboxIcon,    labelKey: 'requests.nav.inbox',     adminOnly: false },
@@ -37,8 +35,8 @@ interface Props {
 export const RequestsLayout: React.FC<Props> = ({ title, subtitle, actions, children }) => {
   const { t } = useTranslation();
   const location = useLocation();
-  const { activeProfile } = useActiveProfile();
-  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
+  const permissions = usePermissions();
+  const isAdmin = permissions.atLeast('approvals', 'admin');
   const visibleNavItems = requestsNavItems.filter((item) => !item.adminOnly || isAdmin);
 
   return (

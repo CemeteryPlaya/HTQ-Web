@@ -19,11 +19,10 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { usePermissions } from '@/hooks/usePermissions';
 import { useHRLevel } from '@/hooks/useHRLevel';
-import { hasAnyRole } from '@/lib/auth/roles';
 
 const ACCOUNTANT_PERMISSION = 'contracts.accountable_funds_request.mark_paid';
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 const statusLabel: Record<string, string> = { draft: 'Черновик', on_review: 'На согласовании', awaiting_accounting: 'Ожидает оплаты бухгалтерией', awaiting_advance_report: 'Ожидает авансовый отчёт', closed: 'Закрыта' };
 const approvalLabel: Record<string, string> = { draft: 'Черновик', pending: 'На согласовании', approved: 'Согласовано', rejected: 'Отклонено', rework: 'На доработке' };
 
@@ -31,8 +30,9 @@ export default function AccountableFundsRequestDetail() {
   const requestId = Number(useParams<{ id: string }>().id);
   const queryClient = useQueryClient();
   const { activeProfile } = useActiveProfile();
+  const permissions = usePermissions();
   const { hasPerm } = useHRLevel();
-  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
+  const isAdmin = permissions.atLeast('contracts', 'admin');
   const canMarkPaid = isAdmin || hasPerm(ACCOUNTANT_PERMISSION);
   const [budgetLineId, setBudgetLineId] = useState('');
   const [expenseName, setExpenseName] = useState('');

@@ -14,9 +14,26 @@ vi.mock('@/api/client', () => ({
   default: { get: vi.fn(() => Promise.reject(new Error('offline'))) },
 }));
 
-// Права из отчёта: аккаунт staff без HR-уровня — HR-раздел ему доступен.
 vi.mock('@/hooks/useHRLevel', () => ({
   useHRLevel: () => ({ level: null, hasHrAccess: false }),
+}));
+
+// Предмет теста — раскрытие разделов, а не выдача прав, поэтому права
+// подставляются напрямую. Со стадии 2 HR-раздел открывает уровень `hr:read`,
+// а НЕ флаг `staff`: прежде `staff` входил в HR-ведро мёртвого словаря ролей
+// и попадал в раздел даром.
+const levels: Record<string, string> = { hr: 'read' };
+const order = ['none', 'read', 'write', 'admin'];
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    company: 'demo',
+    level: (m: string) => levels[m] ?? 'none',
+    atLeast: (m: string, req: string) =>
+      order.indexOf(levels[m] ?? 'none') >= order.indexOf(req),
+    scope: () => null,
+    subordinateCompanies: [],
+    isLoading: false,
+  }),
 }));
 
 vi.mock('@/hooks/useServiceStatus', () => ({

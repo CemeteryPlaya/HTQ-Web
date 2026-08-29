@@ -16,20 +16,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { contractsApi } from '@/api/contracts';
-import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { usePermissions } from '@/hooks/usePermissions';
 import { useHRLevel } from '@/hooks/useHRLevel';
-import { hasAnyRole } from '@/lib/auth/roles';
 
 const ACCOUNTANT_PERMISSION = 'contracts.advance_payment.record_payment';
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const AdvancePaymentDetail = () => {
   const { id } = useParams<{ id: string }>();
   const paymentId = Number(id);
   const queryClient = useQueryClient();
-  const { activeProfile } = useActiveProfile();
+  const permissions = usePermissions();
   const { hasPerm } = useHRLevel();
-  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
+  const isAdmin = permissions.atLeast('contracts', 'admin');
   const canRecord = isAdmin || hasPerm(ACCOUNTANT_PERMISSION);
   const fileInput = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
