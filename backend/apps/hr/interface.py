@@ -41,7 +41,7 @@ def get_employee_brief(user_id: int) -> dict | None:
     row = (
         Employee.objects.filter(user_id=user_id, is_deleted=False)
         .values("id", "first_name", "last_name", "department_id",
-                "position__title", "status")
+                "position_id", "position__title", "status")
         .first()
     )
     if row is None:
@@ -50,6 +50,11 @@ def get_employee_brief(user_id: int) -> dict | None:
         "id": row["id"],
         "full_name": f"{row['last_name']} {row['first_name']}",
         "department_id": row["department_id"],
+        # Единственный шов стадии 2 с кадровым доменом: apps.access ключует
+        # роли на должности и обязана получать её id, а не заголовок
+        # (спека docs/plans/2026-08-29-stage2-access-and-roles-spec.md, §1.5).
+        # Ключ добавлен АДДИТИВНО — остальные читает действующий фронт.
+        "position_id": row["position_id"],
         "position_title": row["position__title"],
         "status": row["status"],
     }

@@ -71,6 +71,20 @@ def test_get_employee_brief_by_user_id(org):
 
 
 @pytest.mark.django_db
+def test_get_employee_brief_carries_position_id(org):
+    """apps.access ключуется на должности, и ей нужен id, а не заголовок.
+
+    Это единственный шов стадии 2 с кадровым доменом (спека §1.5): модели HR
+    аппка доступа не импортирует.
+    """
+    _dep, pos, _emp = org
+    brief = interface.get_employee_brief(42)
+    assert brief["position_id"] == pos.id
+    # Аддитивность: старые ключи на месте — их читает действующий фронт.
+    assert {"id", "full_name", "department_id", "position_title", "status"} <= set(brief)
+
+
+@pytest.mark.django_db
 def test_get_employee_brief_skips_soft_deleted(org):
     _dep, _pos, emp = org
     emp.is_deleted = True
