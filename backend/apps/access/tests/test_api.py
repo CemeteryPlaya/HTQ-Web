@@ -54,11 +54,19 @@ def test_roles_require_authentication(client):
 
 @pytest.mark.django_db
 def test_list_roles(client):
+    """В каталоге уже есть засеянная platform-admin — проверяем состав, а не длину.
+
+    Роль-минимум приходит миграцией 0002 и существует в любой базе: без неё
+    систему прав некому раздать. Тест, ожидающий пустой каталог, проверял бы
+    отсутствие этого засева, а не работу ручки.
+    """
     Role.objects.create(code="a", title="Альфа")
     resp = client.get(f"{BASE}/roles", **auth(token()))
     assert resp.status_code == 200
-    assert resp.json() == [{"id": Role.objects.get().id, "code": "a",
-                            "title": "Альфа", "is_system": False}]
+    by_code = {row["code"]: row for row in resp.json()}
+    assert by_code["a"] == {"id": Role.objects.get(code="a").id, "code": "a",
+                            "title": "Альфа", "is_system": False}
+    assert by_code["platform-admin"]["is_system"] is True
 
 
 @pytest.mark.django_db
@@ -82,7 +90,7 @@ def test_staff_may_not_touch_the_shared_catalog(client):
     resp = post_json(client, f"{BASE}/roles", {"code": "x", "title": "X"},
                      **auth(staff_token()))
     assert resp.status_code == 403
-    assert not Role.objects.exists()
+    assert not Role.objects.filter(code="x").exists()
 
 
 @pytest.mark.django_db

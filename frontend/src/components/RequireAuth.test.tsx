@@ -51,6 +51,8 @@ const permissionsOf = (levels: Record<string, AccessLevel>, isLoading = false) =
   scope: () => null,
   subordinateCompanies: [],
   isLoading,
+  isError: false,
+  refetch: vi.fn(),
 });
 
 const renderGate = (requires?: { module: string; level: AccessLevel }) =>
@@ -117,5 +119,30 @@ describe('RequireAuth — гейт по модулю и уровню', () => {
     // заход выбрасывал бы на профиль раньше ответа сервера).
     expect(screen.queryByText('содержимое страницы')).not.toBeInTheDocument();
     expect(screen.queryByText('профиль')).not.toBeInTheDocument();
+  });
+
+  /**
+   * Неудачный запрос прав и отсутствие прав дают ОДНУ И ТУ ЖЕ пустую карту.
+   * Пока их не разделили, недоступная ручка выглядела как «вам не выдали
+   * роль»: закрывалось всё, включая администрирование, и причину искали в
+   * ролях. Ровно так и вышло на первой живой проверке стадии 2.
+   */
+  it('различает «прав нет» и «права не загрузились»', () => {
+    usePermissions.mockReturnValue({ ...permissionsOf({}), isError: true });
+
+    renderGate({ module: 'hr', level: 'read' });
+
+    // Не редирект на профиль: человеку показывают причину и дают повторить.
+    expect(screen.queryByText('профиль')).not.toBeInTheDocument();
+    expect(screen.getByText('auth.errors.permissionsUnavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'common.retry' })).toBeInTheDocument();
+  });
+
+  it('доступ при этом всё равно закрыт — отказ в закрытую', () => {
+    usePermissions.mockReturnValue({ ...permissionsOf({ hr: 'admin' }), isError: true });
+
+    renderGate({ module: 'hr', level: 'read' });
+
+    expect(screen.queryByText('содержимое страницы')).not.toBeInTheDocument();
   });
 });

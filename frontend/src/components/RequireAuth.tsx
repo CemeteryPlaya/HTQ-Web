@@ -79,6 +79,30 @@ const RequireAuth = ({ children, requires }: RequireAuthProps) => {
                 </div>
             );
         }
+        // Права НЕ ЗАГРУЗИЛИСЬ — это не «прав нет», и путать их нельзя.
+        // Доступ всё равно закрыт (отказ в закрытую), но человек должен
+        // видеть причину: пустая карта из-за недоступной ручки выглядит ровно
+        // как отсутствие прав, и разбираться идут не туда — искать роли
+        // вместо того, чтобы чинить запрос.
+        if (permissions.isError) {
+            return (
+                <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-6 text-center">
+                    <p className="max-w-prose text-muted-foreground">
+                        {t(
+                            'auth.errors.permissionsUnavailable',
+                            'Не удалось получить права доступа. Раздел закрыт не потому, что прав нет, '
+                            + 'а потому, что их не удалось спросить у сервера.',
+                        )}
+                    </p>
+                    <button
+                        onClick={() => permissions.refetch()}
+                        className="rounded-full border px-5 py-2 text-sm font-medium transition-colors hover:bg-accent"
+                    >
+                        {t('common.retry')}
+                    </button>
+                </div>
+            );
+        }
         if (!permissions.atLeast(requires.module, requires.level)) {
             // Отправляем в безопасное место, а не по кругу на /login: профиль —
             // универсальная посадочная страница «вы вошли».

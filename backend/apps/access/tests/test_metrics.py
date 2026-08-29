@@ -33,17 +33,20 @@ def test_collect_returns_the_common_shape():
 
 @pytest.mark.django_db
 def test_empty_role_is_counted():
+    """Счёт ведётся от засеянного состояния: platform-admin есть в любой базе."""
+    before = metrics.collect()["access_roles_total"]["values"][0][1]
     Role.objects.create(code="empty", title="Пустая")
     useful = Role.objects.create(code="useful", title="Полезная")
     RoleModulePermission.objects.create(role=useful, module="hr", level=Level.READ)
 
     got = metrics.collect()
-    assert got["access_roles_total"]["values"] == [((), 2)]
+    assert got["access_roles_total"]["values"] == [((), before + 2)]
     assert got["access_roles_without_permissions"]["values"] == [((), 1)]
 
 
 @pytest.mark.django_db
 def test_admin_only_role_is_counted():
+    """Ролей «всё admin» становится две: засеянная и заведённая тестом."""
     all_admin = Role.objects.create(code="god", title="Всё")
     RoleModulePermission.objects.create(role=all_admin, module="hr", level=Level.ADMIN)
     RoleModulePermission.objects.create(role=all_admin, module="tasks", level=Level.ADMIN)
@@ -51,7 +54,8 @@ def test_admin_only_role_is_counted():
     RoleModulePermission.objects.create(role=mixed, module="hr", level=Level.ADMIN)
     RoleModulePermission.objects.create(role=mixed, module="tasks", level=Level.READ)
 
-    assert metrics.collect()["access_roles_admin_only"]["values"] == [((), 1)]
+    # Засеянная platform-admin тоже сплошь admin — считаем прирост, а не итог.
+    assert metrics.collect()["access_roles_admin_only"]["values"] == [((), 2)]
 
 
 @pytest.mark.django_db

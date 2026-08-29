@@ -36,12 +36,25 @@ export interface Permissions {
   /** Компании ниже по внешней иерархии. Только отображение (§7). */
   subordinateCompanies: string[];
   isLoading: boolean;
+  /**
+   * Права НЕ УДАЛОСЬ получить — это не то же самое, что «прав нет».
+   *
+   * Различать обязательно. Пустая карта приходит штатно (вне контекста
+   * компании, у человека без ролей), а неудачный запрос выглядит точно так
+   * же: закрывается всё, включая администрирование, и человек ищет причину
+   * в правах, хотя дело в недоступной ручке. Ровно так и вышло при первой
+   * проверке стадии 2 — dev-прокси не знал про `/api/access/`, и
+   * администратор платформы остался без единого раздела.
+   */
+  isError: boolean;
+  /** Повторить запрос прав — для экрана «не загрузились». */
+  refetch: () => void;
 }
 
 const EMPTY: PermissionMap = {};
 
 export function usePermissions(): Permissions {
-  const { data, isLoading } = useQuery<AccessMe>({
+  const { data, isLoading, isError, refetch } = useQuery<AccessMe>({
     queryKey: ['access', 'me'],
     queryFn: () => accessApi.getMe(),
     // Тот же горизонт, что у useHRLevel: права меняются редко, а запрос
@@ -59,8 +72,10 @@ export function usePermissions(): Permissions {
       scope: (module) => scopeFor(permissions, module),
       subordinateCompanies: data?.subordinate_companies ?? [],
       isLoading,
+      isError,
+      refetch: () => { void refetch(); },
     };
-  }, [data, isLoading]);
+  }, [data, isLoading, isError, refetch]);
 }
 
 export default usePermissions;
