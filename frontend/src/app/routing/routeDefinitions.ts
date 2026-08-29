@@ -196,4 +196,12 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/hr/offers', component: lazyPages.HROffers, requiresAuth: true, requires: { module: 'hr', level: 'read' } },
   { path: '/hr/production-calendar', component: lazyPages.HRProductionCalendar, requiresAuth: true, requires: { module: 'hr', level: 'read' } },
   { path: '/hr/staffing', component: lazyPages.HRStaffing, requiresAuth: true, requires: { module: 'hr', level: 'read' } },
+
+  // ─── Доступ и роли ────────────────────────────────────────────────────
+  // Гейт на собственный модуль: каталог общий для всех компаний, и его
+  // мутации бэкенд отдаёт только суперпользователю (403 иначе). Уровень
+  // admin здесь — минимум для входа на страницу, а не полный эквивалент
+  // серверной проверки: страница сама скрывает правку у неплатформенного
+  // администратора.
+  { path: '/access/roles', component: lazyPages.AccessRoleCatalog, requiresAuth: true, requires: { module: 'access', level: 'admin' } },
 ];
