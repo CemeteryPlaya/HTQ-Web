@@ -89,7 +89,6 @@ import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useTranslation } from 'react-i18next';
 
-
 const ProcessDetail = () => {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
@@ -99,6 +98,9 @@ const ProcessDetail = () => {
   const { activeProfile } = useActiveProfile();
   const permissions = usePermissions();
   const myId = activeProfile?.id ? Number(activeProfile.id) : null;
+  // Уровень модуля вместо платформенных флагов — см. пояснение в
+  // components/signoff/SignoffShell.tsx: до навешивания модульного гейта на
+  // ручки согласования интерфейс строже сервера, и это лечится выдачей роли.
   const isAdmin = permissions.atLeast('signoff', 'admin');
 
   const [target, setTarget] = useState<DecisionTarget | null>(null);

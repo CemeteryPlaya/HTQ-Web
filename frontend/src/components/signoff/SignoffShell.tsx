@@ -20,8 +20,6 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
 
-/** Те же роли, что считает администраторскими раздел «Запросы». */
-
 interface NavItem {
   to: string;
   labelKey: string;
@@ -51,6 +49,14 @@ const NAV: NavItem[] = [
 export function SignoffShell({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const { pathname } = useLocation();
+  // Права раздела — уровень МОДУЛЯ, а не платформенные флаги учётки
+  // (стадия 2 «Доступ и роли»). ⚠️ Пока это строже бэкенда: его ручки
+  // согласования всё ещё гейтятся `api_view(admin=True)`, то есть
+  // is_staff/is_superuser, а модульный гейт стадия объявила, но ни на одну
+  // существующую ручку не навесила. Значит staff-администратор без роли с
+  // `signoff:admin` увидит меньше, чем сервер ему разрешит, — лечится
+  // выдачей роли (`platform-admin` засеяна миграцией access/0002), а не
+  // возвратом проверки по флагам.
   const permissions = usePermissions();
   const isAdmin = permissions.atLeast('signoff', 'admin');
 
