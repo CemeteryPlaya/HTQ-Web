@@ -724,7 +724,8 @@ def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
     core = schemas.EmployeeUpdate.model_validate(data.model_dump(exclude={"card_t2"}))
     try:
         with transaction.atomic():
-            employee = emp_svc.update_employee(id, core, changed_by_id=request.token.user_id)
+            employee, identity_request = emp_svc.update_employee(
+                id, core, changed_by_id=request.token.user_id)
             _apply_card_t2(id, data.card_t2, access)
     except emp_svc.DepartmentNotFound:
         return json_error("Department not found", 422)
@@ -736,7 +737,16 @@ def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
         return json_error(str(exc), 403)
     except ValueError as exc:
         return json_error(str(exc), 422)
-    return svc.serialize_employee(employee)
+    payload = svc.serialize_employee(employee)
+    if identity_request is not None:
+        # Поля идентичности (имя, телефон, био, аватар) не пишутся в карточку
+        # сразу — они уходят заявкой владельцу аккаунта. Без этого ключа ответ
+        # неотличим от обычного сохранения, и правка выглядит пропавшей:
+        # форма закрылась, значение прежнее, ошибки нет.
+        from apps.hr.services import identity_request_service
+
+        payload["identity_request"] = identity_request_service.serialize(identity_request)
+    return payload
 
 
 @api_view(methods=("DELETE",), auth="jwt")

@@ -151,7 +151,7 @@ def create_employee(data, *, changed_by_id: int) -> Employee:
 
 
 @transaction.atomic
-def update_employee(id: int, data, *, changed_by_id: int) -> Employee:
+def update_employee(id: int, data, *, changed_by_id: int) -> tuple[Employee, object | None]:
     employee = get_employee(id)
     patch = data.model_dump(exclude_none=True)
 
@@ -192,7 +192,12 @@ def update_employee(id: int, data, *, changed_by_id: int) -> Employee:
         },
         changed_by=changed_by_id,
     )
-    return get_employee(id)
+    # Заявка возвращается ВМЕСТЕ с сотрудником, а не только пишется в журнал.
+    # Правка идентичности не применяется сразу — она уходит на подтверждение
+    # владельцу аккаунта, и без этого признака вызывающий не может отличить
+    # «сохранено» от «отправлено на подтверждение»: строка сотрудника в обоих
+    # случаях возвращается прежней, и для человека правка выглядит пропавшей.
+    return get_employee(id), identity_request
 
 
 @transaction.atomic

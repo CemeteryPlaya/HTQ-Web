@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Briefcase, Building2, Check, ChevronDown, ChevronsUpDown, IdCard, KeyRound, Lock, Plus, Share2, UserPlus } from 'lucide-react';
@@ -371,7 +372,22 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       );
       return createEmployeeWithCard(payload);
     },
-    onSuccess: () => {
+    onSuccess: (saved) => {
+      // Правка идентичности (имя, телефон, био, аватар) у сотрудника со
+      // связанным аккаунтом не применяется сразу: она уходит заявкой владельцу
+      // и попадёт в карточку только после подтверждения. Без этого сообщения
+      // форма просто закрывается, значение остаётся прежним и ошибки нет —
+      // то есть выглядит, будто правка не сохранилась.
+      const identityRequest = (saved as { identity_request?: { fields?: unknown[] } } | undefined)
+        ?.identity_request;
+      if (identityRequest) {
+        toast.info(
+          t('hr.pages.employees.identityRequestCreated',
+            'Отправлено на подтверждение владельцу учётной записи. В карточке '
+            + 'значение появится после того, как он подтвердит правку.'),
+          { duration: 8000 },
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ['hr-employees'] });
       queryClient.invalidateQueries({ queryKey: ['hr-employee-users'] });
       if (editing) queryClient.invalidateQueries({ queryKey: ['hr-card-t2', editing.id] });

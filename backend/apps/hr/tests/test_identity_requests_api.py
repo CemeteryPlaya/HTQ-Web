@@ -225,3 +225,46 @@ def test_approver_get_returns_current(lead_auth, account):
     assert res.status_code == 200
     assert res.json()["user_id"] == account.id
     assert res.json()["user"]["email"] == account.email
+
+
+# ── ответ на правку карточки ────────────────────────────────────────────────
+
+@pytest.mark.django_db
+def test_update_response_says_the_change_went_to_approval(
+        lead_auth, employee, approver_auth, fallback_log_mode):
+    """Правка идентичности обязана быть отличима от обычного сохранения.
+
+    Поля идентичности не пишутся в карточку сразу — они уходят заявкой
+    владельцу аккаунта. Строка сотрудника при этом возвращается ПРЕЖНЕЙ, и без
+    отдельного признака в ответе клиент не может отличить «сохранено» от
+    «отправлено на подтверждение»: форма закрывается, значение не меняется,
+    ошибки нет — правка выглядит пропавшей. Ровно так это и выглядело у
+    заказчика при первой живой проверке.
+    """
+    res = Client().put(
+        f"/api/hr/v1/employees/{employee.id}/",
+        data=json.dumps({"phone": "+7 777 000-11-22"}),
+        content_type="application/json", **lead_auth,
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["identity_request"]["status"] == IdentityChangeRequest.Status.PENDING
+    assert [f["field"] for f in body["identity_request"]["fields"]] == ["phone"]
+    # Карточка намеренно не изменилась: значение появится после подтверждения.
+    employee.refresh_from_db()
+    assert employee.phone != "+7 777 000-11-22"
+
+
+@pytest.mark.django_db
+def test_update_of_non_identity_field_has_no_request_key(
+        lead_auth, employee, approver_auth, fallback_log_mode):
+    """Трудовые поля применяются сразу — заявке взяться неоткуда."""
+    res = Client().put(
+        f"/api/hr/v1/employees/{employee.id}/",
+        data=json.dumps({"status": "suspended"}),
+        content_type="application/json", **lead_auth,
+    )
+
+    assert res.status_code == 200
+    assert "identity_request" not in res.json()
