@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from apps.access.services import resolve
+from apps.access.services import hierarchy, resolve
 from apps.core.services import require_service
 
 
@@ -32,4 +32,14 @@ def permissions_for(user, company: str | None) -> dict[str, dict]:
     return resolve.permissions_for(user, company)
 
 
-__all__ = ["permission_level", "permissions_for"]
+def subordinate_companies(user, company: str | None) -> list[str]:
+    """Компании ниже по дереву владения, над сотрудниками которых он начальник.
+
+    Пусто у всех, кроме руководителей с включённой внешней иерархией (§1.4).
+    Стадия 2 список отдаёт, но выборки по нему не режет.
+    """
+    require_service("access")
+    return hierarchy.subordinate_companies(user, company)
+
+
+__all__ = ["permission_level", "permissions_for", "subordinate_companies"]
