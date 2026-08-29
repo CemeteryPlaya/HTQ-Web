@@ -188,7 +188,10 @@ export const HRLayout: React.FC<Props> = ({ title, subtitle, children }) => {
                   return (
                     <div key={catKey} className="space-y-1">
                       <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
-                        {categoryTitles[catKey] || catKey}
+                        {/* Через t(): categoryTitles хранит КЛЮЧИ перевода, как и
+                            labelKey у пунктов ниже. Без вызова сюда попадала сама
+                            строка ключа — «hr.nav.groups.people» вместо «Персонал». */}
+                        {t(categoryTitles[catKey] ?? catKey)}
                       </div>
                       <nav className="flex flex-col gap-0.5">
                         {items.map((item) => {

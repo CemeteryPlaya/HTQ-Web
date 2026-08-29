@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { cn } from '@/lib/utils';
+import { withSuggestedEmail } from '@/lib/translit';
 import { useHRLevel } from '@/hooks/useHRLevel';
 import { Employee, relationId } from '@/components/hr/employeeCommon';
 import {
@@ -509,6 +510,11 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   const [userPopoverOpen, setUserPopoverOpen] = useState(false);
   const [createUserOpen, setCreateUserOpen] = useState(false);
   const [newUserForm, setNewUserForm] = useState(blankNewUser);
+  // Почту подставляем из имени, пока её не тронули руками. Флаг нужен именно
+  // потому, что подстановка «умная»: без него исправленный адрес затирался бы
+  // на следующем нажатии в поле имени, и человек не понял бы, куда делась
+  // его правка.
+  const [emailEdited, setEmailEdited] = useState(false);
   /** Поля, значения которых пришли из аккаунта, — для подписи под инпутом. */
   const [prefilled, setPrefilled] = useState<Record<string, boolean>>({});
 
@@ -659,6 +665,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       setForm((prev) => ({ ...prev, user: String(data.id) }));
       setCreateUserOpen(false);
       setNewUserForm(blankNewUser());
+      setEmailEdited(false);
       setUserPopoverOpen(false);
     },
   });
@@ -712,6 +719,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                               // прошлой отменённой попытки достался бы
                               // следующему пользователю.
                               setNewUserForm(blankNewUser());
+                              setEmailEdited(false);
                               setCreateUserOpen(true);
                             }}
                           />
@@ -1239,14 +1247,16 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               {t('hr.pages.employees.fields.lastName')}
               <Input
                 value={newUserForm.last_name}
-                onChange={(e) => setNewUserForm({ ...newUserForm, last_name: e.target.value })}
+                onChange={(e) => setNewUserForm(withSuggestedEmail(
+                  { ...newUserForm, last_name: e.target.value }, emailEdited))}
               />
             </label>
             <label className="grid gap-2 text-sm">
               {t('hr.pages.employees.fields.firstName')}
               <Input
                 value={newUserForm.first_name}
-                onChange={(e) => setNewUserForm({ ...newUserForm, first_name: e.target.value })}
+                onChange={(e) => setNewUserForm(withSuggestedEmail(
+                  { ...newUserForm, first_name: e.target.value }, emailEdited))}
               />
             </label>
             <label className="grid gap-2 text-sm">
@@ -1261,7 +1271,10 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               <Input
                 type="email"
                 value={newUserForm.email}
-                onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+                onChange={(e) => {
+                  setEmailEdited(true);
+                  setNewUserForm({ ...newUserForm, email: e.target.value });
+                }}
               />
               <span className="text-xs text-muted-foreground">
                 {t('hr.pages.employees.usernameHint', 'Логин будет выведен из email:')}{' '}
