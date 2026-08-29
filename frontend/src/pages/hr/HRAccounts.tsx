@@ -12,7 +12,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, Copy, Check } from 'lucide-react';
+import { RefreshCw, Copy, Check, KeyRound } from 'lucide-react';
+import { UserAssignmentsDialog } from '@/components/access/UserAssignmentsDialog';
+import { isPlatformAdmin } from '@/lib/auth/roles';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
 
 const HRAccounts = () => {
   const { t } = useTranslation();
@@ -20,6 +23,12 @@ const HRAccounts = () => {
   const [search, setSearch] = useState('');
   const [tempPassword, setTempPassword] = useState<{ id: number; pw: string } | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  // Личные назначения ролей — исключительный путь (стадия 2, §4.4). Место
+  // выбрано по ключу: назначение ключуется на учётной записи, и здесь она
+  // есть, в отличие от карточки должности.
+  const [assignmentsFor, setAssignmentsFor] = useState<PlatformAccount | null>(null);
+  const { activeProfile } = useActiveProfile({ retry: false });
+  const canEditAssignments = isPlatformAdmin(activeProfile?.roles);
 
   const { data: accounts, isLoading, error } = useQuery({
     queryKey: ['hr-accounts'],
@@ -115,15 +124,26 @@ const HRAccounts = () => {
                   <Badge variant="outline">{roleOf(a)}</Badge>
                 </TableCell>
                 <TableCell>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => resetMutation.mutate(a.id)}
-                    disabled={resetMutation.isPending}
-                  >
-                    <RefreshCw className="h-3.5 w-3.5 mr-1" />
-                    {t('hr.pages.accounts.resetPassword')}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => resetMutation.mutate(a.id)}
+                      disabled={resetMutation.isPending}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                      {t('hr.pages.accounts.resetPassword')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setAssignmentsFor(a)}
+                      aria-label={`${t('access.assignments.title', 'Личные назначения')}: ${a.username}`}
+                      title={t('access.assignments.title', 'Личные назначения')}
+                    >
+                      <KeyRound className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -137,6 +157,14 @@ const HRAccounts = () => {
           </TableBody>
         </Table>
       </div>
+
+      <UserAssignmentsDialog
+        userId={assignmentsFor?.id ?? null}
+        userLabel={assignmentsFor?.username ?? ''}
+        open={assignmentsFor !== null}
+        onOpenChange={(next) => { if (!next) setAssignmentsFor(null); }}
+        canEdit={canEditAssignments}
+      />
     </HRLayout>
   );
 };
