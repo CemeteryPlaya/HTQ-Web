@@ -9,6 +9,8 @@ import { fetchOrgTree, type OrgTree, type RelationType } from '@/api/hr';
 import HRLayout from '@/components/hr/HRLayout';
 import { EmployeeDetailDrawer } from '@/components/hr/EmployeeDetailDrawer';
 import { OrgChart, type OrgRawNode } from '@/components/hr/OrgChart';
+import { ExternalHierarchy } from '@/components/hr/OrgChart/ExternalHierarchy';
+import { HierarchySwitch, type HierarchyKind } from '@/components/hr/OrgChart/HierarchySwitch';
 import { OrgEditPanel } from '@/components/hr/OrgChart/OrgEditPanel';
 import { useOrgEditMutations } from '@/components/hr/OrgChart/useOrgEditMutations';
 import { EntityCombobox, type EntityOption } from '@/components/hr/OrgChart/EntityCombobox';
@@ -34,10 +36,13 @@ const HROrgChart = () => {
   const [selected, setSelected] = useState<OrgRawNode | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  // Правило 4 стадии 2: иерархий две. Внешняя вычисляется из дерева компаний
+  // и потому только для чтения — правка в ней невозможна по построению.
+  const [hierarchy, setHierarchy] = useState<HierarchyKind>('internal');
 
   const { isSeniorOrAbove, isLoading: levelLoading } = useHRLevel();
   const canEdit = isSeniorOrAbove && !levelLoading;
-  const editable = editMode && canEdit && mode !== 'both';
+  const editable = editMode && canEdit && mode !== 'both' && hierarchy === 'internal';
 
   useEffect(() => {
     if (editMode && mode === 'both') {
@@ -199,7 +204,9 @@ const HROrgChart = () => {
           />
         </div>
 
-        {canEdit && (
+        <HierarchySwitch value={hierarchy} onChange={setHierarchy} />
+
+        {canEdit && hierarchy === 'internal' && (
           <div className="flex items-center gap-1.5 text-xs font-medium rounded-lg border bg-muted/30 px-2.5 py-1">
             <Pencil className="h-3.5 w-3.5 text-primary" />
             <span className="text-foreground">{t('hr.orgChartPage.editLabel')}</span>
@@ -224,7 +231,21 @@ const HROrgChart = () => {
         </div>
       )}
 
+      {/* Самое вероятное расхождение ожиданий с заказчиком: связь на дереве
+          читается как передача прав. Закрывается подписью в интерфейсе, а не
+          абзацем в документации, и стоит в ОБОИХ режимах — с внешней
+          иерархией ожидание сильнее, чем с внутренней. */}
+      <p className="mb-2 text-xs text-muted-foreground">
+        {t(
+          'access.hierarchy.subordinationNote',
+          'Связь на дереве означает подчинение, а не передачу прав: начальник не '
+          + 'получает права подчинённого автоматически — они приходят ролями его '
+          + 'должности.',
+        )}
+      </p>
+
       <div className="h-[calc(100vh-270px)] min-h-[500px]">
+        {hierarchy === 'external' ? <ExternalHierarchy /> : (
         <ReactFlowProvider>
           <OrgChart
             rawNodes={treeData?.nodes ?? []}
@@ -235,6 +256,7 @@ const HROrgChart = () => {
             onConnectNodes={handleConnectNodes}
           />
         </ReactFlowProvider>
+        )}
       </div>
 
       {editable ? (

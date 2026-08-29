@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { isKnownModule } from '@/lib/auth/modules';
+
 import { protectedRoutes, publicRoutes } from './routeDefinitions';
 
 /**
@@ -80,18 +82,18 @@ describe('routeDefinitions', () => {
      * всегда будет `none` — страница закроется навсегда и молча, без единой
      * ошибки в консоли. Опечатка здесь неотличима от «прав не выдали».
      *
-     * Список ниже — намеренная копия реестра для проверки, а не второй
-     * справочник: он не участвует в работе приложения и существует только
-     * затем, чтобы новый модуль в маршрутах стал осознанным решением.
+     * Здесь была своя копия реестра — она пережила ровно до появления
+     * каталога ролей: матрице прав понадобился список модулей с подписями,
+     * он лёг в `lib/auth/modules.ts`, и копий стало две. Вторая устарела
+     * первой же (в ней не было `access`) и уронила сборку, не поймав при
+     * этом ни одной настоящей опечатки. Поэтому проверка ходит в реестр:
+     * осознанным решением остаётся правка самого реестра — файла с
+     * подписями, а не безымянного списка в тесте, — а расхождение реестра с
+     * бэкендом стережёт `lib/auth/modules.test.ts`.
      */
     it('использует только модули из реестра бэкенда', () => {
-        const KNOWN = new Set([
-            'users', 'hr', 'tasks', 'approvals', 'cms', 'media',
-            'mail', 'messenger', 'conference', 'contracts', 'signoff',
-            'companies',
-        ]);
         const unknown = protectedRoutes
-            .filter((r) => r.requires && !KNOWN.has(r.requires.module))
+            .filter((r) => r.requires && !isKnownModule(r.requires.module))
             .map((r) => `${r.path} → ${r.requires?.module}`);
         expect(unknown).toEqual([]);
     });
