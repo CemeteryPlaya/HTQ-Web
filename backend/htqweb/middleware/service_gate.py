@@ -14,6 +14,7 @@ PREFIX_TO_SERVICE = {
     "/api/messenger/": "messenger",
     "/api/contracts/": "contracts",
     "/api/signoff/": "signoff",
+    "/api/access/": "access",
     "/ws/messenger/": "messenger",
     "/ws/sfu/": "conference",
 }

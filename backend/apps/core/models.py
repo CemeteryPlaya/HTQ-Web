@@ -4,7 +4,7 @@ from django.db import models
 # кроме исторических: approvals ↔ /api/requests/, mail ↔ /api/email/).
 KNOWN_SERVICES = ["users", "hr", "tasks", "approvals", "cms",
                   "media", "mail", "messenger", "conference", "contracts",
-                  "signoff", "companies"]
+                  "signoff", "companies", "access"]
 
 
 class ServiceStatus(models.Model):

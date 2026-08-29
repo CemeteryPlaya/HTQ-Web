@@ -14,7 +14,7 @@ _CACHE_TTL = 5  # секунд; рубильник срабатывает быс
 # по-прежнему действует: он гасит домен на всей платформе, а не у одной
 # компании, и нужен для регламентных работ.
 CORE_MODULES = frozenset({"users", "companies", "core", "hr", "messenger",
-                          "media", "cms"})
+                          "media", "cms", "access"})
 
 
 class ServiceDisabled(Exception):
