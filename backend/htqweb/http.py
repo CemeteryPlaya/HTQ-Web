@@ -72,7 +72,8 @@ _AUTHENTICATORS = {"jwt": _authenticate_jwt}
 
 
 def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
-            status: int = 200, admin: bool = False):
+            status: int = 200, admin: bool = False,
+            module: str | None = None, level: str = "read"):
     if admin and auth is None:
         # admin=True checks request.token, which only an authenticator
         # populates — auth=None always sets it to None (see below), so the
@@ -104,6 +105,22 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                 # private _require_admin copy.
                 if admin and not require_admin(request.token):
                     return json_error("Forbidden", 403)
+                # Прикладной гейт «модуль × уровень» (стадия 2 «Доступ и роли»).
+                # Стоит ПОСЛЕ сверки компании: уровень считается в её контексте,
+                # и проверять права по токену чужой компании бессмысленно.
+                #
+                # Импорт ленивый, внутри функции, и это не стилистика: вьюхи
+                # самой apps.access декорированы этим же api_view, поэтому
+                # импорт на уровне модуля даёт циклический импорт на старте.
+                if module is not None:
+                    from apps.access import interface as access
+                    from apps.access.models import LEVEL_ORDER
+                    from htqweb.tenancy.context import current_company_or_none
+
+                    have = access.permission_level(
+                        request.token, module, current_company_or_none())
+                    if LEVEL_ORDER[have] < LEVEL_ORDER[level]:
+                        return json_error("Forbidden", 403)
             else:
                 request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
             if body is not None:
