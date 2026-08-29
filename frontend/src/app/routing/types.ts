@@ -1,24 +1,26 @@
 import type { ComponentType, LazyExoticComponent } from 'react';
 
+import type { AccessLevel } from '@/lib/auth/permissions';
+
 export type LazyPage = LazyExoticComponent<ComponentType>;
 
-/** Coarse role buckets enforced at the route layer.
+/**
+ * Гейт маршрута: модуль и минимальный уровень (§3, §6 B4 спеки стадии 2).
  *
- * - ``admin``  — full superuser/admin access (mapped to ELEVATED_ROLES with
- *   admin/superuser, plus ``staff`` since staff is treated as admin-equivalent
- *   on this codebase today).
- * - ``hr``     — HR or higher (admin / staff / hr_manager / senior_hr /
- *   junior_hr / senior_manager / junior_manager).
- * - ``editor`` — content-editing access for the marketing CMS pages
- *   (``editors`` / ``staff``).
+ * Пришло на смену `RouteRole`. Прежние три ведра ролей опирались на словарь,
+ * который бэкенд не выдавал никогда, — то есть гейт по факту сводился к
+ * `admin`/`staff`/`user`.
  */
-export type RouteRole = 'admin' | 'hr' | 'editor';
+export interface RouteRequirement {
+  module: string;
+  level: AccessLevel;
+}
 
 export interface RouteConfig {
   path: string;
   component: LazyPage;
   requiresAuth?: boolean;
-  /** Optional role gate. ``requiresAuth`` MUST also be true for this to
-   * take effect — RouteElement only mounts the guard for protected paths. */
-  requiresRole?: RouteRole;
+  /** Гейт по модулю и уровню. ``requiresAuth`` ОБЯЗАН быть true, иначе он не
+   * сработает — RouteElement монтирует охрану только для защищённых путей. */
+  requires?: RouteRequirement;
 }

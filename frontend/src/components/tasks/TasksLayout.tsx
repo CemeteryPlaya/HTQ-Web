@@ -5,7 +5,7 @@ import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { BackToProfile } from '@/components/BackToProfile';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasElevatedAccess } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import {
@@ -70,7 +70,8 @@ export const TasksLayout: React.FC<Props> = ({ title, subtitle, children }) => {
   const { t } = useTranslation();
   const location = useLocation();
   const { activeProfile } = useActiveProfile();
-  const elevated = hasElevatedAccess(activeProfile);
+  const permissions = usePermissions();
+  const elevated = permissions.atLeast('tasks', 'admin');
   const [searchQuery, setSearchQuery] = useState('');
 
   const visibleNavItems = useMemo(() => {

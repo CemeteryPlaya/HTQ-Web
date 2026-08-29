@@ -3,34 +3,23 @@ import type { AxiosError } from "axios";
 import { ForcePasswordChange } from "./ForcePasswordChange";
 import { Loader2 } from "lucide-react";
 import { useActiveProfile } from "@/hooks/useActiveProfile";
-import { hasAnyRole, HR_ROLES, EDITOR_ROLES } from "@/lib/auth/roles";
-import type { RouteRole } from "@/app/routing/types";
+import { usePermissions } from "@/hooks/usePermissions";
+import type { RouteRequirement } from "@/app/routing/types";
 import { useTranslation } from 'react-i18next';
-
-// Admin/superuser is always allowed everywhere; staff is admin-equivalent on
-// the user-service side (every admin endpoint accepts ``is_staff OR is_superuser``),
-// so we mirror that here. Each bucket explicitly includes ``admin`` /
-// ``superuser`` / ``staff`` so the gate stays self-evident — no clever
-// fallbacks needed.
-const ALWAYS_ALLOWED = ['admin', 'superuser', 'staff'] as const;
-
-const ROLE_BUCKETS: Record<RouteRole, readonly string[]> = {
-    admin: ALWAYS_ALLOWED,
-    hr: [...ALWAYS_ALLOWED, ...HR_ROLES.filter((r) => !ALWAYS_ALLOWED.includes(r as any))],
-    editor: [...ALWAYS_ALLOWED, ...EDITOR_ROLES.filter((r) => !ALWAYS_ALLOWED.includes(r as any))],
-};
 
 interface RequireAuthProps {
     children: JSX.Element;
-    requiredRole?: RouteRole;
+    /** Гейт по модулю и уровню (§4 контракта стадии 2). */
+    requires?: RouteRequirement;
 }
 
-const RequireAuth = ({ children, requiredRole }: RequireAuthProps) => {
+const RequireAuth = ({ children, requires }: RequireAuthProps) => {
     const { t } = useTranslation();
     const location = useLocation();
     const { activeProfile, isLoading, error, isLoggedIn, clearAuthStorage, refetch } = useActiveProfile({
         retry: false,
     });
+    const permissions = usePermissions();
 
     if (!isLoggedIn) {
         return <Navigate to="/login" state={{ from: location }} replace />;
@@ -76,16 +65,23 @@ const RequireAuth = ({ children, requiredRole }: RequireAuthProps) => {
         return <ForcePasswordChange />;
     }
 
-    // Role gate. This is a UX guard — the backend enforces the same checks
-    // on every API call, so a brief stale-cache window can't actually leak
-    // privileged data. Re-render fires automatically when the fresh profile
-    // fetch resolves and demotes a user.
-    if (requiredRole) {
-        const allowed = ROLE_BUCKETS[requiredRole];
-        const profileRoles = activeProfile?.roles ?? [];
-        if (!hasAnyRole(profileRoles, allowed)) {
-            // Send them somewhere safe instead of looping on /login. Profile
-            // is the universal "you're logged in" landing.
+    // Гейт по модулю и уровню. Это UX-рубеж — настоящий отказ выдаёт бэкенд на
+    // каждом вызове API, поэтому недолгое окно устаревшего кеша ничего не
+    // раскрывает. Перерисовка происходит сама, когда приедут свежие права.
+    if (requires) {
+        // Пока права неизвестны — ЖДЁМ, а не отвергаем. Редирект на этом шаге
+        // выбрасывал бы на профиль при каждом заходе на защищённую страницу,
+        // раньше чем сервер успеет ответить.
+        if (permissions.isLoading) {
+            return (
+                <div className="min-h-screen bg-background flex flex-col items-center justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary opacity-50" />
+                </div>
+            );
+        }
+        if (!permissions.atLeast(requires.module, requires.level)) {
+            // Отправляем в безопасное место, а не по кругу на /login: профиль —
+            // универсальная посадочная страница «вы вошли».
             return <Navigate to="/myprofile" replace state={{ from: location, accessDenied: true }} />;
         }
     }

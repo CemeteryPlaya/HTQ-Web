@@ -56,11 +56,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import type { AgreementStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
 
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const STATUS_VARIANTS: Record<
   AgreementStatus,
@@ -85,8 +84,9 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
   const queryClient = useQueryClient();
 
   const { activeProfile } = useActiveProfile();
+  const permissions = usePermissions();
   const myId = activeProfile?.id ? Number(activeProfile.id) : null;
-  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
+  const isAdmin = permissions.atLeast('contracts', 'admin');
 
   const fileInput = useRef<HTMLInputElement>(null);
 

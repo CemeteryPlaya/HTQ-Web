@@ -31,12 +31,10 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { contractsApi } from '@/api/contracts';
-import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import type { AgreementStatus, CounterpartyStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
 
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const STATUS_VARIANTS: Record<
   CounterpartyStatus,
@@ -56,8 +54,8 @@ interface Props {
 const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props) => {
   const enabled = Number.isFinite(counterpartyId);
 
-  const { activeProfile } = useActiveProfile();
-  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
+  const permissions = usePermissions();
+  const isAdmin = permissions.atLeast('contracts', 'admin');
 
   const {
     data: counterparty,

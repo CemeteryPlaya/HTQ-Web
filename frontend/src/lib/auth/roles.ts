@@ -1,27 +1,23 @@
-import type { UserProfile } from '@/types/userProfile';
+/**
+ * Роли платформенной учётки.
+ *
+ * Бэкенд выдаёт ровно три значения — `admin` (superuser), `staff`, `user`
+ * (`apps/users/services/profile_service.py::roles_for`). Всё остальное, что
+ * здесь когда-то перечислялось (`hr_manager`, `senior_hr`, `junior_hr`,
+ * `senior_manager`, `junior_manager`, `editors`, `employee`), не приезжало
+ * никогда: ветки на этих строках были недостижимы, а код с ними выглядел
+ * работающей ролевой моделью.
+ *
+ * Прикладные права теперь спрашивают у `usePermissions` — уровень модуля
+ * (§3 спеки стадии 2), а не строку роли. Здесь остался только платформенный
+ * признак, у которого нет модульного эквивалента: `admin` — оператор
+ * платформы. Сторож `deadRoles.test.ts` не даёт словарю вернуться.
+ */
 
-export const ELEVATED_ROLES = [
-  'staff',
-  'admin',
-  'superuser',
-  'hr_manager',
-  'senior_hr',
-  'junior_hr',
-  'senior_manager',
-  'junior_manager',
-] as const;
+/** Роли, которые бэкенд действительно выдаёт. */
+export const PLATFORM_ROLES = ['admin', 'staff', 'user'] as const;
 
-export const HR_ROLES = [
-  'hr_manager',
-  'senior_hr',
-  'junior_hr',
-  'senior_manager',
-  'junior_manager',
-  'staff',
-] as const;
-
-export const EDITOR_ROLES = ['editors', 'staff'] as const;
-export const EMPLOYEE_ROLES = ['employee', 'user'] as const;
+export type PlatformRole = (typeof PLATFORM_ROLES)[number];
 
 export const hasAnyRole = (
   roles: string[] | undefined,
@@ -34,38 +30,6 @@ export const hasAnyRole = (
   return roles.some((role) => expectedRoles.includes(role));
 };
 
-export const hasElevatedAccess = (profile: UserProfile | null | undefined): boolean =>
-  hasAnyRole(profile?.roles, ELEVATED_ROLES);
-
-export const isHrManager = (profile: UserProfile | null | undefined): boolean =>
-  hasAnyRole(profile?.roles, HR_ROLES);
-
-export const isEditor = (profile: UserProfile | null | undefined): boolean =>
-  hasAnyRole(profile?.roles, EDITOR_ROLES);
-
-export const hasEmployeeRole = (roles: string[] | undefined): boolean =>
-  hasAnyRole(roles, EMPLOYEE_ROLES);
-
-export const hasEmployeeTaskAccess = (profile: UserProfile | null | undefined): boolean =>
-  Boolean(
-    profile
-    && (
-      hasElevatedAccess(profile)
-      || hasEmployeeRole(profile.roles)
-      || (profile.department && profile.position)
-    ),
-  );
-
-export const hasEmployeeTaskAccessFromParts = (
-  roles?: string[],
-  department?: string,
-  position?: string,
-): boolean =>
-  hasAnyRole(roles, ELEVATED_ROLES)
-  || hasEmployeeRole(roles)
-  || Boolean(department && position);
-
-export const usesEmployeeTaskExperience = (
-  profile: UserProfile | null | undefined,
-): profile is UserProfile =>
-  Boolean(profile && hasEmployeeTaskAccess(profile) && !hasElevatedAccess(profile));
+/** Оператор платформы. Модульного эквивалента нет и быть не должно. */
+export const isPlatformAdmin = (roles: string[] | undefined): boolean =>
+  hasAnyRole(roles, ['admin']);
