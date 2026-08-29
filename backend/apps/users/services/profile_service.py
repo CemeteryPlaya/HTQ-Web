@@ -154,6 +154,29 @@ def roles_for(user: User) -> list[str]:
     return roles
 
 
+def _access_block(user: User) -> dict:
+    """Права текущего пользователя — те же три ключа, что отдаёт access/v1/me.
+
+    Импорт соседа ленивый, внутри функции: ``apps.access`` монтирует свои
+    вьюхи через ``api_view``, и импорт на уровне модуля завязал бы порядок
+    загрузки аппок друг на друга.
+
+    Отсутствие подмены здесь намеренно: если домен доступа выключен глобально,
+    ``require_service`` поднимет ``ServiceDisabled`` и профиль честно ответит
+    503. Тихо отдать пустую карту значило бы показать пользователю интерфейс
+    без единого раздела и без единого признака, что дело не в его правах.
+    """
+    from apps.access import interface as access
+    from htqweb.tenancy.context import current_company_or_none
+
+    company = current_company_or_none()
+    return {
+        "company": company,
+        "permissions": access.permissions_for(user, company),
+        "subordinate_companies": access.subordinate_companies(user, company),
+    }
+
+
 def build_response(user: User) -> dict:
     """Ported field-for-field from the FastAPI original's ``_build_response``.
 
@@ -192,6 +215,11 @@ def build_response(user: User) -> dict:
         "avatar": avatar,
         "settings": user.settings or {},
         "roles": roles_for(user),
+        # Карта прав приезжает вместе с профилем, чтобы фронт не делал второй
+        # запрос на каждой загрузке (спека стадии 2, A7). ``roles`` при этом
+        # остаются как были: их читает действующий фронт, и снимать их до
+        # перекладки маршрутов значит уронить вход в систему.
+        **_access_block(user),
         "department": None,
         "department_id": None,
         "position": None,

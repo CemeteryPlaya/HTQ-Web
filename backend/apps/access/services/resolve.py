@@ -16,6 +16,7 @@ from apps.access.models import (
     RoleModulePermission,
     ScopeKind,
 )
+from apps.access.services.identity import identity
 from htqweb.fallback import fallback
 
 # Чем шире область, тем больше число — сравнивается так же, как уровни.
@@ -28,12 +29,12 @@ def _known_modules() -> list[str]:
     return list(KNOWN_SERVICES)
 
 
-def _position_role_ids(user, company: str) -> list[int]:
+def _position_role_ids(user_id: int, company: str) -> list[int]:
     """Роли штатной должности пользователя. Пусто, если карточки нет."""
     try:
         from apps.hr import interface as hr
 
-        brief = hr.get_employee_brief(user.id)
+        brief = hr.get_employee_brief(user_id)
     except Exception as exc:
         # Кадровый модуль выключен или недоступен: должностные роли не
         # прочитать. Это ПОДМЕНА — права считаются по неполным данным, — и она
@@ -41,7 +42,7 @@ def _position_role_ids(user, company: str) -> list[int]:
         # всей компании, а причину будут искать в правах.
         fallback("access.resolve.hr_unavailable", None,
                  reason="кадровый модуль недоступен, роли должности не учтены",
-                 exc=exc, expected=True, user_id=user.id, company=company)
+                 exc=exc, expected=True, user_id=user_id, company=company)
         return []
     if brief is None or brief.get("position_id") is None:
         return []
@@ -54,7 +55,8 @@ def _position_role_ids(user, company: str) -> list[int]:
 
 def permissions_for(user, company: str | None) -> dict[str, dict]:
     """Карта «модуль → уровень и область». Модули со ``none`` не включаются."""
-    if getattr(user, "is_superuser", False):
+    user_id, is_superuser = identity(user)
+    if is_superuser:
         return {
             module: {"level": Level.ADMIN,
                      "scope": {"kind": ScopeKind.COMPANY, "id": None}}
@@ -67,9 +69,9 @@ def permissions_for(user, company: str | None) -> dict[str, dict]:
     # всю компанию: область сужается только личным назначением.
     scopes: dict[int, tuple[str, int | None]] = {
         role_id: (ScopeKind.COMPANY, None)
-        for role_id in _position_role_ids(user, company)
+        for role_id in _position_role_ids(user_id, company)
     }
-    for row in RoleAssignment.objects.filter(company_slug=company, user_id=user.id):
+    for row in RoleAssignment.objects.filter(company_slug=company, user_id=user_id):
         current = scopes.get(row.role_id)
         if current is None or _SCOPE_WIDTH[row.scope_kind] > _SCOPE_WIDTH[current[0]]:
             scopes[row.role_id] = (row.scope_kind, row.scope_id)

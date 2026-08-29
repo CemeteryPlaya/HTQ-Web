@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from apps.access.services.identity import identity
 from htqweb.fallback import fallback
 
 
@@ -46,7 +47,7 @@ def companies_below(company: str) -> list[str]:
     return sorted(below)
 
 
-def _is_external_manager(user) -> bool:
+def _is_external_manager(user_id: int) -> bool:
     """Руководящая ли должность у пользователя и включена ли внешняя иерархия.
 
     Поля ``is_manager`` и ``external_hierarchy`` заводит переработка HR (спека
@@ -57,11 +58,11 @@ def _is_external_manager(user) -> bool:
     try:
         from apps.hr import interface as hr
 
-        brief = hr.get_employee_brief(user.id)
+        brief = hr.get_employee_brief(user_id)
     except Exception as exc:
         fallback("access.hierarchy.hr_unavailable", None,
                  reason="кадровый модуль недоступен, руководителя не определить",
-                 exc=exc, expected=True, user_id=user.id)
+                 exc=exc, expected=True, user_id=user_id)
         return False
     if brief is None:
         return False
@@ -70,6 +71,7 @@ def _is_external_manager(user) -> bool:
 
 def subordinate_companies(user, company: str | None) -> list[str]:
     """Компании, над сотрудниками которых пользователь начальник по §1.4."""
-    if company is None or not _is_external_manager(user):
+    user_id, _ = identity(user)
+    if company is None or not _is_external_manager(user_id):
         return []
     return companies_below(company)
