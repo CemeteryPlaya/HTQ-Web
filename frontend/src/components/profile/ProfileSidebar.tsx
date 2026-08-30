@@ -28,6 +28,7 @@ import {
     Handshake,
     Link2,
     Network,
+    ShieldCheck,
     UserCog,
     UserPlus,
     MessagesSquare,
@@ -320,6 +321,10 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
         if (!admin) return [];
         return [
             { id: 'admin-users', to: '/admin/users', icon: UserCog, label: t('profile.sidebar.manageUsers', 'Управление пользователями') },
+            // Каталог ролей. Страница существовала с самой стадии 2, но ссылки
+            // на неё не было нигде — до неё можно было добраться только набрав
+            // адрес руками, то есть для всех, кроме автора, её не существовало.
+            { id: 'access-roles', to: '/access/roles', icon: ShieldCheck, label: t('profile.sidebar.accessRoles', 'Роли и права') },
             { id: 'admin-registrations', to: '/admin/registrations', icon: UserPlus, label: t('profile.sidebar.registrations'), badge: <PendingRegistrationsBadge /> },
             { id: 'admin-chats', to: '/admin/chats', icon: MessagesSquare, label: t('profile.sidebar.manageChats', 'Управление чатами') },
             { id: 'admin-mailboxes', to: '/admin/mailboxes', icon: MailIcon, label: t('profile.sidebar.manageMailboxes', 'Корпоративные ящики') },
