@@ -85,6 +85,18 @@ beforeEach(() => {
 });
 
 describe('RoleCatalog', () => {
+  it('обрамлена как остальные страницы: шапка, «назад», подвал', async () => {
+    // Страница появилась позже соседних и сначала жила голым блоком без
+    // каркаса — попасть на неё можно было только по прямому адресу, и уйти
+    // с неё, кроме как кнопкой браузера, тоже было нечем.
+    const { container } = renderWithProviders(<RoleCatalog />);
+
+    await screen.findByText('Администратор кадров');
+    expect(screen.getByRole('link', { name: /профил/i })).toHaveAttribute('href', '/myprofile');
+    expect(container.querySelector('header')).toBeInTheDocument();
+    expect(container.querySelector('footer')).toBeInTheDocument();
+  });
+
   it('предупреждает, что правка действует во всех компаниях', async () => {
     renderWithProviders(<RoleCatalog />);
 

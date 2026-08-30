@@ -7,6 +7,9 @@ import { toast } from 'sonner';
 
 import { accessApi } from '@/api/access';
 import { RolePermissionMatrix } from '@/components/access/RolePermissionMatrix';
+import { BackToProfile } from '@/components/BackToProfile';
+import { Footer } from '@/components/Footer';
+import { Header } from '@/components/Header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -141,9 +144,12 @@ const RoleCatalog = () => {
   });
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
+    <div className="flex min-h-screen flex-col bg-background">
+      <Header />
+      <main className="container mx-auto w-full max-w-6xl flex-1 space-y-4 px-4 py-8">
+        <BackToProfile />
       <div>
-        <h1 className="text-xl font-semibold">
+        <h1 className="text-2xl font-bold">
           {t('access.catalog.title', 'Каталог ролей')}
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -313,6 +319,8 @@ const RoleCatalog = () => {
           )}
         </section>
       </div>
+      </main>
+      <Footer />
     </div>
   );
 };
