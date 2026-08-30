@@ -8,8 +8,9 @@
 import pytest
 from django.test import RequestFactory
 
-from apps.access.models import Level, Role, RoleAssignment, RoleModulePermission, ScopeKind
+from apps.access.models import Level, Role, RoleAssignment, ScopeKind
 from apps.access.tests.helpers import auth, superuser_token, token
+from apps.access.tests.helpers import grant
 from htqweb.http import api_view
 
 
@@ -30,7 +31,7 @@ def _request(tok: str, company: str | None = None):
 
 def _grant(user_id: int, company: str, module: str, level: str) -> None:
     role = Role.objects.create(code=f"r{user_id}{module}{level}", title="Роль")
-    RoleModulePermission.objects.create(role=role, module=module, level=level)
+    grant(role, module, level)
     RoleAssignment.objects.create(company_slug=company, user_id=user_id, role=role,
                                   scope_kind=ScopeKind.COMPANY, scope_id=None)
 

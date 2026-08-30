@@ -82,6 +82,27 @@ class AccessView(ApiView):
         return None
 
 
+class FunctionsView(AccessView):
+    """``GET functions`` — реестр функций деревом.
+
+    Читать может любой вошедший: это справочник экранов платформы, а не данные.
+    Без него редактор ролей нечем нарисовать — матрица прав строится по нему.
+    """
+
+    @read
+    def get(self, request):
+        from apps.access import depth, registry
+
+        return {
+            "tree": registry.tree(),
+            "flags": [{"key": flag, "title": depth.FLAG_TITLES[flag]}
+                      for flag in depth.FLAGS],
+            "presets": [{"key": name, "title": depth.PRESET_TITLES[name],
+                         "flags": sorted(depth.PRESETS[name])}
+                        for name in depth.PRESETS],
+        }
+
+
 class RoleCollectionView(AccessView):
     """``GET|POST roles`` — плоский каталог, общий для всех компаний (§4.1)."""
 
@@ -215,6 +236,7 @@ class MeView(AccessView):
         return schemas.MeRead(
             company=company,
             permissions=resolve.permissions_for(request.token, company),
+            depth=resolve.depth_map(request.token, company),
             subordinate_companies=hierarchy.subordinate_companies(
                 request.token, company),
         )

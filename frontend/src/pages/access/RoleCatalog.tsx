@@ -45,6 +45,12 @@ const RoleCatalog = () => {
   const [newCode, setNewCode] = useState('');
   const [newTitle, setNewTitle] = useState('');
 
+  // Реестр функций — справочник, общий для всех ролей: грузится один раз.
+  const functionsQuery = useQuery({
+    queryKey: ['access', 'functions'],
+    queryFn: async () => (await accessApi.getFunctions()).data,
+  });
+
   const rolesQuery = useQuery({
     queryKey: ['access', 'roles'],
     queryFn: async () => (await accessApi.listRoles()).data,
@@ -117,7 +123,14 @@ const RoleCatalog = () => {
   });
 
   const saveMutation = useMutation({
-    mutationFn: () => accessApi.putRolePermissions(selectedId as number, draft ?? []),
+    mutationFn: () => accessApi.putRolePermissions(
+      selectedId as number,
+      // Наружу уходят только узлы с собственной строкой: отсутствие узла и
+      // есть «наследует от предка».
+      (draft ?? []).map((row) => (row.preset
+        ? { node: row.node, preset: row.preset }
+        : { node: row.node, flags: row.flags })),
+    ),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
         queryKey: ['access', 'roles', selectedId, 'permissions'],
@@ -136,7 +149,8 @@ const RoleCatalog = () => {
         <p className="text-sm text-muted-foreground">
           {t(
             'access.catalog.subtitle',
-            'Роль — набор прав. Кому она достанется, решает должность.',
+            'Роль — набор прав: на каждую функцию задаётся глубина. Кому роль '
+            + 'достанется, решает должность.',
           )}
         </p>
       </div>
@@ -277,12 +291,18 @@ const RoleCatalog = () => {
                     <Loader2 className="h-4 w-4 animate-spin" />
                     {t('common.loading', 'Загрузка…')}
                   </div>
-                ) : (
+                ) : functionsQuery.data ? (
                   <RolePermissionMatrix
+                    registry={functionsQuery.data}
                     value={draft ?? []}
                     onChange={setDraft}
                     disabled={!canEdit}
                   />
+                ) : (
+                  <div className="text-sm text-muted-foreground">
+                    {t('access.catalog.registryUnavailable',
+                      'Не удалось загрузить реестр функций — редактировать права нечем.')}
+                  </div>
                 )}
               </div>
             </>

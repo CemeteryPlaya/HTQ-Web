@@ -8,11 +8,11 @@ from django.contrib import admin
 
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
-from .models import PositionRole, Role, RoleAssignment, RoleModulePermission
+from .models import PositionRole, Role, RoleAssignment, RolePermission
 
 
 class PermissionInline(admin.TabularInline):
-    model = RoleModulePermission
+    model = RolePermission
     extra = 0
 
 

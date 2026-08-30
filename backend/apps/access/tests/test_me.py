@@ -3,8 +3,9 @@
 import pytest
 from django.test import Client
 
-from apps.access.models import Level, Role, RoleAssignment, RoleModulePermission, ScopeKind
+from apps.access.models import Level, Role, RoleAssignment, ScopeKind
 from apps.access.tests.helpers import BASE, auth, superuser_token, token
+from apps.access.tests.helpers import grant
 
 
 @pytest.fixture
@@ -22,7 +23,7 @@ def test_me_without_company_is_not_an_error(client):
     """Переходный режим подпроекта 1: контекста компании нет — это не сбой."""
     resp = client.get(f"{BASE}/me", **auth(token()))
     assert resp.status_code == 200
-    assert resp.json() == {"company": None, "permissions": {},
+    assert resp.json() == {"company": None, "permissions": {}, "depth": {},
                            "subordinate_companies": []}
 
 
@@ -30,7 +31,7 @@ def test_me_without_company_is_not_an_error(client):
 def test_me_returns_permissions_of_the_request_company(client, company_schema):
     slug = company_schema["slug"]
     role = Role.objects.create(code="r", title="Роль")
-    RoleModulePermission.objects.create(role=role, module="hr", level=Level.WRITE)
+    grant(role, "hr", "write")
     RoleAssignment.objects.create(company_slug=slug, user_id=7, role=role,
                                   scope_kind=ScopeKind.DEPARTMENT, scope_id=3)
 
@@ -41,6 +42,8 @@ def test_me_returns_permissions_of_the_request_company(client, company_schema):
         "company": slug,
         "permissions": {"hr": {"level": "write",
                                "scope": {"kind": "department", "id": 3}}},
+        # Полная картина по узлам — из неё уровень модуля и посчитан.
+        "depth": {"hr": ["create", "edit", "view"]},
         "subordinate_companies": [],
     }
 
@@ -75,7 +78,7 @@ def test_profile_carries_the_same_permission_map(client, company_schema, django_
     user = django_user_model.objects.create_user(username="u", email="u@htq.test",
                                                  password="x")
     role = Role.objects.create(code="r", title="Роль")
-    RoleModulePermission.objects.create(role=role, module="tasks", level=Level.READ)
+    grant(role, "tasks", "read")
     RoleAssignment.objects.create(company_slug=slug, user_id=user.id, role=role,
                                   scope_kind=ScopeKind.COMPANY, scope_id=None)
 

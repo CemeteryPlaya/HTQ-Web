@@ -8,12 +8,11 @@
 import pytest
 
 from apps.access import metrics
+from apps.access.tests.helpers import grant
 from apps.access.models import (
-    Level,
     PositionRole,
     Role,
     RoleAssignment,
-    RoleModulePermission,
     ScopeKind,
 )
 
@@ -37,7 +36,7 @@ def test_empty_role_is_counted():
     before = metrics.collect()["access_roles_total"]["values"][0][1]
     Role.objects.create(code="empty", title="Пустая")
     useful = Role.objects.create(code="useful", title="Полезная")
-    RoleModulePermission.objects.create(role=useful, module="hr", level=Level.READ)
+    grant(useful, "hr", "read")
 
     got = metrics.collect()
     assert got["access_roles_total"]["values"] == [((), before + 2)]
@@ -45,17 +44,15 @@ def test_empty_role_is_counted():
 
 
 @pytest.mark.django_db
-def test_admin_only_role_is_counted():
-    """Ролей «всё admin» становится две: засеянная и заведённая тестом."""
-    all_admin = Role.objects.create(code="god", title="Всё")
-    RoleModulePermission.objects.create(role=all_admin, module="hr", level=Level.ADMIN)
-    RoleModulePermission.objects.create(role=all_admin, module="tasks", level=Level.ADMIN)
-    mixed = Role.objects.create(code="mixed", title="Смешанная")
-    RoleModulePermission.objects.create(role=mixed, module="hr", level=Level.ADMIN)
-    RoleModulePermission.objects.create(role=mixed, module="tasks", level=Level.READ)
+def test_roles_with_delete_are_counted():
+    """Удаление — разрушающее право, и рост числа таких ролей стоит видеть."""
+    destructive = Role.objects.create(code="god", title="Всё")
+    grant(destructive, "hr", "full")
+    harmless = Role.objects.create(code="mixed", title="Смешанная")
+    grant(harmless, "hr", "edit")
 
-    # Засеянная platform-admin тоже сплошь admin — считаем прирост, а не итог.
-    assert metrics.collect()["access_roles_admin_only"]["values"] == [((), 2)]
+    # Засеянная platform-admin тоже даёт удаление — считаем вместе с ней.
+    assert metrics.collect()["access_roles_with_delete"]["values"] == [((), 2)]
 
 
 @pytest.mark.django_db

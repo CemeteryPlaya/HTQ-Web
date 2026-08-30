@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from django.db import IntegrityError, transaction
 
-from apps.access.models import Level, Role, RoleModulePermission
+from apps.access import depth, registry
+from apps.access.models import Role, RolePermission
 from apps.access.services.errors import (
     RoleConflict,
     RoleInUse,
@@ -51,31 +52,48 @@ def delete_role(role_id: int) -> None:
 
 
 def permissions_of(role_id: int) -> list[dict]:
+    """Явно заданная глубина роли по узлам, в порядке реестра.
+
+    Отдаются и флаги, и название пресета, если набор совпал с известным:
+    интерфейсу нужно показать «может редактировать», а не четыре галочки, но
+    своя комбинация тоже допустима и тогда пресета просто нет.
+    """
+    rows = {row.node: row.flags
+            for row in RolePermission.objects.filter(role_id=role_id)}
     return [
-        {"module": row["module"], "level": row["level"]}
-        for row in (RoleModulePermission.objects
-                    .filter(role_id=role_id)
-                    .order_by("module")
-                    .values("module", "level"))
+        {"node": node, "flags": sorted(flags), "preset": depth.preset_of(flags)}
+        for node, flags in sorted(rows.items())
     ]
 
 
 def set_permissions(role_id: int, items: list[dict]) -> None:
-    """Замена набора ЦЕЛИКОМ: отсутствующий модуль становится ``none``.
+    """Замена набора ЦЕЛИКОМ (спека §4.2).
 
-    Частичная правка означала бы, что «забыли прислать модуль» тихо
-    равносильно «оставить как было» (спека §4.2). Проверка и запись — одной
-    транзакцией: отказ на середине набора не должен оставить роль без прав.
+    Частичная правка означала бы, что «забыли прислать узел» тихо равносильно
+    «оставить как было». При замене целиком отсутствие узла означает
+    «наследовать от предка» — а явный пустой набор флагов, наоборот, запрет:
+    это две разные вещи, и различать их обязан сам вызывающий.
+
+    Узел, которого нет в реестре, отвергается: право на несуществующую функцию
+    никогда ни на что не влияет, и завести его молча — значит выдать роль,
+    которая не работает.
     """
-    from apps.core.models import KNOWN_SERVICES
-
-    unknown = sorted({i["module"] for i in items if i["module"] not in KNOWN_SERVICES})
+    known = registry.paths()
+    unknown = sorted({i["node"] for i in items if i["node"] not in known})
     if unknown:
-        raise UnknownModule(f"нет таких модулей: {unknown}")
+        raise UnknownModule(f"нет таких функций: {unknown}")
+
+    rows = []
+    for item in items:
+        flags = (depth.flags_of(item["preset"]) if item.get("preset")
+                 else frozenset(item.get("flags") or ()))
+        bad = sorted(flags - set(depth.FLAGS))
+        if bad:
+            raise UnknownModule(f"нет таких признаков глубины: {bad}")
+        row = RolePermission(role_id=role_id, node=item["node"])
+        row.set_flags(flags)
+        rows.append(row)
 
     with transaction.atomic():
-        RoleModulePermission.objects.filter(role_id=role_id).delete()
-        RoleModulePermission.objects.bulk_create([
-            RoleModulePermission(role_id=role_id, module=i["module"], level=i["level"])
-            for i in items if i["level"] != Level.NONE
-        ])
+        RolePermission.objects.filter(role_id=role_id).delete()
+        RolePermission.objects.bulk_create(rows)

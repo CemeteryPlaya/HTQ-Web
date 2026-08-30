@@ -15,12 +15,14 @@ import api from './client';
 import { apiPath } from './endpoints';
 import { ACCESS_ME_FIXTURE, usesAccessFixture } from './access.fixture';
 import type {
+  AccessFunctionsResponse,
   AccessMe,
   PositionRole,
   Role,
   RoleAssignment,
   RoleInput,
   RolePermission,
+  RolePermissionInput,
 } from '@/types/access';
 
 const path = (suffix: string) => apiPath('access', suffix);
@@ -35,11 +37,21 @@ export const accessApi = {
   /** 409 `in_use`, если роль назначена хоть одной должности или пользователю. */
   deleteRole: (id: number) => api.delete<void>(path(`roles/${id}`)),
 
-  // ─── §4.2 Права роли ──────────────────────────────────────────────────
+  // ─── Реестр функций ───────────────────────────────────────────────────
+  /** Дерево «модуль → функция → поле» плюс словари признаков и пресетов. */
+  getFunctions: () => api.get<AccessFunctionsResponse>(path('functions')),
+
+  // ─── §4.2 Глубина роли ────────────────────────────────────────────────
   getRolePermissions: (id: number) =>
     api.get<RolePermission[]>(path(`roles/${id}/permissions`)),
-  /** Набор заменяется целиком: отсутствующий в списке модуль равен `none`. */
-  putRolePermissions: (id: number, permissions: RolePermission[]) =>
+  /**
+   * Набор заменяется ЦЕЛИКОМ.
+   *
+   * Отсутствие узла в списке означает «наследовать от предка», а пустой набор
+   * флагов — запрет. Это разные вещи: первым узел оставляют в покое, вторым
+   * закрывают поле внутри разрешённого модуля.
+   */
+  putRolePermissions: (id: number, permissions: RolePermissionInput[]) =>
     api.put<RolePermission[]>(path(`roles/${id}/permissions`), permissions),
 
   // ─── §4.3 Роли должности — штатный путь ───────────────────────────────

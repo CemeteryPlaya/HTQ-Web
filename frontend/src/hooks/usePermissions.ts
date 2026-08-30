@@ -3,11 +3,15 @@ import { useMemo } from 'react';
 
 import { accessApi } from '@/api/access';
 import {
+  depthFor,
+  hasDepth,
   levelFor,
   meetsLevel,
   scopeFor,
   type AccessLevel,
   type AccessScope,
+  type DepthFlag,
+  type DepthMap,
   type PermissionMap,
 } from '@/lib/auth/permissions';
 import type { AccessMe } from '@/types/access';
@@ -33,6 +37,15 @@ export interface Permissions {
   atLeast: (module: string, required: AccessLevel) => boolean;
   /** Область модуля; `null`, если доступа нет. */
   scope: (module: string) => AccessScope | null;
+  /**
+   * Глубина на узле реестра функций с учётом наследования.
+   *
+   * Уровень модуля (``level``/``atLeast``) о полях ничего не знает: он
+   * проекция. Скрывать отдельное поле или кнопку нужно этим.
+   */
+  depth: (node: string) => DepthFlag[];
+  /** Есть ли конкретный признак глубины на узле. */
+  can: (node: string, flag: DepthFlag) => boolean;
   /** Компании ниже по внешней иерархии. Только отображение (§7). */
   subordinateCompanies: string[];
   isLoading: boolean;
@@ -52,6 +65,7 @@ export interface Permissions {
 }
 
 const EMPTY: PermissionMap = {};
+const EMPTY_DEPTH: DepthMap = {};
 
 export function usePermissions(): Permissions {
   const { data, isLoading, isError, refetch } = useQuery<AccessMe>({
@@ -65,11 +79,14 @@ export function usePermissions(): Permissions {
 
   return useMemo(() => {
     const permissions = data?.permissions ?? EMPTY;
+    const depthMap = data?.depth ?? EMPTY_DEPTH;
     return {
       company: data?.company ?? null,
       level: (module) => levelFor(permissions, module),
       atLeast: (module, required) => meetsLevel(levelFor(permissions, module), required),
       scope: (module) => scopeFor(permissions, module),
+      depth: (node) => depthFor(depthMap, node),
+      can: (node, flag) => hasDepth(depthMap, node, flag),
       subordinateCompanies: data?.subordinate_companies ?? [],
       isLoading,
       isError,

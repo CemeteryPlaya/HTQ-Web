@@ -13,10 +13,10 @@ from apps.access.models import (
     PositionRole,
     Role,
     RoleAssignment,
-    RoleModulePermission,
     ScopeKind,
 )
 from apps.access.tests.helpers import (
+    grant,
     BASE,
     auth,
     patch_json,
@@ -163,36 +163,73 @@ def test_delete_system_role_is_409(client):
 @pytest.mark.django_db
 def test_get_role_permissions(client):
     role = Role.objects.create(code="r", title="Роль")
-    RoleModulePermission.objects.create(role=role, module="hr", level=Level.WRITE)
+    grant(role, "hr", "write")
     resp = client.get(f"{BASE}/roles/{role.id}/permissions", **auth(token()))
     assert resp.status_code == 200
-    assert resp.json() == [{"module": "hr", "level": "write"}]
+    assert resp.json() == [{"node": "hr", "flags": ["create", "edit", "view"],
+                            "preset": "edit"}]
 
 
 @pytest.mark.django_db
 def test_put_role_permissions_replaces_the_whole_set(client):
     role = Role.objects.create(code="r", title="Роль")
-    RoleModulePermission.objects.create(role=role, module="tasks", level=Level.ADMIN)
+    grant(role, "tasks", "admin")
     resp = put_json(client, f"{BASE}/roles/{role.id}/permissions",
-                    [{"module": "hr", "level": "read"}], **auth(superuser_token()))
+                    [{"node": "hr", "preset": "view"}], **auth(superuser_token()))
     assert resp.status_code == 200
-    assert resp.json() == [{"module": "hr", "level": "read"}]
+    assert resp.json() == [{"node": "hr", "flags": ["view"], "preset": "view"}]
 
 
 @pytest.mark.django_db
-def test_put_role_permissions_rejects_unknown_module(client):
+def test_put_role_permissions_rejects_unknown_node(client):
+    """Право на несуществующую функцию никогда ни на что не влияет."""
     role = Role.objects.create(code="r", title="Роль")
     resp = put_json(client, f"{BASE}/roles/{role.id}/permissions",
-                    [{"module": "выдумка", "level": "read"}],
+                    [{"node": "hr.выдумка", "preset": "view"}],
                     **auth(superuser_token()))
     assert resp.status_code == 422
+
+
+@pytest.mark.django_db
+def test_put_role_permissions_accepts_a_field_node(client):
+    """Глубина назначается и на поле — третий уровень реестра."""
+    role = Role.objects.create(code="r", title="Роль")
+    resp = put_json(client, f"{BASE}/roles/{role.id}/permissions", [
+        {"node": "hr", "preset": "view"},
+        {"node": "hr.employees.salary", "preset": "none"},
+    ], **auth(superuser_token()))
+    assert resp.status_code == 200
+    nodes = {row["node"]: row["preset"] for row in resp.json()}
+    assert nodes == {"hr": "view", "hr.employees.salary": "none"}
+
+
+@pytest.mark.django_db
+def test_preset_and_flags_together_are_422(client):
+    """Два способа сказать одно и то же — угадывать в правах нельзя."""
+    role = Role.objects.create(code="r", title="Роль")
+    resp = put_json(client, f"{BASE}/roles/{role.id}/permissions",
+                    [{"node": "hr", "preset": "view", "flags": ["view"]}],
+                    **auth(superuser_token()))
+    assert resp.status_code == 422
+
+
+@pytest.mark.django_db
+def test_functions_registry_is_readable(client):
+    resp = client.get(f"{BASE}/functions", **auth(token()))
+    assert resp.status_code == 200
+    body = resp.json()
+    modules = {row["path"] for row in body["tree"]}
+    assert "hr" in modules
+    assert [f["key"] for f in body["flags"]] == ["view", "create", "edit", "delete"]
+    assert {p["key"] for p in body["presets"]} == {
+        "none", "view", "create", "edit", "delete", "full"}
 
 
 @pytest.mark.django_db
 def test_put_role_permissions_is_platform_only(client):
     role = Role.objects.create(code="r", title="Роль")
     resp = put_json(client, f"{BASE}/roles/{role.id}/permissions",
-                    [{"module": "hr", "level": "read"}], **auth(staff_token()))
+                    [{"node": "hr", "preset": "view"}], **auth(staff_token()))
     assert resp.status_code == 403
 
 

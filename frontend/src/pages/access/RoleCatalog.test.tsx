@@ -17,6 +17,7 @@ import type { Role, RolePermission } from '@/types/access';
 import RoleCatalog from './RoleCatalog';
 
 const listRoles = vi.fn();
+const getFunctions = vi.fn();
 const getRolePermissions = vi.fn();
 const putRolePermissions = vi.fn();
 const deleteRole = vi.fn();
@@ -25,6 +26,7 @@ const createRole = vi.fn();
 vi.mock('@/api/access', () => ({
   accessApi: {
     listRoles: () => listRoles(),
+    getFunctions: () => getFunctions(),
     getRolePermissions: (id: number) => getRolePermissions(id),
     putRolePermissions: (id: number, permissions: RolePermission[]) =>
       putRolePermissions(id, permissions),
@@ -46,6 +48,25 @@ vi.mock('sonner', () => ({
   toast: { error: (msg: string) => toastError(msg), success: (msg: string) => toastSuccess(msg) },
 }));
 
+const REGISTRY = {
+  tree: [
+    { path: 'hr', title: 'Кадры', kind: 'module' as const, children: [] },
+    { path: 'tasks', title: 'Задачи', kind: 'module' as const, children: [] },
+  ],
+  flags: [
+    { key: 'view' as const, title: 'видит' },
+    { key: 'create' as const, title: 'вводит' },
+    { key: 'edit' as const, title: 'редактирует' },
+    { key: 'delete' as const, title: 'удаляет' },
+  ],
+  presets: [
+    { key: 'none' as const, title: 'нет доступа', flags: [] },
+    { key: 'view' as const, title: 'видит', flags: ['view' as const] },
+    { key: 'edit' as const, title: 'может редактировать',
+      flags: ['view' as const, 'create' as const, 'edit' as const] },
+  ],
+};
+
 const ROLES: Role[] = [
   { id: 12, code: 'hr-admin', title: 'Администратор кадров', is_system: false },
   { id: 3, code: 'system', title: 'Служебная', is_system: true },
@@ -55,7 +76,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   roles.mockReturnValue(['admin']);
   listRoles.mockResolvedValue({ data: ROLES });
-  getRolePermissions.mockResolvedValue({ data: [{ module: 'hr', level: 'read' }] });
+  getRolePermissions.mockResolvedValue({
+    data: [{ node: 'hr', flags: ['view'], preset: 'view' }],
+  });
+  getFunctions.mockResolvedValue({ data: REGISTRY });
   putRolePermissions.mockResolvedValue({ data: [] });
   deleteRole.mockResolvedValue({ data: undefined });
 });
@@ -105,15 +129,17 @@ describe('RoleCatalog', () => {
     renderWithProviders(<RoleCatalog />);
 
     await userEvent.click(await screen.findByText('Администратор кадров'));
-    await screen.findByLabelText('Кадры: Чтение');
+    await screen.findByLabelText('Кадры: Глубина');
 
-    await userEvent.click(screen.getByLabelText('Задачи и проекты: Запись'));
+    await userEvent.selectOptions(screen.getByLabelText('Задачи: Глубина'), 'edit');
     await userEvent.click(screen.getByRole('button', { name: /Сохранить права/i }));
 
     await waitFor(() => expect(putRolePermissions).toHaveBeenCalledTimes(1));
+    // Наружу уходят пресеты, а не флаги: так тело запроса читается глазами,
+    // а сервер разворачивает пресет сам.
     expect(putRolePermissions).toHaveBeenCalledWith(12, [
-      { module: 'hr', level: 'read' },
-      { module: 'tasks', level: 'write' },
+      { node: 'hr', preset: 'view' },
+      { node: 'tasks', preset: 'edit' },
     ]);
   });
 

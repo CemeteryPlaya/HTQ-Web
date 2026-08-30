@@ -4,12 +4,13 @@ import pytest
 
 from apps.access.models import (
     Level,
+    RolePermission,
     PositionRole,
     Role,
     RoleAssignment,
-    RoleModulePermission,
     ScopeKind,
 )
+from apps.access.tests.helpers import grant
 from apps.access.services import catalog
 from apps.access.services.errors import (
     RoleConflict,
@@ -88,42 +89,52 @@ def test_delete_refuses_system_role():
 def test_set_permissions_replaces_whole_set():
     """Отсутствующий в списке модуль становится none — спека §4.2."""
     role = catalog.create_role("r", "Роль")
-    catalog.set_permissions(role.id, [{"module": "hr", "level": Level.WRITE},
-                                      {"module": "tasks", "level": Level.READ}])
-    catalog.set_permissions(role.id, [{"module": "hr", "level": Level.READ}])
-    rows = {p.module: p.level for p in RoleModulePermission.objects.filter(role=role)}
-    assert rows == {"hr": Level.READ}
+    catalog.set_permissions(role.id, [{"node": "hr", "preset": "edit"},
+                                      {"node": "tasks", "preset": "view"}])
+    catalog.set_permissions(role.id, [{"node": "hr", "preset": "view"}])
+    rows = {row.node: row.flags for row in RolePermission.objects.filter(role=role)}
+    assert rows == {"hr": frozenset({"view"})}
 
 
 @pytest.mark.django_db
-def test_set_permissions_does_not_store_none():
-    """Явный none и отсутствие модуля — одно и то же, хранить нечего."""
+def test_none_is_stored_as_an_explicit_ban():
+    """Пустой набор — это ЗАПРЕТ, а не «строки нет».
+
+    Разница появилась вместе с наследованием: отсутствие строки означает
+    «наследовать от предка», а пустой набор — перекрыть унаследованное. Слить их
+    обратно значило бы лишить возможности закрыть одно поле внутри разрешённого
+    модуля — ровно то, ради чего третий уровень и заведён.
+    """
     role = catalog.create_role("r2", "Роль")
-    catalog.set_permissions(role.id, [{"module": "hr", "level": Level.NONE}])
-    assert not RoleModulePermission.objects.filter(role=role).exists()
+    catalog.set_permissions(role.id, [{"node": "hr.employees.salary", "preset": "none"}])
+    row = RolePermission.objects.get(role=role)
+    assert row.node == "hr.employees.salary"
+    assert row.flags == frozenset()
 
 
 @pytest.mark.django_db
-def test_unknown_module_is_rejected():
+def test_unknown_node_is_rejected():
     role = catalog.create_role("r3", "Роль")
     with pytest.raises(UnknownModule):
-        catalog.set_permissions(role.id, [{"module": "нет-такого", "level": Level.READ}])
+        catalog.set_permissions(role.id, [{"node": "нет-такого", "preset": "view"}])
 
 
 @pytest.mark.django_db
 def test_rejected_set_leaves_the_previous_one_intact():
     """Замена целиком обязана быть транзакционной, иначе отказ обнуляет права."""
     role = catalog.create_role("r4", "Роль")
-    catalog.set_permissions(role.id, [{"module": "hr", "level": Level.WRITE}])
+    catalog.set_permissions(role.id, [{"node": "hr", "preset": "edit"}])
     with pytest.raises(UnknownModule):
-        catalog.set_permissions(role.id, [{"module": "hr", "level": Level.READ},
-                                          {"module": "выдумка", "level": Level.READ}])
-    rows = {p.module: p.level for p in RoleModulePermission.objects.filter(role=role)}
-    assert rows == {"hr": Level.WRITE}
+        catalog.set_permissions(role.id, [{"node": "hr", "preset": "view"},
+                                          {"node": "выдумка", "preset": "view"}])
+    rows = {row.node: row.flags for row in RolePermission.objects.filter(role=role)}
+    assert rows == {"hr": frozenset({"view", "create", "edit"})}
 
 
 @pytest.mark.django_db
 def test_permissions_of_a_role_are_readable():
     role = catalog.create_role("r5", "Роль")
-    catalog.set_permissions(role.id, [{"module": "hr", "level": Level.ADMIN}])
-    assert catalog.permissions_of(role.id) == [{"module": "hr", "level": Level.ADMIN}]
+    catalog.set_permissions(role.id, [{"node": "hr", "preset": "full"}])
+    assert catalog.permissions_of(role.id) == [
+        {"node": "hr", "flags": ["create", "delete", "edit", "view"], "preset": "full"},
+    ]

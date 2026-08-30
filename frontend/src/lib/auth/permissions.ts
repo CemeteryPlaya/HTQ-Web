@@ -52,3 +52,49 @@ export const levelFor = (permissions: PermissionMap, module: string): AccessLeve
  */
 export const scopeFor = (permissions: PermissionMap, module: string): AccessScope | null =>
   permissions[module]?.scope ?? null;
+
+
+// ── Глубина: признаки и пресеты ─────────────────────────────────────────────
+
+/**
+ * Признаки глубины. Независимы: «удаляет» не подразумевает «редактирует» —
+ * роль, которая чистит устаревшие записи, ничего не переписывая, осмысленна.
+ * Порядок задаёт порядок колонок в матрице прав.
+ */
+export const DEPTH_FLAGS = ['view', 'create', 'edit', 'delete'] as const;
+
+export type DepthFlag = (typeof DEPTH_FLAGS)[number];
+
+/** Шесть названных уровней из постановки — готовые наборы флагов. */
+export const DEPTH_PRESETS = ['none', 'view', 'create', 'edit', 'delete', 'full'] as const;
+
+export type DepthPreset = (typeof DEPTH_PRESETS)[number];
+
+/** Карта «узел → флаги» из ответа `/access/v1/me`. */
+export type DepthMap = Record<string, DepthFlag[]>;
+
+/** Путь предков узла от ближайшего к корню: `a.b.c` → `[a.b, a]`. */
+export const nodeAncestors = (path: string): string[] => {
+  const parts = path.split('.');
+  return parts.slice(0, -1).map((_, i) => parts.slice(0, parts.length - 1 - i).join('.'));
+};
+
+/**
+ * Действующая глубина узла с учётом наследования.
+ *
+ * Не заданный узел берёт глубину ближайшего предка; ПУСТОЙ набор у предка —
+ * это запрет, а не «ищи выше». Правило то же, что на сервере
+ * (`apps/access/services/resolve.py::_nearest`) — расхождение означало бы, что
+ * интерфейс показывает не то, что разрешит сервер.
+ */
+export const depthFor = (map: DepthMap, node: string): DepthFlag[] => {
+  for (const candidate of [node, ...nodeAncestors(node)]) {
+    const flags = map[candidate];
+    if (flags !== undefined) return flags;
+  }
+  return [];
+};
+
+/** Есть ли у пользователя конкретный признак на узле. */
+export const hasDepth = (map: DepthMap, node: string, flag: DepthFlag): boolean =>
+  depthFor(map, node).includes(flag);

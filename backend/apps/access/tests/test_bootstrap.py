@@ -8,7 +8,8 @@
 import pytest
 from django.core.management import CommandError, call_command
 
-from apps.access.models import Level, Role, RoleAssignment, RoleModulePermission, ScopeKind
+from apps.access.models import Level, Role, RoleAssignment, RolePermission, ScopeKind
+from apps.access import depth
 from apps.access.services import resolve
 
 
@@ -23,13 +24,11 @@ def test_platform_admin_role_is_seeded():
 def test_seeded_role_grants_admin_on_every_module():
     from apps.core.models import KNOWN_SERVICES
 
-    levels = dict(
-        RoleModulePermission.objects
-        .filter(role__code="platform-admin")
-        .values_list("module", "level")
-    )
-    assert set(levels) == set(KNOWN_SERVICES)
-    assert set(levels.values()) == {Level.ADMIN}
+    rows = {row.node: row.flags
+            for row in RolePermission.objects.filter(role__code="platform-admin")}
+    assert set(rows) == set(KNOWN_SERVICES)
+    # Полный доступ на каждом модуле: все четыре признака глубины.
+    assert all(flags == frozenset(depth.FLAGS) for flags in rows.values())
 
 
 @pytest.mark.django_db

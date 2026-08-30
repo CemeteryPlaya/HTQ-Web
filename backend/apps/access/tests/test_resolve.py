@@ -9,17 +9,20 @@ from apps.access.models import (
     PositionRole,
     Role,
     RoleAssignment,
-    RoleModulePermission,
     ScopeKind,
 )
+from apps.access.tests.helpers import grant
 from apps.access.services import resolve
 
 COMPANY = "htq-kz"
 
 
-def _role(code: str, module: str, level: str) -> Role:
+def _role(code: str, node: str, level: str) -> Role:
+    """Роль с глубиной на одном узле. Уровень принимается прежний — см.
+    ``helpers.LEVEL_PRESET``: тесты этого файла рассуждают в терминах
+    read/write/admin, а проекция глубины в них и проверяется."""
     role = Role.objects.create(code=code, title=code)
-    RoleModulePermission.objects.create(role=role, module=module, level=level)
+    grant(role, node, level)
     return role
 
 

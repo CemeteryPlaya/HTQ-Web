@@ -62,25 +62,59 @@ class Role(models.Model):
         return self.title
 
 
-class RoleModulePermission(models.Model):
-    """Уровень роли на один модуль. Отсутствие строки означает ``none``."""
+class RolePermission(models.Model):
+    """Глубина роли на один узел реестра функций (``apps.access.registry``).
+
+    Узел — путь вида ``hr``, ``hr.employees`` или ``hr.employees.salary``.
+    Отсутствие строки НЕ означает «нет доступа»: не заданный явно узел
+    наследует глубину ближайшего предка, у которого она задана (§1.8 спеки).
+    Пустой набор флагов, наоборот, означает именно запрет — им перекрывают
+    унаследованное разрешение.
+
+    Флаги независимы и хранятся четырьмя колонками, а не битовой маской:
+    их видно в django-admin и в SQL глазами, а маску пришлось бы расшифровывать
+    в голове каждый раз, когда права разбирают по живой базе.
+    """
 
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="permissions")
-    # Значение из apps.core.models.KNOWN_SERVICES. Не choices: реестр модулей
-    # меняется добавлением аппки, и миграция на каждое такое добавление
-    # означала бы, что список живёт в двух местах.
-    module = models.CharField(max_length=32)
-    level = models.CharField(max_length=8, choices=Level.choices)
+    node = models.CharField(max_length=128)
+
+    can_view = models.BooleanField(default=False, db_default=False)
+    can_create = models.BooleanField(default=False, db_default=False)
+    can_edit = models.BooleanField(default=False, db_default=False)
+    can_delete = models.BooleanField(default=False, db_default=False)
 
     class Meta:
-        verbose_name = "Право роли"
-        verbose_name_plural = "Права ролей"
+        verbose_name = "Глубина роли"
+        verbose_name_plural = "Глубина ролей"
         constraints = [
-            models.UniqueConstraint(fields=["role", "module"], name="uniq_role_module"),
+            models.UniqueConstraint(fields=["role", "node"], name="uniq_role_node"),
         ]
+        indexes = [models.Index(fields=["node"])]
+
+    @property
+    def flags(self) -> frozenset[str]:
+        from apps.access import depth
+
+        return frozenset(
+            flag for flag, on in (
+                (depth.VIEW, self.can_view),
+                (depth.CREATE, self.can_create),
+                (depth.EDIT, self.can_edit),
+                (depth.DELETE, self.can_delete),
+            ) if on
+        )
+
+    def set_flags(self, flags) -> None:
+        from apps.access import depth
+
+        self.can_view = depth.VIEW in flags
+        self.can_create = depth.CREATE in flags
+        self.can_edit = depth.EDIT in flags
+        self.can_delete = depth.DELETE in flags
 
     def __str__(self) -> str:
-        return f"{self.role_id}: {self.module}={self.level}"
+        return f"{self.role_id}: {self.node} = {sorted(self.flags) or 'нет доступа'}"
 
 
 class PositionRole(models.Model):

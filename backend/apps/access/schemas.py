@@ -10,7 +10,14 @@ pydantic не является.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    field_validator,
+    model_validator,
+)
 
 from apps.access.models import Level, ScopeKind
 
@@ -35,24 +42,47 @@ class RolePatchIn(BaseModel):
     title: str = Field(min_length=1, max_length=255)
 
 
-# ── Права роли (§4.2) ─────────────────────────────────────────────────────
+# ── Глубина роли (§4.2) ───────────────────────────────────────────────────
 
 class PermissionItem(BaseModel):
-    module: str = Field(min_length=1, max_length=32)
-    level: Level
+    """Глубина на одном узле реестра функций.
 
-    @field_validator("module")
+    Можно прислать либо ``preset`` (шесть названных уровней), либо ``flags``
+    напрямую — своя комбинация тоже допустима. Прислать оба нельзя: тогда
+    непонятно, что имелось в виду, а угадывать в правах нельзя.
+    """
+
+    node: str = Field(min_length=1, max_length=128)
+    flags: list[str] | None = None
+    preset: str | None = None
+
+    @model_validator(mode="after")
+    def one_of_two(self):
+        if self.preset is None and self.flags is None:
+            raise ValueError("нужен либо preset, либо flags")
+        if self.preset is not None and self.flags is not None:
+            raise ValueError("preset и flags вместе не принимаются")
+        return self
+
+    @field_validator("preset")
     @classmethod
-    def module_is_known(cls, value: str) -> str:
-        """Реестр модулей один — ``KNOWN_SERVICES``; своего справочника нет.
+    def preset_is_known(cls, value: str | None) -> str | None:
+        from apps.access import depth
 
-        Импорт внутри валидатора, а не на уровне модуля: схемы читаются при
-        сборке URL-конфигурации, когда реестр аппок ещё может быть неполон.
-        """
-        from apps.core.models import KNOWN_SERVICES
+        if value is not None and value not in depth.PRESETS:
+            raise ValueError(f"неизвестный уровень: {value}")
+        return value
 
-        if value not in KNOWN_SERVICES:
-            raise ValueError(f"неизвестный модуль: {value}")
+    @field_validator("flags")
+    @classmethod
+    def flags_are_known(cls, value: list[str] | None) -> list[str] | None:
+        from apps.access import depth
+
+        if value is None:
+            return value
+        bad = sorted(set(value) - set(depth.FLAGS))
+        if bad:
+            raise ValueError(f"неизвестные признаки глубины: {bad}")
         return value
 
 
@@ -97,4 +127,8 @@ class MeEntry(BaseModel):
 class MeRead(BaseModel):
     company: str | None
     permissions: dict[str, MeEntry]
+    # Полная картина по узлам реестра: нужна интерфейсу, чтобы скрывать
+    # отдельные поля и кнопки, а не только целые разделы. Уровни модулей выше —
+    # проекция этой же карты, оставленная ради маршрутов и гейта.
+    depth: dict[str, list[str]] = {}
     subordinate_companies: list[str]

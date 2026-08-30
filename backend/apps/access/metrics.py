@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from django.db.models import Count
 
-from .models import Level, PositionRole, Role, RoleAssignment
+from .models import PositionRole, Role, RoleAssignment
 
 
 def collect() -> dict:
@@ -31,14 +31,12 @@ def collect() -> dict:
     # недоведённой настройки, который со стороны выглядит как «нет доступа».
     empty_roles = Role.objects.annotate(n=Count("permissions")).filter(n=0).count()
 
-    # Роль, где ВСЕ уровни admin: не ошибка сама по себе, но их рост означает,
-    # что грубые уровни используются как «включить всё».
-    admin_only = (Role.objects
-                  .annotate(total=Count("permissions"))
-                  .exclude(total=0)
-                  .exclude(permissions__level__in=[Level.READ, Level.WRITE])
-                  .distinct()
-                  .count())
+    # Роль, дающая удаление хоть где-то: не ошибка сама по себе, но их рост
+    # означает, что разрушающее право раздают вместо точечного.
+    with_delete = (Role.objects
+                   .filter(permissions__can_delete=True)
+                   .distinct()
+                   .count())
 
     return {
         "access_roles_total": {
@@ -49,9 +47,9 @@ def collect() -> dict:
             "help": "Роли, не дающие ни одного права",
             "values": [((), empty_roles)],
         },
-        "access_roles_admin_only": {
-            "help": "Роли, у которых все права уровня admin",
-            "values": [((), admin_only)],
+        "access_roles_with_delete": {
+            "help": "Роли, дающие право удаления хоть на одной функции",
+            "values": [((), with_delete)],
         },
         "access_position_roles_by_company": {
             "help": "Привязок «должность → роль» по компаниям",

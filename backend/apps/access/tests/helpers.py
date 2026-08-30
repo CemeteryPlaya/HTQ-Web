@@ -56,3 +56,23 @@ def post_json(client: Client, path: str, body, **extra):
 def patch_json(client: Client, path: str, body, **extra):
     return client.patch(path, data=json.dumps(body, default=str),
                         content_type="application/json", **extra)
+
+
+# ── Глубина ролей ───────────────────────────────────────────────────────────
+
+#: Прежние уровни → пресеты глубины. Тесты, писавшиеся до перехода на глубину,
+#: рассуждают в терминах read/write/admin; соответствие собрано здесь, чтобы
+#: оно было видно в одном месте, а не размазано по вызовам.
+LEVEL_PRESET = {"none": "none", "read": "view", "write": "edit", "admin": "full"}
+
+
+def grant(role, node: str, level_or_preset: str = "full"):
+    """Выдать роли глубину на узел. Принимает и прежний уровень, и пресет."""
+    from apps.access import depth
+    from apps.access.models import RolePermission
+
+    preset = LEVEL_PRESET.get(level_or_preset, level_or_preset)
+    row = RolePermission(role=role, node=node)
+    row.set_flags(depth.flags_of(preset))
+    row.save()
+    return row

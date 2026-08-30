@@ -22,6 +22,10 @@ urlpatterns = [
     path("me", views.MeView.as_view()),
     path("me/", views.MeView.as_view()),
 
+    # ── Реестр функций ──
+    path("functions", views.FunctionsView.as_view()),
+    path("functions/", views.FunctionsView.as_view()),
+
     # ── Каталог ролей ──
     path("roles/<int:role_id>/permissions", views.RolePermissionsView.as_view()),
     path("roles/<int:role_id>/permissions/", views.RolePermissionsView.as_view()),

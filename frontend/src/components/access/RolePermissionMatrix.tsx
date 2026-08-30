@@ -1,49 +1,102 @@
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { ACCESS_MODULES } from '@/lib/auth/modules';
-import { LEVEL_ORDER, type AccessLevel } from '@/lib/auth/permissions';
-import type { RolePermission } from '@/types/access';
+import {
+  DEPTH_PRESETS,
+  depthFor,
+  type DepthFlag,
+  type DepthMap,
+  type DepthPreset,
+} from '@/lib/auth/permissions';
+import type {
+  AccessFunctionNode,
+  AccessFunctionsResponse,
+  RolePermission,
+} from '@/types/access';
 
 /**
- * Матрица «модуль × уровень» — единственный редактор прав роли (§4.2).
+ * Матрица прав роли: дерево функций × глубина.
  *
- * Набор всегда заменяется ЦЕЛИКОМ, поэтому компонент работает не со списком
- * изменений, а с полным состоянием: наружу уходит ровно то, что видно на
- * экране. Модуль с уровнем `none` в набор не попадает — отсутствие модуля и
- * есть «нет доступа», и хранить явный `none` значило бы завести второе
- * представление одного и того же.
+ * Два показателя, как их сформулировал заказчик. **Функция** — узел реестра:
+ * модуль, экран внутри него или отдельное поле. **Глубина** — что с этой
+ * функцией разрешено делать.
+ *
+ * Ключевое различие в интерфейсе — между «наследует» и «нет доступа», и оно не
+ * косметическое:
+ *
+ * * **наследует** — строки нет вовсе, узел берёт глубину ближайшего предка.
+ *   Так выглядит подавляющее большинство узлов: роль задаёт глубину на модуле,
+ *   и всё внутри работает по ней.
+ * * **нет доступа** — явный запрет, перекрывающий разрешение предка. Им
+ *   закрывают зарплату внутри разрешённых кадров.
+ *
+ * Слить их в одно значило бы либо лишить возможности закрыть одно поле внутри
+ * открытого модуля, либо заставить расписывать каждый узел вручную — то есть
+ * получить матрицу на тысячу строк, которую никто не заполнит целиком.
  */
 
 export interface RolePermissionMatrixProps {
+  registry: AccessFunctionsResponse;
   value: RolePermission[];
   onChange: (next: RolePermission[]) => void;
   disabled?: boolean;
 }
 
-const LEVEL_LABELS: Record<AccessLevel, { key: string; fallback: string }> = {
-  none: { key: 'access.levels.none', fallback: 'Нет' },
-  read: { key: 'access.levels.read', fallback: 'Чтение' },
-  write: { key: 'access.levels.write', fallback: 'Запись' },
-  admin: { key: 'access.levels.admin', fallback: 'Администрирование' },
-};
+/** `''` — узел без собственной строки, то есть «наследует». */
+type Choice = '' | DepthPreset;
+
+const flatten = (nodes: AccessFunctionNode[], depth = 0): { node: AccessFunctionNode; depth: number }[] =>
+  nodes.flatMap((node) => [
+    { node, depth },
+    ...flatten(node.children, depth + 1),
+  ]);
 
 export function RolePermissionMatrix({
+  registry,
   value,
   onChange,
   disabled = false,
 }: RolePermissionMatrixProps) {
   const { t } = useTranslation();
 
-  const current = new Map(value.map((item) => [item.module, item.level]));
+  const rows = useMemo(() => flatten(registry.tree), [registry.tree]);
+  const explicit = useMemo(
+    () => new Map(value.map((item) => [item.node, item])),
+    [value],
+  );
+  /** Карта для расчёта унаследованного значения — та же форма, что у `/me`. */
+  const asMap: DepthMap = useMemo(
+    () => Object.fromEntries(value.map((item) => [item.node, item.flags])),
+    [value],
+  );
+  const presetTitle = useMemo(
+    () => new Map(registry.presets.map((p) => [p.key, p.title])),
+    [registry.presets],
+  );
+  const flagsOf = useMemo(
+    () => new Map(registry.presets.map((p) => [p.key, p.flags])),
+    [registry.presets],
+  );
 
-  const setLevel = (module: string, level: AccessLevel) => {
-    const next = ACCESS_MODULES
-      .map(({ name }) => ({
-        module: name,
-        level: name === module ? level : (current.get(name) ?? 'none'),
-      }))
-      .filter((item): item is RolePermission => item.level !== 'none');
-    onChange(next);
+  const choose = (node: string, choice: Choice) => {
+    const without = value.filter((item) => item.node !== node);
+    if (choice === '') {
+      onChange(without);
+      return;
+    }
+    const flags = (flagsOf.get(choice) ?? []) as DepthFlag[];
+    onChange([...without, { node, flags, preset: choice }]);
+  };
+
+  /** Что реально действует на узле, если своей строки у него нет. */
+  const inheritedTitle = (path: string): string => {
+    const parts = path.split('.');
+    const parentPath = parts.slice(0, -1).join('.');
+    const flags = parentPath ? depthFor(asMap, parentPath) : [];
+    const preset = registry.presets.find(
+      (p) => p.flags.length === flags.length && p.flags.every((f) => flags.includes(f)),
+    );
+    return preset ? preset.title : flags.join(', ') || t('access.matrix.noAccess', 'нет доступа');
   };
 
   return (
@@ -52,41 +105,47 @@ export function RolePermissionMatrix({
         <thead className="bg-muted/50 text-xs text-muted-foreground">
           <tr>
             <th scope="col" className="px-3 py-2 text-left font-medium">
-              {t('access.catalog.moduleColumn', 'Модуль')}
+              {t('access.matrix.functionColumn', 'Функция')}
             </th>
-            {LEVEL_ORDER.map((level) => (
-              <th key={level} scope="col" className="px-3 py-2 text-center font-medium">
-                {t(LEVEL_LABELS[level].key, LEVEL_LABELS[level].fallback)}
-              </th>
-            ))}
+            <th scope="col" className="w-64 px-3 py-2 text-left font-medium">
+              {t('access.matrix.depthColumn', 'Глубина')}
+            </th>
           </tr>
         </thead>
         <tbody>
-          {ACCESS_MODULES.map((module) => {
-            const level = current.get(module.name) ?? 'none';
+          {rows.map(({ node, depth }) => {
+            const own = explicit.get(node.path);
+            const choice: Choice = own ? (own.preset ?? '') : '';
+            const isModule = node.kind === 'module';
             return (
-              <tr key={module.name} className="border-t">
-                <th scope="row" className="px-3 py-2 text-left font-normal">
-                  {t(module.titleKey, module.fallback)}
-                  <span className="ml-2 text-xs text-muted-foreground">{module.name}</span>
+              <tr key={node.path} className="border-t">
+                <th scope="row" className="px-3 py-1.5 text-left font-normal">
+                  <span style={{ paddingLeft: `${depth * 18}px` }} className="inline-block">
+                    <span className={isModule ? 'font-medium' : ''}>{node.title}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">{node.path}</span>
+                  </span>
                 </th>
-                {LEVEL_ORDER.map((candidate) => (
-                  <td key={candidate} className="px-3 py-2 text-center">
-                    <input
-                      type="radio"
-                      name={`level-${module.name}`}
-                      value={candidate}
-                      checked={level === candidate}
-                      disabled={disabled}
-                      onChange={() => setLevel(module.name, candidate)}
-                      aria-label={`${t(module.titleKey, module.fallback)}: ${t(
-                        LEVEL_LABELS[candidate].key,
-                        LEVEL_LABELS[candidate].fallback,
-                      )}`}
-                      className="h-4 w-4 accent-primary"
-                    />
-                  </td>
-                ))}
+                <td className="px-3 py-1.5">
+                  <select
+                    className="h-8 w-full rounded-md border bg-background px-2 text-sm"
+                    value={choice}
+                    disabled={disabled}
+                    aria-label={`${node.title}: ${t('access.matrix.depthColumn', 'Глубина')}`}
+                    onChange={(event) => choose(node.path, event.target.value as Choice)}
+                  >
+                    <option value="">
+                      {isModule
+                        ? t('access.matrix.noAccess', 'нет доступа')
+                        : t('access.matrix.inherits', 'наследует: {{value}}',
+                          { value: inheritedTitle(node.path) })}
+                    </option>
+                    {DEPTH_PRESETS.map((preset) => (
+                      <option key={preset} value={preset}>
+                        {presetTitle.get(preset) ?? preset}
+                      </option>
+                    ))}
+                  </select>
+                </td>
               </tr>
             );
           })}
