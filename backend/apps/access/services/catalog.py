@@ -16,6 +16,7 @@ from django.db import IntegrityError, transaction
 from apps.access import depth, registry
 from apps.access.models import Role, RolePermission
 from apps.access.services.errors import (
+    DepthNotApplicable,
     RoleConflict,
     RoleInUse,
     RoleIsSystem,
@@ -90,6 +91,16 @@ def set_permissions(role_id: int, items: list[dict]) -> None:
         bad = sorted(flags - set(depth.FLAGS))
         if bad:
             raise UnknownModule(f"нет таких признаков глубины: {bad}")
+        # Признак, не применимый к узлу, отвергается, а не отбрасывается молча:
+        # тихо срезав его, мы сохранили бы роль, отличающуюся от заданной, и
+        # человек считал бы, что выдал право, которого на самом деле нет.
+        applicable = registry.applicable_flags(item["node"])
+        extra = sorted(flags - applicable)
+        if extra:
+            raise DepthNotApplicable(
+                f"к функции {item['node']!r} неприменимы признаки: {extra}; "
+                f"допустимы: {sorted(applicable) or 'нет ни одного'}"
+            )
         row = RolePermission(role_id=role_id, node=item["node"])
         row.set_flags(flags)
         rows.append(row)

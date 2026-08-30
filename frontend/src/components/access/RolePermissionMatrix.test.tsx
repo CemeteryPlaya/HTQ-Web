@@ -20,18 +20,30 @@ const REGISTRY: AccessFunctionsResponse = {
       path: 'hr',
       title: 'Кадры',
       kind: 'module',
+      flags: ['view', 'create', 'edit', 'delete'],
       children: [
         {
           path: 'hr.employees',
           title: 'Сотрудники',
           kind: 'function',
+          flags: ['view', 'create', 'edit', 'delete'],
           children: [
-            { path: 'hr.employees.salary', title: 'Зарплата', kind: 'field', children: [] },
+            {
+              path: 'hr.employees.salary', title: 'Зарплата', kind: 'field',
+              flags: ['view', 'create', 'edit', 'delete'], children: [],
+            },
           ],
         },
       ],
     },
-    { path: 'tasks', title: 'Задачи', kind: 'module', children: [] },
+    { path: 'tasks', title: 'Задачи', kind: 'module',
+      flags: ['view', 'create', 'edit', 'delete'], children: [] },
+    // Действие: осмысленны только «разрешено» и «нет доступа».
+    { path: 'conference', title: 'Конференции', kind: 'module',
+      flags: ['view', 'create', 'edit', 'delete'], children: [
+        { path: 'conference.join', title: 'Участие в конференциях',
+          kind: 'function', flags: ['view'], children: [] },
+      ] },
   ],
   flags: [
     { key: 'view', title: 'видит' },
@@ -105,11 +117,29 @@ describe('RolePermissionMatrix', () => {
     expect(onChange).toHaveBeenCalledWith([{ node: 'hr', flags: ['view'], preset: 'view' }]);
   });
 
-  it('у модуля вместо «наследует» стоит «нет доступа» — наследовать ему не от кого', () => {
+  it('у модуля вместо «наследует» стоит «не задано» — наследовать ему не от кого', () => {
     renderMatrix([]);
 
     const select = screen.getByLabelText('Задачи: Глубина') as HTMLSelectElement;
-    expect(select.options[0].text).toBe('нет доступа');
+    expect(select.options[0].text).toContain('не задано');
+  });
+
+  it('действию предлагаются только «разрешено» и «нет доступа»', () => {
+    // Это и был вопрос заказчика: что означает «конференция — только удалять».
+    // Правильный ответ — что такой выбор нельзя предложить.
+    renderMatrix([]);
+
+    const select = screen.getByLabelText('Участие в конференциях: Глубина') as HTMLSelectElement;
+    const options = [...select.options].map((o) => o.text);
+    expect(options).toEqual(['наследует: нет доступа', 'разрешено', 'нет доступа']);
+  });
+
+  it('узлу с частичным набором не предлагают неприменимое', () => {
+    renderMatrix([]);
+
+    const select = screen.getByLabelText('Сотрудники: Глубина') as HTMLSelectElement;
+    const options = [...select.options].map((o) => o.text);
+    expect(options).toContain('может редактировать');
   });
 
   it('в режиме просмотра выбор заблокирован', () => {

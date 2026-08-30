@@ -30,6 +30,7 @@ from .models import Role
 from .services import assignment, catalog, resolve
 from .services import hierarchy
 from .services.errors import (
+    DepthNotApplicable,
     RoleConflict,
     RoleInUse,
     RoleIsSystem,
@@ -41,7 +42,8 @@ from .services.errors import (
 # 422 — тело корректно по форме, но противоречит состоянию каталога.
 # Отдельно от 409: «нет такой роли» и «такого модуля не существует» — это
 # неверные ЗНАЧЕНИЯ, а не конфликт с состоянием данных.
-INVALID = (RoleConflict, UnknownModule, UnknownRole, ScopeInvalid)
+INVALID = (RoleConflict, UnknownModule, UnknownRole, ScopeInvalid,
+           DepthNotApplicable)
 
 read = method_decorator(api_view(methods=("GET",), auth="jwt"))
 

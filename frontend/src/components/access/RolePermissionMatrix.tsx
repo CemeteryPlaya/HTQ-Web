@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
-  DEPTH_PRESETS,
   depthFor,
   type DepthFlag,
   type DepthMap,
@@ -45,6 +44,16 @@ export interface RolePermissionMatrixProps {
 /** `''` — узел без собственной строки, то есть «наследует». */
 type Choice = '' | DepthPreset;
 
+/**
+ * Узел-действие: единственный осмысленный признак — «доступно».
+ *
+ * Для него шесть уровней вырождаются в два, и показывать «видит» вместо
+ * «разрешено» значит спрашивать не о том: у входа в конференцию нечего
+ * «видеть», в него можно только войти или не войти.
+ */
+const isAction = (node: AccessFunctionNode): boolean =>
+  node.flags.length === 1 && node.flags[0] === 'view';
+
 const flatten = (nodes: AccessFunctionNode[], depth = 0): { node: AccessFunctionNode; depth: number }[] =>
   nodes.flatMap((node) => [
     { node, depth },
@@ -68,10 +77,6 @@ export function RolePermissionMatrix({
   const asMap: DepthMap = useMemo(
     () => Object.fromEntries(value.map((item) => [item.node, item.flags])),
     [value],
-  );
-  const presetTitle = useMemo(
-    () => new Map(registry.presets.map((p) => [p.key, p.title])),
-    [registry.presets],
   );
   const flagsOf = useMemo(
     () => new Map(registry.presets.map((p) => [p.key, p.flags])),
@@ -135,15 +140,27 @@ export function RolePermissionMatrix({
                   >
                     <option value="">
                       {isModule
-                        ? t('access.matrix.noAccess', 'нет доступа')
+                        ? t('access.matrix.notSet', 'не задано (нет доступа)')
                         : t('access.matrix.inherits', 'наследует: {{value}}',
                           { value: inheritedTitle(node.path) })}
                     </option>
-                    {DEPTH_PRESETS.map((preset) => (
-                      <option key={preset} value={preset}>
-                        {presetTitle.get(preset) ?? preset}
-                      </option>
-                    ))}
+                    {registry.presets
+                      // Пресет предлагается, только если ВСЕ его признаки
+                      // применимы к узлу: иначе сервер справедливо ответит
+                      // 422, а человек не поймёт, почему «полный доступ» не
+                      // сохранился на входе в конференцию.
+                      .filter((preset) => preset.key !== 'none'
+                        && preset.flags.every((flag) => node.flags.includes(flag)))
+                      .map((preset) => (
+                        <option key={preset.key} value={preset.key}>
+                          {isAction(node) && preset.key === 'view'
+                            ? t('access.matrix.allowed', 'разрешено')
+                            : preset.title}
+                        </option>
+                      ))}
+                    <option value="none">
+                      {t('access.matrix.noAccess', 'нет доступа')}
+                    </option>
                   </select>
                 </td>
               </tr>

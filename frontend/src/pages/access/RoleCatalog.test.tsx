@@ -50,8 +50,12 @@ vi.mock('sonner', () => ({
 
 const REGISTRY = {
   tree: [
-    { path: 'hr', title: 'Кадры', kind: 'module' as const, children: [] },
-    { path: 'tasks', title: 'Задачи', kind: 'module' as const, children: [] },
+    { path: 'hr', title: 'Кадры', kind: 'module' as const,
+      flags: ['view' as const, 'create' as const, 'edit' as const, 'delete' as const],
+      children: [] },
+    { path: 'tasks', title: 'Задачи', kind: 'module' as const,
+      flags: ['view' as const, 'create' as const, 'edit' as const, 'delete' as const],
+      children: [] },
   ],
   flags: [
     { key: 'view' as const, title: 'видит' },

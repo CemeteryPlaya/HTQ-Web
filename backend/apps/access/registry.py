@@ -46,15 +46,27 @@ def _module_titles() -> dict[str, str]:
     return titles
 
 
-def _declared() -> list[tuple[str, str]]:
-    """Пары ``(путь, название)`` из всех аппок, объявивших реестр."""
-    found: list[tuple[str, str]] = []
+def _declared() -> list[tuple[str, str, tuple[str, ...]]]:
+    """``(путь, название, применимые признаки)`` из всех аппок.
+
+    Третий элемент необязателен: без него к узлу применимы все четыре признака.
+    """
+    from apps.access import depth
+
+    found: list[tuple[str, str, tuple[str, ...]]] = []
     for config in django_apps.get_app_configs():
         if not module_has_submodule(config.module, _SUBMODULE):
             continue
         module = __import__(f"{config.name}.{_SUBMODULE}", fromlist=[_SUBMODULE])
         for row in getattr(module, "FUNCTIONS", ()):
-            found.append((row[0], row[1]))
+            flags = tuple(row[2]) if len(row) > 2 else depth.FLAGS
+            unknown = sorted(set(flags) - set(depth.FLAGS))
+            if unknown:
+                raise ValueError(
+                    f"{_SUBMODULE}: узел {row[0]!r} объявил несуществующие "
+                    f"признаки глубины: {unknown}"
+                )
+            found.append((row[0], row[1], flags))
     return found
 
 
@@ -88,12 +100,15 @@ def nodes() -> list[dict]:
     """
     from apps.core.models import KNOWN_SERVICES
 
+    from apps.access import depth
+
     titles = _module_titles()
-    known = {name: {"path": name, "title": titles.get(name, name), "kind": MODULE}
+    known = {name: {"path": name, "title": titles.get(name, name), "kind": MODULE,
+                    "flags": list(depth.FLAGS)}
              for name in KNOWN_SERVICES}
 
     rows: dict[str, dict] = dict(known)
-    for path, title in _declared():
+    for path, title, flags in _declared():
         module = path.split(".")[0]
         if module not in known:
             # Функция, объявленная под несуществующим модулем, — опечатка в
@@ -103,7 +118,8 @@ def nodes() -> list[dict]:
                 f"{_SUBMODULE}: путь {path!r} ссылается на модуль {module!r}, "
                 f"которого нет в KNOWN_SERVICES"
             )
-        rows[path] = {"path": path, "title": title, "kind": kind_of(path)}
+        rows[path] = {"path": path, "title": title, "kind": kind_of(path),
+                      "flags": list(flags)}
 
     return [rows[path] for path in sorted(rows)]
 
@@ -114,6 +130,28 @@ def paths() -> set[str]:
 
 def is_known(path: str) -> bool:
     return path in paths()
+
+
+def applicable_flags(path: str) -> frozenset[str]:
+    """Признаки глубины, осмысленные для узла.
+
+    Не всякая функция описывается CRUD'ом. «Войти в конференцию» и «написать
+    сообщение» — действия: у них есть только «доступно» и «нет доступа», а
+    «удалять» там не значит ничего. Раньше редактор позволял задать такую
+    бессмыслицу, и понять, что она означает, не мог никто, — теперь она
+    невыразима.
+    """
+    for row in nodes():
+        if row["path"] == path:
+            return frozenset(row["flags"])
+    return frozenset()
+
+
+def is_action(path: str) -> bool:
+    """Узел-действие: единственный осмысленный признак — «доступно»."""
+    from apps.access import depth
+
+    return applicable_flags(path) == frozenset({depth.VIEW})
 
 
 def tree() -> list[dict]:
