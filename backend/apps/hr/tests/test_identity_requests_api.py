@@ -268,3 +268,95 @@ def test_update_of_non_identity_field_has_no_request_key(
 
     assert res.status_code == 200
     assert "identity_request" not in res.json()
+
+
+# ── право менять напрямую (hr.identity.force) ───────────────────────────────
+
+def _force_auth(email: str = "hr-force@htq.test"):
+    """HR-должность с явно выданным правом обхода подтверждения."""
+    dep = Department.objects.create(name="HR-force", path="hrforce")
+    pos = Position.objects.create(
+        title="Кадровик с правом обхода", department=dep, weight=35,
+        # Полный набор для правки чужой карточки: без view/view.all сотрудник
+        # другого отдела просто не находится, и тест падал бы на 404, ничего не
+        # сказав о самом праве обхода.
+        permissions={"hr_level": "senior",
+                     "permissions": ["hr.employees.view", "hr.employees.view.all",
+                                     "hr.employees.edit", "hr.identity.force"]},
+    )
+    user = make_user(email)
+    Employee.objects.create(
+        email=email, department=dep, position=pos, user_id=user.id,
+        hire_date=datetime.date(2024, 1, 9), first_name="Ф", last_name="О",
+    )
+    return auth_headers(user)
+
+
+@pytest.mark.django_db
+def test_force_permission_writes_identity_straight_to_the_card(
+        employee, approver_auth, fallback_log_mode):
+    res = Client().put(
+        f"/api/hr/v1/employees/{employee.id}/",
+        data=json.dumps({"phone": "+7 777 000-11-22"}),
+        content_type="application/json", **_force_auth(),
+    )
+
+    assert res.status_code == 200
+    assert "identity_request" not in res.json()
+    employee.refresh_from_db()
+    assert employee.phone == "+7 777 000-11-22"
+    assert not IdentityChangeRequest.objects.filter(
+        employee=employee, status=IdentityChangeRequest.Status.PENDING).exists()
+
+
+@pytest.mark.django_db
+def test_force_edit_supersedes_a_pending_request(
+        employee, approver_auth, fallback_log_mode):
+    """Иначе подтверждение старой заявки вернуло бы прежнее значение поверх нового."""
+    svc.capture(employee, {"phone": "+7 700 111-11-11"}, actor_id=1)
+
+    Client().put(
+        f"/api/hr/v1/employees/{employee.id}/",
+        data=json.dumps({"phone": "+7 777 000-11-22"}),
+        content_type="application/json", **_force_auth(),
+    )
+
+    request = IdentityChangeRequest.objects.get(employee=employee)
+    assert request.status == IdentityChangeRequest.Status.REJECTED
+    assert "hr.identity.force" in request.decision_note
+
+
+@pytest.mark.django_db
+def test_force_edit_leaves_other_pending_fields_alone(
+        employee, approver_auth, fallback_log_mode):
+    """Снимается только то поле, которое записали напрямую."""
+    svc.capture(employee, {"phone": "+7 700 111-11-11", "bio": "Прораб"}, actor_id=1)
+
+    Client().put(
+        f"/api/hr/v1/employees/{employee.id}/",
+        data=json.dumps({"phone": "+7 777 000-11-22"}),
+        content_type="application/json", **_force_auth(),
+    )
+
+    request = IdentityChangeRequest.objects.get(employee=employee)
+    assert request.status == IdentityChangeRequest.Status.PENDING
+    assert [f.field for f in request.fields.all()] == ["bio"]
+
+
+@pytest.mark.django_db
+def test_without_the_permission_the_edit_still_goes_to_approval(
+        lead_auth, employee, approver_auth, fallback_log_mode):
+    """Право не входит ни в один уровень — даже lead идёт через подтверждение."""
+    res = Client().put(
+        f"/api/hr/v1/employees/{employee.id}/",
+        data=json.dumps({"phone": "+7 777 000-11-22"}),
+        content_type="application/json", **lead_auth,
+    )
+
+    assert res.json()["identity_request"]["status"] == IdentityChangeRequest.Status.PENDING
+
+
+def test_force_key_is_not_part_of_any_level():
+    from apps.hr.permissions import IDENTITY_FORCE, LEVEL_PRESETS
+
+    assert not any(IDENTITY_FORCE in preset for preset in LEVEL_PRESETS.values())

@@ -151,7 +151,8 @@ def create_employee(data, *, changed_by_id: int) -> Employee:
 
 
 @transaction.atomic
-def update_employee(id: int, data, *, changed_by_id: int) -> tuple[Employee, object | None]:
+def update_employee(id: int, data, *, changed_by_id: int,
+                    force_identity: bool = False) -> tuple[Employee, object | None]:
     employee = get_employee(id)
     patch = data.model_dump(exclude_none=True)
 
@@ -159,11 +160,21 @@ def update_employee(id: int, data, *, changed_by_id: int) -> tuple[Employee, obj
     # 2026-08-25 §3): такие поля не пишутся в строку, а уходят заявкой, и
     # дальше по коду patch содержит только трудовые поля. У «скелета» без
     # user_id владельца нет — capture вернёт патч нетронутым.
-    from apps.hr.services import identity_request_service
+    from apps.hr.services import identity_fields, identity_request_service
 
-    patch, identity_request = identity_request_service.capture(
-        employee, patch, actor_id=changed_by_id,
-    )
+    if force_identity:
+        # Право hr.identity.force: поля идентичности пишутся сразу. Ожидающая
+        # заявка по этим же полям снимается — иначе её подтверждение вернуло бы
+        # старое значение поверх нового, и выглядело бы это штатно.
+        identity_request = None
+        identity_request_service.supersede(
+            employee, set(patch) & set(identity_fields.SYNCABLE),
+            actor_id=changed_by_id,
+        )
+    else:
+        patch, identity_request = identity_request_service.capture(
+            employee, patch, actor_id=changed_by_id,
+        )
 
     if "department_id" in patch:
         _assert_department_exists(patch["department_id"])

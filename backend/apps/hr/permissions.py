@@ -39,6 +39,12 @@ USERS_MANAGE = "hr.users.manage"
 # оно не кадровое, а принадлежит подтверждающему (спека 2026-08-25 §9).
 IDENTITY_VIEW = "hr.identity.view"
 IDENTITY_MANAGE = "hr.identity.manage"
+# Право писать идентичность НАПРЯМУЮ, минуя подтверждение владельцем аккаунта.
+# Намеренно НЕ входит ни в один уровень (даже в lead): обычный порядок — правка
+# уходит заявкой человеку, чьи это имя и телефон, и обходить его должен тот, кому
+# это выдали осознанно, а не всякий, кто дорос до уровня. Выдаётся отдельной
+# галкой в матрице прав должности.
+IDENTITY_FORCE = "hr.identity.force"
 CARD_FINANCIAL_VIEW = "hr.card.financial.view"
 CARD_FINANCIAL_EDIT = "hr.card.financial.edit"
 CARD_PERSONAL_VIEW = "hr.card.personal.view"
@@ -59,6 +65,7 @@ ALL_KEYS: frozenset[str] = frozenset({
     EMPLOYEES_DELETE, EMPLOYEES_TRANSFER, DEPARTMENTS_VIEW, DEPARTMENTS_EDIT,
     POSITIONS_VIEW, POSITIONS_EDIT, ORG_EDIT, DOCUMENTS_VIEW, DOCUMENTS_MANAGE,
     REPORTS_VIEW, USERS_LIST, USERS_MANAGE, IDENTITY_VIEW, IDENTITY_MANAGE,
+    IDENTITY_FORCE,
     CARD_FINANCIAL_VIEW, CARD_FINANCIAL_EDIT, CARD_PERSONAL_VIEW, CARD_PERSONAL_EDIT,
     CARD_GROUPS_VIEW, CARD_GROUPS_EDIT,
     CALENDAR_VIEW, CALENDAR_MANAGE,

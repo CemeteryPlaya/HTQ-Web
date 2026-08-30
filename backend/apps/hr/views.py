@@ -31,6 +31,7 @@ from htqweb.http import api_view, json_error
 from apps.users import interface as users_interface
 
 from . import access as hr_access
+from . import permissions as hr_permissions
 from . import schemas
 from .models import IdentityChangeRequest
 from .services import identity_request_service as identity_request_svc
@@ -186,6 +187,9 @@ _PERMISSION_CATALOG = {
         {"key": "hr.employees.view.all", "label": "Просмотр всех отделов", "description": None, "group": "Сотрудники"},
         {"key": "hr.users.list",         "label": "Список платформенных аккаунтов", "description": None, "group": "Аккаунты"},
         {"key": "hr.users.manage",       "label": "Управление аккаунтами",          "description": None, "group": "Аккаунты"},
+        {"key": "hr.identity.view",      "label": "Заявки на изменение — просмотр",  "description": "Очередь правок имени, телефона и био, ожидающих подтверждения владельцем.", "group": "Аккаунты"},
+        {"key": "hr.identity.manage",    "label": "Заявки на изменение — управление", "description": "Назначение подтверждающего.", "group": "Аккаунты"},
+        {"key": "hr.identity.force",     "label": "Менять данные без подтверждения", "description": "Имя, телефон, био и аватар записываются в карточку сразу, минуя подтверждение владельцем учётной записи. Ожидающая заявка по этим полям при этом снимается.", "group": "Аккаунты"},
 
         {"key": "hr.departments.view",  "label": "Просмотр отделов",       "description": None, "group": "Отделы"},
         {"key": "hr.departments.edit",  "label": "Редактирование отделов", "description": None, "group": "Отделы"},
@@ -725,7 +729,12 @@ def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
     try:
         with transaction.atomic():
             employee, identity_request = emp_svc.update_employee(
-                id, core, changed_by_id=request.token.user_id)
+                id, core, changed_by_id=request.token.user_id,
+                # Платформенный админ проходит сюда своим "*" — и это не
+                # расширение его власти: решение по заявке он и так принимает
+                # сам (identity_request_service.may_decide), обход лишь
+                # избавляет от лишнего шага.
+                force_identity=access.has(hr_permissions.IDENTITY_FORCE))
             _apply_card_t2(id, data.card_t2, access)
     except emp_svc.DepartmentNotFound:
         return json_error("Department not found", 422)

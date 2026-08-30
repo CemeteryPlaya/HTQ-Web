@@ -91,6 +91,19 @@ const generatePassword = (length = 16): string => {
   return Array.from(arr, (n) => alphabet[n % alphabet.length]).join('');
 };
 
+/**
+ * Поля идентичности — те, что принадлежат владельцу аккаунта, а не кадрам,
+ * и потому уходят ему на подтверждение (apps/hr/services/identity_fields.py).
+ */
+const IDENTITY_FIELD_LABELS: Record<string, string> = {
+  first_name: 'имя',
+  last_name: 'фамилия',
+  middle_name: 'отчество',
+  phone: 'телефон',
+  bio: 'о себе',
+  avatar_url: 'фото',
+};
+
 /** Чистая форма нового пользователя. Отдельной функцией, а не константой:
  *  объект мутабельный, общий экземпляр протёк бы между открытиями диалога. */
 const blankNewUser = () => ({
@@ -378,14 +391,21 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       // и попадёт в карточку только после подтверждения. Без этого сообщения
       // форма просто закрывается, значение остаётся прежним и ошибки нет —
       // то есть выглядит, будто правка не сохранилась.
-      const identityRequest = (saved as { identity_request?: { fields?: unknown[] } } | undefined)
-        ?.identity_request;
+      const identityRequest = (saved as
+        { identity_request?: { fields?: { field: string }[] } } | undefined)?.identity_request;
       if (identityRequest) {
+        // Перечисляем ИМЕННО те поля, что ушли на подтверждение: в одной форме
+        // рядом лежат и кадровые поля (они применились сразу), и поля
+        // идентичности, и без списка непонятно, что именно не изменилось.
+        const fields = (identityRequest.fields ?? [])
+          .map((row) => IDENTITY_FIELD_LABELS[row.field] ?? row.field)
+          .join(', ');
         toast.info(
           t('hr.pages.employees.identityRequestCreated',
-            'Отправлено на подтверждение владельцу учётной записи. В карточке '
-            + 'значение появится после того, как он подтвердит правку.'),
-          { duration: 8000 },
+            'Отправлено на подтверждение владельцу учётной записи: {{fields}}. '
+            + 'В карточке значения появятся после того, как он подтвердит правку.',
+            { fields }),
+          { duration: 10000 },
         );
       }
       queryClient.invalidateQueries({ queryKey: ['hr-employees'] });
