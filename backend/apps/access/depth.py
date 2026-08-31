@@ -49,6 +49,21 @@ PRESETS: dict[str, frozenset[str]] = {
     "full": frozenset({VIEW, CREATE, EDIT, DELETE}),
 }
 
+#: Пресеты ФУНКЦИОНАЛЬНОГО модуля — три уровня вместо шести.
+#:
+#: Мессенджер, конференции, почта, файлы — это инструменты, а не картотеки. У
+#: них нет «записей», которые заводят и удаляют: у них есть «пользуюсь» и
+#: «управляю». CRUD на таком модуле порождает бессмыслицу вроде
+#: «видеоконференция — только удалять», о которой никто не скажет, пустят ли по
+#: ней в комнату.
+FUNCTIONAL_PRESETS: tuple[str, ...] = ("none", "user", "admin")
+
+PRESETS["user"] = frozenset({VIEW, CREATE})
+PRESETS["admin"] = frozenset({VIEW, CREATE, EDIT, DELETE})
+
+#: Пресеты ДОКУМЕНТНОГО модуля — шесть уровней из постановки.
+DOCUMENT_PRESETS: tuple[str, ...] = ("none", "view", "create", "edit", "delete", "full")
+
 PRESET_TITLES: dict[str, str] = {
     "none": "нет доступа",
     "view": "видит",
@@ -56,14 +71,23 @@ PRESET_TITLES: dict[str, str] = {
     "edit": "может редактировать",
     "delete": "может удалять",
     "full": "полный доступ",
+    "user": "пользователь",
+    "admin": "администратор",
 }
 
 
-def preset_of(flags: frozenset[str] | set[str]) -> str | None:
-    """Название пресета для набора флагов, или ``None`` для своей комбинации."""
+def preset_of(flags: frozenset[str] | set[str], *, functional: bool = False) -> str | None:
+    """Название пресета для набора флагов, или ``None`` для своей комбинации.
+
+    ``functional`` выбирает словарь названий: один и тот же набор флагов у
+    документного модуля называется «полный доступ», а у функционального —
+    «администратор». Хранится он одинаково, различается только то, как о нём
+    говорят, — и говорить надо на языке того модуля, который человек правит.
+    """
     wanted = frozenset(flags)
-    for name, preset in PRESETS.items():
-        if preset == wanted:
+    order = FUNCTIONAL_PRESETS if functional else DOCUMENT_PRESETS
+    for name in order:
+        if PRESETS[name] == wanted:
             return name
     return None
 

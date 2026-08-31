@@ -10,6 +10,7 @@ import {
 import type {
   AccessFunctionNode,
   AccessFunctionsResponse,
+  AccessPageNode,
   RolePermission,
 } from '@/types/access';
 
@@ -51,7 +52,7 @@ type Choice = '' | DepthPreset;
  * «разрешено» значит спрашивать не о том: у входа в конференцию нечего
  * «видеть», в него можно только войти или не войти.
  */
-const isAction = (node: AccessFunctionNode): boolean =>
+const isAction = (node: { flags: DepthFlag[] }): boolean =>
   node.flags.length === 1 && node.flags[0] === 'view';
 
 const flatten = (nodes: AccessFunctionNode[], depth = 0): { node: AccessFunctionNode; depth: number }[] =>
@@ -145,12 +146,12 @@ export function RolePermissionMatrix({
                           { value: inheritedTitle(node.path) })}
                     </option>
                     {registry.presets
-                      // Пресет предлагается, только если ВСЕ его признаки
-                      // применимы к узлу: иначе сервер справедливо ответит
-                      // 422, а человек не поймёт, почему «полный доступ» не
-                      // сохранился на входе в конференцию.
+                      // Список допустимых уровней считает СЕРВЕР (реестр знает
+                      // тип модуля и применимые признаки). Выводить его здесь
+                      // заново значило бы завести второй ответ на тот же
+                      // вопрос — и разойтись с валидацией на первом же модуле.
                       .filter((preset) => preset.key !== 'none'
-                        && preset.flags.every((flag) => node.flags.includes(flag)))
+                        && node.presets.includes(preset.key))
                       .map((preset) => (
                         <option key={preset.key} value={preset.key}>
                           {isAction(node) && preset.key === 'view'
@@ -161,6 +162,81 @@ export function RolePermissionMatrix({
                     <option value="none">
                       {t('access.matrix.noAccess', 'нет доступа')}
                     </option>
+                  </select>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {registry.pages.length > 0 && (
+        <PageSection
+          pages={registry.pages}
+          explicit={explicit}
+          disabled={disabled}
+          onChoose={choose}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Страницы — слой выше остальных.
+ *
+ * Не видя страницы, человек не сделает на ней ничего, какие бы глубины ему ни
+ * выдали. Но это ВЕТО, а не разрешение: страница без запрета работает по
+ * обычным правилам, поэтому вариант по умолчанию — «не ограничена», а не
+ * «закрыта». Иначе всякая роль, где страницы не перечислены поимённо,
+ * оказалась бы бесполезной, а перечень пришлось бы обновлять при каждом новом
+ * экране.
+ */
+function PageSection({
+  pages,
+  explicit,
+  disabled,
+  onChoose,
+}: {
+  pages: AccessPageNode[];
+  explicit: Map<string, RolePermission>;
+  disabled: boolean;
+  onChoose: (node: string, choice: Choice) => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="border-t">
+      <div className="bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
+        {t('access.matrix.pages', 'Страницы сайта')}
+        <span className="ml-2 font-normal">
+          {t('access.matrix.pagesHint',
+            'закрытая страница отменяет всё, что разрешено выше')}
+        </span>
+      </div>
+      <table className="w-full text-sm">
+        <tbody>
+          {pages.map((page) => {
+            const choice: Choice = explicit.get(page.path)?.preset ?? '';
+            return (
+              <tr key={page.path} className="border-t">
+                <th scope="row" className="px-3 py-1.5 text-left font-normal">
+                  {page.title}
+                  <span className="ml-2 text-xs text-muted-foreground">{page.route}</span>
+                </th>
+                <td className="w-64 px-3 py-1.5">
+                  <select
+                    className="h-8 w-full rounded-md border bg-background px-2 text-sm"
+                    value={choice}
+                    disabled={disabled}
+                    aria-label={`${page.title}: ${t('access.matrix.pageAccess', 'Страница')}`}
+                    onChange={(event) => onChoose(page.path, event.target.value as Choice)}
+                  >
+                    <option value="">
+                      {t('access.matrix.pageUnrestricted', 'не ограничена')}
+                    </option>
+                    <option value="view">{t('access.matrix.pageVisible', 'видна')}</option>
+                    <option value="none">{t('access.matrix.pageHidden', 'скрыта')}</option>
                   </select>
                 </td>
               </tr>

@@ -270,3 +270,135 @@ def test_messenger_separates_the_ordinary_user_from_the_administrator():
     assert registry.applicable_flags("messenger.rooms") == frozenset(depth.FLAGS)
     assert registry.applicable_flags("messenger.moderation") == frozenset(
         {depth.VIEW, depth.DELETE})
+
+
+# ── Типы модулей ────────────────────────────────────────────────────────────
+
+
+def test_functional_module_offers_three_levels():
+    """Инструменту CRUD не нужен: у него «пользуюсь» и «управляю».
+
+    Это и заметил заказчик: функции таких модулей уже отвечали правильно, а
+    сам модуль по-прежнему предлагал «полный доступ» и «может удалять».
+    """
+    assert registry.presets_for("conference") == ["none", "user", "admin"]
+    assert registry.presets_for("messenger") == ["none", "user", "admin"]
+
+
+def test_document_module_keeps_six_levels():
+    assert registry.presets_for("hr") == [
+        "none", "view", "create", "edit", "delete", "full"]
+
+
+def test_same_flags_are_named_by_module_kind():
+    """Один набор у картотеки — «полный доступ», у инструмента — «администратор»."""
+    full = depth.PRESETS["full"]
+    assert depth.preset_of(full) == "full"
+    assert depth.preset_of(full, functional=True) == "admin"
+
+
+@pytest.mark.django_db
+def test_level_not_offered_for_the_node_is_refused():
+    from apps.access.services import catalog
+    from apps.access.services.errors import DepthNotApplicable
+
+    role = Role.objects.create(code="wrong-level", title="Роль")
+    with pytest.raises(DepthNotApplicable):
+        catalog.set_permissions(role.id, [{"node": "conference", "preset": "delete"}])
+
+
+# ── Страницы ────────────────────────────────────────────────────────────────
+
+
+def test_page_node_is_flat_and_binary():
+    assert registry.kind_of("page:/hr/employees") == registry.PAGE
+    assert registry.ancestors("page:/hr/employees") == []
+    assert registry.presets_for("page:/hr/employees") == ["none", "view"]
+
+
+@pytest.mark.django_db
+def test_page_without_an_opinion_is_visible(user):
+    """Страница — вето, а не разрешение: молчание роли ничего не закрывает."""
+    role = _role_for(user, "silent")
+    grant(role, "hr", "full")
+
+    assert resolve.page_hidden(user, "/hr/employees", COMPANY) is False
+
+
+@pytest.mark.django_db
+def test_explicit_ban_hides_the_page(user):
+    role = _role_for(user, "no-page")
+    grant(role, "hr", "full")
+    grant(role, "page:/hr/employees", "none")
+
+    assert resolve.page_hidden(user, "/hr/employees", COMPANY) is True
+    # Соседняя страница того же модуля не закрыта.
+    assert resolve.page_hidden(user, "/hr/departments", COMPANY) is False
+
+
+@pytest.mark.django_db
+def test_another_role_can_open_a_page_banned_elsewhere(user):
+    """Роли складываются: запрет в одной не отменяет разрешения в другой."""
+    banned = _role_for(user, "banned-page")
+    grant(banned, "page:/hr/employees", "none")
+    allowed = _role_for(user, "allowed-page")
+    grant(allowed, "page:/hr/employees", "view")
+
+    assert resolve.page_hidden(user, "/hr/employees", COMPANY) is False
+
+
+@pytest.mark.django_db
+def test_superuser_sees_every_page(superuser):
+    assert resolve.page_hidden(superuser, "/hr/employees", None) is False
+
+
+# ── Копия роли ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_copy_carries_the_whole_depth():
+    from apps.access.services import catalog
+
+    source = catalog.create_role("source", "Исходная")
+    catalog.set_permissions(source.id, [
+        {"node": "hr", "preset": "edit"},
+        {"node": "hr.employees.salary", "preset": "none"},
+    ])
+
+    clone = catalog.copy_role(source.id, "clone", "Копия")
+
+    assert catalog.permissions_of(clone.id) == catalog.permissions_of(source.id)
+
+
+@pytest.mark.django_db
+def test_copy_is_independent_of_the_source():
+    from apps.access.services import catalog
+
+    source = catalog.create_role("source2", "Исходная")
+    catalog.set_permissions(source.id, [{"node": "hr", "preset": "full"}])
+    clone = catalog.copy_role(source.id, "clone2", "Копия")
+
+    catalog.set_permissions(source.id, [{"node": "hr", "preset": "view"}])
+
+    assert catalog.permissions_of(clone.id)[0]["preset"] == "full"
+
+
+@pytest.mark.django_db
+def test_copy_of_a_system_role_is_not_system():
+    """Иначе копирование плодило бы неудаляемые роли."""
+    from apps.access.services import catalog
+
+    clone = catalog.copy_role(
+        Role.objects.get(code="platform-admin").id, "copy-of-seed", "Копия")
+
+    assert clone.is_system is False
+
+
+@pytest.mark.django_db
+def test_copy_with_a_taken_code_is_a_conflict():
+    from apps.access.services import catalog
+    from apps.access.services.errors import RoleConflict
+
+    source = catalog.create_role("source3", "Исходная")
+    with pytest.raises(RoleConflict):
+        catalog.copy_role(source.id, "source3", "Дубль")

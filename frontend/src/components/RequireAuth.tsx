@@ -9,11 +9,13 @@ import { useTranslation } from 'react-i18next';
 
 interface RequireAuthProps {
     children: JSX.Element;
+    /** Путь маршрута — для проверки, не закрыта ли страница ролью. */
+    page?: string;
     /** Гейт по модулю и уровню (§4 контракта стадии 2). */
     requires?: RouteRequirement;
 }
 
-const RequireAuth = ({ children, requires }: RequireAuthProps) => {
+const RequireAuth = ({ children, requires, page }: RequireAuthProps) => {
     const { t } = useTranslation();
     const location = useLocation();
     const { activeProfile, isLoading, error, isLoggedIn, clearAuthStorage, refetch } = useActiveProfile({
@@ -63,6 +65,12 @@ const RequireAuth = ({ children, requires }: RequireAuthProps) => {
 
     if (activeProfile?.must_change_password) {
         return <ForcePasswordChange />;
+    }
+
+    // Страница — слой ВЫШЕ глубины: закрытая отменяет всё, что разрешено
+    // модулями. Проверяется первой именно поэтому, а не для скорости.
+    if (page && !permissions.isLoading && permissions.pageHidden(page)) {
+        return <Navigate to="/myprofile" replace state={{ from: location, accessDenied: true }} />;
     }
 
     // Гейт по модулю и уровню. Это UX-рубеж — настоящий отказ выдаёт бэкенд на

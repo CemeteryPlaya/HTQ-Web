@@ -221,8 +221,11 @@ def test_functions_registry_is_readable(client):
     modules = {row["path"] for row in body["tree"]}
     assert "hr" in modules
     assert [f["key"] for f in body["flags"]] == ["view", "create", "edit", "delete"]
-    assert {p["key"] for p in body["presets"]} == {
-        "none", "view", "create", "edit", "delete", "full"}
+    assert {"none", "view", "create", "edit", "delete", "full"} <= {
+        p["key"] for p in body["presets"]}
+    # Страницы приезжают отдельным списком: они не входят в точечное дерево
+    # модулей, потому что страница может собирать данные нескольких доменов.
+    assert any(page["route"] == "/hr/employees" for page in body["pages"])
 
 
 @pytest.mark.django_db

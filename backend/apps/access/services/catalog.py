@@ -39,6 +39,33 @@ def rename_role(role_id: int, title: str) -> Role:
     return role
 
 
+def copy_role(role_id: int, code: str, title: str) -> Role:
+    """Новая роль с той же глубиной по всем узлам.
+
+    Роли отличаются друг от друга обычно двумя-тремя строками из полусотни, и
+    собирать каждую заново — работа, при которой ошибаются молча: забытый узел
+    выглядит не как ошибка, а как «наследует». Копия снимает этот класс ошибок
+    целиком.
+
+    Копия НЕ системная, даже если исходная такая: ``is_system`` защищает
+    засеянную роль-минимум от удаления, и наследовать эту защиту вместе с
+    правами значило бы плодить неудаляемые роли.
+    """
+    source = Role.objects.get(id=role_id)
+    with transaction.atomic():
+        try:
+            clone = Role.objects.create(code=code, title=title)
+        except IntegrityError as exc:
+            raise RoleConflict(code) from exc
+        RolePermission.objects.bulk_create([
+            RolePermission(role=clone, node=row.node, can_view=row.can_view,
+                           can_create=row.can_create, can_edit=row.can_edit,
+                           can_delete=row.can_delete)
+            for row in RolePermission.objects.filter(role_id=source.id)
+        ])
+    return clone
+
+
 def delete_role(role_id: int) -> None:
     role = Role.objects.get(id=role_id)
     if role.is_system:
@@ -61,8 +88,13 @@ def permissions_of(role_id: int) -> list[dict]:
     """
     rows = {row.node: row.flags
             for row in RolePermission.objects.filter(role_id=role_id)}
+    functional = {row["path"] for row in registry.nodes()
+                  if row.get("module_kind") == registry.FUNCTIONAL}
     return [
-        {"node": node, "flags": sorted(flags), "preset": depth.preset_of(flags)}
+        {"node": node, "flags": sorted(flags),
+         # Один и тот же набор у инструмента называется «администратор», а у
+         # картотеки — «полный доступ»: название берётся по типу модуля.
+         "preset": depth.preset_of(flags, functional=node.split(".")[0] in functional)}
         for node, flags in sorted(rows.items())
     ]
 
@@ -86,7 +118,15 @@ def set_permissions(role_id: int, items: list[dict]) -> None:
 
     rows = []
     for item in items:
-        flags = (depth.flags_of(item["preset"]) if item.get("preset")
+        preset = item.get("preset")
+        if preset is not None and preset not in registry.presets_for(item["node"]):
+            # Уровень, не предусмотренный для узла: «полный доступ» у
+            # инструмента или «может удалять» у входа в конференцию.
+            raise DepthNotApplicable(
+                f"уровень {preset!r} не предусмотрен для {item['node']!r}; "
+                f"допустимы: {registry.presets_for(item['node'])}"
+            )
+        flags = (depth.flags_of(preset) if preset
                  else frozenset(item.get("flags") or ()))
         bad = sorted(flags - set(depth.FLAGS))
         if bad:

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AxiosError } from 'axios';
-import { Globe2, Loader2, Lock, Plus, Save, Trash2 } from 'lucide-react';
+import { Copy, Globe2, Loader2, Lock, Plus, Save, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -89,6 +89,29 @@ const RoleCatalog = () => {
       toast.error(
         error.response?.status === 422
           ? t('access.catalog.codeTaken', 'Код роли уже занят — он уникален на всей платформе')
+          : t('access.catalog.saveFailed', 'Не удалось сохранить'),
+      );
+    },
+  });
+
+  const copyMutation = useMutation({
+    mutationFn: (role: Role) => accessApi.copyRole(role.id, {
+      // Код обязан быть уникален на всей платформе, поэтому предлагаем
+      // производный и сразу занятый проверяем на сервере: угадывать свободный
+      // в цикле — плодить роли-призраки при каждой неудаче.
+      code: `${role.code}-copy`,
+      title: t('access.catalog.copyTitle', '{{title}} (копия)', { title: role.title }),
+    }),
+    onSuccess: async () => {
+      await invalidateRoles();
+      toast.success(t('access.catalog.copied', 'Роль скопирована'));
+    },
+    onError: (error: AxiosError) => {
+      toast.error(
+        error.response?.status === 422
+          ? t('access.catalog.copyCodeTaken',
+            'Код для копии уже занят — переименуйте существующую копию или '
+            + 'создайте роль вручную.')
           : t('access.catalog.saveFailed', 'Не удалось сохранить'),
       );
     },
@@ -214,6 +237,17 @@ const RoleCatalog = () => {
                       <Lock className="h-3 w-3" />
                       {t('access.catalog.system', 'служебная')}
                     </Badge>
+                  )}
+                  {canEdit && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={t('access.catalog.copyRole', 'Копировать роль')}
+                      disabled={copyMutation.isPending}
+                      onClick={() => copyMutation.mutate(role)}
+                    >
+                      <Copy className="h-4 w-4" />
+                    </Button>
                   )}
                   {canEdit && !role.is_system && (
                     <Button

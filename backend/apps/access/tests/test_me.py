@@ -24,7 +24,7 @@ def test_me_without_company_is_not_an_error(client):
     resp = client.get(f"{BASE}/me", **auth(token()))
     assert resp.status_code == 200
     assert resp.json() == {"company": None, "permissions": {}, "depth": {},
-                           "subordinate_companies": []}
+                           "hidden_pages": [], "subordinate_companies": []}
 
 
 @pytest.mark.django_db
@@ -44,6 +44,8 @@ def test_me_returns_permissions_of_the_request_company(client, company_schema):
                                "scope": {"kind": "department", "id": 3}}},
         # Полная картина по узлам — из неё уровень модуля и посчитан.
         "depth": {"hr": ["create", "edit", "view"]},
+        # Страница — вето: без явного запрета список пуст.
+        "hidden_pages": [],
         "subordinate_companies": [],
     }
 

@@ -9,3 +9,5 @@ FUNCTIONS = (
     ("mail.mailboxes", "Ящики: заведение и настройка", ("view", "create", "edit", "delete")),
     ("mail.server", "Подключение к почтовому серверу", ("view", "edit")),
 )
+
+MODULE_KIND = "functional"

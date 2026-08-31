@@ -21,29 +21,39 @@ const REGISTRY: AccessFunctionsResponse = {
       title: 'Кадры',
       kind: 'module',
       flags: ['view', 'create', 'edit', 'delete'],
+      presets: ['none', 'view', 'create', 'edit', 'delete', 'full'],
       children: [
         {
           path: 'hr.employees',
           title: 'Сотрудники',
           kind: 'function',
           flags: ['view', 'create', 'edit', 'delete'],
+          presets: ['none', 'view', 'create', 'edit', 'delete', 'full'],
           children: [
             {
               path: 'hr.employees.salary', title: 'Зарплата', kind: 'field',
-              flags: ['view', 'create', 'edit', 'delete'], children: [],
+              flags: ['view', 'create', 'edit', 'delete'],
+              presets: ['none', 'view', 'create', 'edit', 'delete', 'full'], children: [],
             },
           ],
         },
       ],
     },
     { path: 'tasks', title: 'Задачи', kind: 'module',
-      flags: ['view', 'create', 'edit', 'delete'], children: [] },
+      flags: ['view', 'create', 'edit', 'delete'],
+      presets: ['none', 'view', 'create', 'edit', 'delete', 'full'], children: [] },
     // Действие: осмысленны только «разрешено» и «нет доступа».
+    // Инструмент: три уровня вместо шести.
     { path: 'conference', title: 'Конференции', kind: 'module',
-      flags: ['view', 'create', 'edit', 'delete'], children: [
+      flags: ['view', 'create', 'edit', 'delete'],
+      presets: ['none', 'user', 'admin'], children: [
         { path: 'conference.join', title: 'Участие в конференциях',
-          kind: 'function', flags: ['view'], children: [] },
+          kind: 'function', flags: ['view'], presets: ['none', 'view'], children: [] },
       ] },
+  ],
+  pages: [
+    { path: 'page:/hr/employees', title: 'Кадры: сотрудники', kind: 'page',
+      flags: ['view'], presets: ['none', 'view'], route: '/hr/employees' },
   ],
   flags: [
     { key: 'view', title: 'видит' },
@@ -53,6 +63,8 @@ const REGISTRY: AccessFunctionsResponse = {
   ],
   presets: [
     { key: 'none', title: 'нет доступа', flags: [] },
+    { key: 'user', title: 'пользователь', flags: ['view', 'create'] },
+    { key: 'admin', title: 'администратор', flags: ['view', 'create', 'edit', 'delete'] },
     { key: 'view', title: 'видит', flags: ['view'] },
     { key: 'create', title: 'может вводить', flags: ['view', 'create'] },
     { key: 'edit', title: 'может редактировать', flags: ['view', 'create', 'edit'] },
@@ -140,6 +152,38 @@ describe('RolePermissionMatrix', () => {
     const select = screen.getByLabelText('Сотрудники: Глубина') as HTMLSelectElement;
     const options = [...select.options].map((o) => o.text);
     expect(options).toContain('может редактировать');
+  });
+
+  it('модулю-инструменту предлагаются три уровня, а не шесть', () => {
+    // Ровно то, что заметил заказчик: функции таких модулей отвечали уже
+    // правильно, а сам модуль по-прежнему предлагал «полный доступ».
+    renderMatrix([]);
+
+    const select = screen.getByLabelText('Конференции: Глубина') as HTMLSelectElement;
+    const options = [...select.options].map((o) => o.text);
+    expect(options).toEqual([
+      'не задано (нет доступа)', 'пользователь', 'администратор', 'нет доступа',
+    ]);
+  });
+
+  it('страницы вынесены отдельным слоем и по умолчанию не ограничены', () => {
+    renderMatrix([]);
+
+    const select = screen.getByLabelText('Кадры: сотрудники: Страница') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect([...select.options].map((o) => o.text))
+      .toEqual(['не ограничена', 'видна', 'скрыта']);
+  });
+
+  it('скрытая страница сохраняется отдельным узлом', async () => {
+    const onChange = renderMatrix([]);
+
+    await userEvent.selectOptions(
+      screen.getByLabelText('Кадры: сотрудники: Страница'), 'none');
+
+    expect(onChange).toHaveBeenCalledWith([
+      { node: 'page:/hr/employees', flags: [], preset: 'none' },
+    ]);
   });
 
   it('в режиме просмотра выбор заблокирован', () => {

@@ -46,6 +46,14 @@ export interface Permissions {
   depth: (node: string) => DepthFlag[];
   /** Есть ли конкретный признак глубины на узле. */
   can: (node: string, flag: DepthFlag) => boolean;
+  /**
+   * Закрыта ли страница явным запретом роли.
+   *
+   * Слой выше остальных: закрытая страница отменяет всё, что разрешено
+   * глубинами, — на неё просто не попасть. Вето, а не разрешение: маршрут без
+   * запрета работает по обычным правилам.
+   */
+  pageHidden: (route: string) => boolean;
   /** Компании ниже по внешней иерархии. Только отображение (§7). */
   subordinateCompanies: string[];
   isLoading: boolean;
@@ -80,6 +88,7 @@ export function usePermissions(): Permissions {
   return useMemo(() => {
     const permissions = data?.permissions ?? EMPTY;
     const depthMap = data?.depth ?? EMPTY_DEPTH;
+    const hiddenPages = data?.hidden_pages ?? [];
     return {
       company: data?.company ?? null,
       level: (module) => levelFor(permissions, module),
@@ -87,6 +96,7 @@ export function usePermissions(): Permissions {
       scope: (module) => scopeFor(permissions, module),
       depth: (node) => depthFor(depthMap, node),
       can: (node, flag) => hasDepth(depthMap, node, flag),
+      pageHidden: (route) => hiddenPages.includes(route),
       subordinateCompanies: data?.subordinate_companies ?? [],
       isLoading,
       isError,

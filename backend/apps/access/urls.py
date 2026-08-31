@@ -27,6 +27,8 @@ urlpatterns = [
     path("functions/", views.FunctionsView.as_view()),
 
     # ── Каталог ролей ──
+    path("roles/<int:role_id>/copy", views.RoleCopyView.as_view()),
+    path("roles/<int:role_id>/copy/", views.RoleCopyView.as_view()),
     path("roles/<int:role_id>/permissions", views.RolePermissionsView.as_view()),
     path("roles/<int:role_id>/permissions/", views.RolePermissionsView.as_view()),
     path("roles/<int:role_id>", views.RoleItemView.as_view()),

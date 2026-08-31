@@ -27,6 +27,7 @@ from htqweb.tenancy.context import current_company_or_none
 
 from . import schemas
 from .models import Role
+from apps.access import registry
 from .services import assignment, catalog, resolve
 from .services import hierarchy
 from .services.errors import (
@@ -93,10 +94,11 @@ class FunctionsView(AccessView):
 
     @read
     def get(self, request):
-        from apps.access import depth, registry
+        from apps.access import depth
 
         return {
             "tree": registry.tree(),
+            "pages": registry.page_nodes(),
             "flags": [{"key": flag, "title": depth.FLAG_TITLES[flag]}
                       for flag in depth.FLAGS],
             "presets": [{"key": name, "title": depth.PRESET_TITLES[name],
@@ -154,6 +156,27 @@ class RoleItemView(AccessView):
         except RoleIsSystem:
             return json_error("Служебную роль удалить нельзя", 409)
         return {"ok": True}
+
+
+class RoleCopyView(AccessView):
+    """``POST roles/<id>/copy`` — новая роль с той же глубиной.
+
+    Отдельная ручка, а не «создать и потом скопировать права»: между двумя
+    запросами роль существовала бы пустой, и прерывание оставило бы в каталоге
+    роль без единого права — от настоящей она неотличима, а даёт ноль.
+    """
+
+    @write("POST", body=schemas.RoleIn, status=201, admin=False)
+    def post(self, request, role_id: int, data: schemas.RoleIn):
+        if (denied := self.deny_unless_platform_admin()):
+            return denied
+        try:
+            clone = catalog.copy_role(role_id, data.code, data.title)
+        except Role.DoesNotExist:
+            return json_error("Роль не найдена", 404)
+        except INVALID as exc:
+            return json_error(str(exc) or "invalid", 422)
+        return schemas.RoleRead.model_validate(clone)
 
 
 class RolePermissionsView(AccessView):
@@ -239,6 +262,10 @@ class MeView(AccessView):
             company=company,
             permissions=resolve.permissions_for(request.token, company),
             depth=resolve.depth_map(request.token, company),
+            hidden_pages=[
+                row["route"] for row in registry.page_nodes()
+                if resolve.page_hidden(request.token, row["route"], company)
+            ],
             subordinate_companies=hierarchy.subordinate_companies(
                 request.token, company),
         )

@@ -42,7 +42,7 @@ const RouteElement = ({ route }: { route: RouteConfig }) => {
   const RequireAuth = lazyPages.RequireAuth;
   return (
     <SuspensePage>
-      <RequireAuth requires={route.requires}>{content}</RequireAuth>
+      <RequireAuth requires={route.requires} page={route.path}>{content}</RequireAuth>
     </SuspensePage>
   );
 };

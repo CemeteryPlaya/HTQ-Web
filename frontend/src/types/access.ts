@@ -57,11 +57,31 @@ export interface AccessFunctionNode {
    * которой потом никто не скажет, что она означает.
    */
   flags: DepthFlag[];
+  /**
+   * Уровни, которые осмысленно предлагать для узла. Считает их сервер:
+   * у модуля-инструмента их три («нет доступа», «пользователь»,
+   * «администратор»), у модуля-картотеки шесть, у функции — по применимым
+   * признакам. Фронт их не выводит заново — иначе два ответа на один вопрос.
+   */
+  presets: DepthPreset[];
   children: AccessFunctionNode[];
+}
+
+/** Узел-страницы: плоский, только «видно» и «не видно». */
+export interface AccessPageNode {
+  path: string;
+  title: string;
+  kind: 'page';
+  flags: DepthFlag[];
+  presets: DepthPreset[];
+  /** Путь маршрута, как он записан в routeDefinitions. */
+  route: string;
+  children?: never;
 }
 
 export interface AccessFunctionsResponse {
   tree: AccessFunctionNode[];
+  pages: AccessPageNode[];
   flags: { key: DepthFlag; title: string }[];
   presets: { key: DepthPreset; title: string; flags: DepthFlag[] }[];
 }
@@ -94,6 +114,15 @@ export interface AccessMe {
    * уровень модуля о поле ничего не знает.
    */
   depth: Record<string, DepthFlag[]>;
+  /**
+   * Страницы, закрытые роли ЯВНЫМ запретом.
+   *
+   * Слой выше остальных: не видя страницы, человек не сделает на ней ничего,
+   * какие бы глубины ему ни выдали. При этом это вето, а не разрешение —
+   * страница без запрета работает по обычным правилам, иначе всякая роль без
+   * полного перечня страниц оказалась бы бесполезной.
+   */
+  hidden_pages: string[];
   /**
    * Компании ниже по дереву владения, над сотрудниками которых пользователь
    * начальник по внешней иерархии (§1.4). Стадия его отдаёт, но выборки по

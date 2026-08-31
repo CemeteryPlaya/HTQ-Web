@@ -125,6 +125,30 @@ def can(user, node: str, flag: str, company: str | None) -> bool:
     return flag in flags_for(user, node, company)
 
 
+def page_hidden(user, route: str, company: str | None) -> bool:
+    """Закрыта ли страница явным запретом.
+
+    Страница — ВЕТО, а не разрешение: отсутствие строки означает «нет особого
+    мнения», и маршрут работает по обычным правилам. Считать незаданную
+    страницу закрытой значило бы сделать бесполезной всякую роль без полного
+    перечня страниц, а перечень пришлось бы обновлять при каждом новом экране.
+
+    Запрет действует, только если НИ ОДНА роль пользователя не разрешила
+    страницу явно: роли складываются объединением, и запрет в одной не отменяет
+    разрешения в другой (то же правило, что для глубины).
+    """
+    _user_id, is_superuser = identity(user)
+    if is_superuser:
+        return False
+
+    node = f"{registry.PAGE_PREFIX}{route}"
+    scopes = _role_scopes(user, company)
+    opinions = [nodes[node] for nodes in _rows_by_role(scopes).values() if node in nodes]
+    if not opinions:
+        return False
+    return not any(opinions)
+
+
 def depth_map(user, company: str | None) -> dict[str, list[str]]:
     """Все узлы, на которых у пользователя есть хоть что-то, → список флагов.
 

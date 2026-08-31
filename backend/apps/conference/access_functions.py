@@ -25,3 +25,5 @@ FUNCTIONS = (
     ("conference.transcripts", "Протоколы встреч", ("view", "delete")),
     ("conference.invites", "Приглашения по ссылке", ("view", "create", "delete")),
 )
+
+MODULE_KIND = "functional"

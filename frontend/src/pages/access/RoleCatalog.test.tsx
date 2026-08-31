@@ -21,6 +21,7 @@ const getFunctions = vi.fn();
 const getRolePermissions = vi.fn();
 const putRolePermissions = vi.fn();
 const deleteRole = vi.fn();
+const copyRole = vi.fn();
 const createRole = vi.fn();
 
 vi.mock('@/api/access', () => ({
@@ -31,6 +32,7 @@ vi.mock('@/api/access', () => ({
     putRolePermissions: (id: number, permissions: RolePermission[]) =>
       putRolePermissions(id, permissions),
     deleteRole: (id: number) => deleteRole(id),
+    copyRole: (id: number, body: unknown) => copyRole(id, body),
     createRole: (body: unknown) => createRole(body),
   },
 }));
@@ -52,11 +54,12 @@ const REGISTRY = {
   tree: [
     { path: 'hr', title: 'Кадры', kind: 'module' as const,
       flags: ['view' as const, 'create' as const, 'edit' as const, 'delete' as const],
-      children: [] },
+      presets: ['none' as const, 'view' as const, 'edit' as const], children: [] },
     { path: 'tasks', title: 'Задачи', kind: 'module' as const,
       flags: ['view' as const, 'create' as const, 'edit' as const, 'delete' as const],
-      children: [] },
+      presets: ['none' as const, 'view' as const, 'edit' as const], children: [] },
   ],
+  pages: [],
   flags: [
     { key: 'view' as const, title: 'видит' },
     { key: 'create' as const, title: 'вводит' },
@@ -86,6 +89,7 @@ beforeEach(() => {
   getFunctions.mockResolvedValue({ data: REGISTRY });
   putRolePermissions.mockResolvedValue({ data: [] });
   deleteRole.mockResolvedValue({ data: undefined });
+  copyRole.mockResolvedValue({ data: { id: 99, code: 'hr-admin-copy', title: 'Копия', is_system: false } });
 });
 
 describe('RoleCatalog', () => {
@@ -99,6 +103,29 @@ describe('RoleCatalog', () => {
     expect(screen.getByRole('link', { name: /профил/i })).toHaveAttribute('href', '/myprofile');
     expect(container.querySelector('header')).toBeInTheDocument();
     expect(container.querySelector('footer')).toBeInTheDocument();
+  });
+
+  it('копирует роль одним запросом с производным кодом', async () => {
+    // Роли отличаются двумя-тремя строками из полусотни, и собирать каждую
+    // заново — работа, при которой ошибаются молча: забытый узел выглядит не
+    // как ошибка, а как «наследует».
+    renderWithProviders(<RoleCatalog />);
+
+    const buttons = await screen.findAllByRole('button', { name: /Копировать роль/i });
+    await userEvent.click(buttons[0]);
+
+    await waitFor(() => expect(copyRole).toHaveBeenCalledTimes(1));
+    expect(copyRole).toHaveBeenCalledWith(12, expect.objectContaining({
+      code: 'hr-admin-copy',
+    }));
+  });
+
+  it('копировать можно и служебную роль — удалять её по-прежнему нельзя', async () => {
+    renderWithProviders(<RoleCatalog />);
+
+    await screen.findByText('Служебная');
+    expect(await screen.findAllByRole('button', { name: /Копировать роль/i })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /Удалить роль/i })).toHaveLength(1);
   });
 
   it('предупреждает, что правка действует во всех компаниях', async () => {

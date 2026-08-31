@@ -29,6 +29,12 @@ from django.utils.module_loading import module_has_submodule
 MODULE = "module"
 FUNCTION = "function"
 FIELD = "field"
+PAGE = "page"
+
+#: Префикс узла-страницы. Страницы намеренно НЕ входят в точечное дерево
+#: модулей: страница может собирать данные нескольких доменов, и подчинять её
+#: одному из них значило бы соврать о том, что она такое.
+PAGE_PREFIX = "page:"
 
 #: Имя модуля, объявляемого аппкой. Совпадает с именем сервиса в
 #: ``apps.core.models.KNOWN_SERVICES`` — второй список модулей платформа не
@@ -44,6 +50,34 @@ def _module_titles() -> dict[str, str]:
             continue
         titles[config.label] = str(config.verbose_name)
     return titles
+
+
+FUNCTIONAL = "functional"
+DOCUMENT = "document"
+
+
+def _module_kinds() -> dict[str, str]:
+    """Тип каждого модуля: инструмент или картотека.
+
+    Аппка объявляет его константой ``MODULE_KIND`` в ``access_functions.py``.
+    Умолчание — ``document``: подавляющее большинство доменов именно картотеки,
+    и требовать объявления от каждого значило бы завести обязательный ритуал
+    ради меньшинства.
+    """
+    kinds: dict[str, str] = {}
+    for config in django_apps.get_app_configs():
+        if not module_has_submodule(config.module, _SUBMODULE):
+            continue
+        module = __import__(f"{config.name}.{_SUBMODULE}", fromlist=[_SUBMODULE])
+        kind = getattr(module, "MODULE_KIND", DOCUMENT)
+        if kind not in (FUNCTIONAL, DOCUMENT):
+            raise ValueError(
+                f"{config.name}.{_SUBMODULE}: MODULE_KIND={kind!r}; "
+                f"допустимы {FUNCTIONAL!r} и {DOCUMENT!r}"
+            )
+        for row in getattr(module, "FUNCTIONS", ()):
+            kinds[row[0].split(".")[0]] = kind
+    return kinds
 
 
 def _declared() -> list[tuple[str, str, tuple[str, ...]]]:
@@ -72,6 +106,8 @@ def _declared() -> list[tuple[str, str, tuple[str, ...]]]:
 
 def kind_of(path: str) -> str:
     """Уровень узла по числу сегментов пути."""
+    if path.startswith(PAGE_PREFIX):
+        return PAGE
     depth = path.count(".")
     if depth == 0:
         return MODULE
@@ -81,7 +117,12 @@ def kind_of(path: str) -> str:
 
 
 def ancestors(path: str) -> list[str]:
-    """Пути предков от ближайшего к корню: ``a.b.c`` → ``[a.b, a]``."""
+    """Пути предков от ближайшего к корню: ``a.b.c`` → ``[a.b, a]``.
+
+    У страницы предков нет: она плоская и ничего не наследует.
+    """
+    if path.startswith(PAGE_PREFIX):
+        return []
     parts = path.split(".")
     return [".".join(parts[:i]) for i in range(len(parts) - 1, 0, -1)]
 
@@ -103,7 +144,9 @@ def nodes() -> list[dict]:
     from apps.access import depth
 
     titles = _module_titles()
+    kinds = _module_kinds()
     known = {name: {"path": name, "title": titles.get(name, name), "kind": MODULE,
+                    "module_kind": kinds.get(name, DOCUMENT),
                     "flags": list(depth.FLAGS)}
              for name in KNOWN_SERVICES}
 
@@ -119,9 +162,47 @@ def nodes() -> list[dict]:
                 f"которого нет в KNOWN_SERVICES"
             )
         rows[path] = {"path": path, "title": title, "kind": kind_of(path),
+                      "module_kind": kinds.get(module, DOCUMENT),
                       "flags": list(flags)}
 
-    return [rows[path] for path in sorted(rows)]
+    for row in rows.values():
+        row["presets"] = _presets_for(row)
+    return [rows[path] for path in sorted(rows)] + page_nodes()
+
+
+def page_nodes() -> list[dict]:
+    """Узлы-страницы: только «видно» и «не видно»."""
+    from apps.access.pages import PAGES
+
+    return [
+        {"path": f"{PAGE_PREFIX}{route}", "title": title, "kind": PAGE,
+         "module_kind": DOCUMENT, "flags": ["view"], "presets": ["none", "view"],
+         "route": route}
+        for route, title in PAGES
+    ]
+
+
+def _presets_for(row: dict) -> list[str]:
+    """Уровни, которые вообще осмысленно предлагать для узла.
+
+    У МОДУЛЯ их набор определяется его типом: у инструмента (мессенджер,
+    конференции) — три («нет доступа», «пользователь», «администратор»), у
+    картотеки — шесть из постановки. Именно здесь чинится то, что заметил
+    заказчик: функции таких модулей уже отвечали правильно, а сам модуль
+    по-прежнему предлагал CRUD.
+
+    У ФУНКЦИИ и ПОЛЯ набор считается из применимых признаков: предлагается
+    ровно тот уровень, все признаки которого узлу применимы.
+    """
+    from apps.access import depth
+
+    if row["kind"] == MODULE:
+        return list(depth.FUNCTIONAL_PRESETS if row["module_kind"] == FUNCTIONAL
+                    else depth.DOCUMENT_PRESETS)
+
+    applicable = set(row["flags"])
+    return [name for name in depth.DOCUMENT_PRESETS
+            if depth.PRESETS[name] <= applicable]
 
 
 def paths() -> set[str]:
@@ -130,6 +211,14 @@ def paths() -> set[str]:
 
 def is_known(path: str) -> bool:
     return path in paths()
+
+
+def presets_for(path: str) -> list[str]:
+    """Уровни, допустимые для узла. Пустой список — узла нет в реестре."""
+    for row in nodes():
+        if row["path"] == path:
+            return row["presets"]
+    return []
 
 
 def applicable_flags(path: str) -> frozenset[str]:
