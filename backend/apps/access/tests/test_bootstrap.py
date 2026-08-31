@@ -92,3 +92,86 @@ def test_department_scope_requires_scope_id(user):
     with pytest.raises(CommandError):
         call_command("access_grant", "--user", user.username, "--role", "platform-admin",
                      "--company", "htq-kz", "--scope", ScopeKind.DEPARTMENT)
+
+
+# ── Шаблон рядового сотрудника ──────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_employee_role_is_seeded_and_undeletable():
+    role = Role.objects.filter(code="employee-basic").first()
+    assert role is not None, "миграция 0004 должна засеять шаблон сотрудника"
+    assert role.is_system is True
+
+
+@pytest.mark.django_db
+def test_employee_role_cannot_be_deleted():
+    from apps.access.services import catalog
+    from apps.access.services.errors import RoleIsSystem
+
+    role = Role.objects.get(code="employee-basic")
+    with pytest.raises(RoleIsSystem):
+        catalog.delete_role(role.id)
+
+
+@pytest.mark.django_db
+def test_employee_role_matches_the_requested_set():
+    """Состав продиктован заказчиком — проверяем его дословно."""
+    from apps.access.services import catalog
+
+    role = Role.objects.get(code="employee-basic")
+    rows = {row["node"]: row["flags"] for row in catalog.permissions_of(role.id)}
+
+    assert rows["users.profile"] == ["create", "edit", "view"]
+    assert rows["messenger.chats"] == ["view"]
+    assert rows["mail.messages"] == ["view"]
+    assert rows["cms.news"] == ["view"]
+    assert rows["tasks.tasks"] == ["create", "edit", "view"]
+    assert rows["tasks.daily_reports"] == ["create", "view"]
+    assert rows["tasks.calendar"] == ["create", "view"]
+    assert rows["approvals.requests"] == ["create", "view"]
+    assert rows["approvals.decisions"] == ["view"]
+    assert rows["approvals.stats"] == ["view"]
+
+
+@pytest.mark.django_db
+def test_employee_may_join_a_conference_but_not_create_one():
+    """«Только заходить, создавать запрещено» — двумя строками, а не одной."""
+    from apps.access.services import catalog
+
+    role = Role.objects.get(code="employee-basic")
+    rows = {row["node"]: row["flags"] for row in catalog.permissions_of(role.id)}
+
+    assert rows["conference.join"] == ["view"]
+    # Пустой набор — ЯВНЫЙ запрет: без него участие в конференциях
+    # унаследовалось бы на выдачу ссылок.
+    assert rows["conference.invites"] == []
+
+
+@pytest.mark.django_db
+def test_employee_role_opens_the_expected_modules(user):
+    """Проекция в уровни модулей: что рядовой реально увидит в интерфейсе."""
+    from apps.access.models import RoleAssignment, ScopeKind
+    from apps.access.services import resolve
+
+    role = Role.objects.get(code="employee-basic")
+    RoleAssignment.objects.create(company_slug="htq-kz", user_id=user.id, role=role,
+                                  scope_kind=ScopeKind.COMPANY, scope_id=None)
+
+    assert resolve.permission_level(user, "tasks", "htq-kz") == Level.WRITE
+    assert resolve.permission_level(user, "cms", "htq-kz") == Level.READ
+    assert resolve.permission_level(user, "messenger", "htq-kz") == Level.READ
+    # Кадры рядовому не открываются вовсе.
+    assert resolve.permission_level(user, "hr", "htq-kz") == Level.NONE
+
+
+@pytest.mark.django_db
+def test_employee_role_can_be_copied_into_a_variation():
+    """Шаблон неудаляем, но копируем — именно так и делают роль-вариацию."""
+    from apps.access.services import catalog
+
+    source = Role.objects.get(code="employee-basic")
+    clone = catalog.copy_role(source.id, "employee-plus", "Сотрудник +")
+
+    assert clone.is_system is False
+    assert catalog.permissions_of(clone.id) == catalog.permissions_of(source.id)

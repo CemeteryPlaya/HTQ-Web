@@ -28,7 +28,7 @@ from htqweb.tenancy.context import current_company_or_none
 from . import schemas
 from .models import Role
 from apps.access import registry
-from .services import assignment, catalog, resolve
+from .services import assignment, catalog, holders as holders_svc, resolve
 from .services import hierarchy
 from .services.errors import (
     DepthNotApplicable,
@@ -156,6 +156,19 @@ class RoleItemView(AccessView):
         except RoleIsSystem:
             return json_error("Служебную роль удалить нельзя", 409)
         return {"ok": True}
+
+
+class RoleHoldersView(AccessView):
+    """``GET roles/<id>/holders`` — у кого сейчас эта роль.
+
+    Нужна диалогу удаления. Отказ с одним лишь числом («назначена трём
+    должностям») не говорит, к кому идти: снять роль по такому ответу нельзя,
+    придётся искать вручную по всем компаниям.
+    """
+
+    @read
+    def get(self, request, role_id: int):
+        return holders_svc.holders(role_id)
 
 
 class RoleCopyView(AccessView):

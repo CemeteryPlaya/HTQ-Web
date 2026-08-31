@@ -93,6 +93,18 @@ export interface PositionRole {
   title: string;
 }
 
+/** Держатель роли — строка диалога удаления. */
+export interface RoleHolder {
+  user_id: number;
+  full_name: string;
+  company: string;
+  department: string | null;
+  position: string | null;
+  /** `position` — роль пришла с должностью, `personal` — выдана лично. */
+  source: 'position' | 'personal';
+  position_id: number | null;
+}
+
 /** §4.4. Личное назначение — исключительный путь. */
 export interface RoleAssignment {
   role_id: number;

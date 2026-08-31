@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import { accessApi } from '@/api/access';
+import { DeleteRoleDialog } from '@/components/access/DeleteRoleDialog';
 import { RolePermissionMatrix } from '@/components/access/RolePermissionMatrix';
 import { BackToProfile } from '@/components/BackToProfile';
 import { Footer } from '@/components/Footer';
@@ -47,6 +48,8 @@ const RoleCatalog = () => {
   const [draft, setDraft] = useState<RolePermission[] | null>(null);
   const [newCode, setNewCode] = useState('');
   const [newTitle, setNewTitle] = useState('');
+  // Удаление идёт через диалог: сначала показать, у кого роль есть.
+  const [deleting, setDeleting] = useState<Role | null>(null);
 
   // Реестр функций — справочник, общий для всех ролей: грузится один раз.
   const functionsQuery = useQuery({
@@ -121,6 +124,7 @@ const RoleCatalog = () => {
     mutationFn: (id: number) => accessApi.deleteRole(id),
     onSuccess: async (_data, id) => {
       if (selectedId === id) setSelectedId(null);
+      setDeleting(null);
       await invalidateRoles();
       toast.success(t('access.catalog.deleted', 'Роль удалена'));
     },
@@ -256,7 +260,7 @@ const RoleCatalog = () => {
                       className="text-destructive hover:text-destructive"
                       aria-label={t('access.catalog.deleteRole', 'Удалить роль')}
                       disabled={deleteMutation.isPending}
-                      onClick={() => deleteMutation.mutate(role.id)}
+                      onClick={() => setDeleting(role)}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -353,6 +357,13 @@ const RoleCatalog = () => {
           )}
         </section>
       </div>
+      <DeleteRoleDialog
+        role={deleting}
+        open={deleting !== null}
+        onOpenChange={(next) => { if (!next) setDeleting(null); }}
+        onConfirm={(role) => deleteMutation.mutate(role.id)}
+        isDeleting={deleteMutation.isPending}
+      />
       </main>
       <Footer />
     </div>

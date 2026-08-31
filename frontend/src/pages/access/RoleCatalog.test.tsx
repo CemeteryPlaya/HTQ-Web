@@ -22,6 +22,7 @@ const getRolePermissions = vi.fn();
 const putRolePermissions = vi.fn();
 const deleteRole = vi.fn();
 const copyRole = vi.fn();
+const getRoleHolders = vi.fn();
 const createRole = vi.fn();
 
 vi.mock('@/api/access', () => ({
@@ -33,6 +34,7 @@ vi.mock('@/api/access', () => ({
       putRolePermissions(id, permissions),
     deleteRole: (id: number) => deleteRole(id),
     copyRole: (id: number, body: unknown) => copyRole(id, body),
+    getRoleHolders: (id: number) => getRoleHolders(id),
     createRole: (body: unknown) => createRole(body),
   },
 }));
@@ -89,6 +91,7 @@ beforeEach(() => {
   getFunctions.mockResolvedValue({ data: REGISTRY });
   putRolePermissions.mockResolvedValue({ data: [] });
   deleteRole.mockResolvedValue({ data: undefined });
+  getRoleHolders.mockResolvedValue({ data: [] });
   copyRole.mockResolvedValue({ data: { id: 99, code: 'hr-admin-copy', title: 'Копия', is_system: false } });
 });
 
@@ -154,18 +157,23 @@ describe('RoleCatalog', () => {
     expect(screen.getAllByRole('button', { name: /Удалить роль/i })).toHaveLength(1);
   });
 
-  it('отказ на удаление занятой роли показывает, у скольких он отнимет права', async () => {
-    deleteRole.mockRejectedValue({
-      response: { status: 409, data: { detail: 'in_use', positions: 3, users: 2 } },
+  it('удаление идёт через диалог, а не немедленным запросом', async () => {
+    // Прежде кнопка сразу слала DELETE и показывала 409 с числами. Числа не
+    // говорят, к кому идти: снять роль по такому ответу нельзя. Теперь сначала
+    // показываются держатели, и только свободную роль дают удалить.
+    getRoleHolders.mockResolvedValue({
+      data: [{
+        user_id: 2, full_name: 'Петров Пётр', company: 'htq-kz',
+        department: 'Строительство', position: 'Прораб',
+        source: 'position', position_id: 7,
+      }],
     });
     renderWithProviders(<RoleCatalog />);
 
     await userEvent.click(await screen.findByRole('button', { name: /Удалить роль/i }));
 
-    await waitFor(() => expect(toastError).toHaveBeenCalled());
-    const message = toastError.mock.calls[0][0] as string;
-    expect(message).toContain('3');
-    expect(message).toContain('2');
+    expect(await screen.findByText('Петров Пётр')).toBeInTheDocument();
+    expect(deleteRole).not.toHaveBeenCalled();
   });
 
   it('права роли уходят одним PUT с полным набором', async () => {

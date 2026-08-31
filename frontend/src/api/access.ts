@@ -21,6 +21,7 @@ import type {
   Role,
   RoleAssignment,
   RoleInput,
+  RoleHolder,
   RolePermission,
   RolePermissionInput,
 } from '@/types/access';
@@ -44,6 +45,13 @@ export const accessApi = {
    * без единого права — от настоящей она неотличима, а даёт ноль.
    */
   copyRole: (id: number, body: RoleInput) => api.post<Role>(path(`roles/${id}/copy`), body),
+  /**
+   * Кто сейчас держит роль — для диалога удаления.
+   *
+   * Отказ с одним числом («назначена трём должностям») не говорит, к кому
+   * идти: снять роль по такому ответу нельзя.
+   */
+  getRoleHolders: (id: number) => api.get<RoleHolder[]>(path(`roles/${id}/holders`)),
 
   // ─── Реестр функций ───────────────────────────────────────────────────
   /** Дерево «модуль → функция → поле» плюс словари признаков и пресетов. */

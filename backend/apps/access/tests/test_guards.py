@@ -27,6 +27,13 @@ TENANT_MODELS = {"PositionRole", "RoleAssignment"}
 
 QUERY_METHODS = {"filter", "get", "exclude", "get_or_create", "update_or_create"}
 
+#: Маркер осознанной выборки ПОПЕРЁК компаний. Ставится комментарием над
+#: вызовом и обязателен: без него исключение выглядело бы как недосмотр, а с
+#: ним автор обязан written сформулировать, почему компания здесь не нужна.
+#: Молчаливого исключения по имени файла нет намеренно — иначе достаточно было
+#: бы положить код «не туда», и сторож перестал бы его видеть.
+CROSS_COMPANY = "cross-company:"
+
 
 def _chain(node: ast.Call) -> tuple[str | None, set[str]]:
     """Корень цепочки ``Model.objects…`` и все именованные аргументы в ней."""
@@ -41,10 +48,18 @@ def _chain(node: ast.Call) -> tuple[str | None, set[str]]:
     return None, keywords
 
 
+def _marked_cross_company(lines: list[str], lineno: int) -> bool:
+    """Есть ли над вызовом маркер осознанной выборки поперёк компаний."""
+    start = max(0, lineno - 4)
+    return any(CROSS_COMPANY in line for line in lines[start:lineno])
+
+
 def _queries_without_company() -> list[str]:
     offenders: list[str] = []
     for path in sorted(SERVICES.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        source = path.read_text(encoding="utf-8")
+        lines = source.splitlines()
+        tree = ast.parse(source, filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -52,13 +67,15 @@ def _queries_without_company() -> list[str]:
             # 1. Выборки: Model.objects.filter(...) и соседи по цепочке.
             if isinstance(node.func, ast.Attribute) and node.func.attr in QUERY_METHODS:
                 model, keywords = _chain(node)
-                if model in TENANT_MODELS and "company_slug" not in keywords:
+                if (model in TENANT_MODELS and "company_slug" not in keywords
+                        and not _marked_cross_company(lines, node.lineno)):
                     offenders.append(f"{path.name}:{node.lineno} выборка {model}")
 
             # 2. Конструкторы: company_slug — CharField без null, и забытый
             #    аргумент запишет ПУСТУЮ строку, а не упадёт.
             if isinstance(node.func, ast.Name) and node.func.id in TENANT_MODELS:
-                if "company_slug" not in {kw.arg for kw in node.keywords if kw.arg}:
+                if ("company_slug" not in {kw.arg for kw in node.keywords if kw.arg}
+                        and not _marked_cross_company(lines, node.lineno)):
                     offenders.append(
                         f"{path.name}:{node.lineno} создание {node.func.id}")
     return offenders

@@ -5,5 +5,7 @@ FUNCTIONS = (
     ("approvals.templates", "Шаблоны заявок"),
     ("approvals.projects", "Проекты заявок"),
     ("approvals.reference", "Справочники"),
-    ("approvals.stats", "Статистика"),
+    # Решение по адресованной заявке — действие: его либо принимают, либо нет.
+    ("approvals.decisions", "Решения по адресованным заявкам", ("view",)),
+    ("approvals.stats", "Моя статистика"),
 )
