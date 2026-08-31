@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AxiosError } from 'axios';
-import { Copy, Globe2, Loader2, Lock, Plus, Save, Trash2 } from 'lucide-react';
+import { Copy, Globe2, Loader2, Lock, Pencil, Plus, Save, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import { accessApi } from '@/api/access';
 import { DeleteRoleDialog } from '@/components/access/DeleteRoleDialog';
+import { RoleFormDialog, type RoleFormMode } from '@/components/access/RoleFormDialog';
 import { RolePermissionMatrix } from '@/components/access/RolePermissionMatrix';
 import { BackToProfile } from '@/components/BackToProfile';
 import { Footer } from '@/components/Footer';
@@ -50,6 +51,9 @@ const RoleCatalog = () => {
   const [newTitle, setNewTitle] = useState('');
   // Удаление идёт через диалог: сначала показать, у кого роль есть.
   const [deleting, setDeleting] = useState<Role | null>(null);
+  // Копирование и переименование — одна форма: поля те же, отличается только
+  // то, с какими значениями она открывается и куда уходит результат.
+  const [editing, setEditing] = useState<{ role: Role; mode: RoleFormMode } | null>(null);
 
   // Реестр функций — справочник, общий для всех ролей: грузится один раз.
   const functionsQuery = useQuery({
@@ -97,25 +101,32 @@ const RoleCatalog = () => {
     },
   });
 
-  const copyMutation = useMutation({
-    mutationFn: (role: Role) => accessApi.copyRole(role.id, {
-      // Код обязан быть уникален на всей платформе, поэтому предлагаем
-      // производный и сразу занятый проверяем на сервере: угадывать свободный
-      // в цикле — плодить роли-призраки при каждой неудаче.
-      code: `${role.code}-copy`,
-      title: t('access.catalog.copyTitle', '{{title}} (копия)', { title: role.title }),
-    }),
-    onSuccess: async () => {
+  const formMutation = useMutation({
+    mutationFn: ({ role, mode, values }: {
+      role: Role; mode: RoleFormMode; values: { code: string; title: string };
+    }) => (mode === 'copy'
+      ? accessApi.copyRole(role.id, values)
+      : accessApi.renameRole(role.id, role.is_system
+        // Код системной роли на сервере заблокирован — не шлём его вовсе,
+        // иначе получили бы 409 на попытке сохранить то же самое значение.
+        ? { title: values.title }
+        : values)),
+    onSuccess: async (_data, variables) => {
+      setEditing(null);
       await invalidateRoles();
-      toast.success(t('access.catalog.copied', 'Роль скопирована'));
+      toast.success(variables.mode === 'copy'
+        ? t('access.catalog.copied', 'Роль скопирована')
+        : t('access.catalog.renamed', 'Роль переименована'));
     },
     onError: (error: AxiosError) => {
+      const status = error.response?.status;
       toast.error(
-        error.response?.status === 422
-          ? t('access.catalog.copyCodeTaken',
-            'Код для копии уже занят — переименуйте существующую копию или '
-            + 'создайте роль вручную.')
-          : t('access.catalog.saveFailed', 'Не удалось сохранить'),
+        status === 422
+          ? t('access.catalog.codeTaken', 'Код роли уже занят — он уникален на всей платформе')
+          : status === 409
+            ? t('access.catalog.codeLocked',
+              'Код системной роли менять нельзя: по нему её находят миграции.')
+            : t('access.catalog.saveFailed', 'Не удалось сохранить'),
       );
     },
   });
@@ -246,9 +257,18 @@ const RoleCatalog = () => {
                     <Button
                       size="sm"
                       variant="ghost"
+                      aria-label={t('access.catalog.renameRole', 'Переименовать роль')}
+                      onClick={() => setEditing({ role, mode: 'rename' })}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {canEdit && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       aria-label={t('access.catalog.copyRole', 'Копировать роль')}
-                      disabled={copyMutation.isPending}
-                      onClick={() => copyMutation.mutate(role)}
+                      onClick={() => setEditing({ role, mode: 'copy' })}
                     >
                       <Copy className="h-4 w-4" />
                     </Button>
@@ -357,6 +377,15 @@ const RoleCatalog = () => {
           )}
         </section>
       </div>
+      <RoleFormDialog
+        role={editing?.role ?? null}
+        mode={editing?.mode ?? 'rename'}
+        open={editing !== null}
+        onOpenChange={(next) => { if (!next) setEditing(null); }}
+        isPending={formMutation.isPending}
+        onSubmit={(values) => editing && formMutation.mutate({ ...editing, values })}
+      />
+
       <DeleteRoleDialog
         role={deleting}
         open={deleting !== null}

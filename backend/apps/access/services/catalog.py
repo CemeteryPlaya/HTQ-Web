@@ -20,6 +20,7 @@ from apps.access.services.errors import (
     RoleConflict,
     RoleInUse,
     RoleIsSystem,
+    SystemRoleCodeLocked,
     UnknownModule,
 )
 
@@ -32,10 +33,39 @@ def create_role(code: str, title: str) -> Role:
         raise RoleConflict(code) from exc
 
 
-def rename_role(role_id: int, title: str) -> Role:
+def rename_role(role_id: int, *, title: str | None = None,
+                code: str | None = None) -> Role:
+    """Переименовать роль: название, код или оба.
+
+    Код правится тоже — без этого копия навсегда оставалась бы
+    ``<исходный>-copy``, а вторая копия того же исходника вообще не заводилась
+    бы: код уникален на всей платформе.
+
+    ⚠️ У СИСТЕМНОЙ роли код заблокирован. Засеянные роли миграции находят
+    именно по коду, и сменив его, следующий прогон завёл бы рядом вторую роль с
+    тем же смыслом, но без выданных назначений — молча и необратимо.
+    """
     role = Role.objects.get(id=role_id)
-    role.title = title
-    role.save(update_fields=["title", "updated_at"])
+    fields: list[str] = []
+
+    if title is not None and title != role.title:
+        role.title = title
+        fields.append("title")
+
+    if code is not None and code != role.code:
+        if role.is_system:
+            raise SystemRoleCodeLocked(role.code)
+        role.code = code
+        fields.append("code")
+
+    if not fields:
+        return role
+
+    try:
+        with transaction.atomic():
+            role.save(update_fields=[*fields, "updated_at"])
+    except IntegrityError as exc:
+        raise RoleConflict(code) from exc
     return role
 
 

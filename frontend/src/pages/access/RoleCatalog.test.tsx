@@ -7,7 +7,7 @@
  * отказ на удаление занятой роли. Плюс главное свойство редактора прав:
  * уходит один `PUT` с полным набором, а не серия точечных правок.
  */
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,6 +23,7 @@ const putRolePermissions = vi.fn();
 const deleteRole = vi.fn();
 const copyRole = vi.fn();
 const getRoleHolders = vi.fn();
+const renameRole = vi.fn();
 const createRole = vi.fn();
 
 vi.mock('@/api/access', () => ({
@@ -35,6 +36,7 @@ vi.mock('@/api/access', () => ({
     deleteRole: (id: number) => deleteRole(id),
     copyRole: (id: number, body: unknown) => copyRole(id, body),
     getRoleHolders: (id: number) => getRoleHolders(id),
+    renameRole: (id: number, body: unknown) => renameRole(id, body),
     createRole: (body: unknown) => createRole(body),
   },
 }));
@@ -92,6 +94,7 @@ beforeEach(() => {
   putRolePermissions.mockResolvedValue({ data: [] });
   deleteRole.mockResolvedValue({ data: undefined });
   getRoleHolders.mockResolvedValue({ data: [] });
+  renameRole.mockResolvedValue({ data: ROLES[0] });
   copyRole.mockResolvedValue({ data: { id: 99, code: 'hr-admin-copy', title: 'Копия', is_system: false } });
 });
 
@@ -108,19 +111,55 @@ describe('RoleCatalog', () => {
     expect(container.querySelector('footer')).toBeInTheDocument();
   });
 
-  it('копирует роль одним запросом с производным кодом', async () => {
-    // Роли отличаются двумя-тремя строками из полусотни, и собирать каждую
-    // заново — работа, при которой ошибаются молча: забытый узел выглядит не
-    // как ошибка, а как «наследует».
+  it('копирование идёт через форму, где код и название можно поправить', async () => {
+    // Прежде копия создавалась сразу и навсегда оставалась «(копия)» с кодом
+    // «-copy»: вторая копия того же исходника уже не заводилась — код уникален
+    // на всей платформе.
     renderWithProviders(<RoleCatalog />);
 
     const buttons = await screen.findAllByRole('button', { name: /Копировать роль/i });
     await userEvent.click(buttons[0]);
 
+    // Поиск ограничен диалогом: на самой странице есть своя форма создания
+    // роли с теми же подписями полей.
+    const dialog = within(await screen.findByRole('dialog'));
+    const code = dialog.getByLabelText('Код роли');
+    expect(code).toHaveValue('hr-admin-copy');
+    await userEvent.clear(code);
+    await userEvent.type(code, 'hr-viewer');
+    await userEvent.click(dialog.getByRole('button', { name: /Создать роль/i }));
+
     await waitFor(() => expect(copyRole).toHaveBeenCalledTimes(1));
-    expect(copyRole).toHaveBeenCalledWith(12, expect.objectContaining({
-      code: 'hr-admin-copy',
-    }));
+    expect(copyRole).toHaveBeenCalledWith(12, expect.objectContaining({ code: 'hr-viewer' }));
+  });
+
+  it('переименование шлёт и код, и название', async () => {
+    renderWithProviders(<RoleCatalog />);
+
+    const buttons = await screen.findAllByRole('button', { name: /Переименовать роль/i });
+    await userEvent.click(buttons[0]);
+
+    const dialog = within(await screen.findByRole('dialog'));
+    const title = dialog.getByLabelText('Название роли');
+    await userEvent.clear(title);
+    await userEvent.type(title, 'Кадры: лид');
+    await userEvent.click(dialog.getByRole('button', { name: /^Сохранить$/ }));
+
+    await waitFor(() => expect(renameRole).toHaveBeenCalledTimes(1));
+    expect(renameRole).toHaveBeenCalledWith(12, { code: 'hr-admin', title: 'Кадры: лид' });
+  });
+
+  it('у системной роли код не отправляется — на сервере он заблокирован', async () => {
+    renderWithProviders(<RoleCatalog />);
+
+    const buttons = await screen.findAllByRole('button', { name: /Переименовать роль/i });
+    await userEvent.click(buttons[1]);
+
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.click(dialog.getByRole('button', { name: /^Сохранить$/ }));
+
+    await waitFor(() => expect(renameRole).toHaveBeenCalledTimes(1));
+    expect(renameRole).toHaveBeenCalledWith(3, { title: 'Служебная' });
   });
 
   it('копировать можно и служебную роль — удалять её по-прежнему нельзя', async () => {

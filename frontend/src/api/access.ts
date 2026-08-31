@@ -33,8 +33,13 @@ export const accessApi = {
   /** Плоский список: у роли нет ни веса, ни родителя — иерархию несёт должность. */
   listRoles: () => api.get<Role[]>(path('roles')),
   createRole: (body: RoleInput) => api.post<Role>(path('roles'), body),
-  renameRole: (id: number, title: string) =>
-    api.patch<Role>(path(`roles/${id}`), { title }),
+  /**
+   * Правка кода и названия. Код тоже: без этого копия навсегда оставалась бы
+   * `<исходный>-copy`, а вторая копия того же исходника не завелась бы — код
+   * уникален на всей платформе. У системной роли код заблокирован (409).
+   */
+  renameRole: (id: number, body: Partial<RoleInput>) =>
+    api.patch<Role>(path(`roles/${id}`), body),
   /** 409 `in_use`, если роль назначена хоть одной должности или пользователю. */
   deleteRole: (id: number) => api.delete<void>(path(`roles/${id}`)),
   /**

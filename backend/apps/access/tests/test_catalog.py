@@ -36,7 +36,7 @@ def test_duplicate_code_is_a_conflict():
 @pytest.mark.django_db
 def test_rename_keeps_the_code():
     role = catalog.create_role("hr-admin", "Старое")
-    renamed = catalog.rename_role(role.id, "Новое")
+    renamed = catalog.rename_role(role.id, title="Новое")
     assert (renamed.code, renamed.title) == ("hr-admin", "Новое")
 
 
@@ -138,3 +138,63 @@ def test_permissions_of_a_role_are_readable():
     assert catalog.permissions_of(role.id) == [
         {"node": "hr", "flags": ["create", "delete", "edit", "view"], "preset": "full"},
     ]
+
+
+# ── Переименование ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_rename_changes_the_code_too():
+    """Без этого копия навсегда осталась бы «<исходный>-copy»."""
+    role = catalog.create_role("old-code", "Старое")
+
+    renamed = catalog.rename_role(role.id, title="Новое", code="new-code")
+
+    assert (renamed.code, renamed.title) == ("new-code", "Новое")
+
+
+@pytest.mark.django_db
+def test_rename_accepts_only_one_field():
+    role = catalog.create_role("keep-code", "Старое")
+
+    catalog.rename_role(role.id, title="Только название")
+    role.refresh_from_db()
+
+    assert (role.code, role.title) == ("keep-code", "Только название")
+
+
+@pytest.mark.django_db
+def test_rename_to_a_taken_code_is_a_conflict():
+    catalog.create_role("taken", "Занятая")
+    role = catalog.create_role("free", "Свободная")
+
+    with pytest.raises(RoleConflict):
+        catalog.rename_role(role.id, code="taken")
+
+
+@pytest.mark.django_db
+def test_system_role_keeps_its_code():
+    """Миграции находят засеянные роли по коду — сменив его, получим дубль."""
+    from apps.access.services.errors import SystemRoleCodeLocked
+
+    role = Role.objects.get(code="platform-admin")
+    with pytest.raises(SystemRoleCodeLocked):
+        catalog.rename_role(role.id, code="something-else")
+
+
+@pytest.mark.django_db
+def test_system_role_can_still_be_retitled():
+    role = Role.objects.get(code="platform-admin")
+
+    catalog.rename_role(role.id, title="Администратор платформы (главный)")
+    role.refresh_from_db()
+
+    assert role.title == "Администратор платформы (главный)"
+    assert role.code == "platform-admin"
+
+
+@pytest.mark.django_db
+def test_rename_without_changes_is_a_noop():
+    role = catalog.create_role("same", "Одинаковое")
+
+    assert catalog.rename_role(role.id, title="Одинаковое", code="same").id == role.id

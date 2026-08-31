@@ -39,7 +39,11 @@ class RoleIn(BaseModel):
 
 
 class RolePatchIn(BaseModel):
-    title: str = Field(min_length=1, max_length=255)
+    """Правка роли: название, код или оба. Пустое тело — не ошибка, а no-op."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    code: str | None = Field(default=None, min_length=1, max_length=64,
+                             pattern=r"^[-a-zA-Z0-9_]+$")
 
 
 # ── Глубина роли (§4.2) ───────────────────────────────────────────────────

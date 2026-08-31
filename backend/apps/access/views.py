@@ -36,6 +36,7 @@ from .services.errors import (
     RoleInUse,
     RoleIsSystem,
     ScopeInvalid,
+    SystemRoleCodeLocked,
     UnknownModule,
     UnknownRole,
 )
@@ -134,9 +135,14 @@ class RoleItemView(AccessView):
         if (denied := self.deny_unless_platform_admin()):
             return denied
         try:
-            role = catalog.rename_role(role_id, data.title)
+            role = catalog.rename_role(role_id, title=data.title, code=data.code)
         except Role.DoesNotExist:
             return json_error("Роль не найдена", 404)
+        except SystemRoleCodeLocked:
+            return json_error(
+                "Код системной роли менять нельзя: по нему её находят миграции", 409)
+        except INVALID as exc:
+            return json_error(str(exc) or "invalid", 422)
         return schemas.RoleRead.model_validate(role)
 
     @write("DELETE", admin=False)
