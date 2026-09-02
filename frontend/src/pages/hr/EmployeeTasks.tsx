@@ -136,7 +136,12 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                                 <div className="flex items-center gap-1.5">
                                     {TYPE_ICONS[task.task_type]}
                                     <span className="text-xs text-muted-foreground">
-                                        {t(`tasks.pages.list.type.${task.task_type}`)}
+                                        {/* task_types — таблица, пополняемая пользователем, поэтому
+                                            слаг может не иметь ключа в словаре. Порядок тот же, что в
+                                            HRTasks: имя из БД -> перевод -> сам слаг. Без запасного
+                                            варианта незнакомый тип показал бы сырой ключ. */}
+                                        {task.task_type_name
+                                            || t(`tasks.pages.list.type.${task.task_type}`, task.task_type)}
                                     </span>
                                 </div>
                             </TableCell>
