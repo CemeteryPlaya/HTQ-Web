@@ -123,6 +123,7 @@ const DepartmentFiles: React.FC = () => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderNameInputRef = useRef<HTMLInputElement>(null);
 
   const [selectedFolder, setSelectedFolder] = useState<DepartmentFolder | null>(null);
   const [selectedFileFolder, setSelectedFileFolder] = useState<DepartmentFileFolder | null>(null);
@@ -191,11 +192,16 @@ const DepartmentFiles: React.FC = () => {
       createDepartmentFileFolder(departmentId, name),
     onSuccess: (folder) => {
       queryClient.invalidateQueries({ queryKey: ['department-file-folders'] });
-      setSelectedFileFolder(folder);
+      // Не проваливаемся внутрь созданной папки и не закрываем диалог:
+      // папки в отделе ПЛОСКИЕ (у DepartmentFileFolder нет родителя), и
+      // «телепорт» внутрь первой же созданной выглядел как «больше папок
+      // тут не бывает» — следующую негде было создать. Остаёмся в корне
+      // отдела: новая папка появляется в сетке, а окно ждёт следующее имя.
+      setSelectedFileFolder(null);
       toast({ title: t('files.folderCreated'), description: t('files.folderCreatedHint', { name: folder.name }) });
-      setCreateFolderDialogOpen(false);
       setNewFolderName('');
       setSearchQuery('');
+      folderNameInputRef.current?.focus();
     },
     onError: (err: any) => {
       toast({
@@ -239,9 +245,10 @@ const DepartmentFiles: React.FC = () => {
 
   const handleCreateFolder = useCallback(() => {
     const name = newFolderName.trim();
-    if (!selectedFolder || !name) return;
+    if (!selectedFolder || !name || createFolderMutation.isPending) return;
+    if (fileFolders.some((folder) => folder.name.toLowerCase() === name.toLowerCase())) return;
     createFolderMutation.mutate({ departmentId: selectedFolder.id, name });
-  }, [selectedFolder, newFolderName, createFolderMutation]);
+  }, [selectedFolder, newFolderName, fileFolders, createFolderMutation]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -279,6 +286,10 @@ const DepartmentFiles: React.FC = () => {
     ? []
     : fileFolders.filter((folder) => folder.name.toLowerCase().includes(normalizedSearch));
   const contentLoading = filesLoading || (!selectedFileFolder && fileFoldersLoading);
+  const trimmedFolderName = newFolderName.trim();
+  const folderNameTaken = fileFolders.some(
+    (folder) => folder.name.toLowerCase() === trimmedFolderName.toLowerCase(),
+  );
 
   /* ---------- Auto-select first folder ---------- */
   React.useEffect(() => {
@@ -517,16 +528,17 @@ const DepartmentFiles: React.FC = () => {
                   </div>
                   {!searchQuery && (
                     <div className="mt-2 flex flex-wrap justify-center gap-2">
-                      {!selectedFileFolder && (
-                        <Button
-                          variant="outline"
-                          onClick={() => setCreateFolderDialogOpen(true)}
-                          className="gap-2"
-                        >
-                          <FolderPlus className="h-4 w-4" />
-                          {t('files.createFolder')}
-                        </Button>
-                      )}
+                      {/* Кнопка есть и внутри папки: она создаёт СОСЕДНЮЮ
+                          папку отдела (куда именно — написано в диалоге),
+                          а без неё пустая папка выглядела как тупик. */}
+                      <Button
+                        variant="outline"
+                        onClick={() => setCreateFolderDialogOpen(true)}
+                        className="gap-2"
+                      >
+                        <FolderPlus className="h-4 w-4" />
+                        {t('files.createFolder')}
+                      </Button>
                       <Button
                         variant="outline"
                         onClick={() => fileInputRef.current?.click()}
@@ -674,6 +686,7 @@ const DepartmentFiles: React.FC = () => {
           <div className="space-y-2 py-2">
             <label className="text-sm font-medium text-foreground">{t('files.folderName')}</label>
             <Input
+              ref={folderNameInputRef}
               autoFocus
               placeholder={t('files.folderNamePlaceholder')}
               value={newFolderName}
@@ -686,14 +699,45 @@ const DepartmentFiles: React.FC = () => {
               }}
               className="bg-background/60 border-border/50"
             />
+            {/* Куда именно ляжет папка: кнопку жмут и изнутри другой папки,
+                а вложенности у папок отдела нет — это должно быть видно. */}
+            {selectedFolder && (
+              <p className="text-xs text-muted-foreground">
+                {t('files.folderTargetHint', { name: selectedFolder.department_name })}
+              </p>
+            )}
+            {trimmedFolderName && folderNameTaken ? (
+              <p className="text-xs text-destructive">{t('files.folderExistsHint')}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground/70">{t('files.createMoreHint')}</p>
+            )}
+            {fileFolders.length > 0 && (
+              <div className="pt-1">
+                <p className="text-[11px] text-muted-foreground/70 mb-1.5">{t('files.existingFolders')}</p>
+                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                  {fileFolders.map((folder) => (
+                    <Badge
+                      key={folder.id}
+                      variant="secondary"
+                      className="text-[11px] font-normal max-w-[12rem] truncate"
+                      title={folder.name}
+                    >
+                      {folder.name}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
+            {/* «Готово», а не «Отмена»: созданные папки уже сохранены,
+                отменять на этом шаге нечего. */}
             <Button variant="ghost" onClick={() => setCreateFolderDialogOpen(false)}>
-              {t('common.cancel')}
+              {t('common.done')}
             </Button>
             <Button
               onClick={handleCreateFolder}
-              disabled={!newFolderName.trim() || createFolderMutation.isPending}
+              disabled={!trimmedFolderName || folderNameTaken || createFolderMutation.isPending}
               className="gap-2 bg-gradient-to-r from-primary to-primary/80"
             >
               {createFolderMutation.isPending ? (
