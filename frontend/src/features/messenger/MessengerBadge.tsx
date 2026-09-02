@@ -24,6 +24,7 @@ import { MessageCircle } from 'lucide-react';
 import { messengerApi } from './api/messengerApi';
 import { getMessengerSocket } from './api/socket';
 import { getAccessToken } from '@/lib/auth/profileStorage';
+import { requestDesktopPermission, showDesktopNotification } from '@/lib/notifications/desktop';
 import { useTranslation } from 'react-i18next';
 
 export const MessengerBadge = () => {
@@ -52,7 +53,6 @@ export const MessengerBadge = () => {
         const onNew = (payload: { room_id: number; message?: Record<string, unknown> }) => {
             refresh();
             if (onMessengerPage) return;
-            if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
 
             // The socket fans a message out to both the room channel and each
             // participant's personal channel, so the same id can arrive twice.
@@ -68,7 +68,12 @@ export const MessengerBadge = () => {
             } catch {
                 body = '';
             }
-            new Notification(sender?.full_name || sender?.username || t('messenger.newMessage'), {
+            // Общая обёртка, а не голый конструктор: она знает про платформы,
+            // где `new Notification()` бросает исключение. `tag` тот же, что у
+            // NotificationToasts: одно сообщение приходит и сокетом, и опросом
+            // уведомлений, и без общего ключа система показала бы два.
+            showDesktopNotification({
+                title: sender?.full_name || sender?.username || t('messenger.newMessage'),
                 body: body || t('messenger.attachment'),
                 tag: `messenger-room-${payload.room_id}`,
             });
@@ -87,11 +92,7 @@ export const MessengerBadge = () => {
     return (
         <Link
             to="/messenger"
-            onClick={() => {
-                if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-                    Notification.requestPermission().catch(() => { /* пользователь отказал */ });
-                }
-            }}
+            onClick={() => requestDesktopPermission()}
             className="relative inline-flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-accent hover:text-accent-foreground"
             title={total > 0 ? t('messenger.unreadCount', { total }) : t('profile.sidebar.messenger')}
         >
