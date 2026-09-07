@@ -3,7 +3,7 @@ import type { AxiosError } from "axios";
 import { ForcePasswordChange } from "./ForcePasswordChange";
 import { Loader2 } from "lucide-react";
 import { useActiveProfile } from "@/hooks/useActiveProfile";
-import { hasAnyRole, HR_ROLES, EDITOR_ROLES } from "@/lib/auth/roles";
+import { canAccessRouteRole } from "@/lib/auth/roles";
 import type { RouteRole } from "@/app/routing/types";
 import { useTranslation } from 'react-i18next';
 
@@ -12,13 +12,8 @@ import { useTranslation } from 'react-i18next';
 // so we mirror that here. Each bucket explicitly includes ``admin`` /
 // ``superuser`` / ``staff`` so the gate stays self-evident — no clever
 // fallbacks needed.
-const ALWAYS_ALLOWED = ['admin', 'superuser', 'staff'] as const;
-
-const ROLE_BUCKETS: Record<RouteRole, readonly string[]> = {
-    admin: ALWAYS_ALLOWED,
-    hr: [...ALWAYS_ALLOWED, ...HR_ROLES.filter((r) => !ALWAYS_ALLOWED.includes(r as any))],
-    editor: [...ALWAYS_ALLOWED, ...EDITOR_ROLES.filter((r) => !ALWAYS_ALLOWED.includes(r as any))],
-};
+// Таблица переехала в `lib/auth/roles.ts`: на неё смотрит не только роутер,
+// но и экраны, решающие, рисовать ли ссылку на закрытый маршрут.
 
 interface RequireAuthProps {
     children: JSX.Element;
@@ -81,9 +76,7 @@ const RequireAuth = ({ children, requiredRole }: RequireAuthProps) => {
     // privileged data. Re-render fires automatically when the fresh profile
     // fetch resolves and demotes a user.
     if (requiredRole) {
-        const allowed = ROLE_BUCKETS[requiredRole];
-        const profileRoles = activeProfile?.roles ?? [];
-        if (!hasAnyRole(profileRoles, allowed)) {
+        if (!canAccessRouteRole(activeProfile?.roles, requiredRole)) {
             // Send them somewhere safe instead of looping on /login. Profile
             // is the universal "you're logged in" landing.
             return <Navigate to="/myprofile" replace state={{ from: location, accessDenied: true }} />;
