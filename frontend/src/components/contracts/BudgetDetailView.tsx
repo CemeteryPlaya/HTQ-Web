@@ -46,13 +46,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import ProjectLinkBadge from '@/components/contracts/ProjectLinkBadge';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
 import type { AgreementStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
 
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 /** Доля занятого — только для полоски. Точность здесь не важна, сами суммы
  *  всегда показываются строками. */
@@ -308,7 +308,15 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
             </p>
             <div className="mt-3">
               <FieldGrid>
-                <Field label="Администратор">{budget.administrator_name}</Field>
+                <Field label="Администратор">
+                  <span className="inline-flex flex-wrap items-center gap-2">
+                    {budget.administrator_name}
+                    <ProjectLinkBadge
+                      projectId={budget.project_id}
+                      name={budget.administrator_name}
+                    />
+                  </span>
+                </Field>
                 <Field label="Год">
                   <span className="tabular-nums">{budget.period_year}</span>
                 </Field>

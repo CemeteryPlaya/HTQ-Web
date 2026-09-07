@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +20,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { contractsApi } from '@/api/contracts';
+import { reportApiError } from '@/lib/apiError';
+import { isPlatformAdmin } from '@/lib/auth/roles';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
 import type { Administrator, Budget, BudgetStatus } from '@/types/contracts';
 
 /**
@@ -62,7 +66,9 @@ const BudgetEdit = () => {
   });
 
   const backTo = `/contracts/budgets/${budgetId}`;
-  const loading = isLoading || !budget || administratorsLoading || agreementsLoading;
+  const { activeProfile, isLoading: profileLoading } = useActiveProfile();
+  const canEdit = isPlatformAdmin(activeProfile);
+  const loading = profileLoading || isLoading || !budget || administratorsLoading || agreementsLoading;
 
   return (
     <ContractsShell>
@@ -87,6 +93,20 @@ const BudgetEdit = () => {
           <div className="space-y-4">
             <Skeleton className="h-64 w-full" />
           </div>
+        ) : !canEdit ? (
+          // Ссылку на правку карточка не показывает, но маршрут открыт всем:
+          // по закладке или ссылке от коллеги сюда попадает и тот, кому
+          // сервер откажет (PATCH в apps/contracts — admin=True). Форму
+          // такому человеку показывать незачем — он заполнит её впустую.
+          <PrerequisiteNotice
+            title="Править эту карточку нельзя:"
+            items={[{
+              when: true,
+              text: 'Правка, удаление и смена статуса — за администратором,',
+              to: backTo,
+              linkText: 'вернуться к карточке',
+            }]}
+          />
         ) : (
           <BudgetEditForm
             budget={budget}
@@ -129,7 +149,9 @@ const BudgetEditForm = ({ budget, administrators, hasAgreements }: FormProps) =>
       administrators.map((row) => ({
         id: row.id,
         label: row.project_name,
-        hint: row.country_name,
+        // «в задачах» — та же подсказка, что в форме заведения: без неё
+        // одноимённые записи со связью и без неё неразличимы в списке.
+        hint: row.project_id ? `${row.country_name} · в задачах` : row.country_name,
       })),
     [administrators],
   );
@@ -176,25 +198,10 @@ const BudgetEditForm = ({ budget, administrators, hasAgreements }: FormProps) =>
       toast.success(`Бюджет ${row.period_year} сохранён`);
       navigate(`/contracts/budgets/${budgetId}`);
     },
-    onError: (error: unknown) => {
-      const err = error as {
-        response?: { status?: number; data?: { detail?: unknown } };
-      };
-      const httpStatus = err.response?.status;
-      const detail = err.response?.data?.detail;
-      // 409 — дубль «администратор × год × валюта», запертый согласованием
-      // бюджет либо смена валюты при живых договорах; 403 — правит не
-      // администратор.
-      if ((httpStatus === 409 || httpStatus === 403) && typeof detail === 'string') {
-        toast.error(detail);
-        return;
-      }
-      if (httpStatus === 422 && Array.isArray(detail)) {
-        toast.error(detail.map((item) => (item as { msg?: string }).msg).join('; '));
-        return;
-      }
-      toast.error('Не удалось сохранить бюджет');
-    },
+    // 409 — дубль «администратор × год × валюта», запертый согласованием
+    // бюджет либо смена валюты при живых договорах; 403 — правит не
+    // администратор. Тексты с бэкенда осмысленные, их и показываем.
+    onError: (err) => reportApiError(err, 'Не удалось сохранить бюджет'),
   });
 
   const handleSubmit = (event: React.FormEvent) => {

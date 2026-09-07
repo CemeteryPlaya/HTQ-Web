@@ -42,11 +42,15 @@ from django.http import Http404, HttpResponse
 from django.utils.decorators import method_decorator
 
 from apps.signoff import interface as signoff
+from htqweb import date_rules
 from htqweb.http import ApiView, api_view, json_error
 
 from . import schemas
 from .models import (
+    AgreementDirection,
+    AgreementKind,
     AgreementStatus,
+    AgreementType,
     BudgetStatus,
     CounterpartyStatus,
     InvoiceStatus,
@@ -304,7 +308,12 @@ class AdministratorCollectionView(ContractsView):
 
     @write("POST", body=schemas.AdministratorCreate, status=201)
     def post(self, request, data: schemas.AdministratorCreate):
-        row = ref_svc.create_administrator(**data.model_dump())
+        # try/except — как у Country и Program: раньше здесь его не было, и
+        # любой доменный конфликт из сервиса уходил бы 500-й вместо 409.
+        try:
+            row = ref_svc.create_administrator(**data.model_dump())
+        except CONFLICTS as exc:
+            return self.conflict(exc)
         return schemas.AdministratorRead.model_validate(row)
 
 
@@ -318,7 +327,12 @@ class AdministratorDetailView(ContractsView):
     def patch(self, request, administrator_id: int,
               data: schemas.AdministratorUpdate):
         try:
-            row = ref_svc.update_administrator(administrator_id, **data.model_dump())
+            # exclude_unset — чтобы «поле не прислали» отличалось от
+            # «прислали null». Для остальных полей поведение то же (``_apply``
+            # и так пропускает None), но связь с проектом снимают именно
+            # присланным null, и без этого КАЖДЫЙ PATCH молча её обрывал бы.
+            row = ref_svc.update_administrator(
+                administrator_id, **data.model_dump(exclude_unset=True))
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.AdministratorRead.model_validate(row)
@@ -662,6 +676,9 @@ class AgreementDetailView(ContractsView):
     def patch(self, request, agreement_id: int, data: schemas.AgreementUpdate):
         try:
             agreement = agr_svc.update_agreement(agreement_id, **data.model_dump())
+        except date_rules.DatesOutOfOrder as exc:
+            # 422, а не 500: до правила дат раньше добиралась только БД.
+            return json_error(str(exc), 422)
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.AgreementRead.model_validate(
@@ -749,15 +766,21 @@ class AgreementFileView(ContractsView):
 
 
 class AgreementFileUrlView(ContractsView):
-    """Подписанная ссылка на скан договора."""
+    """Подписанная ссылка на скан договора и его паспорт.
+
+    Кроме ``url`` отдаёт ``name``/``mime``/``size``: карточка показывает
+    документ ВНУТРИ страницы, а способ показа выбирается по mime (PDF во
+    фрейм, картинка в ``img``). Гадать по расширению в подписанном URL
+    нельзя — в нём лежит ключ хранилища, а не имя файла.
+    """
 
     @read
     def get(self, request, agreement_id: int):
         agreement = agr_svc.get_agreement_or_404(agreement_id)
-        url = agr_svc.file_url(agreement)
-        if url is None:
+        info = agr_svc.file_info(agreement)
+        if info is None:
             raise Http404("К договору не приложен файл")
-        return {"url": url}
+        return info
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1325,6 +1348,9 @@ class EnumsView(ContractsView):
             "counterparty_status": pairs(CounterpartyStatus.choices),
             "invoice_status": pairs(InvoiceStatus.choices),
             "payment_type": pairs(PaymentType.choices),
+            "direction": pairs(AgreementDirection.choices),
+            "kind": pairs(AgreementKind.choices),
+            "contract_type": pairs(AgreementType.choices),
             # Из каких статусов договор занимает бюджет — фронтенду нужно,
             # чтобы объяснить пользователю, почему остаток не изменился после
             # сохранения черновика. Счёт начинает занимать бюджет только после

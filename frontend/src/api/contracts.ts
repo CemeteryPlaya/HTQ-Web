@@ -192,6 +192,25 @@ export const contractsApi = {
     counterparty_id: number;
     amount: string;
     payment_type: string;
+    direction?: string;
+    kind?: string;
+    contract_type?: string;
+    sed_number?: string;
+    subject?: string;
+    manager_user_id?: number | null;
+    manager_name?: string;
+    has_vat?: boolean;
+    vat_rate?: string;
+    amount_without_vat?: string | null;
+    vat_amount?: string | null;
+    has_advance?: boolean;
+    advance_percentage?: string | null;
+    advance_amount_planned?: string | null;
+    retention_rate?: string;
+    retention_amount?: string | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    term_comment?: string;
     currency?: string;
     signed_date?: string | null;
     status?: AgreementStatus;
@@ -213,8 +232,11 @@ export const contractsApi = {
     form.append('file', file);
     return api.post<Agreement>(path(`agreements/${id}/file`), form);
   },
+  /** Подписанная ссылка + паспорт файла: способ показа выбирается по mime. */
   getAgreementFileUrl: (id: number) =>
-    api.get<{ url: string }>(path(`agreements/${id}/file-url`)),
+    api.get<{ url: string; name: string; mime: string; size: number }>(
+      path(`agreements/${id}/file-url`),
+    ),
 
   // ─── Счета на оплату (без договора) ────────────────────────────────────
   //

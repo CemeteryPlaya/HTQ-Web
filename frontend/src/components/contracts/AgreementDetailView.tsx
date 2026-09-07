@@ -1,41 +1,24 @@
 /**
  * Тело карточки договора.
  *
- * Отделено от страницы (`pages/contracts/AgreementDetail`) ради карточки
- * согласования: `pages/signoff/ProcessDetail` показывает то же тело, чтобы
- * согласующий читал документ, не выходя из своего раздела. Рамку выбирает
- * тот, кто рисует.
- *
- * Здесь же живут две операции, у которых больше нигде в интерфейсе места
- * нет, потому что обе относятся к УЖЕ существующему договору:
- *
- * - **смена статуса.** Переходы разрешает бэкенд по
- *   `agreement_service.ALLOWED_TRANSITIONS`, и таблица приходит с `/enums` —
- *   своей копии здесь нет и быть не должно, иначе она разъедется с сервером
- *   при первой же правке. Операция админская (`api_view(admin=True)`), и
- *   это не дубль согласования: штатно статус двигает маршрут
- *   (`draft → on_review → approved`), а руками — исправляют то, чего
- *   маршрут не покрывает («подписан», «исполнен», «расторгнут»).
- * - **скан договора.** Загрузить может автор, пока договор черновик, либо
- *   администратор всегда — те же условия, что проверяет бэкенд
- *   (`views.AgreementFileView`). Повторная загрузка ЗАМЕЩАЕТ файл, поэтому
- *   автору она и закрыта после отправки: согласующие не должны оказаться
- *   одобрившими не тот документ, который в итоге лежит в карточке.
- *
- * Обе остаются видимы и во встроенном виде: скан согласующему как раз и
- * нужен, а смена статуса и так закрыта админской проверкой на бэкенде.
+ * Поддерживает все корпоративные поля СЭД: направление, вид, тип договора,
+ * № СЭД, предмет договора, куратора/менеджера, разбивку по НДС, авансы,
+ * гарантийные удержания, сроки и привязку к статье бюджета.
  */
 
 import { useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Download,
+  Calendar,
   FileText,
   Loader2,
   Paperclip,
   Pencil,
+  ShieldCheck,
+  Tag,
   Upload,
+  User,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -54,13 +37,13 @@ import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import AgreementDocumentViewer from '@/components/contracts/AgreementDocumentViewer';
+import ProjectLinkBadge from '@/components/contracts/ProjectLinkBadge';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
 import type { AgreementStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
-
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const STATUS_VARIANTS: Record<
   AgreementStatus,
@@ -72,6 +55,25 @@ const STATUS_VARIANTS: Record<
   signed: 'default',
   executed: 'default',
   terminated: 'destructive',
+};
+
+const DIRECTION_LABELS: Record<string, string> = {
+  expense: 'Расход',
+  income: 'Поступление',
+};
+
+const KIND_LABELS: Record<string, string> = {
+  works_services: 'РиУ',
+  goods: 'Товары',
+  services: 'Услуги',
+  lease: 'Аренда',
+  other: 'Прочее',
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  standard: 'Стандартный',
+  non_standard: 'Нетиповой',
+  framework: 'Рамочный',
 };
 
 interface Props {
@@ -105,11 +107,6 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
     queryFn: () => contractsApi.getEnums().then((r) => r.data),
   });
 
-  // Строка бюджета — ради остатка: он показывает, сколько ещё можно
-  // потратить с того же источника, и считается бэкендом. Спрашивается
-  // именно СТРОКА, а не бюджет целиком: лимит договора — это лимит его
-  // программы, и свободные деньги соседней программы к нему отношения не
-  // имеют (`budget_calc.check_capacity`).
   const { data: line } = useQuery({
     queryKey: ['contracts', 'budget-line', agreement?.budget_line_id],
     queryFn: () =>
@@ -122,8 +119,13 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
   const paymentLabel = (value: string) =>
     enums?.payment_type.find((option) => option.value === value)?.label ?? value;
 
-  /** Всё, что должно перечитаться после действия над договором. Остаток
-   *  бюджета — тоже: статус договора решает, занимает ли он деньги. */
+  const directionLabel = (val?: string) =>
+    enums?.direction?.find((o) => o.value === val)?.label ?? DIRECTION_LABELS[val ?? ''] ?? val ?? 'Расход';
+  const kindLabel = (val?: string) =>
+    enums?.kind?.find((o) => o.value === val)?.label ?? KIND_LABELS[val ?? ''] ?? val ?? 'РиУ';
+  const contractTypeLabel = (val?: string) =>
+    enums?.contract_type?.find((o) => o.value === val)?.label ?? TYPE_LABELS[val ?? ''] ?? val ?? 'Стандартный';
+
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ['contracts'] });
     queryClient.invalidateQueries({ queryKey: ['signoff'] });
@@ -136,31 +138,18 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
       toast.success('Файл договора загружен');
       invalidateAll();
     },
-    // 403 — «заменить скан может только администратор» после отправки.
     onError: (err) => reportApiError(err, 'Не удалось загрузить файл'),
   });
 
-  /** Ссылка подписанная и живёт недолго, поэтому запрашивается по клику, а
-   *  не заранее вместе с карточкой. */
-  const download = useMutation({
-    mutationFn: () =>
-      contractsApi.getAgreementFileUrl(agreementId).then((r) => r.data.url),
-    onSuccess: (url) => window.open(url, '_blank', 'noopener,noreferrer'),
-    onError: (err) => reportApiError(err, 'Не удалось получить ссылку на файл'),
-  });
-
   const canUpload =
-    agreement !== undefined
-    && (isAdmin || (agreement.created_by === myId && agreement.status === 'draft'));
-  // Правка чисто админская (`AgreementDetailView.patch` — admin=True). Плюс две
-  // блокировки, которые всё равно наложит бэкенд: пока договор заперт по оси
-  // согласования (`assert_editable`) и когда он терминальный по своей машине
-  // статусов (`executed`/`terminated`). Гасим кнопку заранее, а не ловим 409.
+    agreement !== undefined &&
+    (isAdmin || (agreement.created_by === myId && agreement.status === 'draft'));
+
   const canEdit =
-    agreement !== undefined
-    && isAdmin
-    && isEditableState(agreement.approval_state)
-    && !['executed', 'terminated'].includes(agreement.status);
+    agreement !== undefined &&
+    isAdmin &&
+    isEditableState(agreement.approval_state) &&
+    !['executed', 'terminated'].includes(agreement.status);
 
   if (isLoading) return <DetailSkeleton />;
   if (isError || !agreement) {
@@ -169,18 +158,84 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
 
   const Heading = embedded ? 'h2' : 'h1';
 
+  // Колонка рядом с документом в режиме чтения. Здесь ровно то, что сверяют
+  // с текстом договора: кто, за что, сколько и до какого числа. Остальное
+  // (история согласования, оплаты) в тексте не написано, и сверять его не с
+  // чем — в колонку оно не идёт.
+  const documentSummary = [
+    { label: 'Номер договора', value: agreement.number },
+    { label: '№ СЭД', value: agreement.sed_number },
+    { label: 'Контрагент', value: agreement.counterparty_name },
+    { label: 'БИН/ИИН', value: agreement.counterparty_bin_iin },
+    { label: 'Предмет', value: agreement.subject || agreement.name },
+    { label: 'Направление', value: directionLabel(agreement.direction) },
+    { label: 'Вид / тип', value: `${kindLabel(agreement.kind)} · ${contractTypeLabel(agreement.contract_type)}` },
+    {
+      label: 'Сумма без НДС',
+      value: formatMoney(
+        agreement.amount_without_vat ?? agreement.amount,
+        agreement.currency,
+      ),
+    },
+    {
+      label: agreement.has_vat ? `НДС (${agreement.vat_rate}%)` : 'НДС',
+      value: agreement.has_vat && agreement.vat_amount
+        ? formatMoney(agreement.vat_amount, agreement.currency)
+        : 'без НДС',
+    },
+    { label: 'Всего по договору', value: formatMoney(agreement.amount, agreement.currency) },
+    {
+      label: 'Аванс',
+      value: agreement.has_advance
+        ? `${agreement.advance_percentage || 0}%`
+        : 'не предусмотрен',
+    },
+    {
+      label: 'Гарантийное удержание',
+      value: agreement.retention_rate && parseFloat(agreement.retention_rate) > 0
+        ? `${agreement.retention_rate}%`
+        : 'нет',
+    },
+    { label: 'Дата подписания', value: formatDate(agreement.signed_date) },
+    {
+      label: 'Срок исполнения',
+      // Срок часто задан словом («уточнить»), а не датой — показываем то,
+      // что заполнено, иначе в колонке будет пустая строка вместо ответа.
+      value: agreement.end_date
+        ? `${formatDate(agreement.start_date)} — ${formatDate(agreement.end_date)}`
+        : agreement.term_comment || formatDate(agreement.start_date),
+    },
+    { label: 'Менеджер / куратор', value: agreement.manager_name },
+    { label: 'Статья бюджета', value: `${agreement.program_name} · ${agreement.expense_item}` },
+  ];
+
   return (
     <div className="space-y-6">
+      {/* ─── Шапка ────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
             <FileText className="h-7 w-7 shrink-0 text-muted-foreground" />
             <Heading className="text-3xl font-bold">{agreement.number}</Heading>
             <Badge variant={STATUS_VARIANTS[agreement.status]}>
               {statusLabel(agreement.status)}
             </Badge>
+            <Badge variant={agreement.direction === 'income' ? 'default' : 'outline'} className="capitalize">
+              {directionLabel(agreement.direction)}
+            </Badge>
+            <Badge variant="secondary">
+              {kindLabel(agreement.kind)}
+            </Badge>
+            <Badge variant="outline">
+              {contractTypeLabel(agreement.contract_type)}
+            </Badge>
+            {agreement.sed_number && (
+              <Badge variant="outline" className="font-mono bg-background text-xs">
+                № СЭД: {agreement.sed_number}
+              </Badge>
+            )}
           </div>
-          <p className="mt-1 text-sm text-muted-foreground break-words">
+          <p className="text-sm text-muted-foreground break-words">
             {agreement.name}
           </p>
         </div>
@@ -200,8 +255,6 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               subjectId={agreement.id}
               state={agreement.approval_state}
               submit={contractsApi.submitAgreement}
-              // Отправка переводит договор в on_review, а он уже занимает
-              // бюджет — остаток строки меняется тем же действием.
               invalidate={[
                 ['contracts', 'agreements'],
                 ['contracts', 'agreement', agreementId],
@@ -210,32 +263,56 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                 ['contracts', 'budget-line', agreement.budget_line_id],
               ]}
               size="default"
-              // Карточка объекта — единственное место, где ссылка на
-              // согласование нужна и у решённого объекта: там кнопка
-              // «Вернуть на доработку», без которой он заперт навсегда.
               showProcessLink
             />
           </div>
         )}
       </div>
 
+      {/* ─── Финансовая сводка и НДС ───────────────────────────────────── */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Договор</CardTitle>
+          <CardTitle className="text-base flex items-center justify-between">
+            <span>Финансовые условия</span>
+            <span className="text-xs font-normal text-muted-foreground">
+              {agreement.has_vat ? `НДС: ${agreement.vat_rate}%` : 'Без НДС'}
+            </span>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Финансовая сводка намеренно не живёт в общей сетке реквизитов:
-              сумму договора, оплаты и остаток читают вместе, а не как
-              независимые поля. */}
           <section className="rounded-lg border bg-muted/30 p-4">
-            <div className="grid gap-5 sm:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] sm:items-start">
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] lg:items-start">
               <div>
-                <p className="text-sm text-muted-foreground">Сумма договора</p>
-                <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Договор всего (с НДС)
+                </p>
+                <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums text-foreground">
                   {formatMoney(agreement.amount, agreement.currency)}
                 </p>
+
+                <div className="mt-3 grid grid-cols-2 gap-3 pt-3 border-t text-sm">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Договор без НДС</p>
+                    <p className="mt-0.5 font-semibold tabular-nums">
+                      {agreement.amount_without_vat
+                        ? formatMoney(agreement.amount_without_vat, agreement.currency)
+                        : formatMoney(agreement.amount, agreement.currency)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Договор НДС {agreement.has_vat ? `(${agreement.vat_rate}%)` : ''}
+                    </p>
+                    <p className="mt-0.5 font-semibold tabular-nums">
+                      {agreement.has_vat && agreement.vat_amount
+                        ? formatMoney(agreement.vat_amount, agreement.currency)
+                        : '0,00 ' + agreement.currency}
+                    </p>
+                  </div>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-4 border-t pt-4 sm:border-l sm:border-t-0 sm:pl-8 sm:pt-0">
+
+              <div className="grid grid-cols-2 gap-4 border-t pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
                 <div>
                   <p className="text-xs text-muted-foreground">Предоплачено</p>
                   <p className="mt-1 text-base tabular-nums">
@@ -248,8 +325,8 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                     {formatMoney(agreement.contract_paid_amount, agreement.currency)}
                   </p>
                 </div>
-                <div className="col-span-2 flex items-end justify-between gap-4 border-t pt-4">
-                  <p className="text-xs text-muted-foreground">Остаток</p>
+                <div className="col-span-2 flex items-end justify-between gap-4 border-t pt-3">
+                  <p className="text-xs text-muted-foreground">Остаток к оплате</p>
                   <p className={`text-base font-semibold tabular-nums ${remainingTone(
                     agreement.remaining_amount,
                     agreement.amount,
@@ -259,18 +336,77 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                 </div>
               </div>
             </div>
+
+            {/* Дополнительные параметры: аванс и гарантийное удержание */}
+            <div className="mt-4 pt-3 border-t grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Аванс:</span>
+                <span className="font-medium">
+                  {agreement.has_advance
+                    ? `${agreement.advance_percentage || 0}% (план: ${formatMoney(
+                        agreement.advance_amount_planned || '0',
+                        agreement.currency,
+                      )})`
+                    : 'Не предусмотрен'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">Гарантийное удержание:</span>
+                <span className="font-medium">
+                  {agreement.retention_rate && parseFloat(agreement.retention_rate) > 0
+                    ? `${agreement.retention_rate}% (план: ${formatMoney(
+                        agreement.retention_amount || '0',
+                        agreement.currency,
+                      )})`
+                    : 'Нет'}
+                </span>
+              </div>
+            </div>
+
             <AgreementPaymentBreakdown agreementId={agreement.id} />
           </section>
-          <div className="grid gap-6 border-t pt-5 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
+
+          {/* ─── Предмет договора ──────────────────────────────────────── */}
+          {agreement.subject && (
+            <div className="rounded-lg border bg-background p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">
+                Предмет договора
+              </p>
+              <p className="text-sm whitespace-pre-wrap leading-relaxed text-foreground">
+                {agreement.subject}
+              </p>
+            </div>
+          )}
+
+          {/* ─── Условия и сведения ─────────────────────────────────────── */}
+          <div className="grid gap-6 border-t pt-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(16rem,0.8fr)]">
             <section>
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Условия договора
+                Условия и график исполнения
               </p>
               <dl className="mt-3 grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                <Field label="Менеджер / Куратор">
+                  <span className="inline-flex items-center gap-1.5 font-medium">
+                    <User className="h-3.5 w-3.5 text-muted-foreground" />
+                    {agreement.manager_name || 'Не назначен'}
+                  </span>
+                </Field>
                 <Field label="Тип оплаты">{paymentLabel(agreement.payment_type)}</Field>
                 <Field label="Дата подписания">
                   {formatDate(agreement.signed_date)}
                 </Field>
+                <Field label="Сроки действия">
+                  <span className="inline-flex items-center gap-1">
+                    <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                    {formatDate(agreement.start_date)} — {formatDate(agreement.end_date)}
+                  </span>
+                </Field>
+                {agreement.term_comment && (
+                  <Field label="Срок исполнения (комментарий)" className="sm:col-span-2">
+                    <span className="italic">{agreement.term_comment}</span>
+                  </Field>
+                )}
               </dl>
             </section>
             <section className="border-t pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
@@ -293,28 +429,43 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
         </CardContent>
       </Card>
 
+      {/* ─── Источник денег и Контрагент ───────────────────────────── */}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.6fr)]">
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Источник денег</CardTitle>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Tag className="h-4 w-4 text-muted-foreground" />
+              Источник финансирования и статья бюджета
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-              {/* Ссылка ведёт на БЮДЖЕТ, а не на строку: своей страницы
-                  у строки нет, да и смотреть её в отрыве от соседних
-                  программ незачем. */}
+              <Field label="Проект / Администратор">
+                <span className="font-medium">{agreement.administrator_name}</span>
+                {/* Связь с доской задач: договор ведётся по тому же проекту,
+                    что и работы. */}
+                <ProjectLinkBadge
+                  projectId={agreement.project_id}
+                  name={agreement.administrator_name}
+                  className="ml-2 align-middle"
+                />
+              </Field>
               <Field label="Бюджет">
                 <Link
                   to={`/contracts/budgets/${agreement.budget_id}`}
-                  className="hover:underline underline-offset-2"
+                  className="hover:underline underline-offset-2 text-primary"
                 >
                   Бюджет {agreement.period_year}
                 </Link>
               </Field>
-              <Field label="Администратор">{agreement.administrator_name}</Field>
-              <Field label="Программа">{agreement.program_name}</Field>
-              <Field label="Статья расходов">{agreement.expense_item}</Field>
+              <Field label="Код статьи / Программа">
+                <span className="font-mono text-xs">{agreement.program_name}</span>
+              </Field>
+              <Field label="Статья бюджета / расходов">
+                <span className="font-medium">{agreement.expense_item}</span>
+              </Field>
             </dl>
+
             {line && (
               <div className="rounded-md border bg-muted/40 p-4 text-sm">
                 <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -355,19 +506,20 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               <Field label="Наименование" className="sm:col-span-2">
                 <Link
                   to={`/contracts/counterparties/${agreement.counterparty_id}`}
-                  className="hover:underline underline-offset-2"
+                  className="hover:underline underline-offset-2 font-medium"
                 >
                   {agreement.counterparty_name}
                 </Link>
               </Field>
               <Field label="БИН / ИИН">
-                <span className="tabular-nums">{agreement.counterparty_bin_iin}</span>
+                <span className="tabular-nums font-mono text-xs">{agreement.counterparty_bin_iin}</span>
               </Field>
             </dl>
           </CardContent>
         </Card>
       </div>
 
+      {/* ─── Скан договора ─────────────────────────────────────────── */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -384,44 +536,29 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (file) upload.mutate(file);
-                // Сброс — иначе повторный выбор ТОГО ЖЕ файла не даст
-                // события change и загрузка молча не произойдёт.
                 event.target.value = '';
               }}
             />
           )}
-          <div>
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
-                <p className="font-medium">
-                  {agreement.file_id ? 'Файл приложен' : 'Файл не приложен'}
-                </p>
-                <p className="mt-0.5 text-sm text-muted-foreground">
-                  {agreement.file_id
-                    ? 'Откройте скан или загрузите обновлённую версию.'
-                    : canUpload
+          <div className="space-y-4">
+            {agreement.file_id ? (
+              <AgreementDocumentViewer
+                agreementId={agreement.id}
+                hasFile
+                summary={documentSummary}
+              />
+            ) : (
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="font-medium">Файл не приложен</p>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    {canUpload
                       ? 'Загрузите скан договора, когда он будет готов.'
                       : 'Скан ещё не был добавлен к договору.'}
-                </p>
-              </div>
-
-              <div className="flex shrink-0 flex-wrap gap-2">
-                {agreement.file_id && (
-                  <Button
-                    disabled={download.isPending}
-                    onClick={() => download.mutate()}
-                  >
-                    {download.isPending ? (
-                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Download className="mr-1.5 h-4 w-4" />
-                    )}
-                    Открыть
-                  </Button>
-                )}
+                  </p>
+                </div>
                 {canUpload && (
                   <Button
-                    variant={agreement.file_id ? 'outline' : 'default'}
                     disabled={upload.isPending}
                     onClick={() => fileInput.current?.click()}
                   >
@@ -430,15 +567,31 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                     ) : (
                       <Upload className="mr-1.5 h-4 w-4" />
                     )}
-                    {agreement.file_id ? 'Заменить' : 'Загрузить'}
+                    Загрузить
                   </Button>
                 )}
               </div>
-            </div>
+            )}
+
             {agreement.file_id && canUpload && (
-              <p className="mt-4 border-t pt-3 text-xs text-muted-foreground">
-                Новый файл заменит текущий скан в карточке договора.
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+                <p className="text-xs text-muted-foreground">
+                  Новый файл заменит текущий скан в карточке договора.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={upload.isPending}
+                  onClick={() => fileInput.current?.click()}
+                >
+                  {upload.isPending ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="mr-1.5 h-4 w-4" />
+                  )}
+                  Заменить
+                </Button>
+              </div>
             )}
           </div>
         </CardContent>

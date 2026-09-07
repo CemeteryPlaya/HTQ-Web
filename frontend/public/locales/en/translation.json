@@ -109,7 +109,8 @@
     "myPmoProjects": "My PMO projects",
     "pmoAllocation": "Allocation: {{percent}}%",
     "pmoLead": "Lead",
-    "employeeCardMissing": "The employee card was not found."
+    "employeeCardMissing": "The employee card was not found.",
+    "updateError": "Could not save the profile"
   },
   "header": {
     "about": "About Us",
@@ -774,7 +775,8 @@
           "hireDateRequired": "Specify the hire date",
           "fillRequired": "Fill in the required fields",
           "lastNameRequired": "Enter the last name",
-          "emailRequired": "Enter the email"
+          "emailRequired": "Enter the email",
+          "dismissedBeforeHired": "The termination date is earlier than the hire date"
         },
         "prefill": {
           "open": "Pull data",
@@ -858,7 +860,8 @@
         "noDepartmentFound": "Department not found",
         "createDepartment": "Create new department",
         "createDepartmentTitle": "New department",
-        "usernameHint": "Username will be derived from the email:"
+        "usernameHint": "Username will be derived from the email:",
+        "readOnlyNotice": "This card is read-only — editing requires HR permissions"
       },
       "structure": {
         "title": "Company Structure",
@@ -953,7 +956,9 @@
           "worked": "Worked",
           "projectTask": "Project / task",
           "actions": "Actions"
-        }
+        },
+        "noEmployees": "There are no employees in the directory — timesheets are kept per employee card,",
+        "addEmployee": "add an employee"
       },
       "vacancies": {
         "title": "Vacancies",
@@ -993,7 +998,9 @@
         },
         "actions": {
           "add": "Add Vacancy"
-        }
+        },
+        "noDepartments": "The department directory is empty — a vacancy can be created without one, but it is better to first",
+        "addDepartment": "create a department"
       },
       "applications": {
         "title": "Applications",
@@ -1038,7 +1045,9 @@
         "step": {
           "prev": "Previous Step",
           "next": "Next Step"
-        }
+        },
+        "noVacancies": "There are no open vacancies — an application is attached to one,",
+        "addVacancy": "open a vacancy"
       },
       "offers": {
         "title": "Offers",
@@ -1145,7 +1154,9 @@
           "date": "Date",
           "actions": "Actions"
         },
-        "fileHint": "PDF only, up to 25 MB"
+        "fileHint": "PDF only, up to 25 MB",
+        "noEmployees": "There are no employees in the directory — a document is filed against an employee card,",
+        "addEmployee": "add an employee"
       },
       "logs": {
         "title": "Action Logs",
@@ -1696,7 +1707,8 @@
       "reportsTransferred": "Reports transferred: {{count}}",
       "linkRemoved": "The link was removed",
       "deptHeadUpdated": "The department head was updated",
-      "confirmReplaceManager": "This node already has a manager. Replace them?"
+      "confirmReplaceManager": "This node already has a manager. Replace them?",
+      "directoryEmpty": "The directory is empty — fill it in the HR section"
     },
     "card": {
       "noPosition": "No position",
@@ -1935,7 +1947,10 @@
       "workingDays": "Count in working days",
       "workingDaysHint": "Durations default to calendar days — construction runs 7/7. Turn this on for office projects so weekends and holidays are excluded.",
       "configureSites": "Project sites",
-      "noSitesYet": "No sites yet. Check them below — the work on each will show up here."
+      "noSitesYet": "No sites yet. Check them below — the work on each will show up here.",
+      "registryEmpty": "There are no projects yet —",
+      "addFirst": "create a project",
+      "readOnlyNotice": "Read-only list — only the project owner or an administrator can pick sites"
     },
     "types": {
       "create": "Create type",
@@ -2065,7 +2080,11 @@
           "success": "Task created",
           "error": "Error creating task",
           "summaryRequired": "Summary is required",
-          "selectPlaceholder": "Select..."
+          "selectPlaceholder": "Select...",
+          "noDepartments": "The department directory is empty — assignees and the supervisor depend on it,",
+          "addDepartment": "create a department",
+          "noEmployeesHint": "No employees with a platform account in the selected departments —",
+          "checkEmployees": "check the employee cards"
         },
         "supervisor": "Supervisor",
         "noSupervisor": "No supervisor",
@@ -2308,7 +2327,11 @@
           "active": "Active",
           "suspended": "Suspended",
           "closed": "Closed"
-        }
+        },
+        "registryEmpty": "The site directory is empty —",
+        "addFirst": "add a site",
+        "noneForProjectHint": "The project has no sites —",
+        "attachToProject": "attach sites to the project"
       },
       "contractors": {
         "title": "Partners",
@@ -2410,7 +2433,9 @@
         "firstName": "First name *",
         "qualification": "Qualification",
         "speciality": "Speciality / Position",
-        "specialityPlaceholder": "Grade 5 welder"
+        "specialityPlaceholder": "Grade 5 welder",
+        "registryEmpty": "The partner registry is empty —",
+        "addFirst": "add a partner"
       },
       "roadmaps": {
         "title": "Roadmaps",
@@ -2677,7 +2702,9 @@
     "workEmpty": "The HR record has not been created yet. Contact HR.",
     "workPhone": "Work phone",
     "workTitle": "HR record",
-    "phoneIncomplete": "Enter the full number: +7 (700) 483-55-81"
+    "phoneIncomplete": "Enter the full number: +7 (700) 483-55-81",
+    "mailDisconnectError": "Could not disconnect the mailbox",
+    "signatureSaveError": "Could not save the signature"
   },
   "auth": {
     "register": "Register",
@@ -2972,7 +2999,18 @@
           "reconcile": "The mailbox exists but has no owner set. Reconciliation does that — see the Reconcile tab.",
           "password": "The mailbox is linked, but the platform could not get access on its own. The employee enters the password in their own mail settings."
         }
-      }
+      },
+      "needAddressOrName": "To create a mailbox, give an address or a first and last name — the address is built from them",
+      "needPassword": "This server needs the password set by hand — the mailbox cannot be created without it",
+      "archiveError": "Could not archive the mailbox",
+      "restoreError": "Could not restore the mailbox",
+      "deleteError": "Could not delete the mailbox",
+      "passwordResetError": "Could not reset the password",
+      "reconcileError": "Could not run reconciliation",
+      "aliasCreateError": "Could not create the alias",
+      "aliasDeleteError": "Could not delete the alias",
+      "settingsSaveError": "Could not save the settings",
+      "testError": "Could not reach the mail server"
     },
     "news": {
       "status": {
@@ -3102,7 +3140,8 @@
       "unauthorised": "Not authorised — please sign in",
       "adminRequired": "Administrator rights are required",
       "conflict": "Conflict: {{detail}}",
-      "generic": "Error: {{detail}}"
+      "generic": "Error: {{detail}}",
+      "forbidden": "You do not have permission for this action"
     },
     "onShort": "On",
     "offShort": "Off",
@@ -3454,9 +3493,46 @@
       "fileLabel": "Agreement file",
       "submit": "Create the agreement",
       "noBudgets": "There is not a single budget —",
-      "noCounterparties": "The counterparty registry is empty —"
+      "noCounterparties": "The counterparty registry is empty —",
+      "advanceAmountLabel": "Planned advance amount",
+      "advancePercentageLabel": "Advance, %",
+      "amountWithoutVatLabel": "Contract net of VAT",
+      "codeLabel": "Item code",
+      "contractTypeFramework": "Framework",
+      "contractTypeLabel": "Contract type",
+      "contractTypeNonStandard": "Non-standard",
+      "contractTypeStandard": "Standard",
+      "directionExpense": "Expense (drawn from the budget)",
+      "directionIncome": "Income",
+      "directionLabel": "Direction",
+      "endDateLabel": "Completion date",
+      "expenseItemLabel": "Budget item",
+      "hasAdvanceLabel": "Advance provided for",
+      "kindGoods": "Goods",
+      "kindLabel": "Contract kind",
+      "kindLease": "Lease",
+      "kindOther": "Other",
+      "kindServices": "Services",
+      "kindWorksServices": "Works and services",
+      "managerLabel": "Contract manager / curator",
+      "managerPlaceholder": "Pick or type the manager's full name",
+      "retentionAmountLabel": "Retention amount",
+      "retentionRateLabel": "Retention, %",
+      "sedNumberLabel": "EDMS no.",
+      "sedNumberPlaceholder": "DOC-00026-20260623",
+      "startDateLabel": "Start date",
+      "subjectLabel": "Subject of the contract",
+      "subjectPlaceholder": "Fence installation, roads, levelling, earthworks...",
+      "termCommentLabel": "Completion term (comment)",
+      "termCommentPlaceholder": "e.g. to be confirmed",
+      "totalAmountLabel": "Contract total",
+      "vatAmountLabel": "Contract VAT",
+      "vatRateLabel": "VAT rate, %",
+      "financeSectionTitle": "Financial terms and calculations",
+      "retentionSectionTitle": "Retention",
+      "termsSectionTitle": "Dates, performance terms and status"
     },
-    "budgetAdministrator": "Budget administrator",
+    "budgetAdministrator": "Project",
     "pick": "Pick one",
     "budgetYear": "Budget year",
     "budgetForm": {
@@ -3473,7 +3549,7 @@
       "createError": "Could not create the budget",
       "backToList": "Back to the budget list",
       "subtitle": "Fill it in completely — reference records can be created right here, no separate trip needed.",
-      "administratorHint": "The holder of budget lines is a project in a country. The record itself carries no money: the amounts live on budgets, and one project has several — one per programme.",
+      "administratorHint": "A budget belongs to a project. Pick one from the Tasks module so the name stays the same across the platform; if it is not there yet, type the name by hand. The record itself carries no money: the amounts live on budgets, and one project has several — one per programme.",
       "projectName": "Project name",
       "searchProject": "Search by project or country…",
       "countryLockedHint": "The country belongs to the selected reference record — to change it, edit the administrator itself, not this request.",
@@ -4314,11 +4390,14 @@
         "amber": "Amber",
         "pink": "Pink",
         "violet": "Violet"
-      }
+      },
+      "noDepartments": "No departments exist yet — pick another event type or ask HR to add one"
     },
     "selectedCount": "Selected: {{count}}",
     "searchByNameOrEmail": "Search by name or email",
-    "removeParticipant": "Remove participant"
+    "removeParticipant": "Remove participant",
+    "noEmployees": "There are no employees in the directory —",
+    "addEmployee": "add an employee"
   },
   "files": {
     "unitB": "B",
@@ -4639,7 +4718,6 @@
       "title": "Submit a request",
       "subtitle": "Pick a request form",
       "searchForm": "Search for a form…",
-      "noForms": "No published forms. Create a template in the “Templates” section.",
       "allRequests": "All requests",
       "newRequest": "New request",
       "fillForm": "Fill in the request form",
@@ -4647,7 +4725,9 @@
       "titleLabel": "Title",
       "titlePlaceholder": "A short request title",
       "saveDraft": "Save the draft",
-      "submit": "Submit for approval"
+      "submit": "Submit for approval",
+      "noFormsAdmin": "No published forms. Create a template in the Templates section.",
+      "noFormsEmployee": "No request forms have been published yet — ask a platform administrator."
     },
     "projects": {
       "create": "Create a project",
