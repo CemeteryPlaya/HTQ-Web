@@ -329,6 +329,20 @@ CONFERENCE_INVITE_TTL_HOURS = int(env("CONFERENCE_INVITE_TTL_HOURS", "168"))
 # Публичный адрес платформы для сборки ссылок в письмах и сообщениях: там,
 # в отличие от браузера, origin взять неоткуда.
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "")
+
+# ── Утренняя сводка в Telegram (apps/core/tasks.py::send_daily_digest) ──────
+# Бот на платформе ОДИН, поэтому второй токен заводить не нужно: по умолчанию
+# берётся тот же GF_TELEGRAM_BOT_TOKEN, что читает Grafana. Префикс GF_ у него
+# исторический — это не настройка Grafana (секции [telegram] у неё нет), а
+# просто имя переменной, которую её провижининг подставляет через $__env{}.
+# Отдельный TELEGRAM_BOT_TOKEN оставлен как переопределение — на случай, если
+# сводку когда-нибудь захотят слать другим ботом.
+TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", env("GF_TELEGRAM_BOT_TOKEN", ""))
+# А вот чат нужен свой и по умолчанию пуст: id бизнес-группы живёт литералом в
+# contact_points.yml (Grafana не умеет брать его из окружения — см. объяснение
+# там), и продублировать его ещё и здесь значило бы завести вторую правду о
+# том, куда шлём. Пусто = сводка молча не отправляется.
+TELEGRAM_DIGEST_CHAT_ID = env("TELEGRAM_DIGEST_CHAT_ID", "")
 CONFERENCE_SFU_PATH = env("CONFERENCE_SFU_PATH", "/ws/sfu/")
 # ICE-серверы, которые бэкенд отдаёт фронту в GET /api/cms/v1/conference/config.
 #
