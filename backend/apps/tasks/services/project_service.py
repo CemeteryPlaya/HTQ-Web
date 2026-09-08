@@ -15,6 +15,8 @@ is what they always were semantically.
 from __future__ import annotations
 
 from django.db.models import Case, Count, F, IntegerField, Sum, When
+
+from htqweb import date_rules
 from django.http import Http404
 
 from .. import schemas
@@ -70,6 +72,13 @@ def update_project(project_id: int, changes: dict) -> Project:
         raise Http404("Project not found")
     for field, value in changes.items():
         setattr(project, field, value)
+    # По СЛИТОЙ паре, а не по присланным полям: в PATCH может приехать одна
+    # дата, вторая лежит в строке. У проекта, в отличие от блока и роудмапа,
+    # нет даже CheckConstraint — до этой проверки перепутанные даты просто
+    # сохранялись.
+    # TODO: добавить ck_project_dates миграцией, сперва проверив боевую базу
+    # на уже сохранённые строки с нарушенным порядком.
+    date_rules.assert_instance_ordered(project)
     project.save()
     return project
 

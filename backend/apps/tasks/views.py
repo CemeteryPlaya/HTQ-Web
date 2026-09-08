@@ -26,6 +26,7 @@ from django.db import IntegrityError
 from django.http import HttpResponse
 from django.utils import timezone
 
+from htqweb import date_rules
 from htqweb.http import api_view, json_error
 
 from . import schemas
@@ -503,6 +504,9 @@ def _update_task(request, task_id: int, data: schemas.TaskUpdate):
 
     try:
         task_service.update_task(task_id, data, user_id=request.token.user_id)
+    except date_rules.DatesOutOfOrder as exc:
+        # 422, а не 500: до правила дат раньше добиралась только БД.
+        return json_error(str(exc), 422)
     except ValueError as exc:
         # Rejected FSM transition — 400, as in the original.
         return json_error(str(exc), 400)
@@ -1284,6 +1288,9 @@ def _update_engagement(request, engagement_id: int,
     try:
         row = contractor_service.update_engagement(
             engagement_id, data.model_dump(exclude_unset=True))
+    except date_rules.DatesOutOfOrder as exc:
+        # 422, а не 500: до правила дат раньше добиралась только БД.
+        return json_error(str(exc), 422)
     except ValueError as exc:
         return json_error(str(exc), 400)
     return schemas.ContractorEngagementResponse.model_validate(
@@ -1438,7 +1445,12 @@ def _update_block(request, block_id: int, data: schemas.SiteBlockUpdate):
     try:
         block = block_service.update_block(
             block_id, data.model_dump(exclude_unset=True))
+    except date_rules.DatesOutOfOrder as exc:
+        # 422, а не 500: до правила дат раньше добиралась только БД.
+        return json_error(str(exc), 422)
     except IntegrityError:
+        # Только про уникальность: нарушение дат сюда больше не доходит, а
+        # раньше доходило — и человек, поправивший даты, читал про дубль имени.
         return json_error("Блок с таким названием или кодом уже есть "
                           "на этом объекте", 409)
     return schemas.SiteBlockResponse.model_validate(block_service.build_block(
@@ -1585,8 +1597,16 @@ def _project_for_write(request, project_id: int):
 @api_view(methods=("PATCH",), body=schemas.ProjectUpdate)
 def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
     _project_for_write(request, project_id)
-    return project_service.build_response(project_service.update_project(
-        project_id, data.model_dump(exclude_unset=True)))
+    try:
+        project = project_service.update_project(
+            project_id, data.model_dump(exclude_unset=True))
+    except date_rules.DatesOutOfOrder as exc:
+        # У проекта нет ни CheckConstraint, ни валидатора до этой правки:
+        # перепутанные даты просто сохранялись.
+        # TODO: добавить ck_project_dates миграцией — сперва проверив боевую
+        # базу на уже сохранённые строки с нарушенным порядком.
+        return json_error(str(exc), 422)
+    return project_service.build_response(project)
 
 
 @api_view(methods=("DELETE",), status=204)
@@ -1686,6 +1706,9 @@ def _update_roadmap(request, roadmap_id: int, data: schemas.RoadmapUpdate):
     try:
         roadmap = roadmap_service.update_roadmap(
             roadmap_id, data.model_dump(exclude_unset=True))
+    except date_rules.DatesOutOfOrder as exc:
+        # 422, а не 500: до правила дат раньше добиралась только БД.
+        return json_error(str(exc), 422)
     except ValueError as exc:
         return json_error(str(exc), 400)
     except IntegrityError:
@@ -1883,10 +1906,13 @@ def _update_requirement(request, requirement_id: int,
                         data: schemas.ResourceRequirementUpdate):
     row = resource_service.get_requirement(requirement_id)
     _authorise_resource_target(request, row.task_id, row.roadmap_id)
+    try:
+        updated = resource_service.update_requirement(
+            requirement_id, data.model_dump(exclude_unset=True))
+    except date_rules.DatesOutOfOrder as exc:
+        return json_error(str(exc), 422)
     return schemas.ResourceRequirementResponse.model_validate(
-        resource_service.build_requirement(
-            resource_service.update_requirement(
-                requirement_id, data.model_dump(exclude_unset=True))))
+        resource_service.build_requirement(updated))
 
 
 @api_view(methods=("DELETE",), status=204)

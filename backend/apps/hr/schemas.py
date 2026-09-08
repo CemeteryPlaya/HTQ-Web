@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, RootModel, field_validator, model_validator
 
+from htqweb.date_rules import OrderedDates
+
 
 class DepartmentCreate(BaseModel):
     """Порт schemas/department.py::DepartmentCreate.
@@ -788,7 +790,7 @@ class PMOUpdate(BaseModel):
     status: PMOStatusLiteral | None = None
 
 
-class PMOMemberAdd(BaseModel):
+class PMOMemberAdd(OrderedDates):
     employee_id: int
     membership_type: PMOMembershipTypeLiteral = "permanent"
     position_in_pmo: str | None = Field(default=None, max_length=200)
@@ -797,14 +799,8 @@ class PMOMemberAdd(BaseModel):
     from_date: date | None = None
     to_date: date | None = None
 
-    @model_validator(mode="after")
-    def _check_dates(self) -> "PMOMemberAdd":
-        if self.from_date and self.to_date and self.to_date < self.from_date:
-            raise ValueError("to_date must be >= from_date")
-        return self
 
-
-class PMOMemberUpdate(BaseModel):
+class PMOMemberUpdate(OrderedDates):
     """Порт MemberUpdate — все поля опциональны, патч через ``exclude_unset``
     (буквально исходник: ``body.model_dump(exclude_unset=True)``, В ОТЛИЧИЕ
     от MemberAdd/PMOUpdate/остальных *Update схем этого файла, которые
