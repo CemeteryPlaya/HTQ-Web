@@ -100,7 +100,12 @@ def test_business_metrics_are_discovered_across_apps():
 
     collected = business.collect_all()
     assert "core" in collected                # реестр сервисов
-    assert {"tasks", "approvals", "mail"} <= set(collected)
+    # Перечислены все аппки, у которых metrics.py есть сегодня. Список
+    # жёсткий намеренно: дискавери рефлективное, и «аппка перестала отдавать
+    # метрики» выглядит для него ровно так же, как «аппки нет» — то есть
+    # молча. Заводите metrics.py — дописывайте сюда.
+    assert {"tasks", "approvals", "mail", "conference", "contracts", "signoff",
+            "hr", "cms", "media_files", "messenger", "users"} <= set(collected)
 
 
 @pytest.mark.django_db

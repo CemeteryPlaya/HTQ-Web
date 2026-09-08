@@ -183,6 +183,23 @@ CELERY_CACHE_BACKEND = "default"
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 300
+# События задач. Без них Flower видит только самих воркеров, но не то, что они
+# выполняют: flower_events_total и flower_task_runtime_seconds_bucket пусты, а
+# с ними — половина дашборда «Celery». Настройкой, а не флагом `-E` у воркера:
+# флаг пришлось бы повторить в трёх compose-файлах и в media-воркере, и забытая
+# копия ломается молча — панель просто остаётся пустой.
+CELERY_WORKER_SEND_TASK_EVENTS = True
+# Адрес Prometheus во ВНУТРЕННЕЙ сети — для виджета мониторинга в профиле
+# админа (apps/core/views.py::infrastructure_targets). Префикс /prometheus
+# обязателен: контейнер запущен с --web.external-url=/prometheus, и без него
+# API отвечает 404. Наружу Prometheus по-прежнему не проксируется — у него
+# нет собственной авторизации.
+PROMETHEUS_INTERNAL_URL = env("PROMETHEUS_INTERNAL_URL",
+                              "http://prometheus:9090/prometheus")
+# Событие «задача поставлена» шлёт КЛИЕНТ (любой .delay), а не воркер. Нужно
+# ровно для одного вопроса: задачи ставятся, но их никто не берёт — то есть
+# очередь есть, а потребителя у неё нет.
+CELERY_TASK_SEND_SENT_EVENT = True
 # Обработка записей конференций уходит в СВОЮ очередь и к своему воркеру
 # (backend-media-worker, образ backend/Dockerfile.media с ffmpeg и Whisper).
 # Два повода развести: сборка часового видео и распознавание занимают десятки
