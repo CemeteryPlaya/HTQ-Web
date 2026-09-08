@@ -21,8 +21,10 @@ import {
     Briefcase,
     Clock,
     FileText,
+    FileSignature,
     History,
     ClipboardList,
+    Stamp,
     Archive,
     KeyRound,
     Handshake,
@@ -295,6 +297,23 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
             );
         }
         items.push({ id: 'requests', to: '/requests', icon: ClipboardList, label: t('profile.sidebar.requests', 'Запросы') });
+        // Договоры и согласования были достижимы только из шапки (меню «Ещё»):
+        // сайдбар ведёт свой список и НЕ читает app/navigation/navItems.ts, где
+        // оба раздела есть с самого начала. Ровно та же болезнь, ради которой
+        // тот файл и заводили — там в докстринге описано, как разошлись шапка и
+        // нижняя панель; сайдбар тогда в объединение не попал.
+        //
+        // ⚠️ «Запросы» выше и «Согласования» ниже — РАЗНЫЕ домены, и их легко
+        // перепутать: /requests — конструктор заявок (apps.approvals), который
+        // согласует свои же формы; /signoff — маршруты утверждения ЧУЖИХ
+        // документов (договоров, счетов, актов). Подписи намеренно не сближаем.
+        //
+        // Ключи и иконки взяты те же, что в navItems.ts, чтобы один раздел не
+        // назывался в шапке и в сайдбаре по-разному.
+        items.push(
+            { id: 'contracts', to: '/contracts', icon: FileSignature, label: t('contracts.nav.title', 'Договоры') },
+            { id: 'signoff', to: '/signoff', icon: Stamp, label: t('signoff.nav.title', 'Согласования') },
+        );
         return items;
     }, [t, hasTasksAccess, elevated]);
 
