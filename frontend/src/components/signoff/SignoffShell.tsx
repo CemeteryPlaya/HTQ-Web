@@ -17,12 +17,11 @@ import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { BackToProfile } from '@/components/BackToProfile';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
 
 /** Те же роли, что считает администраторскими раздел «Запросы». */
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 interface NavItem {
   to: string;

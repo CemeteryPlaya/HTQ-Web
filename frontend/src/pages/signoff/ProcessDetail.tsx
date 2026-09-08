@@ -86,10 +86,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import { signoffApi } from '@/api/signoff';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
 import { useTranslation } from 'react-i18next';
 
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const ProcessDetail = () => {
   const { t } = useTranslation();

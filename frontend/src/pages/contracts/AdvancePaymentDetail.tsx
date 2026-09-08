@@ -18,10 +18,9 @@ import { Label } from '@/components/ui/label';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useHRLevel } from '@/hooks/useHRLevel';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
 
 const ACCOUNTANT_PERMISSION = 'contracts.advance_payment.record_payment';
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const AdvancePaymentDetail = () => {
   const { id } = useParams<{ id: string }>();

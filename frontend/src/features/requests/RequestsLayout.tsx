@@ -13,9 +13,8 @@ import {
 } from 'lucide-react';
 
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
 
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const requestsNavItems = [
   { to: '/requests',           icon: InboxIcon,    labelKey: 'requests.nav.inbox',     adminOnly: false },

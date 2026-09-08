@@ -32,11 +32,10 @@ import {
 } from '@/components/ui/table';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
 import type { AgreementStatus, CounterpartyStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
 
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const STATUS_VARIANTS: Record<
   CounterpartyStatus,
