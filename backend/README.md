@@ -4,7 +4,7 @@ One Django backend (Python 3.14, Django 5.2.7) serving the whole HTQWeb API. It 
 platform's earlier FastAPI generation — nine independently-deployed microservices (`services/*`)
 plus a shared `libs/htqweb_auth` — which have been deleted from this repo. This document
 replaces the deleted `services/README.md` and covers the equivalent ground for the new shape:
-the anatomy of one Django app, the rules that keep ~9 domains from turning back into a tangle,
+the anatomy of one Django app, the rules that keep eleven domains from turning back into a tangle,
 how to add a new one, and how to run/test locally.
 
 See also: [../CLAUDE.md](../CLAUDE.md) (session-level orientation), [../STRUCTURE.md](../STRUCTURE.md)
@@ -14,7 +14,7 @@ See also: [../CLAUDE.md](../CLAUDE.md) (session-level orientation), [../STRUCTUR
 ## What this is
 
 Domains live as Django apps under `apps/`: `users`, `cms`, `media_files`, `hr`, `mail`,
-`messenger`, `tasks`, `approvals`, `contracts`, `signoff`, plus `core` (shared foundation — the
+`messenger`, `tasks`, `approvals`, `contracts`, `signoff`, `conference`, plus `core` (shared foundation — the
 service registry, ETL helpers, health checks; not a domain itself). Everything else — auth primitives, the API
 decorator, object storage, middleware — lives once in the `htqweb/` project package, not
 duplicated per app the way the FastAPI generation duplicated `s3_storage.py`/`request_id.py`

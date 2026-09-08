@@ -1,8 +1,9 @@
 # HTQWeb — внутренняя платформа Hi-Tech Group
 
 React + Vite SPA перед **единым Django-бэкендом**. Одно процессное семейство, один Postgres,
-десять доменных приложений: кадры, задачи и проекты, согласования, договоры, почта, мессенджер,
-CMS, файловое хранилище, видеоконференции.
+одиннадцать доменных приложений: пользователи, кадры, задачи и проекты, согласования (два разных
+домена: конструктор заявок и маршруты утверждения), договоры, почта, мессенджер, CMS,
+файловое хранилище, видеоконференции.
 
 > **Статус архитектуры: миграция завершена.** Платформа прошла полный круг — Django-монолит →
 > ~9 FastAPI-микросервисов (Strangler Fig) → **обратно в один Django-бэкенд** (`backend/`).
@@ -85,7 +86,7 @@ docker compose -f docker-compose.test-env.yml exec backend-web printenv DB_HOST 
 | Реестр сервисов / health | http://localhost:8000/api/core/v1/services/ , `/health/`, `/health/ready/` |
 | MinIO-консоль | http://localhost:9001 |
 | Flower (Celery) | http://localhost:5555 |
-| Grafana | http://localhost:3001 (или `/grafana/` через edge) |
+| Grafana | http://localhost:3002 (или `/grafana/` через edge). В проде — 3001 |
 | Prometheus | http://localhost:9090/prometheus |
 
 **Учётка администратора** создаётся идемпотентно при каждом старте `backend-web`
@@ -151,12 +152,13 @@ HTQWeb/
 │   └── logging/              # Loki, Promtail, Prometheus, Grafana (provisioning + дашборды)
 ├── sfu/                      # Mediasoup SFU (Node.js) — медиа-роутинг конференций
 ├── webtransport/             # QUIC-сигнализация (aioquic) перед SFU
-├── scripts/                  # TLS-сертификаты, firewall, туннели, проверка конфига SFU
+├── scripts/                  # TLS-сертификаты, firewall, туннели, проверка конфигов SFU и мониторинга
 ├── docs/                     # Архитектурные заметки, аудиты, хендоффы
 ├── docker-compose.yml        # Прод-стек (+ профиль production: nginx/sfu/certbot)
 ├── docker-compose.test-local.yml # Тест-стек: Vite HMR + Postgres в контейнере (:55432)
 ├── docker-compose.test-env.yml   # Тест-стек: Vite HMR, БД из .env, миграции OFF
 ├── dev-up.sh                 # Обёртка над docker-compose.test-local.yml
+├── .github/workflows/        # CI: быстрые проверки на push, полный прогон бэкенда на PR/ночью
 ├── STRUCTURE.md              # ⭐ Навигационная карта репозитория (подробно, RU)
 ├── API.md                    # ⭐ Роутинг и контракты всех эндпойнтов
 ├── PLAN.md                   # Журнал завершённой миграции
@@ -259,20 +261,78 @@ pytest-django гоняется против **настоящего Postgres**, �
 `:5432` занят нативным Windows-PostgreSQL, а через `:6432`/PgBouncer (transaction-пул)
 не проходит `CREATE DATABASE`. Порт поднимается один раз:
 
+```bash
+docker compose -f docker-compose.test-local.yml up -d db   # ТОЛЬКО Postgres на :55432
+cd backend
+../.venv/Scripts/python.exe -m pytest -q                                   # вся сюита (~50 мин)
+../.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # один тест
+```
+
+`DJANGO_SETTINGS_MODULE` и `JWT_SECRET` заданы в `pytest.ini`/`settings/test.py` —
+руками экспортировать нечего. Подробности (включая, зачем контейнеру
+`max_connections=300`): [backend/README-tests.md](./backend/README-tests.md).
+
+### CI (GitHub Actions)
+
+Два workflow'а, и разделение по времени прогона, а не по типу проверок:
+
+| Файл | Когда | Что | Время |
+|---|---|---|---|
+| [.github/workflows/ci.yml](./.github/workflows/ci.yml) | каждый push и PR | конфиги мониторинга, фронтенд (lint + типы + vitest + сборка), тесты-сторожа бэкенда | ~10 мин |
+| [.github/workflows/backend-full.yml](./.github/workflows/backend-full.yml) | PR в `main`, ночью в 02:00 UTC, вручную | вся сюита бэкенда | ~50 мин |
+
+Полная сюита вынесена отдельно намеренно: час ожидания на каждый коммит
+означает, что результат перестанут читать, а CI, который не читают, не
+отличается от отсутствующего.
+
+**Проверку конфигов мониторинга можно (и стоит) гонять локально** — она не
+занимает портов и ничего не меняет:
+
+```bash
+./scripts/check-monitoring-config.sh
+```
+
+Она ловит класс поломок, который иначе обнаруживается только на проде и молча:
+Grafana 10.4 валидирует контакт-пойнты на старте и при пустом токене или битом
+шаблоне **падает целиком**, унося с собой и дашборды.
+
+**Известный долг вынесен в три файла, и все три обязаны уменьшаться:**
+
+| Файл | Что там | Почему |
+|---|---|---|
+| [backend/ci-known-failures.txt](./backend/ci-known-failures.txt) | 9 pytest-тестов (signoff, contracts, hr) | падали до появления CI |
+| [frontend/ci-known-failures.txt](./frontend/ci-known-failures.txt) | 2 файла vitest + 2 ошибки типов в `vite.config.ts` | то же |
+| [frontend/eslint.ci.config.js](./frontend/eslint.ci.config.js) | 358 ошибок линта, из них 349 — один `no-explicit-any` на 85 файлов | накопленная типизация |
+
+Смысл везде один: красный CI перестают читать так же, как вечно горящий алерт,
+и тогда **новая** поломка теряется среди старых. Поэтому долг не прячется, а
+перечисляется поимённо с TODO; каждая запись — дыра, а не исключение.
+
+⚠️ Стандарты проекта при этом **не смягчены**: `npm run lint` у разработчика
+по-прежнему строгий и показывает все 358. Понижение до предупреждений живёт
+только в CI-конфиге.
+
+Отдельный шаг полного прогона перезапускает исключённые pytest-тесты и
+сообщает, если какой-то из них **начал проходить** — значит его починили
+попутно и строку пора убрать, иначе список начнёт прятать рабочие тесты.
+
+**Самое полезное, что видно из этих списков:** восемь падающих vitest-тестов и
+два падающих pytest-теста — это **одна сломанная фича** (секции Т-2 карточки
+сотрудника), а не десять разных проблем. Чинить её надо с бэкенда: пока POST
+не создаёт `EmployeeCard`, фронт зелёным не станет никакими правками.
+
+### SFU — запуск вручную (`cd sfu`)
+
 ```powershell
 $env:SFU_HOST="0.0.0.0"
 $env:SFU_PORT="4443"
 $env:SIGNALING_REQUIRE_TLS="true"
-$env:TLS_CERT="D:\HTQWeb1\certs\cert.pem"
+$env:TLS_CERT="D:\HTQWeb1\certs\cert.pem"   # пути-примеры, подставьте свои
 $env:TLS_KEY="D:\HTQWeb1\certs\key.pem"
-```
-
-Run:
-
-```powershell
-cd .\sfu
 npm run dev
 ```
+
+Обычно SFU не нужно запускать отдельно — он поднимается вместе со стеком.
 
 ## Cloudflare + Bore Quick Start
 
@@ -281,7 +341,8 @@ account, no credit card. Cloudflare carries the signalling, bore carries the
 media (UDP never passes an HTTP tunnel).
 Full details: [docs/TUNNEL_SETUP.md](docs/TUNNEL_SETUP.md)
 
-1. Start the stack (`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`) and Vite
+1. Start the stack (`docker compose -f docker-compose.test-local.yml up -d`) — файла
+   `docker-compose.dev.yml` больше нет, и цепочка `-f a -f b` тут не применяется
 2. Run `.\scripts\start-public-test.ps1 -GuestEmail guest@example.com`
 3. Send the printed link and credentials; Ctrl+C restores local mode
 
@@ -291,27 +352,22 @@ Project structure and refactoring conventions are documented in:
 
 ## 🔧 WebRTC Video/Audio Troubleshooting
 
-Если у вас проблемы с видео/аудио потоками между клиентами, начните отсюда:
+Если у вас проблемы с видео/аудио потоками между клиентами, начните отсюда.
 
-### ⚡ Быстрое исправление (5 минут)
-Прочитайте [QUICK_FIX.md](./QUICK_FIX.md) - пошаговое руководство по настройке
-
-### 📖 Детальная диагностика
-Прочитайте [WEBRTC_TROUBLESHOOTING.md](./WEBRTC_TROUBLESHOOTING.md) - полное руководство
+> Ссылки на `QUICK_FIX.md` и `WEBRTC_TROUBLESHOOTING.md` из этого раздела убраны: таких файлов
+> в репозитории нет. Актуальные причины и их разбор — ниже и в
+> [docs/DEPLOY-SFU.md](./docs/DEPLOY-SFU.md).
 
 ### 🛠️ Инструменты диагностики
 
 **1. Проверка конфигурации SFU:**
 ```bash
-docker compose -f docker-compose.test-local.yml up -d db   # публикует db на :55432
-cd backend
-../.venv/Scripts/python.exe -m pytest -q                                   # вся сюита
-../.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # один тест
+node scripts/check-sfu-config.js
 ```
 
-`DJANGO_SETTINGS_MODULE=htqweb.settings.test` и `JWT_SECRET` заданы в `pytest.ini`/`settings/test.py` —
-экспортировать руками нечего. Полная история (включая `max_connections=300`) —
-[backend/README-tests.md](./backend/README-tests.md).
+Проверяет то, на чём конференция ломается чаще всего: `WEBRTC_ANNOUNCED_IP` (с wildcard
+listenIp и пустым announced SFU падает на старте намеренно — иначе получилось бы чёрное видео),
+доступность сигнального порта и согласованность кодеков.
 
 ### Backend — management-команды (`cd backend`, тот же venv)
 
@@ -384,7 +440,7 @@ DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
 | 6432 | PgBouncer — только хостовые утилиты | `docker-compose.test-local.yml` |
 | 6379 | Redis (кэш `/1`, Celery-брокер `/2`) | всегда |
 | 9000 / 9001 | MinIO API / веб-консоль | всегда |
-| 3001 | Grafana | всегда |
+| 3002 | Grafana (в проде — 3001) | всегда |
 | 9090 | Prometheus (под `/prometheus`) | всегда |
 | 3100 | Loki | всегда |
 | 9187 / 9121 | postgres-exporter / redis-exporter | всегда |
@@ -402,12 +458,25 @@ DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
   `htqweb/middleware/request_id.py`.
 - **Health:** `GET /health/`, `GET /health/ready/`, `GET /api/core/v1/services/` (реестр
   отключаемости). На уровне nginx — `/health` и `/health/ready`.
-- **Grafana** (`:3001`, либо `/grafana/` через edge) имеет JWT-SSO: платформенные аккаунты
+- **Grafana** (`:3002` в тестовых стеках, `:3001` в проде, либо `/grafana/` через edge) имеет JWT-SSO: платформенные аккаунты
   входят своим access-токеном (superuser → Admin, staff → Editor). Дашборды — в папке **HTQWeb**.
-- ⚠️ **Метрик самого Django пока нет.** Старая `libs/htqweb_metrics` снесена вместе с FastAPI,
-  `django-prometheus` не установлен, `/metrics` не выставлен. Prometheus сейчас скрейпит 6 целей:
-  себя, `postgres-exporter`, `redis-exporter`, MinIO, Loki и Grafana; job `django-backend`
-  заготовлен и закомментирован в `infra/logging/prometheus/prometheus.yml`.
+- **Метрики Django есть.** `django-prometheus` установлен, `/metrics` отдаётся в корне (рядом
+  с `/health/`, а не под `/api/` — иначе выключение домена уносило бы наблюдаемость).
+  Prometheus скрейпит **13 джобов**: два процесса Django, Celery через Flower, Postgres, Redis,
+  хост и контейнеры (`node-exporter`, `cadvisor`), шлюз, SFU, MinIO, Loki, Grafana и себя.
+- **Бизнес-метрики — свои у каждого домена:** `apps/<домен>/metrics.py`, автодискавери в
+  `apps/core/metrics.py`, считает Celery-beat раз в 60 с в кэш, префикс `htqweb_*`.
+  ⚠️ Пустая панель означает «сборщик не отработал», а НЕ «ноль»: при пустом кэше метрика не
+  экспортируется вовсе, потому что «нет данных» и «ноль задач» обязаны выглядеть по-разному.
+- **Алерты — 40 правил**, доставка в **два разных чата Telegram**: инциденты звонят, бизнес-события
+  приходят молча и им разрешено висеть неделями. Разводит их лейбл `channel=business`, а не
+  severity. `critical` дублируется на почту вторым независимым каналом.
+  Плюс утренняя сводка в 09:00 (Пн–Пт) — `apps.core.tasks.send_daily_digest`.
+- ⚠️ **Доступ в проде закрыт.** Наружу смотрит только Grafana; Prometheus, Loki, Flower и консоль
+  MinIO привязаны к `127.0.0.1` (ходить через `ssh -L`), у экспортеров портов нет вовсе.
+  В тестовых стеках всё публикуется как обычно.
+- **Проверить конфигурацию, не поднимая стек:** `./scripts/check-monitoring-config.sh` —
+  promtool, compose, JSON дашбордов и старт настоящей Grafana с настоящим провижинингом.
 
 ---
 
@@ -462,8 +531,15 @@ mkcert -cert-file .\infra\certs\cert.pem -key-file .\infra\certs\key.pem localho
 | [PLAN.md](./PLAN.md) | Журнал завершённой обратной миграции |
 | [docs/architecture.md](./docs/architecture.md) | Архитектурные решения — **частично устарел** (говорит про DRF ViewSets и каталог `backend/tasks/`, которых нет); фон, а не источник истины |
 
-Материалы в `docs/audit-2026-04-28/`, `docs/alerting-2026-04-28.md`,
-`docs/dependency-audit-2026-04-28.md` относятся к FastAPI-эпохе и под Django не обновлялись.
+Материалы в `docs/audit-2026-04-28/` и `docs/dependency-audit-2026-04-28.md` относятся
+к FastAPI-эпохе и под Django не обновлялись.
+
+`docs/alerting-2026-04-28.md` удалён: он не просто устарел, а описывал прямо
+противоположное текущему устройству — «стек только Loki, Prometheus и экспортеров
+нет», четыре правила вместо двадцати пяти и контакт-пойнт `htqweb-default`, которого
+больше не существует. Актуальное состояние алертов живёт в самом
+[infra/logging/grafana-provisioning/alerting/rules.yml](./infra/logging/grafana-provisioning/alerting/rules.yml):
+в шапке файла записано и что покрыто, и что сознательно не покрыто, и почему.
 
 ---
 
