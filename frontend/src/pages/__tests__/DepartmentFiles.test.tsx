@@ -84,7 +84,8 @@ describe('DepartmentFiles — папки отдела', () => {
         await waitFor(() => expect(api.createDepartmentFileFolder).toHaveBeenCalledTimes(2));
         expect(api.createDepartmentFileFolder.mock.calls.map((call) => call[1]))
             .toEqual(['Регламенты', 'Договоры']);
-    });
+    }, 15000);   // сценарий из двух диалогов подряд: в одиночку ~1,3 с, но под
+    // полной нагрузкой набора упирался в дефолтные 5 с vitest.
 
     it('после создания остаётся в корне отдела, а не проваливается в новую папку', async () => {
         const user = userEvent.setup();
