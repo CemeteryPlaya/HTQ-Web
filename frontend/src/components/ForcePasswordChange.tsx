@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/api/client';
+import { explainedDetail } from '@/lib/apiError';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -30,7 +31,7 @@ export const ForcePasswordChange = () => {
         onError: (err: any) => {
             toast({
                 title: t('auth.passwordChangeError'),
-                description: err?.response?.data?.detail || t('common.error'),
+                description: explainedDetail(err) || t('common.error'),
                 variant: 'destructive',
             });
         }

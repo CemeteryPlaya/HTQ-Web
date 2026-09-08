@@ -19,6 +19,7 @@ import {
 import { fetchTasks, updateTask } from '@/api/tasks';
 import type { Task, TaskPriority, TaskStatus } from '@/types/tasks';
 import type { UserProfile } from '@/types/userProfile';
+import { reportApiError } from '@/lib/apiError';
 import { statusBadgeClass, statusLabel } from '@/lib/tasks/status';
 import { TASK_PRIORITY, priorityLabel } from '@/lib/tasks/priority';
 
@@ -73,13 +74,13 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
             toast.success(t('tasks.pages.detail.success'));
             setActiveTab('my-tasks');
         },
-        onError: () => toast.error(t('tasks.pages.detail.error')),
+        onError: (err) => reportApiError(err, t('tasks.pages.detail.error')),
     });
 
     const updateStatusMutation = useMutation({
         mutationFn: ({ id, status }: { id: number; status: TaskStatus }) => updateTask(id, { status }),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['employee-tasks'] }),
-        onError: () => toast.error(t('tasks.pages.list.updateError')),
+        onError: (err) => reportApiError(err, t('tasks.pages.list.updateError')),
     });
 
     // Filter tasks locally to serve tab functionalities

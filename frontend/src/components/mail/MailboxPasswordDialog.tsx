@@ -25,6 +25,7 @@ import { ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 
 import api from '@/api/client';
+import { explainedDetail } from '@/lib/apiError';
 import { Button } from '@/components/ui/button';
 import {
     Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -78,7 +79,7 @@ export const MailboxPasswordDialog: React.FC<{
         // ответу нельзя было перебирать существующие адреса. Умолчи мы об
         // этом — человек стал бы перебирать пароли от ящика, которого нет.
         onError: (e: ApiError) => {
-            const detail = e?.response?.data?.detail
+            const detail = explainedDetail(e)
                 || t('mail.connect.failed', 'Не удалось подключить ящик');
             toast.error(
                 kind === 'suggest'

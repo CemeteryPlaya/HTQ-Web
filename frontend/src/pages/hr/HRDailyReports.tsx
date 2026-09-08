@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 
 import { TasksLayout } from '@/components/tasks/TasksLayout';
+import { DateInput } from '@/components/ui/date-input';
+import { reportApiError } from '@/lib/apiError';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -31,10 +33,6 @@ const shiftDay = (day: string, days: number): string => {
   value.setDate(value.getDate() + days);
   return isoDay(value);
 };
-
-const errorDetail = (err: unknown): string | undefined =>
-  (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail as
-    string | undefined;
 
 interface Draft {
   volume_type_id: string;
@@ -80,9 +78,7 @@ const BoardRow: React.FC<{
       setDraft(emptyDraft());
       onSaved();
     },
-    onError: (err) => {
-      toast.error(errorDetail(err) || t('tasks.dailyReports.saveError', 'Не удалось отправить отчёт'));
-    },
+    onError: (err) => reportApiError(err, t('tasks.dailyReports.saveError', 'Не удалось отправить отчёт')),
   });
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -277,11 +273,10 @@ const HRDailyReports: React.FC = () => {
               <ChevronLeft className="h-4 w-4" />
             </Button>
 
-            <Input
-              type="date"
+            <DateInput
               className="h-8 text-xs w-36 rounded-xl bg-muted/30 font-medium"
               value={date}
-              onChange={(e) => setDate(e.target.value || today())}
+              onChange={(value) => setDate(value || today())}
             />
 
             <Button

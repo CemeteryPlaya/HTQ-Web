@@ -26,6 +26,7 @@ import {
   ConferenceInvite, createInvite, joinUrl, listInvites, revokeInvite, sendInvite,
 } from '@/api/conference';
 import { createCalendarEvent, fetchCalendarUserOptions } from '@/api/calendar';
+import { reportApiError } from '@/lib/apiError';
 import { copyText } from '@/lib/clipboard';
 
 interface Props {
@@ -71,7 +72,7 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
       await copy(joinUrl(invite.token));
       toast.success(t('conference.invite.created', 'Ссылка создана и скопирована'));
     },
-    onError: () => toast.error(t('conference.invite.createError', 'Не удалось создать ссылку')),
+    onError: (err) => reportApiError(err, t('conference.invite.createError', 'Не удалось создать ссылку')),
   });
 
   const remove = useMutation({
@@ -110,7 +111,7 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
       result.errors.forEach((err) => toast.error(err));
       setEmails('');
     },
-    onError: () => toast.error(t('conference.invite.sendError', 'Не удалось отправить')),
+    onError: (err) => reportApiError(err, t('conference.invite.sendError', 'Не удалось отправить')),
   });
 
   const schedule = useMutation({
@@ -130,8 +131,7 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
     },
     onSuccess: () => toast.success(
       t('conference.invite.scheduled', 'Встреча добавлена в календарь')),
-    onError: () => toast.error(
-      t('conference.invite.scheduleError', 'Не удалось создать встречу')),
+    onError: (err) => reportApiError(err, t('conference.invite.scheduleError', 'Не удалось создать встречу')),
   });
 
   const toggleStaff = (id: number) => setStaffIds(

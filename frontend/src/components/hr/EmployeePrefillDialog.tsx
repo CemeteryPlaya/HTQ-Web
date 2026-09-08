@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { errorDetail } from '@/lib/apiError';
+import { errorDetail, explainedDetail } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 import {
   PREFILL_FIELD_LABEL_KEYS, PREFILL_SOURCE_TYPES, defaultSelection, isSelectable, pickValues,
@@ -175,7 +175,7 @@ const EmployeePrefillDialog = ({
     },
     onError: (err) => {
       setError(
-        errorDetail(err)
+        explainedDetail(err)
         || t('hr.pages.employees.prefill.applyError', 'Не удалось перенести данные'),
       );
     },

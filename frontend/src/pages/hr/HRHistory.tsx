@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { DateInput } from '@/components/ui/date-input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useHRLevel } from '@/hooks/useHRLevel';
@@ -246,7 +247,7 @@ const HRHistory = () => {
                 </label>
                 <label className="grid gap-2 text-sm">
                   {t('hr.pages.history.fields.eventDate')}
-                  <Input type="date" value={form.event_date} onChange={(e) => setForm({ ...form, event_date: e.target.value })} />
+                  <DateInput value={form.event_date} onChange={(value) => setForm({ ...form, event_date: value })} />
                 </label>
               </div>
 

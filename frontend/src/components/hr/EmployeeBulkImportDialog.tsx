@@ -5,6 +5,8 @@ import { Loader2, UsersRound } from 'lucide-react';
 
 import { bulkImportEmployees, fetchImportCandidates } from '@/api/hr';
 import type { BulkImportResult, Department, Position } from '@/types/hr';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { DateInput } from '@/components/ui/date-input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -15,7 +17,7 @@ import { Input } from '@/components/ui/input';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
-import { errorDetail } from '@/lib/apiError';
+import { errorDetail, explainedDetail } from '@/lib/apiError';
 
 /**
  * Массовый импорт: карточки сотрудников из учёток, у которых их ещё нет.
@@ -95,7 +97,7 @@ const EmployeeBulkImportDialog = ({ open, onOpenChange, departments, positions }
     },
     onError: (err) => {
       setError(
-        errorDetail(err)
+        explainedDetail(err)
         || t('hr.pages.employees.import.error', 'Не удалось выполнить импорт'),
       );
     },
@@ -202,15 +204,20 @@ const EmployeeBulkImportDialog = ({ open, onOpenChange, departments, positions }
                     ))}
                   </SelectContent>
                 </Select>
+                <PrerequisiteNotice
+                  variant="inline"
+                  items={[{
+                    when: availablePositions.length === 0,
+                    text: t('hr.pages.employees.import.noPositions', 'Подходящих должностей нет —'),
+                    to: '/hr/positions',
+                    linkText: t('hr.pages.employees.import.addPosition', 'заведите должность'),
+                  }]}
+                />
               </label>
 
               <label className="grid gap-2 text-sm">
                 {t('hr.pages.employees.fields.dateHired')}
-                <Input
-                  type="date"
-                  value={hireDate}
-                  onChange={(e) => setHireDate(e.target.value)}
-                />
+                <DateInput value={hireDate} onChange={setHireDate} />
               </label>
             </div>
 

@@ -14,7 +14,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
 
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { TASKS_LIMITS } from '@/lib/fieldLimits';
+import { DateInput } from '@/components/ui/date-input';
+import { DATES_OUT_OF_ORDER, INVALID_DATE, datesOutOfOrder } from '@/lib/validation';
 import { Badge } from '@/components/ui/badge';
+import { reportApiError } from '@/lib/apiError';
 import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
@@ -116,9 +121,16 @@ export const SiteBlocksDialog: React.FC<{
       setVolumes([]);
       invalidate();
     },
-    onError: () => toast.error(
-      t('tasks.pages.blocks.saveError', 'Не удалось сохранить блок')),
+    onError: (err) => reportApiError(err, t('tasks.pages.blocks.saveError', 'Не удалось сохранить блок')),
   });
+
+  // Порядок дат известен форме, поэтому и отвечает за него форма: сервер
+  // ответил бы тем же текстом (`htqweb/date_rules.py`), но уже после отправки.
+  const reversedDates = datesOutOfOrder(form.start_date, form.end_date);
+  // Набрано что-то, из чего даты не выходит («31.02»): поле отдаёт наружу
+  // пустоту, и без этого флага форма считала бы дату просто незаполненной.
+  const [brokenDates, setBrokenDates] = useState({ start: false, end: false });
+  const hasBrokenDate = brokenDates.start || brokenDates.end;
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteSiteBlock(id),
@@ -126,8 +138,7 @@ export const SiteBlocksDialog: React.FC<{
       toast.success(t('tasks.pages.blocks.deleted', 'Блок удалён'));
       invalidate();
     },
-    onError: () => toast.error(
-      t('tasks.pages.blocks.deleteError', 'Не удалось удалить блок')),
+    onError: (err) => reportApiError(err, t('tasks.pages.blocks.deleteError', 'Не удалось удалить блок')),
   });
 
   const openEdit = (block: SiteBlock) => {
@@ -214,6 +225,7 @@ export const SiteBlocksDialog: React.FC<{
               <Label>{t('tasks.pages.blocks.name', 'Название')}</Label>
               <Input
                 value={form.name}
+                maxLength={TASKS_LIMITS.blockName}
                 placeholder={t('tasks.pages.blocks.namePlaceholder', 'Блок 1')}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
@@ -222,13 +234,15 @@ export const SiteBlocksDialog: React.FC<{
               <Label>{t('tasks.pages.blocks.code', 'Код')}</Label>
               <Input
                 value={form.code}
+                maxLength={TASKS_LIMITS.code}
                 onChange={(e) => setForm({ ...form, code: e.target.value })}
               />
             </div>
             <div>
               <Label>{t('tasks.pages.blocks.order', 'Порядок')}</Label>
               <Input
-                type="number" min={0} value={form.order}
+                type="number" min={TASKS_LIMITS.order.min} max={TASKS_LIMITS.order.max}
+                value={form.order}
                 onChange={(e) => setForm({ ...form, order: Number(e.target.value) })}
               />
             </div>
@@ -250,23 +264,45 @@ export const SiteBlocksDialog: React.FC<{
             </div>
             <div>
               <Label>{t('tasks.pages.blocks.start', 'Начало')}</Label>
-              <Input
-                type="date" value={form.start_date}
-                onChange={(e) => setForm({ ...form, start_date: e.target.value })}
+              <DateInput
+                value={form.start_date}
+                invalid={brokenDates.start}
+                onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, start: bad }))}
+                onChange={(value) => setForm({ ...form, start_date: value })}
               />
+              {brokenDates.start && (
+                <p className="mt-1 text-sm text-destructive">{INVALID_DATE}</p>
+              )}
             </div>
             <div>
               <Label>{t('tasks.pages.blocks.end', 'Окончание')}</Label>
-              <Input
-                type="date" value={form.end_date}
-                onChange={(e) => setForm({ ...form, end_date: e.target.value })}
+              <DateInput
+                value={form.end_date}
+                invalid={brokenDates.end || reversedDates}
+                onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, end: bad }))}
+                onChange={(value) => setForm({ ...form, end_date: value })}
               />
+              {brokenDates.end ? (
+                <p className="mt-1 text-sm text-destructive">{INVALID_DATE}</p>
+              ) : reversedDates && (
+                <p className="mt-1 text-sm text-destructive">{DATES_OUT_OF_ORDER}</p>
+              )}
             </div>
           </div>
 
           {/* Плановые объёмы */}
           <div>
             <Label>{t('tasks.pages.blocks.volumes', 'Объёмы работ')}</Label>
+            {/* Справочник видов работ не редактируется из интерфейса — строка
+                без ссылки намеренно, идти сотруднику некуда. */}
+            <PrerequisiteNotice
+              variant="inline"
+              items={[{
+                when: volumeTypes.length === 0,
+                text: t('tasks.pages.blocks.noVolumeTypes',
+                  'Справочник видов работ пуст — объёмы задать не из чего, попросите администратора его заполнить'),
+              }]}
+            />
             <div className="space-y-2 mt-1">
               {volumes.map((row, index) => (
                 <div key={index} className="flex items-center gap-2">
@@ -326,7 +362,7 @@ export const SiteBlocksDialog: React.FC<{
             </Button>
           )}
           <Button
-            disabled={!form.name.trim() || saveMutation.isPending}
+            disabled={!form.name.trim() || reversedDates || hasBrokenDate || saveMutation.isPending}
             onClick={() => saveMutation.mutate()}
           >
             {editing

@@ -45,6 +45,7 @@ import { fetchEmployeeUsers } from '@/api/hr';
 import {
     TASK_STATUS, TASK_STATUS_ORDER, normalizeTaskStatus,
 } from '@/lib/tasks/status';
+import { reportApiError } from '@/lib/apiError';
 import { TASK_PRIORITY, TASK_PRIORITY_ORDER } from '@/lib/tasks/priority';
 
 /* ---- Visual config ---- */
@@ -120,35 +121,35 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onStatusChange 
         mutationFn: ({ id, priority }: { id: number; priority: TaskPriority }) =>
             updateTask(id, { priority }),
         onSuccess: invalidateTasks,
-        onError: () => toast.error(t('tasks.pages.list.updateError', 'Не удалось обновить задачу')),
+        onError: (err) => reportApiError(err, t('tasks.pages.list.updateError', 'Не удалось обновить задачу')),
     });
 
     const assigneesMutation = useMutation({
         mutationFn: ({ id, assignees }: { id: number; assignees: Array<{ user_id: number; role: AssigneeRole }> }) =>
             updateTaskAssignees(id, assignees),
         onSuccess: invalidateTasks,
-        onError: () => toast.error(t('tasks.pages.list.updateError', 'Не удалось обновить задачу')),
+        onError: (err) => reportApiError(err, t('tasks.pages.list.updateError', 'Не удалось обновить задачу')),
     });
 
     const supervisorMutation = useMutation({
         mutationFn: ({ id, userId }: { id: number; userId: number | null }) =>
             updateTaskSupervisor(id, userId),
         onSuccess: invalidateTasks,
-        onError: () => toast.error(t('tasks.pages.list.updateError', 'Не удалось обновить задачу')),
+        onError: (err) => reportApiError(err, t('tasks.pages.list.updateError', 'Не удалось обновить задачу')),
     });
 
     const progressMutation = useMutation({
         mutationFn: ({ id, percent }: { id: number; percent: number }) =>
             updateTaskProgress(id, percent),
         onSuccess: invalidateTasks,
-        onError: () => toast.error(t('tasks.pages.list.updateError', 'Не удалось обновить задачу')),
+        onError: (err) => reportApiError(err, t('tasks.pages.list.updateError', 'Не удалось обновить задачу')),
     });
 
     const labelsMutation = useMutation({
         mutationFn: ({ id, label_ids }: { id: number; label_ids: number[] }) =>
             updateTask(id, { label_ids } as any),
         onSuccess: invalidateTasks,
-        onError: () => toast.error(t('tasks.pages.list.updateError', 'Не удалось обновить задачу')),
+        onError: (err) => reportApiError(err, t('tasks.pages.list.updateError', 'Не удалось обновить задачу')),
     });
 
     const onDragEnd = (result: DropResult) => {

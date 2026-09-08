@@ -14,7 +14,12 @@ import {
   fetchPositions,
   updateEmployeeWithCard,
 } from '@/api/hr';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { DateInput } from '@/components/ui/date-input';
+import { HR_LIMITS } from '@/lib/fieldLimits';
+import { datesOutOfOrder } from '@/lib/validation';
 import { Button } from '@/components/ui/button';
+import { explainedDetail } from '@/lib/apiError';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { PhoneInput } from '@/components/ui/phone-input';
@@ -492,6 +497,14 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
         errs.date_hired = t('hr.pages.employees.errors.hireDateRequired', 'Укажите дату приёма');
       }
     }
+    // Увольнение раньше приёма. Ни схема, ни база этого не проверяют, так что
+    // до формы такую карточку ловить некому — сохранилась бы молча.
+    if (datesOutOfOrder(form.date_hired, form.date_dismissed)) {
+      errs.date_dismissed = t(
+        'hr.pages.employees.errors.dismissedBeforeHired',
+        'Дата увольнения раньше даты приёма',
+      );
+    }
     if (Object.keys(errs).length > 0) {
       setFieldErrors(errs);
       setFormError(t('hr.pages.employees.errors.fillRequired', 'Заполните обязательные поля'));
@@ -580,15 +593,9 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       setNewPositionForm({ title: '', department_id: '', weight: '100', grade: '1', description: '', hr_level: '' });
       setNewPositionError(null);
     },
-    onError: (err: any) => {
-      const data = err?.response?.data;
-      setNewPositionError(
-        (typeof data?.detail === 'string' ? data.detail : null)
-        || (Array.isArray(data?.detail) ? data.detail.map((d: any) => d.msg).join(' • ') : null)
-        || err?.message
-        || 'Не удалось создать должность',
-      );
-    },
+    onError: (err) => setNewPositionError(
+      explainedDetail(err) || 'Не удалось создать должность',
+    ),
   });
 
   const startCreatePosition = () => {
@@ -627,18 +634,9 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       setNewDepartmentForm({ name: '', description: '' });
       setNewDepartmentError(null);
     },
-    onError: (err: unknown) => {
-      const e = err as { response?: { data?: { detail?: unknown } }; message?: string };
-      const detail = e?.response?.data?.detail;
-      setNewDepartmentError(
-        (typeof detail === 'string' ? detail : null)
-        || (Array.isArray(detail)
-          ? detail.map((d) => (d as { msg?: string })?.msg).filter(Boolean).join(' • ')
-          : null)
-        || e?.message
-        || 'Не удалось создать отдел',
-      );
-    },
+    onError: (err) => setNewDepartmentError(
+      explainedDetail(err) || 'Не удалось создать отдел',
+    ),
   });
 
   const startCreateDepartment = () => {
@@ -684,6 +682,18 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
             <DialogTitle>{editing ? t('hr.pages.employees.edit') : t('hr.pages.employees.new')}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-4">
+            {/* Прав на правку нет — поля молча становятся read-only, а кнопка
+                «Сохранить» остаётся живой и приводит к 403. Говорим об этом
+                сразу: ссылки нет намеренно, права выдаёт кадровая служба. */}
+            <PrerequisiteNotice
+              items={[{
+                when: editing ? !canWriteBasic : !canCreateEmployee,
+                text: t(
+                  'hr.pages.employees.readOnlyNotice',
+                  'Карточка открыта только для просмотра — правка полей требует прав кадровой службы',
+                ),
+              }]}
+            />
             {/* «Подтянуть данные» доступно и при создании, и при
                 редактировании: в режиме правки это единственный способ
                 привязать учётку к уже заведённой карточке (PATCH поле
@@ -817,6 +827,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                 {t('hr.pages.employees.fields.lastName')}
                 <Input
                   value={form.last_name}
+                  maxLength={HR_LIMITS.personName}
                   readOnly={!canWriteBasic}
                   onChange={(e) => setForm({ ...form, last_name: e.target.value })}
                 />
@@ -828,6 +839,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                 {t('hr.pages.employees.fields.firstName')}
                 <Input
                   value={form.first_name}
+                  maxLength={HR_LIMITS.personName}
                   readOnly={!canWriteBasic}
                   onChange={(e) => setForm({ ...form, first_name: e.target.value })}
                 />
@@ -836,6 +848,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                 {t('hr.pages.employees.fields.patronymic')}
                 <Input
                   value={form.middle_name}
+                  maxLength={HR_LIMITS.personName}
                   readOnly={!canWriteBasic}
                   onChange={(e) => setForm({ ...form, middle_name: e.target.value })}
                 />
@@ -847,6 +860,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               <Input
                 type="email"
                 value={form.email}
+                maxLength={HR_LIMITS.email}
                 readOnly={!canWriteBasic}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
               />
@@ -1025,14 +1039,17 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               </label>
               <label className="grid gap-2 text-sm">
                 {t('hr.pages.employees.fields.dateHired')}
-                <Input type="date" value={form.date_hired} onChange={(e) => setForm({ ...form, date_hired: e.target.value })} />
+                <DateInput value={form.date_hired} onChange={(value) => setForm({ ...form, date_hired: value })} />
               </label>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2 text-sm">
                 {t('hr.pages.employees.fields.dateDismissed')}
-                <Input type="date" value={form.date_dismissed} readOnly={!canTransferEmployee} onChange={(e) => setForm({ ...form, date_dismissed: e.target.value })} />
+                {fieldErrors.date_dismissed && (
+                  <span className="text-xs text-destructive">{fieldErrors.date_dismissed}</span>
+                )}
+                <DateInput value={form.date_dismissed} readOnly={!canTransferEmployee} onChange={(value) => setForm({ ...form, date_dismissed: value })} />
               </label>
             </div>
 

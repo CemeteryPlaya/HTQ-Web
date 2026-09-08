@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 
 import api from '@/api/client';
+import { reportApiError } from '@/lib/apiError';
 import {
     Dialog,
     DialogContent,
@@ -244,9 +245,7 @@ export const UserEditDialog: React.FC<Props> = ({ open, onOpenChange, mode, user
 
             onOpenChange(false);
         },
-        onError: (err: any) => {
-            toast.error(err?.response?.data?.detail || t('admin.users.createError', 'Не удалось создать пользователя'));
-        },
+        onError: (err) => reportApiError(err, t('admin.users.createError', 'Не удалось создать пользователя')),
     });
 
     const updateMutation = useMutation({
@@ -262,9 +261,7 @@ export const UserEditDialog: React.FC<Props> = ({ open, onOpenChange, mode, user
             toast.success(t('admin.users.saved', 'Изменения сохранены'));
             onOpenChange(false);
         },
-        onError: (err: any) => {
-            toast.error(err?.response?.data?.detail || t('admin.users.saveError', 'Не удалось сохранить'));
-        },
+        onError: (err) => reportApiError(err, t('admin.users.saveError', 'Не удалось сохранить')),
     });
 
     const setPasswordMutation = useMutation({
@@ -279,9 +276,7 @@ export const UserEditDialog: React.FC<Props> = ({ open, onOpenChange, mode, user
             toast.success(t('admin.users.passwordReset', 'Пароль сброшен'));
             setResetPassword('');
         },
-        onError: (err: any) => {
-            toast.error(err?.response?.data?.detail || t('admin.users.passwordResetError', 'Не удалось сбросить пароль'));
-        },
+        onError: (err) => reportApiError(err, t('admin.users.passwordResetError', 'Не удалось сбросить пароль')),
     });
 
     const isPending = createMutation.isPending || updateMutation.isPending || setPasswordMutation.isPending;

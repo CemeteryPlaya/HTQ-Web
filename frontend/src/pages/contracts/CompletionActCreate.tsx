@@ -3,8 +3,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, FileText, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
 
 import { contractsApi } from '@/api/contracts';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { formatDate, formatMoment, formatMoney } from '@/components/contracts/format';
 import { Button } from '@/components/ui/button';
@@ -19,9 +21,16 @@ export default function CompletionActCreate() {
   const navigate = useNavigate(); const queryClient = useQueryClient();
   const [administratorId, setAdministratorId] = useState(''); const [agreementId, setAgreementId] = useState('');
   const [amount, setAmount] = useState(''); const [act, setAct] = useState<File | null>(null);
-  const { data: administrators = [] } = useQuery({ queryKey: ['contracts', 'administrators'], queryFn: () => contractsApi.listAdministrators({ is_active: true }).then(r => r.data) });
-  const { data: agreements = [] } = useQuery({ queryKey: ['contracts', 'agreements'], queryFn: () => contractsApi.listAgreements().then(r => r.data) });
+  const { data: administrators = [], isLoading: administratorsLoading } = useQuery({ queryKey: ['contracts', 'administrators'], queryFn: () => contractsApi.listAdministrators({ is_active: true }).then(r => r.data) });
+  const { data: agreements = [], isLoading: agreementsLoading } = useQuery({ queryKey: ['contracts', 'agreements'], queryFn: () => contractsApi.listAgreements().then(r => r.data) });
   const eligible = agreements.filter(a => a.approval_state === 'approved' && String(a.administrator_id) === administratorId && !['terminated', 'executed'].includes(a.status));
+  // Акт составляется по договору, договор — по бюджету. Пустые селекты
+  // без объяснения читаются как поломка формы, поэтому недостающее звено
+  // называется прямо, вместе со ссылкой, куда за ним идти.
+  const noAdministrators = !administratorsLoading && administrators.length === 0;
+  const noAgreements = !agreementsLoading && agreements.length === 0;
+  const nothingApproved = !agreementsLoading && agreements.length > 0
+    && !agreements.some(a => a.approval_state === 'approved' && !['terminated', 'executed'].includes(a.status));
   const selectedFromList = eligible.find(a => String(a.id) === agreementId);
   const { data: selectedAgreement, isLoading: isLoadingAgreement } = useQuery({
     queryKey: ['contracts', 'agreement', agreementId],
@@ -36,13 +45,23 @@ export default function CompletionActCreate() {
   const create = useMutation({
     mutationFn: () => contractsApi.createCompletionAct(Number(administratorId), Number(agreementId), amount.replace(',', '.'), act!).then(r => r.data),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['contracts'] }); toast.success('Акт выполненных работ создан'); navigate('/contracts/completion-acts'); },
-    onError: (e: any) => toast.error(e?.response?.data?.detail ?? 'Не удалось создать акт'),
+    onError: (err) => reportApiError(err, 'Не удалось создать акт'),
   });
   return <ContractsShell><div className="max-w-2xl"><Link to="/contracts/completion-acts" className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" />К актам</Link>
     <div className="mb-6 flex items-center gap-3"><FileText className="h-7 w-7 text-muted-foreground" /><h1 className="text-3xl font-bold">Акт выполненных работ</h1></div>
+    <PrerequisiteNotice
+      title="Пока акт составлять не по чему:"
+      items={[
+        { when: noAdministrators, text: 'Справочник администраторов пуст — администратор заводится вместе с бюджетом,', to: '/contracts/budgets/new', linkText: 'создайте бюджетную строку' },
+        { when: noAgreements, text: 'Договоров пока нет —', to: '/contracts/agreements/new', linkText: 'оформите договор' },
+        { when: nothingApproved, text: 'Ни один договор не согласован — акт составляется только по согласованному действующему договору,', to: '/contracts/agreements', linkText: 'проверьте статусы' },
+      ]}
+    />
     <form onSubmit={e => { e.preventDefault(); if (!administratorId || !agreementId || !act || invalidAmount) { toast.error('Заполните все поля и проверьте сумму'); return; } create.mutate(); }}><Card><CardHeader><CardTitle>Основание и сумма</CardTitle></CardHeader><CardContent className="space-y-5">
       <div><Label>Администратор</Label><Select value={administratorId} onValueChange={v => { setAdministratorId(v); setAgreementId(''); }}><SelectTrigger><SelectValue placeholder="Выберите администратора" /></SelectTrigger><SelectContent>{administrators.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.display_name}</SelectItem>)}</SelectContent></Select></div>
-      <div><Label>Договор</Label><Select value={agreementId} onValueChange={setAgreementId} disabled={!administratorId}><SelectTrigger><SelectValue placeholder="Выберите договор" /></SelectTrigger><SelectContent>{eligible.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.number} — {a.name}</SelectItem>)}</SelectContent></Select></div>
+      <div><Label>Договор</Label><Select value={agreementId} onValueChange={setAgreementId} disabled={!administratorId}><SelectTrigger><SelectValue placeholder="Выберите договор" /></SelectTrigger><SelectContent>{eligible.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.number} — {a.name}</SelectItem>)}</SelectContent></Select>
+        <PrerequisiteNotice variant="inline" items={[{ when: Boolean(administratorId) && !agreementsLoading && eligible.length === 0 && !noAgreements && !nothingApproved, text: 'У этого администратора нет согласованных действующих договоров — выберите другого администратора или', to: '/contracts/agreements', linkText: 'проверьте статус договора' }]} />
+      </div>
       {selected && <section className="rounded-lg border bg-muted/30 p-4 text-sm">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b pb-3">
           <div><p className="font-semibold">{selected.number} — {selected.name}</p><p className="mt-0.5 text-muted-foreground">Договор</p></div>

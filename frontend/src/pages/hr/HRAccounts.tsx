@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { RefreshCw, Copy, Check } from 'lucide-react';
+import { reportApiError } from '@/lib/apiError';
 import { copyText } from '@/lib/clipboard';
 
 const HRAccounts = () => {
@@ -33,8 +34,7 @@ const HRAccounts = () => {
       setTempPassword({ id, pw });
       queryClient.invalidateQueries({ queryKey: ['hr-accounts'] });
     },
-    onError: (err: any) =>
-      toast.error(err?.response?.data?.detail ?? t('hr.pages.accounts.error')),
+    onError: (err) => reportApiError(err, t('hr.pages.accounts.error')),
   });
 
   const filtered = (accounts || []).filter((a) => {

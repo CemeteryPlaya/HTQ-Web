@@ -7,6 +7,8 @@ import { GripVertical, Lock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-reac
 import api from '@/api/client';
 import HRLayout from '@/components/hr/HRLayout';
 import PositionLevelsPanel from '@/components/hr/PositionLevelsPanel';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { HR_LIMITS } from '@/lib/fieldLimits';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -451,6 +453,7 @@ const HRPositions = () => {
                       {t('hr.pages.positions.fields.title')}
                       <Input
                         value={form.title}
+                        maxLength={HR_LIMITS.title}
                         onChange={(e) => setForm({ ...form, title: e.target.value })}
                         disabled={editingIsSystem}
                       />
@@ -473,6 +476,15 @@ const HRPositions = () => {
                           ))}
                         </SelectContent>
                       </Select>
+                      <PrerequisiteNotice
+                        variant="inline"
+                        items={[{
+                          when: departments !== undefined && departments.length === 0,
+                          text: t('hr.pages.positions.noDepartments', 'Справочник отделов пуст — должность заводится в отделе,'),
+                          to: '/hr/departments',
+                          linkText: t('hr.pages.positions.addDepartment', 'создайте отдел'),
+                        }]}
+                      />
                     </label>
                     <label className="grid gap-2 text-sm">
                       {t('hr.pages.positions.fields.level')}

@@ -11,6 +11,7 @@ import {
 } from '@/api/fileManager';
 import type { DepartmentFolder, DepartmentFile, DepartmentFileFolder } from '@/types/fileManager';
 import { BackToProfile } from '@/components/BackToProfile';
+import { explainedDetail } from '@/lib/apiError';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
@@ -181,7 +182,7 @@ const DepartmentFiles: React.FC = () => {
     onError: (err: any) => {
       toast({
         title: t('files.uploadErrorTitle'),
-        description: err?.response?.data?.detail || t('files.uploadError'),
+        description: explainedDetail(err) || t('files.uploadError'),
         variant: 'destructive',
       });
     },
@@ -206,7 +207,7 @@ const DepartmentFiles: React.FC = () => {
     onError: (err: any) => {
       toast({
         title: t('files.folderErrorTitle'),
-        description: err?.response?.data?.detail || t('files.folderError'),
+        description: explainedDetail(err) || t('files.folderError'),
         variant: 'destructive',
       });
     },
@@ -225,7 +226,7 @@ const DepartmentFiles: React.FC = () => {
     onError: (err: any) => {
       toast({
         title: t('files.deleteErrorTitle'),
-        description: err?.response?.data?.detail || t('files.deleteError'),
+        description: explainedDetail(err) || t('files.deleteError'),
         variant: 'destructive',
       });
     },

@@ -92,7 +92,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
     });
 
     // Departments for "Для отдела" type. Same lazy-load condition.
-    const { data: departments = [] } = useQuery({
+    const { data: departments = [], isLoading: departmentsLoading } = useQuery({
         queryKey: ['calendar-departments'],
         queryFn: fetchDepartments,
         enabled: isAnyEventDialogOpen,
@@ -405,6 +405,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                                 defaultDate={prefilledDate}
                                 userOptions={userOptions}
                                 departments={departments}
+                                departmentsLoading={departmentsLoading}
                                 submitting={createEventMutation.isPending}
                                 submitLabel={t('hr.common.create')}
                                 onCancel={() => { setIsEventModalOpen(false); setPrefilledDate(null); }}
@@ -778,6 +779,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
                             excludeFromPicker={editingEvent.creator_id ?? editingEvent.creator ?? null}
                             userOptions={userOptions}
                             departments={departments}
+                            departmentsLoading={departmentsLoading}
                             submitting={updateEventMutation.isPending}
                             submitLabel={t('common.save')}
                             onCancel={() => { setIsEditModalOpen(false); setEditingEvent(null); }}

@@ -7,6 +7,7 @@ import { TasksLayout } from '@/components/tasks/TasksLayout';
 import { ResourceGantt } from '@/components/tasks/ResourceGantt';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { DateInput } from '@/components/ui/date-input';
 import { Button } from '@/components/ui/button';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -84,11 +85,11 @@ const HRResourceSchedule: React.FC = () => {
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-xs text-muted-foreground">
               {t('tasks.pages.resources.periodFrom', 'Период с')}
-              <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-9 w-[160px]" />
+              <DateInput value={from} onChange={setFrom} className="h-9 w-[160px]" />
             </label>
             <label className="flex flex-col gap-1 text-xs text-muted-foreground">
               {t('tasks.pages.resources.periodTo', 'по')}
-              <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-9 w-[160px]" />
+              <DateInput value={to} onChange={setTo} className="h-9 w-[160px]" />
             </label>
 
             <div className="flex bg-muted/50 p-1 rounded-md border gap-1">

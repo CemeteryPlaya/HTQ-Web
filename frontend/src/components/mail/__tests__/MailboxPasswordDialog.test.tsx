@@ -46,10 +46,16 @@ const submitWithPassword = async () => {
     return String(toastError.mock.calls[0][0]);
 };
 
+// Статус в фикстуре обязателен: показывать ли текст сервера, решает именно он
+// (`lib/apiError.ts`). Отказ проверки пароля бэкенд отдаёт как 400 —
+// `self_service.VerificationFailed` в `apps/mail/views.py`.
+const rejectWith = (detail: string, status = 400) =>
+    post.mockRejectedValue({ response: { status, data: { detail } } });
+
 beforeEach(() => {
     post.mockReset();
     toastError.mockReset();
-    post.mockRejectedValue({ response: { data: { detail: 'Вход не выполнен' } } });
+    rejectWith('Вход не выполнен');
 });
 
 describe('MailboxPasswordDialog', () => {
@@ -74,7 +80,7 @@ describe('MailboxPasswordDialog', () => {
     it('ответ сервера показывается дословно, а не подменяется своим текстом', async () => {
         // «не тот пароль» и «сервер недоступен» требуют разных действий, и
         // сервер об этом знает больше нас.
-        post.mockRejectedValue({ response: { data: { detail: 'Сервер недоступен: таймаут' } } });
+        rejectWith('Сервер недоступен: таймаут');
         show('suggest');
 
         expect(await submitWithPassword()).toContain('Сервер недоступен: таймаут');
