@@ -46,7 +46,9 @@ from htqweb.http import ApiView, api_view, json_error
 
 from . import schemas
 from .models import (
+    AgreementKind,
     AgreementStatus,
+    AgreementType,
     BudgetStatus,
     CounterpartyStatus,
     InvoiceStatus,
@@ -1325,6 +1327,11 @@ class EnumsView(ContractsView):
             "counterparty_status": pairs(CounterpartyStatus.choices),
             "invoice_status": pairs(InvoiceStatus.choices),
             "payment_type": pairs(PaymentType.choices),
+            # «Вид» и «Тип» из реестра заказчика. Тип нужен форме не как
+            # украшение: у «открытого» договора сумма не заполняется, и
+            # выбор типа решает, требовать ли её.
+            "agreement_kind": pairs(AgreementKind.choices),
+            "agreement_type": pairs(AgreementType.choices),
             # Из каких статусов договор занимает бюджет — фронтенду нужно,
             # чтобы объяснить пользователю, почему остаток не изменился после
             # сохранения черновика. Счёт начинает занимать бюджет только после

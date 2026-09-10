@@ -29,7 +29,9 @@ from pydantic import (
 
 from apps.contracts.models import (
     AdvancePayment,
+    AgreementKind,
     AgreementStatus,
+    AgreementType,
     BudgetStatus,
     CounterpartyStatus,
     InvoiceStatus,
@@ -447,6 +449,11 @@ class AgreementCreate(BaseModel):
     counterparty_id: int
     amount: Decimal = Field(..., gt=0)
     payment_type: PaymentType
+    # Доля аванса — 0..1, а НЕ проценты: та же граница, что и в
+    # CheckConstraint модели, чтобы «70» вместо «0.7» не доходило до БД.
+    advance_share: Decimal = Field(Decimal("0"), ge=0, le=1)
+    kind: AgreementKind = AgreementKind.WORKS_SERVICES
+    contract_type: AgreementType = AgreementType.STANDARD
     currency: str = Field("KZT", min_length=3, max_length=3)
     signed_date: Optional[date] = None
     status: Optional[AgreementStatus] = None
@@ -464,6 +471,9 @@ class AgreementUpdate(BaseModel):
     counterparty_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
     payment_type: Optional[PaymentType] = None
+    advance_share: Optional[Decimal] = Field(None, ge=0, le=1)
+    kind: Optional[AgreementKind] = None
+    contract_type: Optional[AgreementType] = None
     currency: Optional[str] = Field(None, min_length=3, max_length=3)
     signed_date: Optional[date] = None
 
@@ -495,6 +505,9 @@ class AgreementRead(BaseModel):
     counterparty_name: str
     counterparty_bin_iin: str
     payment_type: str
+    advance_share: Decimal
+    kind: str
+    contract_type: str
     amount: Decimal
     advance_payment_id: Optional[int]
     advance_paid_amount: Decimal
