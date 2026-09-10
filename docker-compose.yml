@@ -635,6 +635,14 @@ services:
         printf '{"keys":[{"kty":"oct","use":"sig","alg":"HS256","k":"%s"}]}' "$$k" > /tmp/htqweb-jwks.json
         exec /run.sh
     environment:
+      # Провижининг алертов читает эти две переменные через $__env{}
+      # (infra/logging/grafana-provisioning/alerting/contact_points.yml).
+      # Дефолта тут намеренно НЕТ: пустое значение роняет провижининг
+      # («could not find Bot Token in settings»), а заглушка была бы хуже —
+      # Grafana поднялась бы, а алерты молча не уходили бы никуда, ровно та
+      # беда, ради которой contact_points.yml и переписывали. Задайте оба в .env.
+      GF_TELEGRAM_BOT_TOKEN: ${GF_TELEGRAM_BOT_TOKEN}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
