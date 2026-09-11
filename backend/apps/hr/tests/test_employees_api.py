@@ -796,8 +796,12 @@ def test_id_pmos_admin_sees_active_membership(admin_auth, hr_dep):
 # несёт то, что из неё переносится в карточку, плюс employee_id — «карточка
 # у этого пользователя уже есть». Набор проверяется целиком (==, не <=):
 # лишнее поле на границе аппок так же нежелательно, как недостающее.
+#
+# bio/avatar_url здесь НЕТ намеренно — они нужны для одного выбранного
+# пользователя и приходят точечной ручкой employees/users/<id>/prefill/
+# (test_identity_prefill_api сторожит это с другой стороны).
 USER_OPTION_FIELDS = {"id", "full_name", "email", "first_name", "last_name",
-                      "patronymic", "phone", "avatar_url", "bio", "employee_id"}
+                      "patronymic", "phone", "employee_id"}
 
 # Ответ на СОЗДАНИЕ шире ровно на временный пароль. Он есть только здесь:
 # без него заведённая через HR-форму учётка никому не по зубам — пароль

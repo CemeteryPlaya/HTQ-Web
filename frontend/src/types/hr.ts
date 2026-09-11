@@ -102,10 +102,10 @@ export interface HRUserOption {
   first_name?: string;
   last_name?: string;
   patronymic?: string;
-  /** Данные для переноса в карточку — их отдаёт GET /employees/users/. */
+  /** Данные для переноса в карточку — их отдаёт GET /employees/users/.
+   *  bio и avatar_url сюда не входят: список бывает на сотни строк, и за
+   *  ними ходят точечно (`HRUserPrefill`). */
   phone?: string;
-  avatar_url?: string;
-  bio?: string;
   /** Карточка сотрудника у этой учётки уже есть; null — ещё нет. */
   employee_id?: number | null;
 }
