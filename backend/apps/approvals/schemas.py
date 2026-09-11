@@ -20,12 +20,14 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from htqweb.date_rules import OrderedDates
+
 from .models import ProjectMemberRole, ProjectStatus
 
 
 # ── projects ────────────────────────────────────────────────────────────
 
-class ProjectCreate(BaseModel):
+class ProjectCreate(OrderedDates):
     name: str = Field(..., min_length=1, max_length=200)
     description: str = Field(default="", max_length=5000)
     status: ProjectStatus = ProjectStatus.ACTIVE
@@ -38,7 +40,7 @@ class ProjectCreate(BaseModel):
     department_id: int | None = None
 
 
-class ProjectUpdate(BaseModel):
+class ProjectUpdate(OrderedDates):
     name: str | None = Field(None, min_length=1, max_length=200)
     description: str | None = Field(None, max_length=5000)
     status: ProjectStatus | None = None

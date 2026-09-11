@@ -19,6 +19,7 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
 
@@ -104,6 +105,18 @@ export const ParticipantsPicker: React.FC<Props> = ({
           </Command>
         </PopoverContent>
       </Popover>
+      {/* «Никого не найдено» внутри списка говорит и про пустой поиск, и про
+          пустой справочник — а делать в этих случаях надо разное. Про пустой
+          справочник говорим снаружи, до того как список откроют. */}
+      <PrerequisiteNotice
+        variant="inline"
+        items={[{
+          when: options.length === 0,
+          text: t('calendar.noEmployees', 'В справочнике нет сотрудников —'),
+          to: '/hr/employees',
+          linkText: t('calendar.addEmployee', 'заведите сотрудника'),
+        }]}
+      />
 
       {value.length > 0 && (
         <div className="flex flex-wrap gap-1.5">

@@ -621,3 +621,20 @@ img, svg, video, canvas {
 
 
 
+
+/* Карточки уведомлений (sonner) стоят в правом нижнем углу, и там же на
+   телефоне прибита панель навигации (BottomNav, `md:hidden`, высота
+   4.25rem + безопасная зона). Без подъёма уведомление ложится ровно на неё:
+   и читать мешает, и нажать по нему нельзя.
+
+   `!important` обязателен: sonner подставляет эти переменные ИНЛАЙНОВЫМ
+   стилем на своём контейнере, а инлайн обычное правило не перебьёт. Верхняя
+   граница 767.98px — та же, на которой панель исчезает (Tailwind `md`);
+   собственная «мобильная» ширина sonner (600px) для этого мала, между 600 и
+   767px панель ещё видна. */
+@media (max-width: 767.98px) {
+  [data-sonner-toaster][data-y-position='bottom'] {
+    --offset-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px)) !important;
+    --mobile-offset-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}

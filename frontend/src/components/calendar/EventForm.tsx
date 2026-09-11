@@ -23,6 +23,9 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { DateInput } from '@/components/ui/date-input';
+import { datesOutOfOrder } from '@/lib/validation';
 import {
   Select,
   SelectContent,
@@ -45,6 +48,8 @@ interface Props {
   defaultDate?: Date | null;
   userOptions: CalendarUserOption[];
   departments: Department[];
+  /** Список ещё едет: иначе подсказка «отделов нет» мигает на каждом открытии. */
+  departmentsLoading?: boolean;
   submitting: boolean;
   submitLabel: string;
   onCancel: () => void;
@@ -107,6 +112,7 @@ export const EventForm: React.FC<Props> = ({
   defaultDate,
   userOptions,
   departments,
+  departmentsLoading = false,
   submitting,
   submitLabel,
   onCancel,
@@ -224,13 +230,14 @@ export const EventForm: React.FC<Props> = ({
           <Label htmlFor="ev-start-date" className="text-sm font-semibold ml-1">
             {t('calendar.form.startDate')}
           </Label>
-          <Input
+          <DateInput
             id="ev-start-date"
-            type="date"
             value={startDate}
-            onChange={(e) => {
-              setStartDate(e.target.value);
-              if (!endDate || endDate < e.target.value) setEndDate(e.target.value);
+            onChange={(next) => {
+              setStartDate(next);
+              // Окончание тянется за началом, если отстало: событие «с 5-го
+              // по 3-е» человек не задумывал, это следствие правки начала.
+              if (next && (!endDate || endDate < next)) setEndDate(next);
             }}
             className="rounded-2xl h-12 bg-muted/30 border-none focus-visible:ring-primary/40"
           />
@@ -239,12 +246,11 @@ export const EventForm: React.FC<Props> = ({
           <Label htmlFor="ev-end-date" className="text-sm font-semibold ml-1">
             {t('calendar.form.endDate')}
           </Label>
-          <Input
+          <DateInput
             id="ev-end-date"
-            type="date"
             value={endDate}
-            min={startDate}
-            onChange={(e) => setEndDate(e.target.value)}
+            invalid={datesOutOfOrder(startDate, endDate)}
+            onChange={setEndDate}
             className="rounded-2xl h-12 bg-muted/30 border-none focus-visible:ring-primary/40"
           />
         </div>
@@ -324,6 +330,15 @@ export const EventForm: React.FC<Props> = ({
                 ))}
               </SelectContent>
             </Select>
+            {/* Ссылки нет намеренно: справочник отделов ведёт кадровая
+                служба, и рядовому сотруднику идти туда не с чем. */}
+            <PrerequisiteNotice
+              variant="inline"
+              items={[{
+                when: !departmentsLoading && departments.length === 0,
+                text: t('calendar.form.noDepartments'),
+              }]}
+            />
           </div>
         )}
       </div>

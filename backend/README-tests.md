@@ -1,8 +1,13 @@
 # Backend tests — Postgres
 
-Status: **DONE**. The suite runs against real Postgres (`htqweb1-db-1`), no SQLite
-anywhere. Full measurement history for how the port conflict was diagnosed is in
-`.superpowers/sdd/task-1.0-report.md` — this file is the "how to run it" recipe.
+Status: **DONE**. The suite runs against real Postgres, no SQLite anywhere — the
+`db` service of `docker-compose.test-local.yml` (container `htqweb-local-db-1`;
+the old `htqweb1-db-1` name predates the per-stack compose project names).
+
+CI brings the same service up the same way rather than using an Actions
+`services:` block — see `.github/workflows/`. The reason is `max_connections=300`
+below: `services:` cannot override a container's command, and the compose file
+already carries the right one.
 
 ## Why a dedicated port (55432)
 
@@ -11,7 +16,7 @@ pytest-django needs a **direct** connection to Postgres so it can
 
 - Host `:5432` is occupied by a **native Windows `postgresql-x64-18` service**, which
   wins routing over Docker's port-proxy for the same port — the project's
-  `htqweb1-db-1` container is unreachable there from the host.
+  Postgres container is unreachable there from the host.
 - Host `:6432` (PgBouncer) does reach the real project DB, but it's
   transaction-pooled, and `CREATE DATABASE`/`DROP DATABASE` cannot pass through a
   pooled connection.
@@ -87,11 +92,15 @@ the run and drops it afterward (no `--keepdb` configured in `pytest.ini`).
 ## Notes for whoever touches this next
 
 - `apps/core/migrations/0001_initial.py` seeds `ServiceStatus` rows for every entry in
-  `KNOWN_SERVICES` (`conference` seeded `enabled=False` — SFU stack intentionally not
-  wired up yet) via `update_or_create`, both forward and backward — this runs for real
+  `KNOWN_SERVICES` via `update_or_create`, both forward and backward. (An earlier
+  revision noted `conference` as seeded `enabled=False` with "the SFU stack is
+  intentionally not wired up yet" — both are out of date: migration
+  `core/0003_enable_conference` turns it on, and conferences run in every stack.) — this runs for real
   against Postgres now, unlike SQLite's in-memory throwaway DB.
 - Tests that touch seeded rows (`apps/core/tests/test_service_gate.py`) already used
   `ServiceStatus.objects.update_or_create(...)`, not `.create(...)` — this was already
   correct going in, no test needed rewriting for the Postgres move.
-- The autouse `clear_service_status_cache` fixture in `apps/core/tests/conftest.py`
-  still applies unchanged (it only touches Django's cache, not the DB backend).
+- The autouse `clear_service_status_cache` fixture lives in `backend/conftest.py`
+  (repo-level, not `apps/core/tests/conftest.py` as an earlier revision of this
+  file said) and still applies unchanged — it only touches Django's cache, not
+  the DB backend.

@@ -1,0 +1,75 @@
+# Известные исключения из договора об интерфейсе.
+#
+# Проверяет `src/lib/ux/__tests__/uxContract.test.ts`; формат строки —
+# `путь/от/src:переменная` (для проверки ошибок — `путь:onError`).
+#
+# Мотив тот же, что у ci-known-failures.txt и eslint.ci.config.js: заслон
+# полезен, только пока он зелёный. Красный тест перестают читать, и новая
+# поломка теряется среди старых. Поэтому здесь перечислено ровно то, что
+# проверка не умеет отличить сама, — и у каждой строки написана ПРИЧИНА.
+#
+# Правило: строка — это либо «эвристика не может знать», либо долг с TODO.
+# Разрешением на молчаливый тупик она не является.
+# Проверено 2026-09-02.
+
+# ── Не ошибка API ────────────────────────────────────────────────────────────
+# Отказ WebRTC (нет камеры, сеть не собралась), а не ответ бэкенда: разбирать
+# его `lib/apiError` нечем, у него нет ни статуса, ни конверта.
+pages/ConferencePage.tsx:onError
+
+# ── Фильтры списков ──────────────────────────────────────────────────────────
+# Пустой список тут безвреден: фильтровать нечего ровно потому, что и строк
+# нет, а сама страница уже показывает своё «ничего не найдено».
+pages/hr/HRHistory.tsx:employees
+pages/hr/HRHistory.tsx:departments
+pages/hr/HRHistory.tsx:positions
+pages/hr/HRTimeTracking.tsx:employees
+pages/signoff/ProcessList.tsx:subjects
+
+# ── Необязательные поля с пунктом «не выбрано» ───────────────────────────────
+# Пустой список не мешает работе: значение можно не задавать вовсе, и форма
+# отправится. Подсказка тут была бы шумом на каждом открытии карточки.
+pages/hr/HRTaskDetail.tsx:users
+pages/hr/HRTaskDetail.tsx:departments
+pages/hr/HRTaskDetail.tsx:projects
+pages/AdminNews.tsx:categories
+components/hr/EmployeeFormDialog.tsx:departments
+components/tasks/CreateTaskModal.tsx:contractors
+components/tasks/CreateTaskModal.tsx:contractorWorkers
+
+# ── Зависимые селекты ────────────────────────────────────────────────────────
+# Пусты, только пока не выбран родитель (администратор бюджета), и в этом
+# состоянии выключены. Случай «справочника нет вовсе» объясняет плашка над
+# формой — она стоит выше по разметке, чем видит эвристика.
+pages/contracts/AgreementCreate.tsx:programs
+pages/contracts/AgreementCreate.tsx:yearOptions
+pages/contracts/AgreementEdit.tsx:yearOptions
+pages/contracts/InvoiceCreate.tsx:programs
+pages/contracts/InvoiceCreate.tsx:yearOptions
+pages/contracts/InvoiceEdit.tsx:yearOptions
+pages/contracts/BudgetEdit.tsx:administratorOptions
+
+# ── Пустым не бывает по построению ───────────────────────────────────────────
+# Правка существующей записи: её страна/тип уже выбраны, значит в справочнике
+# есть как минимум одна строка.
+pages/contracts/CounterpartyEdit.tsx:countryOptions
+# Пять системных типов задач кладёт миграция tasks/0002.
+components/tasks/CreateTaskModal.tsx:taskTypes
+# Каталог прав собирается из кода, а не из базы.
+pages/hr/HRPositions.tsx:permissionsCatalog
+# Блок рисуется только при volumes.length > 1.
+components/tasks/DailyReportDialog.tsx:volumes
+
+# ── Пара дат: фильтр периода, а не ввод данных ───────────────────────────────
+# Перевёрнутый период тут ничего не портит: запрос просто ничего не находит, и
+# страница сама об этом говорит. Сохраняемых дат в этих формах нет.
+
+# ── Списки на Command: пустота объясняется иначе или объяснять нечего ────────
+# Поиск по всей платформе: «ничего не найдено» — единственный осмысленный
+# ответ, справочника за этим списком нет.
+components/GlobalSearch.tsx:emptySource
+# Значение заводится прямо в поле («создать ‹набранное›»), идти никуда не надо:
+# ReferenceCombobox создаёт страну/программу вместе с бюджетом, TagsMultiSelect
+# — тег на месте.
+components/contracts/ReferenceCombobox.tsx:emptySource
+components/news/TagsMultiSelect.tsx:emptySource

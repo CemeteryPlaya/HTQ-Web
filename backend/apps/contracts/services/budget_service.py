@@ -34,6 +34,8 @@ from apps.contracts.services.reference_service import (
     get_administrator_or_404,
     get_program_or_404,
     resolve_country_input,
+    resolve_project_or_404,
+    update_administrator,
 )
 from apps.signoff import interface as signoff
 
@@ -140,6 +142,12 @@ def serialize_budget(budget: Budget, *, committed: dict | None = None) -> dict:
     return {
         "id": budget.pk,
         "administrator_id": budget.administrator_id,
+        # Проект из apps.tasks, если администратор с ним связан. Отдаётся
+        # ГОЛЫМ id, а не паспортом: подпись проекта уже приехала в
+        # ``administrator_name`` (сервис держит их синхронными), а поход в
+        # tasks за паспортом на каждый бюджет превратил бы список в N+1.
+        # Фронтенду id хватает, чтобы сделать ссылку на доску задач.
+        "project_id": budget.administrator.project_id,
         # Подпись администратора («проект страна») собирает сама модель —
         # см. Administrator.display_name.
         "administrator_name": budget.administrator.display_name,
@@ -195,6 +203,12 @@ def serialize_line(line: BudgetLine, *, committed=None) -> dict:
     return {
         **_serialize_line_inner(line, committed=committed),
         "administrator_id": budget.administrator_id,
+        # Проект из apps.tasks, если администратор с ним связан. Отдаётся
+        # ГОЛЫМ id, а не паспортом: подпись проекта уже приехала в
+        # ``administrator_name`` (сервис держит их синхронными), а поход в
+        # tasks за паспортом на каждый бюджет превратил бы список в N+1.
+        # Фронтенду id хватает, чтобы сделать ссылку на доску задач.
+        "project_id": budget.administrator.project_id,
         "administrator_name": budget.administrator.display_name,
         "period_year": budget.period_year,
         "currency": budget.currency,
@@ -254,16 +268,37 @@ def create_budget_full(*, administrator, programs, period_year,
 
 def _resolve_administrator(data) -> Administrator:
     if data.id is not None:
-        return get_administrator_or_404(data.id)
+        administrator = get_administrator_or_404(data.id)
+        # Существующую запись можно ДОСВЯЗАТЬ с проектом прямо из формы
+        # бюджета: связь появилась позже самих записей, и заставлять человека
+        # уходить в отдельный справочник ради одного поля незачем. Уже
+        # связанную не трогаем — переклеивать чужую связь мимоходом опаснее,
+        # чем не проставить её вовсе.
+        if data.project_id is not None and administrator.project_id is None:
+            administrator = update_administrator(
+                administrator.pk, project_id=data.project_id)
+        return administrator
     country = resolve_country_input(data.country)
     # Ключ совпадения — проект + страна, и это ВСЯ идентичность записи после
     # снятия ФИО: один проект в одной стране — один администратор бюджета.
     # Тот же проект в другой стране — отдельная запись с отдельными
     # бюджетами, поэтому страна из ключа не убирается.
-    administrator, _ = Administrator.objects.get_or_create(
-        project_name=data.project_name.strip(),
+    #
+    # Со связью имя берётся у проекта — иначе ключ совпадения считался бы по
+    # тексту из формы, и «QAZAQSTAN-Aralsk» с опечаткой завёл бы ВТОРОГО
+    # администратора рядом с настоящим.
+    project_name = (data.project_name or "").strip()
+    if data.project_id is not None:
+        project_name = resolve_project_or_404(data.project_id)["name"]
+
+    administrator, created = Administrator.objects.get_or_create(
+        project_name=project_name,
         country=country,
+        defaults={"project_id": data.project_id},
     )
+    if not created and data.project_id is not None and administrator.project_id is None:
+        administrator = update_administrator(
+            administrator.pk, project_id=data.project_id)
     return administrator
 
 

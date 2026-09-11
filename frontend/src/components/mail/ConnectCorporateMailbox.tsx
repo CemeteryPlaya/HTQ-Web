@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { AtSign, KeyRound, Link2, Unlink } from 'lucide-react';
 
 import api from '@/api/client';
+import { reportApiError } from '@/lib/apiError';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
@@ -43,7 +44,7 @@ export const ConnectCorporateMailbox: React.FC<{ className?: string }> = ({ clas
             toast.success(t('mail.connect.disconnected', 'Ящик отключён от платформы'));
             invalidate();
         },
-        onError: (e: ApiError) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('mail.connect.failed', 'Не удалось подключить ящик')),
     });
 
     // Раньше здесь стоял ранний `return null`, уносивший ВЕСЬ поддеревом,

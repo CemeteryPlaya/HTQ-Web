@@ -18,6 +18,8 @@ senior) уже хранятся и уже показываются в интер
 from __future__ import annotations
 
 from django.db.models import Q
+
+from htqweb import date_rules
 from django.http import Http404
 
 from ..models import (
@@ -183,6 +185,10 @@ def update_engagement(engagement_id: int, changes: dict) -> ContractorEngagement
         setattr(row, field, value)
     if row.project_id is None and row.site_id is None and row.roadmap_id is None:
         raise ValueError("Укажите проект, объект или роудмап (хотя бы одно)")
+    # По СЛИТОЙ паре, а не по присланным полям: в PATCH может приехать
+    # одна дата, вторая лежит в строке. Без этой проверки нарушение
+    # доходит до CheckConstraint и возвращается как 500.
+    date_rules.assert_instance_ordered(row)
     row.save()
     return row
 

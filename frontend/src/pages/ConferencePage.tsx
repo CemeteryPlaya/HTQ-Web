@@ -41,6 +41,7 @@ import {
 import { fetchOverview, listSessions } from '@/api/conference';
 import { useTranslation } from 'react-i18next';
 import i18next from '@/i18n';
+import { copyText } from '@/lib/clipboard';
 
 type ConferenceRuntimeConfig = {
   sfu_signaling_url: string;
@@ -1144,7 +1145,7 @@ export const ConferencePage = () => {
   const handleCopyRoomId = async () => {
     if (!activeRoomId) return;
     try {
-      await navigator.clipboard.writeText(activeRoomId);
+      await copyText(activeRoomId);
       toast({ description: t('conference.page.roomIdCopied') });
     } catch {
       toast({

@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { Server, ShieldCheck, Wand2, ChevronDown, ChevronRight } from 'lucide-react';
 
 import api from '@/api/client';
+import { reportApiError } from '@/lib/apiError';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -92,8 +93,9 @@ export const ConnectImapAccount: React.FC<{
             qc.invalidateQueries({ queryKey: ['email-accounts'] });
             onClose();
         },
-        onError: (e: ApiError) => toast.error(
-            e?.response?.data?.detail || t('mail.imap.error', 'Не удалось подключить аккаунт'),
+        onError: (err) => reportApiError(
+            err,
+            t('mail.imap.error', 'Не удалось подключить аккаунт'),
             { duration: 12_000 },
         ),
     });

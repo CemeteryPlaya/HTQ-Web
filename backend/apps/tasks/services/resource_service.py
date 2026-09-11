@@ -20,6 +20,8 @@
 from __future__ import annotations
 
 from django.db import transaction
+
+from htqweb import date_rules
 from django.db.models import Count, Q, Sum
 from django.http import Http404
 
@@ -99,6 +101,10 @@ def update_requirement(requirement_id: int, changes: dict) -> ResourceRequiremen
         row.equipment_category_id = None
     else:
         row.work_role_id = None
+    # По СЛИТОЙ паре, а не по присланным полям: в PATCH может приехать
+    # одна дата, вторая лежит в строке. Без этой проверки нарушение
+    # доходит до CheckConstraint и возвращается как 500.
+    date_rules.assert_instance_ordered(row)
     row.save()
     return row
 

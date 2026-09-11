@@ -2,13 +2,20 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Server, AlertTriangle, CheckCircle2, ExternalLink } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import api from '@/api/client';
 import { grafanaSsoUrl } from '@/lib/monitoring';
 import { useTranslation } from 'react-i18next';
 
 /**
  * MonitoringWidget — виджет быстрого доступа к мониторингу.
- * Отображает статус Prometheus targets (UP/DOWN) и ссылки на Grafana/Prometheus.
+ * Отображает статус Prometheus targets (UP/DOWN) и ссылку на Grafana.
  * Показывается только админам на странице MyProfile.
+ *
+ * Данные идут через бэкенд (`admin/v1/infrastructure/targets`), а НЕ напрямую
+ * в `/prometheus/api/v1/targets`, как было раньше. Причина: у Prometheus нет
+ * собственной авторизации, поэтому шлюз его намеренно не проксирует
+ * (infra/nginx/default.conf) — прямой запрос работал только под dev-прокси
+ * Vite, а в проде виджет показывал ошибку всегда.
  */
 
 interface PrometheusTarget {
@@ -16,10 +23,11 @@ interface PrometheusTarget {
     health: 'up' | 'down' | 'unknown';
     lastScrape: string;
     lastScrapeDuration: number;
+    lastError?: string;
 }
 
-interface TargetGroup {
-    activeTargets: PrometheusTarget[];
+interface TargetsResponse {
+    targets: PrometheusTarget[];
 }
 
 export const MonitoringWidget: React.FC = () => {
@@ -27,10 +35,8 @@ export const MonitoringWidget: React.FC = () => {
     const { data: targets, isLoading, error } = useQuery<PrometheusTarget[]>({
         queryKey: ['prometheus-targets'],
         queryFn: async () => {
-            const res = await fetch('/prometheus/api/v1/targets');
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const json = await res.json();
-            return (json.data as TargetGroup)?.activeTargets ?? [];
+            const res = await api.get<TargetsResponse>('admin/v1/infrastructure/targets');
+            return res.data?.targets ?? [];
         },
         retry: 1,
         refetchInterval: 30_000, // обновляем каждые 30 секунд
@@ -61,13 +67,16 @@ export const MonitoringWidget: React.FC = () => {
                         Grafana
                         <ExternalLink className="h-3 w-3" />
                     </a>
+                    {/* Explore в Grafana вместо прямой ссылки на /prometheus:
+                        шлюз его не проксирует, и ссылка вела в 404. Тот же
+                        PromQL, но за платформенным SSO. */}
                     <a
-                        href="/prometheus"
+                        href={grafanaSsoUrl('/explore')}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
                     >
-                        Prometheus
+                        PromQL
                         <ExternalLink className="h-3 w-3" />
                     </a>
                 </div>

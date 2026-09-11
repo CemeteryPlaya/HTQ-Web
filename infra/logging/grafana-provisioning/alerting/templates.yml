@@ -1,0 +1,75 @@
+# Шаблоны уведомлений (provisioned).
+#
+# Раньше текст сообщения жил ИНЛАЙНОМ в contact_points.yml. С появлением
+# второго чата это перестало работать: у инцидента и у бизнес-события разный
+# читатель, разная срочность и разный набор полезных полей, а копия шаблона в
+# двух местах разъезжается на первой же правке.
+#
+# ⚠️ ПОРОГА В ДАННЫХ ШАБЛОНА НЕТ. Grafana отдаёт `.Values` (значения по refId)
+# и `.ValueString`, но не то, С ЧЕМ сравнивали: порог живёт в модели правила,
+# а не в контексте уведомления. Поэтому у каждого правила есть СВОЯ аннотация
+# `threshold`, и шаблон печатает её. Забыли аннотацию — строка просто не
+# выводится, сообщение остаётся валидным.
+#
+# ⚠️ Ссылки (`.DashboardURL`, `.PanelURL`) появляются, только если у правила
+# заданы аннотации `__dashboardUid__` и `__panelId__`. Их нет у правил, разбор
+# которых идёт не в панели, а в консоли или в логах — там ссылка на дашборд
+# была бы вежливым враньём. Сам адрес строится из GF_SERVER_ROOT_URL, который
+# в проде берётся из PUBLIC_BASE_URL (см. docker-compose.yml): при дефолтном
+# `%(domain)s` он указывал на localhost и был бесполезен с телефона.
+
+apiVersion: 1
+
+templates:
+  - orgId: 1
+    name: htqweb-notifications
+    template: |
+      {{/* Текущее значение. .Values — map по refId; запрос у всех правил
+           лежит в A (в B — результат порога, 0 или 1, печатать его
+           бессмысленно). .ValueString — запасной путь для нестандартных
+           правил, где A отсутствует. */}}
+      {{ define "htqweb.value" -}}
+      {{- if index .Values "A" }}{{ printf "%.4g" (index .Values "A") }}
+      {{- else }}{{ .ValueString }}{{ end -}}
+      {{ end }}
+
+      {{ define "htqweb.threshold" -}}
+      {{- with index .Annotations "threshold" }} (порог: {{ . }}){{ end -}}
+      {{ end }}
+
+      {{/* ─── Инциденты ──────────────────────────────────────────────────
+           Читателя будят. Значит: сразу цифра, сразу ссылка на график и
+           возможность заглушить, если разбор откладывается до утра. */}}
+      {{ define "htqweb.incident" }}
+      {{- if eq .Status "firing" }}🔴{{ else }}✅{{ end }} {{ .Status | toUpper }} — {{ .CommonLabels.alertname }}
+      {{ range .Alerts }}
+      {{ .Annotations.summary }}
+      Сейчас: {{ template "htqweb.value" . }}{{ template "htqweb.threshold" . }}
+      {{- if .Annotations.description }}
+
+      {{ .Annotations.description }}{{ end }}
+      {{- if .PanelURL }}
+      График: {{ .PanelURL }}{{ else if .DashboardURL }}
+      Дашборд: {{ .DashboardURL }}{{ end }}
+      {{- if .SilenceURL }}
+      Заглушить: {{ .SilenceURL }}{{ end }}
+      {{ end }}
+      {{- end }}
+
+      {{/* ─── Бизнес-события ─────────────────────────────────────────────
+           Другой тон и, главное, БЕЗ ссылки «заглушить». Бизнес-событие
+           закрывается работой (обработали обращение, оформили оплату), а не
+           кнопкой; silence здесь означал бы «мы решили это не делать» — такое
+           решение принимается в задаче, а не в уведомлении. */}}
+      {{ define "htqweb.business" }}
+      {{- if eq .Status "firing" }}📌{{ else }}✔️{{ end }} {{ .CommonLabels.alertname }}
+      {{ range .Alerts }}
+      {{ .Annotations.summary }}
+      Сейчас: {{ template "htqweb.value" . }}{{ template "htqweb.threshold" . }}
+      {{- if .Annotations.description }}
+
+      {{ .Annotations.description }}{{ end }}
+      {{- if .DashboardURL }}
+      Подробности: {{ .DashboardURL }}{{ end }}
+      {{ end }}
+      {{- end }}

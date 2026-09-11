@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import logging
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -35,6 +36,8 @@ from apps.hr.models import ShareableLink, ShareLinkAudit
 from apps.hr.services import employee_card_service as card_svc
 from apps.hr.services import employee_service as emp_svc
 from apps.hr.services import org_service
+
+logger = logging.getLogger(__name__)
 
 PII_FIELDS = (
     "email",
@@ -119,6 +122,15 @@ def _audit(
     reason: str | None = None,
 ) -> None:
     ShareLinkAudit.objects.create(link_id=link_id, action=action, ip=ip, user_agent=ua, reason=reason)
+
+    if action.startswith("denied_"):
+        # Отказ дублируется в лог, и не ради удобства чтения. Журнал
+        # проиндексирован по (link_id, occurred_at), то есть вопрос «сколько
+        # отказов за час ПО ВСЕМ ссылкам» стоит seq scan вечно растущей
+        # append-only таблицы — гонять такое раз в минуту метрикой нельзя.
+        # Loki отвечает на тот же вопрос бесплатно: правило
+        # htqweb-share-link-probing.
+        logger.warning("share_link_denied action=%s ip=%s", action, ip or "-")
 
 
 def serialize_link(link: ShareableLink) -> dict:
@@ -234,6 +246,12 @@ def _resolve_and_validate(request, raw_token: str, *, expected_target: str | Non
         link = ShareableLink.objects.select_for_update().filter(token_hash=token_hash).first()
 
         if link is None:
+            # Неизвестный токен — ГЛАВНЫЙ признак перебора, и до сих пор он не
+            # писался никуда: строка аудита привязана к ссылке (link_id), а
+            # здесь ссылки нет. У реальной отозванной ссылки запись в журнале
+            # появится, у подобранной — нет, поэтому без этой строки самый
+            # интересный случай был невидим.
+            logger.warning("share_link_denied action=denied_unknown ip=%s", ip or "-")
             error: Exception | None = LinkNotFound()
         else:
             now = timezone.now()

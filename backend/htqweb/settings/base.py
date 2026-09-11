@@ -201,6 +201,23 @@ CELERY_CACHE_BACKEND = "default"
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 300
+# События задач. Без них Flower видит только самих воркеров, но не то, что они
+# выполняют: flower_events_total и flower_task_runtime_seconds_bucket пусты, а
+# с ними — половина дашборда «Celery». Настройкой, а не флагом `-E` у воркера:
+# флаг пришлось бы повторить в трёх compose-файлах и в media-воркере, и забытая
+# копия ломается молча — панель просто остаётся пустой.
+CELERY_WORKER_SEND_TASK_EVENTS = True
+# Адрес Prometheus во ВНУТРЕННЕЙ сети — для виджета мониторинга в профиле
+# админа (apps/core/views.py::infrastructure_targets). Префикс /prometheus
+# обязателен: контейнер запущен с --web.external-url=/prometheus, и без него
+# API отвечает 404. Наружу Prometheus по-прежнему не проксируется — у него
+# нет собственной авторизации.
+PROMETHEUS_INTERNAL_URL = env("PROMETHEUS_INTERNAL_URL",
+                              "http://prometheus:9090/prometheus")
+# Событие «задача поставлена» шлёт КЛИЕНТ (любой .delay), а не воркер. Нужно
+# ровно для одного вопроса: задачи ставятся, но их никто не берёт — то есть
+# очередь есть, а потребителя у неё нет.
+CELERY_TASK_SEND_SENT_EVENT = True
 # Обработка записей конференций уходит в СВОЮ очередь и к своему воркеру
 # (backend-media-worker, образ backend/Dockerfile.media с ffmpeg и Whisper).
 # Два повода развести: сборка часового видео и распознавание занимают десятки
@@ -338,6 +355,20 @@ CONFERENCE_INVITE_TTL_HOURS = int(env("CONFERENCE_INVITE_TTL_HOURS", "168"))
 # Публичный адрес платформы для сборки ссылок в письмах и сообщениях: там,
 # в отличие от браузера, origin взять неоткуда.
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "")
+
+# ── Утренняя сводка в Telegram (apps/core/tasks.py::send_daily_digest) ──────
+# Бот на платформе ОДИН, поэтому второй токен заводить не нужно: по умолчанию
+# берётся тот же GF_TELEGRAM_BOT_TOKEN, что читает Grafana. Префикс GF_ у него
+# исторический — это не настройка Grafana (секции [telegram] у неё нет), а
+# просто имя переменной, которую её провижининг подставляет через $__env{}.
+# Отдельный TELEGRAM_BOT_TOKEN оставлен как переопределение — на случай, если
+# сводку когда-нибудь захотят слать другим ботом.
+TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", env("GF_TELEGRAM_BOT_TOKEN", ""))
+# А вот чат нужен свой и по умолчанию пуст: id бизнес-группы живёт литералом в
+# contact_points.yml (Grafana не умеет брать его из окружения — см. объяснение
+# там), и продублировать его ещё и здесь значило бы завести вторую правду о
+# том, куда шлём. Пусто = сводка молча не отправляется.
+TELEGRAM_DIGEST_CHAT_ID = env("TELEGRAM_DIGEST_CHAT_ID", "")
 CONFERENCE_SFU_PATH = env("CONFERENCE_SFU_PATH", "/ws/sfu/")
 # ICE-серверы, которые бэкенд отдаёт фронту в GET /api/cms/v1/conference/config.
 #
@@ -595,6 +626,16 @@ MAIL_SYNC_PUSH_FLAGS = _flag("MAIL_SYNC_PUSH_FLAGS", "true")
 # По умолчанию периодическая задача только СЧИТАЕТ расхождения и пишет их в
 # лог; применение изменений — явное действие админа из UI.
 MAIL_RECONCILE_AUTO_APPLY = _flag("MAIL_RECONCILE_AUTO_APPLY", "false")
+
+# Привязка БЕСХОЗНЫХ ящиков к владельцам по точному совпадению адреса —
+# отдельно от AUTO_APPLY выше и по умолчанию включена. Операция не
+# разрушающая: у ящика не было владельца, а его адрес совпал с email
+# пользователя, и другого владельца у такого адреса быть не может.
+# Слитая с AUTO_APPLY, она требовала бы включить заодно двустороннее
+# автосведение (импорт с сервера и создание недостающих ящиков на нём) —
+# поэтому и не работала никогда: ради безопасной половины пришлось бы
+# включить опасную.
+MAIL_RECONCILE_AUTO_LINK = _flag("MAIL_RECONCILE_AUTO_LINK", "true")
 
 # Как собирать адрес из имени сотрудника: first.last | f.last | firstlast |
 # first_last | flast | last.first | first. Дефолт "f.last" — историческое

@@ -19,6 +19,7 @@ import {
 import { fetchTasks, updateTask } from '@/api/tasks';
 import type { Task, TaskPriority, TaskStatus } from '@/types/tasks';
 import type { UserProfile } from '@/types/userProfile';
+import { reportApiError } from '@/lib/apiError';
 import { statusBadgeClass, statusLabel } from '@/lib/tasks/status';
 import { TASK_PRIORITY, priorityLabel } from '@/lib/tasks/priority';
 
@@ -73,13 +74,13 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
             toast.success(t('tasks.pages.detail.success'));
             setActiveTab('my-tasks');
         },
-        onError: () => toast.error(t('tasks.pages.detail.error')),
+        onError: (err) => reportApiError(err, t('tasks.pages.detail.error')),
     });
 
     const updateStatusMutation = useMutation({
         mutationFn: ({ id, status }: { id: number; status: TaskStatus }) => updateTask(id, { status }),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['employee-tasks'] }),
-        onError: () => toast.error(t('tasks.pages.list.updateError')),
+        onError: (err) => reportApiError(err, t('tasks.pages.list.updateError')),
     });
 
     // Filter tasks locally to serve tab functionalities
@@ -136,7 +137,12 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                                 <div className="flex items-center gap-1.5">
                                     {TYPE_ICONS[task.task_type]}
                                     <span className="text-xs text-muted-foreground">
-                                        {t(`tasks.pages.list.type.${task.task_type}`)}
+                                        {/* task_types — таблица, пополняемая пользователем, поэтому
+                                            слаг может не иметь ключа в словаре. Порядок тот же, что в
+                                            HRTasks: имя из БД -> перевод -> сам слаг. Без запасного
+                                            варианта незнакомый тип показал бы сырой ключ. */}
+                                        {task.task_type_name
+                                            || t(`tasks.pages.list.type.${task.task_type}`, task.task_type)}
                                     </span>
                                 </div>
                             </TableCell>

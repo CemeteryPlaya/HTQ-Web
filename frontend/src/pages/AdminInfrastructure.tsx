@@ -19,6 +19,7 @@ import {
 import { toast } from 'sonner';
 
 import api from '@/api/client';
+import { reportApiError } from '@/lib/apiError';
 import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
@@ -38,6 +39,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
+import { copyText } from '@/lib/clipboard';
 
 type CredentialField = {
     key: string;
@@ -154,9 +156,6 @@ const resolveExternalUrl = (url: string) => {
     return url;
 };
 
-const extractError = (err: any, fallback: string) =>
-    err?.response?.data?.detail ?? err?.message ?? fallback;
-
 const AdminInfrastructure = () => {
   const { t } = useTranslation();
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -194,7 +193,7 @@ const AdminInfrastructure = () => {
             toast.success(t('admin.infrastructure.revealConfirmed'));
         },
         onError: (err) => {
-            toast.error(extractError(err, t('admin.infrastructure.passwordError')));
+            reportApiError(err, t('admin.infrastructure.passwordError'));
         },
     });
 
@@ -249,7 +248,7 @@ const AdminInfrastructure = () => {
             const res = await api.get<AuditResponse>('admin/v1/infrastructure/audit/reveals');
             setAuditEvents(res.data.events);
         } catch (err) {
-            toast.error(extractError(err, t('admin.infrastructure.logError')));
+            reportApiError(err, t('admin.infrastructure.logError'));
         } finally {
             setAuditLoading(false);
         }
@@ -276,7 +275,7 @@ const AdminInfrastructure = () => {
             setHealth((prev) => ({ ...prev, ...map }));
             fetchHistory();
         } catch (err) {
-            toast.error(extractError(err, t('admin.infrastructure.statusError')));
+            reportApiError(err, t('admin.infrastructure.statusError'));
             setHealth((prev) => {
                 const next = { ...prev };
                 ids.forEach((id) => {
@@ -310,13 +309,13 @@ const AdminInfrastructure = () => {
             fetchHistory();
         } catch (err) {
             setHealth((prev) => ({ ...prev, [resourceId]: { status: 'unknown' } }));
-            toast.error(extractError(err, t('admin.infrastructure.checkFailed')));
+            reportApiError(err, t('admin.infrastructure.checkFailed'));
         }
     };
 
     const copyValue = async (field: CredentialField) => {
         if (!field.copyable || !field.value) return;
-        await navigator.clipboard.writeText(field.value);
+        await copyText(field.value);
         toast.success(t('admin.infrastructure.copied', { label: field.label }));
     };
 

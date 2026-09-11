@@ -36,6 +36,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { fetchTaskDailyReports, fetchVolumeTypes, setTaskVolumes } from '@/api/tasks';
+import { reportApiError } from '@/lib/apiError';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
 import { canReportOnTask } from '@/lib/tasks/dailyReport';
@@ -118,9 +119,7 @@ const VolumeEditor: React.FC<{
       toast.success(t('tasks.volumes.saved', 'Плановый объём сохранён'));
       onSaved();
     },
-    onError: (err) => toast.error(
-      errorDetail(err) || t('tasks.volumes.saveError', 'Не удалось сохранить объём'),
-    ),
+    onError: (err) => reportApiError(err, t('tasks.volumes.saveError', 'Не удалось сохранить объём')),
   });
 
   // Один вид работ — одна строка: сервер отвергает дубликаты

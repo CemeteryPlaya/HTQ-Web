@@ -15,6 +15,7 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
 import { useTranslation } from 'react-i18next';
 
 interface Props {
@@ -59,7 +60,7 @@ export function TagsMultiSelect({ value, onChange }: Props) {
       setSearch('');
       toast.success(t('news.tags.created', { name: tag.name }));
     },
-    onError: (err: any) => toast.error(err?.response?.data?.detail || t('news.tags.createError')),
+    onError: (err) => reportApiError(err, t('news.tags.createError')),
   });
 
   const selected = tags.filter((t) => value.includes(t.id));

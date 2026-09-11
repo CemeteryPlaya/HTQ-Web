@@ -138,6 +138,17 @@ def create_employee(data, *, changed_by_id: int) -> Employee:
     _assert_position_exists(data.position_id)
     if _email_taken(data.email):
         raise EmailAlreadyInUse
+    if data.user_id is not None:
+        # ``user_id`` приходит прямо из тела запроса и до сих пор писался в
+        # модель как есть: несуществующая учётка проходила молча, а занятая
+        # другим сотрудником всплывала как IntegrityError, то есть 500
+        # «что-то пошло не так» вместо внятных 422/409.
+        #
+        # Импорт ленивый: employee_prefill_service импортирует ЭТОТ модуль
+        # (он ниже уровнем), и на верхнем уровне вышел бы цикл.
+        from apps.hr.services import employee_prefill_service as link_svc
+
+        link_svc.assert_user_available(data.user_id)
 
     employee = Employee.objects.create(**data.model_dump())
     audit_service.log(

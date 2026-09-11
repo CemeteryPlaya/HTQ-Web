@@ -4,6 +4,7 @@ import { ReactFlowProvider } from '@xyflow/react';
 import api from '@/api/client';
 import HRLayout from '@/components/hr/HRLayout';
 import { OrgChart } from '@/components/hr/OrgChart';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -223,6 +224,15 @@ const HRPMO = () => {
                                 {employees.map((e: any) => <SelectItem key={e.id} value={String(e.id)}>{e.full_name ?? `${e.first_name} ${e.last_name}`}</SelectItem>)}
                               </SelectContent>
                             </Select>
+                            <PrerequisiteNotice
+                              variant="inline"
+                              items={[{
+                                when: employees.length === 0,
+                                text: t('hr.pmo.noEmployees', 'В справочнике нет сотрудников —'),
+                                to: '/hr/employees',
+                                linkText: t('hr.pmo.addEmployee', 'заведите сотрудника'),
+                              }]}
+                            />
                           </label>
                           <label className="grid gap-1.5 text-sm">{t('hr.pmo.membershipType')}
                             <Select value={memberForm.membership_type} onValueChange={(v) => setMemberForm({ ...memberForm, membership_type: v })}>

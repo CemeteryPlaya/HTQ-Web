@@ -56,7 +56,9 @@ class PMOMemberNotFound(Exception):
 class PMOMemberDatesInvalid(Exception):
     """422: to_date < from_date."""
 
-    detail = "to_date must be >= from_date"
+    # Текст видит человек в интерфейсе, поэтому он на языке платформы и
+    # совпадает с формулировкой htqweb.date_rules (одно правило — один текст).
+    detail = "Дата начала участия позже даты окончания"
 
     def __init__(self) -> None:
         super().__init__(self.detail)

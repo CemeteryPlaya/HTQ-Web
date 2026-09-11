@@ -10,13 +10,17 @@ import {
   Share2,
   Trash2,
   UserPlus,
+  UsersRound,
 } from 'lucide-react';
 import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
 import { EmployeeFormDialog } from '@/components/hr/EmployeeFormDialog';
+import EmployeeBulkImportDialog from '@/components/hr/EmployeeBulkImportDialog';
 import { Employee, relationLabel } from '@/components/hr/employeeCommon';
 import {
   deleteEmployee,
+  fetchDepartments,
   fetchEmployees,
+  fetchPositions,
 } from '@/api/hr';
 import HRLayout from '@/components/hr/HRLayout';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -75,8 +79,27 @@ const HREmployees = () => {
     canWriteBasic,
     canCreateEmployee,
     canDeleteEmployee,
+    canListUserOptions,
     isLoading: levelLoading,
   } = useHRLevel();
+
+  // Массовый импорт — действие страницы, а не формы: он заводит СРАЗУ много
+  // карточек и формой сотрудника не пользуется.
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
+
+  // Справочники нужны диалогу импорта — там выбирают отдел и должность,
+  // общие для всей пачки. Ключи те же, что у формы сотрудника, поэтому
+  // react-query отдаст уже загруженное, а не сходит в API второй раз.
+  const { data: importDepartments } = useQuery({
+    queryKey: ['hr-departments'],
+    queryFn: fetchDepartments,
+    enabled: bulkImportOpen,
+  });
+  const { data: importPositions } = useQuery({
+    queryKey: ['hr-positions'],
+    queryFn: fetchPositions,
+    enabled: bulkImportOpen,
+  });
   const { data: employees, isLoading, error } = useQuery({
     queryKey: ['hr-employees'],
     queryFn: () => fetchEmployees({ limit: '200' }),
@@ -222,6 +245,16 @@ const HREmployees = () => {
               {level && <span className="ml-2 uppercase tracking-wide">({level.replace('_', ' ')})</span>}
             </div>
           </div>
+          {canCreateEmployee && canListUserOptions && (
+            <Button
+              variant="outline"
+              className="h-9 gap-2 rounded-xl font-semibold shrink-0"
+              onClick={() => setBulkImportOpen(true)}
+            >
+              <UsersRound className="h-4 w-4" />
+              {t('hr.pages.employees.import.open', 'Импорт из пользователей')}
+            </Button>
+          )}
           {canCreateEmployee && (
             <Button onClick={startCreate} className="h-9 shrink-0">
               <UserPlus className="mr-2 h-4 w-4" />
@@ -398,6 +431,13 @@ const HREmployees = () => {
           setDialogOpen(next);
           if (!next) setEditing(null);
         }}
+      />
+
+      <EmployeeBulkImportDialog
+        open={bulkImportOpen}
+        onOpenChange={setBulkImportOpen}
+        departments={importDepartments ?? []}
+        positions={importPositions ?? []}
       />
     </>
   );
