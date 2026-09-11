@@ -6,8 +6,15 @@
 
     committed = SUM(agreement.amount) по договорам этой СТРОКИ бюджета
                 в статусах COMMITTING_STATUSES
+              + SUM(оплат) по ОТКРЫТЫМ договорам этой строки
               + SUM(invoice.amount) по согласованным/оплаченным счетам
     remaining = line.amount − committed
+
+Открытый (рамочный) договор суммы не имеет, и его ``amount = 0`` бюджет не
+занимает. Тратятся по нему деньги оплатами — поэтому для открытого договора
+расходом считаются ОНИ, а не сумма договора. У стандартного — наоборот:
+сумма договора уже занимает бюджет целиком, и прибавить к ней оплаты по нему
+значило бы посчитать одни и те же деньги дважды.
 
 Единица счёта — ``BudgetLine``, а не ``Budget``: договор ссылается на
 строку, деньги выделены программе. Итоги по бюджету целиком
@@ -37,9 +44,14 @@ from django.db.models import Sum
 from apps.contracts.models import (
     Agreement,
     AgreementStatus,
+    AgreementType,
     AccountableFundsRequest,
     AccountableFundsRequestStatus,
+    AdvancePayment,
+    AdvancePaymentStatus,
     BudgetLine,
+    CompletionAct,
+    ContractPayment,
     Invoice,
     InvoiceStatus,
 )
@@ -79,6 +91,24 @@ ACCOUNTABLE_FUNDS_COMMITTING_STATUSES = frozenset({
     # budget: they are evidenced by the approved advance reports instead.
     AccountableFundsRequestStatus.CLOSED,
 })
+
+# Оплата по ОТКРЫТОМУ договору становится расходом с того же момента, что и
+# счёт без договора, — после положительного решения signoff
+# (``awaiting_accounting``) и дальше, после проведения (``closed``). Черновик
+# и оплата на согласовании бюджет не занимают, как не занимает его черновик
+# счёта.
+#
+# Статус самого договора здесь роли не играет: расторгнутый открытый договор
+# уже потраченных денег не возвращает.
+OPEN_AGREEMENT_SPENDING_STATUSES = frozenset({
+    AdvancePaymentStatus.AWAITING_ACCOUNTING,
+    AdvancePaymentStatus.CLOSED,
+})
+
+# Через что уходят деньги по договору. Тот же набор, что складывает
+# ``contract_payment_service.paid_amount_for_agreement``: предоплата, оплата
+# по счёту и оплата по акту — три отдельных платёжных документа.
+_OPEN_AGREEMENT_SPENDING_MODELS = (AdvancePayment, ContractPayment, CompletionAct)
 
 ZERO = Decimal("0.00")
 
@@ -135,6 +165,21 @@ def committed_map(line_ids, *, exclude_agreement_id: int | None = None,
         rows = query.values("budget_line_id").annotate(total=Sum("amount"))
         for row in rows:
             line_id = row["budget_line_id"]
+            totals[line_id] = totals.get(line_id, ZERO) + (row["total"] or ZERO)
+
+    # Расход по открытым договорам — их оплатами (см. докстринг модуля).
+    # ``exclude_agreement_id`` к ним не применяется: он исключает СУММУ
+    # договора при проверке её новой величины, а у открытого договора
+    # суммы, которую занимала бы строка, нет.
+    for model in _OPEN_AGREEMENT_SPENDING_MODELS:
+        rows = (model.objects
+                .filter(agreement__budget_line_id__in=ids,
+                        agreement__contract_type=AgreementType.OPEN,
+                        status__in=OPEN_AGREEMENT_SPENDING_STATUSES)
+                .values("agreement__budget_line_id")
+                .annotate(total=Sum("amount")))
+        for row in rows:
+            line_id = row["agreement__budget_line_id"]
             totals[line_id] = totals.get(line_id, ZERO) + (row["total"] or ZERO)
     return totals
 

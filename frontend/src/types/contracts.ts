@@ -142,6 +142,15 @@ export interface Counterparty {
 
 export type PaymentType = 'prepayment' | 'postpayment' | 'staged';
 
+/** «Вид» из реестра заказчика: РиУ / ТМЦ. */
+export type AgreementKind = 'works_services' | 'goods';
+
+/**
+ * «Тип» из реестра заказчика. У открытого (рамочного) договора суммы нет по
+ * существу — `amount` у него `0.00`, а `remaining_amount` — `null`.
+ */
+export type AgreementType = 'standard' | 'open';
+
 export type AgreementStatus =
   | 'draft'
   | 'on_review'
@@ -169,14 +178,21 @@ export interface Agreement {
   counterparty_name: string;
   counterparty_bin_iin: string;
   payment_type: PaymentType;
+  /** Доля аванса, `0.000`…`1.000`. */
+  advance_share: string;
+  kind: AgreementKind;
+  contract_type: AgreementType;
   amount: string;
   /** Единственная предоплата по договору, если она создана. */
   advance_payment_id: number | null;
   /** Закрытая предоплата; исходную сумму договора не меняет. */
   advance_paid_amount: string;
   contract_paid_amount: string;
-  /** Остаток по договору после закрытой предоплаты. */
-  remaining_amount: string;
+  /**
+   * Остаток по договору после проведённых платежей. `null` — у открытого
+   * договора: суммы нет, значит нет и лимита, которым ограничивать оплату.
+   */
+  remaining_amount: string | null;
   currency: string;
   file_id: string | null;
   signed_date: string | null;

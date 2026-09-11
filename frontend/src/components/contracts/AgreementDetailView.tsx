@@ -46,6 +46,7 @@ import {
   formatDate,
   formatMoment,
   formatMoney,
+  formatRemaining,
   remainingTone,
 } from '@/components/contracts/format';
 import { reportApiError } from '@/lib/apiError';
@@ -232,7 +233,9 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               <div>
                 <p className="text-sm text-muted-foreground">Сумма договора</p>
                 <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
-                  {formatMoney(agreement.amount, agreement.currency)}
+                  {agreement.contract_type === 'open'
+                    ? 'Открытый договор'
+                    : formatMoney(agreement.amount, agreement.currency)}
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-4 border-t pt-4 sm:border-l sm:border-t-0 sm:pl-8 sm:pt-0">
@@ -250,11 +253,12 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                 </div>
                 <div className="col-span-2 flex items-end justify-between gap-4 border-t pt-4">
                   <p className="text-xs text-muted-foreground">Остаток</p>
-                  <p className={`text-base font-semibold tabular-nums ${remainingTone(
-                    agreement.remaining_amount,
-                    agreement.amount,
-                  )}`}>
-                    {formatMoney(agreement.remaining_amount, agreement.currency)}
+                  <p className={`text-base font-semibold tabular-nums ${
+                    agreement.remaining_amount === null
+                      ? 'text-muted-foreground'
+                      : remainingTone(agreement.remaining_amount, agreement.amount)
+                  }`}>
+                    {formatRemaining(agreement.remaining_amount, agreement.currency)}
                   </p>
                 </div>
               </div>

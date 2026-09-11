@@ -76,6 +76,10 @@ def paid_amount_for_agreement(agreement_id: int) -> Decimal:
 
 
 def check_agreement_capacity(agreement: Agreement, amount) -> None:
+    # Открытый договор суммы не имеет — сравнивать оплату не с чем. Без этой
+    # оговорки его ``amount = 0`` запрещал бы любую оплату по нему.
+    if not agreement.has_fixed_amount:
+        return
     remaining = agreement.amount - paid_amount_for_agreement(agreement.pk)
     if amount > remaining:
         raise ContractPaymentRuleViolation(
@@ -102,6 +106,7 @@ def serialize_contract_payment(payment: ContractPayment) -> dict:
         "posting_number": payment.posting_number,
         "paid_by": payment.paid_by,
         "paid_at": payment.paid_at,
+        "document_date": payment.document_date,
         "created_by": payment.created_by,
         "created_at": payment.created_at,
         "updated_at": payment.updated_at,

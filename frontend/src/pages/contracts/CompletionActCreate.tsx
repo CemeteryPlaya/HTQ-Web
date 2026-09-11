@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 
 import { contractsApi } from '@/api/contracts';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
-import { formatDate, formatMoment, formatMoney } from '@/components/contracts/format';
+import { exceedsRemaining, formatDate, formatMoment, formatMoney, formatRemaining } from '@/components/contracts/format';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -30,7 +30,7 @@ export default function CompletionActCreate() {
   });
   const { data: enums } = useQuery({ queryKey: ['contracts', 'enums'], queryFn: () => contractsApi.getEnums().then(r => r.data) });
   const selected = selectedAgreement ?? selectedFromList;
-  const invalidAmount = !AMOUNT_RE.test(amount.trim()) || Number(amount.replace(',', '.')) <= 0 || (selected && Number(amount.replace(',', '.')) > Number(selected.remaining_amount));
+  const invalidAmount = !AMOUNT_RE.test(amount.trim()) || Number(amount.replace(',', '.')) <= 0 || (selected && exceedsRemaining(amount, selected.remaining_amount));
   const agreementStatusLabel = selected ? enums?.agreement_status.find(option => option.value === selected.status)?.label ?? selected.status : '';
   const paymentTypeLabel = selected ? enums?.payment_type.find(option => option.value === selected.payment_type)?.label ?? selected.payment_type : '';
   const create = useMutation({
@@ -49,10 +49,10 @@ export default function CompletionActCreate() {
           <p className="text-muted-foreground">{isLoadingAgreement ? 'Загрузка реквизитов…' : agreementStatusLabel}</p>
         </div>
         <div className="grid gap-x-6 gap-y-4 py-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div><p className="text-xs text-muted-foreground">Сумма договора</p><p className="mt-1 font-medium tabular-nums">{formatMoney(selected.amount, selected.currency)}</p></div>
+          <div><p className="text-xs text-muted-foreground">Сумма договора</p><p className="mt-1 font-medium tabular-nums">{selected.contract_type === 'open' ? 'Открытый договор' : formatMoney(selected.amount, selected.currency)}</p></div>
           <div><p className="text-xs text-muted-foreground">Предоплачено</p><p className="mt-1 tabular-nums">{formatMoney(selected.advance_paid_amount, selected.currency)}</p></div>
           <div><p className="text-xs text-muted-foreground">Оплачено по договору</p><p className="mt-1 tabular-nums">{formatMoney(selected.contract_paid_amount, selected.currency)}</p></div>
-          <div><p className="text-xs text-muted-foreground">Доступно к оплате</p><p className="mt-1 font-semibold tabular-nums">{formatMoney(selected.remaining_amount, selected.currency)}</p></div>
+          <div><p className="text-xs text-muted-foreground">Доступно к оплате</p><p className="mt-1 font-semibold tabular-nums">{formatRemaining(selected.remaining_amount, selected.currency)}</p></div>
         </div>
         <dl className="grid gap-x-6 gap-y-4 border-t pt-4 sm:grid-cols-2">
           <div><dt className="text-xs text-muted-foreground">Администратор</dt><dd className="mt-1">{selected.administrator_name}</dd></div>

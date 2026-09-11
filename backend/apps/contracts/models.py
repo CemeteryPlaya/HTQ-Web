@@ -199,20 +199,35 @@ class Program(models.Model):
     class Meta:
         ordering = ("name", "expense_item")
         constraints = [
-            # Ключ программы — КОД, а не пара «название + статья». Так её
-            # опознают финансисты, и так она приходит из их реестра: две
-            # РАЗНЫЕ программы разных проектов регулярно называются
-            # одинаково («Сопровождение проекта» — это и 3011, и 3020), и
-            # уникальность по названию их бы просто не пустила в базу.
-            # Различает их в интерфейсе ``display_name`` («код название»),
-            # так что одинаковое имя не создаёт двусмысленности и там.
+            # Ключ программы — ПАРА «код + название», и ни одно из двух по
+            # отдельности. Оба одиночных ключа данные заказчика опровергли:
             #
-            # Условие на непустой код: ``code`` необязателен, а Postgres
-            # считает пустые строки равными — без условия все программы,
-            # заведённые руками без кода, конфликтовали бы друг с другом.
-            models.UniqueConstraint(fields=["code"],
+            # - название не уникально: «Сопровождение проекта» — это и 3011,
+            #   и 3020;
+            # - код не уникален: коды у финансистов СВОИ У КАЖДОГО ПРОЕКТА.
+            #   111 — это «Материально-техническое оснащение» у офиса и
+            #   «Мобилизация/демобилизация» у ВАрваринского, 3026 — «Кабели
+            #   LV» у Аральска и «Система заземления» у «Арал 30 МВт».
+            #
+            # Поэтому программу по одному коду не ищут нигде: «какая это
+            # программа» — вопрос к СТРОКЕ БЮДЖЕТА (администратор × код), а
+            # не к справочнику. Этот ключ лишь не даёт завести одну и ту же
+            # «код + название» дважды. ``display_name`` («код название»)
+            # различает программы и в интерфейсе.
+            #
+            # Условие на непустой код: ``code`` необязателен, и программы,
+            # заведённые руками без кода, этим ключом не связаны.
+            models.UniqueConstraint(fields=["code", "name"],
                                     condition=~models.Q(code=""),
-                                    name="uq_contracts_program_code"),
+                                    name="uq_contracts_program_code_name"),
+            # Программа БЕЗ кода (заведённая руками) опознаётся так, как до
+            # появления кодов, — названием и статьёй. Иначе две одинаковые
+            # «Образование / Оборудование» без кода легли бы в базу дважды.
+            # Программ с кодом правило не касается: у 3011 и 3020 одинаковы
+            # и название, и статья, и это две разные программы.
+            models.UniqueConstraint(fields=["name", "expense_item"],
+                                    condition=models.Q(code=""),
+                                    name="uq_contracts_program_uncoded"),
         ]
         verbose_name = "Программа"
         verbose_name_plural = "Программы"
@@ -588,6 +603,17 @@ class Agreement(signoff.Approvable, models.Model):
     def __str__(self) -> str:
         return f"{self.number} — {self.name}"
 
+    # Есть ли у договора сумма, с которой можно сравнивать оплаты и остаток.
+    # У открытого (рамочного) договора её нет по существу — ``amount = 0``
+    # означает «суммы ещё нет», а не «лимит ноль». Все проверки вида «оплата
+    # не больше остатка договора» спрашивают ЭТО свойство, а не тип напрямую:
+    # иначе каждая из них повторяла бы одно и то же условие, и первая же
+    # забытая превратила бы открытый договор в договор, по которому нельзя
+    # заплатить ни тенге.
+    @property
+    def has_fixed_amount(self) -> bool:
+        return self.contract_type != AgreementType.OPEN
+
 
 class Invoice(signoff.Approvable, models.Model):
     """Счёт на оплату БЕЗ договора — прямая закупка, за которой не стоит
@@ -650,6 +676,20 @@ class Invoice(signoff.Approvable, models.Model):
     status = models.CharField(max_length=20, choices=InvoiceStatus.choices,
                               default=InvoiceStatus.DRAFT,
                               db_default=InvoiceStatus.DRAFT)
+    # Дата самого счёта — не дата его записи в платформу. Для отчёта о
+    # движении денег это разные вещи: счёт от 31 декабря, заведённый в
+    # январе, относится к прошлому году. Необязательна: в книге заказчика
+    # у половины счетов её нет.
+    document_date = models.DateField(null=True, blank=True,
+                                     verbose_name="Дата счёта")
+    # Происхождение записи, пришедшей импортом, — тот же смысл, что у
+    # ``Agreement.external_id``: по нему повторный прогон находит свою строку,
+    # а не заводит вторую. У счёта без договора в источнике нет своего
+    # идентификатора, поэтому здесь лежит отпечаток содержимого строки
+    # (см. ``services/cashflow_operations_import.py``).
+    external_id = models.CharField(max_length=64, default="", blank=True,
+                                   db_default="", db_index=True,
+                                   verbose_name="Идентификатор в источнике")
     created_by = models.IntegerField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
@@ -662,6 +702,11 @@ class Invoice(signoff.Approvable, models.Model):
             # учитываться в остатке (см. докстринг, пункт 3).
             models.Index(fields=["budget_line", "status"],
                          name="ix_contracts_inv_line_st"),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=["external_id"],
+                                    condition=~models.Q(external_id=""),
+                                    name="uq_contracts_inv_external_id"),
         ]
         verbose_name = "Счёт на оплату"
         verbose_name_plural = "Счета на оплату"
@@ -692,12 +737,24 @@ class ContractPayment(signoff.Approvable, models.Model):
                                       db_default="", verbose_name="Номер проводки")
     paid_by = models.IntegerField(null=True, blank=True, db_index=True)
     paid_at = models.DateTimeField(null=True, blank=True)
+    # Дата счёта, по которому платят, и идентификатор источника — то же, что
+    # у ``Invoice`` и по тем же причинам (см. там).
+    document_date = models.DateField(null=True, blank=True,
+                                     verbose_name="Дата счёта")
+    external_id = models.CharField(max_length=64, default="", blank=True,
+                                   db_default="", db_index=True,
+                                   verbose_name="Идентификатор в источнике")
     created_by = models.IntegerField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
     class Meta:
         ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(fields=["external_id"],
+                                    condition=~models.Q(external_id=""),
+                                    name="uq_ctr_pay_external_id"),
+        ]
         indexes = [
             models.Index(fields=["agreement", "status"], name="ix_ctr_pay_agr_status"),
             models.Index(fields=["administrator", "approval_state"], name="ix_ctr_pay_adm_state"),

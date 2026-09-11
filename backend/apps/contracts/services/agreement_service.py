@@ -20,6 +20,7 @@ from django.http import Http404
 from apps.contracts.models import (
     Agreement,
     AgreementStatus,
+    AgreementType,
     Budget,
     BudgetLine,
     BudgetStatus,
@@ -257,7 +258,11 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "advance_payment_id": advance_payment_id,
         "advance_paid_amount": advance_paid_amount,
         "contract_paid_amount": contract_paid_amount,
-        "remaining_amount": agreement.amount - advance_paid_amount - contract_paid_amount,
+        # Остаток к оплате есть только у договора с суммой. У открытого её
+        # нет, и «0 − оплачено» дало бы отрицательный остаток, который формы
+        # оплаты читают как «платить нечего». ``None`` — «без лимита».
+        "remaining_amount": (agreement.amount - advance_paid_amount - contract_paid_amount
+                             if agreement.has_fixed_amount else None),
         "currency": agreement.currency,
         "file_id": agreement.file_id,
         "signed_date": agreement.signed_date,
@@ -343,10 +348,27 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
         # сумма, и почти всегда падало бы.
         budget_calc.check_capacity(line, amount, exclude_agreement_id=agreement.pk)
 
-    # Не даём уменьшить исходную сумму договора ниже уже закрытой
-    # предоплаты. Сам остаток не хранится: он считается из суммы договора и
-    # проведённой предоплаты, как остаток бюджетной строки для счетов.
-    advance_payment_svc.check_agreement_capacity(agreement, amount)
+    # Не даём уменьшить сумму договора ниже того, что по нему уже проведено
+    # (предоплата, оплаты, акты). Сам остаток не хранится: он считается из
+    # суммы договора и проведённых платежей.
+    #
+    # Сравнивается НОВАЯ сумма с оплаченным — а не с «остатком» старой, как
+    # делает ``check_agreement_capacity``: тот отвечает на другой вопрос
+    # («можно ли заплатить ещё столько-то») и на правке суммы запрещал бы
+    # договору расти даже в пределах бюджета.
+    #
+    # Для открытого договора проверки нет: суммы у него нет, а оплаты есть,
+    # и без оговорки ЛЮБАЯ правка (хоть опечатки в названии) падала бы на
+    # «сумма меньше оплаченного». Смотрим на тип, который у договора БУДЕТ
+    # после этой правки: перевод открытого договора в стандартный как раз
+    # и должен проверить, что новая сумма покрывает уже оплаченное.
+    contract_type = fields.get("contract_type") or agreement.contract_type
+    if contract_type != AgreementType.OPEN:
+        paid = advance_payment_svc.total_paid_amount_for_agreement(agreement.pk)
+        if amount < paid:
+            raise AgreementRuleViolation(
+                f"Сумма договора {amount} меньше уже проведённых по нему платежей: {paid}"
+            )
 
     changed = [key for key, value in fields.items() if value is not None]
     for key in changed:

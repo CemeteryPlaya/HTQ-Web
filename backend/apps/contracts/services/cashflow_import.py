@@ -43,11 +43,14 @@
   курылысы»), и название — не ключ. Побеждает первое встреченное написание,
   остальные попадают в отчёт: выбирать за финансистов, как правильно, импорт
   не вправе.
-- **Программа опознаётся по КОДУ.** Названия у разных программ совпадают
-  («Сопровождение проекта» — это и 3011, и 3020), а код различает их всегда;
-  под это же переписан и уникальный ключ ``Program`` (см. его ``Meta``).
-  Название берётся из «Бюджета» (там оно полное), статья расходов — из
-  реестра (там оно короткое, каким его пишут в договорах).
+- **Программа опознаётся по паре «администратор × код».** Ни название, ни
+  код по отдельности её не определяют: названия совпадают у разных
+  программ («Сопровождение проекта» — это и 3011, и 3020), а коды у
+  финансистов свои у каждого проекта (111 у офиса и 111 у ВАрваринского —
+  разные программы). Поэтому ищется СТРОКА бюджета проекта с этим кодом
+  (``BudgetResolver``), а справочник программ трогается, только когда такой
+  строки ещё нет. Название берётся из «Бюджета» (там оно полное), статья
+  расходов — из реестра (там оно короткое, каким его пишут в договорах).
 - **Повторяющиеся номера договоров.** ``Agreement.number`` уникален, а в
   реестре один номер носят до трёх РАЗНЫХ договоров (у «1» — три разных
   контрагента). Повторам приписывается точка в конец («1», «1.», «1..»),
@@ -188,6 +191,10 @@ class ImportReport:
     updated: dict[str, int] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     overruns: list[str] = field(default_factory=list)
+    # Сделанное сверх создания/обновления строк, о чём стоит знать, но что
+    # не требует проверки (в отличие от ``warnings``): «согласовано N
+    # договоров» и т.п.
+    notes: list[str] = field(default_factory=list)
     rows_read: int = 0
     dry_run: bool = False
 
@@ -594,33 +601,158 @@ class _NumberAllocator:
 
 # ── Загрузка ────────────────────────────────────────────────────────────
 
-@dataclass
-class _References:
-    """Справочники, разложенные по ключам, которыми к ним обращается реестр."""
+class BudgetResolver:
+    """Находит строку бюджета по паре «администратор × код программы».
 
-    administrators: dict[str, Administrator] = field(default_factory=dict)
-    programs: dict[str, Program] = field(default_factory=dict)
-    budgets: dict[tuple[int, str], Budget] = field(default_factory=dict)
-    lines: dict[tuple[str, str], BudgetLine] = field(default_factory=dict)
+    Именно пара, а не код: коды программ у финансистов СВОИ У КАЖДОГО
+    ПРОЕКТА (111 у офиса и 111 у ВАрваринского — разные программы), и
+    вопрос «какая это программа» имеет ответ только внутри бюджета одного
+    администратора. Поэтому поиск идёт от СТРОКИ бюджета, а справочник
+    программ трогается лишь тогда, когда строки ещё нет и её надо завести.
+
+    Общий для обоих импортов (реестр договоров и «Операции»): оба листа
+    называют программу одинаково — администратором и кодом, — и расходиться
+    в том, как это превращается в строку бюджета, им нельзя.
+
+    Всё, что заводит, помечается в отчёте; строки без лимита — отдельным
+    предупреждением: нулевой лимит означает, что весь расход по ней лежит
+    за пределами бюджета, и это должен увидеть человек.
+    """
+
+    def __init__(self, *, year: int, country: Country, report: ImportReport,
+                 currencies: dict[str, str] | None = None,
+                 missing_limit_note: str):
+        self.year = year
+        self.country = country
+        self.report = report
+        # Валюта проекта — из его строк на листе лимитов; в листах расходов
+        # колонки валюты нет.
+        self.currencies = dict(currencies or {})
+        self.missing_limit_note = missing_limit_note
+        self.administrators: dict[str, Administrator] = {}
+        self.budgets: dict[tuple[int, str], Budget] = {}
+        self.lines: dict[tuple[str, str], BudgetLine] = {}
+
+    def administrator(self, project_name: str) -> Administrator:
+        if project_name not in self.administrators:
+            administrator, created = Administrator.objects.get_or_create(
+                country=self.country, project_name=project_name,
+            )
+            self.administrators[project_name] = administrator
+            self.report.bump("Administrator", created)
+        return self.administrators[project_name]
+
+    def budget(self, project_name: str, currency: str | None = None) -> Budget:
+        """Бюджет-контейнер «администратор × год × валюта».
+
+        Заводится по требованию: валюта входит в ключ, и проект со строками
+        лимитов в двух валютах должен получить два контейнера, а не уронить
+        импорт на отсутствующем ключе.
+        """
+        currency = currency or self.currencies.get(project_name, DEFAULT_CURRENCY)
+        administrator = self.administrator(project_name)
+        key = (administrator.pk, currency)
+        if key not in self.budgets:
+            budget, created = Budget.objects.get_or_create(
+                administrator=administrator, period_year=self.year, currency=currency,
+            )
+            self.budgets[key] = budget
+            self.report.bump("Budget", created)
+        return self.budgets[key]
+
+    def line(self, project_name: str, code: str, *, name: str, expense_item: str = "",
+             limit: Decimal | None = None, update_limit: bool = False,
+             currency: str | None = None) -> BudgetLine | None:
+        """Строка бюджета проекта с программой ``code``; заводится, если её нет.
+
+        ``None`` — строки нет, а завести её не из чего: пустой ``name``.
+
+        ``limit`` — лимит с листа «Бюджет», если он там есть. ``update_limit``
+        разрешает переписать им лимит УЖЕ существующей строки: так делает
+        импорт самого листа лимитов, но не импорт расходов — тот лимиты не
+        правит никогда, иначе исправленный финансистами в интерфейсе лимит
+        откатывался бы каждым прогоном.
+
+        ``name``/``expense_item`` нужны только при заведении новой программы.
+        У найденной строки программа не трогается: её могли переименовать в
+        интерфейсе, и импорт не должен это откатывать.
+        """
+        key = (project_name, code)
+        line = self.lines.get(key)
+
+        if line is None:
+            budget = self.budget(project_name, currency)
+            found = list(BudgetLine.objects
+                         .filter(budget=budget, program__code=code)
+                         .select_related("program", "budget")
+                         .order_by("pk")[:2])
+            if len(found) > 1:
+                self.report.warn(
+                    f"«{project_name}»: в бюджете {self.year} несколько строк с "
+                    f"программой {code} — взята первая (#{found[0].pk})"
+                )
+            if not found:
+                # Без названия программу не завести: код один её не
+                # определяет (см. докстринг класса), а выдумывать название
+                # импорт не вправе. Вызывающий сообщит об этом сам.
+                if not name:
+                    return None
+                # Новая строка заводится сразу с нужным лимитом — править
+                # после этого нечего.
+                line = self._create_line(budget, project_name, code, name=name,
+                                         expense_item=expense_item, limit=limit)
+                self.lines[key] = line
+                return line
+            line = found[0]
+            self.lines[key] = line
+            self.report.bump("BudgetLine", False)
+
+        if update_limit and limit is not None and line.amount != limit:
+            line.amount = limit
+            line.save(update_fields=["amount", "updated_at"])
+        return line
+
+    def _create_line(self, budget: Budget, project_name: str, code: str, *,
+                     name: str, expense_item: str, limit: Decimal | None) -> BudgetLine:
+        # Программу с тем же «код + название» переиспользуем: у разных
+        # проектов бывает одна и та же программа («100 Обеспечение
+        # деятельности команды Проекта» у ВАрваринского и Жанаозена).
+        program = Program.objects.filter(code=code, name=name).first()
+        if program is None:
+            program = Program.objects.create(code=code, name=name,
+                                             expense_item=expense_item or name)
+            self.report.bump("Program", True)
+        else:
+            self.report.bump("Program", False)
+
+        line = BudgetLine.objects.create(
+            budget=budget, program=program,
+            amount=limit if limit is not None else ZERO,
+            note="" if limit is not None else self.missing_limit_note,
+        )
+        self.report.bump("BudgetLine", True)
+        if limit is None:
+            self.report.warn(
+                f"нет лимита для «{project_name}» × программа {code} "
+                f"({program.display_name}) — строка бюджета заведена с нулевым лимитом"
+            )
+        return line
 
 
 def _load_references(budget_rows: list[BudgetRow], registry_rows: list[RegistryRow],
                      *, year: int, country: Country,
-                     report: ImportReport) -> _References:
+                     report: ImportReport) -> BudgetResolver:
     """Справочники и бюджет. Обязан отработать до договоров.
 
-    Программы собираются из ОБОИХ листов: длинное название есть только в
-    «Бюджете», короткое (статья расходов) — только в реестре, а часть кодов
-    встречается лишь в одном из листов.
+    Название и статья расходов программы собираются из ОБОИХ листов — по
+    паре «администратор × код», не по одному коду: длинное название есть
+    только в «Бюджете», короткое (статья) — только в реестре.
     """
-    refs = _References()
-
-    # Программы: код → (длинное название, короткое название).
-    names: dict[str, str] = {}
-    items: dict[str, str] = {}
+    names: dict[tuple[str, str], str] = {}
+    items: dict[tuple[str, str], str] = {}
     for row in budget_rows:
         if row.program_code:
-            names.setdefault(row.program_code, row.program_name)
+            names.setdefault((row.administrator, row.program_code), row.program_name)
         elif row.program_name:
             report.warn(
                 f"«{SHEET_BUDGET}» строка {row.excel_row}: "
@@ -628,88 +760,48 @@ def _load_references(budget_rows: list[BudgetRow], registry_rows: list[RegistryR
             )
     for row in registry_rows:
         if row.program_code:
-            items.setdefault(row.program_code, row.program_name)
+            items.setdefault((row.administrator, row.program_code), row.program_name)
 
-    for code in sorted(set(names) | set(items)):
+    def naming(key):
         # Название — из «Бюджета» (там оно полное), статья — из реестра.
         # Когда есть только одно из двух, оно идёт в оба поля: пустое
         # название программе запрещено, а пустая статья ничего не сообщает.
-        name = names.get(code) or items.get(code, "")
-        expense_item = items.get(code) or names.get(code, "")
-        program, created = Program.objects.update_or_create(
-            code=code, defaults={"name": name, "expense_item": expense_item},
-        )
-        refs.programs[code] = program
-        report.bump("Program", created)
+        name = names.get(key) or items.get(key, "")
+        return name, items.get(key) or name
+
+    resolver = BudgetResolver(
+        year=year, country=country, report=report,
+        currencies={row.administrator: row.currency for row in budget_rows},
+        missing_limit_note=(
+            f"Заведена импортом реестра договоров: лимит на листе «{SHEET_BUDGET}» отсутствует"
+        ),
+    )
 
     # Администраторы: и из «Бюджета», и из реестра — часть проектов ведёт
     # договоры, не имея строки лимитов.
     admin_names = {row.administrator for row in budget_rows if row.administrator}
     admin_names |= {row.administrator for row in registry_rows if row.administrator}
     for project_name in sorted(admin_names):
-        administrator, created = Administrator.objects.get_or_create(
-            country=country, project_name=project_name,
-        )
-        refs.administrators[project_name] = administrator
-        report.bump("Administrator", created)
+        resolver.administrator(project_name)
 
-    # Бюджеты-контейнеры: один на «администратор × год × валюта».
-    #
-    # Заводятся ПО ТРЕБОВАНИЮ, а не заранее по списку администраторов: валюта
-    # входит в ключ, и проект, у которого на листе лимитов оказались строки в
-    # двух валютах, должен получить два контейнера, а не уронить импорт на
-    # отсутствующем ключе. Валюта договоров того же проекта берётся из его
-    # строк бюджета (в реестре колонки валюты нет).
-    currencies = {row.administrator: row.currency for row in budget_rows}
-
-    def budget_for(project_name: str, currency: str) -> Budget:
-        administrator = refs.administrators[project_name]
-        key = (administrator.pk, currency)
-        if key not in refs.budgets:
-            budget, created = Budget.objects.get_or_create(
-                administrator=administrator, period_year=year, currency=currency,
-            )
-            refs.budgets[key] = budget
-            report.bump("Budget", created)
-        return refs.budgets[key]
-
-    # Строки бюджета из листа лимитов.
+    # Строки бюджета из листа лимитов: лимит отсюда и переписывается.
     for row in budget_rows:
         if not row.program_code or not row.administrator:
             continue
-        line, created = BudgetLine.objects.update_or_create(
-            budget=budget_for(row.administrator, row.currency),
-            program=refs.programs[row.program_code],
-            defaults={"amount": row.limit},
-        )
-        refs.lines[(row.administrator, row.program_code)] = line
-        report.bump("BudgetLine", created)
+        name, expense_item = naming((row.administrator, row.program_code))
+        resolver.line(row.administrator, row.program_code, name=name,
+                      expense_item=expense_item, limit=row.limit,
+                      update_limit=True, currency=row.currency)
 
-    # Строки, на которые ссылается реестр, но которых нет в «Бюджете».
-    # Договор без строки не сохранить, поэтому строка заводится с нулевым
-    # лимитом — и это ровно тот случай, который обязан увидеть человек:
-    # ноль означает, что весь договор лежит за пределами бюджета.
+    # Строки, на которые ссылается реестр, но которых нет в «Бюджете»:
+    # заводятся с нулевым лимитом (см. ``BudgetResolver``).
     for row in registry_rows:
-        key = (row.administrator, row.program_code)
-        if key in refs.lines or not row.program_code:
+        if not row.program_code:
             continue
-        currency = currencies.get(row.administrator, DEFAULT_CURRENCY)
-        line, created = BudgetLine.objects.get_or_create(
-            budget=budget_for(row.administrator, currency),
-            program=refs.programs[row.program_code],
-            defaults={
-                "amount": ZERO,
-                "note": f"Заведена импортом реестра договоров: лимит на листе «{SHEET_BUDGET}» отсутствует",
-            },
-        )
-        refs.lines[key] = line
-        report.bump("BudgetLine", created)
-        if created:
-            report.warn(
-                f"нет лимита для «{row.administrator}» × программа {row.program_code} — "
-                f"строка бюджета заведена с нулевым лимитом"
-            )
-    return refs
+        name, expense_item = naming((row.administrator, row.program_code))
+        resolver.line(row.administrator, row.program_code, name=name,
+                      expense_item=expense_item)
+    return resolver
 
 
 def _load_counterparties(registry_rows: list[RegistryRow], *, country: Country,
@@ -744,7 +836,7 @@ def _load_counterparties(registry_rows: list[RegistryRow], *, country: Country,
     return by_bin
 
 
-def _load_agreements(registry_rows: list[RegistryRow], refs: _References,
+def _load_agreements(registry_rows: list[RegistryRow], refs: BudgetResolver,
                      counterparties: dict[str, Counterparty], *,
                      status: str, report: ImportReport) -> None:
     external_ids = [row.external_id for row in registry_rows if row.external_id]
@@ -827,7 +919,7 @@ def _load_agreements(registry_rows: list[RegistryRow], refs: _References,
         report.bump("Agreement", created)
 
 
-def _report_overruns(refs: _References, report: ImportReport) -> None:
+def _report_overruns(refs: BudgetResolver, report: ImportReport) -> None:
     """Посчитать, где загруженные договоры вышли за лимит строки.
 
     Импорт перерасход не запрещает (переносится уже случившийся факт), но
@@ -842,7 +934,7 @@ def _report_overruns(refs: _References, report: ImportReport) -> None:
         used = committed.get(line.pk, ZERO)
         if used > line.amount:
             report.overruns.append(
-                f"«{key[0]}» × программа {key[1]}: договоров на {used}, "
+                f"«{key[0]}» × программа {key[1]}: расход {used}, "
                 f"лимит {line.amount} (перерасход {used - line.amount})"
             )
 

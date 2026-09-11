@@ -512,7 +512,8 @@ class AgreementRead(BaseModel):
     advance_payment_id: Optional[int]
     advance_paid_amount: Decimal
     contract_paid_amount: Decimal
-    remaining_amount: Decimal
+    # ``None`` у открытого договора: суммы нет — нет и остатка к оплате.
+    remaining_amount: Optional[Decimal]
     currency: str
     file_id: Optional[str]
     signed_date: Optional[date]
@@ -535,6 +536,9 @@ class InvoiceCreate(BaseModel):
     budget_line_id: int
     counterparty_id: int
     amount: Decimal = Field(..., gt=0)
+    # Дата самого счёта (не записи в платформу) — нужна отчёту о движении
+    # денег. Необязательна, как и в книге заказчика.
+    document_date: Optional[date] = None
 
 
 class InvoiceUpdate(BaseModel):
@@ -547,6 +551,7 @@ class InvoiceUpdate(BaseModel):
     budget_line_id: Optional[int] = None
     counterparty_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
+    document_date: Optional[date] = None
 
 
 class InvoiceStatusChange(BaseModel):
@@ -577,6 +582,7 @@ class InvoiceRead(BaseModel):
     file_id: Optional[str]
     status: str
     approval_state: str
+    document_date: Optional[date]
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
@@ -675,6 +681,7 @@ class ContractPaymentRead(BaseModel):
     posting_number: str
     paid_by: Optional[int]
     paid_at: Optional[datetime]
+    document_date: Optional[date]
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
