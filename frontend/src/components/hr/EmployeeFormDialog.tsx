@@ -606,10 +606,12 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
           ...prev,
           phone: prev.phone || prefill.phone || '',
           notes: prev.notes || prefill.bio || '',
+          avatar_url: prev.avatar_url || prefill.avatar_url || '',
         };
         setPrefilled({
           phone: !prev.phone && !!prefill.phone,
           notes: !prev.notes && !!prefill.bio,
+          avatar_url: !prev.avatar_url && !!prefill.avatar_url,
         });
         return next;
       });
@@ -851,9 +853,15 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                                 onSelect={() => {
                                   // Выбор учётки — это и есть «подтянуть»:
                                   // раньше отсюда уезжали только имя,
-                                  // фамилия и почта, хотя телефон, отчество
-                                  // и аватар в учётке уже были. Пустое поле
-                                  // учётки не затирает введённое руками.
+                                  // фамилия и почта, хотя телефон и отчество
+                                  // в учётке уже были. Пустое поле учётки не
+                                  // затирает введённое руками.
+                                  //
+                                  // Здесь — только то, что несёт СТРОКА
+                                  // СПИСКА, чтобы форма не мигала в ожидании
+                                  // запроса. «О себе» и аватар в списке не
+                                  // приезжают (он бывает на сотни строк) —
+                                  // их досевает prefillFromAccount ниже.
                                   setForm({
                                     ...form,
                                     user: String(u.id),
@@ -862,8 +870,6 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                                     middle_name: u.patronymic || form.middle_name,
                                     email: u.email || form.email,
                                     phone: u.phone || form.phone,
-                                    avatar_url: u.avatar_url || form.avatar_url,
-                                    notes: u.bio || form.notes,
                                   });
                                   setUserPopoverOpen(false);
                                   prefillFromAccount(u.id);

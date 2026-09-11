@@ -39,10 +39,11 @@ x-django-env: &django-env
   DJANGO_SETTINGS_MODULE: htqweb.settings.base
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
   JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-  # Публичный адрес (ссылки в письмах) — он же доверенный origin для CSRF
-  # django-admin; прочие адреса стенда — CSRF_TRUSTED_ORIGINS через запятую.
-  # См. «CSRF за прокси» в backend/htqweb/settings/base.py.
-  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+  # Доверенные origin'ы для CSRF в django-admin: адреса стенда через запятую.
+  # Второй источник — PUBLIC_BASE_URL, он объявлен ниже, в своей секции (сюда
+  # его дубликатом не возвращать: YAML запрещает повторный ключ, и compose
+  # падает на парсинге всего файла). См. «CSRF за прокси» в
+  # backend/htqweb/settings/base.py.
   CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-}
   # Django (psycopg, sync) идёт НАПРЯМУЮ в Postgres: CONN_MAX_AGE пулит на уровне
   # приложения, а PgBouncer transaction-mode рвал бы DDL/prepared-statements.
@@ -811,14 +812,10 @@ services:
         printf '{"keys":[{"kty":"oct","use":"sig","alg":"HS256","k":"%s"}]}' "$$k" > /tmp/htqweb-jwks.json
         exec /run.sh
     environment:
-      # Провижининг алертов читает эти две переменные через $__env{}
-      # (infra/logging/grafana-provisioning/alerting/contact_points.yml).
-      # Дефолта тут намеренно НЕТ: пустое значение роняет провижининг
-      # («could not find Bot Token in settings»), а заглушка была бы хуже —
-      # Grafana поднялась бы, а алерты молча не уходили бы никуда, ровно та
-      # беда, ради которой contact_points.yml и переписывали. Задайте оба в .env.
-      GF_TELEGRAM_BOT_TOKEN: ${GF_TELEGRAM_BOT_TOKEN}
-      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
+      # GF_TELEGRAM_BOT_TOKEN и ALERT_EMAIL_TO объявлены НИЖЕ, в секции про
+      # доставку алертов, через синтаксис :? — там же написано, почему пустое
+      # значение роняет Grafana целиком. Сюда их дубликатом не возвращать:
+      # повторный ключ в YAML роняет парсинг всего compose-файла.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       # Синтаксис :? — compose ОТКАЗЫВАЕТСЯ поднимать стек без пароля. Раньше
       # здесь молча подставлялось admin/admin на панель со всеми метриками

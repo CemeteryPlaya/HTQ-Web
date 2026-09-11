@@ -510,11 +510,17 @@ def _serialize_user_option(user: dict) -> dict:
     (``users.interface.list_user_prefills``). Через ``.get`` потому, что тем
     же сериализатором отвечает POST этой же ручки, а ``create_user``
     возвращает более узкую option-форму: у только что заведённой учётки
-    телефона и аватара и не может быть.
+    телефона и не может быть.
 
     ``employee_id`` отвечает на вопрос, который раньше приходилось решать
     глазами по списку сотрудников, — «у этого пользователя карточка уже
     есть?». ``None`` значит «нет», а не «не проверяли».
+
+    ``bio`` и ``avatar_url`` сюда НЕ входят, хотя источник их отдаёт: они
+    нужны для ОДНОГО выбранного пользователя, а список бывает на сотни
+    строк. За ними ходят точечно — ``employees/users/<id>/prefill/``
+    (``user_prefill`` ниже), и фронт так и делает: из списка он читает
+    только ``employee_id``, ``phone`` и ``patronymic``.
     """
     return {
         "id": user["id"],
@@ -524,8 +530,6 @@ def _serialize_user_option(user: dict) -> dict:
         "last_name": user.get("last_name", ""),
         "patronymic": user.get("patronymic", ""),
         "phone": user.get("phone", ""),
-        "avatar_url": user.get("avatar_url") or "",
-        "bio": user.get("bio", ""),
         "employee_id": user.get("employee_id"),
     }
 

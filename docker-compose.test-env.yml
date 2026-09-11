@@ -51,10 +51,10 @@ x-django-env: &django-env
   DJANGO_SETTINGS_MODULE: htqweb.settings.dev
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
   JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-  # Публичный адрес (ссылки в письмах) — он же доверенный origin для CSRF
-  # django-admin; прочие адреса стенда — CSRF_TRUSTED_ORIGINS через запятую.
+  # Доверенные origin'ы для CSRF в django-admin: адреса стенда через запятую.
+  # PUBLIC_BASE_URL сюда НЕ добавлять — он объявлен ниже пустым литералом, и
+  # причина там же; повторный ключ в YAML роняет парсинг всего файла.
   # См. «CSRF за прокси» в backend/htqweb/settings/base.py.
-  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
   CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-}
   # Всё из .env. Дефолты повторяют docker-compose.yml, чтобы поведение стеков
   # не расходилось, когда переменная в .env не задана.
@@ -81,6 +81,10 @@ x-django-env: &django-env
   # лежит боевой https://htq.group, и тестовый стенд начал бы клеить ссылки на
   # прод. Пустой TELEGRAM_BOT_TOKEN выключает утреннюю сводку — тестовый стек
   # в сеть за ней не ходит.
+  #
+  # Пустой PUBLIC_BASE_URL значит и то, что доверенный origin для CSRF в
+  # django-admin берётся ТОЛЬКО из CSRF_TRUSTED_ORIGINS (см. выше): адрес
+  # стенда нужно выписать там явно.
   PUBLIC_BASE_URL: ""
   GF_TELEGRAM_BOT_TOKEN: ""
   TELEGRAM_BOT_TOKEN: ""
@@ -468,13 +472,10 @@ services:
         printf '{"keys":[{"kty":"oct","use":"sig","alg":"HS256","k":"%s"}]}' "$$k" > /tmp/htqweb-jwks.json
         exec /run.sh
     environment:
-      # Провижининг алертов читает эти две переменные через $__env{} (infra/
-      # logging/grafana-provisioning/alerting/contact_points.yml). Пустое значение
-      # не «выключает канал», а роняет провижининг целиком — «could not find Bot
-      # Token in settings», — и вместе с ним всю Grafana, включая дашборды.
-      # На тестовом стенде алерты никуда не шлём, поэтому дефолт-заглушка.
-      GF_TELEGRAM_BOT_TOKEN: ${GF_TELEGRAM_BOT_TOKEN:-disabled-no-telegram-in-tests}
-      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-alerts@htqweb.local}
+      # GF_TELEGRAM_BOT_TOKEN и ALERT_EMAIL_TO объявлены НИЖЕ, в секции про
+      # доставку алертов: там заглушки и объяснение, почему они непустые.
+      # Сюда дубликатом не возвращать — повторный ключ в YAML роняет парсинг
+      # всего compose-файла.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       # Дефолт admin здесь остаётся намеренно: тестовый стек поднимается одной
       # командой без .env и наружу не смотрит. В docker-compose.yml та же

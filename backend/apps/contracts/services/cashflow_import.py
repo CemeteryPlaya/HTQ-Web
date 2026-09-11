@@ -148,9 +148,13 @@ KIND_BY_LABEL = {
     "риу": AgreementKind.WORKS_SERVICES,
     "тмц": AgreementKind.GOODS,
 }
+# «Открытый» из реестра — это FRAMEWORK: одно понятие (договор без общей
+# суммы) под двумя именами, см. докстринг AgreementType. Отдельного значения
+# ``open`` в перечислении нет намеренно, иначе договоры разошлись бы по двум
+# значениям, а проверка «суммы может не быть» читала бы только одно.
 TYPE_BY_LABEL = {
     "стандарт": AgreementType.STANDARD,
-    "открытый": AgreementType.OPEN,
+    "открытый": AgreementType.FRAMEWORK,
 }
 
 # БИН и ИИН в Казахстане всегда двенадцатизначные — до этой ширины и
@@ -796,7 +800,7 @@ def _load_agreements(registry_rows: list[RegistryRow], refs: _References,
                     f"(«{row.name}», {row.counterparty}) — сохранён как «{number}»"
                 )
 
-        if not row.has_amount and row.contract_type != AgreementType.OPEN:
+        if not row.has_amount and row.contract_type != AgreementType.FRAMEWORK:
             report.warn(
                 f"строка {row.excel_row} («{number}»): суммы нет, "
                 f"но договор не помечен открытым — записан нулём"
