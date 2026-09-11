@@ -25,6 +25,8 @@ export interface ConferenceInvite {
   revoked: boolean;
   max_uses: number;
   uses: number;
+  /** Язык интерфейса для того, кто откроет ссылку — '' значит «не задан». */
+  locale: string;
   created_at: string;
 }
 
@@ -34,6 +36,8 @@ export interface InvitePublicInfo {
   expires_at: string;
   /** Приезжает только сотруднику: анонимному посетителю комнату не отдаём. */
   room_id: string | null;
+  /** Язык приглашения — '' значит «не задан», страница входа его не трогает. */
+  locale: string;
 }
 
 export interface GuestTokenResponse {
@@ -42,6 +46,9 @@ export interface GuestTokenResponse {
   room_id: string;
   display_name: string;
   title: string;
+  /** Язык приглашения — кладётся в guestSession, чтобы не откатиться при
+   *  переходе со страницы входа в саму комнату. */
+  locale: string;
   conference: unknown;
 }
 
@@ -64,6 +71,8 @@ export const createInvite = async (payload: {
   allow_guests?: boolean;
   ttl_hours?: number | null;
   max_uses?: number;
+  /** '' или отсутствует — язык не задан, страница входа поведёт себя как раньше. */
+  locale?: string;
 }): Promise<ConferenceInvite> =>
   (await api.post<ConferenceInvite>('cms/v1/conference/invites', payload)).data;
 

@@ -86,10 +86,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import { signoffApi } from '@/api/signoff';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasAnyRole } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import { useTranslation } from 'react-i18next';
-
-const ADMIN_ROLES = ['admin', 'superuser', 'staff'] as const;
 
 const ProcessDetail = () => {
   const { t } = useTranslation();
@@ -98,8 +96,12 @@ const ProcessDetail = () => {
   const queryClient = useQueryClient();
 
   const { activeProfile } = useActiveProfile();
+  const permissions = usePermissions();
   const myId = activeProfile?.id ? Number(activeProfile.id) : null;
-  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
+  // Уровень модуля вместо платформенных флагов — см. пояснение в
+  // components/signoff/SignoffShell.tsx: до навешивания модульного гейта на
+  // ручки согласования интерфейс строже сервера, и это лечится выдачей роли.
+  const isAdmin = permissions.atLeast('signoff', 'admin');
 
   const [target, setTarget] = useState<DecisionTarget | null>(null);
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { TasksLayout } from '@/components/tasks/TasksLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -15,6 +16,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
 import { AlertCircle, Plus, Edit, PowerOff, RotateCcw, Truck } from 'lucide-react';
 import {
   fetchEquipment, createEquipment, updateEquipment, deleteEquipment,
@@ -52,7 +54,7 @@ const HREquipment: React.FC = () => {
     }),
   });
 
-  const { data: contractors = [] } = useQuery({
+  const { data: contractors = [], isLoading: contractorsLoading } = useQuery({
     queryKey: ['contractors'],
     queryFn: () => fetchContractors({ status: 'active' }),
   });
@@ -92,7 +94,7 @@ const HREquipment: React.FC = () => {
         ? t('tasks.pages.equipment.updated', 'Техника обновлена')
         : t('tasks.pages.equipment.created', 'Техника добавлена'));
     },
-    onError: () => toast.error(t('tasks.pages.equipment.saveError', 'Не удалось сохранить')),
+    onError: (err) => reportApiError(err, t('tasks.pages.equipment.saveError', 'Не удалось сохранить')),
   });
 
   const disableMutation = useMutation({
@@ -101,7 +103,7 @@ const HREquipment: React.FC = () => {
       invalidate();
       toast.success(t('tasks.pages.equipment.disabled', 'Техника отключена'));
     },
-    onError: () => toast.error(t('tasks.pages.equipment.disableError', 'Не удалось отключить')),
+    onError: (err) => reportApiError(err, t('tasks.pages.equipment.disableError', 'Не удалось отключить')),
   });
 
   const restoreMutation = useMutation({
@@ -110,7 +112,7 @@ const HREquipment: React.FC = () => {
       invalidate();
       toast.success(t('tasks.pages.equipment.restored', 'Техника возвращена в работу'));
     },
-    onError: () => toast.error(t('tasks.pages.equipment.restoreError', 'Не удалось вернуть')),
+    onError: (err) => reportApiError(err, t('tasks.pages.equipment.restoreError', 'Не удалось вернуть')),
   });
 
   const openCreate = () => { setEditing(null); setForm(empty); setDialogOpen(true); };
@@ -347,6 +349,17 @@ const HREquipment: React.FC = () => {
                       ))}
                     </SelectContent>
                   </Select>
+                  {/* Партнёр обязателен, а заводится на отдельной странице:
+                      без подсказки пустой список выглядит как поломка. */}
+                  <PrerequisiteNotice
+                    variant="inline"
+                    items={[{
+                      when: !contractorsLoading && contractors.length === 0,
+                      text: t('tasks.pages.contractors.registryEmpty', 'Реестр партнёров пуст —'),
+                      to: '/tasks/contractors',
+                      linkText: t('tasks.pages.contractors.addFirst', 'добавьте партнёра'),
+                    }]}
+                  />
                 </div>
               )}
             </div>

@@ -27,11 +27,13 @@ backend/staticfiles/
 # ─── Environment / Secrets ───────────────────────────────────────────────────
 # Keep .env.example (template), ignore actual .env files with real secrets
 .env
-.env.example
 .env.production
 .env.local
 .env.*.local
-!.env.example
+# Шаблон — единственный .env-файл в репозитории. Раньше он был сначала
+# заигнорен строкой `.env.example`, а потом возвращён `!`-строкой ниже:
+# работало, но держалось на порядке строк, и перестановка молча выкинула бы
+# шаблон из репозитория. Теперь его просто не игнорируют.
 !frontend/.env.example
 
 # ─── TLS Certificates ────────────────────────────────────────────────────────
@@ -55,7 +57,15 @@ node_modules/
 frontend/dist/
 frontend/.env
 **/dist/
-**/.tsbuildinfo
+# `**/.tsbuildinfo` НЕ работал: он требует, чтобы файл назывался ровно
+# `.tsbuildinfo`, а tsc пишет `tsconfig.app.tsbuildinfo`.
+#
+# Сам файл лежал в git не из-за этого: рабочее правило есть в
+# `frontend/.gitignore`, но игнорирование не действует на то, что уже попало
+# в индекс, — кэш закоммитили 24.08.2026, и с тех пор он шумел в каждом
+# коммите. Убран через `git rm --cached`; правило здесь нужно, чтобы он не
+# вернулся из корня.
+*.tsbuildinfo
 
 # ─── Docker ──────────────────────────────────────────────────────────────────
 # Nothing to ignore — docker-compose.yml and Dockerfiles are committed
@@ -98,3 +108,10 @@ requirementsNDPP.txt
 # Локальные скрипты с боевыми доступами (тот же случай, что .env выше).
 db-vps.ps1
 .playwright-mcp
+memory.md
+prod-hotfix.patch
+docker-compose.override.yml
+*.bak
+db_schema.csv
+table_data.csv
+existing_models.py

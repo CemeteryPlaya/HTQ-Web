@@ -18,6 +18,7 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
 
+from apps.companies.interface import user_may_enter_company
 from apps.mail import interface as mail_interface
 from htqweb.authn.jwt import AuthError, decode_token, issue_token_pair
 from htqweb.fallback import fallback
@@ -37,6 +38,60 @@ from .services import (
 logger = logging.getLogger(__name__)
 
 
+# ── Компания запроса для выдачи токена — общий шаг login и refresh ─────────
+#
+# Обе двери (вход по паролю и обмен refresh-cookie) обязаны выдать токен
+# КОМПАНИИ ЗАПРОСА, а не компании по умолчанию — иначе пользователь на чужом
+# для его токена поддомене получает валидный, но бесполезный токен, который
+# api_view тут же отвергнет по X-HTQ-Company (403). Для входа по паролю это
+# особенно жёстко: там нет последующего обмена по refresh, который мог бы
+# исправить компанию — фронт вызывает refresh только на 401, а тут сразу 403,
+# то есть без этой проверки пользователь на чужом (для default_company_slug)
+# поддомене не может войти вообще.
+
+
+def _company_slug_for_token(request, user_id: int):
+    """Компания, для которой выпускать токен, по заголовку запроса.
+
+    Возвращает ``(company_slug, None)`` при успехе — ``company_slug`` может
+    быть ``None``, если заголовка ``X-HTQ-Company`` нет (общий домен,
+    переходный период): тогда ``issue_token_pair`` сама откатится на
+    компанию по умолчанию, как до этой правки. Если заголовок есть, но
+    пользователь в этой компании не состоит — ``(None, error_response)``, и
+    вызывающий обязан вернуть ``error_response`` как есть, не выпуская
+    токен: молчаливый откат на компанию по умолчанию здесь бессмыслен —
+    токен всё равно не совпал бы с запрошенным поддоменом, и api_view отдал
+    бы 403, но уже без понятной причины.
+
+    Проверка членства обязательна: без неё любой пользователь получал бы
+    токен любой компании, просто открыв её поддомен.
+    """
+    if request.company is None:
+        return None, None
+    slug = request.company["slug"]
+    if not user_may_enter_company(user_id, slug):
+        return None, json_error("Forbidden", 403)
+    return slug, None
+def _log_login_failure(request, reason: str) -> None:
+    """Строка в лог на каждый неудачный вход — источник алерта о подборе.
+
+    В ЛОГ, а не в AuditLog, и это осознанный размен. ``obtain_token`` —
+    единственный неаутентифицированный write-путь платформы: запись строки в
+    базу на каждую неудачу превратила бы его в усилитель отказа (сто попыток
+    в секунду = сто INSERT'ов, и таблица растёт от чужих рук). Строка лога не
+    стоит ничего, а канал доставки уже построен: promtail → Loki → правило
+    ``htqweb-auth-failed-burst``.
+
+    Ни логина, ни пароля здесь нет намеренно: логи читают шире, чем базу, а
+    сам факт «этот адрес пробовали» — уже утечка. Причина разделена на
+    ``not_activated`` и ``invalid_credentials``, потому что перебор ИМЁН и
+    перебор ПАРОЛЕЙ выглядят по-разному и разбираются по-разному.
+    """
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    ip = forwarded or request.META.get("REMOTE_ADDR") or "-"
+    logger.warning("auth_login_failed reason=%s ip=%s", reason, ip[:45])
+
+
 # ── POST token/ — login by email or username ────────────────────────────────
 
 @api_view(methods=("POST",), auth=None, body=schemas.TokenObtainRequest)
@@ -44,11 +99,17 @@ def obtain_token(request, data: schemas.TokenObtainRequest):
     try:
         user = auth_service.authenticate(data.email, data.password)
     except auth_service.AccountNotActivated:
+        _log_login_failure(request, "not_activated")
         return json_error("Account is not activated", 401)
     except auth_service.InvalidCredentials:
+        _log_login_failure(request, "invalid_credentials")
         return json_error("Invalid credentials", 401)
 
-    tokens = issue_token_pair(user)
+    company_slug, error = _company_slug_for_token(request, user.id)
+    if error is not None:
+        return error
+
+    tokens = issue_token_pair(user, company_slug=company_slug)
     return schemas.TokenResponse(access=tokens["access"], refresh=tokens["refresh"])
 
 
@@ -68,7 +129,15 @@ def refresh_token(request, data: schemas.TokenRefreshRequest):
     if user is None or user.status != UserStatus.ACTIVE:
         return json_error("User not found or inactive", 401)
 
-    tokens = issue_token_pair(user)
+    # Компания старого refresh-токена здесь не участвует: этим эндпоинтом
+    # фронт меняет cookie на access при переходе на другой поддомен (см. §9
+    # спеки), поэтому важна компания ЗАПРОСА, а не компания, с которой
+    # refresh был выпущен изначально (refresh_claims её и не несёт).
+    company_slug, error = _company_slug_for_token(request, user.id)
+    if error is not None:
+        return error
+
+    tokens = issue_token_pair(user, company_slug=company_slug)
     return schemas.TokenRefreshResponse(access=tokens["access"])
 
 

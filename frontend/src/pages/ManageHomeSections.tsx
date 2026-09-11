@@ -17,6 +17,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
 import {
   ArrowDown, ArrowUp, Eye, EyeOff, Pencil, Plus, Trash2,
 } from 'lucide-react';
@@ -54,6 +55,11 @@ const SECTION_LABELS: Record<string, string> = {
   mission: 'Наша миссия',
   about: 'О компании',
   partners: 'Партнёры',
+  'footer-brand': 'Футер: слоган',
+  'footer-company': 'Футер: колонка «Компания»',
+  'footer-services': 'Футер: колонка «Услуги»',
+  'footer-contact': 'Футер: колонка «Контакты»',
+  'footer-legal': 'Футер: копирайт и правовые ссылки',
 };
 
 /** Подсказка, какие поля элемента реально видны в этом блоке. Поля модели
@@ -66,6 +72,9 @@ const ITEM_HINTS: Record<string, string> = {
   services: 'Показываются: заголовок, описание',
   mission: 'Показываются: заголовок, описание, иконка',
   about: 'Показываются: заголовок, описание, иконка',
+  'footer-company': 'Показываются: заголовок (текст ссылки) и ссылка',
+  'footer-services': 'Показываются: заголовок (текст ссылки) и ссылка',
+  'footer-contact': 'Показываются: заголовок (текст), иконка и ссылка (для адреса оставьте пустой)',
 };
 
 /** Готовые макеты. Значения совпадают с `HomeSection.Layout` на бэкенде. */
@@ -101,44 +110,42 @@ export default function ManageHomeSections() {
       invalidate();
       toast.success(s.is_visible ? 'Блок скрыт' : 'Блок показан');
     },
-    onError: () => toast.error('Не удалось изменить видимость'),
+    onError: (err) => reportApiError(err, 'Не удалось изменить видимость'),
   });
 
   const reorder = useMutation({
     mutationFn: (ids: number[]) => homeAdminApi.reorderSections(ids),
     onSuccess: invalidate,
-    onError: () => toast.error('Не удалось изменить порядок'),
+    onError: (err) => reportApiError(err, 'Не удалось изменить порядок'),
   });
 
   const createSection = useMutation({
     mutationFn: (data: { title_ru: string; layout: string }) =>
       homeAdminApi.createSection(data),
     onSuccess: () => { invalidate(); setCreateOpen(false); toast.success('Блок создан'); },
-    onError: () => toast.error('Не удалось создать блок'),
+    onError: (err) => reportApiError(err, 'Не удалось создать блок'),
   });
 
   const deleteSection = useMutation({
     mutationFn: (id: number) => homeAdminApi.deleteSection(id),
     onSuccess: () => { invalidate(); toast.success('Блок удалён'); },
-    onError: (err: unknown) => {
-      const status = (err as { response?: { status?: number } })?.response?.status;
-      toast.error(status === 409
-        ? 'Системный блок нельзя удалить — его можно только скрыть'
-        : 'Не удалось удалить блок');
-    },
+    // 409 приезжает с готовым объяснением («Системный блок нельзя удалить —
+    // его можно только скрыть», apps/cms/views.py), дублировать его здесь
+    // значило бы завести вторую правду о том же правиле.
+    onError: (err) => reportApiError(err, 'Не удалось удалить блок'),
   });
 
   const deleteItem = useMutation({
     mutationFn: (itemId: number) => homeAdminApi.deleteItem(itemId),
     onSuccess: () => { invalidate(); toast.success('Элемент удалён'); },
-    onError: () => toast.error('Не удалось удалить элемент'),
+    onError: (err) => reportApiError(err, 'Не удалось удалить элемент'),
   });
 
   const toggleItemVisible = useMutation({
     mutationFn: (i: HomeItemAdmin) =>
       homeAdminApi.updateItem(i.id, { is_visible: !i.is_visible }),
     onSuccess: invalidate,
-    onError: () => toast.error('Не удалось изменить видимость элемента'),
+    onError: (err) => reportApiError(err, 'Не удалось изменить видимость элемента'),
   });
 
   const ordered = useMemo(() => sections ?? [], [sections]);
@@ -400,7 +407,7 @@ function EditDialog({
       toast.success('Сохранено');
       onClose();
     },
-    onError: () => toast.error('Не удалось сохранить'),
+    onError: (err) => reportApiError(err, 'Не удалось сохранить'),
   });
 
   const set = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));

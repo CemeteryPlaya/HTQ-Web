@@ -220,7 +220,14 @@ export function EntityCombobox(props: EntityComboboxProps) {
           <CommandList className="max-h-[280px] overflow-y-auto p-1">
             {filteredOptions.length === 0 ? (
               <CommandEmpty className="py-6 text-center text-xs text-muted-foreground">
-                {emptyText}
+                {/* «Ничего не найдено» и «справочник пуст» — разные вещи:
+                    в первом случае надо иначе искать, во втором — идти и
+                    заводить. Ссылки нет намеренно: компонент обслуживает и
+                    сотрудников, и должности, и адрес справочника зависит от
+                    того, чем его наполнил вызывающий. */}
+                {options.length === 0
+                  ? t('hr.orgChart.directoryEmpty', 'Справочник пуст — заполните его в кадрах')
+                  : emptyText}
               </CommandEmpty>
             ) : (
               <CommandGroup>

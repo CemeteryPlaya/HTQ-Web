@@ -27,6 +27,7 @@ import type { Task, TaskPriority, TaskStatus } from '@/types/tasks';
 import {
     TASK_STATUS_ORDER, statusBadgeClass, statusLabel,
 } from '@/lib/tasks/status';
+import { reportApiError } from '@/lib/apiError';
 import { TASK_PRIORITY, priorityLabel } from '@/lib/tasks/priority';
 
 /* ---- Config Maps ---- */
@@ -82,7 +83,7 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
             queryClient.invalidateQueries({ queryKey: ['employee-tasks'] });
             toast.success(t('tasks.pages.detail.success'));
         },
-        onError: () => toast.error(t('tasks.pages.detail.error')),
+        onError: (err) => reportApiError(err, t('tasks.pages.detail.error')),
     });
 
     const commentMutation = useMutation({
@@ -92,7 +93,7 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
             setCommentText('');
             toast.success(t('tasks.pages.detail.commentSuccess'));
         },
-        onError: () => toast.error(t('tasks.pages.detail.commentError')),
+        onError: (err) => reportApiError(err, t('tasks.pages.detail.commentError')),
     });
 
     const attachMutation = useMutation({
@@ -101,7 +102,7 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
             queryClient.invalidateQueries({ queryKey: ['employee-task', taskId] });
             toast.success(t('tasks.pages.detail.attachSuccess'));
         },
-        onError: () => toast.error(t('tasks.pages.detail.attachError')),
+        onError: (err) => reportApiError(err, t('tasks.pages.detail.attachError')),
     });
 
     function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {

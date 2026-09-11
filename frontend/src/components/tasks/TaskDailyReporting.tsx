@@ -36,8 +36,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { fetchTaskDailyReports, fetchVolumeTypes, setTaskVolumes } from '@/api/tasks';
+import { reportApiError } from '@/lib/apiError';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasElevatedAccess } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import { canReportOnTask } from '@/lib/tasks/dailyReport';
 import { volumeUnitLabel } from '@/lib/tasks/roadmap';
 import type { Task, TaskVolume } from '@/types/tasks';
@@ -118,9 +119,7 @@ const VolumeEditor: React.FC<{
       toast.success(t('tasks.volumes.saved', 'Плановый объём сохранён'));
       onSaved();
     },
-    onError: (err) => toast.error(
-      errorDetail(err) || t('tasks.volumes.saveError', 'Не удалось сохранить объём'),
-    ),
+    onError: (err) => reportApiError(err, t('tasks.volumes.saveError', 'Не удалось сохранить объём')),
   });
 
   // Один вид работ — одна строка: сервер отвергает дубликаты
@@ -210,7 +209,8 @@ export const TaskDailyReporting: React.FC<{
 }> = ({ task, onChanged }) => {
   const { t } = useTranslation();
   const { activeProfile } = useActiveProfile();
-  const elevated = hasElevatedAccess(activeProfile);
+  const permissions = usePermissions();
+  const elevated = permissions.atLeast('tasks', 'admin');
   const myId = Number(activeProfile?.id);
   const mayReport = canReportOnTask(task, myId, elevated);
 

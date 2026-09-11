@@ -1,0 +1,97 @@
+# Полный прогон бэкенда — ~50 минут, 4400+ тестов.
+#
+# НЕ на каждый push намеренно: час ожидания на коммит означает, что результат
+# перестанут читать, а сэкономленные минуты GitHub тратятся впустую. Быстрые
+# проверки (ci.yml) идут всегда; сюда попадают моменты, когда час оправдан:
+#   • pull request в main — перед вливанием;
+#   • ночью — ловит то, что просочилось мимо PR;
+#   • вручную — кнопкой Run workflow.
+#
+# Известные падения вынесены в backend/ci-known-failures.txt: без этого CI был
+# бы красным с первого дня, а к постоянно красному CI привыкают ровно так же,
+# как к вечно горящему алерту. Список ЯВНЫЙ и печатается в лог, а последний
+# шаг проверяет, не починился ли кто-то из них попутно.
+
+name: Backend (полный прогон)
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    # 02:00 UTC = 07:00 Asia/Almaty — результат готов к началу рабочего дня.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: backend-full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # Тем же способом, что и в ci.yml — см. объяснение про max_connections=300
+      # там же.
+      - name: Postgres :55432
+        run: |
+          docker compose -f docker-compose.test-local.yml up -d db
+          for _ in $(seq 1 30); do
+            docker compose -f docker-compose.test-local.yml exec -T db \
+              pg_isready -U htqweb -d htqweb >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "Postgres не поднялся" >&2
+          exit 1
+
+      - name: Установка зависимостей
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Список известных падений
+        working-directory: backend
+        run: |
+          echo "Эти тесты исключены из прогона (backend/ci-known-failures.txt):"
+          grep -vE '^\s*(#|$)' ci-known-failures.txt | sed 's/^/  /'
+
+      - name: Полный прогон без известных падений
+        working-directory: backend
+        run: |
+          args=()
+          while IFS= read -r nodeid; do
+            args+=(--deselect "$nodeid")
+          done < <(grep -vE '^\s*(#|$)' ci-known-failures.txt)
+          python -m pytest -q "${args[@]}"
+
+      # Отдельным шагом и БЕЗ падения сборки: список известных падений обязан
+      # уменьшаться, а не жить вечно. Если исключённый тест внезапно проходит —
+      # его починили попутно, и строку надо убрать, иначе список начнёт прятать
+      # РАБОЧИЕ тесты и превратится из долга в дыру.
+      - name: Не починился ли кто-то из известных падений
+        if: always()
+        working-directory: backend
+        run: |
+          mapfile -t known < <(grep -vE '^\s*(#|$)' ci-known-failures.txt)
+          fixed=()
+          for nodeid in "${known[@]}"; do
+            if python -m pytest -q "$nodeid" >/dev/null 2>&1; then
+              fixed+=("$nodeid")
+            fi
+          done
+          if [ ${#fixed[@]} -gt 0 ]; then
+            {
+              echo "### Эти тесты больше не падают — уберите их из ci-known-failures.txt"
+              printf '* `%s`\n' "${fixed[@]}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            printf 'ПОЧИНИЛОСЬ: %s\n' "${fixed[@]}"
+          else
+            echo "Все ${#known[@]} известных падений всё ещё падают." >> "$GITHUB_STEP_SUMMARY"
+          fi

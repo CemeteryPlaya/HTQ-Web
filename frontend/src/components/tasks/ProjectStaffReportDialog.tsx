@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import { History, Loader2, Plus, Trash2, Users } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { reportApiError } from '@/lib/apiError';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -176,10 +177,7 @@ export const ProjectStaffReportDialog: React.FC<Props> = ({
       invalidate();
       onOpenChange(false);
     },
-    onError: (err) => {
-      toast.error(errorDetail(err)
-        || t('tasks.projectStaff.saveError', 'Не удалось сохранить отчёт'));
-    },
+    onError: (err) => reportApiError(err, t('tasks.projectStaff.saveError', 'Не удалось сохранить отчёт')),
   });
 
   const remove = useMutation({
@@ -189,10 +187,7 @@ export const ProjectStaffReportDialog: React.FC<Props> = ({
       invalidate();
       onOpenChange(false);
     },
-    onError: (err) => {
-      toast.error(errorDetail(err)
-        || t('tasks.projectStaff.deleteError', 'Не удалось удалить отчёт'));
-    },
+    onError: (err) => reportApiError(err, t('tasks.projectStaff.deleteError', 'Не удалось удалить отчёт')),
   });
 
   const handleSubmit = (event: React.FormEvent) => {

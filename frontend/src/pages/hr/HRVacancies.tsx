@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '@/api/client';
 import { Plus } from 'lucide-react';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -190,6 +191,15 @@ const HRVacancies = () => {
                       ))}
                     </SelectContent>
                   </Select>
+                  <PrerequisiteNotice
+                    variant="inline"
+                    items={[{
+                      when: departments !== undefined && departments.length === 0,
+                      text: t('hr.pages.vacancies.noDepartments', 'Справочник отделов пуст — вакансию можно завести и без отдела, но лучше сначала'),
+                      to: '/hr/departments',
+                      linkText: t('hr.pages.vacancies.addDepartment', 'создать отдел'),
+                    }]}
+                  />
                 </label>
                 <label className="grid gap-2 text-sm">
                   {t('hr.pages.vacancies.fields.status')}

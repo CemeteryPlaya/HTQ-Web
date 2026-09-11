@@ -142,6 +142,9 @@ urlpatterns = [
     path("mailboxes/settings/", views.mail_settings),
     path("mailboxes/settings", views.mail_settings),
 
+    path("mailboxes/coverage/", views.mailbox_coverage),
+    path("mailboxes/coverage", views.mailbox_coverage),
+
     path("mailboxes/reconcile/", views.reconcile_mailboxes),
     path("mailboxes/reconcile", views.reconcile_mailboxes),
 

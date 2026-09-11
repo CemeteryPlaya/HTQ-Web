@@ -1,0 +1,212 @@
+{
+  "uid": "htqweb-logs",
+  "title": "HTQWeb · Логи (Loki)",
+  "tags": [
+    "htqweb",
+    "logs"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "",
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Сервис",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "query": "label_values(service)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Темп логов по сервисам",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "cps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (service) (rate({service=~\"$service\"}[$__interval]))",
+          "refId": "A",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "id": 1
+    },
+    {
+      "type": "timeseries",
+      "title": "Ошибки по сервисам",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (service) (count_over_time({service=~\"$service\", level=\"ERROR\"}[$__interval]))",
+          "refId": "A",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "description": "Тот же источник, что у правила htqweb-error-rate-5m (порог — больше 10 за 5 минут на сервис).",
+      "id": 2
+    },
+    {
+      "type": "logs",
+      "title": "Последние ошибки",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 10
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service=~\"$service\", level=\"ERROR\"}",
+          "refId": "A"
+        }
+      ],
+      "description": "Текст ошибки и стектрейс — то, чего в метриках нет в принципе.",
+      "id": 3
+    },
+    {
+      "type": "logs",
+      "title": "Подмены значений (FALLBACK)",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 24,
+        "h": 10
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service=~\"$service\"} |= \"FALLBACK site=\"",
+          "refId": "A"
+        }
+      ],
+      "description": "Операторская пара к правилу htqweb-fallback-worker-logs. Celery-процессы не отдают /metrics, поэтому подмены из задач видны ТОЛЬКО здесь, в логах, и никогда — в htqweb_fallback_total.",
+      "id": 4
+    }
+  ],
+  "description": "Заменил htqweb-services-overview, который не работал с момента создания: он ссылался на datasource uid «Loki» с заглавной буквы (провижинится «loki») и фильтровал по project=\"htqweb1\" — такого имени проекта нет ни в одном стеке (promtail берёт его из com.docker.compose.project: htq-web / htqweb-local / htqweb-env)."
+}

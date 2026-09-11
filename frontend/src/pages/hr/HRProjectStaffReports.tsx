@@ -23,6 +23,7 @@ import {
 
 import { TasksLayout } from '@/components/tasks/TasksLayout';
 import { Badge } from '@/components/ui/badge';
+import { DateInput } from '@/components/ui/date-input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -256,12 +257,11 @@ const HRProjectStaffReports: React.FC = () => {
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <div className="relative">
-              <CalendarDays className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-              <input
-                type="date"
+              <CalendarDays className="pointer-events-none absolute left-3 top-3 z-10 h-4 w-4 text-muted-foreground" />
+              <DateInput
                 value={date}
-                onChange={(e) => setDate(e.target.value || today())}
-                className="h-10 rounded-xl border bg-background pl-9 pr-3 text-sm"
+                onChange={(value) => setDate(value || today())}
+                className="h-10 rounded-xl border bg-background pl-9 text-sm"
               />
             </div>
             <Button

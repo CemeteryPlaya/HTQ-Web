@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -98,7 +99,7 @@ function MembersPanel({ project }: { project: Project }) {
       setUserId('');
       toast.success(t('messenger.memberAdded'));
     },
-    onError: (e: any) => toast.error(e?.response?.data?.detail ?? t('requests.projects.addError')),
+    onError: (err) => reportApiError(err, t('requests.projects.addError')),
   });
   const remove = useMutation({
     mutationFn: (uid: number) => requestsApi.projects.removeMember(project.id, uid),
@@ -106,7 +107,7 @@ function MembersPanel({ project }: { project: Project }) {
       qc.invalidateQueries({ queryKey: membersKey });
       toast.success(t('requests.projects.deleted'));
     },
-    onError: (e: any) => toast.error(e?.response?.data?.detail ?? t('requests.projects.deleteError')),
+    onError: (err) => reportApiError(err, t('requests.projects.deleteError')),
   });
 
   return (

@@ -109,7 +109,8 @@
     "myPmoProjects": "My PMO projects",
     "pmoAllocation": "Allocation: {{percent}}%",
     "pmoLead": "Lead",
-    "employeeCardMissing": "The employee card was not found."
+    "employeeCardMissing": "The employee card was not found.",
+    "updateError": "Could not save the profile"
   },
   "header": {
     "about": "About Us",
@@ -773,7 +774,80 @@
           "departmentRequired": "Select a department",
           "positionRequired": "Select a position",
           "hireDateRequired": "Specify the hire date",
-          "fillRequired": "Fill in the required fields"
+          "fillRequired": "Fill in the required fields",
+          "lastNameRequired": "Enter the last name",
+          "emailRequired": "Enter the email",
+          "dismissedBeforeHired": "The termination date is earlier than the hire date"
+        },
+        "prefill": {
+          "open": "Pull data",
+          "title": "Pull existing data",
+          "description": "Choose where to take the data from. Filled-in fields stay as they are until you tick them.",
+          "sources": {
+            "user": "User account",
+            "employee": "Employee",
+            "mailbox": "Mailbox"
+          },
+          "searchPlaceholder": "Start typing (2 characters minimum)",
+          "searchHint": "Type at least 2 characters",
+          "nothingFound": "Nothing found",
+          "nothingToTransfer": "This source has no data to transfer",
+          "hasCard": "already has a card",
+          "noAccount": "No account linked",
+          "columnField": "Field",
+          "columnCurrent": "Current",
+          "columnIncoming": "New",
+          "stateConflict": "differs",
+          "stateSame": "same",
+          "fillableCount": "Will be filled: {{count}}",
+          "conflictsCount": "Differences: {{count}}",
+          "apply": "Transfer selected",
+          "applyError": "Could not transfer the data",
+          "fields": {
+            "avatar": "Avatar"
+          }
+        },
+        "import": {
+          "open": "Import from users",
+          "title": "Import from users",
+          "description": "Showing user accounts that have no employee card yet.",
+          "search": "Search by name or email",
+          "empty": "Every user account already has an employee card",
+          "selectAll": "Select all",
+          "submit": "Create cards",
+          "created": "Created: {{count}}",
+          "skipped": "Skipped: {{count}}",
+          "importMore": "Import more",
+          "error": "Import failed",
+          "reason": {
+            "user_not_found": "User account not found",
+            "no_email": "The account has no email",
+            "already_linked": "A card is already linked to this account",
+            "email_taken": "An employee with this email already exists",
+            "create_failed": "Could not create the card"
+          }
+        },
+        "match": {
+          "duplicateTitle": "This employee may already exist",
+          "userTitle": "There is a matching user account",
+          "openCard": "Open",
+          "useUser": "Pull data",
+          "reason": {
+            "email": "email matches",
+            "phone": "phone matches",
+            "full_name": "name matches",
+            "patronymic": "middle name matches"
+          }
+        },
+        "newAccount": {
+          "warning": "Pass these details on to the employee. The password is shown once — after that it can only be reset.",
+          "login": "Login",
+          "password": "Temporary password",
+          "hint": "The employee should change this password in their profile after the first sign-in.",
+          "copy": "Copy",
+          "copied": "Copied",
+          "done": "I saved the credentials",
+          "copyFailed": "Could not copy — select the password and copy it manually."
         },
         "cardT2": {
           "saved": "Saved",
@@ -792,7 +866,8 @@
         "generatePassword": "Generate",
         "passwordHint": "The password is shown in clear — pass it to the employee. It cannot be viewed later.",
         "mustChangePasswordNotice": "On first sign-in the employee must replace this password with their own — the one you gave stops working.",
-        "fromAccount": "Filled in from the account"
+        "fromAccount": "Filled in from the account",
+        "readOnlyNotice": "This card is read-only — editing requires HR permissions"
       },
       "structure": {
         "title": "Company Structure",
@@ -887,7 +962,9 @@
           "worked": "Worked",
           "projectTask": "Project / task",
           "actions": "Actions"
-        }
+        },
+        "noEmployees": "There are no employees in the directory — timesheets are kept per employee card,",
+        "addEmployee": "add an employee"
       },
       "vacancies": {
         "title": "Vacancies",
@@ -927,7 +1004,9 @@
         },
         "actions": {
           "add": "Add Vacancy"
-        }
+        },
+        "noDepartments": "The department directory is empty — a vacancy can be created without one, but it is better to first",
+        "addDepartment": "create a department"
       },
       "applications": {
         "title": "Applications",
@@ -972,7 +1051,9 @@
         "step": {
           "prev": "Previous Step",
           "next": "Next Step"
-        }
+        },
+        "noVacancies": "There are no open vacancies — an application is attached to one,",
+        "addVacancy": "open a vacancy"
       },
       "offers": {
         "title": "Offers",
@@ -1079,7 +1160,9 @@
           "date": "Date",
           "actions": "Actions"
         },
-        "fileHint": "PDF only, up to 25 MB"
+        "fileHint": "PDF only, up to 25 MB",
+        "noEmployees": "There are no employees in the directory — a document is filed against an employee card,",
+        "addEmployee": "add an employee"
       },
       "logs": {
         "title": "Action Logs",
@@ -1164,7 +1247,8 @@
           "password": "Password",
           "status": "Status",
           "isActive": "Account active"
-        }
+        },
+        "copyFailed": "Could not copy — select the password and copy it manually"
       },
       "identity": {
         "title": "Profile change requests",
@@ -1660,7 +1744,8 @@
       "reportsTransferred": "Reports transferred: {{count}}",
       "linkRemoved": "The link was removed",
       "deptHeadUpdated": "The department head was updated",
-      "confirmReplaceManager": "This node already has a manager. Replace them?"
+      "confirmReplaceManager": "This node already has a manager. Replace them?",
+      "directoryEmpty": "The directory is empty — fill it in the HR section"
     },
     "card": {
       "noPosition": "No position",
@@ -1905,7 +1990,10 @@
       "workingDays": "Count in working days",
       "workingDaysHint": "Durations default to calendar days — construction runs 7/7. Turn this on for office projects so weekends and holidays are excluded.",
       "configureSites": "Project sites",
-      "noSitesYet": "No sites yet. Check them below — the work on each will show up here."
+      "noSitesYet": "No sites yet. Check them below — the work on each will show up here.",
+      "registryEmpty": "There are no projects yet —",
+      "addFirst": "create a project",
+      "readOnlyNotice": "Read-only list — only the project owner or an administrator can pick sites"
     },
     "types": {
       "create": "Create type",
@@ -2035,7 +2123,11 @@
           "success": "Task created",
           "error": "Error creating task",
           "summaryRequired": "Summary is required",
-          "selectPlaceholder": "Select..."
+          "selectPlaceholder": "Select...",
+          "noDepartments": "The department directory is empty — assignees and the supervisor depend on it,",
+          "addDepartment": "create a department",
+          "noEmployeesHint": "No employees with a platform account in the selected departments —",
+          "checkEmployees": "check the employee cards"
         },
         "supervisor": "Supervisor",
         "noSupervisor": "No supervisor",
@@ -2278,7 +2370,11 @@
           "active": "Active",
           "suspended": "Suspended",
           "closed": "Closed"
-        }
+        },
+        "registryEmpty": "The site directory is empty —",
+        "addFirst": "add a site",
+        "noneForProjectHint": "The project has no sites —",
+        "attachToProject": "attach sites to the project"
       },
       "contractors": {
         "title": "Partners",
@@ -2380,7 +2476,9 @@
         "firstName": "First name *",
         "qualification": "Qualification",
         "speciality": "Speciality / Position",
-        "specialityPlaceholder": "Grade 5 welder"
+        "specialityPlaceholder": "Grade 5 welder",
+        "registryEmpty": "The partner registry is empty —",
+        "addFirst": "add a partner"
       },
       "roadmaps": {
         "title": "Roadmaps",
@@ -2647,7 +2745,9 @@
     "workEmpty": "The HR record has not been created yet. Contact HR.",
     "workPhone": "Work phone",
     "workTitle": "HR record",
-    "phoneIncomplete": "Enter the full number: +7 (700) 483-55-81"
+    "phoneIncomplete": "Enter the full number: +7 (700) 483-55-81",
+    "mailDisconnectError": "Could not disconnect the mailbox",
+    "signatureSaveError": "Could not save the signature"
   },
   "auth": {
     "register": "Register",
@@ -2921,7 +3021,39 @@
       "userIdHint": "With a user set, the mailbox shows up in their Mail section: the platform creates a mail account for them.",
       "userIdPlaceholder": "optional",
       "firstNamePlaceholder": "John",
-      "lastNamePlaceholder": "Smith"
+      "lastNamePlaceholder": "Smith",
+      "tabCoverage": "Coverage",
+      "coverage": {
+        "loading": "Counting…",
+        "error": "Could not load the list",
+        "noDomain": "The corporate domain is not configured, so the platform cannot tell who is supposed to have work mail. Set the domain on the Connection tab.",
+        "empty": "Every employee with an address on the corporate domain has working mail.",
+        "summary": "Employees on @{{domain}} whose mail does not work: {{count}}",
+        "columnName": "Employee",
+        "columnEmail": "Work address",
+        "reason": {
+          "no_mailbox": "No mailbox",
+          "not_linked": "Mailbox has no owner",
+          "awaiting_password": "Waiting for a password"
+        },
+        "advice": {
+          "createHere": "Create the mailbox on the Mailboxes tab — the platform will create it on the server.",
+          "createOnServer": "The mail administrator creates the mailbox on the server. The platform will connect it on its own afterwards.",
+          "reconcile": "The mailbox exists but has no owner set. Reconciliation does that — see the Reconcile tab.",
+          "password": "The mailbox is linked, but the platform could not get access on its own. The employee enters the password in their own mail settings."
+        }
+      },
+      "needAddressOrName": "To create a mailbox, give an address or a first and last name — the address is built from them",
+      "needPassword": "This server needs the password set by hand — the mailbox cannot be created without it",
+      "archiveError": "Could not archive the mailbox",
+      "restoreError": "Could not restore the mailbox",
+      "deleteError": "Could not delete the mailbox",
+      "passwordResetError": "Could not reset the password",
+      "reconcileError": "Could not run reconciliation",
+      "aliasCreateError": "Could not create the alias",
+      "aliasDeleteError": "Could not delete the alias",
+      "settingsSaveError": "Could not save the settings",
+      "testError": "Could not reach the mail server"
     },
     "news": {
       "status": {
@@ -3051,7 +3183,8 @@
       "unauthorised": "Not authorised — please sign in",
       "adminRequired": "Administrator rights are required",
       "conflict": "Conflict: {{detail}}",
-      "generic": "Error: {{detail}}"
+      "generic": "Error: {{detail}}",
+      "forbidden": "You do not have permission for this action"
     },
     "onShort": "On",
     "offShort": "Off",
@@ -3096,7 +3229,11 @@
       "security": "The password is stored encrypted and is used only to fetch and send your mail.",
       "subtitle": "Connect your work mailbox @{{domain}} to read and send mail here.",
       "title": "Corporate mail",
-      "update": "Update password"
+      "update": "Update password",
+      "suggestTitle": "Connect work mail",
+      "suggestBody": "Your work address {{address}} is on the corporate domain, but mail is not connected here yet. Enter the mailbox password: the platform will verify it against the mail server and start showing your correspondence.",
+      "suggestHint": "Enter the password for {{address}} — the same one you use in your mail client. The platform will sign in to it on the mail server: if the mailbox exists, your mail appears here and the password is stored encrypted.",
+      "suggestFailedHint": "The mail server does not distinguish \"wrong password\" from \"no such mailbox\", so there are two possible causes. If the password is definitely correct, the mailbox may not exist yet — ask your administrator."
     },
     "imap": {
       "address": "Address",
@@ -3399,9 +3536,46 @@
       "fileLabel": "Agreement file",
       "submit": "Create the agreement",
       "noBudgets": "There is not a single budget —",
-      "noCounterparties": "The counterparty registry is empty —"
+      "noCounterparties": "The counterparty registry is empty —",
+      "advanceAmountLabel": "Planned advance amount",
+      "advancePercentageLabel": "Advance, %",
+      "amountWithoutVatLabel": "Contract net of VAT",
+      "codeLabel": "Item code",
+      "contractTypeFramework": "Framework",
+      "contractTypeLabel": "Contract type",
+      "contractTypeNonStandard": "Non-standard",
+      "contractTypeStandard": "Standard",
+      "directionExpense": "Expense (drawn from the budget)",
+      "directionIncome": "Income",
+      "directionLabel": "Direction",
+      "endDateLabel": "Completion date",
+      "expenseItemLabel": "Budget item",
+      "hasAdvanceLabel": "Advance provided for",
+      "kindGoods": "Goods",
+      "kindLabel": "Contract kind",
+      "kindLease": "Lease",
+      "kindOther": "Other",
+      "kindServices": "Services",
+      "kindWorksServices": "Works and services",
+      "managerLabel": "Contract manager / curator",
+      "managerPlaceholder": "Pick or type the manager's full name",
+      "retentionAmountLabel": "Retention amount",
+      "retentionRateLabel": "Retention, %",
+      "sedNumberLabel": "EDMS no.",
+      "sedNumberPlaceholder": "DOC-00026-20260623",
+      "startDateLabel": "Start date",
+      "subjectLabel": "Subject of the contract",
+      "subjectPlaceholder": "Fence installation, roads, levelling, earthworks...",
+      "termCommentLabel": "Completion term (comment)",
+      "termCommentPlaceholder": "e.g. to be confirmed",
+      "totalAmountLabel": "Contract total",
+      "vatAmountLabel": "Contract VAT",
+      "vatRateLabel": "VAT rate, %",
+      "financeSectionTitle": "Financial terms and calculations",
+      "retentionSectionTitle": "Retention",
+      "termsSectionTitle": "Dates, performance terms and status"
     },
-    "budgetAdministrator": "Budget administrator",
+    "budgetAdministrator": "Project",
     "pick": "Pick one",
     "budgetYear": "Budget year",
     "budgetForm": {
@@ -3418,7 +3592,7 @@
       "createError": "Could not create the budget",
       "backToList": "Back to the budget list",
       "subtitle": "Fill it in completely — reference records can be created right here, no separate trip needed.",
-      "administratorHint": "The holder of budget lines is a project in a country. The record itself carries no money: the amounts live on budgets, and one project has several — one per programme.",
+      "administratorHint": "A budget belongs to a project. Pick one from the Tasks module so the name stays the same across the platform; if it is not there yet, type the name by hand. The record itself carries no money: the amounts live on budgets, and one project has several — one per programme.",
       "projectName": "Project name",
       "searchProject": "Search by project or country…",
       "countryLockedHint": "The country belongs to the selected reference record — to change it, edit the administrator itself, not this request.",
@@ -3872,6 +4046,8 @@
       "failed": "Could not join via the link"
     },
     "invite": {
+      "emailRemove": "Remove address",
+      "emailAdd": "External participant e-mail — press Enter to add",
       "title": "Invite to the conference",
       "subtitle": "Send the link to anyone. Only the person you give it to can see it, and you can revoke it.",
       "nameLabel": "Meeting name",
@@ -3879,6 +4055,8 @@
       "nameHint": "Shown to whoever opens the link, so they know what they were invited to.",
       "allowGuests": "Allow joining without an account",
       "allowGuestsHint": "An external participant enters a name and joins. Turn off when inviting employees only.",
+      "languageLabel": "Guest interface language",
+      "languageHint": "Whoever opens the link will see the platform in this language.",
       "create": "Create link",
       "created": "Link created and copied",
       "createError": "Could not create the link",
@@ -3892,7 +4070,7 @@
       "revoked": "Link revoked",
       "sendTitle": "Send the invitation",
       "emails": "Emails, comma separated — for external participants",
-      "staffSearch": "Find an employee",
+      "staffSearch": "Employee — name, login or e-mail",
       "send": "Send by email and messenger",
       "sendError": "Could not send",
       "schedule": "Add to calendar",
@@ -3929,7 +4107,10 @@
       "tabToday": "Today",
       "tabLive": "Live now",
       "tabHistory": "History",
+      "openFullHistory": "Full history",
       "join": "Join",
+      "start": "Start",
+      "openHistory": "Open",
       "emptyToday": "No meetings today",
       "emptyLive": "Nobody is talking right now",
       "loadError": "Could not load the conference overview",
@@ -4022,6 +4203,10 @@
       "guest": "Guest",
       "tryingH264": "VP8 is unavailable. Trying H.264…",
       "joinFailed": "Could not connect: {{message}}",
+      "guestAutoJoining": "Connecting you to the call…",
+      "guestAutoJoinFailedTitle": "Could not join the call",
+      "guestAutoJoinFailedHint": "Check the browser's camera and microphone permissions and try again.",
+      "retryJoin": "Retry",
       "muteOnEntryNotice": "The host turned on mute-on-entry",
       "micError": "Microphone error: {{message}}",
       "audioOnlyNotice": "The camera is unavailable. The conference runs in audio-only mode.",
@@ -4113,6 +4298,8 @@
       "joinByIdTitle": "Join by ID",
       "joinByIdHint": "Enter the room ID the host gave you",
       "roomIdPlaceholder": "For example: 12ab-34cd",
+      "meetingTitleLabel": "Meeting title",
+      "autoTitleTemplate": "{{name}}'s meeting",
       "previewTitle": "Camera and sound check",
       "previewBadge": "Preview",
       "previewHint": "Make sure you look and sound right before joining",
@@ -4181,6 +4368,7 @@
       "messenger": "Messenger",
       "email": "Email",
       "conference": "Conferences",
+      "hrIdentity": "HR",
       "generic": "Notification"
     },
     "verb": {
@@ -4281,11 +4469,20 @@
         "amber": "Amber",
         "pink": "Pink",
         "violet": "Violet"
-      }
+      },
+      "noDepartments": "No departments exist yet — pick another event type or ask HR to add one"
     },
     "selectedCount": "Selected: {{count}}",
     "searchByNameOrEmail": "Search by name or email",
-    "removeParticipant": "Remove participant"
+    "removeParticipant": "Remove participant",
+    "deepLink": {
+      "title": "Event",
+      "loading": "Loading event…",
+      "notFound": "Event not found or unavailable",
+      "enter": "Enter the room"
+    },
+    "noEmployees": "There are no employees in the directory —",
+    "addEmployee": "add an employee"
   },
   "files": {
     "unitB": "B",
@@ -4323,6 +4520,10 @@
     "createdBy": "Created by: {{name}}",
     "folderName": "Folder name",
     "folderNamePlaceholder": "For example, Policies",
+    "folderTargetHint": "The folder will appear in the “{{name}}” department",
+    "createMoreHint": "A department can hold any number of folders — this window stays open, create the next one.",
+    "existingFolders": "Already in the department",
+    "folderExistsHint": "A folder with this name already exists",
     "pickFile": "Click to pick a file",
     "optionalParen": "(optional)",
     "descriptionPlaceholder": "A short description of the file...",
@@ -4602,7 +4803,6 @@
       "title": "Submit a request",
       "subtitle": "Pick a request form",
       "searchForm": "Search for a form…",
-      "noForms": "No published forms. Create a template in the “Templates” section.",
       "allRequests": "All requests",
       "newRequest": "New request",
       "fillForm": "Fill in the request form",
@@ -4610,7 +4810,9 @@
       "titleLabel": "Title",
       "titlePlaceholder": "A short request title",
       "saveDraft": "Save the draft",
-      "submit": "Submit for approval"
+      "submit": "Submit for approval",
+      "noFormsAdmin": "No published forms. Create a template in the Templates section.",
+      "noFormsEmployee": "No request forms have been published yet — ask a platform administrator."
     },
     "projects": {
       "create": "Create a project",

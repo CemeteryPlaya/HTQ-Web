@@ -18,6 +18,31 @@
 #
 # Доставка — infra/logging/grafana-provisioning/alerting/contact_points.yml:
 # всё в Telegram, critical дополнительно на почту.
+#
+# ─── Что сюда СОЗНАТЕЛЬНО не добавлено ──────────────────────────────────────
+# Записано, чтобы не добавили заново «для полноты»: каждое шумное правило
+# стоит всей системе алертов её кредита доверия.
+#
+#   htqweb_requests_stuck, htqweb_tasks_overdue — это бэклог, а не инцидент.
+#     В живой компании оба неделями ненулевые, любой порог припарковал бы
+#     warning в Telegram навсегда и приучил бы его пролистывать. Для «смотреть»
+#     у них уже есть stat-панели с порогами на дашборде «Бизнес-метрики» — это
+#     правильная поверхность для числа, на которое смотрят, а не будят.
+#
+#   htqweb_conference_transcripts_pending — та же первопричина, что у
+#     htqweb-conference-recordings-stuck и htqweb-conference-media-queue
+#     (media-воркер не разбирает очередь). Две страницы на один сбой — это и
+#     есть определение усталости от алертов. Панель есть, правила нет.
+#
+#   MinIO health и заполнение — «упал» ловится htqweb-target-down по
+#     up{job="minio"}, «кончилось место» ловится htqweb-disk-space-low: MinIO
+#     здесь однонодовый и лежит на файловой системе хоста. Отдельное правило
+#     только продублировало бы страницу.
+#
+#   htqweb_service_enabled == 0 — выключенный домен это осознанное действие
+#     администратора, которое держится днями; level-алерт ныл бы дважды в
+#     сутки вечно. Если понадобится — алертить на ПЕРЕХОД, а не на уровень:
+#     min by (service) (changes(htqweb_service_enabled[15m])) > 0, for: 0s.
 
 apiVersion: 1
 
@@ -218,6 +243,9 @@ groups:
         execErrState: Alerting
         for: 3m
         annotations:
+          __dashboardUid__: htqweb-prometheus
+          __panelId__: "3"
+          threshold: "5%"
           summary: "Каждый двадцатый запрос падает с 5xx"
           description: |
             Разбор: дашборд «Django (приложение)» → панель «5xx по вьюхам»
@@ -258,6 +286,9 @@ groups:
         execErrState: OK
         for: 10m
         annotations:
+          __dashboardUid__: htqweb-prometheus
+          __panelId__: "4"
+          threshold: "3 c"
           summary: "Каждый двадцатый запрос обрабатывается дольше 3 секунд"
           description: |
             Смотреть «Топ-10 медленных вьюх» и панель запросов к БД: чаще
@@ -335,6 +366,9 @@ groups:
         execErrState: OK
         for: 10m
         annotations:
+          __dashboardUid__: htqweb-celery
+          __panelId__: "6"
+          threshold: "500"
           summary: "Воркеры не успевают разгребать очередь"
           description: |
             Длина списка `celery` в Redis держится выше 500 десять минут.
@@ -375,6 +409,9 @@ groups:
         execErrState: OK
         for: 15m
         annotations:
+          __dashboardUid__: htqweb-business
+          __panelId__: "3"
+          threshold: "1 ч"
           summary: "Ни один ящик не синхронизировался больше часа"
           description: |
             Почта ломается тихо: контейнеры зелёные, письма не приходят.
@@ -483,6 +520,839 @@ groups:
           severity: warning
           team: platform
 
+      # ── Сборщик бизнес-метрик ────────────────────────────────────────────
+      # Единственное правило, которое ловит ОТСУТСТВИЕ метрики, а не её
+      # значение, и без него вся ветка htqweb_* слепнет необнаружимо: при
+      # мёртвом сборщике метрики не экспортируются вовсе (осознанно — см.
+      # apps/core/metrics.py: «ноль задач» и «сборщик встал» обязаны выглядеть
+      # по-разному), а у зависящих правил стоит noDataState: OK. То есть
+      # система рапортует «всё зелено» ровно потому, что ослепла.
+      - uid: htqweb-business-metrics-stale
+        title: "Бизнес-метрики не обновляются"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              # Сторож — именно htqweb_service_enabled: он есть ВСЕГДА, если
+              # сборщик отработал (core считает его по KNOWN_SERVICES
+              # безусловно). htqweb_tasks на пустой базе даёт ноль серий, а
+              # htqweb_mail_sync_lag_seconds не экспортируется, пока не было ни
+              # одной синхронизации, — оба дали бы ложную тревогу на свежем
+              # стенде.
+              expr: 'absent(htqweb_service_enabled)'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        # NoData здесь означало бы «недоступен сам Prometheus» — это ловит
+        # htqweb-target-down, дублировать не нужно. При живом Prometheus
+        # absent() всегда возвращает данные: 1 или пусто.
+        noDataState: OK
+        execErrState: Alerting
+        # Сбор идёт раз в 60 с, кэш живёт 180 с (CACHE_TTL). 10 минут — это
+        # десять пропущенных запусков подряд; случайный сбой не считается.
+        # Побочный эффект: первые ~10 минут свежего стенда правило горит — и
+        # это правда, сборщик там действительно ещё не отработал.
+        for: 10m
+        annotations:
+          __dashboardUid__: htqweb-business
+          __panelId__: "9"
+          summary: "Сборщик бизнес-метрик встал"
+          description: |
+            Метрик htqweb_* нет в Prometheus вовсе — значит не работает
+            apps.core.tasks.collect_business_metrics (Celery-beat, раз в 60 с):
+            встал beat, воркер или Redis-кэш.
+            Пока это так, СЛЕПЫ дашборд «Бизнес-метрики» целиком и правила
+            htqweb-mail-sync-stalled, htqweb-mail-accounts-failing-ratio,
+            htqweb-conference-recordings-stuck: они молчат не потому, что всё
+            хорошо, а потому, что смотреть не на что.
+            Проверить: docker compose ps backend-beat backend-worker и
+            docker compose exec backend-web python manage.py shell -c
+            "from apps.core import metrics; print(sorted(metrics.load()))"
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Сама база ────────────────────────────────────────────────────────
+      # Не дубль up{job="postgres"}: в проде БД ВНЕШНЯЯ (DB_HOST в .env,
+      # обычно VPS), и postgres-exporter ходит на неё по сети. Поэтому up==1
+      # означает лишь «жив контейнер экспортера» и остаётся зелёным при
+      # полностью лежащей базе. Прямого правила на саму базу платформы до сих
+      # пор не было — только косвенные, через 5xx и текст в логах.
+      - uid: htqweb-postgres-down
+        title: "Postgres не отвечает"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'pg_up'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [1], type: lt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        # NoData = не отвечает сам экспортер, это уже ловит htqweb-target-down.
+        noDataState: OK
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: "Экспортер жив, а база — нет"
+          description: |
+            pg_up == 0: postgres-exporter подключиться к Postgres не может.
+            В проде база внешняя, поэтому up{job="postgres"} этого НЕ покажет —
+            он зелёный, пока жив контейнер экспортера.
+            Через пару минут вся платформа начнёт отдавать 5xx. Проверить
+            доступность DB_HOST:DB_PORT с хоста и место на диске самой БД.
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Конференция: конвейер записи ─────────────────────────────────────
+      # Пара правил на один конвейер, и они НЕ дублируют друг друга:
+      # recordings-stuck = «задачу взяли и она зависла», media-queue =
+      # «задачу некому взять». Диагностика у них разная, поэтому описания
+      # ссылаются друг на друга.
+      #
+      # Порог > 2, а не > 0: гейдж считает встречи в состоянии «обработка»,
+      # закончившиеся больше часа назад, и одна долгая сборка часового видео
+      # этот час законно перешагивает.
+      - uid: htqweb-conference-recordings-stuck
+        title: "Записи встреч не обрабатываются"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1800, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_conference_recordings_stuck'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [2], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        # Пропажу метрики целиком ловит htqweb-business-metrics-stale.
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          __dashboardUid__: htqweb-conference
+          __panelId__: "3"
+          threshold: "2"
+          summary: "Больше двух записей висят в обработке дольше часа"
+          description: |
+            Конвейер записи (SFU пишет → воркер сводит → воркер распознаёт)
+            ломается МОЛЧА: звонок при этом идёт нормально, никто не жалуется,
+            записи просто не появляются.
+            Если очередь conference_media при этом ПУСТА — задача взята и
+            зависла (ffmpeg или Whisper), смотреть логи backend-media-worker.
+            Если растёт — её некому брать, см. htqweb-conference-media-queue.
+            Дашборд: «HTQWeb · Конференция».
+        labels:
+          severity: warning
+          team: platform
+
+      - uid: htqweb-conference-media-queue
+        title: "Очередь обработки записей не разбирается"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1800, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'max(redis_key_size{key="conference_media"})'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [20], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        # redis-exporter отдаёт redis_key_size только для существующих ключей,
+        # поэтому «нет данных» = очередь пуста = всё хорошо.
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          __dashboardUid__: htqweb-conference
+          __panelId__: "7"
+          threshold: "20"
+          summary: "В conference_media копятся задачи"
+          description: |
+            У очереди есть поставщик и нет потребителя. Задачи
+            process_session_recording и transcribe_session маршрутизируются
+            сюда через CELERY_TASK_ROUTES, а слушает её ТОЛЬКО отдельный
+            backend-media-worker (образ backend/Dockerfile.media): общий
+            backend-worker запущен без -Q и этих задач не видит.
+            Проверить, что сервис вообще поднят: docker compose ps.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Почта: доля сломанных ящиков ─────────────────────────────────────
+      # Доля, а не счётчик, и это принципиально: один ящик с неверным паролем —
+      # проблема одного пользователя, и сырой счётчик залип бы на нём навсегда.
+      # Половина ящиков — отказ уровня сервера или общих учётных данных, и это
+      # не бывает нормой. Доля — ровно тот различитель.
+      # failing ⊆ active (apps/mail/metrics.py), так что величина определена.
+      - uid: htqweb-mail-accounts-failing-ratio
+        title: "Почта не работает у половины ящиков"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1800, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: |
+                htqweb_mail_accounts_failing
+                / clamp_min(htqweb_mail_accounts_active, 1)
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0.5], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          __dashboardUid__: htqweb-business
+          __panelId__: "4"
+          threshold: "50%"
+          summary: "Больше половины почтовых ящиков с ошибкой синхронизации"
+          description: |
+            Отказ общий, а не у отдельного пользователя: сервер, туннель или
+            общие учётные данные. Первое, что стоит запустить, —
+            manage.py mail_check: он проверяет связку по порядку зависимостей
+            и останавливается на первой настоящей причине.
+            Вкладка «Покрытие» в /admin/mailboxes покажет, у кого именно.
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Ошибки ORM, которые никуда не всплывают ──────────────────────────
+      # Пойманная и проглоченная ошибка БД не становится 5xx (мимо
+      # htqweb-http-5xx-rate) и не является ошибкой соединения (мимо
+      # логового htqweb-db-connection-errors). Ровно тот класс тихих отказов,
+      # ради которого в проекте вообще заведён механизм подмен.
+      # Самозатухающее: одиночная ошибка выпадает из окна 5m за пять минут,
+      # поэтому for: 10m требует, чтобы они шли потоком.
+      - uid: htqweb-django-db-errors
+        title: "Ошибки запросов к БД"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum(rate(django_db_errors_total[5m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          summary: "Запросы к БД падают с ошибками"
+          description: |
+            django_db_errors_total растёт непрерывно 10 минут. Если при этом
+            нет всплеска 5xx — ошибки ловятся и проглатываются, то есть
+            снаружи всё выглядит рабочим. Разбивка по вьюхам: дашборд
+            «HTQWeb · Django», панель «База данных».
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Redis вытесняет ключи ────────────────────────────────────────────
+      # Самое недооценённое правило здесь. Redis запущен с
+      # --maxmemory 128mb --maxmemory-policy allkeys-lru, и в ОДНОМ экземпляре
+      # лежат кэш (DB 1), брокер Celery (DB 2) и снапшот бизнес-метрик.
+      # allkeys-lru спокойно вытеснит ключ БРОКЕРА — то есть потеряет
+      # поставленную задачу, — и об этом сегодня не сообщает ничто.
+      # Вытеснения ещё и первопричина для htqweb-business-metrics-stale: без
+      # этого правила дежурного отправят чинить beat, а виновата память.
+      - uid: htqweb-redis-evictions
+        title: "Redis вытесняет ключи (не хватает памяти)"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum(rate(redis_evicted_keys_total[5m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [1], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 10m
+        annotations:
+          __dashboardUid__: htqweb-observability
+          __panelId__: "28"
+          threshold: "1/с"
+          summary: "Redis выбрасывает ключи под нехваткой памяти"
+          description: |
+            Политика allkeys-lru не разбирает, что выбрасывать: под нож идут не
+            только кэш, но и ключи брокера Celery (DB 2) — то есть молча
+            теряются поставленные задачи, — и снапшот бизнес-метрик.
+            Немедленно: поднять maxmemory у redis в docker-compose.yml.
+            По-настоящему: развести брокер и кэш по разным инстансам либо
+            перевести политику на volatile-lru, чтобы вытеснялось только то,
+            у чего есть TTL.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Логи перестали поступать ─────────────────────────────────────────
+      # Аналог htqweb-business-metrics-stale для логовой половины стека: Loki
+      # может быть up, пока мёртв promtail, и тогда ВСЕ пять правил группы
+      # htqweb-loki молчат в состоянии OK. Контейнеры всегда что-нибудь пишут
+      # (healthcheck'и, access-строки gunicorn), поэтому ноль строк за десять
+      # минут однозначен.
+      - uid: htqweb-logs-ingestion-stopped
+        title: "Логи не поступают в Loki"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum(rate(loki_distributor_lines_received_total[10m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0.01], type: lt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        # NoData = молчит сам Loki, и это тоже повод: без него слепа вся
+        # логовая группа.
+        noDataState: NoData
+        execErrState: OK
+        for: 15m
+        annotations:
+          __dashboardUid__: htqweb-observability
+          __panelId__: "8"
+          threshold: "0.01/с"
+          summary: "Loki не принимает новых строк"
+          description: |
+            Скорее всего встал promtail (он читает /var/lib/docker/containers).
+            Платформа при этом работает — вы просто ослепли: все правила группы
+            htqweb-loki будут молчать в состоянии OK.
+            Проверить: docker compose ps promtail loki и логи promtail.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Правила, которые сами не считаются ───────────────────────────────
+      # 25 правил провижинятся из YAML, который никакой CI не валидирует.
+      # Правило, падающее на вычислении, молчит ровно так же, как правило, у
+      # которого всё хорошо. 15 минут — чтобы переждать штатные ошибки на
+      # старте Grafana, пока Prometheus ещё поднимается.
+      - uid: htqweb-alert-eval-failures
+        title: "Правила алертов падают на вычислении"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum(rate(grafana_alerting_rule_evaluation_failures_total[10m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          __dashboardUid__: htqweb-observability
+          __panelId__: "13"
+          threshold: "0"
+          summary: "Часть правил не вычисляется"
+          description: |
+            Такое правило не «горит» и не «молчит» — оно просто не работает, и
+            снаружи неотличимо от исправного. Найти: Alerting → Alert rules,
+            фильтр по состоянию Error. Обычные причины — опечатка в PromQL
+            после правки rules.yml или недоступный datasource.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Целостность договорного контура ──────────────────────────────────
+      # Три правила ниже описывают НАРУШЕННЫЙ ИНВАРИАНТ, а не нагрузку: их
+      # нормальное значение — тождественный ноль. Поэтому порог 0 здесь не
+      # «жёсткий», а единственно возможный, и critical оправдан: расхождение
+      # в деньгах не рассасывается само и чем дольше живёт, тем дороже
+      # разбирать.
+      - uid: htqweb-contracts-signoff-desync
+        title: "Договор согласован, а статус не переведён"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_contracts_signoff_desync'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "1"
+          threshold: "0"
+          summary: "{{ $values.A }} договор(ов) согласованы, но не переведены по статусу"
+          description: |
+            signoff проставил approval_state=approved, а apps/contracts/
+            approval_hooks.py не перевёл status. Договор согласован только на
+            бумаге: интерфейс покажет его несогласованным, оплаты по нему не
+            пройдут.
+            Разбор: какие именно — в админке договоров фильтром по статусу;
+            причина обычно в исключении внутри хука (Explore → Loki →
+            {service="backend-web"} |= "approval_hooks").
+        labels:
+          severity: critical
+          team: platform
+
+      - uid: htqweb-contracts-budget-overspent
+        title: "Строка бюджета ушла в перерасход"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_contracts_budget_lines_overspent'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "2"
+          threshold: "0"
+          summary: "{{ $values.A }} строк(и) бюджета: занято больше, чем выделено"
+          description: |
+            budget_calc проверяет остаток при одобрении под блокировкой строки,
+            поэтому перерасход означает, что проверку обошли: правка суммы после
+            согласования, ручной SQL или гонка на параллельном одобрении.
+            Считается тем же правилом, что и в интерфейсе (COMMITTING_STATUSES),
+            так что цифра сходится с карточкой бюджета.
+        labels:
+          severity: critical
+          team: platform
+
+      - uid: htqweb-hr-terminated-still-active
+        title: "Уволенный сотрудник остаётся активным"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_hr_terminated_still_active'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "20"
+          threshold: "0"
+          summary: "{{ $values.A }} сотрудник(ов) уволены по дате, но статус активен"
+          description: |
+            Дата увольнения прошла, а status не переведён в «уволен». Все проверки
+            «активен ли сотрудник» такого человека ПРОПУСКАЮТ: он остаётся
+            согласующим в маршрутах, попадает в выгрузки и сохраняет доступ.
+            for: 1h — чтобы не срабатывать в день увольнения, пока кадры
+            дооформляют приказ.
+        labels:
+          severity: critical
+          team: platform
+
+      # ── Согласования ─────────────────────────────────────────────────────
+      - uid: htqweb-signoff-route-dead-end
+        title: "В маршруте есть этап, который некому согласовать"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_signoff_routes_without_approvers'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "10"
+          threshold: "0"
+          summary: "{{ $values.A }} этап(ов) «по должности» без единой должности"
+          description: |
+            Движок ищет исполнителей по должностям этапа; если их нет, задачи не
+            создаются НИКОМУ и объект застревает навсегда — ждать бесполезно.
+            Ошибка конфигурации маршрута, а не нагрузки, поэтому порог нулевой.
+            Чинится в админке маршрутов: этапу нужна хотя бы одна должность, у
+            которой есть активный сотрудник с учётной записью (см. панель
+            «Работают без учётной записи»).
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Файлы: зонды здоровья фоновых задач ──────────────────────────────
+      # Эти два правила меряют не хранилище, а РАБОТУ задач, которые его
+      # обслуживают: метрика считает ровно те строки, которые задача должна
+      # была убрать. Порог не нулевой намеренно — между суточными запусками
+      # хвост копится штатно.
+      - uid: htqweb-media-purge-backlog
+        title: "Удалённые файлы не вычищаются"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_media_purge_backlog'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [20], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 2h
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "40"
+          threshold: "20"
+          summary: "{{ $values.A }} файлов пережили срок хранения и не удалены"
+          description: |
+            media.purge_soft_deleted идёт раз в сутки в 03:00 UTC и удаляет именно
+            эти строки. Порог 20 и два часа — это «пропустили запуск», а не
+            «сегодня много удаляли».
+            Проверить: docker compose ps backend-beat backend-worker, затем
+            Flower → задача media.purge_soft_deleted.
+        labels:
+          severity: warning
+          team: platform
+
+      - uid: htqweb-media-variants-missing
+        title: "Превью картинок не создаются"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_media_images_without_variants'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [5], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "41"
+          threshold: "5"
+          summary: "{{ $values.A }} картинок за сутки остались без превью"
+          description: |
+            make_variants при ошибке обработки пишет warning и идёт дальше, то есть
+            сломанный конвейер превью не виден больше нигде. Одна картинка — гонка
+            на загрузке; шесть за сутки — обработчик стоит.
+            Разбор: Explore → Loki → {service="backend-worker"} |= "variant".
+        labels:
+          severity: warning
+          team: platform
+
+      - uid: htqweb-messenger-attachments-broken
+        title: "Вложения в чат загружаются наполовину"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_messenger_attachments_broken'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "51"
+          threshold: "0"
+          summary: "{{ $values.A }} вложений без файла в хранилище"
+          description: |
+            Строка вложения создана, а ссылки на файл в ней нет: запись в чат
+            прошла, загрузка в файловое хранилище — нет. Пользователь видит
+            вложение, которое не открывается.
+            На пути создания поле заполняется всегда, поэтому нулевой порог здесь
+            корректен (окно метрики — неделя, наследие не считается).
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Права администраторов ────────────────────────────────────────────
+      # Единственное правило, которое смотрит на ПЕРЕХОД, а не на уровень —
+      # ровно тот приём, который шапка этого файла рекомендует вместо
+      # level-алерта на состояние, управляемое человеком. Три администратора
+      # это норма; «стало четыре» — событие.
+      #
+      # for: 0s обязателен: событие живёт один интервал вычисления, и любое
+      # ожидание его просто потеряет.
+      #
+      # Гейдж, а не счётчик событий аудита: запись в аудит появляется только
+      # при выдаче прав через админ-API, а гейдж ловит любой путь —
+      # manage.py createsuperuser, ETL, прямой SQL.
+      - uid: htqweb-superusers-changed
+        title: "Изменился состав суперпользователей"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'max(changes(htqweb_users_superusers[15m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "60"
+          threshold: "0"
+          summary: "Число активных суперпользователей изменилось"
+          description: |
+            Кому-то выдали или отобрали полные права на платформу. Если это не вы —
+            разбираться немедленно: суперпользователь видит и меняет всё, включая
+            инфраструктурные пароли в /admin.
+            Кто и когда: /django-admin/ → журнал аудита users, действие
+            user.updated. Изменения через manage.py в аудит НЕ попадают — тогда
+            смотреть логи backend-web за это время.
+        labels:
+          severity: critical
+          team: platform
+
   # ═══════════════════════════════════════════════════════════════════════
   - orgId: 1
     name: htqweb-loki
@@ -566,8 +1436,8 @@ groups:
           summary: "Nginx 5xx ratio > 5% in last 1m"
           description: |
             Sustained 5xx rate at the gateway. Likely an upstream service
-            outage or a regression. Check upstream-by-status in the
-            "htqweb-services-overview" dashboard.
+            outage or a regression. Check upstream-by-status on the
+            «HTQWeb · Шлюз и конференция» dashboard.
         labels:
           severity: critical
           team: platform
@@ -705,3 +1575,342 @@ groups:
         labels:
           severity: warning
           team: platform
+
+      # ── Подбор пароля ────────────────────────────────────────────────────
+      # Метрикой это невыразимо: obtain_token — единственный
+      # неаутентифицированный write-путь платформы, и писать строку в БД на
+      # каждую неудачную попытку значило бы дать чужим рукам управлять ростом
+      # таблицы. Поэтому источник — строка лога (apps/users/views.py::
+      # _log_login_failure), а считает её Loki, которому это ничего не стоит.
+      - uid: htqweb-auth-failed-burst
+        title: "Всплеск неудачных входов"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: loki
+            model:
+              datasource: { type: loki, uid: loki }
+              editorMode: code
+              expr: |
+                sum(count_over_time(
+                  {service="backend-web"} |= "auth_login_failed" [5m]
+                ))
+              queryType: instant
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [30], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          threshold: "30"
+          summary: "Больше 30 неудачных входов за 5 минут"
+          description: |
+            Порог 30, а не 5, намеренно: забытый пароль даёт три-пять попыток,
+            а фронт при этом ещё и повторяет запрос. Тридцать за пять минут,
+            держащиеся десять минут подряд, — это уже не человек.
+            Разбор: Explore → Loki →
+            {service="backend-web"} |= "auth_login_failed"
+            В строке есть ip и причина; not_activated отделён от
+            invalid_credentials намеренно — перебор ИМЁН и перебор ПАРОЛЕЙ
+            выглядят по-разному. Ни логина, ни пароля в логе нет.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Перебор публичных ссылок оргструктуры ────────────────────────────
+      - uid: htqweb-share-link-probing
+        title: "Перебор публичных ссылок оргструктуры"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: loki
+            model:
+              datasource: { type: loki, uid: loki }
+              editorMode: code
+              expr: |
+                sum(count_over_time(
+                  {service="backend-web"} |= "share_link_denied" [10m]
+                ))
+              queryType: instant
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [20], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          threshold: "20"
+          summary: "Больше 20 отказов по публичным ссылкам за 10 минут"
+          description: |
+            Страница /join и публичная оргструктура отдаются БЕЗ
+            аутентификации, по одному токену в ссылке. Всплеск
+            denied_unknown — это перебор токенов, а не забывчивость
+            сотрудников: у настоящей отозванной ссылки токен верный.
+            Разбор: Explore → Loki →
+            {service="backend-web"} |= "share_link_denied"
+            В строке есть ip и точная причина отказа.
+        labels:
+          severity: warning
+          team: platform
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Бизнес-события. Отдельная ГРУППА и отдельный ЧАТ (лейбл channel=business
+  # → contact point htqweb-telegram-business), и это не косметика:
+  #
+  #   • у них другой читатель и другая срочность. «Три оплаты ждут
+  #     бухгалтерию» — состояние компании, а не авария, и рядом с «Postgres
+  #     не отвечает» оно обесценивает оба;
+  #   • им РАЗРЕШЕНО гореть неделями. В инцидентном чате постоянно горящее
+  #     правило разрушает доверие к каналу (см. шапку файла); здесь это
+  #     ровно то, что нужно — счётчик незакрытых дел;
+  #   • интервал 5m вместо 1m: цифры меняются часами, чаще считать незачем.
+  #
+  # Разводит их лейбл channel, а НЕ severity: severity описывает срочность,
+  # channel — адресата, и смешивать эти оси нельзя.
+  - orgId: 1
+    name: htqweb-business
+    folder: HTQWeb
+    interval: 5m
+    rules:
+      - uid: htqweb-contracts-awaiting-accounting
+        title: "Деньги ждут бухгалтерию дольше недели"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum(htqweb_contracts_awaiting_accounting)'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "5"
+          threshold: "0"
+          summary: "{{ $values.A }} документ(ов) ждут оформления дольше 7 дней"
+          description: |
+            Оплаты, акты, предоплаты и подотчётные заявки в статусе «ожидает
+            оформления бухгалтерией», не тронутые больше недели.
+            Разбивка по видам и суммам — панели «Ждут бухгалтерию» и «…на сумму»
+            дашборда «Домены».
+            Если бухгалтерия штатно оформляет дольше недели — поднимите порог
+            STALE_ACCOUNTING_DAYS в apps/contracts/metrics.py, иначе правило будет
+            гореть постоянно и перестанет что-либо значить.
+        labels:
+          severity: warning
+          team: platform
+          channel: business
+
+      - uid: htqweb-signoff-pending-stale
+        title: "Согласования стоят дольше трёх суток"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum by (subject_type) (htqweb_signoff_pending_stale)'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 2h
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "13"
+          threshold: "0"
+          summary: "{{ $labels.subject_type }}: {{ $values.A }} без движения"
+          description: |
+            Процессы «на согласовании», у которых больше трёх суток нет ни
+            одобрения, ни отказа. Люди просто не смотрят.
+            Если это повторяется на одном subject_type — сначала проверьте, что
+            задачи вообще выдались: этап «по должности» без назначенных должностей
+            не создаёт их НИКОМУ (правило htqweb-signoff-route-dead-end).
+        labels:
+          severity: warning
+          team: platform
+          channel: business
+
+      - uid: htqweb-cms-contact-unhandled
+        title: "Обращения с сайта без ответа"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_cms_contact_requests_unhandled'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "30"
+          threshold: "0"
+          summary: "{{ $values.A }} обращений старше суток без ответа"
+          description: |
+            Заявки с публичного сайта — это лиды, и сейчас об их появлении не
+            сообщает НИЧТО: единственное уведомление (mail_admins в
+            apps/cms/tasks.py) молча ничего не делает при пустом ADMINS и глотает
+            ошибку SMTP.
+            Смотреть: раздел обращений в админке CMS.
+        labels:
+          severity: warning
+          team: platform
+          channel: business
+
+      - uid: htqweb-cms-news-scheduled-overdue
+        title: "Новости не публикуются по расписанию"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_cms_news_scheduled_overdue'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 30m
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "31"
+          threshold: "0"
+          summary: "{{ $values.A }} новостей просрочили время публикации"
+          description: |
+            Известный мёртвый путь: publish_scheduled_news не зарегистрирован в
+            расписании beat вовсе, а его фильтр не может совпасть с запланированной
+            новостью в принципе. Публикация сейчас происходит «лениво», на чтении.
+            Правило не чинит задачу — оно показывает, что её отсутствие стало
+            кому-то мешать. Разовое лечение: опубликовать новость руками в админке.
+        labels:
+          severity: warning
+          team: platform
+          channel: business
+
+      - uid: htqweb-users-pending-stale
+        title: "Регистрации ждут модерации дольше двух суток"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_users_pending_stale'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          __dashboardUid__: htqweb-domains
+          __panelId__: "61"
+          threshold: "0"
+          summary: "{{ $values.A }} заявок на регистрацию без решения"
+          description: |
+            Человек двое суток не может войти на платформу, и об этом не знает
+            никто: заявка лежит в списке, куда заходят раз в неделю.
+            Решение: /django-admin/ → пользователи → статус «ожидает».
+        labels:
+          severity: warning
+          team: platform
+          channel: business

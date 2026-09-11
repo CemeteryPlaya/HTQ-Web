@@ -323,6 +323,19 @@ class ConferenceInvite(models.Model):
     max_uses = models.PositiveIntegerField(default=0, db_default=0)
     uses = models.PositiveIntegerField(default=0, db_default=0)
     last_used_at = models.DateTimeField(null=True, blank=True)
+    #: Язык интерфейса для того, кто откроет ссылку — "ru"/"en" либо пусто.
+    #: Пусто — язык НЕ задан (обычный случай для старых ссылок и для тех, кто
+    #: не выбирал язык явно): страница входа ведёт себя как раньше, ничего не
+    #: переключая. Заказчик просил ровно это: у иностранного гостя нет
+    #: профиля и переключателя языка под рукой, поэтому язык должен ехать
+    #: вместе со ссылкой, а не угадываться по браузеру гостя. Поле — простой
+    #: CharField без ограничения значений на уровне БД (ручная правка строки
+    #: в базе технически может записать что угодно), поэтому сервис
+    #: (`conference_invite_service.normalize_locale`) приводит значение к
+    #: "ru"/"en"/"" не только при записи, но и на КАЖДОМ пути чтения — так
+    #: что мусор не долетает до пользователя, даже если он оказался здесь в
+    #: обход `create_invite`.
+    locale = models.CharField(max_length=8, blank=True, default="", db_default="")
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:

@@ -17,6 +17,9 @@ import { toast } from 'sonner';
 import { History, Pencil, Plus, Trash2 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { DateInput } from '@/components/ui/date-input';
+import { reportApiError } from '@/lib/apiError';
+import { INVALID_DATE } from '@/lib/validation';
 import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
@@ -32,7 +35,7 @@ import {
   fetchTaskDailyReports, fetchTaskVolumes, updateDailyReport,
 } from '@/api/tasks';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasElevatedAccess } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import { canEditDailyReport } from '@/lib/tasks/dailyReport';
 import { volumeUnitLabel } from '@/lib/tasks/roadmap';
 import type { DailyReport } from '@/types/tasks';
@@ -132,12 +135,16 @@ export const DailyReportDialog: React.FC<{
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { activeProfile } = useActiveProfile();
-  const elevated = hasElevatedAccess(activeProfile);
+  const permissions = usePermissions();
+  const elevated = permissions.atLeast('tasks', 'admin');
   const myId = Number(activeProfile?.id);
 
   const [form, setForm] = useState(emptyForm);
   const [editing, setEditing] = useState<DailyReport | null>(null);
   const [historyFor, setHistoryFor] = useState<number | null>(null);
+  // «31.02»: поле отдаёт наружу пустоту, и без флага форма считала бы дату
+  // просто незаполненной, а человек не понял бы, почему кнопка мертва.
+  const [brokenDate, setBrokenDate] = useState(false);
 
   const canEdit = (report: DailyReport) => canEditDailyReport({
     authorId: report.author_id, supervisorId, myId, elevated,
@@ -202,8 +209,7 @@ export const DailyReportDialog: React.FC<{
       setEditing(null);
       invalidate();
     },
-    onError: () => toast.error(
-      t('tasks.dailyReports.saveError', 'Не удалось сохранить отчёт')),
+    onError: (err) => reportApiError(err, t('tasks.dailyReports.saveError', 'Не удалось сохранить отчёт')),
   });
 
   const deleteMutation = useMutation({
@@ -212,8 +218,7 @@ export const DailyReportDialog: React.FC<{
       toast.success(t('tasks.dailyReports.deleted', 'Отчёт удалён'));
       invalidate();
     },
-    onError: () => toast.error(
-      t('tasks.dailyReports.deleteError', 'Не удалось удалить отчёт')),
+    onError: (err) => reportApiError(err, t('tasks.dailyReports.deleteError', 'Не удалось удалить отчёт')),
   });
 
   const openEdit = (report: DailyReport) => {
@@ -347,10 +352,15 @@ export const DailyReportDialog: React.FC<{
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>{t('tasks.dailyReports.workDate', 'Дата выполнения')}</Label>
-              <Input
-                type="date" value={form.work_date}
-                onChange={(e) => setForm({ ...form, work_date: e.target.value })}
+              <DateInput
+                value={form.work_date}
+                invalid={brokenDate}
+                onValidityChange={setBrokenDate}
+                onChange={(value) => setForm({ ...form, work_date: value })}
               />
+              {brokenDate && (
+                <p className="mt-1 text-sm text-destructive">{INVALID_DATE}</p>
+              )}
               <p className="mt-1 text-[11px] text-muted-foreground">
                 {t('tasks.dailyReports.workDateHint',
                    'Когда работа сделана, а не когда заполняете отчёт.')}
@@ -410,7 +420,7 @@ export const DailyReportDialog: React.FC<{
             </Button>
           )}
           <Button
-            disabled={!form.quantity || !form.work_date
+            disabled={!form.quantity || !form.work_date || brokenDate
                       || (needsVolumeType && !editing && !form.volume_type_id)
                       || saveMutation.isPending}
             onClick={() => saveMutation.mutate()}

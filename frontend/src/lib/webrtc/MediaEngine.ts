@@ -37,6 +37,14 @@ export interface ConferenceOptions {
   signalingUrl: string;
   roomId: string;
   displayName: string;
+  /**
+   * Название встречи, выбранное (или автоматически вычисленное) в лобби.
+   * Уходит в SFU только на joinRoom первого вошедшего — сама сессия
+   * решает на бэкенде (session_service.start_session), кто победил.
+   * Опционально: гостевой путь и повторные попытки подключения его не
+   * передают, там название комнаты уже никого не касается.
+   */
+  title?: string;
   videoCodecPolicy?: VideoCodecPolicy;
   iceServers?: RTCIceServer[];
   /**
@@ -578,6 +586,9 @@ export class MediaEngine {
       const joinResult = await this.signaling.request<JoinRoomResult>('joinRoom', {
         roomId: this.options.roomId,
         displayName: this.options.displayName,
+        // Пустая строка не отправляется отдельно: если title не задан,
+        // SFU и так получит undefined и не тронет уже идущую встречу.
+        title: this.options.title,
       });
       if (!joinResult.ok) {
         return this.failJoin(joinResult.error);

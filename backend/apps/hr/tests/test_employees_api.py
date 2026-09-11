@@ -791,13 +791,19 @@ def test_id_pmos_admin_sees_active_membership(admin_auth, hr_dep):
 # access.can_list_user_options (senior+)/can_manage_user_options (lead) —
 # ровно как HR-исходник, НЕ грубый api_view(admin=True).
 
-# patronymic/phone добавлены сверкой идентичности Сотрудник<->Аккаунт
-# (docs/superpowers/specs/2026-08-25-hr-identity-sync-design.md §10) — форма
-# создания сотрудника сеет ими карточку. bio/avatar_url в списке намеренно
-# отсутствуют: они нужны для ОДНОГО выбранного пользователя и приходят
-# точечной ручкой employees/users/<id>/prefill/ (см. test_identity_prefill_api).
+# Форма пункта пикера. Поля после last_name добавлены задачей «подтянуть
+# данные из Пользователей»: пикер теперь не только называет учётку, но и
+# несёт то, что из неё переносится в карточку, плюс employee_id — «карточка
+# у этого пользователя уже есть». Набор проверяется целиком (==, не <=):
+# лишнее поле на границе аппок так же нежелательно, как недостающее.
 USER_OPTION_FIELDS = {"id", "full_name", "email", "first_name", "last_name",
-                      "patronymic", "phone"}
+                      "patronymic", "phone", "avatar_url", "bio", "employee_id"}
+
+# Ответ на СОЗДАНИЕ шире ровно на временный пароль. Он есть только здесь:
+# без него заведённая через HR-форму учётка никому не по зубам — пароль
+# генерируется случайным, а ``must_change_password`` срабатывает уже ПОСЛЕ
+# входа, которого не будет.
+USER_CREATED_FIELDS = USER_OPTION_FIELDS | {"generated_password"}
 
 
 @pytest.mark.django_db
@@ -899,7 +905,7 @@ def test_users_post_201_for_lead_creates_user(lead):
     )
     assert resp.status_code == 201
     body = resp.json()
-    assert set(body) == USER_OPTION_FIELDS
+    assert set(body) == USER_CREATED_FIELDS
     assert body["email"] == "new-hire@htq.test"
     assert body["first_name"] == "New"
     assert body["last_name"] == "Hire"
@@ -1242,79 +1248,87 @@ def test_update_employee_rolls_back_basic_fields_when_card_forbidden(creator_no_
 
 # ── Пароль при создании пользователя из HR-формы ────────────────────────────
 #
-# До этого форма пароль не спрашивала, а apps.users.interface.create_user
-# минтил случайный `secrets.token_urlsafe(12)`, которого не видел никто:
-# аккаунт заводился, но войти в него было нельзя до админского сброса.
-# Пароль стал обязательным, поэтому его отсутствие — 422, а переданный
-# должен реально работать при входе.
+# Форма пароль не спрашивает: apps.users.interface.create_user генерирует его
+# и возвращает ОДИН раз в ответе на создание. Раньше он генерировался «для
+# себя» и не показывался никому — аккаунт заводился, но войти в него было
+# нельзя до админского сброса. Тесты ниже держат обе половины обещания:
+# отданный пароль реально пускает внутрь, и больше он нигде не появляется.
 
 @pytest.mark.django_db
-def test_users_post_422_without_password(lead):
+def test_users_post_returns_a_password_that_actually_works(lead):
+    """Смысл ответа — не поле в JSON, а возможность войти.
+
+    До этого HR заводил сотрудника, а войти было нечем: пароль генерировался
+    случайным и не показывался никому, оставался только сброс через
+    /admin/users.
+    """
     _emp, headers = lead
     resp = Client().post(
         f"{BASE}/users/",
-        data='{"first_name": "No", "last_name": "Password", "email": "no-pwd@htq.test"}',
-        content_type="application/json",
-        **headers,
-    )
-    assert resp.status_code == 422
-    assert resp.json()["detail"] == "Пароль обязателен"
-
-    from apps.users.models import User as _User
-    assert not _User.objects.filter(email="no-pwd@htq.test").exists()
-
-
-@pytest.mark.django_db
-def test_users_post_422_on_blank_password(lead):
-    """Пробелы — не пароль: иначе форму можно было бы «обойти» пробелом."""
-    _emp, headers = lead
-    resp = Client().post(
-        f"{BASE}/users/",
-        data='{"first_name": "Blank", "last_name": "Password", "email": "blank-pwd@htq.test", "password": "   "}',
-        content_type="application/json",
-        **headers,
-    )
-    assert resp.status_code == 422
-
-
-@pytest.mark.django_db
-def test_users_post_sets_the_given_password(lead):
-    """Главное: переданным паролем действительно можно войти."""
-    _emp, headers = lead
-    resp = Client().post(
-        f"{BASE}/users/",
-        data='{"first_name": "Real", "last_name": "Login", "email": "real-login@htq.test", "password": "Str0ng!Passw0rd"}',
+        data='{"first_name": "Login", "last_name": "Works", "email": "login-works@htq.test"}',
         content_type="application/json",
         **headers,
     )
     assert resp.status_code == 201
+    password = resp.json()["generated_password"]
+    assert password
 
-    from apps.users.models import User as _User
-    created = _User.objects.get(email="real-login@htq.test")
-    assert created.check_password("Str0ng!Passw0rd")
-    # По умолчанию — смена при первом входе (пароль назначал не сам сотрудник).
-    assert created.must_change_password is True
+    token = Client().post(
+        "/api/users/v1/token/",
+        data='{"email": "login-works@htq.test", "password": "%s"}' % password,
+        content_type="application/json",
+    )
+    assert token.status_code == 200, token.content
+    assert token.json()["access"]
+
+
+@pytest.mark.django_db
+def test_users_get_never_leaks_the_password(senior):
+    """Пароль отдаётся ТОЛЬКО в ответе на создание.
+
+    Список строит тот же ``_serialize_user_option``, и если однажды пароль
+    заведётся внутри него, утечёт он именно здесь — в справочнике учёток,
+    доступном каждому senior HR.
+    """
+    _emp, headers = senior
+    body = Client().get(f"{BASE}/users/", **headers).json()
+    assert body
+    for row in body:
+        assert "generated_password" not in row
+
+
+@pytest.mark.django_db
+def test_created_user_must_change_password(lead):
+    """Временный пароль остаётся временным: флаг смены выставлен."""
+    _emp, headers = lead
+    Client().post(
+        f"{BASE}/users/",
+        data='{"first_name": "Temp", "last_name": "Pass", "email": "temp-pass@htq.test"}',
+        content_type="application/json",
+        **headers,
+    )
+    user = User.objects.get(email="temp-pass@htq.test")
+    assert user.must_change_password is True
 
 
 @pytest.mark.django_db
 def test_users_post_forces_password_change_even_if_client_says_otherwise(lead):
     """Смена пароля при первом входе на этом маршруте НЕ отключаема.
 
-    Пароль назначает HR и видит его открытым текстом, поэтому сотрудник обязан
-    сменить его при первом входе. Поля в схеме нет, вьюха проставляет True
-    жёстко — присланный клиентом ``false`` должен игнорироваться, а не
-    приниматься. Тест бьёт именно в обход UI: через форму такой запрос не
-    отправить, а напрямую — сколько угодно.
+    Пароль сгенерирован сервером и показан заводящему открытым текстом,
+    поэтому сотрудник обязан сменить его при первом входе. Поля в схеме нет,
+    ``interface.create_user`` проставляет True сам — присланный клиентом
+    ``false`` должен игнорироваться, а не приниматься. Тест бьёт именно в
+    обход UI: через форму такой запрос не отправить, а напрямую — сколько
+    угодно.
     """
     _emp, headers = lead
     resp = Client().post(
         f"{BASE}/users/",
         data=('{"first_name": "Keep", "last_name": "Password", "email": "keep-pwd@htq.test",'
-              ' "password": "Str0ng!Passw0rd", "must_change_password": false}'),
+              ' "must_change_password": false}'),
         content_type="application/json",
         **headers,
     )
     assert resp.status_code == 201
-
-    from apps.users.models import User as _User
-    assert _User.objects.get(email="keep-pwd@htq.test").must_change_password is True
+    assert User.objects.get(email="keep-pwd@htq.test").must_change_password is True

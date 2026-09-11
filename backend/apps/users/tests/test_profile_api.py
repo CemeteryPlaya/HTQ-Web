@@ -134,6 +134,10 @@ def test_get_profile_me_200_full_dual_case_field_set(active_user):
         "roles", "department", "department_id", "position",
         "must_change_password", "date_joined", "last_login",
         "created_at", "updated_at",
+        # Карта прав приезжает вместе с профилем, чтобы фронт не делал второй
+        # запрос на каждой загрузке (спека стадии 2 «Доступ и роли», A7).
+        # ``roles`` при этом остались как были — их читает действующий фронт.
+        "company", "permissions", "subordinate_companies",
     }
     assert body["id"] == str(active_user.id)
     assert body["username"] == "alice"

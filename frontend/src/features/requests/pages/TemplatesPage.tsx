@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/select';
 
 import { requestsApi } from '@/api/requests';
+import { reportApiError } from '@/lib/apiError';
 import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { QK, useProjects, useTemplates } from '@/features/requests/hooks';
 import type { FormTemplate } from '@/features/requests/types';
@@ -42,10 +43,7 @@ export default function TemplatesPage() {
       setProjectId('none');
       toast.success(t('requests.templates.created', { name: tpl.name }));
     },
-    onError: (e: any) => {
-      const detail = e?.response?.data?.detail ?? e?.message ?? t('requests.templates.createError');
-      toast.error(detail);
-    },
+    onError: (err) => reportApiError(err, t('requests.templates.createError')),
   });
 
   return (
@@ -159,7 +157,7 @@ function TemplateActions({ tpl }: { tpl: FormTemplate }) {
       qc.invalidateQueries({ queryKey: QK.templates(null) });
       toast.success(ok);
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? t('requests.templates.actionError'));
+      reportApiError(e, t('requests.templates.actionError'));
     } finally {
       setBusy(false);
     }

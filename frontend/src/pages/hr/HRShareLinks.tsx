@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { translatedMap } from '@/lib/i18n/translatedMap';
 import { useTranslation } from 'react-i18next';
 import i18next from '@/i18n';
+import { copyText } from '@/lib/clipboard';
 
 interface ShareLink {
   id: string;
@@ -71,7 +72,7 @@ function CreatedDialog({ created, onClose }: { created: CreatedLink; onClose: ()
   // proxy rewrites Host to the API host).
   const shareUrl = `${window.location.origin}/public/org/${created.token}`;
   const copy = () => {
-    navigator.clipboard.writeText(shareUrl);
+    void copyText(shareUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

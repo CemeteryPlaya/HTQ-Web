@@ -43,6 +43,9 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
+  LivePanel, SessionRow, TodayPanel,
+} from '@/components/conference/OverviewPanels';
+import {
   formatDateTime,
   formatDuration,
   recordingBadge,
@@ -169,49 +172,19 @@ const ConferenceHistory: React.FC = () => {
           </TabsList>
 
           <TabsContent value="today">
-            {overviewLoading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 3 }).map((_, index) => (
-                  <Skeleton key={index} className="h-16 w-full rounded-2xl" />
-                ))}
-              </div>
-            ) : todayItems.length > 0 ? (
-              <ul className="space-y-3">
-                {todayItems.map((item) => (
-                  <TodayRow key={item.event_id} item={item} />
-                ))}
-              </ul>
-            ) : !overviewError && (
-              <div className="rounded-lg border border-dashed p-12 text-center">
-                <CalendarDays className="mx-auto h-10 w-10 text-muted-foreground/50" />
-                <p className="mt-4 text-muted-foreground">
-                  {t('conference.overview.emptyToday', 'Сегодня встреч нет')}
-                </p>
-              </div>
-            )}
+            <TodayPanel
+              items={todayItems}
+              loading={overviewLoading}
+              failed={Boolean(overviewError)}
+            />
           </TabsContent>
 
           <TabsContent value="live">
-            {overviewLoading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 3 }).map((_, index) => (
-                  <Skeleton key={index} className="h-24 w-full rounded-lg" />
-                ))}
-              </div>
-            ) : activeItems.length > 0 ? (
-              <ul className="space-y-3">
-                {activeItems.map((session) => (
-                  <SessionRow key={session.id} session={session} />
-                ))}
-              </ul>
-            ) : !overviewError && (
-              <div className="rounded-lg border border-dashed p-12 text-center">
-                <Radio className="mx-auto h-10 w-10 text-muted-foreground/50" />
-                <p className="mt-4 text-muted-foreground">
-                  {t('conference.overview.emptyLive', 'Сейчас никто не разговаривает')}
-                </p>
-              </div>
-            )}
+            <LivePanel
+              items={activeItems}
+              loading={overviewLoading}
+              failed={Boolean(overviewError)}
+            />
           </TabsContent>
 
           <TabsContent value="history">
@@ -297,77 +270,6 @@ const ConferenceHistory: React.FC = () => {
       </main>
       <Footer />
     </div>
-  );
-};
-
-const TodayRow: React.FC<{ item: ConferenceTodayItem }> = ({ item }) => {
-  const { t } = useTranslation();
-  return (
-    <li className="flex items-center justify-between gap-3 rounded-2xl border p-4">
-      <div className="min-w-0">
-        <p className="truncate font-medium">{item.title}</p>
-        <p className="text-xs text-muted-foreground">
-          {format(new Date(item.start_at), 'HH:mm')}
-          {' — '}
-          {format(new Date(item.end_at), 'HH:mm')}
-        </p>
-      </div>
-      {item.status === 'live' ? (
-        <Button asChild size="sm">
-          <Link to={`/room/${item.room_id}`}>{t('conference.overview.join', 'Войти')}</Link>
-        </Button>
-      ) : (
-        <Badge variant={item.status === 'finished' ? 'outline' : 'secondary'}>
-          {t(`conference.overview.status.${item.status}`)}
-        </Badge>
-      )}
-    </li>
-  );
-};
-
-const SessionRow: React.FC<{ session: ConferenceSessionListItem }> = ({ session }) => {
-  const { t } = useTranslation();
-  const badge = recordingBadge(session.recording_state);
-
-  return (
-    <li>
-      <Link
-        to={`/conference/history/${session.id}`}
-        className="block rounded-lg border p-4 transition-colors hover:bg-accent/50"
-      >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="truncate font-medium">
-              {session.title
-                || t('conference.history.untitled', 'Встреча без названия')}
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {session.created_by_name || '—'} · {formatDateTime(session.started_at)}
-            </p>
-          </div>
-          <Badge variant={badge.variant}>{t(badge.i18nKey, badge.fallback)}</Badge>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <Clock className="h-4 w-4" />
-            {session.ended_at
-              ? formatDuration(session.duration_sec)
-              : t('conference.history.ongoing', 'Идёт сейчас')}
-          </span>
-          <span className="flex items-center gap-1.5">
-            <Users className="h-4 w-4" />
-            {session.participant_count}
-          </span>
-          {session.transcript_state === 'ready' && (
-            <span className="flex items-center gap-1.5">
-              <FileText className="h-4 w-4" />
-              {t('conference.history.hasTranscript', 'Есть протокол')}
-            </span>
-          )}
-        </div>
-      </Link>
-    </li>
   );
 };
 

@@ -7,6 +7,7 @@ import { visualizer } from "rollup-plugin-visualizer";
 import viteCompression from "vite-plugin-compression";
 import compression from "compression";
 import { ViteImageOptimizer } from "vite-plugin-image-optimizer";
+import { companyFromHost } from "./src/lib/auth/companySwitch";
 
 function isEnvFalse(value: string | undefined) {
   if (!value) return false;
@@ -23,6 +24,41 @@ function sendJson(res: ServerResponse, statusCode: number, body: Record<string, 
 
 function rewriteApiPrefix(from: RegExp, to: string) {
   return (requestPath: string) => requestPath.replace(from, to);
+}
+
+/**
+ * Ставит `X-HTQ-Company` на прокси-запросе к Django — dev-эквивалент того,
+ * что в проде делает nginx (`infra/nginx/default.conf`, `proxy_set_header
+ * X-HTQ-Company $company`, где `$company` — именованная группа той же
+ * `server_name`-регулярки). Без нижнего звена этой цепочки
+ * (поддомен -> заголовок -> схема) ни один dev/тестовый стек не мог
+ * пройти маршрут целиком: у прокси Vite заголовка не было вовсе, а nginx в
+ * тестовые compose-файлы сознательно не добавляется (см. CLAUDE.md) — четвёртое
+ * место с логикой определения компании того не стоит.
+ *
+ * Правило "что считается компанией по имени хоста" ЕДИНОЕ на весь фронт —
+ * `companyFromHost` из `src/lib/auth/companySwitch.ts` (уже согласовано с
+ * той же nginx-регуляркой символ в символ, см. её докстринг). Здесь оно не
+ * продублировано, а импортировано: `vite.config.ts` не входит в бандл SPA и
+ * выполняется Node'ом через собственный esbuild-загрузчик Vite, поэтому
+ * обычный relative-импорт `.ts`-файла без React/JSX-зависимостей работает
+ * без дополнительной настройки — заводить для конфигурации отдельную копию
+ * регулярки не потребовалось.
+ */
+function attachCompanyHeader<T extends { configure?: (proxy: any, options: any) => void }>(
+  entry: T
+): T {
+  const previousConfigure = entry.configure;
+  return {
+    ...entry,
+    configure: (proxy: any, options: any) => {
+      proxy.on("proxyReq", (proxyReq: any, req: IncomingMessage) => {
+        const company = companyFromHost(req.headers.host ?? "");
+        if (company) proxyReq.setHeader("X-HTQ-Company", company);
+      });
+      previousConfigure?.(proxy, options);
+    },
+  };
 }
 
 function mediaLegacyGuardPlugin() {
@@ -54,8 +90,8 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const enableDevCompression = env.VITE_DEV_COMPRESSION === "true";
   // Слежение опросом: обязательно, когда dev-сервер живёт в контейнере, а
-  // исходники примонтированы с хоста (docker-compose.dev.yml ставит эту
-  // переменную). Подробности — у server.watch ниже.
+  // исходники примонтированы с хоста (её ставят docker-compose.test-local.yml
+  // и docker-compose.test-env.yml). Подробности — у server.watch ниже.
   const usePolling = env.VITE_USE_POLLING === "true";
 
   // HTTPS in dev is opt-in via VITE_DEV_HTTPS=true. Default: plain HTTP on :3000
@@ -98,9 +134,11 @@ export default defineConfig(({ mode }) => {
   // WSGI (runserver/gunicorn) его не стримит. В dev шлём на отдельный ASGI-процесс
   // (backend-asgi), как это делает прод-nginx. Переопределяется VITE_ASGI_TARGET.
   const asgiTarget = env.VITE_ASGI_TARGET || "http://127.0.0.1:8001";
-  // Grafana's HOST port is 3001 (container 3000 is taken by Vite itself);
+  // Grafana's HOST port is 3002 in the test stacks (container 3000 is taken
+  // by Vite itself; 3001 collides with other projects on dev machines —
+  // production still publishes 3001);
   // 3100 is Loki — proxying there breaks /grafana with a 404.
-  const grafanaTarget = env.VITE_GRAFANA_TARGET || "http://127.0.0.1:3001";
+  const grafanaTarget = env.VITE_GRAFANA_TARGET || "http://127.0.0.1:3002";
   const prometheusTarget = env.VITE_PROMETHEUS_TARGET || "http://127.0.0.1:9090";
   // Keep SFU upstream plain WS by default (common for local/tunnel mode where TLS
   // is terminated at reverse proxy edge). If your SFU listens with TLS locally,
@@ -138,7 +176,8 @@ export default defineConfig(({ mode }) => {
     console.log(`[vite] HMR pinned to tunnel host: wss://${tunnelPublicHost}:443`);
   }
 
-  const buildProxyConfig = () => ({
+  const buildProxyConfig = () => {
+  const rawProxyConfig: Record<string, any> = {
     // ─── WebSockets ─────────────────────────────────────────────────────────
     "/ws/sfu": {
       target: sfuWsTarget,
@@ -307,6 +346,18 @@ export default defineConfig(({ mode }) => {
       target: signoffServiceTarget,
       changeOrigin: true,
     },
+    // Доступ и роли (apps.access). Легаси-путей без /v1/ здесь нет, поэтому
+    // одной строки достаточно.
+    //
+    // ⚠️ Без этого правила запросы к /api/access/ уходят НЕ в бэкенд, а в сам
+    // dev-сервер: у таблицы ниже нет общего правила "^/api/" — в отличие от
+    // прод-nginx, где такой location есть. Клиент получает index.html вместо
+    // JSON, страница ролей молча пуста, и симптом на причину не указывает.
+    // Сторож — src/api/endpoints.proxy.test.ts.
+    "^/api/access/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
     "^/api/requests/v1/stream": {
       target: asgiTarget,
       changeOrigin: true,
@@ -327,6 +378,16 @@ export default defineConfig(({ mode }) => {
     // доходя до бэкенда (в проде nginx отдаёт его через общий `location
     // /api/`, поэтому там всё работало и расхождение не замечали).
     "^/api/core/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
+    // apps.conference: история встреч, сводный экран `/overview`, протоколы и
+    // записи. Та же история, что у `core` выше, — домен появился уже в
+    // Django-монолите, правила в этой таблице не было, и ВЕСЬ API конференций
+    // в dev упирался в catch-all ниже, получая синтетический 404 «API endpoint
+    // not found» от самого Vite. В проде nginx отдаёт его общим `location
+    // /api/`, поэтому там работало и расхождение жило незамеченным.
+    "^/api/conference/": {
       target: backendTarget,
       changeOrigin: true,
     },
@@ -391,7 +452,22 @@ export default defineConfig(({ mode }) => {
       target: prometheusTarget,
       changeOrigin: true,
     },
-  });
+  };
+
+  // Заголовок ставится только на правилах, чьи запросы реально попадают в
+  // Django (backendTarget — WSGI, asgiTarget — SSE/WS-хвост /ws/*
+  // middleware не покрывает, но лишний заголовок ему не мешает): у
+  // мониторинга (Grafana/Prometheus) и у сигналинга SFU/messenger своя
+  // авторизация и своего понятия "компания" нет вовсе.
+  const djangoTargets = new Set([backendTarget, asgiTarget]);
+  const proxyConfig: Record<string, any> = {};
+  for (const [path, entry] of Object.entries(rawProxyConfig)) {
+    proxyConfig[path] = djangoTargets.has(entry.target)
+      ? attachCompanyHeader(entry)
+      : entry;
+  }
+  return proxyConfig;
+  };
 
   return {
   server: {

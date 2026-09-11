@@ -38,6 +38,9 @@
 name: htqweb-local
 
 x-django-env: &django-env
+  # Секрет канала SFU -> Django. Пустой ЗАКРЫВАЕТ приём фактов о
+  # встречах (так задумано), поэтому без него нет ни истории, ни записей.
+  CONFERENCE_INTERNAL_TOKEN: ${CONFERENCE_INTERNAL_TOKEN:-}
   # DEBUG-настройки: подробные трейсбеки, без обязательного ALLOWED_HOSTS.
   DJANGO_SETTINGS_MODULE: htqweb.settings.dev
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
@@ -62,6 +65,16 @@ x-django-env: &django-env
   S3_BUCKET: ${S3_BUCKET:-htqweb-cms}
   MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-htqweb-media}
   S3_USE_PATH_STYLE: "true"
+
+  # Публичный адрес и сводка — см. развёрнутый комментарий в
+  # docker-compose.yml. Здесь ПУСТЫЕ и без подстановки из .env намеренно: там
+  # лежит боевой https://htq.group, и тестовый стенд начал бы клеить ссылки на
+  # прод. Пустой TELEGRAM_BOT_TOKEN выключает утреннюю сводку — тестовый стек
+  # в сеть за ней не ходит.
+  PUBLIC_BASE_URL: ""
+  GF_TELEGRAM_BOT_TOKEN: ""
+  TELEGRAM_BOT_TOKEN: ""
+  TELEGRAM_DIGEST_CHAT_ID: ""
 
 services:
   # ─── PostgreSQL (локальная, одноразовая) ────────────────────────────────────
@@ -332,7 +345,21 @@ services:
       - /app/node_modules
     environment:
       VITE_DEV_HTTPS: "false"
-      VITE_DISABLE_HMR: "false"
+      # ⚠️ ВРЕМЕННО (показ через туннель): HMR-сокет ходит на хост страницы,
+      # а через туннель это чужой домен — вебсокет не встаёт и консоль сыплет
+      # ошибками у зрителя. Для показа перезагрузка по правке не нужна.
+      # ВЕРНУТЬ ПОСЛЕ ПОКАЗА: "false".
+      VITE_DISABLE_HMR: "true"
+      # ⚠️ ОБЯЗАТЕЛЬНО, пока Vite живёт в контейнере, а исходники смонтированы
+      # с хоста: события файловой системы через такой монт не доходят, watcher
+      # молчит, и браузер получает модуль, собранный при СТАРТЕ сервера.
+      # Выглядит это как «правку не применили» — на диске новый код, в
+      # контейнере новый, в браузере старый, — и лечится только рестартом
+      # контейнера. Подробности в комментарии у server.watch в vite.config.ts.
+      #
+      # Переменная была потеряна при сведении compose-файлов в три: её ставил
+      # docker-compose.dev.yml, а он удалён. Цена — один обход дерева в секунду.
+      VITE_USE_POLLING: "true"
       VITE_BACKEND_TARGET: "http://backend-web:8000"
       VITE_ASGI_TARGET: "http://backend-asgi:8000"
       VITE_MESSENGER_WS_TARGET: "ws://backend-asgi:8000"
@@ -364,6 +391,18 @@ services:
     restart: unless-stopped
     environment:
       REDIS_ADDR: redis://redis:6379
+      # Длина очередей Celery. Flower её НЕ знает (он видит воркеров и события,
+      # а не брокер), поэтому единственный источник redis_key_size — здесь. Без
+      # переменной метрики нет вовсе: правило htqweb-celery-queue-growing и все
+      # панели «Очередь Celery» пусты.
+      #
+      # ⚠️ Номер БД — 2, а не 9: CELERY_BROKER_URL это redis://redis:6379/2.
+      # 9 — дефолт из htqweb/settings/base.py, который compose перекрывает; с
+      # ним экспортер сканировал бы пустую базу и молчал так же, как без него.
+      #
+      # conference_media — вторая очередь (CELERY_TASK_ROUTES): сведение записей
+      # и распознавание встреч.
+      REDIS_EXPORTER_CHECK_KEYS: "2=celery,2=conference_media"
     ports:
       - "9121:9121"
     depends_on:
@@ -373,11 +412,67 @@ services:
       driver: json-file
       options: { max-size: "5m", max-file: "3" }
 
+  # ─── Хост: диск, память, CPU, сеть ──────────────────────────────────────
+  # Единственный источник node_*: дашборд «Хост и контейнеры» целиком,
+  # host-панели «Обзора платформы» и правила htqweb-disk-space-low /
+  # htqweb-host-memory-high. Джоб `node` скрейпился и раньше, но контейнера не
+  # было ни в одном compose-файле — таргет вечно висел DOWN.
+  # На Docker Desktop/WSL2 отсюда видно ВМ WSL, а не Windows-хост: для проверки
+  # того, что метрики текут и панели рисуются, этого достаточно.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    pid: host
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      # $$ — экранированный $: одинарный compose попытался бы подставить.
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/.+)($$|/)
+      - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|mqueue|overlay|proc|procfs|pstore|securityfs|sysfs|tracefs)$$
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  # ─── Контейнеры: CPU, память, перезапуски ───────────────────────────────
+  # container_* нужны панели «Память контейнеров бэкенда», половине дашборда
+  # «Хост и контейнеры» и правилу htqweb-container-restarts. Флаги режут объём
+  # серий на порядок и не трогают ничего, что мы рисуем — подробности в
+  # docker-compose.yml, там же про сознательный отказ от privileged.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    restart: unless-stopped
+    command:
+      - --housekeeping_interval=30s
+      - --docker_only=true
+      - --store_container_labels=false
+      - --disable_metrics=percpu,sched,tcp,udp,advtcp,process,hugetlb,referenced_memory,cpu_topology,resctrl
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
   prometheus:
     build:
       context: ./infra/logging/prometheus
       dockerfile: Dockerfile
     restart: unless-stopped
+    environment:
+      # ⚠️ ЖЁСТКО, а не ${PROMETHEUS_ENV} — по той же причине, по которой в
+      # этом файле жёстко прописан DB_HOST. В корневом .env лежит
+      # PROMETHEUS_ENV=production, и подстановка пометила бы серии локального
+      # стенда как боевые: если данные стендов когда-нибудь сведут в одно
+      # хранилище, разделить их будет уже нечем.
+      PROMETHEUS_ENV: test-local
     ports:
       - "9090:9090"
     volumes:
@@ -441,10 +536,17 @@ services:
         exec /run.sh
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      # Дефолт admin здесь остаётся намеренно: тестовый стек поднимается одной
+      # командой без .env и наружу не смотрит. В docker-compose.yml та же
+      # строка обязательная (синтаксис :?) — там Grafana видна из интернета.
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
-      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+      # Литерал, а НЕ ${PUBLIC_BASE_URL}: в .env разработчика лежит боевой
+      # адрес, и подстановка заставила бы тестовый стенд клеить в уведомления
+      # ссылки на ПРОДОВУЮ Grafana. Та же логика, что у жёсткого
+      # PROMETHEUS_ENV: тестовый стенд не притворяется продом ни в одном байте.
+      GF_SERVER_ROOT_URL: "http://localhost:3002/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
       # SSO платформенными аккаунтами: superuser → Admin, staff → Editor,
       # остальные отклоняются (role_attribute_strict). Локальный admin/admin
@@ -461,8 +563,33 @@ services:
       GF_AUTH_JWT_ROLE_ATTRIBUTE_PATH: "is_superuser && 'Admin' || is_staff && 'Editor'"
       GF_AUTH_JWT_ROLE_ATTRIBUTE_STRICT: "true"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/htqweb-prometheus-services.json
+      # ─── Доставка алертов ────────────────────────────────────────────────
+      # Провижининг подставляет их синтаксисом $$__env{...}
+      # (grafana-provisioning/alerting/contact_points.yml), а подстановка читает
+      # ОКРУЖЕНИЕ КОНТЕЙНЕРА. Без этих строк она давала пустую строку, и
+      # Telegram-ресивер с пустым токеном молча ничего не отправлял.
+      # Chat id сюда НЕ приходит: он литерал в contact_points.yml (там написано,
+      # почему числовой id из $$__env{} роняет Grafana 10.4).
+      # ⚠️ Заглушки НЕПУСТЫЕ намеренно: Grafana 10.4 валидирует контакт-пойнты
+      # на старте и с пустым значением падает целиком (exit 1, рестарт-петля),
+      # а тестовый стек должен подниматься одной командой без .env. Настоящие
+      # значения из .env их перекроют. В docker-compose.yml обе переменные
+      # обязательные — там доставка алертов и есть смысл существования Grafana.
+      GF_TELEGRAM_BOT_TOKEN: ${GF_TELEGRAM_BOT_TOKEN:-000000000:PLACEHOLDER-NOT-A-REAL-TOKEN}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-alerts@example.invalid}
+      # ⚠️ GF_SMTP_HOST задаётся С ПОРТОМ: smtp.example.com:587.
+      GF_SMTP_ENABLED: ${GF_SMTP_ENABLED:-false}
+      GF_SMTP_HOST: ${GF_SMTP_HOST:-}
+      GF_SMTP_USER: ${GF_SMTP_USER:-}
+      GF_SMTP_PASSWORD: ${GF_SMTP_PASSWORD:-}
+      GF_SMTP_FROM_ADDRESS: ${GF_SMTP_FROM_ADDRESS:-}
+      GF_SMTP_SKIP_VERIFY: ${GF_SMTP_SKIP_VERIFY:-false}
     ports:
-      - "3001:3000"
+      # 3002, а НЕ 3001: на машинах разработчиков 3001 бывает занят соседним
+      # проектом, и тогда Grafana просто не стартует, а Prometheus получает
+      # вечный DOWN-таргет. В ПРОДЕ порт остался 3001 — там он свободен и
+      # оставлен намеренно как запасной вход при лежащем nginx.
+      - "3002:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./infra/logging/grafana-provisioning:/etc/grafana/provisioning:ro
@@ -514,6 +641,11 @@ services:
       WEBRTC_ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-127.0.0.1}
       WEBRTC_SERVER_PORT: ${WEBRTC_SERVER_PORT:-44444}
       MEDIASOUP_WORKERS: ${MEDIASOUP_WORKERS:-1}
+      # Куда SFU шлёт факты о встрече. Пустой адрес выключает запись
+      # целиком: писать файлы, о которых некому рассказать, значит
+      # копить сирот на диске.
+      CONFERENCE_BACKEND_URL: ${CONFERENCE_BACKEND_URL:-http://backend-web:8000}
+      CONFERENCE_INTERNAL_TOKEN: ${CONFERENCE_INTERNAL_TOKEN:-}
     ports:
       - "4443:4443"
       - "${WEBRTC_SERVER_PORT:-44444}:${WEBRTC_SERVER_PORT:-44444}/udp"

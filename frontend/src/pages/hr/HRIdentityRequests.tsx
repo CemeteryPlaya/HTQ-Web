@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useHRLevel } from '@/hooks/useHRLevel';
-import { errorDetail } from '@/lib/apiError';
+import { errorDetail, reportApiError } from '@/lib/apiError';
 
 const STATUS_LABEL: Record<IdentityRequestStatus | 'all', string> = {
   pending: 'Ожидают',
@@ -60,8 +60,8 @@ const HRIdentityRequests = () => {
   const changeApprover = useMutation({
     mutationFn: (userId: number | null) => setIdentityApprover(userId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['identity-approver'] }),
-    onError: (err: unknown) => toast.error(
-      errorDetail(err) ?? t('hr.pages.identity.approverError', 'Не удалось назначить подтверждающего'),
+    onError: (err: unknown) => reportApiError(
+      err, t('hr.pages.identity.approverError', 'Не удалось назначить подтверждающего'),
     ),
   });
 

@@ -21,6 +21,7 @@ import { toast } from 'sonner';
 import { AtSign, CheckCircle2, KeyRound, PenLine, Unlink } from 'lucide-react';
 
 import api from '@/api/client';
+import { reportApiError } from '@/lib/apiError';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -63,9 +64,9 @@ export const CorporateMailSettings: React.FC = () => {
             invalidate();
             toast.success(t('settingsPage.mailConnected', 'Почта подключена — письма скоро появятся в разделе «Почта»'));
         },
-        onError: (e: ApiError) => toast.error(
-            e?.response?.data?.detail
-            || t('settingsPage.mailConnectFailed', 'Не удалось подключить почту'),
+        onError: (err) => reportApiError(
+            err,
+            t('settingsPage.mailConnectFailed', 'Не удалось подключить почту'),
             { duration: 15_000 },
         ),
     });
@@ -76,7 +77,7 @@ export const CorporateMailSettings: React.FC = () => {
             invalidate();
             toast.success(t('settingsPage.mailDisconnected', 'Почта отключена от платформы'));
         },
-        onError: (e: ApiError) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('settingsPage.mailDisconnectError', 'Не удалось отключить почту')),
     });
 
     // Карточка не показывается вовсе, когда подключать нечего: у сотрудника
@@ -195,7 +196,7 @@ const SignatureField: React.FC = () => {
             setTouched(false);
             toast.success(t('settingsPage.signatureSaved', 'Подпись сохранена'));
         },
-        onError: (e: ApiError) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('settingsPage.signatureSaveError', 'Не удалось сохранить подпись')),
     });
 
     if (!account) return null;

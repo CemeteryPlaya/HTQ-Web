@@ -138,6 +138,17 @@ def create_employee(data, *, changed_by_id: int) -> Employee:
     _assert_position_exists(data.position_id)
     if _email_taken(data.email):
         raise EmailAlreadyInUse
+    if data.user_id is not None:
+        # ``user_id`` приходит прямо из тела запроса и до сих пор писался в
+        # модель как есть: несуществующая учётка проходила молча, а занятая
+        # другим сотрудником всплывала как IntegrityError, то есть 500
+        # «что-то пошло не так» вместо внятных 422/409.
+        #
+        # Импорт ленивый: employee_prefill_service импортирует ЭТОТ модуль
+        # (он ниже уровнем), и на верхнем уровне вышел бы цикл.
+        from apps.hr.services import employee_prefill_service as link_svc
+
+        link_svc.assert_user_available(data.user_id)
 
     employee = Employee.objects.create(**data.model_dump())
     audit_service.log(
@@ -151,7 +162,8 @@ def create_employee(data, *, changed_by_id: int) -> Employee:
 
 
 @transaction.atomic
-def update_employee(id: int, data, *, changed_by_id: int) -> Employee:
+def update_employee(id: int, data, *, changed_by_id: int,
+                    force_identity: bool = False) -> tuple[Employee, object | None]:
     employee = get_employee(id)
     patch = data.model_dump(exclude_none=True)
 
@@ -159,11 +171,21 @@ def update_employee(id: int, data, *, changed_by_id: int) -> Employee:
     # 2026-08-25 §3): такие поля не пишутся в строку, а уходят заявкой, и
     # дальше по коду patch содержит только трудовые поля. У «скелета» без
     # user_id владельца нет — capture вернёт патч нетронутым.
-    from apps.hr.services import identity_request_service
+    from apps.hr.services import identity_fields, identity_request_service
 
-    patch, identity_request = identity_request_service.capture(
-        employee, patch, actor_id=changed_by_id,
-    )
+    if force_identity:
+        # Право hr.identity.force: поля идентичности пишутся сразу. Ожидающая
+        # заявка по этим же полям снимается — иначе её подтверждение вернуло бы
+        # старое значение поверх нового, и выглядело бы это штатно.
+        identity_request = None
+        identity_request_service.supersede(
+            employee, set(patch) & set(identity_fields.SYNCABLE),
+            actor_id=changed_by_id,
+        )
+    else:
+        patch, identity_request = identity_request_service.capture(
+            employee, patch, actor_id=changed_by_id,
+        )
 
     if "department_id" in patch:
         _assert_department_exists(patch["department_id"])
@@ -192,7 +214,12 @@ def update_employee(id: int, data, *, changed_by_id: int) -> Employee:
         },
         changed_by=changed_by_id,
     )
-    return get_employee(id)
+    # Заявка возвращается ВМЕСТЕ с сотрудником, а не только пишется в журнал.
+    # Правка идентичности не применяется сразу — она уходит на подтверждение
+    # владельцу аккаунта, и без этого признака вызывающий не может отличить
+    # «сохранено» от «отправлено на подтверждение»: строка сотрудника в обоих
+    # случаях возвращается прежней, и для человека правка выглядит пропавшей.
+    return get_employee(id), identity_request
 
 
 @transaction.atomic

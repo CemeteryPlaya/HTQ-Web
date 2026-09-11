@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +21,9 @@ import {
 } from '@/components/ui/select';
 import { formatAmount } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
+import { reportApiError } from '@/lib/apiError';
+import { isPlatformAdmin } from '@/lib/auth/roles';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
 import type { BudgetLineFlat, Counterparty, Invoice } from '@/types/contracts';
 
 /**
@@ -68,7 +72,9 @@ const InvoiceEdit = () => {
   });
 
   const backTo = `/contracts/invoices/${invoiceId}`;
-  const loading = invoiceLoading || !invoice || linesLoading || counterpartiesLoading;
+  const { activeProfile, isLoading: profileLoading } = useActiveProfile();
+  const canEdit = isPlatformAdmin(activeProfile);
+  const loading = profileLoading || invoiceLoading || !invoice || linesLoading || counterpartiesLoading;
 
   return (
     <ContractsShell>
@@ -94,6 +100,20 @@ const InvoiceEdit = () => {
             <Skeleton className="h-40 w-full" />
             <Skeleton className="h-56 w-full" />
           </div>
+        ) : !canEdit ? (
+          // Ссылку на правку карточка не показывает, но маршрут открыт всем:
+          // по закладке или ссылке от коллеги сюда попадает и тот, кому
+          // сервер откажет (PATCH в apps/contracts — admin=True). Форму
+          // такому человеку показывать незачем — он заполнит её впустую.
+          <PrerequisiteNotice
+            title="Править эту карточку нельзя:"
+            items={[{
+              when: true,
+              text: 'Правка, удаление и смена статуса — за администратором,',
+              to: backTo,
+              linkText: 'вернуться к карточке',
+            }]}
+          />
         ) : (
           <InvoiceEditForm
             invoice={invoice}
@@ -213,24 +233,7 @@ const InvoiceEditForm = ({ invoice, lines, counterparties }: FormProps) => {
       toast.success(`Счёт «${updated.name}» сохранён`);
       navigate(`/contracts/invoices/${invoiceId}`);
     },
-    onError: (error: unknown) => {
-      const err = error as {
-        response?: { status?: number; data?: { detail?: unknown } };
-      };
-      const httpStatus = err.response?.status;
-      const detail = err.response?.data?.detail;
-      if ((httpStatus === 409 || httpStatus === 403) && typeof detail === 'string') {
-        toast.error(detail);
-        return;
-      }
-      if (httpStatus === 422 && Array.isArray(detail)) {
-        toast.error(
-          detail.map((item) => (item as { msg?: string }).msg).join('; '),
-        );
-        return;
-      }
-      toast.error('Не удалось сохранить счёт');
-    },
+    onError: (err) => reportApiError(err, 'Не удалось сохранить счёт'),
   });
 
   const handleSubmit = (event: React.FormEvent) => {

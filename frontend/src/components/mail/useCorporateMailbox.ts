@@ -22,6 +22,12 @@ export type CorporateMailboxInfo = {
     /** Собственно режим самообслуживания — без учёта «ждущего» ящика. */
     self_service: boolean;
     domain: string;
+    /**
+     * Рабочий адрес сотрудника, если он в корпоративном домене. Считается на
+     * сервере: адрес — ещё и признак, по которому подключение разрешено без
+     * `self_service`, и доверять присланному клиентом тут нельзя.
+     */
+    own_address: string;
     mailbox: {
         id: number;
         address: string;
@@ -31,6 +37,14 @@ export type CorporateMailboxInfo = {
     } | null;
     /** Ящик привязан, но платформа не смогла получить к нему доступ сама. */
     awaiting_password: boolean;
+    /**
+     * Ящика нет, но рабочий адрес корпоративный — стоит предложить подключить.
+     *
+     * Не «ящик найден»: на голом IMAP существование ящика нельзя проверить
+     * без пароля, поэтому подтверждением служит сам успешный вход при
+     * подключении. См. apps/mail/views.py::corporate_connect_info.
+     */
+    suggest_connect: boolean;
 };
 
 export const CORPORATE_MAILBOX_KEY = ['corporate-mailbox-connect'] as const;

@@ -9,7 +9,11 @@ import {
 } from 'lucide-react';
 
 import { SiteWorkTree } from '@/components/tasks/SiteWorkTree';
+import { reportApiError } from '@/lib/apiError';
 import { TasksLayout } from '@/components/tasks/TasksLayout';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { DateInput } from '@/components/ui/date-input';
+import { DATES_OUT_OF_ORDER, INVALID_DATE, datesOutOfOrder } from '@/lib/validation';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -37,7 +41,7 @@ import {
 import { fetchDepartments } from '@/api/hr';
 import { searchUserOptions } from '@/api/users';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasElevatedAccess } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import {
   PROJECT_STATUS_ORDER, projectNeedsSites, projectStatusBadgeClass,
   projectStatusLabel,
@@ -63,10 +67,6 @@ const emptyForm = {
 };
 
 type FormState = typeof emptyForm;
-
-const errorDetail = (err: unknown): string | undefined =>
-  (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail as
-    string | undefined;
 
 /* ─────────────────────────── Owner picker ─────────────────────────── */
 
@@ -191,9 +191,7 @@ const SitePicker: React.FC<{
       onSaved();
       toast.success(t('tasks.projects.sitesSaved', 'Объекты проекта сохранены'));
     },
-    onError: (err) => toast.error(
-      errorDetail(err) || t('tasks.projects.sitesError', 'Не удалось сохранить объекты'),
-    ),
+    onError: (err) => reportApiError(err, t('tasks.projects.sitesError', 'Не удалось сохранить объекты')),
   });
 
   const toggle = (id: number) => {
@@ -210,6 +208,15 @@ const SitePicker: React.FC<{
         {t('tasks.projects.sitesHint',
           'Задачи проекта будут предлагать только отмеченные объекты. Если объект один, он подставится в задачу сам.')}
       </p>
+
+      <PrerequisiteNotice
+        variant="inline"
+        items={[{
+          when: !canEdit,
+          text: t('tasks.projects.readOnlyNotice',
+            'Список открыт только для просмотра — отмечать объекты может владелец проекта или администратор'),
+        }]}
+      />
 
       <div className="divide-y rounded-lg border">
         {sites.length === 0 && (
@@ -401,7 +408,8 @@ const HRProjects: React.FC = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { activeProfile } = useActiveProfile();
-  const elevated = hasElevatedAccess(activeProfile);
+  const permissions = usePermissions();
+  const elevated = permissions.atLeast('tasks', 'admin');
   const myId = Number(activeProfile?.id);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -411,6 +419,11 @@ const HRProjects: React.FC = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
+  // Проекту в БД ограничение на даты не поставлено (в отличие от блока и
+  // роудмапа), поэтому до этой проверки перепутанные даты просто сохранялись.
+  const reversedDates = datesOutOfOrder(form.start_date, form.end_date);
+  const [brokenDates, setBrokenDates] = useState({ start: false, end: false });
+  const hasBrokenDate = brokenDates.start || brokenDates.end;
   const [confirmDelete, setConfirmDelete] = useState<Project | null>(null);
 
   const { data: projects = [], isLoading, error } = useQuery({
@@ -459,9 +472,7 @@ const HRProjects: React.FC = () => {
         ? t('tasks.projects.updated', 'Проект обновлён')
         : t('tasks.projects.created', 'Проект создан'));
     },
-    onError: (err) => toast.error(
-      errorDetail(err) || t('tasks.projects.saveError', 'Не удалось сохранить проект'),
-    ),
+    onError: (err) => reportApiError(err, t('tasks.projects.saveError', 'Не удалось сохранить проект')),
   });
 
   const deleteMutation = useMutation({
@@ -472,9 +483,7 @@ const HRProjects: React.FC = () => {
       if (selectedId === id) setSelectedId(null);
       toast.success(t('tasks.projects.deleted', 'Проект удалён'));
     },
-    onError: (err) => toast.error(
-      errorDetail(err) || t('tasks.projects.deleteError', 'Не удалось удалить проект'),
-    ),
+    onError: (err) => reportApiError(err, t('tasks.projects.deleteError', 'Не удалось удалить проект')),
   });
 
   const filtered = useMemo(() => projects.filter((project) => {
@@ -839,21 +848,31 @@ const HRProjects: React.FC = () => {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="project-start">{t('tasks.projects.start', 'Начало')}</Label>
-                <Input
+                <DateInput
                   id="project-start"
-                  type="date"
                   value={form.start_date}
-                  onChange={(e) => setForm({ ...form, start_date: e.target.value })}
+                  invalid={brokenDates.start}
+                  onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, start: bad }))}
+                  onChange={(value) => setForm({ ...form, start_date: value })}
                 />
+                {brokenDates.start && (
+                  <p className="text-sm text-destructive">{INVALID_DATE}</p>
+                )}
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="project-end">{t('tasks.projects.end', 'Завершение')}</Label>
-                <Input
+                <DateInput
                   id="project-end"
-                  type="date"
                   value={form.end_date}
-                  onChange={(e) => setForm({ ...form, end_date: e.target.value })}
+                  invalid={brokenDates.end || reversedDates}
+                  onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, end: bad }))}
+                  onChange={(value) => setForm({ ...form, end_date: value })}
                 />
+                {brokenDates.end ? (
+                  <p className="text-sm text-destructive">{INVALID_DATE}</p>
+                ) : reversedDates && (
+                  <p className="text-sm text-destructive">{DATES_OUT_OF_ORDER}</p>
+                )}
               </div>
             </div>
 
@@ -873,6 +892,15 @@ const HRProjects: React.FC = () => {
                   ))}
                 </SelectContent>
               </Select>
+              <PrerequisiteNotice
+                variant="inline"
+                items={[{
+                  when: departments.length === 0,
+                  text: t('tasks.projects.noDepartments', 'Справочник отделов пуст — проект можно вести и без отдела,'),
+                  to: '/hr/departments',
+                  linkText: t('tasks.projects.addDepartment', 'либо создайте отдел'),
+                }]}
+              />
             </div>
 
             <OwnerPicker
@@ -894,7 +922,7 @@ const HRProjects: React.FC = () => {
                 }
                 saveMutation.mutate(form);
               }}
-              disabled={saveMutation.isPending}
+              disabled={reversedDates || hasBrokenDate || saveMutation.isPending}
             >
               {saveMutation.isPending
                 ? t('common.saving', 'Сохранение...')
