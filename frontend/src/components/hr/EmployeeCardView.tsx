@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 
 import type { EmployeeCard, EmployeeCardBrief } from '@/api/hr';
+import { formatTenure } from '@/components/hr/tenure';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
@@ -121,6 +122,8 @@ export function EmployeeCardView({ card, mode, hideHeader }: Props) {
   const hasContacts = Boolean(card.email || card.phone);
 
   const isActive = card.status?.toLowerCase() === 'active';
+  // У уволенного стаж замирает на дате увольнения, а не тикает дальше.
+  const tenure = formatTenure(t, card.hire_date, card.termination_date);
 
   return (
     <div className="grid gap-6">
@@ -203,6 +206,9 @@ export function EmployeeCardView({ card, mode, hideHeader }: Props) {
             </FieldRow>
             <FieldRow icon={Calendar} label={t('hr.card.hireDate')}>
               {fmtDate(card.hire_date)}
+              {tenure && (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">({tenure})</span>
+              )}
             </FieldRow>
             {isAuth && hasContacts && (
               <>

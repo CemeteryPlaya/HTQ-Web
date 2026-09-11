@@ -526,6 +526,7 @@ function engineWithFakeSignaling() {
   };
 
   const received: unknown[] = [];
+  const participantJoins: Array<{ peerId: string; displayName: string; isGuest: boolean }> = [];
   const engine = new MediaEngine(
     {
       signalingUrl: '',
@@ -533,14 +534,18 @@ function engineWithFakeSignaling() {
       displayName: 'tester',
       signalingFactory: () => signaling as never,
     },
-    { onMediaState: (state) => received.push(state) }
+    {
+      onMediaState: (state) => received.push(state),
+      onParticipantJoined: (peerId, displayName, isGuest) =>
+        participantJoins.push({ peerId, displayName, isGuest }),
+    }
   ) as any;
 
   // Подписки навешиваются приватным setupSignalingEvents — зовём напрямую,
   // чтобы не поднимать весь join-пайплайн с PeerConnection'ами.
   engine.setupSignalingEvents();
 
-  return { engine, sent, handlers, received };
+  return { engine, sent, handlers, received, participantJoins };
 }
 
 describe('mediaState', () => {
@@ -564,5 +569,30 @@ describe('mediaState', () => {
     handlers.get('mediaState')?.({ peerId: 'p2' });
     handlers.get('mediaState')?.({ micEnabled: false });
     expect(received).toEqual([{ peerId: 'p2', micEnabled: true, camEnabled: true }]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// participantJoined: флаг гостя должен дойти до события движка
+// ═══════════════════════════════════════════════════════════
+//
+// SFU шлёт isGuest в сигнальном сообщении, но этот слой раньше срезал его
+// на пути к MediaEngineEvents.onParticipantJoined — гость на встрече был
+// неотличим от сотрудника не из-за фронта, а из-за пропущенного поля
+// прямо здесь. Проверяем только «живое» событие (setupSignalingEvents),
+// а не ветку начального списка участников из join() — та поднимает весь
+// join-пайплайн с PeerConnection'ами, что для проверки одного поля
+// непропорционально тяжело.
+describe('participantJoined', () => {
+  it('доводит isGuest=true до onParticipantJoined', () => {
+    const { handlers, participantJoins } = engineWithFakeSignaling();
+    handlers.get('participantJoined')?.({ peerId: 'p1', displayName: 'Внешний', isGuest: true });
+    expect(participantJoins).toEqual([{ peerId: 'p1', displayName: 'Внешний', isGuest: true }]);
+  });
+
+  it('отсутствующий флаг — старый SFU, а не гость', () => {
+    const { handlers, participantJoins } = engineWithFakeSignaling();
+    handlers.get('participantJoined')?.({ peerId: 'p2', displayName: 'Пётр' });
+    expect(participantJoins).toEqual([{ peerId: 'p2', displayName: 'Пётр', isGuest: false }]);
   });
 });

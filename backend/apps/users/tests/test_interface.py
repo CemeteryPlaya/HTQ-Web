@@ -135,7 +135,13 @@ def test_get_users_brief_one_query(alice, bob_no_name, django_assert_num_queries
 # ── list_users_brief ──────────────────────────────────────────────────────────
 
 
-OPTION_FIELDS = {"id", "username", "email", "first_name", "last_name", "full_name", "is_active"}
+# patronymic/phone добавлены вместе со сверкой идентичности Сотрудник<->Аккаунт
+# (docs/superpowers/specs/2026-08-25-hr-identity-sync-design.md §10): форма
+# создания сотрудника сеет ими карточку, чтобы HR не перепечатывал отчество и
+# телефон с того же экрана, где они уже есть. bio/avatar_url сюда НЕ входят —
+# они приходят только точечным get_user_profile_for_hr.
+OPTION_FIELDS = {"id", "username", "email", "first_name", "last_name",
+                 "patronymic", "phone", "full_name", "is_active"}
 
 
 @pytest.mark.django_db

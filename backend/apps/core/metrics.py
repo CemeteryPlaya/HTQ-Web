@@ -25,6 +25,27 @@
   отработала или кэш пуст, метрики просто не экспортируются, вместо того
   чтобы показать нули. Ноль задач и «сборщик умер» на графике обязаны
   выглядеть по-разному.
+
+**Тенантные аппки (``settings.TENANT_APPS``) сборщик пропускает явно.**
+``collect()`` тенантной аппки (сегодня это только ``apps.tasks``, см.
+``apps/tasks/metrics.py``) читает её модели напрямую — а после переноса в
+схемы компаний (``co_<slug>``) у процесса, который вызывает ``collect_all()``
+из Celery-задачи без контекста компании, эти модели просто не резолвятся:
+запрос ушёл бы в ``public`` (или туда, куда указывает текущий
+``search_path``), нашёл бы чужие/никакие таблицы и упал бы. Без явного
+пропуска это падение ловил бы ``fallback`` как обычную поломку одной
+аппки — в проде (``FALLBACK_MODE=log``) метрики домена молча исчезли бы с
+дашборда НАВСЕГДА, оставляя по строке ``FALLBACK`` в Loki раз в минуту.
+Здесь вместо этого — один явный ``logger.info`` на аппку: не подмена
+значения (ей нечего подменять, метрики домена в принципе не считаются), а
+осознанное решение сборщика, поэтому не через ``htqweb.fallback``.
+
+Полная форма — веер по компаниям (посчитать ``collect()`` в контексте
+КАЖДОЙ действующей компании и разметить результат её slug'ом) — не
+делается здесь: она требует того же решения, что и per-company гейты
+модулей (``apps.companies.models.CompanyModule``), и оба вопроса решаются
+вместе в подпроекте 3. До этого момента у tenant-метрик правильный ответ —
+явное «не считаем», а не тихое падение.
 """
 from __future__ import annotations
 
@@ -32,6 +53,7 @@ import logging
 from typing import Callable
 
 from django.apps import apps as django_apps
+from django.conf import settings
 from django.core.cache import cache
 from django.utils.module_loading import module_has_submodule
 from prometheus_client.core import GaugeMetricFamily
@@ -55,12 +77,26 @@ def _metric_modules() -> list[tuple[str, object]]:
 
     Тот же приём автодискавери, что у ``API_PREFIX`` в ``htqweb/urls.py``:
     добавление метрик новой аппке не требует правок здесь.
+
+    Тенантные аппки (``settings.TENANT_APPS``) пропускаются ДО импорта их
+    ``metrics.py`` — см. докстринг модуля: их ``collect()`` без контекста
+    компании не имеет смысла вызывать вовсе, а не «вызвать и поймать
+    исключение».
     """
     found = []
+    tenant_apps = set(settings.TENANT_APPS)
     for config in django_apps.get_app_configs():
         if not config.name.startswith("apps."):
             continue
         if config.label == "core":          # свои метрики core не собирает
+            continue
+        if config.label in tenant_apps:
+            logger.info(
+                "business metrics: %r — тенантная аппка, метрики требуют "
+                "веера по компаниям (см. докстринг apps/core/metrics.py); "
+                "пропущена до подпроекта 3",
+                config.label,
+            )
             continue
         if not module_has_submodule(config.module, "metrics"):
             continue

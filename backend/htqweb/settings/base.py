@@ -90,6 +90,13 @@ INSTALLED_APPS = [
     # потому что под gunicorn'ом нужен multiprocess-реестр (см. там же).
     "django_prometheus",
     "apps.core",
+    # Реестр компаний группы. Живёт в public и обязателен для всех: именно
+    # он резолвит поддомен в схему Postgres, поэтому стоит до доменных аппок.
+    "apps.companies",
+    # Роли и права. Живёт в public: роль заводится один раз на всю группу
+    # (спека стадии 2, §1.3), поэтому в TENANT_APPS её НЕТ — изоляция этих
+    # таблиц держится обязательным фильтром по компании в сервисном слое.
+    "apps.access",
     "apps.users",
     "apps.cms",
     "apps.media_files",
@@ -121,12 +128,23 @@ INSTALLED_APPS = [
     "apps.signoff",
 ]
 
+# Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное
+# (users, cms, media_files, mail, messenger, conference, core, companies)
+# общее для группы — см. docs/multi-company-tenancy-design.md §3.
+#
+# Кортеж, а не список: набор фиксирован архитектурным решением, и случайный
+# .append() в чужом модуле не должен его расширять.
+TENANT_APPS = ("hr", "tasks", "contracts", "signoff")
+
 MIDDLEWARE = [
     # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —
     # последней. Иначе замеряется не полное время запроса, а только то, что
     # осталось внутри их «скобок», и латентность систематически занижается.
     "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "htqweb.middleware.request_id.RequestIDMiddleware",
+    # Ставится ДО ServiceGateMiddleware: тот гейтит домены и должен уже
+    # знать компанию, чтобы спросить и глобальный рубильник, и компанейский.
+    "htqweb.middleware.company_context.CompanyContextMiddleware",
     "htqweb.middleware.service_gate.ServiceGateMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # WhiteNoise отдаёт собранную (collectstatic) статику прямо из WSGI/ASGI-процесса
@@ -239,6 +257,14 @@ LANGUAGE_CODE = "ru"
 TIME_ZONE = "UTC"
 USE_TZ = True
 CELERY_TIMEZONE = TIME_ZONE
+# Хранение остаётся в UTC (TIME_ZONE выше не трогаем — смена задела бы
+# каждую дату на платформе). PLATFORM_TIME_ZONE — это пояс, в котором
+# физически живут люди: нужен только для ПОКАЗА времени и для границ
+# суток («сегодня» в календаре/обзоре конференций). Именованный пояс, а
+# не число смещения — офис может переехать или сместить закон о времени,
+# и тогда правка будет в одном месте, а не во всех местах, где кто-то
+# написал "+5" руками. См. apps/conference/services/platform_time.py.
+PLATFORM_TIME_ZONE = env("PLATFORM_TIME_ZONE", "Asia/Almaty")
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 # Своя статика проекта (фирменная тема админки). collectstatic сливает её

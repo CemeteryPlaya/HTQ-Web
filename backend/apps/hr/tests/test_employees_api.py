@@ -791,7 +791,13 @@ def test_id_pmos_admin_sees_active_membership(admin_auth, hr_dep):
 # access.can_list_user_options (senior+)/can_manage_user_options (lead) —
 # ровно как HR-исходник, НЕ грубый api_view(admin=True).
 
-USER_OPTION_FIELDS = {"id", "full_name", "email", "first_name", "last_name"}
+# patronymic/phone добавлены сверкой идентичности Сотрудник<->Аккаунт
+# (docs/superpowers/specs/2026-08-25-hr-identity-sync-design.md §10) — форма
+# создания сотрудника сеет ими карточку. bio/avatar_url в списке намеренно
+# отсутствуют: они нужны для ОДНОГО выбранного пользователя и приходят
+# точечной ручкой employees/users/<id>/prefill/ (см. test_identity_prefill_api).
+USER_OPTION_FIELDS = {"id", "full_name", "email", "first_name", "last_name",
+                      "patronymic", "phone"}
 
 
 @pytest.mark.django_db

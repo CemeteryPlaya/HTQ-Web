@@ -15,7 +15,7 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { CalendarPlus, Check, Copy, Link2, Loader2, Send, Trash2 } from 'lucide-react';
+import { CalendarPlus, Check, Copy, Link2, Loader2, Send, Trash2, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -43,12 +43,21 @@ const defaultStart = (): string => {
 };
 
 export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const qc = useQueryClient();
   const [title, setTitle] = useState('');
   const [allowGuests, setAllowGuests] = useState(true);
+  // По умолчанию — язык самого организатора: он создаёт ссылку у себя в
+  // интерфейсе и рабочий сценарий — «позвать таких же коллег», не «иностранцев».
+  // Явный выбор ниже — это и есть ответ на «если это иностранцы, нам нужен
+  // английский»: организатор решает осознанно, а не потому что так вышло.
+  const [locale, setLocale] = useState<'ru' | 'en'>(
+    () => (i18n.language?.startsWith('en') ? 'en' : 'ru'));
   const [copied, setCopied] = useState<string | null>(null);
-  const [emails, setEmails] = useState('');
+  // Адреса храним списком, а не одной строкой: человек видит, что именно уже
+  // добавлено, и может убрать один адрес, не перебирая строку целиком.
+  const [emailList, setEmailList] = useState<string[]>([]);
+  const [emailInput, setEmailInput] = useState('');
   const [staffQuery, setStaffQuery] = useState('');
   const [staffIds, setStaffIds] = useState<number[]>([]);
   const [startAt, setStartAt] = useState(defaultStart);
@@ -63,7 +72,9 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
   const invalidate = () => qc.invalidateQueries({ queryKey: ['conference-invites', roomId] });
 
   const create = useMutation({
-    mutationFn: () => createInvite({ room_id: roomId, title: title.trim(), allow_guests: allowGuests }),
+    mutationFn: () => createInvite({
+      room_id: roomId, title: title.trim(), allow_guests: allowGuests, locale,
+    }),
     onSuccess: async (invite) => {
       invalidate();
       setTarget(invite);
@@ -91,10 +102,21 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
     enabled: open,
   });
 
-  const parsedEmails = emails
-    .split(/[\s,;]+/)
-    .map((value) => value.trim())
-    .filter((value) => value.includes('@'));
+  const parsedEmails = emailList;
+
+  /** Добавить набранный адрес. Возвращает false, если добавлять нечего. */
+  const commitEmail = (raw: string): boolean => {
+    // Разделители принимаем те же, что и раньше: человек вполне может
+    // вставить сразу список из письма, и он не обязан знать про Enter.
+    const parts = raw.split(/[\s,;]+/).map((v) => v.trim()).filter(Boolean);
+    const valid = parts.filter((v) => v.includes('@'));
+    if (valid.length === 0) return false;
+    setEmailList((prev) => Array.from(new Set([...prev, ...valid])));
+    return true;
+  };
+
+  const removeEmail = (value: string) =>
+    setEmailList((prev) => prev.filter((item) => item !== value));
 
   const send = useMutation({
     mutationFn: () => sendInvite(sendTarget!.id, {
@@ -107,7 +129,8 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
       toast.success(t('conference.invite.sentToast', { details: parts.join(', ') }));
       // Отказ одного канала не отменяет другой — показываем оба исхода.
       result.errors.forEach((err) => toast.error(err));
-      setEmails('');
+      setEmailList([]);
+      setEmailInput('');
     },
     onError: () => toast.error(t('conference.invite.sendError', 'Не удалось отправить')),
   });
@@ -150,7 +173,13 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      {/* Базовый DialogContent уже адаптивен по ширине ниже sm (calc(100vw-1.5rem)),
+          но наш собственный `sm:max-w-lg` фиксировал ширину в 512px начиная
+          с 640px — в том числе на альбомном телефоне (~740px), где половина
+          экрана простаивала. `max-w-none sm:max-w-none` снимает ограничение
+          до планшетного `md` (768px), а `md:max-w-lg` возвращает прежний вид
+          на настоящих десктопах — там ничего не меняется. */}
+      <DialogContent className="max-w-none sm:max-w-none md:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Link2 className="h-5 w-5" />
@@ -162,7 +191,15 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        {/* min-w-0 — не косметика: DialogContent сам `display: grid`, а его
+            прямой ребёнок по умолчанию имеет `min-width: auto` и отказывается
+            сжиматься уже ЗДЕСЬ уже раньше явной ширины диалога, если где-то
+            внутри есть `truncate`/`nowrap`-текст (например, полная ссылка-
+            приглашение ниже) — сам truncate обрезает только то, что видно,
+            а не то, что участвует в подсчёте intrinsic-ширины. Без этого
+            класса диалог получал собственный горизонтальный скролл ровно
+            под шириной самой длинной нигде не переносимой строки. */}
+        <div className="min-w-0 space-y-4">
           <div className="space-y-2">
             <label className="text-sm font-medium" htmlFor="invite-title">
               {t('conference.invite.nameLabel', 'Название встречи')}
@@ -197,6 +234,35 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
               </span>
             </span>
           </label>
+
+          <div className="flex items-center justify-between gap-3 rounded-xl border p-3 text-sm">
+            <span>
+              <span className="font-medium">
+                {t('conference.invite.languageLabel', 'Язык интерфейса для гостя')}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {t('conference.invite.languageHint',
+                  'На этом языке увидит платформу тот, кто откроет ссылку.')}
+              </span>
+            </span>
+            <div className="flex shrink-0 items-center gap-1 rounded-md border bg-background p-0.5">
+              {(['ru', 'en'] as const).map((code) => (
+                <button
+                  key={code}
+                  type="button"
+                  onClick={() => setLocale(code)}
+                  aria-pressed={locale === code}
+                  className={`h-7 rounded px-2 text-xs font-medium transition ${
+                    locale === code
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted'
+                  }`}
+                >
+                  {code.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <Button
             className="w-full rounded-xl"
@@ -251,28 +317,72 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
                 {t('conference.invite.sendTitle', 'Отправить приглашение')}
               </p>
 
-              <Input
-                value={emails}
-                onChange={(e) => setEmails(e.target.value)}
-                placeholder={t('conference.invite.emails', 'Почта через запятую — для внешних участников')}
-              />
+              {/* Первая строка — внешние адреса: набрал и нажал Enter. */}
+              <div className="space-y-2">
+                <Input
+                  value={emailInput}
+                  onChange={(e) => setEmailInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ',' && e.key !== ';') return;
+                    // Enter внутри диалога иначе отправит форму целиком.
+                    e.preventDefault();
+                    if (commitEmail(emailInput)) setEmailInput('');
+                  }}
+                  // Потерять набранное при уходе фокусом обиднее, чем добавить
+                  // лишний адрес, который видно и можно убрать одним кликом.
+                  onBlur={() => { if (commitEmail(emailInput)) setEmailInput(''); }}
+                  placeholder={t('conference.invite.emailAdd', 'Почта внешнего участника — Enter, чтобы добавить')}
+                />
+                {emailList.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {emailList.map((value) => (
+                      <span
+                        key={value}
+                        className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2.5 py-1 text-xs"
+                      >
+                        {value}
+                        <button
+                          type="button"
+                          onClick={() => removeEmail(value)}
+                          className="text-muted-foreground hover:text-destructive"
+                          aria-label={t('conference.invite.emailRemove', 'Убрать адрес')}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
 
+              {/* Вторая строка — сотрудники компании: имя, логин или почта. */}
               <div className="space-y-2">
                 <Input
                   value={staffQuery}
                   onChange={(e) => setStaffQuery(e.target.value)}
-                  placeholder={t('conference.invite.staffSearch', 'Поиск сотрудника')}
+                  placeholder={t('conference.invite.staffSearch', 'Сотрудник — имя, логин или почта')}
                 />
                 {staffOptions.length > 0 && (
-                  <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg border p-2">
+                  <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border p-2">
                     {staffOptions.slice(0, 20).map((option) => (
-                      <label key={option.id} className="flex items-center gap-2 text-sm">
+                      <label
+                        key={option.id}
+                        className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-0.5 text-sm hover:bg-accent/50"
+                      >
                         <input
                           type="checkbox"
                           checked={staffIds.includes(option.id)}
                           onChange={() => toggleStaff(option.id)}
                         />
-                        <span className="truncate">{option.full_name || option.email}</span>
+                        <span className="min-w-0 flex-1 truncate">
+                          {option.full_name || option.username || option.email}
+                        </span>
+                        {/* Второй строкой — чем человек отличается от тёзки. */}
+                        <span className="shrink-0 truncate text-xs text-muted-foreground">
+                          {option.username && option.username !== option.full_name
+                            ? option.username
+                            : option.email}
+                        </span>
                       </label>
                     ))}
                   </div>
@@ -291,16 +401,21 @@ export const InviteDialog: React.FC<Props> = ({ roomId, open, onOpenChange }) =>
                 {t('conference.invite.send', 'Отправить почтой и в мессенджер')}
               </Button>
 
-              <div className="flex items-center gap-2 border-t pt-3">
+              {/* Колонка на узких экранах, а не строка: у datetime-local
+                  свой минимальный размер виджета, который браузер не сжимает
+                  ниже — рядом с кнопкой это и был источник горизонтальной
+                  прокрутки диалога. flex-col снимает конкуренцию за ширину,
+                  sm:flex-row возвращает прежний вид на широких экранах. */}
+              <div className="flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center">
                 <Input
                   type="datetime-local"
                   value={startAt}
                   onChange={(e) => setStartAt(e.target.value)}
-                  className="flex-1"
+                  className="min-w-0 sm:flex-1"
                 />
                 <Button
                   variant="outline"
-                  className="rounded-xl"
+                  className="w-full rounded-xl sm:w-auto"
                   disabled={schedule.isPending}
                   onClick={() => schedule.mutate()}
                   title={t('conference.invite.scheduleHint',

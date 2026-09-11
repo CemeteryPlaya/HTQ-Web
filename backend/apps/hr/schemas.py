@@ -897,3 +897,23 @@ class AuditLogQuery(BaseModel):
     entity_id: int | None = None
     page: int = Field(default=1, ge=1)
     limit: int = Field(default=50, ge=1, le=500)
+
+
+# ── сверка идентичности Сотрудник ↔ Аккаунт ─────────────────────────────────
+
+class IdentityDecideRequest(BaseModel):
+    """Решение подтверждающего: по строке на каждое поле заявки.
+
+    Словарь, а не список: решение адресуется полю, и словарь делает
+    невозможным два противоречивых решения по одному полю в одном теле.
+    """
+
+    decisions: dict[str, Literal["apply", "reject"]]
+    note: str | None = None
+
+
+class IdentityApproverRequest(BaseModel):
+    """Назначение подтверждающего. ``None`` — снять назначение и вернуться к
+    руководителю отдела (спека §6.2)."""
+
+    user_id: int | None = None

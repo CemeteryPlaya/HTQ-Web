@@ -53,6 +53,7 @@ import uuid as uuid_module
 import pytest
 from celery.app.task import Task as CeleryTask
 from django.apps import apps as django_apps
+from django.conf import settings as django_settings
 from django.contrib import admin
 from django.core.cache import cache
 from django.test import Client
@@ -167,6 +168,93 @@ def test_every_domain_task_guards_disableability_first():
     assert violations == [], (
         "Celery tasks missing the require_service() disableability guard as "
         "their first statement:\n  " + "\n  ".join(violations)
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Test 1b — every TENANT_APPS task must be @company_task or an explicitly
+# marked dispatcher (docs/multi-company-tenancy-followups.md п.1).
+# ═══════════════════════════════════════════════════════════════════════
+#
+# A TENANT_APPS app's tables live in a company's own Postgres schema
+# (htqweb/tenancy/context.py::schema_for), not public — a Celery task has no
+# HTTP request to inherit a company from, so a task that touches its own
+# app's models MUST be @company_task (htqweb/tenancy/celery.py), which turns
+# a missing ``company_slug`` into ``MissingCompanyArgument`` instead of a
+# silent, wrong read of ``public``. The one sanctioned exception is a
+# dispatcher: it does not touch its app's models at all, only reads the
+# (non-tenant) company registry and fans a *_task per company — those are
+# exempt, but only if marked as such, explicitly, via
+# ``@company_dispatch_task``. Telling the two apart by function name (e.g. a
+# ``_dispatch`` suffix convention) was rejected: a naming convention drifts
+# from the code silently, an attribute set by a decorator cannot — the
+# decorator IS the thing being required, so misusing it is a contradiction
+# the sweep catches, not a convention the sweep has to trust.
+#
+# Why this is `is_company_task`/`is_company_dispatch_task` attributes and
+# not e.g. an AST check for "does the function call company_task": both
+# decorators set the marker on exactly the object ``task.run`` already is
+# (see their docstrings in htqweb/tenancy/celery.py), so the check is a
+# plain attribute read — no unwrap, no source parsing, nothing that could
+# be fooled by an unrelated `functools.wraps`-based decorator.
+
+
+def _company_marker(fn) -> str | None:
+    """``"company_task"``, ``"dispatch"``, or ``None`` — whichever of the two
+    tenancy markers ``fn`` (typically a Celery task's ``.run``) carries."""
+    if getattr(fn, "is_company_task", False):
+        return "company_task"
+    if getattr(fn, "is_company_dispatch_task", False):
+        return "dispatch"
+    return None
+
+
+def test_company_marker_helper_flags_missing_and_conflicting_markers():
+    """Unit-level guard for the helper the sweep below relies on — proves the
+    predicate itself distinguishes the three cases before trusting it over
+    real task modules."""
+    def unmarked():
+        pass
+
+    def real_task():
+        pass
+    real_task.is_company_task = True
+
+    def dispatcher():
+        pass
+    dispatcher.is_company_dispatch_task = True
+
+    assert _company_marker(unmarked) is None
+    assert _company_marker(real_task) == "company_task"
+    assert _company_marker(dispatcher) == "dispatch"
+
+
+def test_tenant_app_tasks_use_company_task_or_are_marked_dispatchers():
+    tenant_apps = frozenset(django_settings.TENANT_APPS)
+    violations = []
+    tasks_seen = 0
+    for app_label, _service, task in _iter_domain_tasks():
+        if app_label not in tenant_apps:
+            continue
+        tasks_seen += 1
+        fn = getattr(task, "run", None) or inspect.unwrap(task)
+        if _company_marker(fn) is None:
+            violations.append(
+                f"{app_label}.tasks.{task.name.rsplit('.', 1)[-1]}: tenant-app "
+                "(settings.TENANT_APPS) task must be @company_task "
+                "(htqweb.tenancy.celery) or explicitly marked a dispatcher via "
+                "@company_dispatch_task — a task with no HTTP request has no "
+                "company context unless one of these gives it one"
+            )
+    # Same tautology guard as Test 1: TENANT_APPS is non-empty and every
+    # member currently has a tasks.py, so an empty sweep means discovery
+    # broke, not that there was nothing to check.
+    assert tasks_seen > 0, (
+        "discovered zero tenant-app Celery tasks — the sweep itself is broken"
+    )
+    assert violations == [], (
+        "Tenant-app Celery tasks without @company_task and without an "
+        "explicit dispatcher marker:\n  " + "\n  ".join(violations)
     )
 
 

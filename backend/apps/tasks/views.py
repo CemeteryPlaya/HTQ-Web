@@ -2140,8 +2140,13 @@ def _list_events(request):
 
 @api_view(methods=("POST",), body=schemas.CalendarEventCreate, status=201)
 def _create_event(request, data: schemas.CalendarEventCreate):
-    event_id = calendar_service.create_event(data.model_dump(),
-                                             creator_id=request.token.user_id)
+    try:
+        event_id = calendar_service.create_event(data.model_dump(),
+                                                 creator_id=request.token.user_id)
+    except ValueError as exc:
+        # Занятая комната — конфликт, а не ошибка валидации формы: 409, как у
+        # занятого slug'а типа задачи выше в этом же файле.
+        return json_error(str(exc), 409)
     return schemas.CalendarEventResponse.model_validate(
         calendar_service.reload_payload(event_id))
 
@@ -2156,9 +2161,12 @@ def events_collection(request):
 
 @api_view(methods=("PATCH",), body=schemas.CalendarEventUpdate)
 def _update_event(request, event_id: int, data: schemas.CalendarEventUpdate):
-    calendar_service.update_event(event_id,
-                                  data.model_dump(exclude_unset=True),
-                                  request.token)
+    try:
+        calendar_service.update_event(event_id,
+                                      data.model_dump(exclude_unset=True),
+                                      request.token)
+    except ValueError as exc:
+        return json_error(str(exc), 409)
     return schemas.CalendarEventResponse.model_validate(
         calendar_service.reload_payload(event_id))
 
@@ -2200,27 +2208,38 @@ def event_exception_detail(request, exception_id: int):
 
 @api_view(methods=("GET",))
 def calendar_user_options(request):
-    """Participant picker — NOT IMPLEMENTED, pending an interface contract.
+    """Поиск сотрудников для выбора участников — по имени, логину и почте.
 
-    The original proxied user-service's ``/api/users/v1/users/options/``
-    over HTTP. In the monolith that has to go through
-    ``apps.users.interface``, whose agreed §7 surface is
-    ``get_user_brief``/``get_users_brief`` — lookup by id, with no search
-    form. ``apps.users.services.options_service.list_user_options(query,
-    limit)`` already exists and is exactly what this needs, but exposing it
-    means adding ``search_user_options`` to the users interface, and a
-    consumer may not extend a neighbour's interface unilaterally
-    (PLAN.md §1.5 п.3, §7).
+    Раньше здесь стояла заглушка с 501: контракт ``apps.users.interface``
+    тогда позволял только выборку по id, а расширять интерфейс соседа
+    в одностороннем порядке нельзя. Блокировка снята — в интерфейсе есть
+    ``list_users_brief(search, limit)``, который ищет ИЛИ-условием сразу по
+    четырём колонкам (``username``, ``first_name``, ``last_name``,
+    ``email``), то есть ровно по имени, логину и почте.
 
-    Answers 501 rather than an empty list on purpose: an empty picker looks
-    like "no colleagues found" and would be debugged as a data problem. The
-    frontend already calls this route (``frontend/src/api/calendar.ts``), so
-    the gap is real and belongs on the integration checklist (§8), not
-    hidden behind a plausible-looking empty response.
+    ``username`` отдаётся наружу намеренно: в списке из десятка однофамильцев
+    имя различить не даёт, а логин — даёт.
     """
-    return json_error(
-        "Participant search requires apps.users.interface.search_user_options "
-        "(PLAN.md §7 contract extension, pending A↔B agreement)", 501)
+    from apps.users.interface import list_users_brief
+
+    query = (request.GET.get("query") or "").strip()
+    try:
+        limit = _int_param(request, "limit", 50, minimum=1, maximum=200)
+    except _ParamError as exc:
+        return exc.response
+
+    return [
+        {
+            "id": row["id"],
+            "full_name": row.get("full_name") or row.get("username") or "",
+            "email": row.get("email") or "",
+            "username": row.get("username") or "",
+        }
+        # Неактивных в подсказке не показываем: приглашать уволенного — это
+        # почти всегда ошибка, а не намерение.
+        for row in list_users_brief(search=query or None, limit=limit)
+        if row.get("is_active", True)
+    ]
 
 
 @api_view(methods=("GET",))

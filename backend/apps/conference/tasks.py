@@ -20,6 +20,7 @@ import shutil
 
 from celery import shared_task
 from django.conf import settings
+from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
 
@@ -33,9 +34,90 @@ from .models import (
     RecordingState,
     TranscriptState,
 )
-from .services import compose_service, session_service, storage_service
+from .services import compose_service, platform_time, session_service, storage_service
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task
+def notify_session_started(session_id: int) -> int:
+    """Сообщить приглашённым, что встреча уже идёт. Возвращает их число.
+
+    Три канала независимы намеренно: колокольчик переживает закрытую вкладку,
+    живой тост доставляется мгновенно, письмо доходит до тех, кого сейчас нет
+    в системе. Падение одного не отменяет двух других — тот же приём, что в
+    ``cms.services.conference_invite_service.send_invite``.
+    """
+    require_service("conference")
+
+    session = ConferenceSession.objects.filter(pk=session_id).first()
+    if session is None or session.calendar_event_id is None:
+        return 0
+
+    from apps.tasks.interface import get_conference_event_for_room
+
+    event = get_conference_event_for_room(session.room_id)
+    if not event:
+        return 0
+
+    recipients = [uid for uid in event["invitee_ids"]
+                  if uid != session.created_by_id]
+    if not recipients:
+        return 0
+
+    title = session.title or event["title"]
+    join_url = f"/room/{session.room_id}"
+
+    try:
+        from apps.tasks.interface import push_notification
+
+        for user_id in recipients:
+            push_notification(recipient_id=user_id,
+                              verb=f"Видеоконференция «{title}» началась",
+                              target_type="conference_session",
+                              target_id=session.pk)
+    except Exception:
+        logger.warning("conference: колокольчик не принял уведомление о старте %s",
+                       session.pk, exc_info=True)
+
+    try:
+        from apps.messenger import interface as messenger
+
+        messenger.dispatch_notification(recipients, {
+            "type": "conference_started",
+            "session_id": session.pk,
+            "room_id": session.room_id,
+            "title": title,
+            "join_url": join_url,
+            "started_at": session.started_at.isoformat(),
+        })
+    except Exception:
+        logger.warning("conference: живое уведомление о старте %s не ушло",
+                       session.pk, exc_info=True)
+
+    try:
+        from apps.users.interface import get_users_brief
+
+        emails = [row["email"] for row in get_users_brief(recipients)
+                  if row.get("email")]
+        if emails:
+            # Время — в поясе платформы (НЕ timezone.localtime(), см.
+            # apps.conference.services.platform_time), а подпись пояса
+            # выводится из того же объекта времени, а не хардкодом — письмо
+            # может открыть внешний участник, у которого пояс другой, и
+            # подпись обязана совпадать со значением, а не жить отдельно.
+            local = platform_time.to_platform(session.started_at)
+            tz_label = platform_time.utc_offset_label(local)
+            send_mail(
+                f"Видеоконференция «{title}» началась",
+                f"Встреча началась в {local:%H:%M} ({tz_label}).\n"
+                f"Подключиться: {settings.PUBLIC_BASE_URL.rstrip('/')}{join_url}",
+                None, emails, fail_silently=False)
+    except Exception:
+        logger.warning("conference: письмо о старте %s не ушло", session.pk,
+                       exc_info=True)
+
+    return len(recipients)
 
 
 @shared_task

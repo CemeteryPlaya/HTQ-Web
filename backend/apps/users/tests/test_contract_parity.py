@@ -86,6 +86,14 @@ def _check_type(value, expected: str) -> bool:
     return False
 
 
+# Ключи, которых в FastAPI-контракте не было и быть не могло: карта прав
+# приезжает вместе с профилем, чтобы фронт не делал второй запрос на каждой
+# загрузке (спека стадии 2 «Доступ и роли», задача A7). Контракт от этого не
+# «дрейфует»: старые ключи на месте и той же формы, а проверка ниже по-прежнему
+# ловит ЛЮБОЙ незаявленный ключ.
+ACCESS_KEYS = frozenset({"company", "permissions", "subordinate_companies"})
+
+
 def _assert_matches_contract(body: dict, contract: dict, *, extra_allowed: frozenset = frozenset()):
     fields = contract["fields"]
     expected_keys = set(fields) | set(extra_allowed)
@@ -150,7 +158,7 @@ def test_profile_response_matches_fastapi_schema_shape():
     resp = Client().get(f"{BASE}/profile/me", **_auth(user))
     assert resp.status_code == 200
     body = resp.json()
-    _assert_matches_contract(body, contract)
+    _assert_matches_contract(body, contract, extra_allowed=ACCESS_KEYS)
     # camelCase/snake_case duplicates must actually agree, not just both exist.
     assert body["firstName"] == body["first_name"] == "Pro"
     assert body["lastName"] == body["last_name"] == "File"
@@ -169,7 +177,7 @@ def test_profile_response_avatar_block_matches_contract_when_present():
     resp = Client().get(f"{BASE}/profile/me", **_auth(user))
     assert resp.status_code == 200
     body = resp.json()
-    _assert_matches_contract(body, contract)
+    _assert_matches_contract(body, contract, extra_allowed=ACCESS_KEYS)
     assert isinstance(body["avatar"], dict)
     assert set(body["avatar"]) == {"id", "url", "variants"}
 

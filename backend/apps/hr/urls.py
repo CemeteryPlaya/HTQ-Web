@@ -88,6 +88,24 @@ urlpatterns = [
     path("employees/me/card", views.my_employee_card),
     path("employees/me/card/", views.my_employee_card),
 
+    # ── сверка идентичности Сотрудник <-> Аккаунт ────────────────────────
+    # Литеральный identity-approver — ДО <int:id>, иначе резолвер увёл бы его
+    # в detail-роут (APPEND_SLASH=False, поэтому оба написания).
+    path("identity-approver/", views.identity_approver),
+    path("identity-approver", views.identity_approver),
+
+    path("identity-requests/<int:id>/decide/", views.identity_request_decide),
+    path("identity-requests/<int:id>/decide", views.identity_request_decide),
+
+    path("identity-requests/<int:id>/", views.identity_request_detail),
+    path("identity-requests/<int:id>", views.identity_request_detail),
+
+    path("identity-requests/", views.identity_requests_collection),
+    path("identity-requests", views.identity_requests_collection),
+
+    path("employees/users/<int:user_id>/prefill/", views.user_prefill),
+    path("employees/users/<int:user_id>/prefill", views.user_prefill),
+
     path("employees/users/", views.employees_users_collection),
     path("employees/users", views.employees_users_collection),
 

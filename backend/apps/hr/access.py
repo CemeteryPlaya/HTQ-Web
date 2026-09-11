@@ -79,6 +79,14 @@ class HRAccess:
     def can_list_user_options(self) -> bool:
         return self.has("hr.users.list")
 
+    @property
+    def can_view_identity_requests(self) -> bool:
+        return self.has("hr.identity.view")
+
+    @property
+    def can_manage_identity_approver(self) -> bool:
+        return self.has("hr.identity.manage")
+
     def can_see_department(self, department_id: int | None) -> bool:
         if self.can_read_all:
             return True
