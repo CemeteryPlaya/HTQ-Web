@@ -98,3 +98,5 @@ requirementsNDPP.txt
 # Локальные скрипты с боевыми доступами (тот же случай, что .env выше).
 db-vps.ps1
 .playwright-mcp
+memory.md
+prod-hotfix.patch
