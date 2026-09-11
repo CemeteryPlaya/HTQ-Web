@@ -41,7 +41,7 @@ def get_employee_brief(user_id: int) -> dict | None:
     row = (
         Employee.objects.filter(user_id=user_id, is_deleted=False)
         .values("id", "first_name", "last_name", "department_id",
-                "position__title", "status")
+                "position_id", "position__title", "status")
         .first()
     )
     if row is None:
@@ -50,6 +50,11 @@ def get_employee_brief(user_id: int) -> dict | None:
         "id": row["id"],
         "full_name": f"{row['last_name']} {row['first_name']}",
         "department_id": row["department_id"],
+        # Единственный шов стадии 2 с кадровым доменом: apps.access ключует
+        # роли на должности и обязана получать её id, а не заголовок
+        # (спека docs/plans/2026-08-29-stage2-access-and-roles-spec.md, §1.5).
+        # Ключ добавлен АДДИТИВНО — остальные читает действующий фронт.
+        "position_id": row["position_id"],
         "position_title": row["position__title"],
         "status": row["status"],
     }
@@ -189,18 +194,16 @@ def link_employee_user(employee_id: int, user_id: int) -> bool:
     Возвращает False, если сотрудника нет или учётка уже занята другим —
     ``user_id`` уникален, и молча переклеивать её с одного человека на
     другого нельзя.
+
+    Сама проверка живёт в ``employee_prefill_service.link_user``: туда же
+    ходит HR-форма («подтянуть данные из учётки»), и две реализации правила
+    «занятую учётку не переклеиваем» разъехались бы неизбежно — ценой в две
+    карточки на одного человека.
     """
     require_service("hr")
-    employee = Employee.objects.filter(id=employee_id, is_deleted=False).first()
-    if employee is None:
-        return False
-    if employee.user_id == user_id:
-        return True
-    if Employee.objects.filter(user_id=user_id).exclude(id=employee_id).exists():
-        return False
-    employee.user_id = user_id
-    employee.save(update_fields=["user_id"])
-    return True
+    from apps.hr.services.employee_prefill_service import link_user
+
+    return link_user(employee_id, user_id)
 
 
 def org_ancestors(department_id: int) -> list[dict]:

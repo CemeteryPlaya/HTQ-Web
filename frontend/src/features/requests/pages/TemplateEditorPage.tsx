@@ -18,6 +18,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { requestsApi } from '@/api/requests';
+import { reportApiError } from '@/lib/apiError';
 import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { BasicInfoStep, type BasicInfoValue } from '@/features/requests/components/BasicInfoStep';
 import { FormBuilder } from '@/features/requests/components/FormBuilder';
@@ -118,10 +119,7 @@ export default function TemplateEditorPage() {
       qc.invalidateQueries({ queryKey: QK.template(templateId) });
       toast.success(t('requests.editor.published', { version: v.version }));
     },
-    onError: (e: any) => {
-      const detail = e?.response?.data?.detail ?? e?.message ?? t('requests.editor.publishError');
-      toast.error(typeof detail === 'string' ? detail : JSON.stringify(detail));
-    },
+    onError: (err) => reportApiError(err, t('requests.editor.publishError')),
   });
 
   if (Number.isNaN(templateId)) {

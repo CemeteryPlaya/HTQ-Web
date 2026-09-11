@@ -8,6 +8,7 @@ import { type HRLevel, useHRLevel } from '@/hooks/useHRLevel';
 import { Input } from '@/components/ui/input';
 import { HRQuickActionsBar } from './HRQuickActionsBar';
 import { cn } from '@/lib/utils';
+import { translatedMap } from '@/lib/i18n/translatedMap';
 import {
   Users,
   Building2,
@@ -62,12 +63,18 @@ const navItems: HRNavItem[] = [
   { to: '/hr/history', icon: History, labelKey: 'hr.nav.history', levels: ['senior', 'lead'], category: 'admin' },
 ];
 
-const categoryTitles: Record<string, string> = {
+/* Карта уровня модуля: `t` из хука здесь недоступен, а подставить перевод в
+ * значения нельзя — на импорте словарь i18n ещё не загружен, и подпись застыла
+ * бы языком на момент сборки. Поэтому ключи переводятся на чтение — тем же
+ * `translatedMap`, что и остальные такие таблицы в HR. Без него значение
+ * уходило в разметку как есть, и в шапке группы читалось «HR.NAV.GROUPS.PEOPLE»
+ * (капс — от `uppercase` на самом заголовке). */
+const categoryTitles: Record<string, string> = translatedMap({
   people: 'hr.nav.groups.people',
   org: 'hr.nav.groups.org',
   tracking: 'hr.nav.groups.tracking',
   admin: 'hr.nav.groups.admin',
-};
+});
 
 interface Props {
   title: string;
@@ -188,7 +195,10 @@ export const HRLayout: React.FC<Props> = ({ title, subtitle, children }) => {
                   return (
                     <div key={catKey} className="space-y-1">
                       <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
-                        {categoryTitles[catKey] || catKey}
+                        {/* Через t(): categoryTitles хранит КЛЮЧИ перевода, как и
+                            labelKey у пунктов ниже. Без вызова сюда попадала сама
+                            строка ключа — «hr.nav.groups.people» вместо «Персонал». */}
+                        {t(categoryTitles[catKey] ?? catKey)}
                       </div>
                       <nav className="flex flex-col gap-0.5">
                         {items.map((item) => {

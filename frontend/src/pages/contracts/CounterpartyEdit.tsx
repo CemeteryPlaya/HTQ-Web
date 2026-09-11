@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Building2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +21,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { contractsApi } from '@/api/contracts';
+import { reportApiError } from '@/lib/apiError';
+import { isPlatformAdmin } from '@/lib/auth/roles';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
 import type { Counterparty, CounterpartyStatus, Country } from '@/types/contracts';
 
 /**
@@ -63,7 +67,9 @@ const CounterpartyEdit = () => {
   });
 
   const backTo = `/contracts/counterparties/${counterpartyId}`;
-  const loading = isLoading || !counterparty || countriesLoading;
+  const { activeProfile, isLoading: profileLoading } = useActiveProfile();
+  const canEdit = isPlatformAdmin(activeProfile);
+  const loading = profileLoading || isLoading || !counterparty || countriesLoading;
 
   return (
     <ContractsShell>
@@ -89,6 +95,20 @@ const CounterpartyEdit = () => {
             <Skeleton className="h-56 w-full" />
             <Skeleton className="h-40 w-full" />
           </div>
+        ) : !canEdit ? (
+          // Ссылку на правку карточка не показывает, но маршрут открыт всем:
+          // по закладке или ссылке от коллеги сюда попадает и тот, кому
+          // сервер откажет (PATCH в apps/contracts — admin=True). Форму
+          // такому человеку показывать незачем — он заполнит её впустую.
+          <PrerequisiteNotice
+            title="Править эту карточку нельзя:"
+            items={[{
+              when: true,
+              text: 'Правка, удаление и смена статуса — за администратором,',
+              to: backTo,
+              linkText: 'вернуться к карточке',
+            }]}
+          />
         ) : (
           <CounterpartyEditForm counterparty={counterparty} countries={countries} />
         )}
@@ -167,24 +187,9 @@ const CounterpartyEditForm = ({ counterparty, countries }: FormProps) => {
       toast.success(`Контрагент «${row.name}» сохранён`);
       navigate(`/contracts/counterparties/${counterpartyId}`);
     },
-    onError: (error: unknown) => {
-      const err = error as {
-        response?: { status?: number; data?: { detail?: unknown } };
-      };
-      const httpStatus = err.response?.status;
-      const detail = err.response?.data?.detail;
-      // 409 — обычно дубль БИН/ИИН либо карточка заперта согласованием;
-      // 403 — правит не автор и не администратор. Тексты с бэкенда осмысленные.
-      if ((httpStatus === 409 || httpStatus === 403) && typeof detail === 'string') {
-        toast.error(detail);
-        return;
-      }
-      if (httpStatus === 422 && Array.isArray(detail)) {
-        toast.error(detail.map((item) => (item as { msg?: string }).msg).join('; '));
-        return;
-      }
-      toast.error('Не удалось сохранить контрагента');
-    },
+    // 409 — обычно дубль БИН/ИИН либо карточка заперта согласованием;
+    // 403 — правит не автор и не администратор.
+    onError: (err) => reportApiError(err, 'Не удалось сохранить контрагента'),
   });
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -308,7 +313,7 @@ const CounterpartyEditForm = ({ counterparty, countries }: FormProps) => {
         <CardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <Label htmlFor="contact-name">Генеральный директор</Label>
+              <Label htmlFor="contact-name">Генеральный директор <span className="text-muted-foreground">(необязательно)</span></Label>
               <Input
                 id="contact-name"
                 value={contactName}
@@ -318,7 +323,7 @@ const CounterpartyEditForm = ({ counterparty, countries }: FormProps) => {
               />
             </div>
             <div>
-              <Label htmlFor="phone">Телефон</Label>
+              <Label htmlFor="phone">Телефон <span className="text-muted-foreground">(необязательно)</span></Label>
               <Input
                 id="phone"
                 type="tel"
@@ -329,7 +334,7 @@ const CounterpartyEditForm = ({ counterparty, countries }: FormProps) => {
               />
             </div>
             <div>
-              <Label htmlFor="email">E-mail</Label>
+              <Label htmlFor="email">E-mail <span className="text-muted-foreground">(необязательно)</span></Label>
               <Input
                 id="email"
                 type="email"
@@ -343,7 +348,7 @@ const CounterpartyEditForm = ({ counterparty, countries }: FormProps) => {
             </div>
           </div>
           <div>
-            <Label htmlFor="address">Адрес</Label>
+            <Label htmlFor="address">Адрес <span className="text-muted-foreground">(необязательно)</span></Label>
             <Textarea
               id="address"
               value={address}

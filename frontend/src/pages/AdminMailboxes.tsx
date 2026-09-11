@@ -18,9 +18,11 @@ import {
     AtSign } from 'lucide-react';
 
 import api from '@/api/client';
+import { reportApiError } from '@/lib/apiError';
 import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -34,6 +36,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MailConnectionSettings } from '@/components/mail/MailConnectionSettings';
 import { MailboxLookupNotice } from '@/components/mail/MailboxLookupNotice';
+import { MailboxCoverage } from '@/components/mail/MailboxCoverage';
 import {
     fetchMailboxLookup,
     lookupIsAnswerable,
@@ -144,19 +147,19 @@ const AdminMailboxes: React.FC = () => {
     const archiveMutation = useMutation({
         mutationFn: (id: number) => api.post<Mailbox>(`email/v1/mailboxes/${id}/archive/`),
         onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-mailboxes'] }); toast.success(t('admin.mailboxes.archived', 'Ящик архивирован')); },
-        onError: (e: any) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('admin.mailboxes.archiveError', 'Не удалось архивировать ящик')),
     });
 
     const restoreMutation = useMutation({
         mutationFn: (id: number) => api.post<Mailbox>(`email/v1/mailboxes/${id}/restore/`),
         onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-mailboxes'] }); toast.success(t('admin.mailboxes.restored', 'Ящик восстановлен')); },
-        onError: (e: any) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('admin.mailboxes.restoreError', 'Не удалось восстановить ящик')),
     });
 
     const deleteMutation = useMutation({
         mutationFn: (id: number) => api.delete(`email/v1/mailboxes/${id}/`),
         onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-mailboxes'] }); toast.success(t('admin.mailboxes.deleted', 'Ящик удалён окончательно')); setDeleteTarget(null); },
-        onError: (e: any) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('admin.mailboxes.deleteError', 'Не удалось удалить ящик')),
     });
 
     if (isLoading) return <Shell><div className="text-center py-16">Loading…</div></Shell>;
@@ -182,6 +185,7 @@ const AdminMailboxes: React.FC = () => {
                 <TabsList>
                     <TabsTrigger value="mailboxes">{t('admin.mailboxes.tabMailboxes', 'Ящики')}</TabsTrigger>
                     <TabsTrigger value="connection">{t('admin.mailboxes.tabConnection', 'Подключение')}</TabsTrigger>
+                    <TabsTrigger value="coverage">{t('admin.mailboxes.tabCoverage', 'Покрытие')}</TabsTrigger>
                     <TabsTrigger value="reconcile">{t('admin.mailboxes.tabReconcile', 'Сверка')}</TabsTrigger>
                     <TabsTrigger value="aliases">{t('admin.mailboxes.tabAliases', 'Алиасы')}</TabsTrigger>
                 </TabsList>
@@ -253,6 +257,10 @@ const AdminMailboxes: React.FC = () => {
 
                 <TabsContent value="connection" className="mt-4">
                     <MailConnectionSettings />
+                </TabsContent>
+
+                <TabsContent value="coverage" className="mt-4">
+                    <MailboxCoverage />
                 </TabsContent>
 
                 <TabsContent value="reconcile" className="mt-4">
@@ -442,12 +450,14 @@ const CreateMailboxDialog: React.FC<{
             onClose();
         },
         onError: (e: ApiError) => {
-            const detail = e?.response?.data?.detail;
-            const mailbox = e?.response?.data?.mailbox;
             // 502 = строка создана, но почтовый сервер отказал. Список нужно
             // обновить, иначе админ создаст дубль, не увидев строку в ошибке.
-            if (mailbox) onDone();
-            toast.error(detail || t('admin.mailboxes.createError', 'Не удалось создать ящик'), { duration: 15_000 });
+            if (e?.response?.data?.mailbox) onDone();
+            reportApiError(
+                e,
+                t('admin.mailboxes.createError', 'Не удалось создать ящик'),
+                { duration: 15_000 },
+            );
         },
     });
 
@@ -543,6 +553,21 @@ const CreateMailboxDialog: React.FC<{
                     </p>
                 </div>
 
+                <PrerequisiteNotice
+                    variant="inline"
+                    items={[
+                        {
+                            when: !localPart.trim() && !(firstName.trim() && lastName.trim()),
+                            text: t('admin.mailboxes.needAddressOrName',
+                                'Чтобы создать ящик, укажите адрес или имя с фамилией — адрес соберётся из них'),
+                        },
+                        {
+                            when: passwordRequired && !password,
+                            text: t('admin.mailboxes.needPassword',
+                                'На этом сервере пароль задаётся вручную — без него ящик не создать'),
+                        },
+                    ]}
+                />
                 <DialogFooter>
                     <Button variant="outline" onClick={onClose}>{t('profile.cancel', 'Отмена')}</Button>
                     <Button onClick={() => mutation.mutate()} disabled={!canSubmit}>
@@ -590,7 +615,7 @@ const ResetPasswordDialog: React.FC<{
             onDone();
             onClose();
         },
-        onError: (e: any) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('admin.mailboxes.passwordResetError', 'Не удалось сбросить пароль')),
     });
 
     return (
@@ -665,7 +690,7 @@ const ReconcileTab: React.FC<{ status?: MailboxStatus }> = ({ status }) => {
                 toast.success(t('admin.mailboxes.reconcileApplied', 'Сверка применена'));
             }
         },
-        onError: (e: ApiError) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('admin.mailboxes.reconcileError', 'Не удалось выполнить сверку')),
     });
 
     const busy = runMutation.isPending;
@@ -821,13 +846,13 @@ const AliasesTab: React.FC = () => {
             toast.success(t('admin.mailboxes.aliasCreated', 'Алиас создан'));
             setAddress(''); setGoto(''); setCreateOpen(false);
         },
-        onError: (e: any) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('admin.mailboxes.aliasCreateError', 'Не удалось создать алиас')),
     });
 
     const deleteMutation = useMutation({
         mutationFn: (id: number) => api.delete(`email/v1/mailboxes/aliases/${id}/`),
         onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-mailbox-aliases'] }); toast.success(t('admin.mailboxes.aliasDeleted', 'Алиас удалён')); },
-        onError: (e: any) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('admin.mailboxes.aliasDeleteError', 'Не удалось удалить алиас')),
     });
 
     return (

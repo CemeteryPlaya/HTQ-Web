@@ -42,7 +42,7 @@
 │   (<app_label>_<model>, e.g. hr_department, mail_emailaccount)       │
 │   PgBouncer :6432 kept for host tooling only, not live traffic       │
 │ Redis :6379  (cache, Celery broker/results, SSE pub/sub bridge)      │
-│ Loki :3100, Grafana :3001, Prometheus :9090                          │
+│ Loki :3100, Grafana :3002 (prod :3001), Prometheus :9090             │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -88,8 +88,7 @@ itself; hit `:8000`/`:8001` directly for that, or use the gateway-level
 
 ## Production access (nginx :80)
 
-`docker compose up -d` (without `-f docker-compose.dev.yml`, and note the
-`production` compose profile that adds `nginx`/`certbot`) brings up nginx on
+`docker compose --profile production up -d` brings up nginx on
 `:80`. Same routing table, but the Vite dev server isn't running. `sfu` и
 `webtransport` профиля не требуют — они поднимаются вместе с остальным
 стеком в обоих режимах.
@@ -127,6 +126,7 @@ same backend.
 | `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
 | `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django. JWT обязателен: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=` (иначе 401 на upgrade) |
 | `:4433/udp` (в обход nginx)         | `webtransport`     | QUIC-сигналинг того же SFU: браузер ходит прямо на UDP-порт, nginx его не проксирует. Токен — в `?token=` |
+| `/api/admin/v1/*`                   | `backend` (WSGI)   | Infrastructure panel — **admin-only**, see the section below |
 | `/django-admin/`                    | `backend` (WSGI)   | Django's own admin, session-authenticated (see Authentication) |
 | `/static/`                          | `backend` (WSGI)   | `collectstatic` output |
 | `/grafana/`, `/prometheus/`         | grafana / prometheus | Observability — see below |
@@ -294,7 +294,13 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/hr/v1/employees/{id}/`              | GET, PATCH, DELETE |                       |
 | `/api/hr/v1/employees/me`                 | GET    | Current user's own employee row |
 | `/api/hr/v1/employees/me/card`            | GET    | Т-2 employee card (field-gated) |
-| `/api/hr/v1/employees/users/`             | GET, POST | User picker for "create employee from user"; POST creates the platform user via `apps.users.interface.create_user` |
+| `/api/hr/v1/employees/users/`             | GET, POST | User picker for "create employee from user" (`?search=`, `?limit=`); each row carries the data that can be pulled into a card plus `employee_id` ("already has a card"). POST creates the platform user via `apps.users.interface.create_user` |
+| `/api/hr/v1/employees/sources/mailboxes`  | GET    | Corporate mailboxes as a prefill source (`?search=`, `?unassigned=1`). Empty list — not 503 — when `apps.mail` is disabled |
+| `/api/hr/v1/employees/prefill`            | POST   | Preview a transfer: `{source: {type: user\|employee\|mailbox, id}, employee_id?}` → per-field `fill`/`conflict`/`same` diff. Writes nothing |
+| `/api/hr/v1/employees/{id}/prefill/apply` | POST   | Apply the ticked fields only; a field absent from the preview is ignored. `department_id`/`position_id` additionally require the transfer permission |
+| `/api/hr/v1/employees/match-suggestions`  | GET    | "This person may already exist": similar user accounts and similar employee cards, by email/phone/name |
+| `/api/hr/v1/employees/import-candidates`  | GET    | User accounts that have no employee card yet |
+| `/api/hr/v1/employees/bulk-import`        | POST   | Create cards in one batch; answers with `{created, skipped: [{user_id, reason}]}` — a partially successful batch is a result, not an error |
 | `/api/hr/v1/departments/`                 | GET, POST | Tree (`ltree path`)         |
 | `/api/hr/v1/departments/tree`             | GET    | Full tree                      |
 | `/api/hr/v1/positions/`                   | GET, POST |                              |
@@ -1042,6 +1048,45 @@ change:
 | 429      | Rate limit exceeded (nginx prod only)                                |
 | 500      | Unhandled exception — `api_view` catches everything and logs it       |
 | 503      | A dependency's `ServiceStatus` is disabled (`{"detail","code":"service_disabled","service"}`), or upstream unhealthy at the gateway |
+
+---
+
+## `apps.core` — `/api/admin/v1/infrastructure` (admin only)
+
+Порт снесённого admin-сервиса: страница «Инфраструктура» в профиле
+администратора. Живёт в `apps.core`, потому что описывает платформу целиком,
+а не какой-то один домен; маршруты объявлены в
+[apps/core/urls.py](backend/apps/core/urls.py) полностью, вместе с префиксом —
+у аппки нет `API_PREFIX`, она смонтирована в корень.
+
+**Все роуты — `api_view(auth="jwt", admin=True)`.** Ослаблять гейт нельзя ни на
+одном, включая health-check'и: они раскрывают внутреннюю топологию, а обзор
+отдаёт (замаскированные) пароли инфраструктуры. Ответы идут с
+`Cache-Control: no-store`.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET  | `/infrastructure/` | Обзор; секреты замаскированы |
+| POST | `/infrastructure/credentials/reveal` | Раскрыть секреты по паролю админа. `admin=True` проверяется ВРУЧНУЮ, а не декоратором: гейт ответил бы 403 раньше, чем сработал бы rate-limit, а это единственный роут, куда подбирают пароль. Порядок: админство → лимит → пароль |
+| GET  | `/infrastructure/audit/reveals` | Журнал раскрытий |
+| GET  | `/infrastructure/health-check` | Проверить всё |
+| GET  | `/infrastructure/health-history` | История проверок |
+| POST | `/infrastructure/<resource_id>/health-check` | Проверить один ресурс |
+| GET  | `/infrastructure/targets` | Состояние скрейп-таргетов Prometheus |
+
+Каждый путь зарегистрирован в двух написаниях — со слешем и без
+(`APPEND_SLASH = False`), потому что фронт зовёт их и так, и так.
+
+⚠️ **`/infrastructure/targets` существует именно потому, что `/prometheus/` наружу
+НЕ проксируется.** У Prometheus нет собственной авторизации, поэтому открытый
+`location` отдал бы его UI и API любому. Виджет мониторинга раньше ходил прямо в
+`/prometheus/api/v1/targets` и работал только под dev-прокси Vite, а в проде
+показывал ошибку всегда. Теперь запрос делает сервер по внутренней сети, а
+наружу он закрыт тем же admin-гейтом. Ответ — `{"targets": [...]}` с полями
+`labels`, `health`, `lastScrape`, `lastScrapeDuration`, `lastError`;
+`discoveredLabels` из ответа Prometheus вырезаны — это внутренняя топология.
+Недоступный Prometheus даёт **503**, а не 500: это отказ соседа, а не ошибка
+платформы.
 
 ---
 

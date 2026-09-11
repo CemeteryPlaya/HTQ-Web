@@ -8,6 +8,7 @@ import { Copy, Plus, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { DateInput } from '@/components/ui/date-input';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -162,7 +163,9 @@ function ScalarControl({ field, value, setValue, readOnly }: CtrlProps) {
           onChange={(e) => setValue(e.target.value === '' ? null : Number(e.target.value))} />
       );
     case 'date':
-      return <Input id={inputId} type="date" disabled={readOnly} value={typeof value === 'string' ? value : ''} onChange={(e) => setValue(e.target.value || null)} />;
+      // Одна ветка — и маска появляется во ВСЕХ формах заявок, какие бы
+      // администраторы ни собрали в конструкторе.
+      return <DateInput id={inputId} disabled={readOnly} value={typeof value === 'string' ? value : ''} onChange={(next) => setValue(next || null)} />;
     case 'checkbox':
       return <Checkbox id={inputId} disabled={readOnly} checked={Boolean(value)} onCheckedChange={(c) => setValue(Boolean(c))} />;
     case 'serial':

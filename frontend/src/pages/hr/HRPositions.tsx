@@ -3,10 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { GripVertical, Lock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { GripVertical, KeyRound, Lock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import api from '@/api/client';
+import { PositionRolesDialog } from '@/components/access/PositionRolesDialog';
 import HRLayout from '@/components/hr/HRLayout';
 import PositionLevelsPanel from '@/components/hr/PositionLevelsPanel';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { HR_LIMITS } from '@/lib/fieldLimits';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -118,6 +121,10 @@ const HRPositions = () => {
   });
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  // Роли должности — штатный путь выдачи прав (стадия 2, §4.3). Отдельным
+  // окном, а не полем формы: набор ролей живёт в своей аппке и заменяется
+  // целиком, а форма должности правит штатное расписание.
+  const [rolesFor, setRolesFor] = useState<Position | null>(null);
   const [editingPos, setEditingPos] = useState<Position | null>(null);
   const [form, setForm] = useState<{
     title: string;
@@ -451,6 +458,7 @@ const HRPositions = () => {
                       {t('hr.pages.positions.fields.title')}
                       <Input
                         value={form.title}
+                        maxLength={HR_LIMITS.title}
                         onChange={(e) => setForm({ ...form, title: e.target.value })}
                         disabled={editingIsSystem}
                       />
@@ -473,6 +481,15 @@ const HRPositions = () => {
                           ))}
                         </SelectContent>
                       </Select>
+                      <PrerequisiteNotice
+                        variant="inline"
+                        items={[{
+                          when: departments !== undefined && departments.length === 0,
+                          text: t('hr.pages.positions.noDepartments', 'Справочник отделов пуст — должность заводится в отделе,'),
+                          to: '/hr/departments',
+                          linkText: t('hr.pages.positions.addDepartment', 'создайте отдел'),
+                        }]}
+                      />
                     </label>
                     <label className="grid gap-2 text-sm">
                       {t('hr.pages.positions.fields.level')}
@@ -769,6 +786,15 @@ const HRPositions = () => {
                                 </div>
                                 {isSenior && (
                                   <div className="flex items-center gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => setRolesFor(position)}
+                                      title={t('access.positionRoles.title', 'Роли должности')}
+                                      aria-label={`${t('access.positionRoles.title', 'Роли должности')}: ${position.title}`}
+                                    >
+                                      <KeyRound className="h-4 w-4" />
+                                    </Button>
                                     <Button size="sm" variant="ghost" onClick={() => startEdit(position)} title={t('hr.common.edit')}>
                                       <Pencil className="h-4 w-4" />
                                     </Button>
@@ -807,6 +833,14 @@ const HRPositions = () => {
             })}
           </div>
         </DragDropContext>
+
+        <PositionRolesDialog
+          positionId={rolesFor?.id ?? null}
+          positionTitle={rolesFor?.title ?? ''}
+          open={rolesFor !== null}
+          onOpenChange={(next) => { if (!next) setRolesFor(null); }}
+          canEdit={isSenior}
+        />
     </div>
   );
 

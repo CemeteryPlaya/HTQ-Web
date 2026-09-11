@@ -838,6 +838,106 @@ def test_connect_info_hands_the_card_its_address_and_server(use_provisioner):
     assert body["self_service"] is False  # …хотя общий режим выключен
 
 
+# ── suggest_connect: предложить подключить, пока ящика нет ────────────────
+#
+# Сценарий: у Амирова Руслана рабочий адрес ruslan.amirov@htq.group, а ящика
+# в платформе нет — учётку завели раньше автоподключения либо оно не
+# сработало. Раньше он не узнавал об этом ниоткуда: подсказка показывалась
+# ТОЛЬКО при ``awaiting_password``, то есть когда строка ящика уже есть.
+#
+# Утверждать «ящик найден» здесь нельзя: на голом IMAP существование ящика
+# без пароля не проверяется вообще. Поэтому флаг называется «предложить», а
+# доказательством служит успешный вход при подключении.
+
+
+def _amirov():
+    u = User.objects.create(
+        username="amirov", email="ruslan.amirov@htq.group", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    u.set_password("S3cret!")
+    u.save()
+    return u
+
+
+def _connect_info(user, **env):
+    settings = {"MAILCOW_DOMAIN": "htq.group", "MAIL_PROVISIONER": "imap",
+                "IMAP_HOST": "mail.htq.group"}
+    settings.update(env)
+    with override_settings(**settings):
+        return Client().get(
+            "/api/email/v1/accounts/connect-corporate/",
+            HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(user)['access']}",
+        ).json()
+
+
+@pytest.mark.django_db
+def test_corporate_address_without_a_mailbox_suggests_connecting(use_provisioner):
+    use_provisioner(_FakeImap())
+    body = _connect_info(_amirov())
+
+    assert body["suggest_connect"] is True
+    assert body["own_address"] == "ruslan.amirov@htq.group"
+    # Именно предложение, а не найденный ящик: подставлять в диалог нечего,
+    # кроме собственного адреса сотрудника.
+    assert body["mailbox"] is None
+    assert body["awaiting_password"] is False
+
+
+@pytest.mark.django_db
+def test_personal_address_is_never_suggested(use_provisioner):
+    """Личная почта — не корпоративный ящик. Просить у человека пароль от
+    его gmail платформа не должна ни при каких обстоятельствах."""
+    u = User.objects.create(
+        username="outsider", email="someone@gmail.com", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    u.set_password("S3cret!")
+    u.save()
+    use_provisioner(_FakeImap())
+
+    assert _connect_info(u)["suggest_connect"] is False
+
+
+@pytest.mark.django_db
+def test_connected_mailbox_stops_the_suggestion(use_provisioner):
+    """Ящик уже подключён и работает — предлагать нечего."""
+    use_provisioner(_FakeImap())
+    u = _amirov()
+    _mailbox(
+        local_part="ruslan.amirov", user_id=u.id, status=MailboxStatus.ACTIVE,
+        encrypted_smtp_app_password=crypto_service.encrypt("MailPass!"),
+    )
+
+    body = _connect_info(u)
+    assert body["suggest_connect"] is False
+    assert body["awaiting_password"] is False
+
+
+@pytest.mark.django_db
+def test_pending_mailbox_wins_over_the_suggestion(use_provisioner):
+    """Ящик найден и ждёт пароль — это факт, а не догадка, и подсказка
+    обязана быть одна: два разных сообщения об одном и том же ящике
+    сотрудник читает как две разные проблемы."""
+    use_provisioner(_FakeMailcow())
+    u = _amirov()
+    _mailbox(local_part="ruslan.amirov", user_id=u.id, status=MailboxStatus.ACTIVE)
+
+    body = _connect_info(u, **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
+    assert body["awaiting_password"] is True
+    assert body["suggest_connect"] is False
+
+
+@pytest.mark.django_db
+def test_no_mail_server_no_suggestion(use_provisioner):
+    """Почтового сервера нет вовсе — подключаться некуда, и просьба ввести
+    пароль была бы издевательством."""
+    use_provisioner(_FakeImap())
+    assert _connect_info(
+        _amirov(), MAIL_PROVISIONER="none", IMAP_HOST="",
+    )["suggest_connect"] is False
+
+
 @pytest.mark.django_db
 def test_personal_email_gives_the_card_nothing_to_prefill(use_provisioner):
     """Почта не корпоративная — подставлять нечего, и послабление не даётся."""
@@ -860,3 +960,281 @@ def test_personal_email_gives_the_card_nothing_to_prefill(use_provisioner):
     body = resp.json()
     assert body["own_address"] == ""
     assert body["allowed"] is False
+
+
+# ── suggest_connect: спрашиваем сервер там, где он умеет отвечать ─────────
+#
+# До этого подсказка считалась только по локальным данным и появлялась у
+# всех, у кого адрес корпоративный. С Mailcow вопрос «есть ли такой ящик»
+# задать МОЖНО — и тогда «нет» означает, что просить пароль не за чем:
+# человек будет перебирать пароли от несуществующего ящика.
+#
+# Голый IMAP отвечает «не знаю», и это НЕ «нет»: приравняй одно к другому —
+# и подсказка исчезла бы разом у всех, кому она сейчас и адресована.
+
+
+class _CountingMailcow(_FakeMailcow):
+    """Считает обращения к серверу — иначе кэш нечем проверить."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.probes: list[str] = []
+
+    def exists_remote(self, *, address):
+        self.probes.append(address.lower())
+        return super().exists_remote(address=address)
+
+
+@pytest.mark.django_db
+def test_server_that_says_no_stops_the_suggestion(use_provisioner):
+    """Главное изменение А3: ящика на сервере нет — молчим."""
+    use_provisioner(_FakeMailcow(remote=set()))
+    body = _connect_info(_amirov(), **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
+
+    assert body["suggest_connect"] is False
+    assert body["own_address"] == "ruslan.amirov@htq.group"
+
+
+@pytest.mark.django_db
+def test_server_that_says_yes_keeps_the_suggestion(use_provisioner):
+    use_provisioner(_FakeMailcow(remote={"ruslan.amirov@htq.group"}))
+    body = _connect_info(_amirov(), **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
+
+    assert body["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_unknown_answer_keeps_the_guess(use_provisioner):
+    """Сегодняшний прод: голый IMAP проверить существование не может.
+    Подсказка обязана остаться — иначе А3 сломал бы ровно тот сценарий,
+    ради которого всё писалось."""
+    use_provisioner(_FakeImap())
+    body = _connect_info(_amirov())
+
+    assert body["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_silent_server_is_not_a_no(use_provisioner):
+    """Mailcow не ответил на вопрос про ящик → «не знаю», а не «ящика нет».
+    Пока сам сервер на связи, предположение остаётся в силе."""
+    use_provisioner(_FakeMailcow(remote=set(), unreachable="таймаут"))
+    body = _connect_info(_amirov(), **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
+
+    assert body["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_server_is_asked_once_per_address(use_provisioner):
+    """Ручку дёргает каждая загрузка страницы каждым сотрудником — без кэша
+    это столько же обращений к Mailcow."""
+    prov = use_provisioner(_CountingMailcow(remote={"ruslan.amirov@htq.group"}))
+    user = _amirov()
+
+    for _ in range(3):
+        assert _connect_info(user, **MAILCOW_ENV,
+                             MAIL_PROVISIONER="mailcow")["suggest_connect"] is True
+
+    assert prov.probes == ["ruslan.amirov@htq.group"]
+
+
+@pytest.mark.django_db
+def test_cache_does_not_answer_for_another_address(use_provisioner):
+    """Ключ по адресу, а не общий: иначе первый спросивший решал бы за всех."""
+    prov = use_provisioner(_CountingMailcow(remote={"ruslan.amirov@htq.group"}))
+    other = User.objects.create(
+        username="other", email="other.person@htq.group", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    other.set_password("S3cret!")
+    other.save()
+
+    assert _connect_info(_amirov(), **MAILCOW_ENV,
+                         MAIL_PROVISIONER="mailcow")["suggest_connect"] is True
+    assert _connect_info(other, **MAILCOW_ENV,
+                         MAIL_PROVISIONER="mailcow")["suggest_connect"] is False
+
+    assert prov.probes == ["ruslan.amirov@htq.group", "other.person@htq.group"]
+
+
+@pytest.mark.django_db
+def test_provisioning_decisions_never_read_the_cache(use_provisioner):
+    """Кэш — только для подсказки. Заведение ящика должно видеть сервер
+    сейчас: устаревшее «ящик есть» стоило бы дубля или потерянной почты."""
+    prov = use_provisioner(_CountingMailcow(remote={"ruslan.amirov@htq.group"}))
+
+    for _ in range(2):
+        lookup_service.lookup("ruslan.amirov@htq.group")
+
+    assert prov.probes == ["ruslan.amirov@htq.group"] * 2
+
+
+# ── гейт по доступности: не просить пароль, когда проверить его негде ─────
+#
+# Худший исход подсказки — попросить пароль у человека, которому его негде
+# проверить: он вводит ВЕРНЫЙ пароль, получает отказ и решает, что ошибся.
+# Дальше либо перебирает пароли, либо идёт к администратору с неверной
+# жалобой. Поэтому в ветке «не знаю» сервер ещё и опрашивается.
+
+
+@pytest.mark.django_db
+def test_down_server_stops_the_suggestion(use_provisioner, mail_server_reachable):
+    """Сегодняшний прод: IMAP «не знает» про ящик, а сам сервер лежит."""
+    use_provisioner(_FakeImap())
+    mail_server_reachable(False)
+
+    assert _connect_info(_amirov())["suggest_connect"] is False
+
+
+@pytest.mark.django_db
+def test_live_server_keeps_the_guess(use_provisioner, mail_server_reachable):
+    """Тот же режим, но сервер отвечает — подсказка на месте."""
+    use_provisioner(_FakeImap())
+    mail_server_reachable(True)
+
+    assert _connect_info(_amirov())["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_found_mailbox_needs_no_second_probe(use_provisioner, mail_server_reachable):
+    """Сервер уже ответил «ящик есть» — значит он на связи по определению.
+    Второй вопрос о доступности был бы лишней задержкой в ручке, которую
+    дёргает каждая загрузка страницы."""
+    use_provisioner(_FakeMailcow(remote={"ruslan.amirov@htq.group"}))
+    mail_server_reachable(False)   # если бы зонд случился — подсказка пропала бы
+
+    body = _connect_info(_amirov(), **MAILCOW_ENV, MAIL_PROVISIONER="mailcow")
+    assert body["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_reachability_is_probed_once_per_server(
+    use_provisioner, monkeypatch, mail_server_reachable,
+):
+    """Адрес сервера у всех один, поэтому и зонд один — на минуту и на стенд,
+    а не на каждого сотрудника."""
+    from apps.mail.services import connection_check
+
+    mail_server_reachable(None)   # проверяем саму проверку, а не заглушку
+    probes = []
+    monkeypatch.setattr(
+        connection_check, "_tcp_reachable",
+        lambda host, port, timeout: probes.append((host, port)) or None,
+    )
+    use_provisioner(_FakeImap())
+    user = _amirov()
+
+    for _ in range(3):
+        assert _connect_info(user)["suggest_connect"] is True
+
+    assert probes == [("mail.htq.group", 993)]
+
+
+# ── лимит попыток: перестать навязываться ────────────────────────────────
+#
+# Две первые неудачи бывают опечаткой, третья означает, что пароля человек не
+# знает либо ящика не существует. В обоих случаях следующая попытка ничего не
+# изменит, а полоса «введите пароль» на каждой странице превращается в тот
+# самый фоновый шум, из-за которого подсказки перестают читать.
+#
+# Гасится ТОЛЬКО подсказка. Форма подключения остаётся: сходивший к
+# администратору за паролем должен ввести его сразу, а не ждать неделю.
+
+
+def _try_connect(user, password: str):
+    with override_settings(
+        MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="imap", IMAP_HOST="mail.htq.group",
+    ):
+        return Client().post(
+            "/api/email/v1/accounts/connect-corporate/",
+            data=f'{{"address": "ruslan.amirov@htq.group", "password": "{password}"}}',
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(user)['access']}",
+        )
+
+
+@pytest.mark.django_db
+def test_three_failures_stop_the_suggestion(use_provisioner):
+    use_provisioner(_FakeImap(passwords={"ruslan.amirov@htq.group": "MailPass!"}))
+    user = _amirov()
+
+    for _ in range(2):
+        assert _try_connect(user, "не тот").status_code == 400
+        # Две неудачи — ещё не повод замолчать: обычная опечатка.
+        assert _connect_info(user)["suggest_connect"] is True
+
+    assert _try_connect(user, "не тот").status_code == 400
+    assert _connect_info(user)["suggest_connect"] is False
+
+
+@pytest.mark.django_db
+def test_successful_connect_resets_the_count(use_provisioner):
+    """Сотрудник сходил за паролем и подключился — серия закрыта."""
+    use_provisioner(_FakeImap(passwords={"ruslan.amirov@htq.group": "MailPass!"}))
+    user = _amirov()
+
+    for _ in range(2):
+        _try_connect(user, "не тот")
+    assert _try_connect(user, "MailPass!").status_code == 201
+
+    from apps.mail.services import self_service
+    assert self_service.attempts_exhausted(user.id) is False
+
+
+@pytest.mark.django_db
+def test_silenced_user_can_still_connect(use_provisioner):
+    """Главная граница: мы прекращаем навязываться, а не запираем дверь.
+    Ручка подключения обязана работать и после лимита — иначе человек,
+    получивший пароль у администратора, ждал бы неделю."""
+    use_provisioner(_FakeImap(passwords={"ruslan.amirov@htq.group": "MailPass!"}))
+    user = _amirov()
+
+    for _ in range(3):
+        _try_connect(user, "не тот")
+    assert _connect_info(user)["suggest_connect"] is False
+
+    assert _try_connect(user, "MailPass!").status_code == 201
+
+
+@pytest.mark.django_db
+def test_refusals_that_are_not_about_the_password_do_not_count(use_provisioner):
+    """Чужой домен — не «не угадал пароль». Причина, которая повтором не
+    лечится, к настойчивости подсказки отношения не имеет, и засчитывать её
+    значило бы гасить подсказку за чужую ошибку."""
+    use_provisioner(_FakeImap())
+    user = _amirov()
+
+    for _ in range(3):
+        with override_settings(
+            MAILCOW_DOMAIN="htq.group", MAIL_PROVISIONER="imap",
+            IMAP_HOST="mail.htq.group",
+        ):
+            resp = Client().post(
+                "/api/email/v1/accounts/connect-corporate/",
+                data='{"address": "someone@gmail.com", "password": "x"}',
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(user)['access']}",
+            )
+        assert resp.status_code == 400
+
+    assert _connect_info(user)["suggest_connect"] is True
+
+
+@pytest.mark.django_db
+def test_the_count_is_per_user(use_provisioner):
+    """Счёт по учётке, а не общий: неудачи одного не должны гасить подсказку
+    у соседа."""
+    use_provisioner(_FakeImap(passwords={"ruslan.amirov@htq.group": "MailPass!"}))
+    user = _amirov()
+    other = User.objects.create(
+        username="other", email="other.person@htq.group", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    other.set_password("S3cret!")
+    other.save()
+
+    for _ in range(3):
+        _try_connect(user, "не тот")
+
+    assert _connect_info(user)["suggest_connect"] is False
+    assert _connect_info(other)["suggest_connect"] is True

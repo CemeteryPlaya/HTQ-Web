@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { DateInput } from '@/components/ui/date-input';
+import { DATES_OUT_OF_ORDER, INVALID_DATE, datesOutOfOrder } from '@/lib/validation';
+import { reportApiError } from '@/lib/apiError';
 import { TasksLayout } from '@/components/tasks/TasksLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { BinIinInput } from '@/components/ui/bin-iin-input';
@@ -107,12 +111,12 @@ const HRContractors: React.FC = () => {
     enabled: selectedId !== null,
   });
 
-  const { data: projects = [] } = useQuery({
+  const { data: projects = [], isLoading: projectsLoading } = useQuery({
     queryKey: ['projects'],
     queryFn: () => fetchProjects(),
   });
 
-  const { data: sites = [] } = useQuery({
+  const { data: sites = [], isLoading: sitesLoading } = useQuery({
     queryKey: ['sites'],
     queryFn: () => fetchSites(),
   });
@@ -126,8 +130,7 @@ const HRContractors: React.FC = () => {
   };
 
   const fail = (labelKey: string, fallback: string) => (err: unknown) => {
-    const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
-    toast.error(typeof detail === 'string' ? detail : t(labelKey, fallback));
+    reportApiError(err, t(labelKey, fallback));
   };
 
   const contractorMutation = useMutation({
@@ -207,6 +210,12 @@ const HRContractors: React.FC = () => {
     },
     onError: fail('tasks.pages.contractors.saveError', 'Не удалось сохранить'),
   });
+
+  const reversedEngagementDates = datesOutOfOrder(
+    engagementForm.start_date, engagementForm.end_date);
+  const [brokenEngagementDates, setBrokenEngagementDates] = useState(
+    { start: false, end: false });
+  const hasBrokenEngagementDate = brokenEngagementDates.start || brokenEngagementDates.end;
 
   const engagementMutation = useMutation({
     mutationFn: (payload: typeof emptyEngagement) => createEngagement({
@@ -734,6 +743,17 @@ const HRContractors: React.FC = () => {
                   ))}
                 </SelectContent>
               </Select>
+              {/* Объекты и проекты ведутся на своих страницах: пустой
+                  список здесь — не сбой окна, а незаполненный справочник. */}
+              <PrerequisiteNotice
+                variant="inline"
+                items={[{
+                  when: !sitesLoading && sites.length === 0,
+                  text: t('tasks.pages.sites.registryEmpty', 'Справочник объектов пуст —'),
+                  to: '/tasks/sites',
+                  linkText: t('tasks.pages.sites.addFirst', 'заведите объект'),
+                }]}
+              />
             </div>
 
             <div>
@@ -748,6 +768,15 @@ const HRContractors: React.FC = () => {
                   ))}
                 </SelectContent>
               </Select>
+              <PrerequisiteNotice
+                variant="inline"
+                items={[{
+                  when: !projectsLoading && projects.length === 0,
+                  text: t('tasks.projects.registryEmpty', 'Проектов пока нет —'),
+                  to: '/manage/projects',
+                  linkText: t('tasks.projects.addFirst', 'создайте проект'),
+                }]}
+              />
             </div>
 
             <div>
@@ -773,23 +802,30 @@ const HRContractors: React.FC = () => {
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label className="text-xs">{t('tasks.pages.contractors.start')}</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={engagementForm.start_date}
-                  onChange={(e) => setEngagementForm({ ...engagementForm, start_date: e.target.value })}
+                  invalid={brokenEngagementDates.start}
+                  onValidityChange={(bad) => setBrokenEngagementDates((prev) => ({ ...prev, start: bad }))}
+                  onChange={(value) => setEngagementForm({ ...engagementForm, start_date: value })}
                   className="h-8 rounded-xl bg-muted/30 mt-1"
                 />
               </div>
               <div>
                 <Label className="text-xs">{t('tasks.pages.contractors.end')}</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={engagementForm.end_date}
-                  onChange={(e) => setEngagementForm({ ...engagementForm, end_date: e.target.value })}
+                  invalid={brokenEngagementDates.end || reversedEngagementDates}
+                  onValidityChange={(bad) => setBrokenEngagementDates((prev) => ({ ...prev, end: bad }))}
+                  onChange={(value) => setEngagementForm({ ...engagementForm, end_date: value })}
                   className="h-8 rounded-xl bg-muted/30 mt-1"
                 />
               </div>
             </div>
+            {hasBrokenEngagementDate ? (
+              <p className="mt-2 text-xs text-destructive">{INVALID_DATE}</p>
+            ) : reversedEngagementDates && (
+              <p className="mt-2 text-xs text-destructive">{DATES_OUT_OF_ORDER}</p>
+            )}
           </div>
           <DialogFooter className="mt-4 gap-2">
             <Button variant="outline" className="rounded-xl text-xs" onClick={() => setEngagementDialog(false)}>
@@ -797,7 +833,7 @@ const HRContractors: React.FC = () => {
             </Button>
             <Button
               className="rounded-xl text-xs bg-primary"
-              disabled={engagementMutation.isPending}
+              disabled={reversedEngagementDates || hasBrokenEngagementDate || engagementMutation.isPending}
               onClick={() => engagementMutation.mutate(engagementForm)}
             >
               {t('common.save')}

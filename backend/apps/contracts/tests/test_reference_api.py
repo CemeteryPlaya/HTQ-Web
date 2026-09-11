@@ -75,12 +75,44 @@ def test_budget_card_labels_the_program_with_its_code():
 
 
 @pytest.mark.django_db
-def test_duplicate_program_is_409():
+def test_duplicate_program_code_is_409():
+    """Уникальность программы держится на КОДЕ, а не на названии.
+
+    Миграция 0022 перенесла ключ с ``(name, expense_item)`` на ``code``: в
+    данных заказчика разные программы разных проектов регулярно называются
+    одинаково, и ключ по названию не пустил бы в базу вторую.
+    """
+    make_program(name="Образование", expense_item="Оборудование", code="EDU-01")
+    resp = post_json(Client(), f"{BASE}/programs",
+                     {"name": "Другое название", "expense_item": "Прочее",
+                      "code": "EDU-01"},
+                     **auth(admin_token()))
+    assert resp.status_code == 409, resp.content
+
+
+@pytest.mark.django_db
+def test_same_program_name_is_allowed_when_codes_differ():
+    """Обратная сторона того же ключа, и именно она была нужна заказчику:
+    «Сопровождение проекта» — это и 3011, и 3020. Различает их ``display_name``
+    («код название»), поэтому в интерфейсе двусмысленности не возникает."""
+    make_program(name="Сопровождение проекта", expense_item="Услуги", code="3011")
+    resp = post_json(Client(), f"{BASE}/programs",
+                     {"name": "Сопровождение проекта", "expense_item": "Услуги",
+                      "code": "3020"},
+                     **auth(admin_token()))
+    assert resp.status_code == 201, resp.content
+
+
+@pytest.mark.django_db
+def test_programs_without_a_code_do_not_collide():
+    """``code`` необязателен, а пустые строки Postgres считает равными — без
+    условия ``~Q(code="")`` в ключе все заведённые руками программы без кода
+    конфликтовали бы между собой."""
     make_program(name="Образование", expense_item="Оборудование")
     resp = post_json(Client(), f"{BASE}/programs",
                      {"name": "Образование", "expense_item": "Оборудование"},
                      **auth(admin_token()))
-    assert resp.status_code == 409, resp.content
+    assert resp.status_code == 201, resp.content
 
 
 @pytest.mark.django_db

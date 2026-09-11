@@ -91,6 +91,39 @@ def capture(employee: Employee, patch: dict, *, actor_id: int | None,
     return rest, request
 
 
+def supersede(employee: Employee, fields: set[str], *, actor_id: int | None) -> None:
+    """Снять из ожидающей заявки поля, которые кадры записали напрямую.
+
+    Нужна праву ``hr.identity.force``. Без неё в очереди осталась бы заявка,
+    предлагающая ЗНАЧЕНИЕ, которое уже перезаписано: подтвердивший её владелец
+    вернул бы старое поверх нового, ничего при этом не нарушив — с его стороны
+    всё выглядело бы штатно.
+
+    Заявка без строк закрывается как ``rejected``: предложение действительно не
+    будет применено. ``applied`` было бы неправдой — владелец ничего не
+    подтверждал, а записанное значение может отличаться от предложенного.
+    """
+    request = (IdentityChangeRequest.objects
+               .filter(employee=employee, status=IdentityChangeRequest.Status.PENDING)
+               .first())
+    if request is None:
+        return
+
+    request.fields.filter(field__in=fields).delete()
+    if request.fields.exists():
+        return
+
+    request.status = IdentityChangeRequest.Status.REJECTED
+    request.decided_by = actor_id
+    request.decided_at = timezone.now()
+    request.decision_note = (
+        "Снята автоматически: кадры записали значения напрямую "
+        "(право hr.identity.force)."
+    )
+    request.save(update_fields=["status", "decided_by", "decided_at",
+                                "decision_note", "updated_at"])
+
+
 # ── кто подтверждает ────────────────────────────────────────────────────────
 
 def resolve_approver(employee: Employee) -> int | None:

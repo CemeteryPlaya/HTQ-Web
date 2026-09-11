@@ -46,6 +46,7 @@ import ast
 import importlib
 import importlib.util
 import inspect
+import pathlib
 import re
 import textwrap
 import uuid as uuid_module
@@ -53,13 +54,17 @@ import uuid as uuid_module
 import pytest
 from celery.app.task import Task as CeleryTask
 from django.apps import apps as django_apps
+from django.conf import settings as django_settings
 from django.contrib import admin
 from django.core.cache import cache
 from django.test import Client
 from django.urls import get_resolver
 from django.urls.resolvers import URLResolver
 
+from pydantic import BaseModel as PydanticBaseModel
+
 from apps.core.models import ServiceStatus
+from htqweb.date_rules import DATE_PAIRS, OrderedDates
 from htqweb.admin_gate import ServiceGatedAdminMixin
 from htqweb.middleware.service_gate import PREFIX_TO_SERVICE, service_name_for_app_label
 
@@ -167,6 +172,93 @@ def test_every_domain_task_guards_disableability_first():
     assert violations == [], (
         "Celery tasks missing the require_service() disableability guard as "
         "their first statement:\n  " + "\n  ".join(violations)
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Test 1b — every TENANT_APPS task must be @company_task or an explicitly
+# marked dispatcher (docs/multi-company-tenancy-followups.md п.1).
+# ═══════════════════════════════════════════════════════════════════════
+#
+# A TENANT_APPS app's tables live in a company's own Postgres schema
+# (htqweb/tenancy/context.py::schema_for), not public — a Celery task has no
+# HTTP request to inherit a company from, so a task that touches its own
+# app's models MUST be @company_task (htqweb/tenancy/celery.py), which turns
+# a missing ``company_slug`` into ``MissingCompanyArgument`` instead of a
+# silent, wrong read of ``public``. The one sanctioned exception is a
+# dispatcher: it does not touch its app's models at all, only reads the
+# (non-tenant) company registry and fans a *_task per company — those are
+# exempt, but only if marked as such, explicitly, via
+# ``@company_dispatch_task``. Telling the two apart by function name (e.g. a
+# ``_dispatch`` suffix convention) was rejected: a naming convention drifts
+# from the code silently, an attribute set by a decorator cannot — the
+# decorator IS the thing being required, so misusing it is a contradiction
+# the sweep catches, not a convention the sweep has to trust.
+#
+# Why this is `is_company_task`/`is_company_dispatch_task` attributes and
+# not e.g. an AST check for "does the function call company_task": both
+# decorators set the marker on exactly the object ``task.run`` already is
+# (see their docstrings in htqweb/tenancy/celery.py), so the check is a
+# plain attribute read — no unwrap, no source parsing, nothing that could
+# be fooled by an unrelated `functools.wraps`-based decorator.
+
+
+def _company_marker(fn) -> str | None:
+    """``"company_task"``, ``"dispatch"``, or ``None`` — whichever of the two
+    tenancy markers ``fn`` (typically a Celery task's ``.run``) carries."""
+    if getattr(fn, "is_company_task", False):
+        return "company_task"
+    if getattr(fn, "is_company_dispatch_task", False):
+        return "dispatch"
+    return None
+
+
+def test_company_marker_helper_flags_missing_and_conflicting_markers():
+    """Unit-level guard for the helper the sweep below relies on — proves the
+    predicate itself distinguishes the three cases before trusting it over
+    real task modules."""
+    def unmarked():
+        pass
+
+    def real_task():
+        pass
+    real_task.is_company_task = True
+
+    def dispatcher():
+        pass
+    dispatcher.is_company_dispatch_task = True
+
+    assert _company_marker(unmarked) is None
+    assert _company_marker(real_task) == "company_task"
+    assert _company_marker(dispatcher) == "dispatch"
+
+
+def test_tenant_app_tasks_use_company_task_or_are_marked_dispatchers():
+    tenant_apps = frozenset(django_settings.TENANT_APPS)
+    violations = []
+    tasks_seen = 0
+    for app_label, _service, task in _iter_domain_tasks():
+        if app_label not in tenant_apps:
+            continue
+        tasks_seen += 1
+        fn = getattr(task, "run", None) or inspect.unwrap(task)
+        if _company_marker(fn) is None:
+            violations.append(
+                f"{app_label}.tasks.{task.name.rsplit('.', 1)[-1]}: tenant-app "
+                "(settings.TENANT_APPS) task must be @company_task "
+                "(htqweb.tenancy.celery) or explicitly marked a dispatcher via "
+                "@company_dispatch_task — a task with no HTTP request has no "
+                "company context unless one of these gives it one"
+            )
+    # Same tautology guard as Test 1: TENANT_APPS is non-empty and every
+    # member currently has a tasks.py, so an empty sweep means discovery
+    # broke, not that there was nothing to check.
+    assert tasks_seen > 0, (
+        "discovered zero tenant-app Celery tasks — the sweep itself is broken"
+    )
+    assert violations == [], (
+        "Tenant-app Celery tasks without @company_task and without an "
+        "explicit dispatcher marker:\n  " + "\n  ".join(violations)
     )
 
 
@@ -363,3 +455,117 @@ def test_resolver_sweep_covers_users_cms_and_media():
             f"resolver sweep found no routes for service {must_cover!r} — "
             "discovery is broken (or the app is no longer mounted in htqweb/urls.py)"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Test 4 — every schema with a pair of dates must validate their order.
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Правило скучное («конец не раньше начала»), интересна история: в БД оно
+# стоит пятью CheckConstraint, в схемах ``*Create`` — валидатором с пометкой
+# «здесь это 422 с текстом, а не IntegrityError→500», а на ``*Update`` его
+# просто забыли. Правка блока с перепутанными датами уходила в базу и
+# возвращалась 409 «Блок с таким названием уже есть» — вьюха ловит
+# IntegrityError и знает про него одно объяснение.
+#
+# Забыть примесь на НОВОЙ схеме так же легко, поэтому проверка обходит схемы
+# всех аппок рефлексией: пара дат из ``DATE_PAIRS`` есть — ``OrderedDates``
+# обязана быть в предках.
+
+def _inbound_schema_names(views_source: str) -> set[str]:
+    """Имена схем, стоящих в ``body=`` — то есть разбирающих ТЕЛО ЗАПРОСА.
+
+    Только они и должны проверять ввод. Схемы ответа (``*Response``) с той же
+    парой дат трогать нельзя: они отдают то, что уже лежит в базе, и валидатор
+    на них уронил бы чтение старых строк, а не поймал бы ошибку ввода.
+
+    Ищем по ``body=schemas.X`` в аргументах любого вызова, а не по имени
+    класса: имя — плохой признак. ``PMOMemberAdd`` разбирает тело, хотя не
+    кончается ни на Create, ни на Update.
+    """
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(views_source)):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg != "body":
+                continue
+            if isinstance(kw.value, ast.Attribute):
+                names.add(kw.value.attr)
+    return names
+
+
+def _iter_inbound_schemas():
+    """Схемы всех доменных аппок, читающие тело запроса: (app_label, класс)."""
+    for config in django_apps.get_app_configs():
+        if not config.name.startswith("apps."):
+            continue
+        module_name = f"{config.name}.schemas"
+        if importlib.util.find_spec(module_name) is None:
+            continue
+        views_spec = importlib.util.find_spec(f"{config.name}.views")
+        if views_spec is None or views_spec.origin is None:
+            continue
+        wanted = _inbound_schema_names(
+            pathlib.Path(views_spec.origin).read_text(encoding="utf-8"))
+        module = importlib.import_module(module_name)
+        for name, obj in vars(module).items():
+            if (name in wanted and inspect.isclass(obj)
+                    and issubclass(obj, PydanticBaseModel)
+                    and obj.__module__ == module_name):
+                yield config.label, obj
+
+
+def test_every_inbound_schema_with_a_date_pair_validates_their_order():
+    violations = []
+    schemas_seen = 0
+    with_dates = 0
+    for app_label, model in _iter_inbound_schemas():
+        schemas_seen += 1
+        fields = set(model.model_fields)
+        pairs = [(start, end) for start, end, _ in DATE_PAIRS
+                 if start in fields and end in fields]
+        if not pairs:
+            continue
+        with_dates += 1
+        if not issubclass(model, OrderedDates):
+            named = ", ".join(f"{start}/{end}" for start, end in pairs)
+            violations.append(
+                f"{app_label}.schemas.{model.__name__} ({named}): "
+                "унаследуйте htqweb.date_rules.OrderedDates"
+            )
+
+    # Пустой проход хуже отсутствия теста: он выглядит зелёным, ничего не
+    # проверив. Убеждаемся, что обход вообще что-то нашёл.
+    assert schemas_seen > 0, "не найдено ни одной входящей схемы — сломан сам обход"
+    assert with_dates > 0, (
+        "ни одна схема не имеет пары дат — либо DATE_PAIRS разошлась с кодом, "
+        "либо обход смотрит не туда"
+    )
+    assert violations == [], (
+        "схемы с парой дат без проверки порядка:\n  " + "\n  ".join(violations)
+    )
+
+
+def test_date_pairs_table_matches_the_database_constraints():
+    """Таблица пар не должна отставать от ограничений в БД.
+
+    ``ck_*_dates`` в моделях — источник истины о том, какие пары вообще
+    существуют. Появится шестое ограничение с новой парой имён — правило о
+    ней узнает только отсюда.
+    """
+    known = {(start, end) for start, end, _ in DATE_PAIRS}
+    missing = []
+    for model in django_apps.get_models():
+        for constraint in model._meta.constraints:
+            name = getattr(constraint, "name", "")
+            if not name.startswith("ck_") or not name.endswith("dates"):
+                continue
+            fields = {f.name for f in model._meta.get_fields()
+                      if hasattr(f, "attname")}
+            if not any(start in fields and end in fields for start, end in known):
+                missing.append(f"{model._meta.label}: {name}")
+    assert missing == [], (
+        "ограничение на даты есть, а пары полей нет в DATE_PAIRS "
+        "(htqweb/date_rules.py):\n  " + "\n  ".join(missing)
+    )

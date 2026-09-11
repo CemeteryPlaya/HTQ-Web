@@ -19,6 +19,8 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
+import { TASKS_LIMITS } from '@/lib/fieldLimits';
 import { AlertCircle, Edit, Layers, MapPin, Plus, Search, Trash2 } from 'lucide-react';
 import { createSite, deleteSite, fetchSites, updateSite } from '@/api/tasks';
 import { SiteBlocksDialog } from '@/components/tasks/SiteBlocksDialog';
@@ -87,7 +89,7 @@ const HRSites: React.FC = () => {
         ? t('tasks.pages.sites.updated', 'Объект обновлён')
         : t('tasks.pages.sites.created', 'Объект добавлен'));
     },
-    onError: () => toast.error(t('tasks.pages.sites.saveError', 'Не удалось сохранить')),
+    onError: (err) => reportApiError(err, t('tasks.pages.sites.saveError', 'Не удалось сохранить')),
   });
 
   const deleteMutation = useMutation({
@@ -96,15 +98,10 @@ const HRSites: React.FC = () => {
       invalidate();
       toast.success(t('tasks.pages.sites.deleted', 'Объект удалён'));
     },
-    onError: (err: unknown) => {
-      // 409 приходит с текстом, в котором названы счётчики задач и
-      // проектов — показываем его, а не общую отписку: пользователю нужно
-      // знать, что именно отвязать.
-      const detail = (err as { response?: { data?: { detail?: string } } })
-        ?.response?.data?.detail;
-      toast.error(detail
-        || t('tasks.pages.sites.deleteError', 'Не удалось удалить объект'));
-    },
+    // 409 приходит с текстом, в котором названы счётчики задач и проектов —
+    // `reportApiError` показывает его вместо общей отписки: пользователю нужно
+    // знать, что именно отвязать.
+    onError: (err) => reportApiError(err, t('tasks.pages.sites.deleteError', 'Не удалось удалить объект')),
   });
 
   const openCreate = () => { setEditing(null); setForm(empty); setDialogOpen(true); };
@@ -284,6 +281,7 @@ const HRSites: React.FC = () => {
               <Label>{t('tasks.pages.sites.name', 'Название')} *</Label>
               <Input
                 value={form.name}
+                maxLength={TASKS_LIMITS.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder={t('tasks.pages.sites.namePlaceholder', 'Алга')}
                 className="mt-1"
@@ -294,6 +292,7 @@ const HRSites: React.FC = () => {
                 <Label>{t('tasks.pages.sites.code', 'Код')}</Label>
                 <Input
                   value={form.code}
+                  maxLength={TASKS_LIMITS.code}
                   onChange={(e) => setForm({ ...form, code: e.target.value })}
                   placeholder="ALG"
                   className="mt-1"
@@ -303,6 +302,7 @@ const HRSites: React.FC = () => {
                 <Label>{t('tasks.pages.sites.region', 'Регион')}</Label>
                 <Input
                   value={form.region}
+                  maxLength={TASKS_LIMITS.region}
                   onChange={(e) => setForm({ ...form, region: e.target.value })}
                   placeholder={t('tasks.pages.sites.regionPlaceholder',
                     'Актюбинская область')}

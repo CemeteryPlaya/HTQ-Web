@@ -3,8 +3,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
 
 import { contractsApi } from '@/api/contracts';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,7 +25,7 @@ export default function AccountableFundsRequestCreate() {
   const [budgetLineId, setBudgetLineId] = useState('');
   const [amount, setAmount] = useState('');
   const [goal, setGoal] = useState('');
-  const { data: lines = [] } = useQuery({
+  const { data: lines = [], isLoading: linesLoading } = useQuery({
     queryKey: ['contracts', 'budget-lines', 'accountable-funds'],
     queryFn: () => contractsApi.listBudgetLines().then((r) => r.data),
   });
@@ -36,6 +38,9 @@ export default function AccountableFundsRequestCreate() {
     String(line.administrator_id) === administratorId && line.budget_status === 'active',
   ), [lines, administratorId]);
   const selectedLine = lines.find((line) => String(line.id) === budgetLineId);
+  // И администраторы, и программы здесь выводятся из бюджетных строк:
+  // пустой бюджет — пустая форма, и без подсказки это выглядит как сбой.
+  const noBudgets = !linesLoading && lines.length === 0;
   const invalidAmount = !AMOUNT_RE.test(amount.trim()) || Number(amount.replace(',', '.')) <= 0
     || (selectedLine != null && Number(amount.replace(',', '.')) > Number(selectedLine.remaining));
   const create = useMutation({
@@ -48,16 +53,22 @@ export default function AccountableFundsRequestCreate() {
       toast.success('Заявка на подотчётные средства создана');
       navigate('/contracts/accountable-funds-requests');
     },
-    onError: (error: any) => toast.error(error?.response?.data?.detail ?? 'Не удалось создать заявку'),
+    onError: (err) => reportApiError(err, 'Не удалось создать заявку'),
   });
 
   return <ContractsShell><div className="max-w-2xl">
     <Link to="/contracts/accountable-funds-requests" className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" />К заявкам</Link>
     <div className="mb-6 flex items-center gap-3"><Wallet className="h-7 w-7 text-muted-foreground" /><div><h1 className="text-3xl font-bold">Заявка на подотчётные средства</h1><p className="text-sm text-muted-foreground">Средства будут закреплены за вами до добавления авансовых отчётов.</p></div></div>
+    <PrerequisiteNotice
+      title="Сначала нужны справочники:"
+      items={[{ when: noBudgets, text: 'Нет ни одного бюджета — из него берутся и администратор, и программа,', to: '/contracts/budgets/new', linkText: 'создайте бюджетную строку' }]}
+    />
     <form onSubmit={(event) => { event.preventDefault(); if (!administratorId || !budgetLineId || invalidAmount || !goal.trim()) { toast.error('Заполните все поля и проверьте сумму'); return; } create.mutate(); }}>
       <Card><CardHeader><CardTitle>Основание и сумма</CardTitle><CardDescription>После сохранения заявку можно отправить в Signoff. Отметка бухгалтера появится только после согласования.</CardDescription></CardHeader><CardContent className="space-y-5">
         <div><Label htmlFor="administrator">Администратор</Label><Select value={administratorId} onValueChange={(value) => { setAdministratorId(value); setBudgetLineId(''); }}><SelectTrigger id="administrator"><SelectValue placeholder="Выберите администратора" /></SelectTrigger><SelectContent>{administrators.map((administrator) => <SelectItem key={administrator.id} value={String(administrator.id)}>{administrator.label}</SelectItem>)}</SelectContent></Select></div>
-        <div><Label htmlFor="program">Программа</Label><Select value={budgetLineId} onValueChange={setBudgetLineId} disabled={!administratorId}><SelectTrigger id="program"><SelectValue placeholder="Сначала выберите администратора" /></SelectTrigger><SelectContent>{programLines.map((line: BudgetLineFlat) => <SelectItem key={line.id} value={String(line.id)}>{line.program_name} — {line.period_year}, {line.currency}</SelectItem>)}</SelectContent></Select></div>
+        <div><Label htmlFor="program">Программа</Label><Select value={budgetLineId} onValueChange={setBudgetLineId} disabled={!administratorId}><SelectTrigger id="program"><SelectValue placeholder="Сначала выберите администратора" /></SelectTrigger><SelectContent>{programLines.map((line: BudgetLineFlat) => <SelectItem key={line.id} value={String(line.id)}>{line.program_name} — {line.period_year}, {line.currency}</SelectItem>)}</SelectContent></Select>
+          <PrerequisiteNotice variant="inline" items={[{ when: Boolean(administratorId) && !linesLoading && programLines.length === 0, text: 'У этого администратора нет действующих бюджетов — заявка оформляется только по бюджету в статусе «активный»,', to: '/contracts/budgets', linkText: 'проверьте статусы бюджетов' }]} />
+        </div>
         {selectedLine && <p className="rounded-md border bg-muted/40 p-3 text-sm">Доступно по программе: <strong>{selectedLine.remaining}</strong> {selectedLine.currency}</p>}
         <div><Label htmlFor="amount">Сумма</Label><div className="flex items-center gap-2"><Input id="amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="100000.00" /><span className="text-sm text-muted-foreground">{selectedLine?.currency ?? ''}</span></div></div>
         <div><Label htmlFor="goal">Цель</Label><Textarea id="goal" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="На что необходимы средства" /></div>

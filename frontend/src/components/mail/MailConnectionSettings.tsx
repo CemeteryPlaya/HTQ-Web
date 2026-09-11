@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { CheckCircle2, XCircle, MinusCircle, PlugZap, Save, Info } from 'lucide-react';
 
 import api from '@/api/client';
+import { reportApiError } from '@/lib/apiError';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -158,7 +159,7 @@ export const MailConnectionSettings: React.FC = () => {
             qc.invalidateQueries({ queryKey: ['admin-mailbox-status'] });
             toast.success(t('admin.mailboxes.settingsSaved', 'Настройки сохранены'));
         },
-        onError: (e: ApiError) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('admin.mailboxes.settingsSaveError', 'Не удалось сохранить настройки')),
     });
 
     const testMutation = useMutation({
@@ -169,7 +170,7 @@ export const MailConnectionSettings: React.FC = () => {
             setReport(data);
             if (data.ok) toast.success(t('admin.mailboxes.testOk', 'Связь с почтовым сервером есть'));
         },
-        onError: (e: ApiError) => toast.error(e?.response?.data?.detail || 'Error'),
+        onError: (err) => reportApiError(err, t('admin.mailboxes.testError', 'Не удалось проверить связь с почтовым сервером')),
     });
 
     if (isLoading || !data) return <div className="py-10 text-center text-muted-foreground">Loading…</div>;

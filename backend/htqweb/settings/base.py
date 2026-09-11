@@ -2,6 +2,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -14,6 +15,35 @@ SECRET_KEY = env("DJANGO_SECRET_KEY", env("JWT_SECRET", "change-me"))
 DEBUG = False
 ALLOWED_HOSTS = ["*"]           # локальный запуск; деплой — вне скоупа
 APPEND_SLASH = False            # пути повторяют API.md буквально, без редиректов
+
+# ── CSRF за прокси (django-admin) ──────────────────────────────────────────
+# Django ≥4 на POST сверяет заголовок Origin с «request.scheme://Host». За
+# nginx/внешним TLS-терминатором бэкенд видит http://, а браузер шлёт
+# Origin: https://<домен> — и вход в /django-admin/ падал 403 «Ошибка проверки
+# CSRF». /api/ это не касается: он снят с CSRF (ApiCsrfExemptMiddleware).
+#
+# Лечится двумя строками, каждая закрывает свою топологию:
+#   * SECURE_PROXY_SSL_HEADER — TLS терминирует НАШ nginx: он на каждой
+#     location перезаписывает X-Forwarded-Proto своим $scheme, и Django узнаёт
+#     настоящую схему. Клиент, идущий мимо шлюза прямо на :8000, может прислать
+#     заголовок сам, но так он лишь ужесточает CSRF-проверку своего же запроса
+#     (без Origin становится обязателен Referer) — ослабить этим нечего.
+#   * CSRF_TRUSTED_ORIGINS — TLS снимается ДО nginx (облачный прокси,
+#     балансировщик), и до Django доходит честное http. Список = origin из
+#     PUBLIC_BASE_URL + CSRF_TRUSTED_ORIGINS через запятую (второй домен,
+#     http://<IP>). Схема обязательна: без неё Django не стартует (4_0.E001).
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+
+def _trusted_origins() -> list[str]:
+    origins = [o.strip().rstrip("/") for o in env("CSRF_TRUSTED_ORIGINS").split(",")]
+    public = urlsplit(env("PUBLIC_BASE_URL").strip())
+    if public.scheme and public.netloc:
+        origins.append(f"{public.scheme}://{public.netloc}")
+    return list(dict.fromkeys(o for o in origins if o))
+
+
+CSRF_TRUSTED_ORIGINS = _trusted_origins()
 
 # ── Среда и политика fallback'ов ───────────────────────────────────────────
 # Одна ось на три рантайма: тот же HTQ_ENV читают фронт (VITE_HTQ_ENV) и SFU.
@@ -60,6 +90,13 @@ INSTALLED_APPS = [
     # потому что под gunicorn'ом нужен multiprocess-реестр (см. там же).
     "django_prometheus",
     "apps.core",
+    # Реестр компаний группы. Живёт в public и обязателен для всех: именно
+    # он резолвит поддомен в схему Postgres, поэтому стоит до доменных аппок.
+    "apps.companies",
+    # Роли и права. Живёт в public: роль заводится один раз на всю группу
+    # (спека стадии 2, §1.3), поэтому в TENANT_APPS её НЕТ — изоляция этих
+    # таблиц держится обязательным фильтром по компании в сервисном слое.
+    "apps.access",
     "apps.users",
     "apps.cms",
     "apps.media_files",
@@ -91,12 +128,23 @@ INSTALLED_APPS = [
     "apps.signoff",
 ]
 
+# Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное
+# (users, cms, media_files, mail, messenger, conference, core, companies)
+# общее для группы — см. docs/multi-company-tenancy-design.md §3.
+#
+# Кортеж, а не список: набор фиксирован архитектурным решением, и случайный
+# .append() в чужом модуле не должен его расширять.
+TENANT_APPS = ("hr", "tasks", "contracts", "signoff")
+
 MIDDLEWARE = [
     # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —
     # последней. Иначе замеряется не полное время запроса, а только то, что
     # осталось внутри их «скобок», и латентность систематически занижается.
     "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "htqweb.middleware.request_id.RequestIDMiddleware",
+    # Ставится ДО ServiceGateMiddleware: тот гейтит домены и должен уже
+    # знать компанию, чтобы спросить и глобальный рубильник, и компанейский.
+    "htqweb.middleware.company_context.CompanyContextMiddleware",
     "htqweb.middleware.service_gate.ServiceGateMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # WhiteNoise отдаёт собранную (collectstatic) статику прямо из WSGI/ASGI-процесса
@@ -183,6 +231,23 @@ CELERY_CACHE_BACKEND = "default"
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 300
+# События задач. Без них Flower видит только самих воркеров, но не то, что они
+# выполняют: flower_events_total и flower_task_runtime_seconds_bucket пусты, а
+# с ними — половина дашборда «Celery». Настройкой, а не флагом `-E` у воркера:
+# флаг пришлось бы повторить в трёх compose-файлах и в media-воркере, и забытая
+# копия ломается молча — панель просто остаётся пустой.
+CELERY_WORKER_SEND_TASK_EVENTS = True
+# Адрес Prometheus во ВНУТРЕННЕЙ сети — для виджета мониторинга в профиле
+# админа (apps/core/views.py::infrastructure_targets). Префикс /prometheus
+# обязателен: контейнер запущен с --web.external-url=/prometheus, и без него
+# API отвечает 404. Наружу Prometheus по-прежнему не проксируется — у него
+# нет собственной авторизации.
+PROMETHEUS_INTERNAL_URL = env("PROMETHEUS_INTERNAL_URL",
+                              "http://prometheus:9090/prometheus")
+# Событие «задача поставлена» шлёт КЛИЕНТ (любой .delay), а не воркер. Нужно
+# ровно для одного вопроса: задачи ставятся, но их никто не берёт — то есть
+# очередь есть, а потребителя у неё нет.
+CELERY_TASK_SEND_SENT_EVENT = True
 # Обработка записей конференций уходит в СВОЮ очередь и к своему воркеру
 # (backend-media-worker, образ backend/Dockerfile.media с ffmpeg и Whisper).
 # Два повода развести: сборка часового видео и распознавание занимают десятки
@@ -320,6 +385,20 @@ CONFERENCE_INVITE_TTL_HOURS = int(env("CONFERENCE_INVITE_TTL_HOURS", "168"))
 # Публичный адрес платформы для сборки ссылок в письмах и сообщениях: там,
 # в отличие от браузера, origin взять неоткуда.
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "")
+
+# ── Утренняя сводка в Telegram (apps/core/tasks.py::send_daily_digest) ──────
+# Бот на платформе ОДИН, поэтому второй токен заводить не нужно: по умолчанию
+# берётся тот же GF_TELEGRAM_BOT_TOKEN, что читает Grafana. Префикс GF_ у него
+# исторический — это не настройка Grafana (секции [telegram] у неё нет), а
+# просто имя переменной, которую её провижининг подставляет через $__env{}.
+# Отдельный TELEGRAM_BOT_TOKEN оставлен как переопределение — на случай, если
+# сводку когда-нибудь захотят слать другим ботом.
+TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", env("GF_TELEGRAM_BOT_TOKEN", ""))
+# А вот чат нужен свой и по умолчанию пуст: id бизнес-группы живёт литералом в
+# contact_points.yml (Grafana не умеет брать его из окружения — см. объяснение
+# там), и продублировать его ещё и здесь значило бы завести вторую правду о
+# том, куда шлём. Пусто = сводка молча не отправляется.
+TELEGRAM_DIGEST_CHAT_ID = env("TELEGRAM_DIGEST_CHAT_ID", "")
 CONFERENCE_SFU_PATH = env("CONFERENCE_SFU_PATH", "/ws/sfu/")
 # ICE-серверы, которые бэкенд отдаёт фронту в GET /api/cms/v1/conference/config.
 #
@@ -577,6 +656,16 @@ MAIL_SYNC_PUSH_FLAGS = _flag("MAIL_SYNC_PUSH_FLAGS", "true")
 # По умолчанию периодическая задача только СЧИТАЕТ расхождения и пишет их в
 # лог; применение изменений — явное действие админа из UI.
 MAIL_RECONCILE_AUTO_APPLY = _flag("MAIL_RECONCILE_AUTO_APPLY", "false")
+
+# Привязка БЕСХОЗНЫХ ящиков к владельцам по точному совпадению адреса —
+# отдельно от AUTO_APPLY выше и по умолчанию включена. Операция не
+# разрушающая: у ящика не было владельца, а его адрес совпал с email
+# пользователя, и другого владельца у такого адреса быть не может.
+# Слитая с AUTO_APPLY, она требовала бы включить заодно двустороннее
+# автосведение (импорт с сервера и создание недостающих ящиков на нём) —
+# поэтому и не работала никогда: ради безопасной половины пришлось бы
+# включить опасную.
+MAIL_RECONCILE_AUTO_LINK = _flag("MAIL_RECONCILE_AUTO_LINK", "true")
 
 # Как собирать адрес из имени сотрудника: first.last | f.last | firstlast |
 # first_last | flast | last.first | first. Дефолт "f.last" — историческое

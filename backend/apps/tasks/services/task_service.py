@@ -24,6 +24,8 @@ import logging
 from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied
+
+from htqweb import date_rules
 from django.db import transaction
 from django.db.models import Count, Q
 from django.db.models.functions import TruncDate
@@ -532,6 +534,10 @@ def update_task(task_id: int, data, user_id: int | None = None) -> Task:
 
     for field, value in changes.items():
         setattr(task, field, value)
+    # По СЛИТОЙ паре, а не по присланным полям: в PATCH может приехать
+    # одна дата, вторая лежит в строке. Без этой проверки нарушение
+    # доходит до CheckConstraint и возвращается как 500.
+    date_rules.assert_instance_ordered(task)
     task.save()
 
     if "assignee_id" in changes:

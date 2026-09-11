@@ -21,13 +21,16 @@ import {
     Briefcase,
     Clock,
     FileText,
+    FileSignature,
     History,
     ClipboardList,
+    Stamp,
     Archive,
     KeyRound,
     Handshake,
     Link2,
     Network,
+    ShieldCheck,
     UserCog,
     UserPlus,
     MessagesSquare,
@@ -51,8 +54,8 @@ import { Input } from '@/components/ui/input';
 import { DjangoIcon } from '@/components/icons/DjangoIcon';
 import { ServiceUnavailableDialog } from '@/components/ServiceUnavailableDialog';
 import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { useServiceStatus } from '@/hooks/useServiceStatus';
-import { hasEmployeeTaskAccessFromParts } from '@/lib/auth/roles';
 import { grafanaSsoUrl } from '@/lib/monitoring';
 import { cn } from '@/lib/utils';
 
@@ -61,18 +64,6 @@ type Props = {
     department?: string;
     position?: string;
 };
-
-// ── Role buckets — mirror values returned by user-service
-const ADMIN_ROLES = ['admin', 'superuser'];
-const STAFF_OR_ADMIN_ROLES = [...ADMIN_ROLES, 'staff'];
-const HR_ROLES = [
-    ...STAFF_OR_ADMIN_ROLES,
-    'hr_manager', 'senior_hr', 'junior_hr', 'senior_manager', 'junior_manager',
-];
-const EDITOR_ROLES = [...STAFF_OR_ADMIN_ROLES, 'editors'];
-
-const hasAnyRole = (roles?: string[], expected: string[] = []) =>
-    Boolean(roles?.some(r => expected.includes(r)));
 
 type IconComponent = LucideIcon | React.FC<React.SVGProps<SVGSVGElement>>;
 
@@ -243,11 +234,14 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     const { t } = useTranslation();
     const [searchQuery, setSearchQuery] = useState('');
 
-    const editor = hasAnyRole(roles, EDITOR_ROLES);
-    const hrManager = hasAnyRole(roles, HR_ROLES);
-    const admin = hasAnyRole(roles, ADMIN_ROLES);
-    const elevated = hasAnyRole(roles, STAFF_OR_ADMIN_ROLES);
-    const hasTasksAccess = hasEmployeeTaskAccessFromParts(roles, department, position);
+    // Пункты меню открываются уровнем модуля, а не ролью. Скрытие здесь —
+    // удобство, а не защита: рубеж стоит на бэкенде и на гейте маршрута.
+    const permissions = usePermissions();
+    const editor = permissions.atLeast('cms', 'write');
+    const hrManager = permissions.atLeast('hr', 'read');
+    const admin = permissions.atLeast('users', 'admin');
+    const elevated = permissions.atLeast('tasks', 'admin');
+    const hasTasksAccess = permissions.atLeast('tasks', 'read');
     const { level, hasHrAccess } = useHRLevel({ enabled: Boolean(roles?.length) });
     const showHrItem = (levels: string[]) => admin || !hasHrAccess || (level ? levels.includes(level) : false);
 
@@ -295,6 +289,23 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
             );
         }
         items.push({ id: 'requests', to: '/requests', icon: ClipboardList, label: t('profile.sidebar.requests', 'Запросы') });
+        // Договоры и согласования были достижимы только из шапки (меню «Ещё»):
+        // сайдбар ведёт свой список и НЕ читает app/navigation/navItems.ts, где
+        // оба раздела есть с самого начала. Ровно та же болезнь, ради которой
+        // тот файл и заводили — там в докстринге описано, как разошлись шапка и
+        // нижняя панель; сайдбар тогда в объединение не попал.
+        //
+        // ⚠️ «Запросы» выше и «Согласования» ниже — РАЗНЫЕ домены, и их легко
+        // перепутать: /requests — конструктор заявок (apps.approvals), который
+        // согласует свои же формы; /signoff — маршруты утверждения ЧУЖИХ
+        // документов (договоров, счетов, актов). Подписи намеренно не сближаем.
+        //
+        // Ключи и иконки взяты те же, что в navItems.ts, чтобы один раздел не
+        // назывался в шапке и в сайдбаре по-разному.
+        items.push(
+            { id: 'contracts', to: '/contracts', icon: FileSignature, label: t('contracts.nav.title', 'Договоры') },
+            { id: 'signoff', to: '/signoff', icon: Stamp, label: t('signoff.nav.title', 'Согласования') },
+        );
         return items;
     }, [t, hasTasksAccess, elevated]);
 
@@ -329,6 +340,10 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
         if (!admin) return [];
         return [
             { id: 'admin-users', to: '/admin/users', icon: UserCog, label: t('profile.sidebar.manageUsers', 'Управление пользователями') },
+            // Каталог ролей. Страница существовала с самой стадии 2, но ссылки
+            // на неё не было нигде — до неё можно было добраться только набрав
+            // адрес руками, то есть для всех, кроме автора, её не существовало.
+            { id: 'access-roles', to: '/access/roles', icon: ShieldCheck, label: t('profile.sidebar.accessRoles', 'Роли и права') },
             { id: 'admin-registrations', to: '/admin/registrations', icon: UserPlus, label: t('profile.sidebar.registrations'), badge: <PendingRegistrationsBadge /> },
             { id: 'admin-chats', to: '/admin/chats', icon: MessagesSquare, label: t('profile.sidebar.manageChats', 'Управление чатами') },
             { id: 'admin-mailboxes', to: '/admin/mailboxes', icon: MailIcon, label: t('profile.sidebar.manageMailboxes', 'Корпоративные ящики') },

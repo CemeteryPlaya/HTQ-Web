@@ -23,6 +23,11 @@ class TokenPayload(BaseModel):
     username: str | None = None
     email: str | None = None
 
+    # Компания, для которой выпущен токен. None у токенов, выданных до
+    # введения мультикомпанейности, и у пользователей без членства — такой
+    # токен работает только на общих доменах (users/cms/media).
+    company: str | None = None
+
     is_staff: bool = False
     is_superuser: bool = False
     is_admin: bool = False

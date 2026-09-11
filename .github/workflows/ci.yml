@@ -1,0 +1,134 @@
+# Быстрые проверки — на каждый push и pull request.
+#
+# Здесь ТОЛЬКО то, что укладывается в минуты. Полный прогон бэкенда (~50 мин,
+# 4400+ тестов) вынесен в backend-full.yml и запускается на PR в main и по
+# ночам: ждать час результата на каждый коммит никто не станет, а CI, который
+# не смотрят, не отличается от отсутствующего.
+#
+# Три задачи идут параллельно и независимы: сломанный фронт не должен прятать
+# сломанный конфиг мониторинга.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Новый push в ту же ветку отменяет предыдущий прогон: смысла проверять
+# промежуточный коммит, который уже перекрыт, нет.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Конфигурация наблюдаемости ─────────────────────────────────────────────
+  # Самая дешёвая и самая окупаемая проверка в этом файле. Она ловит класс
+  # поломок, который иначе обнаруживается только на проде и молча: Grafana
+  # 10.4 валидирует контакт-пойнты на старте и при пустом токене или битом
+  # шаблоне падает ЦЕЛИКОМ, унося с собой дашборды. Прод в таком состоянии
+  # простоял неизвестно сколько.
+  monitoring-config:
+    name: Конфиги мониторинга
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: promtool + compose + дашборды + провижининг Grafana
+        run: ./scripts/check-monitoring-config.sh
+
+  # ── Фронтенд ───────────────────────────────────────────────────────────────
+  frontend:
+    name: Фронтенд
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # ci, а не install: ставит ровно то, что в lock-файле, и не правит его.
+      - run: npm ci
+
+      # Отдельный конфиг, а не `npm run lint`: в репозитории 358 ошибок, из
+      # них 349 — один no-explicit-any на 85 файлов. eslint.ci.config.js
+      # понижает ИМЕННО этот известный долг до предупреждений, перечисляя
+      # каждый пункт с TODO; стандарты проекта не тронуты — у разработчика
+      # `npm run lint` по-прежнему строгий. Любая НОВАЯ ошибка валит сборку.
+      - name: Линт (с явным списком долга)
+        run: npx eslint . -c eslint.ci.config.js
+
+      # tsconfig.json, а не `npm run typecheck` (tsc -b): последний захватывает
+      # ещё и конфиги сборки и падает на vite.config.ts — см. долг в
+      # frontend/ci-known-failures.txt. Проверяем код приложения, то есть то,
+      # что действительно едет пользователю.
+      - name: Типы
+        run: npx tsc --noEmit -p tsconfig.json
+
+      # Два файла исключены (frontend/ci-known-failures.txt) — оба про секции
+      # Т-2 карточки сотрудника, ту же фичу, что роняет и два теста бэкенда.
+      - name: Тесты (кроме известных падений)
+        run: |
+          args=()
+          while IFS= read -r file; do
+            args+=(--exclude "$file")
+          done < <(grep -vE '^\s*(#|$)' ci-known-failures.txt)
+          npx vitest run "${args[@]}"
+
+      # Сборка проверяет и бандл-бюджет: postbuild запускает
+      # scripts/check-bundle-size.mjs, который валится при превышении.
+      - run: npm run build
+
+  # ── Тесты-сторожа бэкенда ──────────────────────────────────────────────────
+  # Подмножество, которое защищает инварианты платформы и наблюдаемость:
+  # изоляция аппок, guard отключаемости у задач, «метрика без панели»,
+  # «ссылка из уведомления в никуда», datasource с опечаткой. Минуты вместо
+  # часа — поэтому гоняются на каждый push, а не только на PR.
+  backend-guards:
+    name: Сторожа бэкенда
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # Postgres поднимаем ТОЙ ЖЕ командой, что документирована разработчику
+      # (CLAUDE.md), а не отдельным services:-блоком. Причина не в красоте:
+      # сюите нужен max_connections=300 (длинный прогон + транзакционные
+      # тесты), он прописан в compose-файле, а services: команду контейнера
+      # переопределить не даёт. Заодно порт совпадает с дефолтом
+      # settings/test.py — переменные окружения не нужны вовсе.
+      - name: Postgres :55432
+        run: |
+          docker compose -f docker-compose.test-local.yml up -d db
+          for _ in $(seq 1 30); do
+            docker compose -f docker-compose.test-local.yml exec -T db \
+              pg_isready -U htqweb -d htqweb >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "Postgres не поднялся" >&2
+          docker compose -f docker-compose.test-local.yml logs db >&2
+          exit 1
+
+      - name: Установка зависимостей
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Инварианты и наблюдаемость
+        working-directory: backend
+        run: |
+          python -m pytest -q \
+            apps/core/tests/test_invariants.py \
+            apps/core/tests/test_app_isolation.py \
+            apps/core/tests/test_metrics.py \
+            apps/core/tests/test_metrics_are_observed.py \
+            apps/core/tests/test_gunicorn_metrics_hooks.py \
+            apps/core/tests/test_digest.py

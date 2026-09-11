@@ -37,12 +37,15 @@ scrape_configs:
 
   # ─── Celery ────────────────────────────────────────────────────
   # Через уже стоящий Flower: с версии 1.0 он сам отдаёт /metrics, поэтому
-  # отдельный celery-exporter не нужен. Требует `-E` у воркера (см. его
-  # команду в docker-compose.yml) — без событий Flower видит только самого
+  # отдельный celery-exporter не нужен. Требует событий задач — их включает
+  # CELERY_WORKER_SEND_TASK_EVENTS в htqweb/settings/base.py (настройкой, а не
+  # флагом `-E` у воркера: флаг пришлось бы повторять в трёх compose-файлах, и
+  # забытая копия ломается молча). Без событий Flower видит только самого
   # воркера, но не то, что он выполняет.
   #
   # Длина очереди приходит НЕ отсюда, а от redis-exporter'а
-  # (REDIS_EXPORTER_CHECK_KEYS=9=celery → redis_key_size): Flower её не знает.
+  # (REDIS_EXPORTER_CHECK_KEYS → redis_key_size): Flower её не знает. Номер БД
+  # там 2, а не 9 — CELERY_BROKER_URL в compose перекрывает дефолт из settings.
   - job_name: "celery"
     static_configs:
       - targets: ["flower:5555"]
@@ -68,18 +71,44 @@ scrape_configs:
         labels: { component: "host" }
 
   - job_name: "cadvisor"
+    # 30 с, а не глобальные 15: housekeeping_interval у самого cAdvisor тоже
+    # 30 с (см. его команду в compose), так что вдвое частый скрейп отдавал бы
+    # те же цифры и вдвое увеличивал хранение на самом многосерийном таргете.
+    scrape_interval: 30s
+    # На холодном старте и при десятке контейнеров cAdvisor отвечает дольше
+    # дефолтных 10 с — и таргет разом уходит в DOWN на ровном месте.
+    scrape_timeout: 20s
     static_configs:
       - targets: ["cadvisor:8080"]
         labels: { component: "containers" }
 
   # ─── Шлюз ──────────────────────────────────────────────────────
-  # Только в профиле production: nginx и его экспортер вне прода не
-  # поднимаются (в dev фронт отдаёт Vite), и вне его таргет будет DOWN —
-  # это ожидаемо.
+  # dns_sd, а не static_configs, и это не украшательство. nginx-exporter живёт
+  # в профиле production; в тестовых стеках его контейнера нет вовсе, и
+  # статический таргет давал бы там вечный up==0 — то есть постоянно горящий
+  # critical htqweb-target-down. Алерт, который горит всегда, не значит ничего.
+  #
+  # Встроенный DNS Docker не резолвит сервис без контейнера: у джоба ноль
+  # таргетов, серии up нет, алертить не на что. Поднялся контейнер — таргет
+  # появился сам. Подставить стенд-зависимый конфиг нечем: он вшит в образ, а
+  # --enable-feature=expand-external-labels разворачивает ТОЛЬКО external_labels.
+  #
+  # Цена, принятая осознанно: вне прода Prometheus раз в 30 с пишет в свой лог
+  # ошибку резолва (prometheus_sd_dns_lookup_failures_total). Шум в логе
+  # контейнера дешевле вечного critical.
   - job_name: "nginx"
-    static_configs:
-      - targets: ["nginx-exporter:9113"]
-        labels: { component: "gateway" }
+    dns_sd_configs:
+      - names: ["nginx-exporter"]
+        type: A
+        port: 9113
+        refresh_interval: 30s
+    relabel_configs:
+      # instance из DNS — это IP:порт, он меняется при каждом пересоздании
+      # контейнера и рвал бы непрерывность графиков и группировку алертов.
+      - target_label: instance
+        replacement: "nginx-exporter:9113"
+      - target_label: component
+        replacement: "gateway"
 
   # ─── Конференция ───────────────────────────────────────────────
   # Экспорт живёт в самом SFU (sfu/src/metrics.ts): штатного /metrics у
@@ -94,6 +123,8 @@ scrape_configs:
   # otherwise the endpoint answers 403.
   - job_name: "minio"
     metrics_path: /minio/v2/metrics/cluster
+    # Самый медленный эндпоинт в стеке: /cluster обходит бакеты.
+    scrape_timeout: 10s
     static_configs:
       - targets: ["minio:9000"]
         labels: { component: "minio" }
@@ -110,3 +141,15 @@ scrape_configs:
     static_configs:
       - targets: ["grafana:3000"]
         labels: { component: "grafana" }
+
+  # ─── Чего здесь нет намеренно ──────────────────────────────────
+  # У backend-worker, backend-beat и backend-media-worker НЕТ и не должно быть
+  # /metrics: это Celery-процессы, HTTP они не обслуживают, и добавить им
+  # эндпоинт значило бы вкрутить в них веб-сервер. Их наблюдаемость по
+  # построению косвенная, и её достаточно:
+  #   • Flower — живы ли воркеры и что они выполняют (job "celery" выше);
+  #   • redis_key_size по их очередям — берут ли вообще (job "redis");
+  #   • Loki — их логи, включая строки FALLBACK (правило
+  #     htqweb-fallback-worker-logs: подмены из задач в метрику не попадают
+  #     именно потому, что /metrics у этих процессов нет);
+  #   • htqweb_*-гейджи — результат их работы, виден через backend-web.

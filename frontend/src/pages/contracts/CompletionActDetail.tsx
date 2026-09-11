@@ -15,17 +15,16 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { usePermissions } from '@/hooks/usePermissions';
 import { useHRLevel } from '@/hooks/useHRLevel';
-import { hasAnyRole } from '@/lib/auth/roles';
 
 const PERMISSION = 'contracts.contract_payment.record_payment';
 
 export default function CompletionActDetail() {
   const { id } = useParams<{ id: string }>(); const actId = Number(id); const queryClient = useQueryClient();
   const [postingNumber, setPostingNumber] = useState(''); const [file, setFile] = useState<File | null>(null); const fileInput = useRef<HTMLInputElement>(null);
-  const { activeProfile } = useActiveProfile(); const { hasPerm } = useHRLevel();
-  const canRecord = hasAnyRole(activeProfile?.roles ?? [], ['admin', 'superuser', 'staff']) || hasPerm(PERMISSION);
+  const permissions = usePermissions(); const { hasPerm } = useHRLevel();
+  const canRecord = permissions.atLeast('contracts', 'admin') || hasPerm(PERMISSION);
   const { data: act, isLoading, isError } = useQuery({ queryKey: ['contracts', 'completion-act', actId], queryFn: () => contractsApi.getCompletionAct(actId).then(r => r.data), enabled: Number.isFinite(actId) });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['contracts'] });
   const record = useMutation({ mutationFn: () => contractsApi.recordCompletionAct(actId, postingNumber.trim(), file!).then(r => r.data), onSuccess: () => { refresh(); toast.success('Платёж проведён'); }, onError: e => reportApiError(e, 'Не удалось оформить платёж') });

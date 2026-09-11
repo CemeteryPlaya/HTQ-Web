@@ -72,7 +72,8 @@ _AUTHENTICATORS = {"jwt": _authenticate_jwt}
 
 
 def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
-            status: int = 200, admin: bool = False):
+            status: int = 200, admin: bool = False,
+            module: str | None = None, level: str = "read"):
     if admin and auth is None:
         # admin=True checks request.token, which only an authenticator
         # populates — auth=None always sets it to None (see below), so the
@@ -91,12 +92,35 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                 if payload is None:
                     return json_error("Not authenticated", 401)
                 request.token = payload
+                # Поддомен подменяется тривиально, подпись токена — нет.
+                # Токен, выпущенный для одной компании, не должен работать
+                # в другой, даже если у пользователя есть членство в обеих:
+                # переключение обязано пройти через выдачу нового токена.
+                current = getattr(request, "company", None)
+                if current is not None and payload.company != current["slug"]:
+                    return json_error("Forbidden", 403)
                 # Single platform admin-gate seam (R1): every admin route
                 # goes through this one predicate — htqweb.authn.rbac.
                 # require_admin — instead of each app keeping its own
                 # private _require_admin copy.
                 if admin and not require_admin(request.token):
                     return json_error("Forbidden", 403)
+                # Прикладной гейт «модуль × уровень» (стадия 2 «Доступ и роли»).
+                # Стоит ПОСЛЕ сверки компании: уровень считается в её контексте,
+                # и проверять права по токену чужой компании бессмысленно.
+                #
+                # Импорт ленивый, внутри функции, и это не стилистика: вьюхи
+                # самой apps.access декорированы этим же api_view, поэтому
+                # импорт на уровне модуля даёт циклический импорт на старте.
+                if module is not None:
+                    from apps.access import interface as access
+                    from apps.access.models import LEVEL_ORDER
+                    from htqweb.tenancy.context import current_company_or_none
+
+                    have = access.permission_level(
+                        request.token, module, current_company_or_none())
+                    if LEVEL_ORDER[have] < LEVEL_ORDER[level]:
+                        return json_error("Forbidden", 403)
             else:
                 request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
             if body is not None:
