@@ -1348,6 +1348,11 @@ class EnumsView(ContractsView):
             "counterparty_status": pairs(CounterpartyStatus.choices),
             "invoice_status": pairs(InvoiceStatus.choices),
             "payment_type": pairs(PaymentType.choices),
+            # «Вид» и «Тип» из реестра заказчика. Тип нужен форме не как
+            # украшение: у «открытого» договора сумма не заполняется, и
+            # выбор типа решает, требовать ли её.
+            "agreement_kind": pairs(AgreementKind.choices),
+            "agreement_type": pairs(AgreementType.choices),
             "direction": pairs(AgreementDirection.choices),
             "kind": pairs(AgreementKind.choices),
             "contract_type": pairs(AgreementType.choices),

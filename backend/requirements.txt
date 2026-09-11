@@ -62,3 +62,9 @@ requests==2.34.2
 # от его API напрямую, а не через django-prometheus.
 django-prometheus==2.5.0
 prometheus-client==0.25.0
+
+# ── contracts: разбор книги финансистов (manage.py import_cashflow) ──────
+# Единственное место в репозитории, читающее .xlsx. read-only режим
+# openpyxl'а держит в памяти строку, а не лист целиком — книга заказчика
+# растёт, а команда всё равно идёт по ней одним проходом.
+openpyxl==3.1.5
