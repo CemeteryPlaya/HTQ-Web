@@ -22,6 +22,23 @@ export function formatMoney(value: string, currency: string): string {
   return `${formatAmount(value)} ${currency}`;
 }
 
+/**
+ * Остаток к оплате. `null` приходит у открытого договора — лимита у него нет,
+ * и показывать «0» или минус значило бы сказать «платить нечего».
+ */
+export function formatRemaining(value: string | null, currency: string): string {
+  return value === null ? 'Без лимита' : formatMoney(value, currency);
+}
+
+/**
+ * Превышает ли сумма остаток договора. Открытый договор (`null`) не
+ * ограничивает ничем.
+ */
+export function exceedsRemaining(amount: string, remaining: string | null): boolean {
+  if (remaining === null) return false;
+  return Number(amount.replace(',', '.')) > Number(remaining);
+}
+
 /** ISO-дата (без времени) → «12.03.2026». Прочерк, если даты нет. */
 export function formatDate(value: string | null): string {
   if (!value) return '—';

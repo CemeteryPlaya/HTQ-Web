@@ -50,34 +50,45 @@ class Command(BaseCommand):
         except FileNotFoundError as exc:
             raise CommandError(f"файл не найден: {options['path']}") from exc
 
-        self._print(report)
+        print_report(self, report, rows_label="Строк реестра прочитано")
 
-    def _print(self, report: cashflow_import.ImportReport) -> None:
-        write = self.stdout.write
 
+def print_report(command: BaseCommand, report: cashflow_import.ImportReport, *,
+                 rows_label: str) -> None:
+    """Отчёт импорта в stdout команды. Общий для обоих импортов CashFlow —
+    ``import_cashflow_operations`` печатает тем же видом."""
+    write = command.stdout.write
+    style = command.style
+
+    write("")
+    write(f"{rows_label}: {report.rows_read}")
+    write("")
+    write(f"{'Сущность':<18}{'создано':>10}{'обновлено':>12}")
+    write("-" * 40)
+    for entity in sorted(set(report.created) | set(report.updated)):
+        write(f"{entity:<18}{report.created.get(entity, 0):>10}"
+              f"{report.updated.get(entity, 0):>12}")
+
+    if report.notes:
         write("")
-        write(f"Строк реестра прочитано: {report.rows_read}")
+        write("К сведению:")
+        for note in report.notes:
+            write(f"  • {note}")
+
+    if report.warnings:
         write("")
-        write(f"{'Сущность':<18}{'создано':>10}{'обновлено':>12}")
-        write("-" * 40)
-        for entity in sorted(set(report.created) | set(report.updated)):
-            write(f"{entity:<18}{report.created.get(entity, 0):>10}"
-                  f"{report.updated.get(entity, 0):>12}")
+        write(style.WARNING(f"Требуют внимания ({len(report.warnings)}):"))
+        for warning in report.warnings:
+            write(f"  • {warning}")
 
-        if report.warnings:
-            write("")
-            write(self.style.WARNING(f"Требуют внимания ({len(report.warnings)}):"))
-            for warning in report.warnings:
-                write(f"  • {warning}")
-
-        if report.overruns:
-            write("")
-            write(self.style.WARNING(f"Перерасход бюджета ({len(report.overruns)}):"))
-            for overrun in report.overruns:
-                write(f"  • {overrun}")
-
+    if report.overruns:
         write("")
-        if report.dry_run:
-            write(self.style.NOTICE("--dry-run: транзакция откачена, база не изменена"))
-        else:
-            write(self.style.SUCCESS("Загрузка завершена"))
+        write(style.WARNING(f"Перерасход бюджета ({len(report.overruns)}):"))
+        for overrun in report.overruns:
+            write(f"  • {overrun}")
+
+    write("")
+    if report.dry_run:
+        write(style.NOTICE("--dry-run: транзакция откачена, база не изменена"))
+    else:
+        write(style.SUCCESS("Загрузка завершена"))

@@ -260,8 +260,6 @@ def serialize_agreement(agreement: Agreement) -> dict:
         # не говорит, сколько платить вперёд, а нулевая сумма без «Тип:
         # открытый» читается как ошибка ввода.
         "advance_share": agreement.advance_share,
-        "kind": agreement.kind,
-        "contract_type": agreement.contract_type,
         "direction": agreement.direction,
         "kind": agreement.kind,
         "contract_type": agreement.contract_type,
@@ -285,7 +283,11 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "advance_payment_id": advance_payment_id,
         "advance_paid_amount": advance_paid_amount,
         "contract_paid_amount": contract_paid_amount,
-        "remaining_amount": agreement.amount - advance_paid_amount - contract_paid_amount,
+        # Остаток к оплате есть только у договора с суммой. У открытого её
+        # нет, и «0 − оплачено» дало бы отрицательный остаток, который формы
+        # оплаты читают как «платить нечего». ``None`` — «без лимита».
+        "remaining_amount": (agreement.amount - advance_paid_amount - contract_paid_amount
+                             if agreement.has_fixed_amount else None),
         "currency": agreement.currency,
         "file_id": agreement.file_id,
         "signed_date": agreement.signed_date,
@@ -347,7 +349,8 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
     # Черновик лимит не проверяет — он его и не занимает.
     # Договоры направления «Поступление» (доходные) также не уменьшают расходный бюджет.
     if direction == AgreementDirection.EXPENSE and status in budget_calc.COMMITTING_STATUSES:
-        budget_calc.check_capacity(line, amount)
+        budget_calc.check_capacity(
+            line, budget_calc.agreement_commitment(contract_type, amount))
 
     with conflict_as(f"Договор с номером {number} уже зарегистрирован"):
         # Объектами, а не id: обе записи уже загружены проверками выше
@@ -431,20 +434,44 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
                       check_budget_status=budget_changed,
                       check_counterparty_status=counterparty_changed)
 
+    # Тип, который у договора БУДЕТ после этой правки: от него зависят обе
+    # проверки ниже — и что занимает строку бюджета, и есть ли сумма, которую
+    # сравнивать с оплаченным.
+    contract_type = fields.get("contract_type") or agreement.contract_type
     direction = fields.get("direction") or agreement.direction
+
+    # Бюджет занимает только РАСХОДНЫЙ договор (поступление денег лимит не
+    # тратит), и только на ту часть суммы, которую считает
+    # ``agreement_commitment`` — у рамочного это ноль.
     if direction == AgreementDirection.EXPENSE and agreement.status in budget_calc.COMMITTING_STATUSES:
         # exclude_agreement_id — чтобы собственная СТАРАЯ сумма договора не
         # считалась чужой занятостью: без этого увеличение суммы на 1 ₸
         # сравнивалось бы с остатком, из которого уже вычтена вся старая
         # сумма, и почти всегда падало бы.
-        budget_calc.check_capacity(line, amount, exclude_agreement_id=agreement.pk)
+        budget_calc.check_capacity(
+            line, budget_calc.agreement_commitment(contract_type, amount),
+            exclude_agreement_id=agreement.pk)
 
-    # Не даём уменьшить исходную сумму договора ниже уже закрытых оплат/предоплат:
-    paid = advance_payment_svc.total_paid_amount_for_agreement(agreement.pk)
-    if amount < paid:
-        raise AgreementRuleViolation(
-            f"Сумма договора ({amount}) не может быть меньше уже оплаченной суммы ({paid})"
-        )
+    # Не даём уменьшить сумму договора ниже того, что по нему уже проведено
+    # (предоплата, оплаты, акты). Сам остаток не хранится: он считается из
+    # суммы договора и проведённых платежей.
+    #
+    # Сравнивается НОВАЯ сумма с оплаченным — а не с «остатком» старой, как
+    # делает ``check_agreement_capacity``: тот отвечает на другой вопрос
+    # («можно ли заплатить ещё столько-то») и на правке суммы запрещал бы
+    # договору расти даже в пределах бюджета.
+    #
+    # Для открытого договора проверки нет: суммы у него нет, а оплаты есть,
+    # и без оговорки ЛЮБАЯ правка (хоть опечатки в названии) падала бы на
+    # «сумма меньше оплаченного». Смотрим на тип, который у договора БУДЕТ
+    # после этой правки: перевод открытого договора в стандартный как раз
+    # и должен проверить, что новая сумма покрывает уже оплаченное.
+    if contract_type != AgreementType.FRAMEWORK:
+        paid = advance_payment_svc.total_paid_amount_for_agreement(agreement.pk)
+        if amount < paid:
+            raise AgreementRuleViolation(
+                f"Сумма договора {amount} меньше уже проведённых по нему платежей: {paid}"
+            )
 
     changed = [key for key, value in fields.items() if value is not None]
     for key in changed:
@@ -530,8 +557,9 @@ def change_status(agreement_id: int, new_status: str, *, actor_id: int | None = 
         # статуса. Обратный переход (в черновик, в расторгнут) бюджет
         # освобождает и проверять нечего.
         line = _lock_line(agreement.budget_line_id)
-        budget_calc.check_capacity(line, agreement.amount,
-                                   exclude_agreement_id=agreement.pk)
+        budget_calc.check_capacity(
+            line, budget_calc.agreement_commitment(agreement.contract_type, agreement.amount),
+            exclude_agreement_id=agreement.pk)
 
     agreement.status = new_status
     agreement.save(update_fields=["status", "updated_at"])
@@ -565,8 +593,10 @@ def submit_for_approval(agreement_id: int, *, actor_id: int | None = None) -> di
     line = _lock_line(agreement.budget_line_id)
     _validate_context(line, agreement.counterparty, agreement.currency)
     if agreement.direction == AgreementDirection.EXPENSE:
-        budget_calc.check_capacity(line, agreement.amount,
-                                   exclude_agreement_id=agreement.pk)
+        budget_calc.check_capacity(
+            line,
+            budget_calc.agreement_commitment(agreement.contract_type, agreement.amount),
+            exclude_agreement_id=agreement.pk)
 
     # enrich=True: карточка уходит прямо в HTTP-ответ, и фронтенду после
     # отправки нужно показать «кто согласует», а не голые user_id.
