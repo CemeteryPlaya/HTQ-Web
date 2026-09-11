@@ -131,11 +131,17 @@ class CounterpartyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 @admin.register(Agreement)
 class AgreementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "number", "name", "counterparty", "budget_line",
-                    "amount", "currency", "payment_type", "status",
+                    "amount", "currency", "payment_type", "advance_share",
+                    "kind", "contract_type", "status",
                     "approval_state", "signed_date")
-    list_filter = ("status", "approval_state", "payment_type", "currency",
+    list_filter = ("status", "approval_state", "payment_type", "kind",
+                   "contract_type", "currency",
                    "budget_line__budget__period_year")
-    search_fields = ("number", "name", "counterparty__name", "counterparty__bin_iin")
+    # ``external_id`` в поиске, но не в колонках: искать по идентификатору
+    # источника нужно (пришла жалоба на договор из выгрузки), а показывать
+    # его в каждой строке списка — нет.
+    search_fields = ("number", "name", "counterparty__name", "counterparty__bin_iin",
+                     "external_id")
     readonly_fields = ("created_at", "updated_at", "file_id", "approval_state")
     raw_id_fields = ("budget_line", "counterparty")
     list_select_related = ("budget_line", "budget_line__program", "counterparty")
