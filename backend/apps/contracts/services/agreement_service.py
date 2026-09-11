@@ -255,6 +255,13 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "counterparty_name": agreement.counterparty.name,
         "counterparty_bin_iin": agreement.counterparty.bin_iin,
         "payment_type": agreement.payment_type,
+        # Доля аванса, вид и тип пришли из реестра заказчика (импорт
+        # CashFlow.xlsx). Отдаются рядом с типом оплаты: «поэтапно» без доли
+        # не говорит, сколько платить вперёд, а нулевая сумма без «Тип:
+        # открытый» читается как ошибка ввода.
+        "advance_share": agreement.advance_share,
+        "kind": agreement.kind,
+        "contract_type": agreement.contract_type,
         "direction": agreement.direction,
         "kind": agreement.kind,
         "contract_type": agreement.contract_type,
@@ -293,6 +300,9 @@ def serialize_agreement(agreement: Agreement) -> dict:
 @transaction.atomic
 def create_agreement(*, number: str, name: str, budget_line_id: int,
                      counterparty_id: int,
+                     amount, payment_type: str, currency: str = "KZT",
+                     advance_share=None, kind: str | None = None,
+                     contract_type: str | None = None,
                      amount, payment_type: str = "postpayment",
                      direction: str | None = None,
                      kind: str | None = None,
@@ -342,6 +352,21 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
         budget_calc.check_capacity(line, amount)
 
     with conflict_as(f"Договор с номером {number} уже зарегистрирован"):
+        return Agreement.objects.create(
+            # Объектами, а не id: обе записи уже загружены проверками выше
+            # (`_lock_line` тянет и бюджет с администратором и страной), и
+            # ответ соберётся из закэшированных связей, а не новыми запросами.
+            number=number, name=name, budget_line=line,
+            counterparty=counterparty, amount=amount,
+            payment_type=payment_type, currency=currency,
+            # Реестровые поля необязательны: договор, заведённый руками,
+            # может о них не знать — тогда действуют дефолты модели
+            # (постоплатный РиУ со стандартным типом).
+            **({"advance_share": advance_share} if advance_share is not None else {}),
+            **({"kind": kind} if kind else {}),
+            **({"contract_type": contract_type} if contract_type else {}),
+            signed_date=signed_date, status=status, created_by=created_by,
+        )
         kwargs = {
             "number": number,
             "name": name,

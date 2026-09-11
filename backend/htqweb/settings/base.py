@@ -2,6 +2,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -14,6 +15,35 @@ SECRET_KEY = env("DJANGO_SECRET_KEY", env("JWT_SECRET", "change-me"))
 DEBUG = False
 ALLOWED_HOSTS = ["*"]           # локальный запуск; деплой — вне скоупа
 APPEND_SLASH = False            # пути повторяют API.md буквально, без редиректов
+
+# ── CSRF за прокси (django-admin) ──────────────────────────────────────────
+# Django ≥4 на POST сверяет заголовок Origin с «request.scheme://Host». За
+# nginx/внешним TLS-терминатором бэкенд видит http://, а браузер шлёт
+# Origin: https://<домен> — и вход в /django-admin/ падал 403 «Ошибка проверки
+# CSRF». /api/ это не касается: он снят с CSRF (ApiCsrfExemptMiddleware).
+#
+# Лечится двумя строками, каждая закрывает свою топологию:
+#   * SECURE_PROXY_SSL_HEADER — TLS терминирует НАШ nginx: он на каждой
+#     location перезаписывает X-Forwarded-Proto своим $scheme, и Django узнаёт
+#     настоящую схему. Клиент, идущий мимо шлюза прямо на :8000, может прислать
+#     заголовок сам, но так он лишь ужесточает CSRF-проверку своего же запроса
+#     (без Origin становится обязателен Referer) — ослабить этим нечего.
+#   * CSRF_TRUSTED_ORIGINS — TLS снимается ДО nginx (облачный прокси,
+#     балансировщик), и до Django доходит честное http. Список = origin из
+#     PUBLIC_BASE_URL + CSRF_TRUSTED_ORIGINS через запятую (второй домен,
+#     http://<IP>). Схема обязательна: без неё Django не стартует (4_0.E001).
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+
+def _trusted_origins() -> list[str]:
+    origins = [o.strip().rstrip("/") for o in env("CSRF_TRUSTED_ORIGINS").split(",")]
+    public = urlsplit(env("PUBLIC_BASE_URL").strip())
+    if public.scheme and public.netloc:
+        origins.append(f"{public.scheme}://{public.netloc}")
+    return list(dict.fromkeys(o for o in origins if o))
+
+
+CSRF_TRUSTED_ORIGINS = _trusted_origins()
 
 # ── Среда и политика fallback'ов ───────────────────────────────────────────
 # Одна ось на три рантайма: тот же HTQ_ENV читают фронт (VITE_HTQ_ENV) и SFU.
