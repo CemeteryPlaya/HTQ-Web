@@ -25,6 +25,7 @@ import {
   type ReferenceValue,
 } from '@/components/contracts/ReferenceCombobox';
 import { contractsApi } from '@/api/contracts';
+import { reportApiError } from '@/lib/apiError';
 import type { CounterpartyStatus } from '@/types/contracts';
 import { useTranslation } from 'react-i18next';
 
@@ -126,23 +127,8 @@ const CounterpartyCreate = () => {
       toast.success(t('contracts.counterpartyForm.added', { name: row.name }));
       navigate('/contracts/counterparties');
     },
-    onError: (error: unknown) => {
-      const axiosError = error as import('axios').AxiosError<{
-        detail?: unknown;
-      }>;
-      const httpStatus = axiosError?.response?.status;
-      const detail = axiosError?.response?.data?.detail;
-      if (httpStatus === 409 && typeof detail === 'string') {
-        // Практически всегда — дубль БИН/ИИН. Текст с бэкенда осмысленный.
-        toast.error(detail);
-        return;
-      }
-      if (httpStatus === 422 && Array.isArray(detail)) {
-        toast.error(detail.map((item) => (item as { msg?: string }).msg ?? '').join('; '));
-        return;
-      }
-      toast.error(t('contracts.counterpartyForm.addError'));
-    },
+    // 409 — практически всегда дубль БИН/ИИН, текст с бэкенда осмысленный.
+    onError: (err) => reportApiError(err, t('contracts.counterpartyForm.addError')),
   });
 
   const handleSubmit = (event: React.FormEvent) => {

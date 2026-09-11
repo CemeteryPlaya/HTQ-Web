@@ -13,6 +13,8 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+
+import { errorDetail } from '@/lib/apiError';
 import { AlertTriangle, LogIn, Video } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -84,7 +86,12 @@ const ConferenceJoin: React.FC = () => {
       });
       navigate(`/room/${encodeURIComponent(data.room_id)}`, { replace: true });
     },
-    onError: (err: Error) => setError(err.message),
+    // Здесь `errorDetail` без фильтра по статусу — намеренно. Тексты этой
+    // ручки написаны для гостя (`InviteInvalid` в conference_invite_service:
+    // «формулировки человеческие, а не отладочные»), и приезжают они с 404.
+    // Раньше показывалось `err.message`, то есть «Request failed with status
+    // code 404» — человеку, который просто открыл присланную ссылку.
+    onError: (err) => setError(errorDetail(err) ?? t('conference.join.failed')),
   });
 
   // Показываем форму, только когда и данные приглашения, и (если нужно)

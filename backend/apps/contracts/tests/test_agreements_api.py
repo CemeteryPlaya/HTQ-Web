@@ -393,3 +393,96 @@ def test_both_slash_spellings_resolve():
                  f"{BASE}/budgets", f"{BASE}/budgets/",
                  f"{BASE}/counterparties", f"{BASE}/counterparties/"):
         assert client.get(path, **auth(token())).status_code == 200, path
+
+
+@pytest.mark.django_db
+def test_agreement_extended_fields_full_roundtrip():
+    line = make_line()
+    counterparty = make_counterparty(country=line.budget.administrator.country)
+    client = Client()
+
+    body = _agreement_body(
+        line,
+        counterparty,
+        number="HTQ 04/2026",
+        name="Монтаж ограждения",
+        direction="income",
+        kind="works_services",
+        contract_type="standard",
+        sed_number="DOC-00026-20260623",
+        subject="Монтаж ограждения, дороги, выравнивание, земляные работы",
+        manager_name="Куаныш Садиев",
+        has_vat=True,
+        vat_rate="0.10",
+        amount_without_vat="999000.00",
+        vat_amount="1000.00",
+        amount="1000000.00",
+        has_advance=False,
+        retention_rate="5.00",
+        retention_amount="50000.00",
+        start_date="2026-05-28",
+        end_date="2026-12-31",
+        term_comment="уточнить",
+        status=AgreementStatus.SIGNED.value,
+    )
+    resp = post_json(client, f"{BASE}/agreements", body, **auth(admin_token()))
+    assert resp.status_code == 201, resp.content
+    data = resp.json()
+    assert data["direction"] == "income"
+    assert data["kind"] == "works_services"
+    assert data["contract_type"] == "standard"
+    assert data["sed_number"] == "DOC-00026-20260623"
+    assert data["subject"] == "Монтаж ограждения, дороги, выравнивание, земляные работы"
+    assert data["manager_name"] == "Куаныш Садиев"
+    assert data["has_vat"] is True
+    assert Decimal(data["vat_rate"]) == Decimal("0.10")
+    assert Decimal(data["amount_without_vat"]) == Decimal("999000.00")
+    assert Decimal(data["vat_amount"]) == Decimal("1000.00")
+    assert Decimal(data["retention_rate"]) == Decimal("5.00")
+    assert Decimal(data["retention_amount"]) == Decimal("50000.00")
+    assert data["start_date"] == "2026-05-28"
+    assert data["end_date"] == "2026-12-31"
+    assert data["term_comment"] == "уточнить"
+
+    # Income agreement does not reduce budget line remaining:
+    budget_resp = client.get(f"{BASE}/budgets/{line.pk}", **auth(token()))
+    assert budget_resp.status_code == 200
+    assert Decimal(budget_resp.json()["committed"]) == Decimal("0.00")
+
+
+@pytest.mark.django_db
+def test_agreement_dates_out_of_order_are_422_not_saved():
+    """Срок исполнения раньше даты начала — 422 с текстом, а не тихое 201.
+
+    У договора нет CheckConstraint на пару дат, поэтому без правила из
+    ``htqweb.date_rules`` перепутанные даты просто сохранялись — то есть
+    «срок исполнения» в карточке оказывался раньше начала работ.
+    """
+    line = make_line()
+    counterparty = make_counterparty(country=line.budget.administrator.country)
+    resp = post_json(Client(), f"{BASE}/agreements", _agreement_body(
+        line, counterparty, start_date="2026-12-31", end_date="2026-01-01",
+    ), **auth(admin_token()))
+    assert resp.status_code == 422, resp.content
+    assert not Agreement.objects.exists()
+
+
+@pytest.mark.django_db
+def test_partial_patch_of_one_date_still_checks_the_stored_one():
+    """PATCH с ОДНОЙ датой схема проверить не может — держит сервис.
+
+    Второй даты в запросе нет, она лежит в строке; правило проверяемо только
+    по слитому состоянию (``date_rules.assert_instance_ordered``).
+    """
+    line = make_line()
+    counterparty = make_counterparty(country=line.budget.administrator.country)
+    client = Client()
+    created = post_json(client, f"{BASE}/agreements", _agreement_body(
+        line, counterparty, start_date="2026-06-01", end_date="2026-12-31",
+    ), **auth(admin_token()))
+    agreement_id = created.json()["id"]
+
+    resp = patch_json(client, f"{BASE}/agreements/{agreement_id}",
+                      {"end_date": "2026-01-01"}, **auth(admin_token()))
+    assert resp.status_code == 422, resp.content
+    assert Agreement.objects.get(pk=agreement_id).end_date.isoformat() == "2026-12-31"

@@ -7,6 +7,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
 import { Users, User, Truck, X } from 'lucide-react';
 import {
   fetchAssignments, createAssignment, deleteAssignment, fetchEquipment,
@@ -56,12 +57,12 @@ export const TaskAssignments: React.FC<Props> = ({ taskId }) => {
   const addMut = useMutation({
     mutationFn: createAssignment,
     onSuccess: invalidate,
-    onError: () => toast.error(t('tasks.pages.resources.assignError', 'Не удалось назначить ресурс')),
+    onError: (err) => reportApiError(err, t('tasks.pages.resources.assignError', 'Не удалось назначить ресурс')),
   });
   const delMut = useMutation({
     mutationFn: deleteAssignment,
     onSuccess: invalidate,
-    onError: () => toast.error(t('tasks.pages.resources.unassignError', 'Не удалось снять назначение')),
+    onError: (err) => reportApiError(err, t('tasks.pages.resources.unassignError', 'Не удалось снять назначение')),
   });
 
   return (

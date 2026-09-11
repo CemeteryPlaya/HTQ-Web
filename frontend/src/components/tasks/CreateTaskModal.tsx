@@ -14,12 +14,16 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { DateInput } from '@/components/ui/date-input';
+import { DATES_OUT_OF_ORDER, INVALID_DATE, datesOutOfOrder } from '@/lib/validation';
 
 import {
     createTask, fetchProjects, fetchSites, fetchTaskTypes, createTaskType,
     fetchContractors, fetchContractorWorkers, fetchRoadmaps, fetchSiteBlocks,
 } from '@/api/tasks';
 import { fetchDepartments, fetchEmployees } from '@/api/hr';
+import { reportApiError } from '@/lib/apiError';
 import { TASK_PRIORITY, TASK_PRIORITY_ORDER } from '@/lib/tasks/priority';
 import type { Task, TaskPriority, TaskStatus, AssigneeRole, TaskTypeRef } from '@/types/tasks';
 
@@ -197,10 +201,7 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
             setNewType({ open: false, name: '', color: '#6b7280' });
             toast.success(t('tasks.types.created', 'Тип создан'));
         },
-        onError: (e: any) => {
-            const msg = e?.response?.data?.detail || t('tasks.types.createError', 'Не удалось создать тип');
-            toast.error(String(msg));
-        },
+        onError: (err) => reportApiError(err, t('tasks.types.createError', 'Не удалось создать тип')),
     });
 
     const createMutation = useMutation({
@@ -223,7 +224,7 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
             setDepartmentIds([]);
             toast.success(t('tasks.pages.list.createDialog.success', 'Задача создана'));
         },
-        onError: () => toast.error(t('tasks.pages.list.createDialog.error', 'Ошибка при создании задачи')),
+        onError: (err) => reportApiError(err, t('tasks.pages.list.createDialog.error', 'Ошибка при создании задачи')),
     });
 
     function toggleAssignee(userId: number) {
@@ -245,9 +246,27 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
         setAssigneeDraft(prev => prev.filter(a => a.user_id !== userId));
     }
 
+    // Дедлайн раньше начала: до этой проверки запрос уходил и упирался в
+    // ck_task_dates, то есть возвращался 500-й.
+    const reversedDates = datesOutOfOrder(form.start_date, form.due_date);
+    // Набрано что-то, из чего дату не собрать («31.02.2026»). Отдельно от
+    // reversedDates: там даты верные, но перепутаны местами, а тут неверна
+    // сама дата, и наружу поле отдаёт пустоту — без этого флага форма
+    // считала бы, что дату просто не заполнили.
+    const [brokenDates, setBrokenDates] = useState({ start: false, due: false });
+    const hasBrokenDate = brokenDates.start || brokenDates.due;
+
     function handleCreate() {
         if (!form.summary.trim()) {
             toast.error(t('tasks.pages.list.createDialog.summaryRequired', 'Заголовок обязателен'));
+            return;
+        }
+        if (hasBrokenDate) {
+            toast.error(INVALID_DATE);
+            return;
+        }
+        if (reversedDates) {
+            toast.error(DATES_OUT_OF_ORDER);
             return;
         }
         const payload: Record<string, any> = {
@@ -476,6 +495,29 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                                     ))}
                                 </SelectContent>
                             </Select>
+                            {/* Подсказка ПОД полем, а не в списке: ссылку внутри
+                                Radix Select не нажать — он перехватывает клик и
+                                закрывается. Да и открывать пустой список, чтобы
+                                узнать, что он пуст, человек не должен. */}
+                            <PrerequisiteNotice
+                                variant="inline"
+                                items={[
+                                    {
+                                        when: sites.length === 0,
+                                        text: t('tasks.pages.sites.registryEmpty', 'Справочник объектов пуст —'),
+                                        to: '/tasks/sites',
+                                        linkText: t('tasks.pages.sites.addFirst', 'заведите объект'),
+                                    },
+                                    {
+                                        when: sites.length > 0 && availableSites.length === 0,
+                                        text: t('tasks.pages.sites.noneForProjectHint',
+                                            'У проекта нет объектов —'),
+                                        to: '/manage/projects',
+                                        linkText: t('tasks.pages.sites.attachToProject',
+                                            'привяжите объекты к проекту'),
+                                    },
+                                ]}
+                            />
                         </div>
 
                         {/* Роудмап — пакет работ внутри проекта. Виден только
@@ -647,6 +689,16 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                                 })}
                             </PopoverContent>
                         </Popover>
+                        <PrerequisiteNotice
+                            variant="inline"
+                            items={[{
+                                when: departments.length === 0,
+                                text: t('tasks.pages.list.createDialog.noDepartments',
+                                    'Справочник отделов пуст — от него зависят исполнители и супервизор,'),
+                                to: '/hr/departments',
+                                linkText: t('tasks.pages.list.createDialog.addDepartment', 'создайте отдел'),
+                            }]}
+                        />
                         {departmentIds.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-2">
                                 {departmentIds.map((id) => {
@@ -724,6 +776,21 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                                     })}
                                 </PopoverContent>
                             </Popover>
+                            {/* «Сначала выберите отдел» остаётся в списке: это не
+                                нехватка справочника, а порядок заполнения, и поле
+                                отделов прямо над этим. А вот пустой отдел — это
+                                уже про карточки сотрудников. */}
+                            <PrerequisiteNotice
+                                variant="inline"
+                                items={[{
+                                    when: !noDeptSelected && !usersLoading && users.length === 0,
+                                    text: t('tasks.pages.list.createDialog.noEmployeesHint',
+                                        'В выбранных отделах нет сотрудников с учётной записью —'),
+                                    to: '/hr/employees',
+                                    linkText: t('tasks.pages.list.createDialog.checkEmployees',
+                                        'проверьте карточки сотрудников'),
+                                }]}
+                            />
                             {assigneeDraft.length > 0 && (
                                 <div className="flex flex-wrap gap-1 mt-2">
                                     {assigneeDraft.map((a) => {
@@ -788,20 +855,36 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <Label>{t('tasks.pages.list.createDialog.startDate', 'Дата начала')}</Label>
-                            <Input
-                                type="date"
+                            <Label htmlFor="task-start-date">
+                                {t('tasks.pages.list.createDialog.startDate', 'Дата начала')}
+                            </Label>
+                            <DateInput
+                                id="task-start-date"
                                 value={form.start_date}
-                                onChange={(e) => setForm({ ...form, start_date: e.target.value })}
+                                invalid={brokenDates.start}
+                                onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, start: bad }))}
+                                onChange={(value) => setForm({ ...form, start_date: value })}
                             />
+                            {brokenDates.start && (
+                                <p className="mt-1 text-sm text-destructive">{INVALID_DATE}</p>
+                            )}
                         </div>
                         <div>
-                            <Label>{t('tasks.pages.list.createDialog.dueDate', 'Дедлайн')}</Label>
-                            <Input
-                                type="date"
+                            <Label htmlFor="task-due-date">
+                                {t('tasks.pages.list.createDialog.dueDate', 'Дедлайн')}
+                            </Label>
+                            <DateInput
+                                id="task-due-date"
                                 value={form.due_date}
-                                onChange={(e) => setForm({ ...form, due_date: e.target.value })}
+                                invalid={brokenDates.due || reversedDates}
+                                onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, due: bad }))}
+                                onChange={(value) => setForm({ ...form, due_date: value })}
                             />
+                            {brokenDates.due ? (
+                                <p className="mt-1 text-sm text-destructive">{INVALID_DATE}</p>
+                            ) : reversedDates && (
+                                <p className="mt-1 text-sm text-destructive">{DATES_OUT_OF_ORDER}</p>
+                            )}
                         </div>
                     </div>
 
@@ -824,7 +907,7 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
                     <Button variant="outline" onClick={() => onOpenChange(false)}>
                         {t('tasks.pages.list.createDialog.cancel', 'Отмена')}
                     </Button>
-                    <Button onClick={handleCreate} disabled={createMutation.isPending}>
+                    <Button onClick={handleCreate} disabled={reversedDates || hasBrokenDate || createMutation.isPending}>
                         {createMutation.isPending
                             ? t('tasks.pages.list.createDialog.submitting', 'Создание...')
                             : t('tasks.pages.list.createDialog.submit', 'Создать')}

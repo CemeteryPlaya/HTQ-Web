@@ -32,6 +32,13 @@ from apps.core.services import require_service
 _BRIEF_FIELDS = ("id", "key", "summary", "status", "assignee_id",
                  "department_id")
 
+# Паспорт проекта для соседа. ``color`` и ``status`` здесь не украшение:
+# договорная карточка рисует проект бейджем, и без них ей пришлось бы либо
+# заводить свою палитру (и разъехаться с доской задач), либо ходить за ней
+# вторым запросом в чужой HTTP-эндпоинт.
+_PROJECT_BRIEF_FIELDS = ("id", "name", "status", "color",
+                         "start_date", "end_date")
+
 # Окно, в котором повторное событие с тем же (получатель, цель, актор, verb)
 # считается дублем и не создаёт вторую строку. Перенесено из
 # services/task/app/workers/notify_sync.py — там оно защищало от повторной
@@ -68,6 +75,61 @@ def get_tasks_brief(task_ids: list[int]) -> list[dict]:
     return [dict(row) for row in
             Task.objects.filter(pk__in=list(task_ids), is_deleted=False)
             .values(*_BRIEF_FIELDS)]
+
+
+def get_project_brief(project_id: int) -> dict | None:
+    """Паспорт проекта, либо ``None``, если id не резолвится.
+
+    Нужен домену договоров: бюджет заводится «на проект», и до появления
+    связи проект жил там отдельной строкой ``Administrator.project_name`` —
+    то есть одно и то же название существовало в двух местах и расходилось
+    при первой же переименовке.
+
+    Отдаёт ``{id, name, status, color, start_date, end_date}`` — ровно то,
+    чем проект ПОДПИСЫВАЮТ. Состав объектов, блоки, задачи и участники
+    остаются приватными для домена: соседу нужна ссылка, а не содержимое.
+    """
+    require_service("tasks")
+    from .models import Project
+
+    row = (Project.objects.filter(pk=project_id)
+           .values(*_PROJECT_BRIEF_FIELDS).first())
+    return dict(row) if row is not None else None
+
+
+def get_projects_brief(project_ids: list[int]) -> list[dict]:
+    """Пакетный вариант ``get_project_brief`` — один запрос на все id.
+
+    Существует ровно ради списков: у договоров есть страница со всеми
+    бюджетами, и поштучный ``get_project_brief`` превратил бы её в N+1.
+    Неизвестные id просто отсутствуют в результате (тот же контракт
+    «unknown -> omitted», что у ``get_tasks_brief``).
+    """
+    require_service("tasks")
+    from .models import Project
+
+    return [dict(row) for row in
+            Project.objects.filter(pk__in=list(project_ids))
+            .values(*_PROJECT_BRIEF_FIELDS)]
+
+
+def find_project_by_name(name: str) -> dict | None:
+    """Проект по ТОЧНОМУ названию, либо ``None``.
+
+    ``Project.name`` уникален, поэтому поиск однозначен. Функция нужна для
+    сшивания уже существующих данных: в договорах проект годами хранился
+    строкой, и связать старые записи можно только по названию. Для нового
+    ввода она не нужна — там выбирают из списка и присылают id.
+
+    Регистр и краевые пробелы не игнорируются намеренно: «похоже совпало» —
+    худший исход для связи, которая потом определяет бюджет проекта.
+    """
+    require_service("tasks")
+    from .models import Project
+
+    row = (Project.objects.filter(name=name)
+           .values(*_PROJECT_BRIEF_FIELDS).first())
+    return dict(row) if row is not None else None
 
 
 def push_notification(*, recipient_id: int, verb: str,

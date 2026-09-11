@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import { updateCardT2, type CardT2, type CardT2Section } from '@/api/hr';
+import { errorStatus, reportApiError } from '@/lib/apiError';
 import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
@@ -73,15 +74,13 @@ export function CardT2SectionDialog({ employeeId, section, values, open, onClose
       onClose();
     },
     onError: (err: unknown) => {
-      const status = (err as { response?: { status?: number } })?.response?.status;
-      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
-      if (status === 403) {
+      // Своя фраза про права точнее общей: она называет РАЗДЕЛ карточки, а не
+      // действие вообще. Всё остальное — общая политика.
+      if (errorStatus(err) === 403) {
         toast.error(t('hr.pages.employees.cardT2.forbidden', 'Недостаточно прав для правки этого раздела'));
         return;
       }
-      toast.error(typeof detail === 'string'
-        ? detail
-        : t('hr.pages.employees.cardT2.error', 'Не удалось сохранить'));
+      reportApiError(err, t('hr.pages.employees.cardT2.error', 'Не удалось сохранить'));
     },
   });
 

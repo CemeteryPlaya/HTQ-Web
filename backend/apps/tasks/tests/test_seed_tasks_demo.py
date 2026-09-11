@@ -712,7 +712,7 @@ def _guard(host: str, *, force: bool = False) -> None:
     Command()._assert_local(force, host=host)
 
 
-@pytest.mark.parametrize("host", ["45.10.110.212", "db.example.com", "10.8.0.4"])
+@pytest.mark.parametrize("host", ["203.0.113.10", "db.example.com", "10.8.0.4"])
 def test_refuses_to_run_against_a_remote_database(host):
     with pytest.raises(CommandError, match="не похож на локальную"):
         _guard(host)
@@ -724,7 +724,7 @@ def test_local_hosts_pass_the_guard(host):
 
 
 def test_force_remote_is_the_only_way_past_the_guard():
-    _guard("45.10.110.212", force=True)  # не бросает
+    _guard("203.0.113.10", force=True)  # не бросает
 
 
 def test_guard_runs_before_anything_is_written(hr_data, monkeypatch):

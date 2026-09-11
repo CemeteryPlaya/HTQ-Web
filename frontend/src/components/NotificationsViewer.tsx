@@ -1,9 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Bell, CheckSquare, MessageSquare, AlertCircle, History, Calendar, Briefcase, UserSquare, Mail } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -22,10 +21,13 @@ import {
     notificationSourceLabel,
     notificationTargetUrl,
 } from '@/api/tasks';
-import { MessengerToast } from '@/components/MessengerToast';
-import { playNotificationSound } from '@/lib/sound/soundService';
+import { requestDesktopPermission } from '@/lib/notifications/desktop';
 import { SoundSettingsModal } from '@/components/sound/SoundSettingsModal';
 import { Volume2 } from 'lucide-react';
+// Именно тип уведомления платформы. Без импорта `Notification` — это
+// одноимённый тип браузерного API из lib.dom, у которого нет ни `target_type`,
+// ни `verb`: подсказки в редакторе врали, а проверка типов молча ругалась.
+import type { Notification } from '@/types/tasks';
 
 /** Icon to show on the left side of each notification, picked from the
  *  source type. Calendar / Task / HR / fallback. */
@@ -54,8 +56,8 @@ export const NotificationsViewer: React.FC = () => {
     const queryClient = useQueryClient();
     const [isOpen, setIsOpen] = useState(false);
 
-    // Auto-refresh notifications every 30 seconds — toasts depend on this
-    // poll to surface freshly-arrived rows shortly after they're created.
+    // Тот же ключ, что у NotificationToasts: react-query держит один кэш на
+    // ключ, поэтому второго опроса сети от этого не возникает.
     const { data: notifications = [] } = useQuery({
         queryKey: ['notifications'],
         queryFn: fetchNotifications,
@@ -85,101 +87,23 @@ export const NotificationsViewer: React.FC = () => {
         }
     };
 
-    // Surface unread notifications as transient toasts in the bottom-right.
-    // The "seen" set is persisted to localStorage so:
-    //   - toasts survive route changes (NotificationsViewer remounts).
-    //   - already-toasted rows don't pop again after a page refresh.
-    //   - any notification we haven't toasted yet — INCLUDING ones that
-    //     existed when the page was first opened — gets a toast on the
-    //     first poll where it's still unread. This is what fixes the case
-    //     of "page already open, but no toast appeared".
-    const SEEN_KEY = 'htq:notif:toasted';
-    const readSeen = (): Set<string> => {
-        try {
-            const raw = localStorage.getItem(SEEN_KEY);
-            if (!raw) return new Set();
-            const parsed = JSON.parse(raw);
-            if (!Array.isArray(parsed)) return new Set();
-            return new Set(parsed.map(String));
-        } catch {
-            return new Set();
-        }
-    };
-    const writeSeen = (set: Set<string>) => {
-        try {
-            // Cap stored ids so localStorage doesn't grow unbounded.
-            const arr = Array.from(set).slice(-500);
-            localStorage.setItem(SEEN_KEY, JSON.stringify(arr));
-        } catch {
-            /* private mode / quota — ignore */
-        }
-    };
-    useEffect(() => {
-        if (notifications.length === 0) return;
-        const seen = readSeen();
-        for (const n of notifications) {
-            const key = String(n.id);
-            if (seen.has(key)) continue;
-            // Persist BEFORE rendering the toast. React StrictMode mounts
-            // this effect twice in development; a second pass would otherwise
-            // re-read the localStorage snapshot from before our in-memory
-            // ``seen.add`` and toast the same notification twice. Writing
-            // first means the second pass already finds the id and skips.
-            seen.add(key);
-            writeSeen(seen);
-
-            // Don't toast already-read entries — they were probably read
-            // on another device, no need to interrupt here. We still record
-            // the id above so they don't re-toast on later refresh.
-            if (n.is_read) continue;
-
-            const source = notificationSourceLabel(n);
-            const body = formatNotificationText(n);
-            const title = n.actor_name ? `${n.actor_name} ${body}` : body;
-            const url = notificationTargetUrl(n);
-            // Play corresponding pleasant sound (debounced internally)
-            playNotificationSound(n);
-
-            // Messenger gets a rich layout (avatar + 2-line clamp + time).
-            // Other types stay on the default sonner text toast — they read
-            // better as a simple title + description.
-            if (n.target_type === 'messenger_room') {
-                toast.custom(
-                    (t) => (
-                        <MessengerToast
-                            toastId={t}
-                            notification={n}
-                            onClick={() => {
-                                markReadMutation.mutate(n.id);
-                                toast.dismiss(t);
-                                if (url) navigate(url);
-                            }}
-                        />
-                    ),
-                    { id: `notif-${n.id}`, duration: 8000 },
-                );
-                continue;
-            }
-
-            toast(title, {
-                id: `notif-${n.id}`,
-                description: source ? t('notifications.toastSource', { source }) : undefined,
-                duration: 8000,
-                action: url
-                    ? {
-                          label: t('common.open'),
-                          onClick: () => {
-                              markReadMutation.mutate(n.id);
-                              navigate(url);
-                          },
-                      }
-                    : undefined,
-            });
-        }
-    }, [notifications, markReadMutation, navigate, t]);
+    // Показ карточек, звук и уведомления ОС живут не здесь, а в
+    // `NotificationToasts` (смонтирован в App.tsx). Колокольчик — только
+    // счётчик и список: пока показ был внутри него, уведомления не приходили на
+    // страницах без шапки и в первые секунды после загрузки.
 
     return (
-        <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+        <DropdownMenu
+            open={isOpen}
+            onOpenChange={(open) => {
+                setIsOpen(open);
+                // Разрешение на уведомления ОС спрашиваем только здесь — на
+                // жесте, которым человек сам открыл список уведомлений. Спросить
+                // при загрузке страницы значило бы почти гарантированно получить
+                // «Блокировать», а это решение из кода уже не отменить.
+                if (open) requestDesktopPermission();
+            }}
+        >
             <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="relative h-9 w-9">
                     <Bell className="h-5 w-5" />

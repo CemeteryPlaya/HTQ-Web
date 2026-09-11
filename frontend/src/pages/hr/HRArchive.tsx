@@ -6,6 +6,7 @@ import HRLayout from '@/components/hr/HRLayout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { DateInput } from '@/components/ui/date-input';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
@@ -329,18 +330,16 @@ const HRArchive = () => {
             <div className="grid grid-cols-2 gap-2">
               <label className="grid gap-1 text-sm">
                 <span className="text-muted-foreground">{t('hr.pages.archive.filters.dateFrom')}</span>
-                <Input
-                  type="date"
+                <DateInput
                   value={docFilters.dateFrom}
-                  onChange={(e) => setDocFilters((prev) => ({ ...prev, dateFrom: e.target.value }))}
+                  onChange={(value) => setDocFilters((prev) => ({ ...prev, dateFrom: value }))}
                 />
               </label>
               <label className="grid gap-1 text-sm">
                 <span className="text-muted-foreground">{t('hr.pages.archive.filters.dateTo')}</span>
-                <Input
-                  type="date"
+                <DateInput
                   value={docFilters.dateTo}
-                  onChange={(e) => setDocFilters((prev) => ({ ...prev, dateTo: e.target.value }))}
+                  onChange={(value) => setDocFilters((prev) => ({ ...prev, dateTo: value }))}
                 />
               </label>
             </div>

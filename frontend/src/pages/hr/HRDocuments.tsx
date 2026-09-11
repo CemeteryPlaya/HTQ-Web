@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '@/api/client';
 import { mediaApi } from '@/api/media';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import HRLayout from '@/components/hr/HRLayout';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
@@ -223,6 +224,15 @@ const HRDocuments = () => {
                     ))}
                   </SelectContent>
                 </Select>
+                <PrerequisiteNotice
+                  variant="inline"
+                  items={[{
+                    when: employees !== undefined && employees.length === 0,
+                    text: t('hr.pages.documents.noEmployees', 'В справочнике нет сотрудников — документ подшивается к карточке сотрудника,'),
+                    to: '/hr/employees',
+                    linkText: t('hr.pages.documents.addEmployee', 'заведите сотрудника'),
+                  }]}
+                />
               </label>
 
               <div className="grid gap-4 md:grid-cols-2">

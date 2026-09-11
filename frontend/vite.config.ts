@@ -90,8 +90,8 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const enableDevCompression = env.VITE_DEV_COMPRESSION === "true";
   // Слежение опросом: обязательно, когда dev-сервер живёт в контейнере, а
-  // исходники примонтированы с хоста (docker-compose.dev.yml ставит эту
-  // переменную). Подробности — у server.watch ниже.
+  // исходники примонтированы с хоста (её ставят docker-compose.test-local.yml
+  // и docker-compose.test-env.yml). Подробности — у server.watch ниже.
   const usePolling = env.VITE_USE_POLLING === "true";
 
   // HTTPS in dev is opt-in via VITE_DEV_HTTPS=true. Default: plain HTTP on :3000
@@ -134,9 +134,11 @@ export default defineConfig(({ mode }) => {
   // WSGI (runserver/gunicorn) его не стримит. В dev шлём на отдельный ASGI-процесс
   // (backend-asgi), как это делает прод-nginx. Переопределяется VITE_ASGI_TARGET.
   const asgiTarget = env.VITE_ASGI_TARGET || "http://127.0.0.1:8001";
-  // Grafana's HOST port is 3001 (container 3000 is taken by Vite itself);
+  // Grafana's HOST port is 3002 in the test stacks (container 3000 is taken
+  // by Vite itself; 3001 collides with other projects on dev machines —
+  // production still publishes 3001);
   // 3100 is Loki — proxying there breaks /grafana with a 404.
-  const grafanaTarget = env.VITE_GRAFANA_TARGET || "http://127.0.0.1:3001";
+  const grafanaTarget = env.VITE_GRAFANA_TARGET || "http://127.0.0.1:3002";
   const prometheusTarget = env.VITE_PROMETHEUS_TARGET || "http://127.0.0.1:9090";
   // Keep SFU upstream plain WS by default (common for local/tunnel mode where TLS
   // is terminated at reverse proxy edge). If your SFU listens with TLS locally,

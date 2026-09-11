@@ -23,6 +23,8 @@ import {
   type ReferenceValue,
 } from '@/components/contracts/ReferenceCombobox';
 import { contractsApi } from '@/api/contracts';
+import { fetchProjects } from '@/api/tasks';
+import { reportApiError } from '@/lib/apiError';
 import type { BudgetFullCreatePayload, BudgetProgramLine } from '@/types/contracts';
 import { useTranslation } from 'react-i18next';
 
@@ -86,6 +88,11 @@ const emptyRow = (): ProgramRow => ({
   note: '',
 });
 
+/** Откуда взялся выбранный в комбобоксе проект. */
+type ProjectSource =
+  | { kind: 'administrator'; administratorId: number }
+  | { kind: 'project'; projectId: number };
+
 const BudgetCreate = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -109,6 +116,13 @@ const BudgetCreate = () => {
   // Комбобокс администратора ДЕРЖИТ название проекта: после снятия ФИО
   // подпись записи — это «проект страна», и отдельное поле «название
   // проекта» рядом с ним было бы вторым вводом одного и того же значения.
+  // Проекты модуля задач — источник связи. Список короткий и меняется редко,
+  // поэтому грузится целиком, без поиска по мере ввода.
+  const { data: taskProjects = [] } = useQuery({
+    queryKey: ['tasks', 'projects', 'for-budget-link'],
+    queryFn: () => fetchProjects(),
+  });
+
   const [administrator, setAdministrator] = useState<ReferenceValue>(null);
   const [country, setCountry] = useState<ReferenceValue>(null);
   const [isoCode, setIsoCode] = useState('');
@@ -129,12 +143,57 @@ const BudgetCreate = () => {
   const removeRow = (key: string) =>
     setRows((prev) => (prev.length === 1 ? [emptyRow()] : prev.filter((row) => row.key !== key)));
 
+  // Бюджет заводят НА ПРОЕКТ, поэтому выбор один, а источников у него два:
+  // проекты модуля Задачи и те проекты договорного контура, которых на доске
+  // задач нет (старые записи, и новые — бюджет часто открывают раньше, чем
+  // работы попадают на доску). Разными полями это было бы два ввода одного и
+  // того же значения, а разойдясь, они дали бы двух администраторов на один
+  // проект.
+  //
+  // `id` у опции СИНТЕТИЧЕСКИЙ: id администратора и id проекта живут в разных
+  // пространствах и столкнулись бы. Комбобокс использует его только как
+  // ключ выбора, а настоящий источник достаётся из `projectSources`.
+  const { projectOptions, projectSources } = useMemo(() => {
+    const options: { id: number; label: string; hint?: string }[] = [];
+    const sources = new Map<number, ProjectSource>();
+    const linkedProjectIds = new Set(
+      administrators.map((row) => row.project_id).filter(Boolean) as number[],
+    );
+
+    administrators.forEach((row) => {
+      const id = options.length + 1;
+      options.push({
+        id,
+        label: row.project_name,
+        // Подсказка говорит не только страну, но и есть ли связь: иначе
+        // «Аралск» из задач и «Аралск» из старых данных неразличимы.
+        hint: row.project_id ? `${row.country_name} · в задачах` : row.country_name,
+      });
+      sources.set(id, { kind: 'administrator', administratorId: row.id });
+    });
+
+    // Только те проекты задач, под которые администратора ещё нет: иначе
+    // один проект стоял бы в списке дважды.
+    taskProjects
+      .filter((project) => !linkedProjectIds.has(project.id))
+      .forEach((project) => {
+        const id = options.length + 1;
+        options.push({ id, label: project.name, hint: 'из модуля Задачи' });
+        sources.set(id, { kind: 'project', projectId: project.id });
+      });
+
+    return { projectOptions: options, projectSources: sources };
+  }, [administrators, taskProjects]);
+
+  const selectedSource =
+    administrator?.kind === 'existing' ? projectSources.get(administrator.id) : undefined;
+
   // Выбран существующий администратор — проект и страна принадлежат ЕМУ,
   // и правка их здесь означала бы правку чужой записи справочника, а не
   // заполнение заявки. Поэтому поля показываются заполненными и закрытыми.
   const existingAdministrator =
-    administrator?.kind === 'existing'
-      ? administrators.find((row) => row.id === administrator.id)
+    selectedSource?.kind === 'administrator'
+      ? administrators.find((row) => row.id === selectedSource.administratorId)
       : undefined;
 
   const administratorLocked = Boolean(existingAdministrator);
@@ -144,16 +203,6 @@ const BudgetCreate = () => {
   const effectiveCountryName = existingAdministrator
     ? existingAdministrator.country_name
     : country?.label ?? '';
-
-  const administratorOptions = useMemo(
-    () =>
-      administrators.map((row) => ({
-        id: row.id,
-        label: row.project_name,
-        hint: row.country_name,
-      })),
-    [administrators],
-  );
   const countryOptions = useMemo(
     () => countries.map((row) => ({ id: row.id, label: row.name, hint: row.iso_code })),
     [countries],
@@ -252,17 +301,25 @@ const BudgetCreate = () => {
     return next;
   };
 
+  const countryPayload = () =>
+    country!.kind === 'existing'
+      ? { id: country!.id }
+      : { name: country!.label.trim(), iso_code: isoCode.trim().toUpperCase() };
+
   const buildPayload = (): BudgetFullCreatePayload => ({
+    // Три случая выбора проекта, и все три бэкенд уже понимает
+    // (`_resolve_administrator`): администратор существует; проект есть в
+    // задачах, а администратора под него нет; проекта нет нигде — заводим по
+    // названию, без связи.
     administrator:
-      administrator!.kind === 'existing'
-        ? { id: administrator!.id }
-        : {
-            project_name: administrator!.label.trim(),
-            country:
-              country!.kind === 'existing'
-                ? { id: country!.id }
-                : { name: country!.label.trim(), iso_code: isoCode.trim().toUpperCase() },
-          },
+      selectedSource?.kind === 'administrator'
+        ? { id: selectedSource.administratorId }
+        : selectedSource?.kind === 'project'
+          ? { project_id: selectedSource.projectId, country: countryPayload() }
+          : {
+              project_name: administrator!.label.trim(),
+              country: countryPayload(),
+            },
     programs: rows.map<BudgetProgramLine>((row) => ({
       program:
         row.program!.kind === 'existing'
@@ -298,24 +355,10 @@ const BudgetCreate = () => {
       // согласование.
       navigate(`/contracts/budgets/${budget.id}`);
     },
-    onError: (error: any) => {
-      const status = error?.response?.status;
-      const detail = error?.response?.data?.detail;
-
-      // 409 — заявка корректна по форме, но противоречит данным (такая
-      // связка уже есть). Текст называет конкретную программу, показываем
-      // как есть.
-      if (status === 409 && typeof detail === 'string') {
-        toast.error(detail);
-        return;
-      }
-      // 422 — нарушение схемы; бэкенд отдаёт список ошибок по полям.
-      if (status === 422 && Array.isArray(detail)) {
-        toast.error(detail.map((item: any) => item.msg).join('; '));
-        return;
-      }
-      toast.error(t('contracts.budgetForm.createError'));
-    },
+    // 409 — заявка корректна по форме, но противоречит данным (такая связка
+    // уже есть) и текст называет конкретную программу; 422 — список ошибок по
+    // полям. И то и другое показывает `reportApiError`.
+    onError: (err) => reportApiError(err, t('contracts.budgetForm.createError')),
   });
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -369,7 +412,7 @@ const BudgetCreate = () => {
                   <Label htmlFor="administrator">{t('contracts.budgetForm.projectName')}</Label>
                   <ReferenceCombobox
                     id="administrator"
-                    options={administratorOptions}
+                    options={projectOptions}
                     value={administrator}
                     onChange={(next) => {
                       setAdministrator(next);
@@ -386,6 +429,11 @@ const BudgetCreate = () => {
                     invalid={Boolean(errors.administrator)}
                   />
                   {fieldError('administrator')}
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Проекты из модуля «Задачи» и те, что уже есть в договорном
+                    контуре. Нужного нет — впишите название, бюджет заведётся
+                    без связи с доской задач.
+                  </p>
                 </div>
 
                 <div>

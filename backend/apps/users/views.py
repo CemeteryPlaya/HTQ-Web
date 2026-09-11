@@ -72,6 +72,24 @@ def _company_slug_for_token(request, user_id: int):
     if not user_may_enter_company(user_id, slug):
         return None, json_error("Forbidden", 403)
     return slug, None
+def _log_login_failure(request, reason: str) -> None:
+    """Строка в лог на каждый неудачный вход — источник алерта о подборе.
+
+    В ЛОГ, а не в AuditLog, и это осознанный размен. ``obtain_token`` —
+    единственный неаутентифицированный write-путь платформы: запись строки в
+    базу на каждую неудачу превратила бы его в усилитель отказа (сто попыток
+    в секунду = сто INSERT'ов, и таблица растёт от чужих рук). Строка лога не
+    стоит ничего, а канал доставки уже построен: promtail → Loki → правило
+    ``htqweb-auth-failed-burst``.
+
+    Ни логина, ни пароля здесь нет намеренно: логи читают шире, чем базу, а
+    сам факт «этот адрес пробовали» — уже утечка. Причина разделена на
+    ``not_activated`` и ``invalid_credentials``, потому что перебор ИМЁН и
+    перебор ПАРОЛЕЙ выглядят по-разному и разбираются по-разному.
+    """
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    ip = forwarded or request.META.get("REMOTE_ADDR") or "-"
+    logger.warning("auth_login_failed reason=%s ip=%s", reason, ip[:45])
 
 
 # ── POST token/ — login by email or username ────────────────────────────────
@@ -81,8 +99,10 @@ def obtain_token(request, data: schemas.TokenObtainRequest):
     try:
         user = auth_service.authenticate(data.email, data.password)
     except auth_service.AccountNotActivated:
+        _log_login_failure(request, "not_activated")
         return json_error("Account is not activated", 401)
     except auth_service.InvalidCredentials:
+        _log_login_failure(request, "invalid_credentials")
         return json_error("Invalid credentials", 401)
 
     company_slug, error = _company_slug_for_token(request, user.id)

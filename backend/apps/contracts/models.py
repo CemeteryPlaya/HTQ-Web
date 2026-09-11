@@ -57,6 +57,8 @@ signoff адресует чужие строки строкой типа и чи
 ``status`` по ``ALLOWED_TRANSITIONS``.
 """
 
+from decimal import Decimal
+
 from django.db import models
 from django.db.models.functions import Now
 
@@ -125,6 +127,25 @@ class AgreementStatus(models.TextChoices):
     SIGNED = "signed", "Подписан"
     EXECUTED = "executed", "Исполнен"
     TERMINATED = "terminated", "Расторгнут"
+
+
+class AgreementDirection(models.TextChoices):
+    EXPENSE = "expense", "Расход"
+    INCOME = "income", "Поступление"
+
+
+class AgreementKind(models.TextChoices):
+    WORKS_SERVICES = "works_services", "РиУ (Работы и услуги)"
+    GOODS = "goods", "Товары"
+    SERVICES = "services", "Услуги"
+    LEASE = "lease", "Аренда"
+    OTHER = "other", "Прочее"
+
+
+class AgreementType(models.TextChoices):
+    STANDARD = "standard", "Стандартный"
+    NON_STANDARD = "non_standard", "Нетиповой"
+    FRAMEWORK = "framework", "Рамочный"
 
 
 class InvoiceStatus(models.TextChoices):
@@ -252,11 +273,32 @@ class Administrator(models.Model):
     Разрешение id в профиль — только через ``apps.users.interface``.
     Заполнять необязательно; сейчас никто в платформе не логинится «как
     администратор бюджета».
+
+    ``project_id`` — тот же приём для ПРОЕКТА из ``apps.tasks``. До него
+    проект существовал в платформе дважды: как ``tasks.Project`` (с
+    объектами, блоками и задачами) и как здешняя строка ``project_name``.
+    Два названия одного и того же расходились при первой же переименовке, и
+    «бюджет проекта» нельзя было показать на доске задач, а «ход работ» — в
+    карточке бюджета.
+
+    Связь необязательная (``null=True``): договорный контур заводят и по
+    проектам, которых на доске задач нет вовсе — например, когда бюджет
+    открывают раньше, чем начинают вести работы.
+
+    ``project_name`` при этом НЕ удалён и остаётся подписью записи: он
+    заполнен у всех старых строк, участвует в ``display_name`` и в
+    сортировке. Когда связь проставлена, сервис синхронизирует его с именем
+    проекта (``reference_service._sync_project_name``) — иначе два названия
+    снова разъехались бы, только теперь молча.
     """
 
     country = models.ForeignKey(Country, on_delete=models.PROTECT,
                                 related_name="administrators")
     project_name = models.CharField(max_length=200)
+    project_id = models.IntegerField(
+        null=True, blank=True, db_index=True,
+        verbose_name="Проект в модуле задач",
+    )
     user_id = models.IntegerField(null=True, blank=True, db_index=True)
     is_active = models.BooleanField(default=True, db_default=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
@@ -531,6 +573,129 @@ class Agreement(signoff.Approvable, models.Model):
                                      default=AgreementType.STANDARD,
                                      db_default=AgreementType.STANDARD,
                                      verbose_name="Тип")
+    direction = models.CharField(
+        max_length=20,
+        choices=AgreementDirection.choices,
+        default=AgreementDirection.EXPENSE,
+        db_default=AgreementDirection.EXPENSE,
+        verbose_name="Направление",
+    )
+    kind = models.CharField(
+        max_length=30,
+        choices=AgreementKind.choices,
+        default=AgreementKind.WORKS_SERVICES,
+        db_default=AgreementKind.WORKS_SERVICES,
+        verbose_name="Вид договора",
+    )
+    contract_type = models.CharField(
+        max_length=30,
+        choices=AgreementType.choices,
+        default=AgreementType.STANDARD,
+        db_default=AgreementType.STANDARD,
+        verbose_name="Тип договора",
+    )
+    sed_number = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        db_default="",
+        verbose_name="№ СЭД / Регистрационный номер",
+    )
+    subject = models.TextField(
+        blank=True,
+        default="",
+        db_default="",
+        verbose_name="Предмет договора",
+    )
+    manager_user_id = models.IntegerField(
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="ID менеджера/куратора",
+    )
+    manager_name = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        db_default="",
+        verbose_name="Менеджер / Куратор",
+    )
+    has_vat = models.BooleanField(
+        default=True,
+        db_default=True,
+        verbose_name="Флаг НДС",
+    )
+    vat_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("12.00"),
+        db_default=Decimal("12.00"),
+        verbose_name="Ставка НДС, %",
+    )
+    amount_without_vat = models.DecimalField(
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Сумма без НДС",
+    )
+    vat_amount = models.DecimalField(
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Сумма НДС",
+    )
+    has_advance = models.BooleanField(
+        default=False,
+        db_default=False,
+        verbose_name="Аванс предусмотрен",
+    )
+    advance_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Аванс, %",
+    )
+    advance_amount_planned = models.DecimalField(
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Плановый аванс, сумма",
+    )
+    retention_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        db_default=Decimal("0.00"),
+        verbose_name="Гарантийное удержание, %",
+    )
+    retention_amount = models.DecimalField(
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Сумма гарантийного удержания",
+    )
+    start_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Дата начала",
+    )
+    end_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Срок исполнения",
+    )
+    term_comment = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        db_default="",
+        verbose_name="Комментарий к сроку исполнения",
+    )
     amount = models.DecimalField(max_digits=18, decimal_places=2)
     currency = models.CharField(max_length=3, default="KZT", db_default="KZT")
     file_id = models.CharField(max_length=64, null=True, blank=True)

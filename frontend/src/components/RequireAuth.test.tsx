@@ -23,15 +23,15 @@ const activeProfile = {
 };
 
 const useActiveProfile = vi.fn();
-const usePermissions = vi.fn();
+const permissionsSpy = vi.fn();
 
 vi.mock('@/hooks/useActiveProfile', () => ({
   useActiveProfile: () => useActiveProfile(),
 }));
 
 vi.mock('@/hooks/usePermissions', () => ({
-  usePermissions: () => usePermissions(),
-  default: () => usePermissions(),
+  usePermissions: () => permissionsSpy(),
+  default: () => permissionsSpy(),
 }));
 
 // Частичный мок: src/i18n.js тянет initReactI18next, поэтому полная подмена
@@ -81,7 +81,7 @@ beforeEach(() => {
     clearAuthStorage: vi.fn(),
     refetch: vi.fn(),
   });
-  usePermissions.mockReturnValue(permissionsOf({ hr: 'write' }));
+  permissionsSpy.mockReturnValue(permissionsOf({ hr: 'write' }));
 });
 
 describe('RequireAuth — гейт по модулю и уровню', () => {
@@ -111,7 +111,7 @@ describe('RequireAuth — гейт по модулю и уровню', () => {
   });
 
   it('ждёт, а не отвергает, пока права ещё грузятся', () => {
-    usePermissions.mockReturnValue(permissionsOf({}, true));
+    permissionsSpy.mockReturnValue(permissionsOf({}, true));
 
     renderGate({ module: 'hr', level: 'read' });
 
@@ -128,7 +128,7 @@ describe('RequireAuth — гейт по модулю и уровню', () => {
    * ролях. Ровно так и вышло на первой живой проверке стадии 2.
    */
   it('различает «прав нет» и «права не загрузились»', () => {
-    usePermissions.mockReturnValue({ ...permissionsOf({}), isError: true });
+    permissionsSpy.mockReturnValue({ ...permissionsOf({}), isError: true });
 
     renderGate({ module: 'hr', level: 'read' });
 
@@ -139,7 +139,7 @@ describe('RequireAuth — гейт по модулю и уровню', () => {
   });
 
   it('доступ при этом всё равно закрыт — отказ в закрытую', () => {
-    usePermissions.mockReturnValue({ ...permissionsOf({ hr: 'admin' }), isError: true });
+    permissionsSpy.mockReturnValue({ ...permissionsOf({ hr: 'admin' }), isError: true });
 
     renderGate({ module: 'hr', level: 'read' });
 

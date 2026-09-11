@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
-import { errorDetail } from '@/lib/apiError';
+import { errorDetail, reportApiError } from '@/lib/apiError';
 
 /** Человеческие названия полей. Ключи — те же, что в FIELD_MAP на бэкенде. */
 const FIELD_LABEL: Record<string, string> = {
@@ -67,8 +67,8 @@ export function IdentityRequestDialog({ requestId, onOpenChange }: Props) {
       queryClient.invalidateQueries({ queryKey: ['hr-employees'] });
       onOpenChange(false);
     },
-    onError: (err: unknown) => toast.error(
-      errorDetail(err) ?? t('hr.pages.identity.decideError', 'Не удалось применить решение'),
+    onError: (err: unknown) => reportApiError(
+      err, t('hr.pages.identity.decideError', 'Не удалось применить решение'),
     ),
   });
 

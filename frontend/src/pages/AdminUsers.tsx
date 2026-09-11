@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import api from '../api/client';
 import { BackToProfile } from '@/components/BackToProfile';
+import { reportApiError } from '@/lib/apiError';
 import { Header } from '../components/Header';
 import { Footer } from '../components/Footer';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -52,9 +53,7 @@ const AdminUsers = () => {
             );
             toast.success(t('admin.users.saved', 'Изменения сохранены'));
         },
-        onError: (err: any) => {
-            toast.error(err?.response?.data?.detail ?? t('admin.users.saveError', 'Не удалось обновить пользователя'));
-        },
+        onError: (err) => reportApiError(err, t('admin.users.saveError', 'Не удалось обновить пользователя')),
     });
 
     const openCreate = () => {

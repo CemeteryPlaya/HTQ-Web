@@ -10,6 +10,7 @@ import { Footer } from '../components/Footer';
 import { ProfileHeader } from '../components/profile/ProfileHeader';
 import ProfileSidebar from '../components/profile/ProfileSidebar';
 import { ConnectCorporateMailbox } from '@/components/mail/ConnectCorporateMailbox';
+import { reportApiError } from '@/lib/apiError';
 import { CalendarWidget } from '../components/calendar/CalendarWidget';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -92,10 +93,7 @@ const MyProfile = () => {
             queryClient.setQueryData(['profile'], updatedProfile);
             toast.success(t('profile.updated'));
         },
-        onError: (err) => {
-            console.error(err);
-            toast.error("Failed to update profile");
-        }
+        onError: (err) => reportApiError(err, t('profile.updateError', 'Не удалось сохранить профиль'))
     });
 
     const handleAvatarChange = (file: Blob) => {

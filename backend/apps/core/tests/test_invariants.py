@@ -46,6 +46,7 @@ import ast
 import importlib
 import importlib.util
 import inspect
+import pathlib
 import re
 import textwrap
 import uuid as uuid_module
@@ -60,7 +61,10 @@ from django.test import Client
 from django.urls import get_resolver
 from django.urls.resolvers import URLResolver
 
+from pydantic import BaseModel as PydanticBaseModel
+
 from apps.core.models import ServiceStatus
+from htqweb.date_rules import DATE_PAIRS, OrderedDates
 from htqweb.admin_gate import ServiceGatedAdminMixin
 from htqweb.middleware.service_gate import PREFIX_TO_SERVICE, service_name_for_app_label
 
@@ -451,3 +455,117 @@ def test_resolver_sweep_covers_users_cms_and_media():
             f"resolver sweep found no routes for service {must_cover!r} — "
             "discovery is broken (or the app is no longer mounted in htqweb/urls.py)"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Test 4 — every schema with a pair of dates must validate their order.
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Правило скучное («конец не раньше начала»), интересна история: в БД оно
+# стоит пятью CheckConstraint, в схемах ``*Create`` — валидатором с пометкой
+# «здесь это 422 с текстом, а не IntegrityError→500», а на ``*Update`` его
+# просто забыли. Правка блока с перепутанными датами уходила в базу и
+# возвращалась 409 «Блок с таким названием уже есть» — вьюха ловит
+# IntegrityError и знает про него одно объяснение.
+#
+# Забыть примесь на НОВОЙ схеме так же легко, поэтому проверка обходит схемы
+# всех аппок рефлексией: пара дат из ``DATE_PAIRS`` есть — ``OrderedDates``
+# обязана быть в предках.
+
+def _inbound_schema_names(views_source: str) -> set[str]:
+    """Имена схем, стоящих в ``body=`` — то есть разбирающих ТЕЛО ЗАПРОСА.
+
+    Только они и должны проверять ввод. Схемы ответа (``*Response``) с той же
+    парой дат трогать нельзя: они отдают то, что уже лежит в базе, и валидатор
+    на них уронил бы чтение старых строк, а не поймал бы ошибку ввода.
+
+    Ищем по ``body=schemas.X`` в аргументах любого вызова, а не по имени
+    класса: имя — плохой признак. ``PMOMemberAdd`` разбирает тело, хотя не
+    кончается ни на Create, ни на Update.
+    """
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(views_source)):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg != "body":
+                continue
+            if isinstance(kw.value, ast.Attribute):
+                names.add(kw.value.attr)
+    return names
+
+
+def _iter_inbound_schemas():
+    """Схемы всех доменных аппок, читающие тело запроса: (app_label, класс)."""
+    for config in django_apps.get_app_configs():
+        if not config.name.startswith("apps."):
+            continue
+        module_name = f"{config.name}.schemas"
+        if importlib.util.find_spec(module_name) is None:
+            continue
+        views_spec = importlib.util.find_spec(f"{config.name}.views")
+        if views_spec is None or views_spec.origin is None:
+            continue
+        wanted = _inbound_schema_names(
+            pathlib.Path(views_spec.origin).read_text(encoding="utf-8"))
+        module = importlib.import_module(module_name)
+        for name, obj in vars(module).items():
+            if (name in wanted and inspect.isclass(obj)
+                    and issubclass(obj, PydanticBaseModel)
+                    and obj.__module__ == module_name):
+                yield config.label, obj
+
+
+def test_every_inbound_schema_with_a_date_pair_validates_their_order():
+    violations = []
+    schemas_seen = 0
+    with_dates = 0
+    for app_label, model in _iter_inbound_schemas():
+        schemas_seen += 1
+        fields = set(model.model_fields)
+        pairs = [(start, end) for start, end, _ in DATE_PAIRS
+                 if start in fields and end in fields]
+        if not pairs:
+            continue
+        with_dates += 1
+        if not issubclass(model, OrderedDates):
+            named = ", ".join(f"{start}/{end}" for start, end in pairs)
+            violations.append(
+                f"{app_label}.schemas.{model.__name__} ({named}): "
+                "унаследуйте htqweb.date_rules.OrderedDates"
+            )
+
+    # Пустой проход хуже отсутствия теста: он выглядит зелёным, ничего не
+    # проверив. Убеждаемся, что обход вообще что-то нашёл.
+    assert schemas_seen > 0, "не найдено ни одной входящей схемы — сломан сам обход"
+    assert with_dates > 0, (
+        "ни одна схема не имеет пары дат — либо DATE_PAIRS разошлась с кодом, "
+        "либо обход смотрит не туда"
+    )
+    assert violations == [], (
+        "схемы с парой дат без проверки порядка:\n  " + "\n  ".join(violations)
+    )
+
+
+def test_date_pairs_table_matches_the_database_constraints():
+    """Таблица пар не должна отставать от ограничений в БД.
+
+    ``ck_*_dates`` в моделях — источник истины о том, какие пары вообще
+    существуют. Появится шестое ограничение с новой парой имён — правило о
+    ней узнает только отсюда.
+    """
+    known = {(start, end) for start, end, _ in DATE_PAIRS}
+    missing = []
+    for model in django_apps.get_models():
+        for constraint in model._meta.constraints:
+            name = getattr(constraint, "name", "")
+            if not name.startswith("ck_") or not name.endswith("dates"):
+                continue
+            fields = {f.name for f in model._meta.get_fields()
+                      if hasattr(f, "attname")}
+            if not any(start in fields and end in fields for start, end in known):
+                missing.append(f"{model._meta.label}: {name}")
+    assert missing == [], (
+        "ограничение на даты есть, а пары полей нет в DATE_PAIRS "
+        "(htqweb/date_rules.py):\n  " + "\n  ".join(missing)
+    )

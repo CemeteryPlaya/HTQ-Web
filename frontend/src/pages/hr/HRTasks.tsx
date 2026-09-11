@@ -13,6 +13,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
 import {
   Plus, Search, Filter, AlertCircle, ArrowUpDown,
   Bug, BookOpen, Layers, CheckSquare, ListTodo, Edit, Trash2, LayoutGrid, LayoutList
@@ -128,7 +129,7 @@ const HRTasks: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['hr-tasks'] });
       toast.success(t('tasks.pages.list.statusUpdated', 'Статус обновлен'));
     },
-    onError: () => toast.error(t('tasks.pages.list.statusError', 'Ошибка обновления статуса')),
+    onError: (err) => reportApiError(err, t('tasks.pages.list.statusError', 'Ошибка обновления статуса')),
   });
 
   const deleteMutation = useMutation({
@@ -137,7 +138,7 @@ const HRTasks: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['hr-tasks'] });
       toast.success(t('tasks.pages.list.createDialog.success'));
     },
-    onError: () => toast.error(t('tasks.pages.list.createDialog.error')),
+    onError: (err) => reportApiError(err, t('tasks.pages.list.createDialog.error')),
   });
 
   return (

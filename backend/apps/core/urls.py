@@ -32,6 +32,12 @@ urlpatterns = [
     path("api/admin/v1/infrastructure/audit/reveals", views.infrastructure_audit),
     path("api/admin/v1/infrastructure/audit/reveals/", views.infrastructure_audit),
 
+    # Состояние скрейп-таргетов для виджета мониторинга. Через бэкенд, а не
+    # напрямую в Prometheus: у того нет своей авторизации, и наружу он не
+    # проксируется (см. infra/nginx/default.conf).
+    path("api/admin/v1/infrastructure/targets", views.infrastructure_targets),
+    path("api/admin/v1/infrastructure/targets/", views.infrastructure_targets),
+
     path("api/admin/v1/infrastructure/health-check", views.infrastructure_health),
     path("api/admin/v1/infrastructure/health-check/", views.infrastructure_health),
 

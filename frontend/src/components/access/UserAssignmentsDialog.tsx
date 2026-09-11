@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import type { Role, RoleAssignment } from '@/types/access';
+import { reportApiError } from '@/lib/apiError';
 
 /**
  * Личные назначения ролей — ИСКЛЮЧИТЕЛЬНЫЙ путь (§4.4 спеки стадии 2).
@@ -100,7 +101,8 @@ export function UserAssignmentsDialog({
       toast.success(t('access.assignments.saved', 'Личные назначения сохранены'));
       onOpenChange(false);
     },
-    onError: () => toast.error(t('access.assignments.saveFailed', 'Не удалось сохранить')),
+    onError: (err) => reportApiError(
+      err, t('access.assignments.saveFailed', 'Не удалось сохранить')),
   });
 
   const roles: Role[] = rolesQuery.data ?? [];

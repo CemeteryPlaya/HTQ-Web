@@ -31,6 +31,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from htqweb.date_rules import OrderedDates
+
 from .models import (
     AssigneeRole, BlockStatus, ContractorLevel, ContractorStatus,
     EquipmentOwnership, LinkType, Priority, ProjectStatus, ResourceKind,
@@ -304,7 +306,7 @@ class ContractorWorkerResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ContractorEngagementCreate(BaseModel):
+class ContractorEngagementCreate(OrderedDates):
     contractor_id: int
     project_id: int | None = None
     site_id: int | None = None
@@ -325,7 +327,7 @@ class ContractorEngagementCreate(BaseModel):
         return self
 
 
-class ContractorEngagementUpdate(BaseModel):
+class ContractorEngagementUpdate(OrderedDates):
     project_id: int | None = None
     site_id: int | None = None
     roadmap_id: int | None = None
@@ -451,7 +453,7 @@ class VolumesUpdate(BaseModel):
         return self
 
 
-class SiteBlockCreate(BaseModel):
+class SiteBlockCreate(OrderedDates):
     name: str = Field(..., min_length=1, max_length=120)
     code: str | None = Field(None, max_length=32)
     order: int = Field(default=0, ge=0, le=32767)
@@ -459,17 +461,8 @@ class SiteBlockCreate(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
 
-    @model_validator(mode="after")
-    def dates_are_ordered(self) -> "SiteBlockCreate":
-        # Дублирует ck_site_block_dates сознательно — тот же приём, что у
-        # EquipmentCreate: здесь это 422 с текстом, а не IntegrityError→500.
-        if (self.start_date and self.end_date
-                and self.start_date > self.end_date):
-            raise ValueError("Дата начала позже даты окончания")
-        return self
 
-
-class SiteBlockUpdate(BaseModel):
+class SiteBlockUpdate(OrderedDates):
     name: str | None = Field(None, min_length=1, max_length=120)
     code: str | None = Field(None, max_length=32)
     order: int | None = Field(None, ge=0, le=32767)
@@ -534,7 +527,7 @@ class ProjectSitesUpdate(BaseModel):
     primary_site_id: int | None = None
 
 
-class RoadmapCreate(BaseModel):
+class RoadmapCreate(OrderedDates):
     """Роудмап — пакет работ на блоке. Проект и блок обязательны.
 
     Площадки в теле нет: она следует из блока. Проект блоком НЕ задаётся —
@@ -555,15 +548,8 @@ class RoadmapCreate(BaseModel):
     owner_id: int | None = None
     department_id: int | None = None
 
-    @model_validator(mode="after")
-    def planned_dates_are_ordered(self) -> "RoadmapCreate":
-        if (self.planned_start_date and self.planned_end_date
-                and self.planned_start_date > self.planned_end_date):
-            raise ValueError("Плановая дата начала позже даты окончания")
-        return self
 
-
-class RoadmapUpdate(BaseModel):
+class RoadmapUpdate(OrderedDates):
     project_id: int | None = None
     site_block_id: int | None = None
     name: str | None = Field(None, min_length=1, max_length=200)
@@ -645,7 +631,7 @@ class RoadmapMetricsResponse(BaseModel):
     equipment: ResourceComparison
 
 
-class ProjectCreate(BaseModel):
+class ProjectCreate(OrderedDates):
     name: str = Field(..., min_length=1, max_length=200)
     description: str = Field(default="", max_length=5000)
     status: ProjectStatus = Field(default=ProjectStatus.ACTIVE)
@@ -658,7 +644,7 @@ class ProjectCreate(BaseModel):
     use_production_calendar: bool = False
 
 
-class ProjectUpdate(BaseModel):
+class ProjectUpdate(OrderedDates):
     name: str | None = Field(None, min_length=1, max_length=200)
     description: str | None = Field(None, max_length=5000)
     status: ProjectStatus | None = None
@@ -740,7 +726,7 @@ class WatcherResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class TaskCreate(BaseModel):
+class TaskCreate(OrderedDates):
     summary: str = Field(..., min_length=1, max_length=500)
     description: str = Field(default="", max_length=10000)
     # Type by FK to the registry, or by slug (resolved server-side). The
@@ -792,7 +778,7 @@ class TaskCreate(BaseModel):
         return v
 
 
-class TaskUpdate(BaseModel):
+class TaskUpdate(OrderedDates):
     """Partial update. Unset fields are left alone (``exclude_unset``).
 
     ``assignees`` / ``delegates`` / ``watchers`` have dedicated endpoints and
@@ -1508,7 +1494,7 @@ class AssignmentCreate(BaseModel):
         return self
 
 
-class ResourceRequirementCreate(BaseModel):
+class ResourceRequirementCreate(OrderedDates):
     """Потребность количеством: «2 человека», «2 кары».
 
     ``work_role_id`` и ``equipment_category_id`` необязательны: «нужно
@@ -1530,13 +1516,10 @@ class ResourceRequirementCreate(BaseModel):
     def exactly_one_target(self) -> "ResourceRequirementCreate":
         if (self.task_id is None) == (self.roadmap_id is None):
             raise ValueError("Укажите ровно одно: task_id или roadmap_id")
-        if (self.start_date and self.end_date
-                and self.start_date > self.end_date):
-            raise ValueError("Дата начала позже даты окончания")
         return self
 
 
-class ResourceRequirementUpdate(BaseModel):
+class ResourceRequirementUpdate(OrderedDates):
     kind: ResourceKind | None = None
     work_role_id: int | None = None
     equipment_category_id: int | None = None

@@ -9,6 +9,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { fetchPositions } from '@/api/hr';
 import type { Position } from '@/types/hr';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -60,7 +61,18 @@ export function PositionPicker({ value, onChange, knownNames = {}, disabled }: P
           </CommandList>
         </Command>
       </PopoverContent>
-    </Popover>
+      </Popover>
+      {/* Этап «по должности» без единой должности в справочнике не запустится
+          вовсе — маршрут окажется неисполнимым. */}
+      <PrerequisiteNotice
+        variant="inline"
+        items={[{
+          when: !isLoading && positions.length === 0,
+          text: 'Справочник должностей пуст — этап «по должности» будет некому исполнять,',
+          to: '/hr/positions',
+          linkText: 'заведите должность',
+        }]}
+      />
     {value.length > 0 && <div className="flex flex-wrap gap-1.5">{value.map((id) => (
       <Badge key={id} variant="secondary" className="gap-1">{nameOf(id)}
         {!disabled && <button type="button" onClick={() => toggle(id)} aria-label={`Убрать ${nameOf(id)}`} className="hover:text-destructive"><X className="h-3 w-3" /></button>}

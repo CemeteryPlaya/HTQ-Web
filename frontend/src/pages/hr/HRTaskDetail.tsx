@@ -17,6 +17,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
+import { DateInput } from '@/components/ui/date-input';
+import { DATES_OUT_OF_ORDER, datesOutOfOrder } from '@/lib/validation';
 import {
   ArrowLeft, Paperclip, MessageSquare, Send, Upload,
   Bug, BookOpen, Layers, CheckSquare, ListTodo,
@@ -118,8 +121,23 @@ const HRTaskDetail: React.FC = () => {
       toast.success(t('tasks.pages.detail.success'));
       setEditingField(null);
     },
-    onError: () => toast.error(t('tasks.pages.detail.error')),
+    onError: (err) => reportApiError(err, t('tasks.pages.detail.error')),
   });
+
+  /**
+   * Дата сохраняется прямо на изменении, формы с кнопкой тут нет — поэтому
+   * порядок проверяется до отправки: вторую дату берём из самой задачи.
+   * Без этого запрос уходил и возвращался 422 (а до правки бэкенда — 500).
+   */
+  const saveDate = (field: 'start_date' | 'due_date', value: string) => {
+    const start = field === 'start_date' ? value : task.start_date ?? '';
+    const due = field === 'due_date' ? value : task.due_date ?? '';
+    if (datesOutOfOrder(start, due)) {
+      toast.error(DATES_OUT_OF_ORDER);
+      return;
+    }
+    updateMutation.mutate({ [field]: value || null } as Partial<Task>);
+  };
 
   const commentMutation = useMutation({
     mutationFn: (body: string) => addTaskComment(taskId, body),
@@ -128,7 +146,7 @@ const HRTaskDetail: React.FC = () => {
       setCommentText('');
       toast.success(t('tasks.pages.detail.commentSuccess'));
     },
-    onError: () => toast.error(t('tasks.pages.detail.commentError')),
+    onError: (err) => reportApiError(err, t('tasks.pages.detail.commentError')),
   });
 
   const attachMutation = useMutation({
@@ -137,7 +155,7 @@ const HRTaskDetail: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['hr-task', taskId] });
       toast.success(t('tasks.pages.detail.attachSuccess'));
     },
-    onError: () => toast.error(t('tasks.pages.detail.attachError')),
+    onError: (err) => reportApiError(err, t('tasks.pages.detail.attachError')),
   });
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -153,10 +171,7 @@ const HRTaskDetail: React.FC = () => {
       setLinkTargetId('');
       toast.success(t('tasks.pages.detail.linkSuccess', 'Связь добавлена'));
     },
-    onError: (err: any) => {
-      const msg = err.response?.data?.non_field_errors?.[0] || t('hr.taskDetail.linkError');
-      toast.error(msg);
-    },
+    onError: (err) => reportApiError(err, t('hr.taskDetail.linkError')),
   });
 
   const deleteLinkMutation = useMutation({
@@ -660,11 +675,10 @@ const HRTaskDetail: React.FC = () => {
                   <Calendar className="h-3 w-3" /> {t('tasks.pages.detail.startDate')}
                 </Label>
                 <div className="flex flex-col gap-1">
-                  <Input
-                    type="date"
+                  <DateInput
                     className="mt-1"
                     value={task.start_date || ''}
-                    onChange={(e) => updateMutation.mutate({ start_date: e.target.value || null } as any)}
+                    onChange={(value) => saveDate('start_date', value)}
                   />
                   {task.task_type === 'epic' && task.effective_start_date && task.effective_start_date !== task.start_date && (
                     <span className="text-xs text-amber-600 dark:text-amber-500">
@@ -679,11 +693,10 @@ const HRTaskDetail: React.FC = () => {
                   <Calendar className="h-3 w-3" /> {t('tasks.pages.detail.dueDate')}
                 </Label>
                 <div className="flex flex-col gap-1">
-                  <Input
-                    type="date"
+                  <DateInput
                     className="mt-1"
                     value={task.due_date || ''}
-                    onChange={(e) => updateMutation.mutate({ due_date: e.target.value || null } as any)}
+                    onChange={(value) => saveDate('due_date', value)}
                   />
                   {task.task_type === 'epic' && task.effective_due_date && task.effective_due_date !== task.due_date && (
                     <span className="text-xs text-amber-600 dark:text-amber-500">
