@@ -1,5 +1,7 @@
 import type { UserProfile } from '@/types/userProfile';
 
+import { REFRESH_COOKIE_DOMAIN } from './companySwitch';
+
 export const ACCESS_TOKEN_KEY = 'access';
 export const REFRESH_TOKEN_KEY = 'refresh';
 export const CACHED_PROFILE_KEY = 'cached_profile';
@@ -69,7 +71,12 @@ const readCookie = (name: string): string | null => {
   return null;
 };
 
-const writeCookie = (name: string, value: string): void => {
+// `domain` передаётся только для refresh-cookie (см. вызовы ниже). Access-
+// cookie остаётся без Domain — привязана к своему поддомену, как и
+// localStorage: если бы она тоже стала общей, браузер после переключения
+// компании подставлял бы access-токен ПРЕЖНЕЙ компании раньше, чем успеет
+// сработать обмен через refresh, и запросы упирались бы в чужой company-claim.
+const writeCookie = (name: string, value: string, domain?: string): void => {
   if (!isBrowser()) {
     return;
   }
@@ -78,17 +85,22 @@ const writeCookie = (name: string, value: string): void => {
     Date.now() + resolveCookieTtlDays() * 24 * 60 * 60 * 1000,
   ).toUTCString();
   const secureAttr = window.location.protocol === 'https:' ? '; Secure' : '';
+  const domainAttr = domain ? `; Domain=${domain}` : '';
 
-  document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Expires=${expiresAt}; Path=/; SameSite=Lax${secureAttr}`;
+  document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Expires=${expiresAt}; Path=/${domainAttr}; SameSite=Lax${secureAttr}`;
 };
 
-const removeCookie = (name: string): void => {
+// Cookie удаляется только тем же набором атрибутов, которым была
+// поставлена (в частности, Domain) — иначе браузер сотрёт cookie
+// origin-уровня (которой не было) и оставит родительскую висеть.
+const removeCookie = (name: string, domain?: string): void => {
   if (!isBrowser()) {
     return;
   }
 
   const secureAttr = window.location.protocol === 'https:' ? '; Secure' : '';
-  document.cookie = `${encodeURIComponent(name)}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; Path=/; SameSite=Lax${secureAttr}`;
+  const domainAttr = domain ? `; Domain=${domain}` : '';
+  document.cookie = `${encodeURIComponent(name)}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; Path=/${domainAttr}; SameSite=Lax${secureAttr}`;
 };
 
 export const setAccessToken = (token: string): void => {
@@ -104,7 +116,7 @@ export const setRefreshToken = (token: string): void => {
     return;
   }
   writeLocalStorage(REFRESH_TOKEN_KEY, token);
-  writeCookie(REFRESH_TOKEN_KEY, token);
+  writeCookie(REFRESH_TOKEN_KEY, token, REFRESH_COOKIE_DOMAIN);
 };
 
 export const setAuthTokens = (tokens: {
@@ -148,7 +160,7 @@ export const getRefreshToken = (): string | null => {
 
   const localToken = readLocalStorage(REFRESH_TOKEN_KEY);
   if (localToken) {
-    writeCookie(REFRESH_TOKEN_KEY, localToken);
+    writeCookie(REFRESH_TOKEN_KEY, localToken, REFRESH_COOKIE_DOMAIN);
   }
   return localToken;
 };
@@ -199,5 +211,5 @@ export const clearAuthStorage = (): void => {
   removeLocalStorage(CACHED_PROFILE_KEY);
 
   removeCookie(ACCESS_TOKEN_KEY);
-  removeCookie(REFRESH_TOKEN_KEY);
+  removeCookie(REFRESH_TOKEN_KEY, REFRESH_COOKIE_DOMAIN);
 };

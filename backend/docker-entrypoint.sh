@@ -34,8 +34,16 @@ sys.exit(1)
 PY
 
 if [ "${RUN_MIGRATIONS}" = "1" ]; then
-    echo "[entrypoint] migrate ..."
-    python manage.py migrate --noinput
+    # НЕ голый `manage.py migrate`: тенантные аппки (hr/tasks/contracts/
+    # signoff) после первого tenancy_bootstrap живут в схемах компаний, а не
+    # в public. Голый migrate при search_path=public увидел бы их как "ни
+    # одной миграции не применено" и пересоздал бы их таблицы заново, уже
+    # пустыми, поверх места, где раньше лежали боевые данные. migrate_shared
+    # мигрирует только общие аппки (список вычисляется из графа миграций
+    # минус settings.TENANT_APPS) и тенантные не трогает никогда — для них
+    # отдельно manage.py migrate_companies.
+    echo "[entrypoint] migrate (только общие аппки) ..."
+    python manage.py migrate_shared
 else
     echo "[entrypoint] migrate ПРОПУЩЕН (RUN_MIGRATIONS=${RUN_MIGRATIONS:-<не задан>})"
 fi

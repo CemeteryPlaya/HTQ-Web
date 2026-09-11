@@ -88,6 +88,10 @@ class ParticipantRead(BaseModel):
     joined_at: datetime
     left_at: datetime | None
     joined_offset_ms: int
+    #: Момент выхода в миллисекундах от начала встречи. ``None`` — участник
+    #: досидел до конца. Считается ЗДЕСЬ, а не на фронте: два независимых
+    #: вычисления одной величины со временем разъезжаются.
+    left_offset_ms: int | None = None
 
 
 class SessionListItem(BaseModel):
@@ -126,6 +130,30 @@ class SessionListResponse(BaseModel):
     limit: int
     recorded_total: int
     active_total: int
+
+
+class TodayItem(BaseModel):
+    """Строка вкладки «Сегодня» — событие календаря плюс его судьба."""
+
+    event_id: int
+    room_id: str
+    title: str
+    start_at: datetime
+    end_at: datetime
+    #: scheduled — ещё не начиналась, live — идёт, finished — закончилась.
+    status: str
+    session_id: int | None = None
+    is_organizer: bool = False
+    participant_count: int = 0
+
+
+class OverviewResponse(BaseModel):
+    #: Часы сервера. Фронт решает «идёт ли сейчас» по ним, а не по часам
+    #: машины пользователя: сбитые локальные часы иначе рисовали бы встречу
+    #: как ещё не начавшуюся.
+    server_time: datetime
+    today: list[TodayItem] = Field(default_factory=list)
+    active: list[SessionListItem] = Field(default_factory=list)
 
 
 class TranscriptSegmentRead(BaseModel):

@@ -32,7 +32,7 @@ import {
   fetchTaskDailyReports, fetchTaskVolumes, updateDailyReport,
 } from '@/api/tasks';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasElevatedAccess } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import { canEditDailyReport } from '@/lib/tasks/dailyReport';
 import { volumeUnitLabel } from '@/lib/tasks/roadmap';
 import type { DailyReport } from '@/types/tasks';
@@ -132,7 +132,8 @@ export const DailyReportDialog: React.FC<{
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { activeProfile } = useActiveProfile();
-  const elevated = hasElevatedAccess(activeProfile);
+  const permissions = usePermissions();
+  const elevated = permissions.atLeast('tasks', 'admin');
   const myId = Number(activeProfile?.id);
 
   const [form, setForm] = useState(emptyForm);

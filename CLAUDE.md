@@ -79,19 +79,21 @@ Playwright: the chromium binary isn't installed; launch with `{ channel: 'msedge
 ```bash
 docker compose -f docker-compose.test-local.yml up -d db   # ТОЛЬКО Postgres на :55432 (НЕ docker restart!)
 cd backend
-../.venv/Scripts/python.exe -m pytest -q                                   # whole suite
-../.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
+./.venv/Scripts/python.exe -m pytest -q                                   # whole suite
+./.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
 ```
 `DJANGO_SETTINGS_MODULE=htqweb.settings.test` and `JWT_SECRET` are both fixed by `pytest.ini`/`settings/test.py` — nothing to export by hand. Full detail (including the `max_connections=300` bump): [backend/README-tests.md](backend/README-tests.md).
 
+⚠️ **The interpreter is `backend/.venv`, not the repo-root `.venv`.** Both exist. The root one carries Django 6.0.2 and is NOT the project environment: every command run through it dies at import with 155 `ImproperlyConfigured` collection errors, which looks like a broken test suite rather than a wrong interpreter. `backend/.venv` has the pinned Django 5.2.7. All commands in this section are relative to `backend/`, hence `./.venv/…`.
+
 **Django management** (`cd backend`, same venv):
 ```bash
-../.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
-../.venv/Scripts/python.exe manage.py migrate
-../.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
-../.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
-../.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
-../.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
+./.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
+./.venv/Scripts/python.exe manage.py migrate
+./.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
+./.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
+./.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
+./.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
 ```
 Mail-server credentials live in **two layers**: `MailServerConfig` (one DB row, edited at `/admin/mailboxes` → «Подключение») **over** the env vars, merged by `apps/mail/services/mail_config.py` with the rule *empty field in the DB = take it from env*. Never read `settings.IMAP_HOST` (or any other `MAILCOW_*`/`IMAP_*`/`SMTP_*`) directly from `apps/mail` — go through `mail_config.get_config()`, or UI-set values will be silently ignored.
 
@@ -104,7 +106,7 @@ Mail-server credentials live in **two layers**: `MailServerConfig` (one DB row, 
 cd backend
 DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
   DB_NAME=htqweb DB_USER=htqweb DB_PASSWORD=change-me JWT_SECRET=dev PYTHONIOENCODING=utf-8 \
-  ../.venv/Scripts/python.exe manage.py <command>
+  ./.venv/Scripts/python.exe manage.py <command>
 ```
 (`:55432` comes up with `docker compose -f docker-compose.test-local.yml up -d db`. `PYTHONIOENCODING=utf-8` is needed or Russian output comes out mojibake on the Windows console.)
 
@@ -124,6 +126,23 @@ DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
 - **Django talks straight to Postgres**: `DB_HOST=db`, `DB_PORT=5432` (psycopg, sync), `CONN_MAX_AGE=0` — pooling is app-level, not a shared external pooler. PgBouncer (`:6432`) is still in the compose file for host-side tooling/manual `psql`, but it is **not** in the live request path anymore.
 - **History (no longer applies — here so old scars make sense if you trip over them):** the FastAPI generation put every service behind PgBouncer in transaction-pooling mode, which silently drops `search_path`, so all 8 Python services (except `user`→schema `auth`) actually lived in schema `public` with a table-name-prefix convention (`hr_*`, `task_*`, `request_*`, `cms_*`, `email_*`), and Alembic needed a fresh-thread-per-migration dance to survive the pooler. None of that applies to Django: one schema (`public`), natural table names (`<app>_<model>`), `managed=True`, plain `makemigrations`/`migrate`.
 - **Tests need a real, unpooled Postgres** — `CREATE DATABASE`/`DROP DATABASE test_htqweb` cannot pass through PgBouncer's transaction pool. That's what host port `:55432` (the `db` service of `docker-compose.test-local.yml`) is for; see [backend/README-tests.md](backend/README-tests.md).
+
+## Мультикомпанейность — схема на компанию
+
+Компании группы изолированы **схемами Postgres**, а не столбцом `company_id`: `settings.TENANT_APPS = ("hr", "tasks", "contracts", "signoff")` живут в `co_<slug>` (дефис в slug заменяется на `_` — идентификатор Postgres дефис не допускает, `htqweb/tenancy/context.py::schema_for`), всё остальное — в `public`. Разводит их `search_path`, который на каждый запрос ставит `CompanyContextMiddleware` (`htqweb/middleware/company_context.py`) по заголовку `X-HTQ-Company` (его кладёт nginx, вытащив поддомен регуляркой — комментарий над `server_name` в `infra/nginx/default.conf` объясняет, почему она нарочно отсекает `www`, IP и голый домен второго уровня). **Модели tenant-аппок поэтому НЕ содержат поля компании — не добавляйте его**: изоляция обеспечивается СУБД, а не дисциплиной разработчика, и это ключевое, намеренное следствие выбора схем.
+
+- **Контекст компании обязателен, а не подставляется.** `htqweb.tenancy.current_company()` поднимает `NoCompanyContext`, если контекст не установлен, — молчаливый откат на `public` дал бы «успешно отработавший» код, не нашедший ни одной строки. Сам `CompanyContextMiddleware` при этом оставляет `search_path=public`, если заголовка `X-HTQ-Company` вообще нет (общие домены вроде `users`/`cms`, переходный период до полного перевода фронта на поддомены) — падает только код, который реально спросил компанию.
+- **Токен несёт claim `company`**, и `api_view` отвергает запрос кодом 403, если он не совпадает с компанией, резолвленной из поддомена, — вторая линия обороны: поддомен подделать тривиально, подпись токена — нет.
+- **Два независимых рубильника.** `apps.core.models.ServiceStatus` гасит домен на всей платформе; `apps.companies.models.CompanyModule` — у одной компании. `CORE_MODULES` (`apps/core/services.py`: `users, companies, core, hr, messenger, media, cms`) — обязательное ядро, у каждой компании оно есть всегда и `CompanyModule` на него не действует. Оба слоя объединяет `apps.core.services.service_status()`, а не только `require_service()`: HTTP-гейт (`ServiceGateMiddleware`) спрашивает именно `service_status()`, и будь компанейский рубильник только внутри `require_service()`, запрос к аппке с выключенным у компании модулем прошёл бы этот гейт насквозь — вьюхи вызывают свои сервисы напрямую, а не через `interface.py`.
+- **В Celery компания передаётся явно.** `@company_task` (`htqweb/tenancy/celery.py`) разворачивает именованный kwarg `company_slug` в контекст; без него — `MissingCompanyArgument`, а не молчаливый откат на `public`.
+- **Миграции тенантных аппок НЕ идут при старте контейнера.** `RUN_MIGRATIONS=1` в `docker-entrypoint.sh` вызывает `manage.py migrate_shared`, а не голый `migrate`: список общих аппок вычисляется из графа миграций минус `TENANT_APPS`, потому что после `tenancy_bootstrap` голый `migrate` при `search_path=public` счёл бы `hr`/`tasks`/`contracts`/`signoff` непромигрированными и создал бы их таблицы заново — пустыми, поверх боевых данных, уже переехавших в схемы компаний. Схемы компаний доводит `manage.py migrate_companies`, отдельно, во время выкатки. Разные компании штатно стоят на разных версиях, поэтому **любое изменение схемы тенантной аппки — по expand/contract**: обратно-совместимый шаг отдельной миграцией от разрушающего.
+- **Сводное чтение холдинга** — схема `holding`, `UNION ALL`-представления по всем действующим компаниям (`apps.companies.services.holding_views`). Каждая tenant-аппка **обязана** объявить `apps/<domain>/holding.py` с `HOLDING_MODELS` (пустым кортежем, если сводить нечего) — отсутствие файла или атрибута роняет сборку `ImproperlyConfigured`, чтобы аппка не выпала из сводок молча. Представления физически **блокируют contract-миграции** (Postgres не даёт удалить столбец или сменить тип, пока от него зависит вьюха), поэтому `migrate_companies` сносит их до прогона и собирает после; заведение, архивация и восстановление компании тоже пересобирают их.
+
+⚠️ **`RUN_MIGRATIONS` в `docker-compose.yml` по умолчанию `1`** (`${RUN_MIGRATIONS:-1}`), и ни `.env`, ни `.env.example`, ни `.env.production` его не переопределяют — «миграции на проде выключены» не гарантировано репозиторием. Перед `tenancy_bootstrap` на бою флаг надо выставить явно.
+
+⚠️ **Осиротевшая строка реестра после неудачного отката `company_create`.** Откат — три независимых шага (`drop_schema`, удаление строки `Company`, `rebuild_holding_views`), каждый через `_cleanup` (см. докстринг `apps/companies/management/commands/company_create.py`). Если `company.delete()` упадёт ПОСЛЕ того, как `drop_schema` уже успешно снёс схему, в реестре останется активная строка компании без физической схемы под ней — и следующий `rebuild_holding_views` (в том же откате или при следующем `migrate_companies`) упадёт, пытаясь собрать `UNION ALL` по несуществующей `co_<slug>`: сводки холдинга не восстановить, пока эта строка не удалена руками. Лечение — удалить осиротевшую строку `Company` (django-admin или `Company.objects.filter(slug=...).delete()`) и повторить `manage.py migrate_companies` (пересобирает представления по оставшимся действующим компаниям).
+
+Полный дизайн: [docs/multi-company-tenancy-design.md](docs/multi-company-tenancy-design.md). Команды: `company_create`, `migrate_companies`, `migrate_shared`, `tenancy_bootstrap` (одноразовый перенос текущих боевых данных в первую компанию через `ALTER TABLE ... SET SCHEMA` — берёт `ACCESS EXCLUSIVE` на каждую таблицу, запускать только в окне обслуживания; `--grant-all`, включён по умолчанию, заводит `CompanyMembership` всем активным пользователям платформы — без него токены выходят с `company: null` и 403 на любой запрос), `company_grant` (выдать/пополнить `CompanyMembership` отдельному пользователю или всем активным, идемпотентно), `company_archive`/`company_restore` (перевести компанию в архив/вернуть — статус и пересборка сводок холдинга одной операцией, идемпотентны; `status` в `CompanyAdmin` только для чтения именно поэтому — правка через админку не пересобирала бы сводки). Архив сегодня — 404 на весь трафик компании; «архив — только чтение» остаётся невыполненным требованием заказчика, адресовано подпроекту 4 (см. `docs/multi-company-tenancy-design.md` §6).
 
 ## Среды и политика fallback'ов
 

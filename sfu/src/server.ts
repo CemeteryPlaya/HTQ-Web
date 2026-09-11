@@ -259,7 +259,7 @@ async function getOrCreateRoom(roomId: string): Promise<Room> {
         data: { speakers },
       });
     },
-    onPeerJoined: (peerId: string, displayName: string) => {
+    onPeerJoined: (peerId: string, displayName: string, isGuest: boolean) => {
       broadcastToRoom(
         roomId,
         {
@@ -267,6 +267,7 @@ async function getOrCreateRoom(roomId: string): Promise<Room> {
           data: {
             peerId,
             displayName,
+            isGuest,
             mediaState:
               peerConnections.get(peerId)?.mediaState ??
               { micEnabled: true, camEnabled: true },
@@ -770,6 +771,11 @@ async function handleMessage(
         const displayName = String(
           data.displayName || peerConn.identity?.username || 'Guest'
         );
+        // Название встречи — необязательное поле: гость и повторное
+        // подключение его не шлют, а start_session на бэкенде и так решает,
+        // кто победил (первый вошедший, уже идущую встречу не переименовать).
+        const rawTitle = data.title;
+        const title = typeof rawTitle === 'string' && rawTitle.trim() ? rawTitle.trim() : undefined;
         if (!roomId) return respondError('roomId is required');
         if (!mayEnterRoom(peerConn, roomId)) {
           return respondError('guest token is not valid for this room');
@@ -788,7 +794,8 @@ async function handleMessage(
           .getParticipants()
           .some((participant) => participant.peerId === peerId);
         if (!alreadyInRoom) {
-          room.addPeer(peerId, displayName);
+          room.addPeer(peerId, displayName,
+                       peerConn.identity?.token_type === 'guest');
         }
 
         // Журнал встречи (apps.conference). Намеренно БЕЗ await: ответ на
@@ -801,6 +808,7 @@ async function handleMessage(
             roomId,
             createdById: peerConn.identity?.user_id ?? null,
             createdByName: peerConn.identity?.username ?? displayName,
+            title,
           });
           if (!session) return;
           await recording.reportParticipant(roomId, {

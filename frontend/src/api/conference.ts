@@ -25,6 +25,8 @@ export interface ConferenceInvite {
   revoked: boolean;
   max_uses: number;
   uses: number;
+  /** Язык интерфейса для того, кто откроет ссылку — '' значит «не задан». */
+  locale: string;
   created_at: string;
 }
 
@@ -34,6 +36,8 @@ export interface InvitePublicInfo {
   expires_at: string;
   /** Приезжает только сотруднику: анонимному посетителю комнату не отдаём. */
   room_id: string | null;
+  /** Язык приглашения — '' значит «не задан», страница входа его не трогает. */
+  locale: string;
 }
 
 export interface GuestTokenResponse {
@@ -42,6 +46,9 @@ export interface GuestTokenResponse {
   room_id: string;
   display_name: string;
   title: string;
+  /** Язык приглашения — кладётся в guestSession, чтобы не откатиться при
+   *  переходе со страницы входа в саму комнату. */
+  locale: string;
   conference: unknown;
 }
 
@@ -64,6 +71,8 @@ export const createInvite = async (payload: {
   allow_guests?: boolean;
   ttl_hours?: number | null;
   max_uses?: number;
+  /** '' или отсутствует — язык не задан, страница входа поведёт себя как раньше. */
+  locale?: string;
 }): Promise<ConferenceInvite> =>
   (await api.post<ConferenceInvite>('cms/v1/conference/invites', payload)).data;
 
@@ -159,6 +168,8 @@ export interface ConferenceParticipant {
   joined_at: string;
   left_at: string | null;
   joined_offset_ms: number;
+  /** Минута выхода от начала встречи; null — досидел до конца. */
+  left_offset_ms: number | null;
 }
 
 export interface ConferenceSessionDetail extends ConferenceSessionListItem {
@@ -205,6 +216,32 @@ export interface ConferenceSessionsPage {
   recorded_total: number;
   active_total: number;
 }
+
+export type TodayStatus = 'scheduled' | 'live' | 'finished';
+
+export interface ConferenceTodayItem {
+  event_id: number;
+  room_id: string;
+  title: string;
+  start_at: string;
+  end_at: string;
+  status: TodayStatus;
+  /** null, пока встреча не начиналась. */
+  session_id: number | null;
+  is_organizer: boolean;
+  /** 0 у неначавшейся. */
+  participant_count: number;
+}
+
+export interface ConferenceOverview {
+  /** Часы сервера: «идёт ли сейчас» считаем по ним, не по машине клиента. */
+  server_time: string;
+  today: ConferenceTodayItem[];
+  active: ConferenceSessionListItem[];
+}
+
+export const fetchOverview = async (): Promise<ConferenceOverview> =>
+  (await api.get<ConferenceOverview>('conference/v1/overview/')).data;
 
 /**
  * Страница истории.

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Briefcase, Building2, Check, ChevronDown, ChevronsUpDown, IdCard, KeyRound, Lock, Plus, Share2, UserPlus } from 'lucide-react';
@@ -12,6 +13,7 @@ import {
   fetchDepartments,
   fetchEmployeeUsers,
   fetchPositions,
+  fetchUserPrefill,
   updateEmployeeWithCard,
 } from '@/api/hr';
 import { Button } from '@/components/ui/button';
@@ -23,6 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { cn } from '@/lib/utils';
+import { withSuggestedEmail } from '@/lib/translit';
 import { useHRLevel } from '@/hooks/useHRLevel';
 import { Employee, relationId } from '@/components/hr/employeeCommon';
 import {
@@ -86,6 +89,19 @@ const generatePassword = (length = 16): string => {
   const arr = new Uint32Array(length);
   crypto.getRandomValues(arr);
   return Array.from(arr, (n) => alphabet[n % alphabet.length]).join('');
+};
+
+/**
+ * Поля идентичности — те, что принадлежат владельцу аккаунта, а не кадрам,
+ * и потому уходят ему на подтверждение (apps/hr/services/identity_fields.py).
+ */
+const IDENTITY_FIELD_LABELS: Record<string, string> = {
+  first_name: 'имя',
+  last_name: 'фамилия',
+  middle_name: 'отчество',
+  phone: 'телефон',
+  bio: 'о себе',
+  avatar_url: 'фото',
 };
 
 /** Чистая форма нового пользователя. Отдельной функцией, а не константой:
@@ -369,7 +385,29 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       );
       return createEmployeeWithCard(payload);
     },
-    onSuccess: () => {
+    onSuccess: (saved) => {
+      // Правка идентичности (имя, телефон, био, аватар) у сотрудника со
+      // связанным аккаунтом не применяется сразу: она уходит заявкой владельцу
+      // и попадёт в карточку только после подтверждения. Без этого сообщения
+      // форма просто закрывается, значение остаётся прежним и ошибки нет —
+      // то есть выглядит, будто правка не сохранилась.
+      const identityRequest = (saved as
+        { identity_request?: { fields?: { field: string }[] } } | undefined)?.identity_request;
+      if (identityRequest) {
+        // Перечисляем ИМЕННО те поля, что ушли на подтверждение: в одной форме
+        // рядом лежат и кадровые поля (они применились сразу), и поля
+        // идентичности, и без списка непонятно, что именно не изменилось.
+        const fields = (identityRequest.fields ?? [])
+          .map((row) => IDENTITY_FIELD_LABELS[row.field] ?? row.field)
+          .join(', ');
+        toast.info(
+          t('hr.pages.employees.identityRequestCreated',
+            'Отправлено на подтверждение владельцу учётной записи: {{fields}}. '
+            + 'В карточке значения появятся после того, как он подтвердит правку.',
+            { fields }),
+          { duration: 10000 },
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ['hr-employees'] });
       queryClient.invalidateQueries({ queryKey: ['hr-employee-users'] });
       if (editing) queryClient.invalidateQueries({ queryKey: ['hr-card-t2', editing.id] });
@@ -508,6 +546,41 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   const [userPopoverOpen, setUserPopoverOpen] = useState(false);
   const [createUserOpen, setCreateUserOpen] = useState(false);
   const [newUserForm, setNewUserForm] = useState(blankNewUser);
+  // Почту подставляем из имени, пока её не тронули руками. Флаг нужен именно
+  // потому, что подстановка «умная»: без него исправленный адрес затирался бы
+  // на следующем нажатии в поле имени, и человек не понял бы, куда делась
+  // его правка.
+  const [emailEdited, setEmailEdited] = useState(false);
+  /** Поля, значения которых пришли из аккаунта, — для подписи под инпутом. */
+  const [prefilled, setPrefilled] = useState<Record<string, boolean>>({});
+
+  /**
+   * Досев формы данными выбранного аккаунта.
+   *
+   * Заполняются ТОЛЬКО пустые поля: смена выбранного пользователя не должна
+   * молча съедать то, что HR уже напечатал руками. Провал запроса — не ошибка
+   * формы: сотрудника всё ещё можно завести, просто телефон придётся ввести
+   * самому, поэтому здесь нет ни баннера, ни блокировки сохранения.
+   */
+  const prefillFromAccount = async (userId: number) => {
+    try {
+      const prefill = await fetchUserPrefill(userId);
+      setForm((prev) => {
+        const next = {
+          ...prev,
+          phone: prev.phone || prefill.phone || '',
+          notes: prev.notes || prefill.bio || '',
+        };
+        setPrefilled({
+          phone: !prev.phone && !!prefill.phone,
+          notes: !prev.notes && !!prefill.bio,
+        });
+        return next;
+      });
+    } catch {
+      setPrefilled({});
+    }
+  };
 
   const [positionPopoverOpen, setPositionPopoverOpen] = useState(false);
   const [createPositionOpen, setCreatePositionOpen] = useState(false);
@@ -628,6 +701,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       setForm((prev) => ({ ...prev, user: String(data.id) }));
       setCreateUserOpen(false);
       setNewUserForm(blankNewUser());
+      setEmailEdited(false);
       setUserPopoverOpen(false);
     },
   });
@@ -681,6 +755,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                               // прошлой отменённой попытки достался бы
                               // следующему пользователю.
                               setNewUserForm(blankNewUser());
+                              setEmailEdited(false);
                               setCreateUserOpen(true);
                             }}
                           />
@@ -705,6 +780,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                                 onSelect={() => {
                                   setForm({ ...form, user: String(u.id) });
                                   setUserPopoverOpen(false);
+                                  prefillFromAccount(u.id);
                                 }}
                               >
                                 <Check className={cn("mr-2 h-4 w-4", form.user === String(u.id) ? "opacity-100" : "opacity-0")} />
@@ -884,6 +960,11 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               <label className="grid gap-2 text-sm">
                 {t('hr.pages.employees.fields.phone')}
                 <PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
+                {prefilled.phone && (
+                  <span className="text-xs text-muted-foreground">
+                    {t('hr.pages.employees.fromAccount', 'Подставлено из аккаунта')}
+                  </span>
+                )}
               </label>
               <label className="grid gap-2 text-sm">
                 {t('hr.pages.employees.fields.dateHired')}
@@ -901,6 +982,11 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
             <label className="grid gap-2 text-sm">
               {t('hr.pages.employees.fields.notes')}
               <Textarea value={form.notes} readOnly={!canWriteBasic} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+              {prefilled.notes && (
+                <span className="text-xs text-muted-foreground">
+                  {t('hr.pages.employees.fromAccount', 'Подставлено из аккаунта')}
+                </span>
+              )}
             </label>
 
             {visibleSections.map((section) => {
@@ -1197,14 +1283,16 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               {t('hr.pages.employees.fields.lastName')}
               <Input
                 value={newUserForm.last_name}
-                onChange={(e) => setNewUserForm({ ...newUserForm, last_name: e.target.value })}
+                onChange={(e) => setNewUserForm(withSuggestedEmail(
+                  { ...newUserForm, last_name: e.target.value }, emailEdited))}
               />
             </label>
             <label className="grid gap-2 text-sm">
               {t('hr.pages.employees.fields.firstName')}
               <Input
                 value={newUserForm.first_name}
-                onChange={(e) => setNewUserForm({ ...newUserForm, first_name: e.target.value })}
+                onChange={(e) => setNewUserForm(withSuggestedEmail(
+                  { ...newUserForm, first_name: e.target.value }, emailEdited))}
               />
             </label>
             <label className="grid gap-2 text-sm">
@@ -1219,7 +1307,10 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               <Input
                 type="email"
                 value={newUserForm.email}
-                onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+                onChange={(e) => {
+                  setEmailEdited(true);
+                  setNewUserForm({ ...newUserForm, email: e.target.value });
+                }}
               />
               <span className="text-xs text-muted-foreground">
                 {t('hr.pages.employees.usernameHint', 'Логин будет выведен из email:')}{' '}

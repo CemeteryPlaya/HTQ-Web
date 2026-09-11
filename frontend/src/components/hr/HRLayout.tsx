@@ -41,6 +41,7 @@ const navItems: HRNavItem[] = [
   // ── Персонал
   { to: '/hr/employees', icon: Users, labelKey: 'hr.nav.employees', levels: ['junior', 'middle', 'senior', 'lead'], category: 'people' },
   { to: '/hr/accounts', icon: IdCard, labelKey: 'hr.nav.accounts', levels: ['lead'], category: 'people' },
+  { to: '/hr/identity-requests', icon: IdCard, labelKey: 'hr.nav.identityRequests', levels: ['senior', 'lead'], category: 'people' },
   { to: '/hr/recruitment', icon: ClipboardList, labelKey: 'hr.nav.recruitment', levels: ['middle', 'senior', 'lead'], category: 'people' },
   { to: '/hr/archive', icon: Archive, labelKey: 'hr.nav.archive', levels: ['senior', 'lead'], category: 'people' },
 
@@ -187,7 +188,10 @@ export const HRLayout: React.FC<Props> = ({ title, subtitle, children }) => {
                   return (
                     <div key={catKey} className="space-y-1">
                       <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
-                        {categoryTitles[catKey] || catKey}
+                        {/* Через t(): categoryTitles хранит КЛЮЧИ перевода, как и
+                            labelKey у пунктов ниже. Без вызова сюда попадала сама
+                            строка ключа — «hr.nav.groups.people» вместо «Персонал». */}
+                        {t(categoryTitles[catKey] ?? catKey)}
                       </div>
                       <nav className="flex flex-col gap-0.5">
                         {items.map((item) => {

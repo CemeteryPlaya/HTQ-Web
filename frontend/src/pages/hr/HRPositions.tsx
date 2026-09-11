@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { GripVertical, Lock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { GripVertical, KeyRound, Lock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import api from '@/api/client';
+import { PositionRolesDialog } from '@/components/access/PositionRolesDialog';
 import HRLayout from '@/components/hr/HRLayout';
 import PositionLevelsPanel from '@/components/hr/PositionLevelsPanel';
 import { Button } from '@/components/ui/button';
@@ -118,6 +119,10 @@ const HRPositions = () => {
   });
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  // Роли должности — штатный путь выдачи прав (стадия 2, §4.3). Отдельным
+  // окном, а не полем формы: набор ролей живёт в своей аппке и заменяется
+  // целиком, а форма должности правит штатное расписание.
+  const [rolesFor, setRolesFor] = useState<Position | null>(null);
   const [editingPos, setEditingPos] = useState<Position | null>(null);
   const [form, setForm] = useState<{
     title: string;
@@ -769,6 +774,15 @@ const HRPositions = () => {
                                 </div>
                                 {isSenior && (
                                   <div className="flex items-center gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => setRolesFor(position)}
+                                      title={t('access.positionRoles.title', 'Роли должности')}
+                                      aria-label={`${t('access.positionRoles.title', 'Роли должности')}: ${position.title}`}
+                                    >
+                                      <KeyRound className="h-4 w-4" />
+                                    </Button>
                                     <Button size="sm" variant="ghost" onClick={() => startEdit(position)} title={t('hr.common.edit')}>
                                       <Pencil className="h-4 w-4" />
                                     </Button>
@@ -807,6 +821,14 @@ const HRPositions = () => {
             })}
           </div>
         </DragDropContext>
+
+        <PositionRolesDialog
+          positionId={rolesFor?.id ?? null}
+          positionTitle={rolesFor?.title ?? ''}
+          open={rolesFor !== null}
+          onOpenChange={(next) => { if (!next) setRolesFor(null); }}
+          canEdit={isSenior}
+        />
     </div>
   );
 

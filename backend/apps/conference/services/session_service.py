@@ -56,6 +56,38 @@ def _room_title(room_id: str) -> str:
         return ""
 
 
+def _default_title_from_creator(created_by_name: str) -> str:
+    """Запасное автоназвание — НЕ основной путь.
+
+    Основной расчёт «имя создателя + конференция» живёт на фронте (там же
+    он показан плейсхолдером в поле названия, и он обязан совпадать с тем,
+    что реально сохранится). Эта функция — вторая линия обороны на случай
+    старого клиента, который ещё не шлёт ``title``, или прямого обращения к
+    SFU в обход фронта: тогда сюда долетает только ``created_by_name``.
+    """
+    first_name = (created_by_name or "").strip().split(" ")[0]
+    if not first_name:
+        return ""
+    return f"{first_name} конференция"
+
+
+def _calendar_event_for(room_id: str) -> dict | None:
+    """Событие календаря этой комнаты — или None.
+
+    Импорт внутри функции и широкий ``except``: связь с календарём —
+    обогащение, а не условие приёма встречи. Выключенный или упавший
+    ``tasks`` не должен мешать людям разговаривать.
+    """
+    try:
+        from apps.tasks.interface import get_conference_event_for_room
+
+        return get_conference_event_for_room(room_id)
+    except Exception:
+        logger.info("conference: календарное событие для комнаты %s недоступно",
+                    room_id, exc_info=True)
+        return None
+
+
 def start_session(*, room_id: str, started_at=None, created_by_id: int | None = None,
                   created_by_name: str = "", title: str = "") -> ConferenceSession:
     """Открыть сессию в комнате или вернуть уже открытую.
@@ -71,9 +103,29 @@ def start_session(*, room_id: str, started_at=None, created_by_id: int | None = 
     if existing is not None:
         return existing
 
+    event = _calendar_event_for(room_id)
+
+    # Порядок разрешения названия — по убыванию приоритета:
+    #   1) название события календаря — у запланированной встречи название
+    #      уже есть, и вошедший (тем более вторым) не должен переименовывать
+    #      её своим автоназванием;
+    #   2) title, присланный SFU — это либо то, что человек сам вписал в
+    #      лобби, либо вычисленное фронтом автоназвание («Санжар конференция»),
+    #      которое СОВПАДАЕТ с плейсхолдером в поле — из фронта сюда всегда
+    #      приезжает непустая строка;
+    #   3) название из приглашения (см. _room_title) — прежний фолбэк;
+    #   4) собственный расчёт автоназвания из created_by_name — страховка на
+    #      случай старого клиента или прямого обращения к SFU в обход фронта,
+    #      когда title вообще не пришёл.
     session = ConferenceSession(
         room_id=room_id,
-        title=title or _room_title(room_id),
+        title=(
+            (event or {}).get("title")
+            or title
+            or _room_title(room_id)
+            or _default_title_from_creator(created_by_name)
+        ),
+        calendar_event_id=(event or {}).get("id"),
         created_by_id=created_by_id,
         created_by_name=created_by_name,
         started_at=started_at,
@@ -96,6 +148,23 @@ def start_session(*, room_id: str, started_at=None, created_by_id: int | None = 
                                                    ended_at__isnull=True).first()
         if session is None:  # pragma: no cover — только при гонке с finish()
             raise
+    else:
+        # Ставим ТОЛЬКО на ветке создания. start_session зовётся на каждом
+        # входе в комнату, и это единственное место, где новая встреча
+        # появляется ровно один раз, — значит идемпотентность рассылки
+        # получается даром, без флагов в БД.
+        if session.calendar_event_id is not None:
+            from apps.conference.tasks import notify_session_started
+
+            # Ошибка брокера не должна ронять start_session: сессия уже
+            # создана и сохранена, а из-за упавшего .delay() SFU получил бы
+            # 500 на успешно открытую встречу. Прецедент — enqueue_processing
+            # ниже в этом файле, обёрнут по той же причине.
+            try:
+                notify_session_started.delay(session.pk)
+            except Exception:
+                logger.exception("conference: не удалось поставить уведомление "
+                                 "о начале сессии %s", session.pk)
     return session
 
 

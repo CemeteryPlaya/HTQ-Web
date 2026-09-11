@@ -3,8 +3,8 @@ import { Menu, X, Search, ArrowLeft, UserCircle, ChevronDown } from 'lucide-reac
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { usePermissions } from '@/hooks/usePermissions';
 import { useHRLevel } from '@/hooks/useHRLevel';
-import { hasEmployeeTaskAccess, isEditor, isHrManager } from '@/lib/auth/roles';
 import { splitForHeader, visibleNavItems, type NavItem } from '@/app/navigation/navItems';
 import {
   DropdownMenu,
@@ -50,6 +50,7 @@ export const Header = () => {
   const { activeProfile, isLoggedIn } = useActiveProfile({
     staleTime: 5 * 60 * 1000,
   });
+  const permissions = usePermissions();
   const { hasHrAccess } = useHRLevel({ enabled: isLoggedIn });
 
   useEffect(() => {
@@ -119,9 +120,9 @@ export const Header = () => {
   // общего с мобильной нижней панелью — раньше два списка жили порознь и
   // разошлись: из шапки были недостижимы чаты, почта и файлы.
   const employeeNav = visibleNavItems({
-    isEditor: isEditor(activeProfile),
-    isHr: isHrManager(activeProfile) || hasHrAccess,
-    hasTasks: hasEmployeeTaskAccess(activeProfile),
+    isEditor: permissions.atLeast('cms', 'write'),
+    isHr: permissions.atLeast('hr', 'read') || hasHrAccess,
+    hasTasks: permissions.atLeast('tasks', 'read'),
     hasDepartment: Boolean(activeProfile?.department),
   });
 

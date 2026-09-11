@@ -17,7 +17,7 @@ def _playable(session: ConferenceSession) -> bool:
     return session.recording_state == RecordingState.READY
 
 
-def _to_list_item(session: ConferenceSession) -> schemas.SessionListItem:
+def to_list_item(session: ConferenceSession) -> schemas.SessionListItem:
     return schemas.SessionListItem(
         id=session.pk,
         room_id=session.room_id,
@@ -69,7 +69,7 @@ def list_sessions(request, *, page: int, limit: int, query: str = "",
     rows = list(queryset.order_by("-started_at")[offset:offset + limit])
 
     return schemas.SessionListResponse(
-        items=[_to_list_item(row) for row in rows],
+        items=[to_list_item(row) for row in rows],
         total=total, page=page, pages=pages, limit=limit,
         recorded_total=recorded_total, active_total=active_total,
     )
@@ -77,7 +77,7 @@ def list_sessions(request, *, page: int, limit: int, query: str = "",
 
 def session_detail(session: ConferenceSession) -> schemas.SessionDetail:
     participants = list(session.participants.all())
-    base = _to_list_item(session)
+    base = to_list_item(session)
     playable = _playable(session)
 
     # Ссылки подписываем ЗДЕСЬ, потому что права проверены прямо перед
@@ -89,11 +89,19 @@ def session_detail(session: ConferenceSession) -> schemas.SessionDetail:
     poster_url = (signing.poster_url(session.pk)
                   if playable and _has_poster(session) else None)
 
+    participants_read = []
+    for row in participants:
+        item = schemas.ParticipantRead.model_validate(row)
+        if row.left_at is not None:
+            delta = row.left_at - session.started_at
+            item.left_offset_ms = max(0, int(delta.total_seconds() * 1000))
+        participants_read.append(item)
+
     return schemas.SessionDetail(
         **base.model_dump(),
         error=session.error,
         purged_at=session.purged_at,
-        participants=[schemas.ParticipantRead.model_validate(p) for p in participants],
+        participants=participants_read,
         playable=playable,
         recording_url=recording_url,
         download_url=download_url,

@@ -30,6 +30,7 @@ import {
   downloadTranscript,
   getSession,
   getTranscript,
+  type ConferenceParticipant,
   type ConferenceSessionDetail as SessionDetail,
   type TranscriptSegment,
 } from '@/api/conference';
@@ -165,6 +166,13 @@ const ConferenceSessionDetailPage: React.FC = () => {
           <Users className="h-4 w-4" />
           {session.participants.length}
         </span>
+        {session.ended_at === null && (
+          <Button asChild size="sm">
+            <Link to={`/room/${session.room_id}`}>
+              {t('conference.overview.join', 'Войти')}
+            </Link>
+          </Button>
+        )}
       </div>
 
       <RecordingPane
@@ -174,7 +182,7 @@ const ConferenceSessionDetailPage: React.FC = () => {
         daysLeft={daysLeft}
       />
 
-      <ParticipantsList session={session} />
+      <ParticipantsSummary participants={session.participants} />
 
       <section className="mt-10">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -302,26 +310,59 @@ const Notice: React.FC<{ icon: React.ReactNode; children: React.ReactNode }> = (
   </div>
 );
 
-const ParticipantsList: React.FC<{ session: SessionDetail }> = ({ session }) => {
+// Минуты и секунды считаются от начала встречи, а не от абсолютного времени —
+// иначе человеку пришлось бы вычитать в уме, глядя на часовую запись.
+const offsetLabel = (ms: number): string => {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
+export const ParticipantsSummary: React.FC<{
+  participants: ConferenceParticipant[];
+}> = ({ participants }) => {
   const { t } = useTranslation();
-  if (session.participants.length === 0) return null;
+  if (participants.length === 0) return null;
 
   return (
     <section className="mt-8">
       <h2 className="mb-3 text-lg font-semibold">
         {t('conference.detail.participants', 'Участники')}
       </h2>
-      <ul className="flex flex-wrap gap-2">
-        {session.participants.map((participant) => (
-          <li key={participant.id}>
-            <Badge variant={participant.is_guest ? 'outline' : 'secondary'}>
-              {participant.display_name}
-              {participant.is_guest
-                && ` · ${t('conference.detail.guest', 'гость')}`}
-            </Badge>
-          </li>
-        ))}
-      </ul>
+      <div className="overflow-x-auto rounded-2xl border">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40 text-left">
+            <tr>
+              <th className="p-3">{t('conference.detail.who', 'Участник')}</th>
+              <th className="p-3">{t('conference.detail.joinedAt', 'Вошёл')}</th>
+              <th className="p-3">{t('conference.detail.leftAt', 'Вышел')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {participants.map((participant) => (
+              <tr key={participant.id} className="border-t">
+                <td className="p-3">
+                  {participant.display_name}
+                  {participant.is_guest && (
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {t('conference.detail.guest', 'гость')}
+                    </span>
+                  )}
+                </td>
+                <td className="p-3 tabular-nums">
+                  {offsetLabel(participant.joined_offset_ms)}
+                </td>
+                <td className="p-3 tabular-nums">
+                  {participant.left_offset_ms === null
+                    ? t('conference.detail.tillEnd', 'до конца')
+                    : offsetLabel(participant.left_offset_ms)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 };
