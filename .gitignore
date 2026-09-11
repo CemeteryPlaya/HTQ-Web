@@ -99,3 +99,9 @@ requirementsNDPP.txt
 db-vps.ps1
 .playwright-mcp
 memory.md
+prod-hotfix.patch
+docker-compose.override.yml
+*.bak
+db_schema.csv
+table_data.csv
+existing_models.py
