@@ -13,6 +13,7 @@ from apps.contracts.models import (
     Administrator, AdvancePayment, AdvancePaymentStatus, Agreement, AgreementStatus,
     CompletionAct, ContractPayment,
 )
+from apps.contracts.services import budget_calc
 from apps.media_files import interface as media
 from apps.signoff import interface as signoff
 
@@ -90,7 +91,8 @@ def check_agreement_capacity(agreement: Agreement, amount) -> None:
         )
 
 
-def serialize_completion_act(act: CompletionAct) -> dict:
+def serialize_completion_act(act: CompletionAct, *, with_budget: bool = False) -> dict:
+    """``with_budget`` — см. ``advance_payment_service.serialize_advance_payment``."""
     agreement = act.agreement
     return {
         "id": act.pk,
@@ -112,6 +114,7 @@ def serialize_completion_act(act: CompletionAct) -> dict:
         "created_by": act.created_by,
         "created_at": act.created_at,
         "updated_at": act.updated_at,
+        "budget_overrun": budget_calc.open_payment_overrun(act) if with_budget else None,
     }
 
 

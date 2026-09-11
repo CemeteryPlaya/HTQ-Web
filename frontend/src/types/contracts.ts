@@ -281,6 +281,12 @@ export interface AdvancePayment {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+  /**
+   * На сколько программа за лимитом с учётом этой оплаты по ОТКРЫТОМУ
+   * договору; `null` — не за лимитом. Предупреждение, не запрет. Приходит
+   * только в карточке и в ответе на создание — в списке всегда `null`.
+   */
+  budget_overrun?: string | null;
 }
 
 export type AccountableFundsRequestStatus =
@@ -349,6 +355,8 @@ export interface ContractPayment {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+  /** См. `AdvancePayment.budget_overrun`. */
+  budget_overrun?: string | null;
 }
 
 export interface CompletionAct {
@@ -371,6 +379,8 @@ export interface CompletionAct {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+  /** См. `AdvancePayment.budget_overrun`. */
+  budget_overrun?: string | null;
 }
 
 /** A current action in the contracts-only personal queue. */

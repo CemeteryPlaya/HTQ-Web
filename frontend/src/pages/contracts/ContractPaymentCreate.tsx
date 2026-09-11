@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import { contractsApi } from '@/api/contracts';
+import { BudgetOverrunNotice } from '@/components/contracts/BudgetOverrunNotice';
+import { useDraftBudgetOverrun } from '@/components/contracts/useDraftBudgetOverrun';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { exceedsRemaining, formatRemaining } from '@/components/contracts/format';
 import { Button } from '@/components/ui/button';
@@ -23,6 +25,7 @@ export default function ContractPaymentCreate() {
   const eligible = agreements.filter(a => a.approval_state === 'approved' && String(a.administrator_id) === administratorId && !['terminated', 'executed'].includes(a.status));
   const selected = eligible.find(a => String(a.id) === agreementId);
   const invalidAmount = !AMOUNT_RE.test(amount.trim()) || Number(amount.replace(',', '.')) <= 0 || (selected && exceedsRemaining(amount, selected.remaining_amount));
+  const budgetOverrun = useDraftBudgetOverrun(selected, amount);
   const create = useMutation({
     mutationFn: () => contractsApi.createContractPayment(Number(administratorId), Number(agreementId), amount.replace(',', '.'), invoice!).then(r => r.data),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['contracts'] }); toast.success('Оплата по договору создана'); navigate('/contracts/contract-payments'); },
@@ -35,6 +38,7 @@ export default function ContractPaymentCreate() {
       <div><Label>Договор</Label><Select value={agreementId} onValueChange={setAgreementId} disabled={!administratorId}><SelectTrigger><SelectValue placeholder="Выберите договор" /></SelectTrigger><SelectContent>{eligible.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.number} — {a.name}</SelectItem>)}</SelectContent></Select></div>
       {selected && <p className="rounded-md border bg-muted/40 p-3 text-sm">Доступно к оплате: <strong>{formatRemaining(selected.remaining_amount, selected.currency)}</strong>{selected.remaining_amount === null && <span className="text-muted-foreground"> — открытый договор</span>}</p>}
       <div><Label>Сумма</Label><Input inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="100000.00" /></div>
+      {selected && <BudgetOverrunNotice overrun={budgetOverrun} currency={selected.currency} />}
       <div><Label>Счёт</Label><Input type="file" onChange={e => setInvoice(e.target.files?.[0] ?? null)} />{invoice && <p className="mt-1 text-xs text-muted-foreground">{invoice.name}</p>}</div>
     </CardContent></Card><div className="mt-6 flex gap-3"><Button disabled={create.isPending}>{create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Создать</Button><Button type="button" variant="outline" onClick={() => navigate('/contracts/contract-payments')}>Отмена</Button></div></form>
   </div></ContractsShell>;

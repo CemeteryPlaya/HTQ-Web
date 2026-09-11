@@ -18,6 +18,7 @@ from django.utils import timezone
 from apps.contracts.models import (
     AdvancePayment, AdvancePaymentStatus, Agreement, AgreementStatus, CompletionAct, ContractPayment,
 )
+from apps.contracts.services import budget_calc
 from apps.contracts.services.reference_service import conflict_as
 from apps.media_files import interface as media
 from apps.signoff import interface as signoff
@@ -101,7 +102,9 @@ def check_agreement_capacity(agreement: Agreement, amount) -> None:
         )
 
 
-def serialize_advance_payment(payment: AdvancePayment) -> dict:
+def serialize_advance_payment(payment: AdvancePayment, *, with_budget: bool = False) -> dict:
+    """``with_budget`` — посчитать ``budget_overrun`` (карточка и ответ на
+    создание). В списке не считается: это запросы к бюджету на каждую строку."""
     agreement = payment.agreement
     return {
         "id": payment.pk,
@@ -120,6 +123,7 @@ def serialize_advance_payment(payment: AdvancePayment) -> dict:
         "created_by": payment.created_by,
         "created_at": payment.created_at,
         "updated_at": payment.updated_at,
+        "budget_overrun": budget_calc.open_payment_overrun(payment) if with_budget else None,
     }
 
 

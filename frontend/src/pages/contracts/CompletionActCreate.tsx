@@ -5,6 +5,8 @@ import { ArrowLeft, FileText, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { contractsApi } from '@/api/contracts';
+import { BudgetOverrunNotice } from '@/components/contracts/BudgetOverrunNotice';
+import { useDraftBudgetOverrun } from '@/components/contracts/useDraftBudgetOverrun';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { exceedsRemaining, formatDate, formatMoment, formatMoney, formatRemaining } from '@/components/contracts/format';
 import { Button } from '@/components/ui/button';
@@ -31,6 +33,7 @@ export default function CompletionActCreate() {
   const { data: enums } = useQuery({ queryKey: ['contracts', 'enums'], queryFn: () => contractsApi.getEnums().then(r => r.data) });
   const selected = selectedAgreement ?? selectedFromList;
   const invalidAmount = !AMOUNT_RE.test(amount.trim()) || Number(amount.replace(',', '.')) <= 0 || (selected && exceedsRemaining(amount, selected.remaining_amount));
+  const budgetOverrun = useDraftBudgetOverrun(selected, amount);
   const agreementStatusLabel = selected ? enums?.agreement_status.find(option => option.value === selected.status)?.label ?? selected.status : '';
   const paymentTypeLabel = selected ? enums?.payment_type.find(option => option.value === selected.payment_type)?.label ?? selected.payment_type : '';
   const create = useMutation({
@@ -70,6 +73,7 @@ export default function CompletionActCreate() {
         </dl>
       </section>}
       <div><Label>Сумма</Label><Input inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="100000.00" /></div>
+      {selected && <BudgetOverrunNotice overrun={budgetOverrun} currency={selected.currency} />}
       <div><Label>Акт</Label><Input type="file" onChange={e => setAct(e.target.files?.[0] ?? null)} />{act && <p className="mt-1 text-xs text-muted-foreground">{act.name}</p>}</div>
     </CardContent></Card><div className="mt-6 flex gap-3"><Button disabled={create.isPending}>{create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Создать</Button><Button type="button" variant="outline" onClick={() => navigate('/contracts/completion-acts')}>Отмена</Button></div></form>
   </div></ContractsShell>;

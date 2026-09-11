@@ -612,6 +612,11 @@ class AdvancePaymentRead(BaseModel):
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
+    # На сколько строка бюджета за лимитом с учётом этой оплаты по ОТКРЫТОМУ
+    # договору (``budget_calc.open_payment_overrun``). Предупреждение, не
+    # запрет. Считается только в карточке и в ответе на создание — в списке
+    # всегда ``None``, иначе каждая строка списка стоила бы запросов к бюджету.
+    budget_overrun: Optional[Decimal] = None
 
 
 # ── Заявка на подотчётные средства ────────────────────────────────────────
@@ -685,6 +690,8 @@ class ContractPaymentRead(BaseModel):
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
+    # См. ``AdvancePaymentRead.budget_overrun``.
+    budget_overrun: Optional[Decimal] = None
 
 
 class CompletionActRead(BaseModel):
@@ -707,6 +714,8 @@ class CompletionActRead(BaseModel):
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
+    # См. ``AdvancePaymentRead.budget_overrun``.
+    budget_overrun: Optional[Decimal] = None
 
 
 # ── Personal action queue ────────────────────────────────────────────────

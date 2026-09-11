@@ -293,7 +293,8 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
     # Черновик лимит не проверяет — он его и не занимает
     # (budget_calc.COMMITTING_STATUSES).
     if status in budget_calc.COMMITTING_STATUSES:
-        budget_calc.check_capacity(line, amount)
+        budget_calc.check_capacity(
+            line, budget_calc.agreement_commitment(contract_type, amount))
 
     with conflict_as(f"Договор с номером {number} уже зарегистрирован"):
         return Agreement.objects.create(
@@ -341,12 +342,19 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
                       check_budget_status=budget_changed,
                       check_counterparty_status=counterparty_changed)
 
+    # Тип, который у договора БУДЕТ после этой правки: от него зависят обе
+    # проверки ниже — и что занимает строку бюджета, и есть ли сумма, которую
+    # сравнивать с оплаченным.
+    contract_type = fields.get("contract_type") or agreement.contract_type
+
     if agreement.status in budget_calc.COMMITTING_STATUSES:
         # exclude_agreement_id — чтобы собственная СТАРАЯ сумма договора не
         # считалась чужой занятостью: без этого увеличение суммы на 1 ₸
         # сравнивалось бы с остатком, из которого уже вычтена вся старая
         # сумма, и почти всегда падало бы.
-        budget_calc.check_capacity(line, amount, exclude_agreement_id=agreement.pk)
+        budget_calc.check_capacity(
+            line, budget_calc.agreement_commitment(contract_type, amount),
+            exclude_agreement_id=agreement.pk)
 
     # Не даём уменьшить сумму договора ниже того, что по нему уже проведено
     # (предоплата, оплаты, акты). Сам остаток не хранится: он считается из
@@ -362,7 +370,6 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
     # «сумма меньше оплаченного». Смотрим на тип, который у договора БУДЕТ
     # после этой правки: перевод открытого договора в стандартный как раз
     # и должен проверить, что новая сумма покрывает уже оплаченное.
-    contract_type = fields.get("contract_type") or agreement.contract_type
     if contract_type != AgreementType.OPEN:
         paid = advance_payment_svc.total_paid_amount_for_agreement(agreement.pk)
         if amount < paid:
@@ -451,8 +458,9 @@ def change_status(agreement_id: int, new_status: str, *, actor_id: int | None = 
         # статуса. Обратный переход (в черновик, в расторгнут) бюджет
         # освобождает и проверять нечего.
         line = _lock_line(agreement.budget_line_id)
-        budget_calc.check_capacity(line, agreement.amount,
-                                   exclude_agreement_id=agreement.pk)
+        budget_calc.check_capacity(
+            line, budget_calc.agreement_commitment(agreement.contract_type, agreement.amount),
+            exclude_agreement_id=agreement.pk)
 
     agreement.status = new_status
     agreement.save(update_fields=["status", "updated_at"])
@@ -485,8 +493,9 @@ def submit_for_approval(agreement_id: int, *, actor_id: int | None = None) -> di
 
     line = _lock_line(agreement.budget_line_id)
     _validate_context(line, agreement.counterparty, agreement.currency)
-    budget_calc.check_capacity(line, agreement.amount,
-                               exclude_agreement_id=agreement.pk)
+    budget_calc.check_capacity(
+        line, budget_calc.agreement_commitment(agreement.contract_type, agreement.amount),
+        exclude_agreement_id=agreement.pk)
 
     # enrich=True: карточка уходит прямо в HTTP-ответ, и фронтенду после
     # отправки нужно показать «кто согласует», а не голые user_id.

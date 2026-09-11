@@ -32,8 +32,8 @@ from .helpers import BASE, auth, make_agreement, make_line, token
 pytestmark = pytest.mark.django_db
 
 
-def _open_agreement(line=None, *, approved=True, **over):
-    agreement = make_agreement(line=line or make_line(), amount="0.00",
+def _open_agreement(line=None, *, approved=True, amount="0.00", **over):
+    agreement = make_agreement(line=line or make_line(), amount=amount,
                                contract_type=AgreementType.OPEN, **over)
     # Оплату заводят только по согласованному договору, а править можно
     # только НЕсогласованный (согласованный заперт до возврата на доработку)
@@ -66,6 +66,54 @@ def test_payment_against_open_agreement_is_accepted(monkeypatch):
         "invoice": SimpleUploadedFile("invoice.pdf", b"PDF"),
     }, **auth(token()))
     assert response.status_code == 201, response.content
+
+
+def test_open_agreement_payment_over_budget_is_accepted_with_warning(monkeypatch):
+    # Перерасход по открытому договору предупреждает, но не запрещает (так
+    # решил заказчик): оплата создаётся, а в ответе — на сколько программа
+    # уйдёт за лимит.
+    agreement = _open_agreement(make_line(amount="1000000.00"))
+    monkeypatch.setattr(
+        "apps.contracts.services.contract_payment_service.media.store_file",
+        lambda **kwargs: {"id": "invoice-1"},
+    )
+    response = Client().post(f"{BASE}/contract-payments", {
+        "administrator_id": str(agreement.budget_line.budget.administrator_id),
+        "agreement_id": str(agreement.pk), "amount": "1500000.00",
+        "invoice": SimpleUploadedFile("invoice.pdf", b"PDF"),
+    }, **auth(token()))
+
+    assert response.status_code == 201, response.content
+    assert response.json()["budget_overrun"] == "500000.00"
+    detail = Client().get(f"{BASE}/contract-payments/{response.json()['id']}", **auth(token()))
+    assert detail.json()["budget_overrun"] == "500000.00"
+
+
+def test_budget_overrun_is_not_counted_twice_once_payment_is_spending():
+    # До одобрения оплата в остатке строки не сидит — вычитается сама; после
+    # одобрения уже сидит, и второй раз её вычитать нельзя.
+    line = make_line(amount="1000000.00")
+    agreement = _open_agreement(line)
+    draft = _payment(agreement, "1500000.00", AdvancePaymentStatus.DRAFT)
+    assert budget_calc.open_payment_overrun(draft) == Decimal("500000.00")
+
+    draft.status = AdvancePaymentStatus.CLOSED
+    draft.save(update_fields=["status"])
+    assert budget_calc.open_payment_overrun(draft) == Decimal("500000.00")
+
+
+def test_no_budget_warning_within_limit_or_for_standard_agreement():
+    line = make_line(amount="1000000.00")
+    open_agreement = _open_agreement(line)
+    within = _payment(open_agreement, "300000.00", AdvancePaymentStatus.DRAFT)
+    # Стандартный договор охраняет бюджет своей суммой; его оплаты строку
+    # не занимают, и предупреждать по ним не о чем.
+    standard = make_agreement(line=line, amount="500000.00", number="Д-002",
+                              counterparty=open_agreement.counterparty)
+    big = _payment(standard, "500000.00", AdvancePaymentStatus.DRAFT)
+
+    assert budget_calc.open_payment_overrun(within) is None
+    assert budget_calc.open_payment_overrun(big) is None
 
 
 def test_editing_open_agreement_with_payments_is_allowed():
@@ -155,6 +203,31 @@ def test_open_agreement_card_through_api():
     assert response.status_code == 200, response.content
     assert response.json()["remaining_amount"] is None
     assert response.json()["contract_type"] == "open"
+
+
+def test_open_agreement_with_amount_is_counted_by_payments_only():
+    # В реестре бывает открытый договор с проставленной суммой (у
+    # DOC-00050-20260806 — 1 550 000). Расход по нему — оплаты; посчитай
+    # ещё и сумму — одни и те же деньги легли бы в строку дважды.
+    line = make_line(amount="5000000.00")
+    agreement = _open_agreement(line, amount="1550000.00")
+    _payment(agreement, "1250000.00")
+
+    assert budget_calc.committed_for(line.pk) == Decimal("1250000.00")
+
+
+def test_open_agreement_amount_does_not_hit_budget_check():
+    # Лимит проверяется на то, что договор займёт, а открытый договор суммой
+    # не займёт ничего: его сумма больше остатка строки — не повод не
+    # пустить его в занимающий статус.
+    line = make_line(amount="1000000.00")
+    agreement = _open_agreement(line, approved=False, status="draft",
+                                amount="5000000.00")
+
+    moved = agreement_service.change_status(agreement.pk, "on_review")
+
+    assert moved.status == "on_review"
+    assert budget_calc.committed_for(line.pk) == Decimal("0.00")
 
 
 def test_terminated_open_agreement_keeps_its_spending():

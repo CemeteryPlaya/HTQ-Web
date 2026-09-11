@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { BudgetOverrunNotice } from '@/components/contracts/BudgetOverrunNotice';
+import { useDraftBudgetOverrun } from '@/components/contracts/useDraftBudgetOverrun';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { formatAmount } from '@/components/contracts/format';
 import { Button } from '@/components/ui/button';
@@ -27,6 +29,7 @@ const AdvancePaymentCreate = () => {
   const approved = agreements.filter((agreement) => agreement.approval_state === 'approved');
   const selected = approved.find((agreement) => String(agreement.id) === agreementId);
   const invalidAmount = !amount.trim() || !AMOUNT_RE.test(amount.trim()) || Number(amount.replace(',', '.')) <= 0;
+  const budgetOverrun = useDraftBudgetOverrun(selected, amount);
 
   const create = useMutation({
     mutationFn: () => contractsApi.createAdvancePayment({ agreement_id: Number(agreementId), amount: amount.replace(',', '.') }).then((r) => r.data),
@@ -42,6 +45,7 @@ const AdvancePaymentCreate = () => {
         <div><Label htmlFor="agreement">Согласованный договор</Label><Select value={agreementId} onValueChange={setAgreementId} disabled={isLoading || approved.length === 0}><SelectTrigger id="agreement"><SelectValue placeholder={isLoading ? 'Загрузка…' : 'Выберите договор'} /></SelectTrigger><SelectContent>{approved.map((agreement) => <SelectItem key={agreement.id} value={String(agreement.id)}>{agreement.number} — {agreement.name}</SelectItem>)}</SelectContent></Select></div>
         {selected && <div className="rounded-md border bg-muted/40 p-4 text-sm"><div className="flex justify-between gap-4"><span className="text-muted-foreground">Контрагент</span><span>{selected.counterparty_name}</span></div><div className="mt-2 flex justify-between gap-4"><span className="text-muted-foreground">Сумма договора</span><span className="tabular-nums">{formatAmount(selected.amount)} {selected.currency}</span></div></div>}
         <div><Label htmlFor="amount">Сумма предоплаты</Label><div className="mt-1 flex items-center gap-2"><Input id="amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="400000.00" /><span className="text-sm text-muted-foreground">{selected?.currency ?? ''}</span></div></div>
+        {selected && <BudgetOverrunNotice overrun={budgetOverrun} currency={selected.currency} />}
       </CardContent></Card>
       <div className="mt-6 flex gap-3"><Button type="submit" disabled={create.isPending || !agreementId || invalidAmount}>{create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Создать</Button><Button type="button" variant="outline" onClick={() => navigate('/contracts/advance-payments')}>Отмена</Button></div>
     </form>
