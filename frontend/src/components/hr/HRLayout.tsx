@@ -8,6 +8,7 @@ import { type HRLevel, useHRLevel } from '@/hooks/useHRLevel';
 import { Input } from '@/components/ui/input';
 import { HRQuickActionsBar } from './HRQuickActionsBar';
 import { cn } from '@/lib/utils';
+import { translatedMap } from '@/lib/i18n/translatedMap';
 import {
   Users,
   Building2,
@@ -62,12 +63,18 @@ const navItems: HRNavItem[] = [
   { to: '/hr/history', icon: History, labelKey: 'hr.nav.history', levels: ['senior', 'lead'], category: 'admin' },
 ];
 
-const categoryTitles: Record<string, string> = {
+/* Карта уровня модуля: `t` из хука здесь недоступен, а подставить перевод в
+ * значения нельзя — на импорте словарь i18n ещё не загружен, и подпись застыла
+ * бы языком на момент сборки. Поэтому ключи переводятся на чтение — тем же
+ * `translatedMap`, что и остальные такие таблицы в HR. Без него значение
+ * уходило в разметку как есть, и в шапке группы читалось «HR.NAV.GROUPS.PEOPLE»
+ * (капс — от `uppercase` на самом заголовке). */
+const categoryTitles: Record<string, string> = translatedMap({
   people: 'hr.nav.groups.people',
   org: 'hr.nav.groups.org',
   tracking: 'hr.nav.groups.tracking',
   admin: 'hr.nav.groups.admin',
-};
+});
 
 interface Props {
   title: string;

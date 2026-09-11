@@ -19,6 +19,7 @@ import {
     UserCircle } from 'lucide-react';
 
 import api from '@/api/client';
+import { reportApiError } from '@/lib/apiError';
 import { BackToProfile } from '@/components/BackToProfile';
 import { CorporateMailSettings } from '@/components/mail/CorporateMailSettings';
 import { Header } from '@/components/Header';
@@ -212,9 +213,7 @@ const PersonalInfoCard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
             });
             toast.success(t('settingsPage.personalSaved', 'Личные данные обновлены'));
         },
-        onError: () => {
-            toast.error(t('settingsPage.personalSaveError', 'Не удалось сохранить'));
-        },
+        onError: (err) => reportApiError(err, t('settingsPage.personalSaveError', 'Не удалось сохранить')),
     });
 
     return (
@@ -387,9 +386,7 @@ const ContactInfoCard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
             form.reset({ phone: updated.phone || '' });
             toast.success(t('settingsPage.contactSaved', 'Контактные данные обновлены'));
         },
-        onError: () => {
-            toast.error(t('settingsPage.contactSaveError', 'Не удалось сохранить'));
-        },
+        onError: (err) => reportApiError(err, t('settingsPage.contactSaveError', 'Не удалось сохранить')),
     });
 
     return (
@@ -636,12 +633,7 @@ const PasswordCard: React.FC = () => {
             toast.success(t('settingsPage.passwordChanged', 'Пароль изменён'));
             form.reset();
         },
-        onError: (err: any) => {
-            const detail = err?.response?.data?.detail;
-            toast.error(
-                detail || t('settingsPage.passwordChangeError', 'Не удалось изменить пароль'),
-            );
-        },
+        onError: (err) => reportApiError(err, t('settingsPage.passwordChangeError', 'Не удалось изменить пароль')),
     });
 
     return (

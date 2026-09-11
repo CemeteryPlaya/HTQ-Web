@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { reportApiError } from '@/lib/apiError';
 import { isPlatformAdmin } from '@/lib/auth/roles';
 import type { Role, RolePermission } from '@/types/access';
 
@@ -93,11 +94,12 @@ const RoleCatalog = () => {
       toast.success(t('access.catalog.created', 'Роль создана'));
     },
     onError: (error: AxiosError) => {
-      toast.error(
-        error.response?.status === 422
-          ? t('access.catalog.codeTaken', 'Код роли уже занят — он уникален на всей платформе')
-          : t('access.catalog.saveFailed', 'Не удалось сохранить'),
-      );
+      if (error.response?.status === 422) {
+        toast.error(
+          t('access.catalog.codeTaken', 'Код роли уже занят — он уникален на всей платформе'));
+        return;
+      }
+      reportApiError(error, t('access.catalog.saveFailed', 'Не удалось сохранить'));
     },
   });
 
@@ -120,14 +122,17 @@ const RoleCatalog = () => {
     },
     onError: (error: AxiosError) => {
       const status = error.response?.status;
-      toast.error(
-        status === 422
-          ? t('access.catalog.codeTaken', 'Код роли уже занят — он уникален на всей платформе')
-          : status === 409
-            ? t('access.catalog.codeLocked',
-              'Код системной роли менять нельзя: по нему её находят миграции.')
-            : t('access.catalog.saveFailed', 'Не удалось сохранить'),
-      );
+      if (status === 422) {
+        toast.error(
+          t('access.catalog.codeTaken', 'Код роли уже занят — он уникален на всей платформе'));
+        return;
+      }
+      if (status === 409) {
+        toast.error(t('access.catalog.codeLocked',
+          'Код системной роли менять нельзя: по нему её находят миграции.'));
+        return;
+      }
+      reportApiError(error, t('access.catalog.saveFailed', 'Не удалось сохранить'));
     },
   });
 
@@ -159,7 +164,7 @@ const RoleCatalog = () => {
         toast.error(t('access.catalog.systemRole', 'Служебную роль удалить нельзя'));
         return;
       }
-      toast.error(t('access.catalog.deleteFailed', 'Не удалось удалить роль'));
+      reportApiError(error, t('access.catalog.deleteFailed', 'Не удалось удалить роль'));
     },
   });
 
@@ -178,7 +183,8 @@ const RoleCatalog = () => {
       });
       toast.success(t('access.catalog.permissionsSaved', 'Права роли сохранены'));
     },
-    onError: () => toast.error(t('access.catalog.saveFailed', 'Не удалось сохранить')),
+    onError: (error) => reportApiError(
+      error, t('access.catalog.saveFailed', 'Не удалось сохранить')),
   });
 
   return (

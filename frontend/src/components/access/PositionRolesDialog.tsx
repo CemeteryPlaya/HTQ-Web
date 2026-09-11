@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import type { Role } from '@/types/access';
+import { reportApiError } from '@/lib/apiError';
 
 /**
  * Роли должности — штатный путь выдачи прав (§4.3 спеки стадии 2).
@@ -83,7 +84,8 @@ export function PositionRolesDialog({
       toast.success(t('access.positionRoles.saved', 'Роли должности сохранены'));
       onOpenChange(false);
     },
-    onError: () => toast.error(t('access.positionRoles.saveFailed', 'Не удалось сохранить роли')),
+    onError: (err) => reportApiError(
+      err, t('access.positionRoles.saveFailed', 'Не удалось сохранить роли')),
   });
 
   const roles: Role[] = rolesQuery.data ?? [];

@@ -39,15 +39,19 @@ x-django-env: &django-env
   DJANGO_SETTINGS_MODULE: htqweb.settings.base
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
   JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-  # Публичный адрес (ссылки в письмах) — он же доверенный origin для CSRF
-  # django-admin; прочие адреса стенда — CSRF_TRUSTED_ORIGINS через запятую.
-  # См. «CSRF за прокси» в backend/htqweb/settings/base.py.
-  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+  # Доверенные origin'ы для CSRF в django-admin: адреса стенда через запятую.
+  # Второй источник — PUBLIC_BASE_URL, он объявлен ниже, в своей секции (сюда
+  # его дубликатом не возвращать: YAML запрещает повторный ключ, и compose
+  # падает на парсинге всего файла). См. «CSRF за прокси» в
+  # backend/htqweb/settings/base.py.
   CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-}
   # Django (psycopg, sync) идёт НАПРЯМУЮ в Postgres: CONN_MAX_AGE пулит на уровне
   # приложения, а PgBouncer transaction-mode рвал бы DDL/prepared-statements.
   # Контейнер pgbouncer (:6432) остаётся для хостовых утилит/совместимости.
-  DB_HOST: ${DB_HOST:-45.10.110.212}   # БД в Docker на VPS; локальная база — docker-compose.test-local.yml
+  # Обязательна и БЕЗ умолчания: раньше здесь стоял адрес боевого VPS, и
+  # пустая/опечатанная переменная в .env молча уводила стек на прод.
+  # Локальная база — docker-compose.test-local.yml.
+  DB_HOST: ${DB_HOST:?укажите адрес БД в .env — молчаливого умолчания на прод здесь быть не должно}
   DB_PORT: "${DB_PORT:-5432}"
   DB_NAME: ${DB_NAME:-htqweb}
   DB_USER: ${DB_USER:-htqweb}
@@ -99,9 +103,30 @@ x-django-env: &django-env
   MAIL_SYNC_PUSH_FLAGS: ${MAIL_SYNC_PUSH_FLAGS:-true}
   MAIL_RECONCILE_AUTO_APPLY: ${MAIL_RECONCILE_AUTO_APPLY:-false}
 
+  # ── Публичный адрес платформы ────────────────────────────────────────────
+  # ⚠️ Раньше НЕ передавался в контейнер вовсе: переменные из .env идут в
+  # интерполяцию compose, а не в окружение процесса, поэтому
+  # settings.PUBLIC_BASE_URL была пустой строкой при заполненном .env. Из-за
+  # этого ссылки в письмах-приглашениях (apps/cms) и в выгрузках hr собирались
+  # без домена. Теперь передаётся явно.
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+
+  # ── Утренняя сводка в Telegram (apps/core/tasks.py::send_daily_digest) ───
+  # Бот на платформе ОДИН, и второй токен заводить не нужно: сюда прокинут
+  # тот же GF_TELEGRAM_BOT_TOKEN, что читает Grafana, а settings/base.py
+  # берёт его как значение по умолчанию. Отдельный TELEGRAM_BOT_TOKEN
+  # остаётся переопределением — если сводку захотят слать другим ботом.
+  GF_TELEGRAM_BOT_TOKEN: ${GF_TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  # А чат нужен свой: id бизнес-группы Grafana держит литералом в
+  # contact_points.yml (из окружения она его взять не умеет), и дублировать
+  # его здесь значило бы завести вторую правду о том, куда шлём.
+  # Пусто = сводка молча не отправляется.
+  TELEGRAM_DIGEST_CHAT_ID: ${TELEGRAM_DIGEST_CHAT_ID:-}
+
 services:
   # Контейнеров `db` и `pgbouncer` здесь НЕТ намеренно: боевая БД внешняя
-  # (DB_HOST из .env, по умолчанию VPS), а Django ходит в Postgres напрямую —
+  # (адрес обязателен в .env, умолчания нет), а Django ходит в Postgres напрямую —
   # CONN_MAX_AGE пулит на уровне приложения, тогда как PgBouncer в
   # transaction-режиме рвал бы DDL и prepared-statements.
   # Postgres в контейнере (и PgBouncer на :6432 для хостовых утилит) живёт в
@@ -112,7 +137,12 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      # ⚠️ 127.0.0.1, а не 0.0.0.0. Redis запущен БЕЗ пароля, а в нём лежат
+      # кэш (DB 1), брокер Celery (DB 2) и снапшот бизнес-метрик — на VPS с
+      # публичным IP открытый 6379 это неаутентифицированный доступ ко всему
+      # перечисленному. `ssh -L 6379:127.0.0.1:6379` и redis-cli с хоста
+      # продолжают работать.
+      - "127.0.0.1:6379:6379"
     command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -135,8 +165,11 @@ services:
       MINIO_PROMETHEUS_AUTH_TYPE: "public"
     command: ["server", "/data", "--console-address", ":9001"]
     ports:
+      # 9000 несущий и остаётся открытым: S3_PUBLIC_ENDPOINT выдаёт presigned-
+      # ссылки, которые браузер тянет НАПРЯМУЮ, а nginx MinIO не проксирует.
       - "9000:9000"
-      - "9001:9001"
+      # Консоль — только через `ssh -L 9001:127.0.0.1:9001`: наружу ей незачем.
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -155,9 +188,10 @@ services:
     image: prometheuscommunity/postgres-exporter:v0.15.0
     restart: unless-stopped
     environment:
-      DATA_SOURCE_NAME: postgresql://${DB_USER:-htqweb}:${DB_PASSWORD:-change-me}@${DB_HOST:-45.10.110.212}:${DB_PORT:-5432}/${DB_NAME:-htqweb}?sslmode=disable
-    ports:
-      - "9187:9187"
+      DATA_SOURCE_NAME: postgresql://${DB_USER:-htqweb}:${DB_PASSWORD:-change-me}@${DB_HOST:?укажите адрес БД в .env}:${DB_PORT:-5432}/${DB_NAME:-htqweb}?sslmode=disable
+    # Порт наружу не публикуется: экспортер нужен только Prometheus'у по
+    # внутренней сети. Посмотреть разово:
+    #   docker compose exec prometheus wget -qO- http://postgres-exporter:9187/metrics
     logging:
       driver: json-file
       options:
@@ -169,11 +203,92 @@ services:
     restart: unless-stopped
     environment:
       REDIS_ADDR: redis://redis:6379
-    ports:
-      - "9121:9121"
+      # Длина очередей Celery. Flower её НЕ знает (он видит воркеров и события,
+      # а не брокер), поэтому единственный источник redis_key_size — здесь. Без
+      # переменной метрики нет вовсе: правило htqweb-celery-queue-growing и все
+      # панели «Очередь Celery» пусты — ровно так и было до этой строки.
+      #
+      # ⚠️ Номер БД — 2, а не 9: CELERY_BROKER_URL выше это redis://redis:6379/2.
+      # 9 — дефолт из htqweb/settings/base.py, который compose перекрывает; с
+      # ним экспортер сканировал бы пустую базу и молчал так же, как без него.
+      #
+      # conference_media — вторая очередь (CELERY_TASK_ROUTES): сведение записей
+      # и распознавание. Её рост при живых воркерах означает, что у очереди нет
+      # потребителя (см. правило htqweb-conference-media-queue).
+      REDIS_EXPORTER_CHECK_KEYS: "2=celery,2=conference_media"
+    # Порт наружу не публикуется — см. postgres-exporter выше.
     depends_on:
       redis:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ─── Хост: диск, память, CPU, сеть ─────────────
+  # Единственный источник node_*. Их ждут дашборд «Хост и контейнеры» целиком,
+  # host-панели «Обзора платформы» и правила htqweb-disk-space-low /
+  # htqweb-host-memory-high. Джоб `node` скрейпился и раньше, но контейнера не
+  # существовало ни в одном compose-файле: таргет вечно висел DOWN, а «кончилось
+  # место» — авария, которая роняет прод чаще всего, и её не видел никто.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    # pid: host — ради node_processes_* и честного uptime: иначе экспортер
+    # видит только собственный namespace.
+    pid: host
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      # Псевдо-ФС и слои docker'а дали бы десятки бессмысленных серий и утопили
+      # бы настоящий корневой раздел в min()-агрегате алерта по диску.
+      # $$ — экранированный $: одинарный compose попытался бы подставить.
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/.+)($$|/)
+      - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|mqueue|overlay|proc|procfs|pstore|securityfs|sysfs|tracefs)$$
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ─── Контейнеры: CPU, память, перезапуски ───────
+  # container_* нужны панели «Память контейнеров бэкенда» (дашборд Django),
+  # половине дашборда «Хост и контейнеры» и правилу htqweb-container-restarts.
+  #
+  # cAdvisor по умолчанию прожорлив: опрашивает каждый контейнер раз в секунду
+  # и отдаёт сотни серий на контейнер. Четыре флага режут это на порядок и НЕ
+  # трогают ничего, что мы рисуем:
+  #   housekeeping_interval=30s — совпадает со scrape_interval джоба;
+  #   docker_only               — не лезет в системные cgroup'ы хоста;
+  #   store_container_labels    — иначе все метки compose уезжают в лейблы;
+  #   disable_metrics           — perCPU/sched/tcp/udp дают ~70% серий и не
+  #                               используются ни одной панелью.
+  #
+  # Намеренно БЕЗ privileged и без /dev/kmsg: kmsg питает только OOM-watcher,
+  # которого мы не скрейпим, а на Docker Desktop/WSL2 его нет — то есть
+  # локальная проверка стека сломалась бы. Если на VPS в логах появится
+  # `failed to read /sys/fs/cgroup` (хост на cgroup v1) — тогда добавить
+  # privileged: true, но не заранее.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    restart: unless-stopped
+    command:
+      - --housekeeping_interval=30s
+      - --docker_only=true
+      - --store_container_labels=false
+      - --disable_metrics=percpu,sched,tcp,udp,advtcp,process,hugetlb,referenced_memory,cpu_topology,resctrl
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
     logging:
       driver: json-file
       options:
@@ -270,9 +385,28 @@ services:
       # collectstatic + бакеты хранилища + сид админа — к схеме БД отношения
       # не имеют и нужны при каждом старте, поэтому НЕ зависят от флага выше.
       RUN_BOOTSTRAP: ${RUN_BOOTSTRAP:-1}
-    command: ["gunicorn", "htqweb.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "60"]
+      # Мультипроцессные метрики. gunicorn держит 4 воркера, у каждого СВОЙ
+      # реестр prometheus_client, и скрейп попадал бы в случайный из четырёх —
+      # цифры вчетверо ниже правды (сильнее всего врал htqweb_fallback_total).
+      # С этой переменной воркеры пишут в файлы каталога, а /metrics собирает
+      # их MultiProcessCollector'ом (apps/core/views.py::metrics).
+      # ⚠️ Только backend-web. У backend-asgi/worker/beat/flower по одному
+      # процессу, там каталог только мешал бы — поэтому переменной НЕТ в общем
+      # якоре *django-env.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus-multiproc
+    # -c htqweb/gunicorn_conf.py — вторая половина той же схемы: on_starting
+    # чистит каталог от файлов прошлого запуска (иначе счётчики мёртвых
+    # воркеров сложились бы с живыми и график скакнул бы на рестарте),
+    # child_exit снимает с учёта воркера, убитого таймаутом или OOM.
+    # bind/workers/timeout остаются здесь — их удобнее переопределять на месте.
+    command: ["gunicorn", "htqweb.wsgi:application", "-c", "htqweb/gunicorn_conf.py",
+              "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "60"]
     ports:
       - "8000:8000"
+    # tmpfs, а не том: файлы метрик эфемерны по смыслу и переживать рестарт не
+    # должны, а на диске давали бы запись на каждый инкремент счётчика.
+    tmpfs:
+      - /tmp/prometheus-multiproc
     volumes:
       # Только чтобы прочитать cert.sha256 QUIC-моста и отдать его фронту
       # в conference/config (dev-сценарий с самоподписанным сертификатом).
@@ -375,7 +509,9 @@ services:
       <<: *django-env
     command: ["celery", "-A", "htqweb", "flower", "--port=5555"]
     ports:
-      - "5555:5555"
+      # Только через ssh -L: у Flower нет своей авторизации, а он показывает
+      # аргументы задач.
+      - "127.0.0.1:5555:5555"
     depends_on:
       redis:
         condition: service_healthy
@@ -500,6 +636,32 @@ services:
         max-size: "20m"
         max-file: "5"
 
+  # ─── Экспортер шлюза ────────────────────────────
+  # Профиль production — тот же, что у nginx: без него экспортеру нечего
+  # скрейпить. Источник данных — location = /stub_status в
+  # infra/nginx/default.conf, закрытый allow-списком docker-сетей.
+  #
+  # Джоб `nginx` в prometheus.yml поднят на dns_sd именно ради этой пары
+  # профилей: без профиля контейнера нет, имя не резолвится, таргета не
+  # существует — и вечного DOWN тоже.
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.3.0
+    restart: unless-stopped
+    profiles:
+      - production
+    # Синтаксис флага — 1.x (kingpin, двойной дефис). Односложный
+    # -nginx.scrape-uri это 0.11 и здесь не сработает.
+    command:
+      - --nginx.scrape-uri=http://nginx:80/stub_status
+    depends_on:
+      nginx:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
   # ─── Certbot (Let's Encrypt SSL) ────────────────
   # Run once to obtain certificate, then renews automatically.
   # Usage:
@@ -571,8 +733,16 @@ services:
       context: ./infra/logging/prometheus
       dockerfile: Dockerfile
     restart: unless-stopped
+    environment:
+      # Уезжает в external_labels каждой серии (prometheus.yml, разворачивается
+      # флагом --enable-feature=expand-external-labels). Без переменной на всех
+      # сериях env="" и стенды сливаются в одно.
+      PROMETHEUS_ENV: ${PROMETHEUS_ENV:-production}
     ports:
-      - "9090:9090"
+      # 127.0.0.1, а не 0.0.0.0: у Prometheus нет ВООБЩЕ никакой авторизации,
+      # а через него видно всю платформу. Наружу смотрит только Grafana.
+      # С рабочей машины: ssh -L 9090:127.0.0.1:9090 <vps>.
+      - "127.0.0.1:9090:9090"
     volumes:
       - prometheus_data:/prometheus
     healthcheck:
@@ -593,7 +763,8 @@ services:
     restart: unless-stopped
     command: -config.file=/etc/loki/loki-config.yml
     ports:
-      - "3100:3100"
+      # Логи всей платформы без авторизации — только через ssh -L.
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./infra/logging/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki_data:/loki
@@ -641,21 +812,32 @@ services:
         printf '{"keys":[{"kty":"oct","use":"sig","alg":"HS256","k":"%s"}]}' "$$k" > /tmp/htqweb-jwks.json
         exec /run.sh
     environment:
-      # Провижининг алертов читает эти две переменные через $__env{}
-      # (infra/logging/grafana-provisioning/alerting/contact_points.yml).
-      # Дефолта тут намеренно НЕТ: пустое значение роняет провижининг
-      # («could not find Bot Token in settings»), а заглушка была бы хуже —
-      # Grafana поднялась бы, а алерты молча не уходили бы никуда, ровно та
-      # беда, ради которой contact_points.yml и переписывали. Задайте оба в .env.
-      GF_TELEGRAM_BOT_TOKEN: ${GF_TELEGRAM_BOT_TOKEN}
-      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
+      # GF_TELEGRAM_BOT_TOKEN и ALERT_EMAIL_TO объявлены НИЖЕ, в секции про
+      # доставку алертов, через синтаксис :? — там же написано, почему пустое
+      # значение роняет Grafana целиком. Сюда их дубликатом не возвращать:
+      # повторный ключ в YAML роняет парсинг всего compose-файла.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Синтаксис :? — compose ОТКАЗЫВАЕТСЯ поднимать стек без пароля. Раньше
+      # здесь молча подставлялось admin/admin на панель со всеми метриками
+      # платформы, а .env.example уверял, что так нельзя. Grafana — единственный
+      # сервис мониторинга, смотрящий наружу, и слабый пароль тут стоит дорого.
+      # В тестовых стеках дефолт admin остаётся: они поднимаются одной командой
+      # без .env и наружу не смотрят.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?задайте GRAFANA_ADMIN_PASSWORD в .env — Grafana смотрит наружу}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       # Served behind the edge under /grafana/ (nginx in prod, Vite in dev).
       # serve_from_sub_path keeps direct host access working at :3001/grafana/.
-      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+      # ⚠️ Раньше здесь стояло "%(protocol)s://%(domain)s:%(http_port)s/grafana/",
+      # а GF_SERVER_DOMAIN не задавался никогда — значит domain оставался
+      # дефолтным localhost, и КАЖДАЯ ссылка в уведомлении вела на
+      # localhost:3000, то есть была бесполезна с телефона. Публичный адрес у
+      # платформы уже есть, берём его.
+      # Побочный эффект осознан: запасной вход http://<ip>:3001/grafana/
+      # продолжает отдавать страницы, но редиректы после логина будут вести на
+      # публичный домен. Если лежит nginx — а это ровно тот случай, ради
+      # которого порт открыт, — заходить по прямому /grafana/login.
+      GF_SERVER_ROOT_URL: ${PUBLIC_BASE_URL:-http://localhost:3001}/grafana/
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
       # ─── SSO with platform accounts (HTQWeb JWT, HS256 shared secret) ────
       # Frontend opens /grafana/?auth_token=<access JWT> (url_login). Roles:
@@ -674,7 +856,38 @@ services:
       GF_AUTH_JWT_ROLE_ATTRIBUTE_STRICT: "true"
       # Land admins straight on the service-metrics dashboard after login.
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/htqweb-prometheus-services.json
+      # ─── Доставка алертов ────────────────────────────────────────────────
+      # Провижининг подставляет их синтаксисом $$__env{...}
+      # (grafana-provisioning/alerting/contact_points.yml). Подстановка читает
+      # ОКРУЖЕНИЕ КОНТЕЙНЕРА, и без этих строк она давала пустую строку:
+      # Telegram-ресивер получал пустой токен и молча ничего не отправлял —
+      # алерты жили только на экране, куда во время аварии никто не смотрит.
+      # Переменные существовали в .env.example, но сюда не передавались.
+      #
+      # Chat id сюда НЕ приходит: он литерал в contact_points.yml, и там
+      # написано почему (Grafana 10.4 падает на числовом id из $$__env{}).
+      # ⚠️ Обязательные, и это не перестраховка: Grafana 10.4 ВАЛИДИРУЕТ
+      # контакт-пойнты на старте и с пустым значением падает целиком —
+      # «could not find Bot Token in settings», exit 1, дальше рестарт-петля.
+      # Именно это и происходило: переменных не было в окружении вовсе, то
+      # есть в проде не работали не только алерты, но и сами дашборды.
+      # Синтаксис :? роняет compose ДО запуска, с внятным сообщением.
+      GF_TELEGRAM_BOT_TOKEN: ${GF_TELEGRAM_BOT_TOKEN:?получите у @BotFather; пустое значение роняет Grafana на старте}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:?адрес получателя critical-алертов; пустое значение роняет Grafana на старте}
+      # GF_SMTP_* читает сама Grafana (секция [smtp]). Без них email — второй
+      # независимый канал для severity=critical — молча не отправляет.
+      # ⚠️ GF_SMTP_HOST задаётся С ПОРТОМ: smtp.example.com:587.
+      GF_SMTP_ENABLED: ${GF_SMTP_ENABLED:-false}
+      GF_SMTP_HOST: ${GF_SMTP_HOST:-}
+      GF_SMTP_USER: ${GF_SMTP_USER:-}
+      GF_SMTP_PASSWORD: ${GF_SMTP_PASSWORD:-}
+      GF_SMTP_FROM_ADDRESS: ${GF_SMTP_FROM_ADDRESS:-}
+      GF_SMTP_SKIP_VERIFY: ${GF_SMTP_SKIP_VERIFY:-false}
     ports:
+      # ЕДИНСТВЕННЫЙ сервис мониторинга, открытый наружу, и это осознанно:
+      # запасной вход на случай лежащего nginx (штатный путь — /grafana/ через
+      # шлюз с JWT SSO). Закрыт паролем: GF_SECURITY_ADMIN_PASSWORD выше
+      # обязателен, регистрация выключена, JWT пускает только staff/superuser.
       - "3001:3000"
     volumes:
       - grafana_data:/var/lib/grafana

@@ -174,7 +174,79 @@ def corporate_connect_info(request):
         "own_address": own_address,
         "mailbox": mailbox,
         "awaiting_password": awaiting,
+        "suggest_connect": _suggest_connect(own_address, mailbox, info, user_id),
     }
+
+
+def _suggest_connect(
+    own_address: str, mailbox: dict | None, info: dict, user_id: int,
+) -> bool:
+    """Предлагать ли сотруднику подключить рабочий ящик паролем.
+
+    Повод возникает, когда ящика у человека нет, а его рабочий адрес —
+    корпоративный: скорее всего ящик на сервере есть, просто платформа о нём
+    не знает (учётку завели до автоподключения, или оно не сработало).
+
+    Дальше всё зависит от того, умеет ли сервер отвечать на вопрос «есть ли
+    такой ящик»:
+
+    * **умеет** (Mailcow, есть API) — верим ему. ``False`` означает, что
+      ящика нет, и просить пароль не за чем: человек будет перебирать пароли
+      от несуществующего ящика;
+    * **не умеет** (голый IMAP: проверить можно ТОЛЬКО логином, а пароля у
+      платформы нет) или молчит — остаётся предположение. Тогда порядок
+      обратный тому, каким его хочется видеть: сначала спрашиваем пароль, а
+      успешный вход и есть доказательство, что ящик существует и принадлежит
+      спрашивающему. Но предположение имеет смысл, только если пароль будет
+      где проверить, — поэтому в этой ветке сервер ещё и опрашивается на
+      доступность. Спросить пароль, когда проверить его негде, значит
+      получить отказ на ВЕРНЫЙ пароль и отправить человека перебирать пароли
+      или жаловаться не на то.
+
+    ``provisioner == "none"`` исключён: почтового сервера нет вовсе,
+    подключаться некуда, и просьба ввести пароль была бы издевательством.
+    """
+    if not own_address or mailbox is not None or info["provisioner"] == "none":
+        return False
+
+    # Трижды не вышло — перестаём навязываться. Форма в профиле остаётся: тот,
+    # кто сходил за паролем к администратору, вводит его сразу, а не ждёт
+    # неделю (см. self_service.attempts_exhausted).
+    if self_service.attempts_exhausted(user_id):
+        return False
+
+    from apps.mail.services import lookup_service
+
+    # С кэшем: ручку дёргает каждая загрузка страницы каждым сотрудником, а
+    # ответ сервера про один адрес одинаков для всех и меняется редко.
+    try:
+        exists = lookup_service.remote_exists(own_address, use_cache=True)
+    except Exception as exc:  # noqa: BLE001 — карточка не должна ронять ответ
+        exists = fallback(
+            "mail.connect_info.remote_lookup_failed", None,
+            reason="не удалось спросить почтовый сервер про ящик сотрудника",
+            exc=exc, address=own_address,
+        )
+
+    if exists is False:
+        return False
+    if exists is True:
+        # Сервер ответил — значит он на связи, второй раз спрашивать незачем.
+        return True
+
+    # None — «не знаю», и это НЕ «ящика нет»: приравняй одно к другому, и на
+    # голом IMAP подсказка исчезла бы у всех разом. Но и предлагать вслепую,
+    # когда сервер молчит, нельзя.
+    from apps.mail.services import connection_check
+
+    try:
+        return connection_check.verify_endpoint_reachable(use_cache=True)
+    except Exception as exc:  # noqa: BLE001 — карточка не должна ронять ответ
+        return fallback(
+            "mail.connect_info.reachability_failed", False,
+            reason="не удалось проверить доступность почтового сервера",
+            exc=exc,
+        )
 
 
 def _own_corporate_address(user_id: int, domain: str) -> str:
@@ -209,9 +281,10 @@ def _current_mailbox(user_id: int):
 
 @api_view(methods=("POST",), auth="jwt", body=schemas.MailboxConnectRequest, status=201)
 def _corporate_connect(request, data: schemas.MailboxConnectRequest):
+    user_id = request.token.user_id
     try:
-        return self_service.connect_own_mailbox(
-            user_id=request.token.user_id, address=data.address, password=data.password,
+        result = self_service.connect_own_mailbox(
+            user_id=user_id, address=data.address, password=data.password,
         )
     except self_service.SelfServiceDisabled:
         return json_error(
@@ -222,7 +295,14 @@ def _corporate_connect(request, data: schemas.MailboxConnectRequest):
     except self_service.MailboxTakenByAnotherUser as exc:
         return json_error(exc.detail, 409)
     except self_service.VerificationFailed as exc:
+        # Считаем только отказы СЕРВЕРА. Отключённый режим, чужой домен и
+        # занятый ящик — не «не угадал пароль», а причины, которые повтором
+        # не лечатся и к настойчивости подсказки отношения не имеют.
+        self_service.note_failed_attempt(user_id)
         return json_error(exc.detail, 400)
+
+    self_service.clear_failed_attempts(user_id)
+    return result
 
 
 @api_view(methods=("DELETE",), auth="jwt")
@@ -658,6 +738,27 @@ def test_mail_connection(request, data: schemas.MailConnectionTestRequest):
 #
 # GET  — только отчёт о расхождениях, ничего не меняет.
 # POST — применить решение (direction=pull|push|both), тело — ReconcileRequest.
+
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def mailbox_coverage(request):
+    """``GET /mailboxes/coverage/`` — кто из сотрудников без рабочей почты.
+
+    Обратная сторона подсказки «введите пароль»: та адресует проблему
+    сотруднику по одному, эта показывает администратору всю картину разом и
+    то, что часть случаев он закрывает сам, не дёргая людей.
+
+    ``can_create_remotely`` отдаётся вместе со списком, чтобы интерфейс не
+    гадал, показывать ли кнопку «завести пачкой»: на голом IMAP платформа
+    ящики не создаёт, и предлагать это было бы обманом.
+    """
+    info = provisioning.describe()
+    return {
+        "domain": info["domain"],
+        "provisioner": info["provisioner"],
+        "can_create_remotely": info["can_create_remotely"],
+        "users": mbx_svc.users_without_mailbox(),
+    }
 
 
 @api_view(methods=("GET",), auth="jwt", admin=True)

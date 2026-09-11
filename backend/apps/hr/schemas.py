@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, RootModel, field_validator, model_validator
 
+from htqweb.date_rules import OrderedDates
+
 
 class DepartmentCreate(BaseModel):
     """Порт schemas/department.py::DepartmentCreate.
@@ -181,25 +183,26 @@ class EmployeeTransfer(BaseModel):
 
 class HRUserCreateRequest(BaseModel):
     """``POST /employees/users/`` body — порт
-    ``services/hr/app/api/v1/employees.py::HRUserCreateRequest``. ``username``
-    по-прежнему выводится из email в ``apps.users.interface.create_user``.
+    ``services/hr/app/api/v1/employees.py::HRUserCreateRequest``. HR-сторона
+    знает только ФИО + email; ``username`` выводится из email, а пароль
+    генерируется в ``apps.users.interface.create_user`` и возвращается в
+    ответе ОДИН раз (``generated_password``).
 
-    ``password`` ДОБАВЛЕН сверх исходника и обязателен. Раньше HR-форма его не
-    спрашивала, а ``interface.create_user`` молча минтил случайный
-    ``secrets.token_urlsafe(12)``, которого не видел никто — включая самого
-    сотрудника. Формально аккаунт создавался, фактически войти в него было
-    нельзя, пока администратор не сбросит пароль через свою панель. Пустую
-    строку отбиваем во вьюхе (422), а не тут: так сообщение об ошибке
-    остаётся в одном стиле с проверкой email рядом.
+    **Поля ``password`` тут нет намеренно, и это решение, а не упущение.**
+    Раньше пароль минтился «для себя» и не показывался никому: аккаунт
+    заводился, а войти в него было нельзя до админского сброса. Чинить это
+    можно было двумя способами — спросить пароль у HR или показать
+    сгенерированный. Выбран второй: секрет не проходит через форму и сеть,
+    а «первый вход заканчивается сменой» остаётся гарантией сервера, а не
+    обещанием клиента.
 
-    Поля ``must_change_password`` тут НЕТ намеренно. Пароль на этом маршруте
-    всегда назначает HR, а не сам сотрудник, и HR его видит — значит первый
-    вход обязан заканчиваться сменой. Будь это поле в теле запроса, гарантия
-    держалась бы на клиенте: любой, кто шлёт запрос напрямую, отправил бы
-    ``false``. Вьюха проставляет ``True`` жёстко, а лишний ключ pydantic по
-    умолчанию игнорирует — старые клиенты не ломаются, но и обойти правило не
-    могут. Админской панели поле по-прежнему доступно: там сценарии другие
-    (сервисные учётки, ручной сброс).
+    Поля ``must_change_password`` тут НЕТ по той же причине. Будь оно в теле
+    запроса, гарантия держалась бы на клиенте: любой, кто шлёт запрос
+    напрямую, отправил бы ``false``. ``interface.create_user`` проставляет
+    ``True`` сам, а лишний ключ pydantic по умолчанию игнорирует — старые
+    клиенты не ломаются, но и обойти правило не могут. Админской панели поле
+    по-прежнему доступно: там сценарии другие (сервисные учётки, ручной
+    сброс).
 
     ``email`` is a plain ``str`` (not ``EmailStr``) — the source's field is
     plain ``str`` too; the source does its own manual "has an @" check in the
@@ -211,7 +214,6 @@ class HRUserCreateRequest(BaseModel):
     last_name: str = ""
     patronymic: str = ""
     email: str
-    password: str = ""
 
 
 class EmployeeListQuery(BaseModel):
@@ -223,6 +225,81 @@ class EmployeeListQuery(BaseModel):
     search: str | None = None
     page: int = Field(default=1, ge=1)
     limit: int = Field(default=20, ge=1, le=200)
+
+
+# ── префилл сотрудника (перенос уже имеющихся данных) ───────────────────────
+#
+# Схемы для apps/hr/services/employee_prefill_service.py. Тип источника
+# валидируется паттерном, а не Literal, — тем же приёмом, что ``status`` выше
+# (``_STATUS_PATTERN``): 422 с внятным сообщением вместо голого
+# "Input should be 'user', 'employee' or 'mailbox'".
+
+_SOURCE_TYPE_PATTERN = r"^(user|employee|mailbox)$"
+
+
+class PrefillSource(BaseModel):
+    """Откуда берём данные: учётка, соседняя карточка или почтовый ящик."""
+
+    type: str = Field(..., pattern=_SOURCE_TYPE_PATTERN)
+    id: int
+
+
+class PrefillPreviewRequest(BaseModel):
+    """``POST /employees/prefill`` — показать «было → станет», ничего не писать.
+
+    ``employee_id=None`` означает «карточку ещё создают»: сравнивать не с чем,
+    все поля вернутся как ``fill``.
+    """
+
+    source: PrefillSource
+    employee_id: int | None = None
+
+
+class PrefillApplyRequest(BaseModel):
+    """``POST /employees/{id}/prefill/apply`` — записать отмеченные поля.
+
+    ``fields`` — то, что человек оставил отмеченным в предпросмотре. Сервис
+    всё равно сверит список с собственным diff: поле, которого в предпросмотре
+    не было, в карточку не попадёт (см. докстринг ``apply_prefill``).
+    """
+
+    source: PrefillSource
+    fields: list[str] = Field(default_factory=list)
+
+
+class MatchSuggestQuery(BaseModel):
+    """``GET /employees/match-suggestions`` — подсказка по мере заполнения.
+
+    Все поля необязательны: форма спрашивает по тому, что уже набрано. Всё
+    пустое → пустой ответ (см. ``suggest_matches``), а не выгрузка справочника.
+    """
+
+    email: str = ""
+    phone: str = ""
+    first_name: str = ""
+    last_name: str = ""
+    patronymic: str = ""
+    exclude_employee_id: int | None = None
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+class ImportCandidatesQuery(BaseModel):
+    search: str | None = None
+    limit: int = Field(default=200, ge=1, le=500)
+
+
+class BulkImportRequest(BaseModel):
+    """``POST /employees/bulk-import`` — карточки пачкой из выбранных учёток.
+
+    Отдел, должность, дата приёма и статус — общие на всю пачку: это ровно
+    те поля, которых учётка не знает.
+    """
+
+    user_ids: list[int] = Field(..., min_length=1, max_length=200)
+    department_id: int
+    position_id: int
+    hire_date: date
+    status: str = Field(default="active", pattern=_STATUS_PATTERN)
 
 
 # ── org — порт services/hr/app/api/v1/org.py (схемы были inline в роутере) ──
@@ -713,7 +790,7 @@ class PMOUpdate(BaseModel):
     status: PMOStatusLiteral | None = None
 
 
-class PMOMemberAdd(BaseModel):
+class PMOMemberAdd(OrderedDates):
     employee_id: int
     membership_type: PMOMembershipTypeLiteral = "permanent"
     position_in_pmo: str | None = Field(default=None, max_length=200)
@@ -722,14 +799,8 @@ class PMOMemberAdd(BaseModel):
     from_date: date | None = None
     to_date: date | None = None
 
-    @model_validator(mode="after")
-    def _check_dates(self) -> "PMOMemberAdd":
-        if self.from_date and self.to_date and self.to_date < self.from_date:
-            raise ValueError("to_date must be >= from_date")
-        return self
 
-
-class PMOMemberUpdate(BaseModel):
+class PMOMemberUpdate(OrderedDates):
     """Порт MemberUpdate — все поля опциональны, патч через ``exclude_unset``
     (буквально исходник: ``body.model_dump(exclude_unset=True)``, В ОТЛИЧИЕ
     от MemberAdd/PMOUpdate/остальных *Update схем этого файла, которые

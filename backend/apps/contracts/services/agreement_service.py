@@ -17,9 +17,14 @@ import logging
 from django.db import transaction
 from django.http import Http404
 
+from htqweb import date_rules
+
 from apps.contracts.models import (
     Agreement,
+    AgreementDirection,
+    AgreementKind,
     AgreementStatus,
+    AgreementType,
     Budget,
     BudgetLine,
     BudgetStatus,
@@ -238,6 +243,10 @@ def serialize_agreement(agreement: Agreement) -> dict:
         # что разойтись с ней не могут.
         "administrator_id": budget.administrator_id,
         "administrator_name": budget.administrator.display_name,
+        # Голый id проекта из apps.tasks — по той же причине, что и в
+        # budget_service: имя уже в administrator_name, а паспорт на каждый
+        # договор в списке был бы N+1.
+        "project_id": budget.administrator.project_id,
         "program_id": line.program_id,
         "program_name": line.program.display_name,
         "expense_item": line.program.expense_item,
@@ -253,6 +262,25 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "advance_share": agreement.advance_share,
         "kind": agreement.kind,
         "contract_type": agreement.contract_type,
+        "direction": agreement.direction,
+        "kind": agreement.kind,
+        "contract_type": agreement.contract_type,
+        "sed_number": agreement.sed_number,
+        "subject": agreement.subject,
+        "manager_user_id": agreement.manager_user_id,
+        "manager_name": agreement.manager_name,
+        "has_vat": agreement.has_vat,
+        "vat_rate": agreement.vat_rate,
+        "amount_without_vat": agreement.amount_without_vat,
+        "vat_amount": agreement.vat_amount,
+        "has_advance": agreement.has_advance,
+        "advance_percentage": agreement.advance_percentage,
+        "advance_amount_planned": agreement.advance_amount_planned,
+        "retention_rate": agreement.retention_rate,
+        "retention_amount": agreement.retention_amount,
+        "start_date": agreement.start_date,
+        "end_date": agreement.end_date,
+        "term_comment": agreement.term_comment,
         "amount": agreement.amount,
         "advance_payment_id": advance_payment_id,
         "advance_paid_amount": advance_paid_amount,
@@ -272,9 +300,28 @@ def serialize_agreement(agreement: Agreement) -> dict:
 @transaction.atomic
 def create_agreement(*, number: str, name: str, budget_line_id: int,
                      counterparty_id: int,
-                     amount, payment_type: str, currency: str = "KZT",
-                     advance_share=None, kind: str | None = None,
+                     amount, payment_type: str = "postpayment",
+                     direction: str | None = None,
+                     kind: str | None = None,
                      contract_type: str | None = None,
+                     advance_share=None,
+                     sed_number: str = "",
+                     subject: str = "",
+                     manager_user_id: int | None = None,
+                     manager_name: str = "",
+                     has_vat: bool = True,
+                     vat_rate=None,
+                     amount_without_vat=None,
+                     vat_amount=None,
+                     has_advance: bool = False,
+                     advance_percentage=None,
+                     advance_amount_planned=None,
+                     retention_rate=None,
+                     retention_amount=None,
+                     start_date=None,
+                     end_date=None,
+                     term_comment: str = "",
+                     currency: str = "KZT",
                      signed_date=None, status: str | None = None,
                      created_by: int | None = None) -> Agreement:
     line = _lock_line(budget_line_id)
@@ -285,27 +332,75 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
     if status not in AgreementStatus.values:
         raise AgreementRuleViolation(f"Неизвестный статус договора: {status}")
 
-    # Черновик лимит не проверяет — он его и не занимает
-    # (budget_calc.COMMITTING_STATUSES).
-    if status in budget_calc.COMMITTING_STATUSES:
+    direction = direction or AgreementDirection.EXPENSE
+    if direction not in AgreementDirection.values:
+        raise AgreementRuleViolation(f"Неизвестное направление: {direction}")
+
+    kind = kind or AgreementKind.WORKS_SERVICES
+    if kind not in AgreementKind.values:
+        raise AgreementRuleViolation(f"Неизвестный вид договора: {kind}")
+
+    contract_type = contract_type or AgreementType.STANDARD
+    if contract_type not in AgreementType.values:
+        raise AgreementRuleViolation(f"Неизвестный тип договора: {contract_type}")
+
+    # Черновик лимит не проверяет — он его и не занимает.
+    # Договоры направления «Поступление» (доходные) также не уменьшают расходный бюджет.
+    if direction == AgreementDirection.EXPENSE and status in budget_calc.COMMITTING_STATUSES:
         budget_calc.check_capacity(line, amount)
 
     with conflict_as(f"Договор с номером {number} уже зарегистрирован"):
-        return Agreement.objects.create(
-            # Объектами, а не id: обе записи уже загружены проверками выше
-            # (`_lock_line` тянет и бюджет с администратором и страной), и
-            # ответ соберётся из закэшированных связей, а не новыми запросами.
-            number=number, name=name, budget_line=line,
-            counterparty=counterparty, amount=amount,
-            payment_type=payment_type, currency=currency,
-            # Реестровые поля необязательны: договор, заведённый руками,
-            # может о них не знать — тогда действуют дефолты модели
-            # (постоплатный РиУ со стандартным типом).
-            **({"advance_share": advance_share} if advance_share is not None else {}),
-            **({"kind": kind} if kind else {}),
-            **({"contract_type": contract_type} if contract_type else {}),
-            signed_date=signed_date, status=status, created_by=created_by,
-        )
+        # Объектами, а не id: обе записи уже загружены проверками выше
+        # (`_lock_line` тянет и бюджет с администратором и страной), и ответ
+        # соберётся из закэшированных связей, а не новыми запросами.
+        kwargs = {
+            "number": number,
+            "name": name,
+            "budget_line": line,
+            "counterparty": counterparty,
+            "amount": amount,
+            "payment_type": payment_type,
+            "direction": direction,
+            "kind": kind,
+            "contract_type": contract_type,
+            "sed_number": sed_number,
+            "subject": subject,
+            "manager_user_id": manager_user_id,
+            "manager_name": manager_name,
+            "has_vat": has_vat,
+            "has_advance": has_advance,
+            "term_comment": term_comment,
+            "currency": currency,
+            "signed_date": signed_date,
+            "start_date": start_date,
+            "end_date": end_date,
+            "status": status,
+            "created_by": created_by,
+        }
+        # Необязательные поля подставляются только заданными: договор,
+        # заведённый руками, может о них не знать — тогда действуют дефолты
+        # модели, а не перезапись их на None.
+        if vat_rate is not None:
+            kwargs["vat_rate"] = vat_rate
+        if amount_without_vat is not None:
+            kwargs["amount_without_vat"] = amount_without_vat
+        if vat_amount is not None:
+            kwargs["vat_amount"] = vat_amount
+        if advance_percentage is not None:
+            kwargs["advance_percentage"] = advance_percentage
+        if advance_amount_planned is not None:
+            kwargs["advance_amount_planned"] = advance_amount_planned
+        # Доля аванса — поле реестра, из которого импорт ВЫВОДИТ payment_type;
+        # обратной силы это не имеет, поэтому доля остаётся необязательной и
+        # при ручном заведении падает на дефолт модели (0).
+        if advance_share is not None:
+            kwargs["advance_share"] = advance_share
+        if retention_rate is not None:
+            kwargs["retention_rate"] = retention_rate
+        if retention_amount is not None:
+            kwargs["retention_amount"] = retention_amount
+
+        return Agreement.objects.create(**kwargs)
 
 
 @transaction.atomic
@@ -336,21 +431,27 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
                       check_budget_status=budget_changed,
                       check_counterparty_status=counterparty_changed)
 
-    if agreement.status in budget_calc.COMMITTING_STATUSES:
+    direction = fields.get("direction") or agreement.direction
+    if direction == AgreementDirection.EXPENSE and agreement.status in budget_calc.COMMITTING_STATUSES:
         # exclude_agreement_id — чтобы собственная СТАРАЯ сумма договора не
         # считалась чужой занятостью: без этого увеличение суммы на 1 ₸
         # сравнивалось бы с остатком, из которого уже вычтена вся старая
         # сумма, и почти всегда падало бы.
         budget_calc.check_capacity(line, amount, exclude_agreement_id=agreement.pk)
 
-    # Не даём уменьшить исходную сумму договора ниже уже закрытой
-    # предоплаты. Сам остаток не хранится: он считается из суммы договора и
-    # проведённой предоплаты, как остаток бюджетной строки для счетов.
-    advance_payment_svc.check_agreement_capacity(agreement, amount)
+    # Не даём уменьшить исходную сумму договора ниже уже закрытых оплат/предоплат:
+    paid = advance_payment_svc.total_paid_amount_for_agreement(agreement.pk)
+    if amount < paid:
+        raise AgreementRuleViolation(
+            f"Сумма договора ({amount}) не может быть меньше уже оплаченной суммы ({paid})"
+        )
 
     changed = [key for key, value in fields.items() if value is not None]
     for key in changed:
         setattr(agreement, key, fields[key])
+    # Частичный PATCH схема проверить не может: второй даты в запросе нет, а
+    # лежит она в строке. Здесь состояние уже слито — см. htqweb/date_rules.py.
+    date_rules.assert_instance_ordered(agreement)
     if changed:
         with conflict_as("Договор с таким номером уже зарегистрирован"):
             agreement.save()
@@ -423,7 +524,7 @@ def change_status(agreement_id: int, new_status: str, *, actor_id: int | None = 
 
     was_committing = current in budget_calc.COMMITTING_STATUSES
     will_commit = new_status in budget_calc.COMMITTING_STATUSES
-    if will_commit and not was_committing:
+    if agreement.direction == AgreementDirection.EXPENSE and will_commit and not was_committing:
         # Договор занимает бюджет только на этом переходе — здесь и
         # единственное место, где проверка лимита срабатывает при смене
         # статуса. Обратный переход (в черновик, в расторгнут) бюджет
@@ -463,8 +564,9 @@ def submit_for_approval(agreement_id: int, *, actor_id: int | None = None) -> di
 
     line = _lock_line(agreement.budget_line_id)
     _validate_context(line, agreement.counterparty, agreement.currency)
-    budget_calc.check_capacity(line, agreement.amount,
-                               exclude_agreement_id=agreement.pk)
+    if agreement.direction == AgreementDirection.EXPENSE:
+        budget_calc.check_capacity(line, agreement.amount,
+                                   exclude_agreement_id=agreement.pk)
 
     # enrich=True: карточка уходит прямо в HTTP-ответ, и фронтенду после
     # отправки нужно показать «кто согласует», а не голые user_id.
@@ -500,6 +602,31 @@ def file_url(agreement: Agreement) -> str | None:
     if not agreement.file_id:
         return None
     return media.get_file_url(agreement.file_id)
+
+
+def file_info(agreement: Agreement) -> dict | None:
+    """Ссылка на скан ПЛЮС его паспорт: имя, mime, размер.
+
+    Метаданные едут вместе со ссылкой, а не полем ``AgreementRead``,
+    намеренно: ``serialize_agreement`` вызывается на КАЖДУЮ строку списка
+    договоров, и поход в media за паспортом превратил бы список в N+1. Тому,
+    кто показывает документ, ссылка нужна всё равно, — значит, лишнего
+    запроса нет вовсе.
+
+    ``mime``/``filename`` могут прийти пустыми (строка в media удалена, файл
+    старый): карточка обязана пережить это и предложить хотя бы скачивание,
+    поэтому ссылка отдаётся даже без паспорта.
+    """
+    url = file_url(agreement)
+    if url is None:
+        return None
+    meta = media.get_file_meta(agreement.file_id) or {}
+    return {
+        "url": url,
+        "name": meta.get("filename") or "",
+        "mime": meta.get("mime") or "",
+        "size": meta.get("size") or 0,
+    }
 
 
 @transaction.atomic

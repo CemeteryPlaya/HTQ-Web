@@ -3,6 +3,7 @@ import { Calendar, ImagePlus, Trash2, Eye, Plus } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
 
 import api from '@/api/client';
 import { cmsApi } from '@/api/cms';
@@ -150,7 +151,7 @@ const AdminNews = () => {
       qc.invalidateQueries({ queryKey: ['news'] });
       toast.success(t('admin.news.deleted'));
     },
-    onError: () => toast.error(t('admin.news.deleteError')),
+    onError: (err) => reportApiError(err, t('admin.news.deleteError')),
   });
 
   // Form handlers ---------------------------------------------------------

@@ -19,6 +19,8 @@ from __future__ import annotations
 from decimal import Decimal
 
 from django.db import transaction
+
+from htqweb import date_rules
 from django.http import Http404
 
 from ..models import (SiteBlock, SiteBlockVolume, Task, WorkVolumeType)
@@ -47,6 +49,10 @@ def update_block(block_id: int, changes: dict) -> SiteBlock:
     block = get_block(block_id)
     for field, value in changes.items():
         setattr(block, field, value)
+    # По СЛИТОЙ паре, а не по присланным полям: в PATCH может приехать
+    # одна дата, вторая лежит в строке. Без этой проверки нарушение
+    # доходит до CheckConstraint и возвращается как 500.
+    date_rules.assert_instance_ordered(block)
     block.save()
     return block
 

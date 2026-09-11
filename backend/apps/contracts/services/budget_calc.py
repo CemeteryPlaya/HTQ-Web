@@ -36,6 +36,7 @@ from django.db.models import Sum
 
 from apps.contracts.models import (
     Agreement,
+    AgreementDirection,
     AgreementStatus,
     AccountableFundsRequest,
     AccountableFundsRequestStatus,
@@ -115,7 +116,9 @@ def committed_map(line_ids, *, exclude_agreement_id: int | None = None,
         return {}
 
     agreement_query = Agreement.objects.filter(
-        budget_line_id__in=ids, status__in=COMMITTING_STATUSES,
+        budget_line_id__in=ids,
+        status__in=COMMITTING_STATUSES,
+        direction=AgreementDirection.EXPENSE,
     )
     if exclude_agreement_id is not None:
         agreement_query = agreement_query.exclude(pk=exclude_agreement_id)

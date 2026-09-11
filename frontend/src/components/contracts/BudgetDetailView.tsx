@@ -46,6 +46,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import ProjectLinkBadge from '@/components/contracts/ProjectLinkBadge';
 import { contractsApi } from '@/api/contracts';
 import { usePermissions } from '@/hooks/usePermissions';
 import type { AgreementStatus } from '@/types/contracts';
@@ -306,7 +307,15 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
             </p>
             <div className="mt-3">
               <FieldGrid>
-                <Field label="Администратор">{budget.administrator_name}</Field>
+                <Field label="Администратор">
+                  <span className="inline-flex flex-wrap items-center gap-2">
+                    {budget.administrator_name}
+                    <ProjectLinkBadge
+                      projectId={budget.project_id}
+                      name={budget.administrator_name}
+                    />
+                  </span>
+                </Field>
                 <Field label="Год">
                   <span className="tabular-nums">{budget.period_year}</span>
                 </Field>

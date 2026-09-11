@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '@/api/client';
 import HRLayout from '@/components/hr/HRLayout';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { DateInput } from '@/components/ui/date-input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import {
@@ -273,12 +275,21 @@ const HRTimeTracking = () => {
                     ))}
                   </SelectContent>
                 </Select>
+                <PrerequisiteNotice
+                  variant="inline"
+                  items={[{
+                    when: employees !== undefined && employees.length === 0,
+                    text: t('hr.pages.timeTracking.noEmployees', 'В справочнике нет сотрудников — табель ведётся по карточкам сотрудников,'),
+                    to: '/hr/employees',
+                    linkText: t('hr.pages.timeTracking.addEmployee', 'заведите сотрудника'),
+                  }]}
+                />
               </label>
 
               <div className="grid gap-4 md:grid-cols-4">
                 <label className="grid gap-2 text-sm">
                   {t('hr.pages.timeTracking.fields.date')}
-                  <Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+                  <DateInput value={form.date} onChange={(value) => setForm({ ...form, date: value })} />
                 </label>
                 <label className="grid gap-2 text-sm">
                   {t('hr.pages.timeTracking.fields.startTime')}

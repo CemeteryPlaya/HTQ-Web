@@ -16,6 +16,7 @@ import { requestsApi } from '@/api/requests';
 import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { FormRenderer } from '@/features/requests/components/FormRenderer';
 import { useTemplate, useTemplates, useTemplateVersion } from '@/features/requests/hooks';
+import { usePermissions } from '@/hooks/usePermissions';
 import type { FormTemplate } from '@/features/requests/types';
 import { useTranslation } from 'react-i18next';
 
@@ -42,8 +43,12 @@ function CatalogCard({ t, onPick }: { t: FormTemplate; onPick: () => void }) {
   );
 }
 
+
 export default function NewRequestPage() {
   const { t } = useTranslation();
+  // Тот же признак, что у RequestsLayout: «администратор» здесь — уровень
+  // модуля approvals, а не строка роли.
+  const isAdmin = usePermissions().atLeast('approvals', 'admin');
   const navigate = useNavigate();
   const templates = useTemplates(null);
   const [tplId, setTplId] = useState<number | null>(null);
@@ -116,7 +121,10 @@ export default function NewRequestPage() {
           <Card>
             <CardContent className="py-10 text-center text-sm text-muted-foreground">
               {activeTemplates.length === 0
-                ? t('requests.new.noForms')
+                // «Создайте шаблон» — совет только для тех, у кого есть такая
+                // страница: /requests/templates закрыт ролью admin, и
+                // рядовому сотруднику этот текст обещал недоступное.
+                ? (isAdmin ? t('requests.new.noFormsAdmin') : t('requests.new.noFormsEmployee'))
                 : t('messenger.search.empty')}
             </CardContent>
           </Card>

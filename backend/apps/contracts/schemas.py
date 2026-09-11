@@ -29,6 +29,7 @@ from pydantic import (
 
 from apps.contracts.models import (
     AdvancePayment,
+    AgreementDirection,
     AgreementKind,
     AgreementStatus,
     AgreementType,
@@ -37,6 +38,7 @@ from apps.contracts.models import (
     InvoiceStatus,
     PaymentType,
 )
+from htqweb.date_rules import OrderedDates
 
 _ORM = ConfigDict(from_attributes=True)
 
@@ -94,16 +96,46 @@ class ProgramRead(BaseModel):
 
 # ── Administrator ───────────────────────────────────────────────────────
 
+class ProjectBrief(BaseModel):
+    """Проект из ``apps.tasks`` в договорном ответе.
+
+    Собирается не здесь: приезжает готовым словарём из
+    ``apps.tasks.interface.get_project_brief``. Схема нужна, чтобы состав
+    полей был виден в контракте API, а не только в чужом модуле.
+    """
+
+    id: int
+    name: str
+    status: str
+    color: str
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
+
 class AdministratorCreate(BaseModel):
     country_id: int
-    project_name: str = Field(..., min_length=1, max_length=200)
+    # ``project_name`` не обязателен, если задан ``project_id``: тогда подпись
+    # берётся у проекта из apps.tasks. Пустыми оба быть не могут — подпись и
+    # есть то, чем запись опознают (``display_name``, сортировка).
+    project_name: str = Field("", max_length=200)
+    project_id: Optional[int] = None
     user_id: Optional[int] = None
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def _name_or_project(self):
+        # Правило про ПАРУ полей, поэтому валидатор модели, а не поля — тем же
+        # приёмом, что и ``AdministratorInput._id_or_fields`` ниже.
+        if not self.project_name and self.project_id is None:
+            raise ValueError(
+                "нужно либо название проекта, либо связь с проектом модуля задач")
+        return self
 
 
 class AdministratorUpdate(BaseModel):
     country_id: Optional[int] = None
     project_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    project_id: Optional[int] = None
     user_id: Optional[int] = None
     is_active: Optional[bool] = None
 
@@ -120,6 +152,12 @@ class AdministratorRead(BaseModel):
     country_name: str
     project_name: str
     display_name: str
+    # Связь с модулем задач: id — то, что хранится, ``project`` — паспорт,
+    # разрешённый через ``apps.tasks.interface``. ``project`` пустой при
+    # ``project_id is not None`` означает «проект удалили в задачах», и это
+    # отличается от «связи не было» — см. reference_service.attach_projects.
+    project_id: Optional[int] = None
+    project: Optional[ProjectBrief] = None
     user_id: Optional[int]
     is_active: bool
 
@@ -174,12 +212,21 @@ class AdministratorInput(BaseModel):
     id: Optional[int] = None
     project_name: Optional[str] = Field(None, min_length=1, max_length=200)
     country: Optional[CountryInput] = None
+    #: Связь с проектом модуля задач. При заведении новой записи ЗАМЕНЯЕТ
+    #: ``project_name`` (имя берётся у проекта); у существующей — проставляет
+    #: связь, если её ещё не было.
+    project_id: Optional[int] = None
 
     @model_validator(mode="after")
     def _id_or_fields(self):
-        if self.id is None and not (self.project_name and self.country):
+        # ``project_id`` заменяет собой название: со связью имя приезжает из
+        # модуля задач, и требовать его ещё и текстом значило бы просить
+        # ввести то, что система уже знает.
+        has_name = bool(self.project_name) or self.project_id is not None
+        if self.id is None and not (has_name and self.country):
             raise ValueError(
-                "нужен либо id администратора, либо название проекта + страна")
+                "нужен либо id администратора, либо проект (название или связь) "
+                "+ страна")
         return self
 
 
@@ -298,6 +345,8 @@ class BudgetRead(BaseModel):
     id: int
     administrator_id: int
     administrator_name: str
+    #: Проект из apps.tasks, если администратор с ним связан.
+    project_id: Optional[int] = None
     period_year: int
     currency: str
     status: str
@@ -333,6 +382,8 @@ class BudgetLineFlatRead(BaseModel):
     remaining: Decimal
     administrator_id: int
     administrator_name: str
+    #: Проект из apps.tasks, если администратор с ним связан.
+    project_id: Optional[int] = None
     period_year: int
     currency: str
     # Статус и согласование — родительского бюджета: своих у строки нет.
@@ -441,7 +492,7 @@ class CounterpartyRead(BaseModel):
 
 # ── Agreement ───────────────────────────────────────────────────────────
 
-class AgreementCreate(BaseModel):
+class AgreementCreate(OrderedDates):
     # Ссылка на СТРОКУ бюджета, а не на бюджет: деньги выделены программе.
     number: str = Field(..., min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=300)
@@ -454,12 +505,32 @@ class AgreementCreate(BaseModel):
     advance_share: Decimal = Field(Decimal("0"), ge=0, le=1)
     kind: AgreementKind = AgreementKind.WORKS_SERVICES
     contract_type: AgreementType = AgreementType.STANDARD
+    payment_type: PaymentType = PaymentType.POSTPAYMENT
+    direction: AgreementDirection = AgreementDirection.EXPENSE
+    kind: AgreementKind = AgreementKind.WORKS_SERVICES
+    contract_type: AgreementType = AgreementType.STANDARD
+    sed_number: str = Field("", max_length=100)
+    subject: str = ""
+    manager_user_id: Optional[int] = None
+    manager_name: str = Field("", max_length=200)
+    has_vat: bool = True
+    vat_rate: Decimal = Field(Decimal("12.00"), ge=0, le=100)
+    amount_without_vat: Optional[Decimal] = None
+    vat_amount: Optional[Decimal] = None
+    has_advance: bool = False
+    advance_percentage: Optional[Decimal] = Field(None, ge=0, le=100)
+    advance_amount_planned: Optional[Decimal] = None
+    retention_rate: Decimal = Field(Decimal("0.00"), ge=0, le=100)
+    retention_amount: Optional[Decimal] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    term_comment: str = Field("", max_length=255)
     currency: str = Field("KZT", min_length=3, max_length=3)
     signed_date: Optional[date] = None
     status: Optional[AgreementStatus] = None
 
 
-class AgreementUpdate(BaseModel):
+class AgreementUpdate(OrderedDates):
     """Статуса здесь нет намеренно: он меняется только через
     ``POST /agreements/{id}/status``, где проверяется допустимость перехода
     (``agreement_service.ALLOWED_TRANSITIONS``). Приняв статус в PATCH, мы
@@ -474,6 +545,25 @@ class AgreementUpdate(BaseModel):
     advance_share: Optional[Decimal] = Field(None, ge=0, le=1)
     kind: Optional[AgreementKind] = None
     contract_type: Optional[AgreementType] = None
+    direction: Optional[AgreementDirection] = None
+    kind: Optional[AgreementKind] = None
+    contract_type: Optional[AgreementType] = None
+    sed_number: Optional[str] = Field(None, max_length=100)
+    subject: Optional[str] = None
+    manager_user_id: Optional[int] = None
+    manager_name: Optional[str] = Field(None, max_length=200)
+    has_vat: Optional[bool] = None
+    vat_rate: Optional[Decimal] = Field(None, ge=0, le=100)
+    amount_without_vat: Optional[Decimal] = None
+    vat_amount: Optional[Decimal] = None
+    has_advance: Optional[bool] = None
+    advance_percentage: Optional[Decimal] = Field(None, ge=0, le=100)
+    advance_amount_planned: Optional[Decimal] = None
+    retention_rate: Optional[Decimal] = Field(None, ge=0, le=100)
+    retention_amount: Optional[Decimal] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    term_comment: Optional[str] = Field(None, max_length=255)
     currency: Optional[str] = Field(None, min_length=3, max_length=3)
     signed_date: Optional[date] = None
 
@@ -497,6 +587,8 @@ class AgreementRead(BaseModel):
     budget_id: int
     administrator_id: int
     administrator_name: str
+    #: Проект из apps.tasks, если администратор с ним связан.
+    project_id: Optional[int] = None
     program_id: int
     program_name: str
     expense_item: str
@@ -508,6 +600,25 @@ class AgreementRead(BaseModel):
     advance_share: Decimal
     kind: str
     contract_type: str
+    direction: str
+    kind: str
+    contract_type: str
+    sed_number: str
+    subject: str
+    manager_user_id: Optional[int]
+    manager_name: str
+    has_vat: bool
+    vat_rate: Decimal
+    amount_without_vat: Optional[Decimal]
+    vat_amount: Optional[Decimal]
+    has_advance: bool
+    advance_percentage: Optional[Decimal]
+    advance_amount_planned: Optional[Decimal]
+    retention_rate: Decimal
+    retention_amount: Optional[Decimal]
+    start_date: Optional[date]
+    end_date: Optional[date]
+    term_comment: str
     amount: Decimal
     advance_payment_id: Optional[int]
     advance_paid_amount: Decimal

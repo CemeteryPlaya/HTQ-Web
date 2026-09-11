@@ -39,8 +39,22 @@ export interface Administrator {
   project_name: string;
   /** Готовая подпись «проект страна». Собирает бэкенд, чтобы формат жил в одном месте. */
   display_name: string;
+  /** Связь с проектом модуля задач. `project_id` есть, а `project` пустой —
+   *  значит проект удалили в задачах; связи не было — оба пустые. */
+  project_id: number | null;
+  project: LinkedProject | null;
   user_id: number | null;
   is_active: boolean;
+}
+
+/** Паспорт проекта из apps.tasks — ровно то, чем проект подписывают. */
+export interface LinkedProject {
+  id: number;
+  name: string;
+  status: string;
+  color: string;
+  start_date: string | null;
+  end_date: string | null;
 }
 
 export type BudgetStatus = 'active' | 'closed';
@@ -77,6 +91,10 @@ export interface Budget {
   id: number;
   administrator_id: number;
   administrator_name: string;
+  /** Проект из модуля задач, если администратор бюджета с ним связан.
+   *  Голый id: подпись проекта уже приехала в `administrator_name`.
+   *  Нужен, чтобы дать ссылку на доску задач. */
+  project_id: number | null;
   period_year: number;
   currency: string;
   status: BudgetStatus;
@@ -106,6 +124,10 @@ export interface Budget {
 export interface BudgetLineFlat extends BudgetLine {
   administrator_id: number;
   administrator_name: string;
+  /** Проект из модуля задач, если администратор бюджета с ним связан.
+   *  Голый id: подпись проекта уже приехала в `administrator_name`.
+   *  Нужен, чтобы дать ссылку на доску задач. */
+  project_id: number | null;
   period_year: number;
   currency: string;
   /** Статус и согласование — РОДИТЕЛЬСКОГО бюджета: своих у строки нет. */
@@ -150,6 +172,10 @@ export type AgreementStatus =
   | 'executed'
   | 'terminated';
 
+export type AgreementDirection = 'expense' | 'income';
+export type AgreementKind = 'works_services' | 'goods' | 'services' | 'lease' | 'other';
+export type AgreementType = 'standard' | 'non_standard' | 'framework';
+
 export interface Agreement {
   id: number;
   number: string;
@@ -161,6 +187,10 @@ export interface Agreement {
   /** Разворачивается из строки бюджета — на договоре такой колонки нет. */
   administrator_id: number;
   administrator_name: string;
+  /** Проект из модуля задач, если администратор бюджета с ним связан.
+   *  Голый id: подпись проекта уже приехала в `administrator_name`.
+   *  Нужен, чтобы дать ссылку на доску задач. */
+  project_id: number | null;
   program_id: number;
   program_name: string;
   expense_item: string;
@@ -169,6 +199,25 @@ export interface Agreement {
   counterparty_name: string;
   counterparty_bin_iin: string;
   payment_type: PaymentType;
+  direction: AgreementDirection;
+  kind: AgreementKind;
+  contract_type: AgreementType;
+  sed_number: string;
+  subject: string;
+  manager_user_id: number | null;
+  manager_name: string;
+  has_vat: boolean;
+  vat_rate: string;
+  amount_without_vat: string | null;
+  vat_amount: string | null;
+  has_advance: boolean;
+  advance_percentage: string | null;
+  advance_amount_planned: string | null;
+  retention_rate: string;
+  retention_amount: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  term_comment: string;
   amount: string;
   /** Единственная предоплата по договору, если она создана. */
   advance_payment_id: number | null;
@@ -381,6 +430,9 @@ export interface ContractsEnums {
   counterparty_status: EnumOption[];
   invoice_status: EnumOption[];
   payment_type: EnumOption[];
+  direction?: EnumOption[];
+  kind?: EnumOption[];
+  contract_type?: EnumOption[];
   /** Из каких статусов договор занимает бюджет. */
   committing_statuses: AgreementStatus[];
   transitions: Record<AgreementStatus, AgreementStatus[]>;
@@ -404,6 +456,10 @@ export interface AdministratorInput {
   id?: number;
   project_name?: string;
   country?: CountryInput;
+  /** Связь с проектом модуля задач. У новой записи заменяет `project_name`
+   *  (имя берётся у проекта); у существующей — проставляется, только если
+   *  связи ещё не было. */
+  project_id?: number | null;
 }
 
 export interface ProgramInput {

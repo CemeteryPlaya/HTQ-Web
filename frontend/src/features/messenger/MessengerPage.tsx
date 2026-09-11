@@ -16,11 +16,13 @@ import {
     Reply as ReplyIcon, Pencil, UserPlus, UserMinus, ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { reportApiError } from '@/lib/apiError';
 import { isAxiosError } from 'axios';
 import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { DateInput } from '@/components/ui/date-input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { messengerApi } from './api/messengerApi';
 import { useMessengerSocket, type PresenceMap } from './hooks/useMessengerSocket';
@@ -730,20 +732,18 @@ const ChatSearchSheet: React.FC<ChatSearchSheetProps> = ({ open, onOpenChange, r
                     <div className="grid grid-cols-2 gap-2">
                         <label className="flex flex-col gap-1 text-xs text-muted-foreground">
                             {t('messenger.search.dateFrom')}
-                            <input
-                                type="date"
+                            <DateInput
                                 value={since}
-                                onChange={(e) => setSince(e.target.value)}
-                                className="px-2 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                onChange={setSince}
+                                className="h-auto px-2 py-1.5 text-sm"
                             />
                         </label>
                         <label className="flex flex-col gap-1 text-xs text-muted-foreground">
                             {t('messenger.search.dateTo')}
-                            <input
-                                type="date"
+                            <DateInput
                                 value={until}
-                                onChange={(e) => setUntil(e.target.value)}
-                                className="px-2 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                onChange={setUntil}
+                                className="h-auto px-2 py-1.5 text-sm"
                             />
                         </label>
                     </div>
@@ -880,10 +880,7 @@ const ChatInfoDialog: React.FC<ChatInfoDialogProps> = ({
 
     const invalidateRooms = () =>
         queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
-    const membershipError = (err: unknown) => {
-        const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
-        toast.error(typeof detail === 'string' ? detail : t('messenger.errors.updateMembers'));
-    };
+    const membershipError = (err: unknown) => reportApiError(err, t('messenger.errors.updateMembers'));
 
     const addMutation = useMutation({
         mutationFn: (userId: number) => messengerApi.addParticipants(room.id, [userId]),
@@ -1399,7 +1396,7 @@ const MessengerPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['messenger-messages', activeRoomId] });
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
         },
-        onError: () => toast.error(t('messenger.errors.send')),
+        onError: (err) => reportApiError(err, t('messenger.errors.send')),
     });
 
     const editMutation = useMutation({
@@ -1411,10 +1408,7 @@ const MessengerPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['messenger-messages', updated.room_id] });
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
         },
-        onError: (err: unknown) => {
-            const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
-            toast.error(typeof detail === 'string' ? detail : t('messenger.errors.edit'));
-        },
+        onError: (err) => reportApiError(err, t('messenger.errors.edit')),
     });
 
     const deleteMsgMutation = useMutation({
@@ -1423,10 +1417,7 @@ const MessengerPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['messenger-messages', activeRoomId] });
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
         },
-        onError: (err: unknown) => {
-            const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
-            toast.error(typeof detail === 'string' ? detail : t('messenger.errors.delete'));
-        },
+        onError: (err) => reportApiError(err, t('messenger.errors.delete')),
     });
 
     const createRoomMutation = useMutation({
@@ -1479,17 +1470,9 @@ const MessengerPage: React.FC = () => {
             }
             setMobileShowChat(true);
         },
-        onError: (err: unknown) => {
-            // Without this the mutation failed silently and the "new chat"
-            // panel just sat there, looking like a dead button.
-            const detail = isAxiosError(err) ? err.response?.data?.detail : undefined;
-            const message = err instanceof Error ? err.message : '';
-            toast.error(
-                typeof detail === 'string'
-                    ? detail
-                    : message || t('messenger.errors.createChat'),
-            );
-        },
+        // Without this the mutation failed silently and the "new chat"
+        // panel just sat there, looking like a dead button.
+        onError: (err) => reportApiError(err, t('messenger.errors.createChat')),
     });
 
     const updateRoomMutation = useMutation({
@@ -1498,7 +1481,7 @@ const MessengerPage: React.FC = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
         },
-        onError: () => toast.error(t('messenger.errors.updateChat')),
+        onError: (err) => reportApiError(err, t('messenger.errors.updateChat')),
     });
 
     // DELETE /rooms/{id} does one of two things depending on who asks and
@@ -1517,7 +1500,7 @@ const MessengerPage: React.FC = () => {
                     : t('messenger.chatRemovedForYou'),
             );
         },
-        onError: () => toast.error(t('messenger.errors.deleteChat')),
+        onError: (err) => reportApiError(err, t('messenger.errors.deleteChat')),
     });
 
     // --- Smart auto-scroll ---

@@ -5,15 +5,19 @@
 "" — у неё нет API_PREFIX, см. htqweb/urls.py), поэтому здесь соседствуют
 ``/health/``, ``/api/core/v1/...`` и ``/api/admin/v1/...``.
 """
+import json
 import os
 from datetime import datetime, timezone
+from urllib.request import urlopen
 
+from django.conf import settings
 from django.db import connection
 from django.http import HttpResponse, JsonResponse
 from prometheus_client import CollectorRegistry, exposition, multiprocess
 from prometheus_client.registry import REGISTRY
 from pydantic import BaseModel, Field
 
+from htqweb.fallback import fallback
 from htqweb.http import api_view, json_error
 
 from apps.core import infrastructure
@@ -173,3 +177,44 @@ def infrastructure_health_one(request, resource_id: str):
     result = infrastructure.run_health(resource_id)
     infrastructure.invalidate_health_cache()
     return _no_store(JsonResponse(result))
+
+
+@api_view(methods=("GET",), auth="jwt", admin=True)
+def infrastructure_targets(request):
+    """Состояние скрейп-таргетов Prometheus для виджета мониторинга.
+
+    Зачем ручка, а не проксирование /prometheus/ на шлюзе: у Prometheus нет
+    СВОЕЙ авторизации, поэтому открытый location отдал бы весь его UI и API
+    любому — ровно поэтому он и убран из infra/nginx/default.conf. Виджет при
+    этом ходил напрямую в /prometheus/api/v1/targets и работал только под
+    dev-прокси Vite, а в проде показывал ошибку всегда.
+
+    Здесь запрос делает сервер по внутренней сети, а наружу он закрыт тем же
+    гейтом, что и остальные infrastructure-роуты: admin=True.
+    """
+    url = settings.PROMETHEUS_INTERNAL_URL.rstrip("/") + "/api/v1/targets"
+    try:
+        with urlopen(url, timeout=5) as resp:      # noqa: S310 — адрес из настроек
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        # Ровно 503, а не 500: недоступный Prometheus — это отказ соседа, а не
+        # ошибка платформы, и виджет должен показать «мониторинг недоступен»,
+        # а не «что-то сломалось у нас».
+        fallback("core.views.prometheus_targets_unreachable", None,
+                 reason="Prometheus не ответил на запрос таргетов",
+                 exc=exc, expected=True)
+        return json_error("Prometheus unavailable", 503)
+
+    active = (payload.get("data") or {}).get("activeTargets") or []
+    # Отдаём только то, что рисует виджет. Prometheus кладёт в ответ ещё и
+    # discoveredLabels со всей внутренней топологией — наружу ей не надо.
+    return _no_store(JsonResponse({"targets": [
+        {
+            "labels": t.get("labels") or {},
+            "health": t.get("health") or "unknown",
+            "lastScrape": t.get("lastScrape") or "",
+            "lastScrapeDuration": t.get("lastScrapeDuration") or 0,
+            "lastError": t.get("lastError") or "",
+        }
+        for t in active
+    ]}))

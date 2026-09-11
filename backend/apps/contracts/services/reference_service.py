@@ -15,6 +15,7 @@ from django.db.models import ProtectedError
 from django.http import Http404
 
 from apps.contracts.models import Administrator, Country, Program
+from apps.tasks import interface as tasks
 
 
 class ReferenceConflict(Exception):
@@ -103,24 +104,74 @@ def delete_program(program_id: int) -> None:
 
 # ── Administrator ───────────────────────────────────────────────────────
 
+def resolve_project_or_404(project_id: int) -> dict:
+    """Паспорт проекта из ``apps.tasks`` либо 404.
+
+    Проверяется ЯВНО, по той же причине, по которой ``create_administrator``
+    проверяет страну: несуществующий ``project_id`` — это обычная опечатка
+    клиента, и она должна быть честной 404 про проект, а не тихо записанным
+    в базу мусором. FK бы это поймал, но междоменный FK запрещён, поэтому
+    целостность связи держится здесь.
+    """
+    brief = tasks.get_project_brief(project_id)
+    if brief is None:
+        raise Http404(f"Проект {project_id} не найден в модуле задач")
+    return brief
+
+
+def _sync_project_name(admin: Administrator, brief: dict | None) -> None:
+    """Подпись записи следует за названием связанного проекта.
+
+    Без этого одно и то же название осталось бы в платформе дважды и
+    разъехалось при первой переименовке проекта — ровно та беда, ради
+    которой связь и заводилась.
+    """
+    if brief is not None:
+        admin.project_name = brief["name"]
+
+
+def attach_projects(admins: list[Administrator]) -> list[Administrator]:
+    """Проставить каждому администратору его ``project`` одним запросом.
+
+    Пакетно, а не поштучно: страница бюджетов показывает все записи разом, и
+    ``get_project_brief`` на каждую превратил бы её в N+1.
+
+    Результат кладётся АТРИБУТОМ на объект, потому что ``AdministratorRead``
+    собирается из ORM-строки (``from_attributes``) — так поле доезжает до
+    схемы без отдельного слоя сериализации, которого у справочников нет.
+
+    Проект, который удалили в модуле задач, просто не найдётся: связь
+    останется в базе, а в ответе будет ``None``. Это осознанно — стирать
+    ссылку в чужой транзакции некому, а «проект был, но его больше нет» и
+    «проекта не указывали» интерфейс различает по ``project_id``.
+    """
+    ids = [a.project_id for a in admins if a.project_id]
+    by_id = {row["id"]: row for row in tasks.get_projects_brief(ids)} if ids else {}
+    for admin in admins:
+        admin.project = by_id.get(admin.project_id) if admin.project_id else None
+    return admins
+
+
 def list_administrators(*, is_active: bool | None = None, country_id: int | None = None):
     query = Administrator.objects.select_related("country")
     if is_active is not None:
         query = query.filter(is_active=is_active)
     if country_id is not None:
         query = query.filter(country_id=country_id)
-    return list(query)
+    return attach_projects(list(query))
 
 
 def get_administrator_or_404(administrator_id: int) -> Administrator:
     admin = Administrator.objects.select_related("country").filter(pk=administrator_id).first()
     if admin is None:
         raise Http404("Администратор бюджета не найден")
-    return admin
+    return attach_projects([admin])[0]
 
 
-def create_administrator(*, country_id: int, project_name: str,
-                         user_id: int | None = None, is_active: bool = True) -> Administrator:
+def create_administrator(*, country_id: int, project_name: str = "",
+                         project_id: int | None = None,
+                         user_id: int | None = None,
+                         is_active: bool = True) -> Administrator:
     # Существование страны проверяется явно: без этого несуществующий
     # country_id ушёл бы в БД и вернулся IntegrityError → 500, вместо
     # честного 404 про конкретно ненайденную страну.
@@ -128,16 +179,50 @@ def create_administrator(*, country_id: int, project_name: str,
     # ``display_name``/``country_name``, и по объекту они читаются из
     # закэшированной связи, а по id — лишним запросом.
     country = get_country_or_404(country_id)
-    return Administrator.objects.create(
-        country=country, project_name=project_name,
+
+    # Со связью подпись берётся у проекта, без связи — из присланного текста.
+    # Поэтому ``project_name`` больше не обязателен, но пустым остаться не
+    # может: он и есть подпись записи (``display_name``, сортировка).
+    brief = resolve_project_or_404(project_id) if project_id else None
+    if brief is not None:
+        project_name = brief["name"]
+    if not project_name:
+        raise ReferenceConflict(
+            "Нужно либо название проекта, либо связь с проектом модуля задач")
+
+    admin = Administrator.objects.create(
+        country=country, project_name=project_name, project_id=project_id,
         user_id=user_id, is_active=is_active,
     )
+    admin.project = brief
+    return admin
 
 
 def update_administrator(administrator_id: int, **fields) -> Administrator:
     if "country_id" in fields and fields["country_id"] is not None:
         get_country_or_404(fields["country_id"])
-    return _apply(get_administrator_or_404(administrator_id), fields)
+
+    admin = get_administrator_or_404(administrator_id)
+
+    # ``project_id`` обрабатывается ДО ``_apply``: смена связи переписывает и
+    # подпись, а ``_apply`` кладёт присланные поля как есть и о таком правиле
+    # не знает.
+    if "project_id" in fields:
+        project_id = fields.pop("project_id")
+        if project_id is None:
+            # Связь снимают. ``project_name`` остаётся тем, что было, — иначе
+            # запись потеряла бы подпись и пропала бы из списков.
+            admin.project_id = None
+            admin.project = None
+            admin.save(update_fields=["project_id", "updated_at"])
+        else:
+            brief = resolve_project_or_404(project_id)
+            admin.project_id = project_id
+            _sync_project_name(admin, brief)
+            admin.save(update_fields=["project_id", "project_name", "updated_at"])
+            admin.project = brief
+
+    return _apply(admin, fields) if fields else admin
 
 
 def delete_administrator(administrator_id: int) -> None:

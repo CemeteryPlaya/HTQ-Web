@@ -17,8 +17,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { formatAmount } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
+import { reportApiError } from '@/lib/apiError';
 import type { BudgetLineFlat } from '@/types/contracts';
 
 /**
@@ -210,26 +212,8 @@ const InvoiceCreate = () => {
       toast.success(`Счёт «${invoice.name}» выписан`);
       navigate('/contracts/invoices');
     },
-    onError: (error: unknown) => {
-      const err = error as {
-        response?: { status?: number; data?: { detail?: unknown } };
-      };
-      const httpStatus = err.response?.status;
-      const detail = err.response?.data?.detail;
-      if (httpStatus === 409 && typeof detail === 'string') {
-        // Закрытый бюджет, заблокированный/несогласованный контрагент —
-        // тексты с бэкенда осмысленные.
-        toast.error(detail);
-        return;
-      }
-      if (httpStatus === 422 && Array.isArray(detail)) {
-        toast.error(
-          detail.map((item) => (item as { msg?: string }).msg).join('; '),
-        );
-        return;
-      }
-      toast.error('Не удалось выписать счёт');
-    },
+    // 409 — закрытый бюджет, заблокированный или несогласованный контрагент.
+    onError: (err) => reportApiError(err, 'Не удалось выписать счёт'),
   });
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -271,33 +255,23 @@ const InvoiceCreate = () => {
           </div>
         </div>
 
-        {(noBudgets || noCounterparties) && (
-          <Card className="mb-6 border-amber-500/50">
-            <CardContent className="pt-6 text-sm">
-              <p className="font-medium mb-2">Сначала нужны справочники:</p>
-              <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
-                {noBudgets && (
-                  <li>
-                    Нет ни одного бюджета —{' '}
-                    <Link to="/contracts/budgets/new" className="underline">
-                      создайте бюджетную строку
-                    </Link>
-                    .
-                  </li>
-                )}
-                {noCounterparties && (
-                  <li>
-                    Реестр контрагентов пуст —{' '}
-                    <Link to="/contracts/counterparties/new" className="underline">
-                      добавьте поставщика
-                    </Link>
-                    .
-                  </li>
-                )}
-              </ul>
-            </CardContent>
-          </Card>
-        )}
+        <PrerequisiteNotice
+          title="Сначала нужны справочники:"
+          items={[
+            {
+              when: noBudgets,
+              text: 'Нет ни одного бюджета —',
+              to: '/contracts/budgets/new',
+              linkText: 'создайте бюджетную строку',
+            },
+            {
+              when: noCounterparties,
+              text: 'Реестр контрагентов пуст —',
+              to: '/contracts/counterparties/new',
+              linkText: 'добавьте поставщика',
+            },
+          ]}
+        />
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* ─── Источник финансирования ───────────────────────────────── */}

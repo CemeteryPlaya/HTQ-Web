@@ -342,9 +342,9 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "redis_key_size{key=\"celery\"}",
+          "expr": "redis_key_size",
           "refId": "A",
-          "legendFormat": "celery"
+          "legendFormat": "{{key}}"
         }
       ],
       "description": "Устойчивый рост означает, что воркеры не успевают за потоком задач.",

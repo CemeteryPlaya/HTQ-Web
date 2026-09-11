@@ -1,53 +1,104 @@
-# Welcome to your New project
+# HTQWeb — фронтенд
 
-## Project info
+React 19 + Vite 8 + TypeScript, shadcn-ui поверх Tailwind, TanStack Query для серверного
+состояния, React Router 6, i18next. SPA целиком, перед единым Django-бэкендом.
 
-## How can I edit this code?
+> Этот файл раньше содержал шаблон-заглушку («Welcome to your New project» с инструкцией
+> `git clone <YOUR_GIT_URL>`) — она не имела отношения к проекту и заменена.
 
-There are several ways of editing your application.
+Общая картина платформы — в [корневом README](../README.md); контракты эндпойнтов —
+в [API.md](../API.md); навигация по репозиторию — в [STRUCTURE.md](../STRUCTURE.md).
 
-**Use your preferred IDE**
+## Команды
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. 
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+```bash
+npm run dev            # Vite dev-сервер :3000
+npm run build          # сборка; postbuild проверяет бюджет бандла и валится при превышении
+npm run lint           # eslint — строгий, показывает весь накопленный долг
+npm run typecheck      # tsc -b (см. оговорку ниже)
+npm test               # vitest run
+npx vitest run <file> -t "<name>"   # один тест
+npm run test:e2e       # playwright
 ```
 
-**Edit a file directly in GitHub**
+⚠️ **Типы проверяются командой `npx tsc --noEmit -p tsconfig.app.json`.** НЕ
+`-p tsconfig.json`: корневой конфиг — solution-файл с `"files": []`, он берёт ноль файлов
+и всегда «зелёный» (в этом легко убедиться флагом `--listFiles`). Именно эту пустую
+команду выполняет шаг «Типы» в CI, поэтому типы там сегодня не проверяются вовсе.
+В коде приложения 300 накопленных ошибок типов, так что сверяйте вывод до и после правки
+и следите, чтобы в ВАШИХ файлах их не появилось; масштаб долга записан в
+[ci-known-failures.txt](./ci-known-failures.txt).
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+⚠️ **Playwright:** бинарь chromium не установлен, запускать с `{ channel: 'msedge' }` —
+Edge есть на Windows-хосте.
 
-**Use GitHub Codespaces**
+## Что нужно знать до первой правки
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+**Прокси Vite повторяет разделение nginx.** `vite.config.ts` разводит запросы на два
+апстрима — WSGI (`VITE_BACKEND_TARGET`) и ASGI (`VITE_MESSENGER_WS_TARGET`, SSE и
+WebSocket'ы). Имена вида `*ServiceTarget` в этом файле исторические: они остались от
+FastAPI-поколения и сегодня все указывают на один и тот же бэкенд.
 
-## What technologies are used for this project?
+**Подмены значений (fallback) — через общий примитив**, а не `|| 'заглушка'` по месту:
+[src/lib/fallback.ts](./src/lib/fallback.ts). У разработчика (`VITE_HTQ_ENV=development`)
+подмены запрещены — вместо тихой замены летит исключение в оверлей Vite. Визуальные
+заглушки на время загрузки (`?? []`, `|| '—'`) через примитив НЕ проходят: иначе он утонет
+в шуме. Правила целиком — в [CLAUDE.md](../CLAUDE.md), раздел про политику fallback'ов.
 
-This project is built with:
+**Мониторинг открывается через SSO платформы**, не через логин Grafana:
+[src/lib/monitoring.ts](./src/lib/monitoring.ts) кладёт cookie `htq_access` и добавляет
+`?auth_token=`. Состояние скрейп-таргетов виджет берёт у бэкенда
+(`admin/v1/infrastructure/targets`), а НЕ напрямую у Prometheus: у того нет своей
+авторизации, и шлюз его наружу не проксирует.
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+**Сотруднику всегда видно, что произошло.** Три правила, за двумя из них следит
+[src/lib/ux/__tests__/uxContract.test.ts](./src/lib/ux/__tests__/uxContract.test.ts):
+
+1. **Пустой список объясняется и ведёт туда, где недостающее заводится.** Селект,
+   который кормится из `useQuery`, однажды окажется пустым — справочник не заполнен,
+   согласованных договоров нет, отделы не заведены. Рядом ставится
+   [PrerequisiteNotice](./src/components/common/PrerequisiteNotice.tsx) (`card` над
+   формой, `inline` под полем): он молчит, пока всё на месте, и показывает ТОЛЬКО
+   невыполненное. Места, где пустота безвредна (фильтры, необязательные поля),
+   перечислены с причиной в [ux-contract-allowlist.txt](./ux-contract-allowlist.txt).
+2. **Ошибка сервера доходит до человека.** В `onError` мутации — только
+   [reportApiError](./src/lib/apiError.ts)`(err, 'запасная фраза')`. Бэкенд объясняет
+   400, 409, 422 и 502 словами («Номер договора занят», «Mailcow error: …»), и
+   «Не удалось сохранить» это объяснение стирает. Утилита же прячет то, что человеку
+   не поможет: внутренности 500-й и машинные строки сторожей прав («Missing
+   permission: …»). Валидация формы ДО отправки — не этот случай, там обычный
+   `toast.error`. ⚠️ Интерцептор [api/client.ts](./src/api/client.ts) сворачивает 5xx
+   в обычный `Error` без `response` — читать `err.response.data.detail` по месту
+   поэтому бесполезно вдвойне.
+3. **Выключенный контрол называет причину.** Не тултипом: выключенный элемент не
+   получает событий мыши, и `Tooltip` на нём молчит. Строкой рядом — тем же
+   `PrerequisiteNotice variant="inline"`.
+4. **Форма ловит ошибку до отправки, а не после.** Правила, ответ на которые
+   форме уже известен, живут в [src/lib/validation.ts](./src/lib/validation.ts):
+   порядок дат (`datesOutOfOrder`), сумма против остатка (`overLimit`), формат
+   суммы. Формулировка отказа совпадает с серверной — одно правило, один текст.
+   Длины и диапазоны полей зеркалятся из схем бэкенда в
+   [src/lib/fieldLimits.ts](./src/lib/fieldLimits.ts) и вешаются на поле
+   (`maxLength`, `min`/`max`): неверное просто не вводится.
+5. **Действие не предлагается тому, кто не сможет.** Проверка прав — на
+   СТРАНИЦЕ, а не только на ссылке: маршруты `/contracts/*/edit` открыты всем, а
+   `PATCH` там админский, и по ссылке из закладок сотрудник заполнял форму
+   впустую. Роли берутся из [src/lib/auth/roles.ts](./src/lib/auth/roles.ts)
+   (`isPlatformAdmin`), а не копируются в каждый файл.
+
+Новые строки идут в **оба** словаря `public/locales/{ru,en}/translation.json`; за этим
+следит [translationKeys.test.ts](./src/lib/i18n/__tests__/translationKeys.test.ts).
+
+## Долг, вынесенный в CI
+
+CI не проверяет фронтенд теми же командами, что вы запускаете локально, и это осознанно:
+
+| Файл | Что там |
+|---|---|
+| [eslint.ci.config.js](./eslint.ci.config.js) | 358 ошибок линта понижены до предупреждений — 349 из них один `no-explicit-any` на 85 файлов. Каждый пункт с TODO |
+| [ci-known-failures.txt](./ci-known-failures.txt) | 2 файла vitest (секции Т-2 карточки сотрудника) + непроверяемые типы |
+| [ux-contract-allowlist.txt](./ux-contract-allowlist.txt) | Места, где эвристика договора об интерфейсе не может решить сама — с причиной на каждую строку |
+
+Смысл: красный CI перестают читать так же, как вечно горящий алерт, и тогда **новая**
+поломка теряется среди старых. Поэтому долг не прячется, а перечисляется поимённо и обязан
+уменьшаться. **Стандарты при этом не смягчены** — `npm run lint` у вас по-прежнему строгий.

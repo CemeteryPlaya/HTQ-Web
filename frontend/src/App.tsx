@@ -12,6 +12,7 @@ import { registerRoutePrefetch } from '@/app/routing/prefetch';
 import { protectedRoutes, publicRoutes } from '@/app/routing/routeDefinitions';
 import type { RouteConfig } from '@/app/routing/types';
 import { getAccessToken } from '@/lib/auth/profileStorage';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { ConferenceNotifier } from '@/components/ConferenceNotifier';
 import { ServiceUnavailableListener } from '@/components/ServiceUnavailableListener';
 import { BodyPointerEventsGuard } from '@/components/BodyPointerEventsGuard';
@@ -26,6 +27,35 @@ const MailboxPasswordPrompt = lazy(() =>
 
 const DeferredToaster = lazyPages.Toaster;
 const DeferredSonner = lazyPages.Sonner;
+// Показ уведомлений (карточка в правом нижнем углу, звук, уведомление ОС).
+// Отдельным чанком: тянет за собой api/tasks и синтез звука, которым на первом
+// экране делать нечего.
+const NotificationToasts = lazy(() =>
+  import('@/components/NotificationToasts')
+    .then((m) => ({ default: m.NotificationToasts })),
+);
+
+/**
+ * Включатель показа уведомлений.
+ *
+ * Отдельный компонент, а не флаг `hasAccessToken` ниже: тот читается ОДИН раз
+ * при монтировании App, а вход в систему — переход внутри SPA, без перезагрузки.
+ * По флагу уведомления начинали бы приходить только со следующего открытия
+ * страницы. Здесь же вопрос «вошёл ли» задаётся на каждом рендере, а рендер
+ * случится: `useActiveProfile` подписан на тот же запрос профиля, который после
+ * входа выполняет шапка.
+ *
+ * Пока человек не вошёл, чанк с показом уведомлений не загружается вовсе.
+ */
+const NotificationsChrome = () => {
+  const { isLoggedIn } = useActiveProfile({ staleTime: 5 * 60 * 1000 });
+  if (!isLoggedIn) return null;
+  return (
+    <Suspense fallback={null}>
+      <NotificationToasts />
+    </Suspense>
+  );
+};
 
 const SuspensePage = ({ children }: { children: ReactNode }) => (
   <Suspense fallback={<PageLoader />}>{children}</Suspense>
@@ -103,6 +133,10 @@ const App = () => {
             <Suspense fallback={null}>
               <DeferredToaster />
               <DeferredSonner />
+              {/* Рядом с приёмником тостов, а не в блоке ниже: уведомления
+                  должны приходить на ЛЮБОЙ странице, в том числе на тех, где
+                  нет шапки с колокольчиком (файлы отдела). */}
+              <NotificationsChrome />
             </Suspense>
           )}
           <AppRoutes />

@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -16,30 +18,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { DateInput } from '@/components/ui/date-input';
 import { contractsApi } from '@/api/contracts';
-import type { AgreementStatus, BudgetLineFlat, PaymentType } from '@/types/contracts';
+import { fetchEmployees } from '@/api/hr';
+import { reportApiError } from '@/lib/apiError';
+import type {
+  AgreementDirection,
+  AgreementKind,
+  AgreementStatus,
+  AgreementType,
+  BudgetLineFlat,
+  PaymentType,
+} from '@/types/contracts';
 import { useTranslation } from 'react-i18next';
 
 /**
- * Оформление договора.
- *
- * Ключевая механика — выбор источника финансирования. В спецификации у
- * договора отдельные поля «администратор» и «программа», и форма их так и
- * показывает (два каскадных списка), но на бэкенд уходит ОДИН
- * `budget_line_id`: строка бюджета и есть «программа такого-то проекта за
- * такой-то год». Хранить на договоре и администратора, и программу значило
- * бы завести две версии правды о том, из какого кармана взяты деньги.
- *
- * Списки строятся из ПЛОСКОГО списка строк (`GET /budget-lines`), а не из
- * вложенных `lines` внутри бюджетов: каскад перебирает программы всех
- * бюджетов сразу, и разворачивать для этого вложенную структуру на клиенте
- * значило бы переложить сюда же и фильтр по согласованности.
- *
- * Остаток выбранной строки показывается сразу и пересчитывается при вводе
- * суммы — чтобы превышение было видно до отправки, а не прилетало 409-ым
- * после. Финальную проверку всё равно делает бэкенд: остаток мог измениться
- * между загрузкой страницы и отправкой, и верить фронтенду в вопросах денег
- * нельзя.
+ * Оформление договора со всеми реквизитами корпоративной СЭД.
  */
 
 const AMOUNT_RE = /^\d+([.,]\d{1,2})?$/;
@@ -63,10 +58,6 @@ const AgreementCreate = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Только СОГЛАСОВАННЫЕ бюджеты: с несогласованного тратить нельзя, и
-  // бэкенд это проверяет сам (`agreement_service._validate_context`).
-  // Показывать в списке источник, который гарантированно будет отбит, —
-  // значит обещать деньги, которых форма не даст потратить.
   const { data: lines = [], isLoading: budgetsLoading } = useQuery({
     queryKey: ['contracts', 'budget-lines', 'approved'],
     queryFn: () =>
@@ -80,24 +71,53 @@ const AgreementCreate = () => {
     queryKey: ['contracts', 'enums'],
     queryFn: () => contractsApi.getEnums().then((r) => r.data),
   });
+  const { data: employees = [] } = useQuery({
+    queryKey: ['hr', 'employees', 'all'],
+    queryFn: () => fetchEmployees(),
+  });
 
+  // Финансирование
   const [administratorId, setAdministratorId] = useState<string>('');
   const [programId, setProgramId] = useState<string>('');
   const [lineId, setLineId] = useState<string>('');
   const [counterpartyId, setCounterpartyId] = useState<string>('');
+
+  // Общие реквизиты СЭД
+  const [direction, setDirection] = useState<AgreementDirection>('expense');
+  const [kind, setKind] = useState<AgreementKind>('works_services');
+  const [contractType, setContractType] = useState<AgreementType>('standard');
   const [number, setNumber] = useState('');
+  const [sedNumber, setSedNumber] = useState('');
   const [name, setName] = useState('');
+  const [subject, setSubject] = useState('');
+  const [managerName, setManagerName] = useState('');
+  const [managerUserId, setManagerUserId] = useState<number | null>(null);
+
+  // Финансы и НДС
+  const [hasVat, setHasVat] = useState<boolean>(true);
+  const [vatRate, setVatRate] = useState<string>('12');
+  const [amountWithoutVat, setAmountWithoutVat] = useState('');
+  const [vatAmount, setVatAmount] = useState('');
   const [amount, setAmount] = useState('');
+
+  // Аванс и удержание
+  const [hasAdvance, setHasAdvance] = useState<boolean>(false);
+  const [advancePercentage, setAdvancePercentage] = useState('');
+  const [advanceAmountPlanned, setAdvanceAmountPlanned] = useState('');
+  const [retentionRate, setRetentionRate] = useState('0');
+  const [retentionAmount, setRetentionAmount] = useState('');
+
+  // Сроки, тип оплаты и статус
   const [paymentType, setPaymentType] = useState<PaymentType>('postpayment');
-  const [status, setStatus] = useState<AgreementStatus>('draft');
   const [signedDate, setSignedDate] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [termComment, setTermComment] = useState('');
+  const [status, setStatus] = useState<AgreementStatus>('draft');
   const [file, setFile] = useState<File | null>(null);
+
   const [errors, setErrors] = useState<Errors>({});
 
-  // Списки строятся из строк бюджета, а не из справочников: выбирать можно
-  // только тех администраторов и те программы, под которые бюджет реально
-  // заведён и согласован. Иначе форма позволяла бы собрать пару, для которой
-  // источника денег нет.
   const administrators = useMemo(() => {
     const seen = new Map<number, string>();
     lines.forEach((row) => seen.set(row.administrator_id, row.administrator_name));
@@ -117,9 +137,6 @@ const AgreementCreate = () => {
     }));
   }, [lines, administratorId]);
 
-  // Одна программа у одного администратора может финансироваться за разные
-  // годы — это разные бюджеты и разные строки, тогда нужен третий выбор.
-  // Если год ровно один, он проставляется сам.
   const yearOptions = useMemo(() => {
     if (!administratorId || !programId) return [];
     return lines
@@ -137,8 +154,6 @@ const AgreementCreate = () => {
   const amountKopecks =
     amount.trim() && AMOUNT_RE.test(amount.trim()) ? toKopecks(amount.trim()) : null;
 
-  // Черновик бюджет не занимает — предупреждать о превышении для него
-  // незачем, бэкенд его тоже пропустит.
   const committingStatuses = enums?.committing_statuses ?? [
     'on_review',
     'approved',
@@ -147,6 +162,7 @@ const AgreementCreate = () => {
   ];
   const willCommit = committingStatuses.includes(status);
   const overBudget =
+    direction === 'expense' &&
     willCommit &&
     remainingKopecks !== null &&
     amountKopecks !== null &&
@@ -167,8 +183,99 @@ const AgreementCreate = () => {
           String(row.program_id) === value,
       )
       .sort((a, b) => b.period_year - a.period_year);
-    // Единственный год — выбирать нечего, проставляем сразу.
     setLineId(matching.length === 1 ? String(matching[0].id) : '');
+  };
+
+  // Пересчет НДС
+  const handleWithoutVatChange = (val: string) => {
+    setAmountWithoutVat(val);
+    const num = parseFloat(val.replace(',', '.')) || 0;
+    if (!hasVat) {
+      setVatAmount('0.00');
+      const totalStr = num ? num.toFixed(2) : '';
+      setAmount(totalStr);
+      recalculateAdvance(totalStr, advancePercentage);
+      recalculateRetention(totalStr, retentionRate);
+      return;
+    }
+    const rate = parseFloat(vatRate.replace(',', '.')) || 0;
+    const vat = num * (rate / 100);
+    const total = num + vat;
+    setVatAmount(vat ? vat.toFixed(2) : '');
+    const totalStr = total ? total.toFixed(2) : '';
+    setAmount(totalStr);
+    recalculateAdvance(totalStr, advancePercentage);
+    recalculateRetention(totalStr, retentionRate);
+  };
+
+  const handleTotalAmountChange = (val: string) => {
+    setAmount(val);
+    const num = parseFloat(val.replace(',', '.')) || 0;
+    if (!hasVat) {
+      setAmountWithoutVat(num ? num.toFixed(2) : '');
+      setVatAmount('0.00');
+    } else {
+      const rate = parseFloat(vatRate.replace(',', '.')) || 0;
+      const withoutVat = num / (1 + rate / 100);
+      const vat = num - withoutVat;
+      setAmountWithoutVat(withoutVat ? withoutVat.toFixed(2) : '');
+      setVatAmount(vat ? vat.toFixed(2) : '');
+    }
+    recalculateAdvance(val, advancePercentage);
+    recalculateRetention(val, retentionRate);
+  };
+
+  const handleVatRateChange = (newRate: string) => {
+    setVatRate(newRate);
+    if (!hasVat) return;
+    const rateNum = parseFloat(newRate.replace(',', '.')) || 0;
+    const withoutVatNum = parseFloat(amountWithoutVat.replace(',', '.')) || 0;
+    if (withoutVatNum) {
+      const vat = withoutVatNum * (rateNum / 100);
+      const total = withoutVatNum + vat;
+      setVatAmount(vat.toFixed(2));
+      setAmount(total.toFixed(2));
+      recalculateAdvance(total.toFixed(2), advancePercentage);
+      recalculateRetention(total.toFixed(2), retentionRate);
+    }
+  };
+
+  const handleVatToggle = (enabled: boolean) => {
+    setHasVat(enabled);
+    if (!enabled) {
+      setVatAmount('0.00');
+      if (amount) {
+        setAmountWithoutVat(amount);
+      }
+    } else {
+      const rate = parseFloat(vatRate.replace(',', '.')) || 12;
+      if (!vatRate || vatRate === '0') setVatRate('12');
+      const withoutVatNum = parseFloat(amountWithoutVat.replace(',', '.')) || 0;
+      if (withoutVatNum) {
+        const vat = withoutVatNum * (rate / 100);
+        const total = withoutVatNum + vat;
+        setVatAmount(vat.toFixed(2));
+        setAmount(total.toFixed(2));
+        recalculateAdvance(total.toFixed(2), advancePercentage);
+        recalculateRetention(total.toFixed(2), retentionRate);
+      }
+    }
+  };
+
+  const recalculateAdvance = (totalStr: string, pctStr: string) => {
+    const totalNum = parseFloat(totalStr.replace(',', '.')) || 0;
+    const pctNum = parseFloat(pctStr.replace(',', '.')) || 0;
+    if (pctNum > 0 && totalNum > 0) {
+      setAdvanceAmountPlanned(((totalNum * pctNum) / 100).toFixed(2));
+    }
+  };
+
+  const recalculateRetention = (totalStr: string, rateStr: string) => {
+    const totalNum = parseFloat(totalStr.replace(',', '.')) || 0;
+    const rateNum = parseFloat(rateStr.replace(',', '.')) || 0;
+    if (rateNum > 0 && totalNum > 0) {
+      setRetentionAmount(((totalNum * rateNum) / 100).toFixed(2));
+    }
   };
 
   const validate = (): Errors => {
@@ -198,16 +305,31 @@ const AgreementCreate = () => {
           counterparty_id: Number(counterpartyId),
           amount: amount.trim().replace(',', '.'),
           payment_type: paymentType,
+          direction,
+          kind,
+          contract_type: contractType,
+          sed_number: sedNumber.trim(),
+          subject: subject.trim(),
+          manager_user_id: managerUserId,
+          manager_name: managerName.trim(),
+          has_vat: hasVat,
+          vat_rate: hasVat ? vatRate.trim() || '0' : '0',
+          amount_without_vat: amountWithoutVat.trim() ? amountWithoutVat.trim().replace(',', '.') : null,
+          vat_amount: vatAmount.trim() ? vatAmount.trim().replace(',', '.') : null,
+          has_advance: hasAdvance,
+          advance_percentage: hasAdvance && advancePercentage.trim() ? advancePercentage.trim().replace(',', '.') : null,
+          advance_amount_planned: hasAdvance && advanceAmountPlanned.trim() ? advanceAmountPlanned.trim().replace(',', '.') : null,
+          retention_rate: retentionRate.trim() || '0',
+          retention_amount: retentionAmount.trim() ? retentionAmount.trim().replace(',', '.') : null,
+          start_date: startDate || null,
+          end_date: endDate || null,
+          term_comment: termComment.trim(),
           currency: selectedLine!.currency,
           signed_date: signedDate || null,
           status,
         })
         .then((r) => r.data);
 
-      // Файл грузится вторым запросом — у бэкенда для него отдельный
-      // multipart-эндпоинт. Ошибка загрузки НЕ откатывает договор: он уже
-      // создан и валиден, скан можно приложить позже, и терять введённое
-      // из-за сбоя на файле было бы хуже.
       if (file) {
         try {
           await contractsApi.uploadAgreementFile(agreement.id, file);
@@ -224,21 +346,7 @@ const AgreementCreate = () => {
       toast.success(t('contracts.agreementForm.created', { number: agreement.number }));
       navigate('/contracts/agreements');
     },
-    onError: (error: any) => {
-      const httpStatus = error?.response?.status;
-      const detail = error?.response?.data?.detail;
-      if (httpStatus === 409 && typeof detail === 'string') {
-        // Дубль номера, превышение остатка, закрытый бюджет, заблокированный
-        // контрагент — тексты с бэкенда осмысленные.
-        toast.error(detail);
-        return;
-      }
-      if (httpStatus === 422 && Array.isArray(detail)) {
-        toast.error(detail.map((item: any) => item.msg).join('; '));
-        return;
-      }
-      toast.error(t('contracts.agreementForm.createError'));
-    },
+    onError: (err) => reportApiError(err, t('contracts.agreementForm.createError')),
   });
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -260,7 +368,7 @@ const AgreementCreate = () => {
 
   return (
     <ContractsShell>
-      <div className="max-w-3xl">
+      <div className="max-w-4xl">
         <div className="mb-6 flex flex-col gap-4">
           <Link
             to="/contracts/agreements"
@@ -280,36 +388,26 @@ const AgreementCreate = () => {
           </div>
         </div>
 
-        {(noBudgets || noCounterparties) && (
-          <Card className="mb-6 border-amber-500/50">
-            <CardContent className="pt-6 text-sm">
-              <p className="font-medium mb-2">{t('contracts.agreementForm.needReferences')}</p>
-              <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
-                {noBudgets && (
-                  <li>
-                    {t('contracts.agreementForm.noBudgets')}{' '}
-                    <Link to="/contracts/budgets/new" className="underline">
-                      {t('contracts.agreementForm.createBudgetLine')}
-                    </Link>
-                    .
-                  </li>
-                )}
-                {noCounterparties && (
-                  <li>
-                    {t('contracts.agreementForm.noCounterparties')}{' '}
-                    <Link to="/contracts/counterparties/new" className="underline">
-                      {t('contracts.agreementForm.addCounterparty')}
-                    </Link>
-                    .
-                  </li>
-                )}
-              </ul>
-            </CardContent>
-          </Card>
-        )}
+        <PrerequisiteNotice
+          title={t('contracts.agreementForm.needReferences')}
+          items={[
+            {
+              when: noBudgets,
+              text: t('contracts.agreementForm.noBudgets'),
+              to: '/contracts/budgets/new',
+              linkText: t('contracts.agreementForm.createBudgetLine'),
+            },
+            {
+              when: noCounterparties,
+              text: t('contracts.agreementForm.noCounterparties'),
+              to: '/contracts/counterparties/new',
+              linkText: t('contracts.agreementForm.addCounterparty'),
+            },
+          ]}
+        />
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* ─── Источник финансирования ───────────────────────────────── */}
+          {/* ─── 1. Источник финансирования и бюджет ──────────────────────── */}
           <Card>
             <CardHeader>
               <CardTitle>{t('contracts.agreementForm.fundingSource')}</CardTitle>
@@ -372,7 +470,6 @@ const AgreementCreate = () => {
                 </div>
               </div>
 
-              {/* Год спрашивается, только если строк за разные годы больше одной. */}
               {yearOptions.length > 1 && (
                 <div className="sm:w-48">
                   <Label htmlFor="budget-year">{t('contracts.budgetYear')}</Label>
@@ -396,7 +493,17 @@ const AgreementCreate = () => {
               )}
 
               {selectedLine && (
-                <div className="rounded-md border bg-muted/40 p-4 text-sm">
+                <div className="rounded-md border bg-muted/40 p-4 text-sm space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pb-2 border-b text-xs">
+                    <div>
+                      <span className="text-muted-foreground">{t('contracts.agreementForm.codeLabel') || 'Код статьи'}: </span>
+                      <span className="font-medium">{selectedLine.program_name}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">{t('contracts.agreementForm.expenseItemLabel') || 'Статья бюджета'}: </span>
+                      <span className="font-medium">{selectedLine.expense_item}</span>
+                    </div>
+                  </div>
                   <div className="flex flex-wrap justify-between gap-2">
                     <span className="text-muted-foreground">{t('contracts.columns.allocated')}</span>
                     <span className="tabular-nums">
@@ -420,13 +527,69 @@ const AgreementCreate = () => {
             </CardContent>
           </Card>
 
-          {/* ─── Договор ───────────────────────────────────────────────── */}
+          {/* ─── 2. Реквизиты договора и СЭД ───────────────────────────── */}
           <Card>
             <CardHeader>
               <CardTitle>{t('contracts.agreement.title')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
+              {/* Направление, Вид, Тип */}
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <Label htmlFor="direction">{t('contracts.agreementForm.directionLabel')}</Label>
+                  <Select
+                    value={direction}
+                    onValueChange={(val) => setDirection(val as AgreementDirection)}
+                  >
+                    <SelectTrigger id="direction">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="expense">{t('contracts.agreementForm.directionExpense')}</SelectItem>
+                      <SelectItem value="income">{t('contracts.agreementForm.directionIncome')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label htmlFor="kind">{t('contracts.agreementForm.kindLabel')}</Label>
+                  <Select
+                    value={kind}
+                    onValueChange={(val) => setKind(val as AgreementKind)}
+                  >
+                    <SelectTrigger id="kind">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="works_services">{t('contracts.agreementForm.kindWorksServices')}</SelectItem>
+                      <SelectItem value="goods">{t('contracts.agreementForm.kindGoods')}</SelectItem>
+                      <SelectItem value="services">{t('contracts.agreementForm.kindServices')}</SelectItem>
+                      <SelectItem value="lease">{t('contracts.agreementForm.kindLease')}</SelectItem>
+                      <SelectItem value="other">{t('contracts.agreementForm.kindOther')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label htmlFor="contract-type">{t('contracts.agreementForm.contractTypeLabel')}</Label>
+                  <Select
+                    value={contractType}
+                    onValueChange={(val) => setContractType(val as AgreementType)}
+                  >
+                    <SelectTrigger id="contract-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="standard">{t('contracts.agreementForm.contractTypeStandard')}</SelectItem>
+                      <SelectItem value="non_standard">{t('contracts.agreementForm.contractTypeNonStandard')}</SelectItem>
+                      <SelectItem value="framework">{t('contracts.agreementForm.contractTypeFramework')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Номера и Контрагент */}
+              <div className="grid gap-4 sm:grid-cols-3">
                 <div>
                   <Label htmlFor="number">{t('contracts.agreementForm.numberLabel')}</Label>
                   <Input
@@ -438,6 +601,17 @@ const AgreementCreate = () => {
                   />
                   {fieldError('number')}
                 </div>
+
+                <div>
+                  <Label htmlFor="sed-number">{t('contracts.agreementForm.sedNumberLabel')}</Label>
+                  <Input
+                    id="sed-number"
+                    value={sedNumber}
+                    onChange={(event) => setSedNumber(event.target.value)}
+                    placeholder={t('contracts.agreementForm.sedNumberPlaceholder')}
+                  />
+                </div>
+
                 <div>
                   <Label htmlFor="counterparty">{t('contracts.columns.counterparty')}</Label>
                   <Select
@@ -463,41 +637,251 @@ const AgreementCreate = () => {
                 </div>
               </div>
 
+              {/* Наименование и Куратор */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="name">{t('contracts.agreementForm.nameLabel')}</Label>
+                  <Input
+                    id="name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder={t('contracts.agreementForm.namePlaceholder')}
+                    className={errors.name ? 'border-destructive' : undefined}
+                  />
+                  {fieldError('name')}
+                </div>
+
+                <div>
+                  <Label htmlFor="manager">{t('contracts.agreementForm.managerLabel')}</Label>
+                  <Input
+                    id="manager"
+                    list="manager-options"
+                    value={managerName}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setManagerName(val);
+                      const match = employees.find(
+                        (emp) => emp.full_name.toLowerCase() === val.trim().toLowerCase(),
+                      );
+                      setManagerUserId(match ? match.user_id ?? match.user ?? null : null);
+                    }}
+                    placeholder={t('contracts.agreementForm.managerPlaceholder')}
+                  />
+                  <datalist id="manager-options">
+                    {employees.map((emp) => (
+                      <option key={emp.id} value={emp.full_name}>
+                        {emp.position_title ? `${emp.position_title} (${emp.department_name || ''})` : ''}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+
+              {/* Предмет договора */}
               <div>
-                <Label htmlFor="name">{t('contracts.agreementForm.nameLabel')}</Label>
-                <Input
-                  id="name"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder={t('contracts.agreementForm.namePlaceholder')}
-                  className={errors.name ? 'border-destructive' : undefined}
+                <Label htmlFor="subject">{t('contracts.agreementForm.subjectLabel')}</Label>
+                <Textarea
+                  id="subject"
+                  rows={3}
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  placeholder={t('contracts.agreementForm.subjectPlaceholder')}
                 />
-                {fieldError('name')}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* ─── 3. Финансовые условия и НДС ────────────────────────────── */}
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('contracts.agreementForm.financeSectionTitle')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-4 p-3 rounded-lg border bg-muted/20">
+                <div className="flex items-center space-x-3">
+                  <Switch
+                    id="has-vat"
+                    checked={hasVat}
+                    onCheckedChange={handleVatToggle}
+                  />
+                  <Label htmlFor="has-vat" className="cursor-pointer font-medium">
+                    {hasVat ? 'С НДС' : 'Без НДС'}
+                  </Label>
+                </div>
+                {hasVat && (
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="vat-rate" className="text-sm">
+                      {t('contracts.agreementForm.vatRateLabel')}
+                    </Label>
+                    <Input
+                      id="vat-rate"
+                      className="w-24 text-right"
+                      value={vatRate}
+                      onChange={(e) => handleVatRateChange(e.target.value)}
+                      placeholder="12"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <div>
-                  <Label htmlFor="amount">{t('contracts.agreementForm.amountLabel')}</Label>
+                  <Label htmlFor="amount-without-vat">
+                    {t('contracts.agreementForm.amountWithoutVatLabel')}
+                  </Label>
+                  <Input
+                    id="amount-without-vat"
+                    inputMode="decimal"
+                    value={amountWithoutVat}
+                    onChange={(e) => handleWithoutVatChange(e.target.value)}
+                    placeholder="0.00"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="vat-amount">
+                    {t('contracts.agreementForm.vatAmountLabel')}
+                  </Label>
+                  <Input
+                    id="vat-amount"
+                    readOnly
+                    tabIndex={-1}
+                    className="bg-muted/50 cursor-not-allowed"
+                    value={vatAmount}
+                    placeholder="0.00"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="amount" className="font-semibold">
+                    {t('contracts.agreementForm.totalAmountLabel')} *
+                  </Label>
                   <div className="flex items-center gap-2">
                     <Input
                       id="amount"
                       inputMode="decimal"
                       value={amount}
-                      onChange={(event) => setAmount(event.target.value)}
-                      placeholder="400000.00"
+                      onChange={(event) => handleTotalAmountChange(event.target.value)}
+                      placeholder="0.00"
                       className={
-                        errors.amount || overBudget ? 'border-destructive' : undefined
+                        errors.amount || overBudget ? 'border-destructive font-semibold' : 'font-semibold'
                       }
                     />
                     {selectedLine && (
-                      <span className="text-sm text-muted-foreground">
+                      <span className="text-sm text-muted-foreground font-medium">
                         {selectedLine.currency}
                       </span>
                     )}
                   </div>
                   {fieldError('amount')}
                 </div>
+              </div>
 
+              {overBudget && selectedLine && (
+                <div className="flex gap-2 rounded-md border border-destructive/50 bg-destructive/5 p-3 text-sm">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />
+                  <div>
+                    {t('contracts.agreementForm.overBudget', {
+                      amount: formatAmount(selectedLine.remaining),
+                      currency: selectedLine.currency,
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Аванс и гарантийное удержание */}
+              <div className="grid gap-4 sm:grid-cols-2 pt-2 border-t">
+                {/* Блок аванса */}
+                <div className="space-y-3 rounded-lg border p-3">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="has-advance" className="font-medium cursor-pointer">
+                      {t('contracts.agreementForm.hasAdvanceLabel')}
+                    </Label>
+                    <Switch
+                      id="has-advance"
+                      checked={hasAdvance}
+                      onCheckedChange={(checked) => {
+                        setHasAdvance(checked);
+                        if (!checked) {
+                          setAdvancePercentage('');
+                          setAdvanceAmountPlanned('');
+                        }
+                      }}
+                    />
+                  </div>
+                  {hasAdvance && (
+                    <div className="grid grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <Label htmlFor="advance-pct" className="text-xs">
+                          {t('contracts.agreementForm.advancePercentageLabel')}
+                        </Label>
+                        <Input
+                          id="advance-pct"
+                          value={advancePercentage}
+                          onChange={(e) => {
+                            setAdvancePercentage(e.target.value);
+                            recalculateAdvance(amount, e.target.value);
+                          }}
+                          placeholder="30"
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="advance-amount" className="text-xs">
+                          {t('contracts.agreementForm.advanceAmountLabel')}
+                        </Label>
+                        <Input
+                          id="advance-amount"
+                          value={advanceAmountPlanned}
+                          onChange={(e) => setAdvanceAmountPlanned(e.target.value)}
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Блок гарантийного удержания */}
+                <div className="space-y-3 rounded-lg border p-3">
+                  <div className="font-medium text-sm">{t('contracts.agreementForm.retentionSectionTitle')}</div>
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <Label htmlFor="retention-rate" className="text-xs">
+                        {t('contracts.agreementForm.retentionRateLabel')}
+                      </Label>
+                      <Input
+                        id="retention-rate"
+                        value={retentionRate}
+                        onChange={(e) => {
+                          setRetentionRate(e.target.value);
+                          recalculateRetention(amount, e.target.value);
+                        }}
+                        placeholder="5"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="retention-amount" className="text-xs">
+                        {t('contracts.agreementForm.retentionAmountLabel')}
+                      </Label>
+                      <Input
+                        id="retention-amount"
+                        value={retentionAmount}
+                        onChange={(e) => setRetentionAmount(e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* ─── 4. Сроки, статус и файл ───────────────────────────────── */}
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('contracts.agreementForm.termsSectionTitle')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-4">
                 <div>
                   <Label htmlFor="payment-type">{t('contracts.columns.paymentType')}</Label>
                   <Select
@@ -519,25 +903,43 @@ const AgreementCreate = () => {
 
                 <div>
                   <Label htmlFor="signed-date">{t('contracts.columns.signedAt')}</Label>
-                  <Input
+                  <DateInput
                     id="signed-date"
-                    type="date"
                     value={signedDate}
-                    onChange={(event) => setSignedDate(event.target.value)}
+                    onChange={setSignedDate}
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="start-date">{t('contracts.agreementForm.startDateLabel')}</Label>
+                  <DateInput
+                    id="start-date"
+                    value={startDate}
+                    onChange={setStartDate}
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="end-date">{t('contracts.agreementForm.endDateLabel')}</Label>
+                  <DateInput
+                    id="end-date"
+                    value={endDate}
+                    onChange={setEndDate}
                   />
                 </div>
               </div>
 
-              {overBudget && selectedLine && (
-                <div className="flex gap-2 rounded-md border border-destructive/50 bg-destructive/5 p-3 text-sm">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />
-                  <div>
-                    {t('contracts.agreementForm.overBudget', { amount: formatAmount(selectedLine.remaining), currency: selectedLine.currency })}
-                  </div>
-                </div>
-              )}
+              <div>
+                <Label htmlFor="term-comment">{t('contracts.agreementForm.termCommentLabel')}</Label>
+                <Input
+                  id="term-comment"
+                  value={termComment}
+                  onChange={(e) => setTermComment(e.target.value)}
+                  placeholder={t('contracts.agreementForm.termCommentPlaceholder')}
+                />
+              </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-2 pt-2 border-t">
                 <div>
                   <Label htmlFor="status">{t('contracts.columns.status')}</Label>
                   <Select
@@ -548,8 +950,6 @@ const AgreementCreate = () => {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {/* «Исполнен»/«Расторгнут» при создании не предлагаем —
-                          это состояния уже прожитого договора. */}
                       {(enums?.agreement_status ?? [])
                         .filter(
                           (option) =>
@@ -563,7 +963,7 @@ const AgreementCreate = () => {
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {willCommit
+                    {willCommit && direction === 'expense'
                       ? t('contracts.agreementForm.statusConsumes')
                       : t('contracts.agreementForm.draftDoesNot')}
                   </p>

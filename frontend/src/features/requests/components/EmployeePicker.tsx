@@ -8,6 +8,7 @@ import { Plus, Search, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -102,6 +103,16 @@ export function EmployeePicker({ value, onChange, multiple = true, max, addLabel
                   ))}
                 </SelectContent>
               </Select>
+              {/* Ссылки нет: справочник ведёт кадровая служба, а сюда попадает
+                  любой сотрудник, заполняющий заявку. */}
+              <PrerequisiteNotice
+                variant="inline"
+                items={[{
+                  when: departments.data !== undefined && departments.data.length === 0,
+                  text: t('requests.employeePicker.noDepartments',
+                    'Отделы ещё не заведены — обратитесь в кадровую службу'),
+                }]}
+              />
             </div>
 
             {dept && (

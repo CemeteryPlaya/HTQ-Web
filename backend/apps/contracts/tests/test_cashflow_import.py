@@ -184,7 +184,9 @@ def test_open_contract_without_amount_loads_as_zero(tmp_path):
     agreement = Agreement.objects.get()
     assert agreement.amount == Decimal("0.00")
     # Ноль читается как «суммы ещё нет» только вместе с этим признаком.
-    assert agreement.contract_type == AgreementType.OPEN
+    # «Открытый» в реестре и FRAMEWORK в модели — одно понятие, см. докстринг
+    # AgreementType: отдельного значения ``open`` в перечислении нет.
+    assert agreement.contract_type == AgreementType.FRAMEWORK
     assert agreement.payment_type == PaymentType.PREPAYMENT
     assert agreement.advance_share == Decimal("1.000")
     assert not report.warnings

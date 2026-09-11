@@ -26,6 +26,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { DateInput } from '@/components/ui/date-input';
 import { Label } from '@/components/ui/label';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -117,10 +118,10 @@ const HRProjectPlanFact: React.FC = () => {
           <Label htmlFor="data-date" className="text-xs text-muted-foreground">
             {t('tasks.planFact.dataDate', 'Отчётная дата')}
           </Label>
-          <Input
-            id="data-date" type="date" className="h-9 w-[170px]"
+          <DateInput
+            id="data-date" className="h-9 w-[170px]"
             value={dataDate}
-            onChange={(event) => setDataDate(event.target.value)}
+            onChange={setDataDate}
           />
         </div>
       </div>

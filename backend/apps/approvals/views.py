@@ -31,6 +31,7 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from pydantic import ValidationError
 
+from htqweb import date_rules
 from htqweb.http import api_view, json_error
 
 from . import schemas
@@ -279,6 +280,13 @@ def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
     permissions.ensure_can_manage_project(project_id, request.token)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(project, field, value)
+    try:
+        # По СЛИТОЙ паре: в PATCH может приехать одна дата, вторая лежит в
+        # строке. У проекта заявок нет даже CheckConstraint, так что до этой
+        # проверки перепутанные даты просто сохранялись.
+        date_rules.assert_instance_ordered(project)
+    except date_rules.DatesOutOfOrder as exc:
+        return json_error(str(exc), 422)
     project.save()
     return schemas.ProjectResponse.model_validate(project)
 

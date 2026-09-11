@@ -18,6 +18,8 @@
 from __future__ import annotations
 
 from django.db.models import Case, Count, F, IntegerField, Max, Min, Q, Sum, When
+
+from htqweb import date_rules
 from django.http import Http404
 
 from ..models import (TERMINAL_STATUSES, Project, ProjectSite, Roadmap,
@@ -122,6 +124,10 @@ def update_roadmap(roadmap_id: int, changes: dict) -> Roadmap:
             changes.get("site_block_id", roadmap.site_block_id))
     for field, value in changes.items():
         setattr(roadmap, field, value)
+    # По СЛИТОЙ паре, а не по присланным полям: в PATCH может приехать
+    # одна дата, вторая лежит в строке. Без этой проверки нарушение
+    # доходит до CheckConstraint и возвращается как 500.
+    date_rules.assert_instance_ordered(roadmap)
     roadmap.save()
     return roadmap
 

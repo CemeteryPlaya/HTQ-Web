@@ -21,6 +21,10 @@ store_file() запускает ТОТ ЖЕ пайплайн загрузки, �
 явно вызывающим, а не берётся из JWT, и audit.record_action получает
 request=None — тот принимает это штатно, см. его докстринг).
 
+get_file_meta() отдаёт имя/mime/размер файла — соседу, который его
+ПОКАЗЫВАЕТ, а не просто ссылается (карточка договора рисует PDF во фрейме, а
+картинку в img, и способ показа выбирается по mime).
+
 get_file_url() переиспользует ровно ту же "signed vs plain" развилку, что
 и views.issue_signed_url (через общий services.url_service.build_file_url)
 — никакого самодельного HMAC здесь, как и предупреждает докстринг
@@ -160,6 +164,38 @@ def get_file_url(file_id, variant: str = "original") -> str | None:
 
     url, _exp = build_file_url(meta, variant=variant)
     return url
+
+
+def get_file_meta(file_id) -> dict | None:
+    """Паспорт файла для соседа: имя, тип, размер. ``None``, если id не
+    разрешается в живую (не soft-deleted) строку, включая кривой/не-UUID id
+    — тот же контракт, что и у ``get_file_url``.
+
+    Нужен тем, кто ПОКАЗЫВАЕТ файл, а не только отдаёт ссылку: чтобы выбрать
+    способ показа (PDF во фрейм, картинку в img), надо знать mime, а чтобы
+    подписать кнопку — имя и размер. Без этой функции сосед либо гадал бы по
+    расширению в URL, либо лез бы в чужую модель напрямую.
+
+    Возвращает простой dict, а не ORM-объект, — как и все функции здесь.
+    """
+    require_service("media")
+
+    try:
+        key = uuid.UUID(str(file_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+    meta = FileMetadata.objects.filter(pk=key, deleted_at__isnull=True).first()
+    if meta is None:
+        return None
+
+    return {
+        "id": str(meta.pk),
+        "filename": meta.original_filename,
+        "mime": meta.mime,
+        "size": meta.size,
+        "kind": meta.kind,
+    }
 
 
 def delete_file(file_id) -> bool:

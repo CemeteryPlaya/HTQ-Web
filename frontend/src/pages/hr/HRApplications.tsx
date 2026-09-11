@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '@/api/client';
 import { Plus } from 'lucide-react';
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -225,6 +226,15 @@ const HRApplications = () => {
                     ))}
                   </SelectContent>
                 </Select>
+                <PrerequisiteNotice
+                  variant="inline"
+                  items={[{
+                    when: vacancies !== undefined && vacancies.length === 0,
+                    text: t('hr.pages.applications.noVacancies', 'Открытых вакансий нет — заявка на подбор привязывается к вакансии,'),
+                    to: '/hr/vacancies',
+                    linkText: t('hr.pages.applications.addVacancy', 'откройте вакансию'),
+                  }]}
+                />
               </label>
 
               <div className="grid gap-4 md:grid-cols-2">
