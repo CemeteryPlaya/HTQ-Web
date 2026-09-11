@@ -295,7 +295,11 @@ def test_engagement_dates_must_be_ordered():
                      {"contractor_id": contractor.id, "site_id": site.id,
                       "start_date": "2026-06-01", "end_date": "2026-01-01"},
                      **auth(admin_token()))
-    assert resp.status_code == 500       # CHECK ck_engagement_dates
+    # 422, а не 500: до правила порядка дат раньше добиралась только БД, и
+    # ``CHECK ck_engagement_dates`` прилетал пользователю голой пятисоткой.
+    # Теперь порядок дат проверяется на всех путях записи — см. htqweb/
+    # date_rules.py и apps/tasks/tests/test_date_order.py.
+    assert resp.status_code == 422
 
 
 # ─────────────────────────────────────────────────────────────────────────

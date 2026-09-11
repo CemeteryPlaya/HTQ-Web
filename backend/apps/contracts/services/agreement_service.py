@@ -300,13 +300,11 @@ def serialize_agreement(agreement: Agreement) -> dict:
 @transaction.atomic
 def create_agreement(*, number: str, name: str, budget_line_id: int,
                      counterparty_id: int,
-                     amount, payment_type: str, currency: str = "KZT",
-                     advance_share=None, kind: str | None = None,
-                     contract_type: str | None = None,
                      amount, payment_type: str = "postpayment",
                      direction: str | None = None,
                      kind: str | None = None,
                      contract_type: str | None = None,
+                     advance_share=None,
                      sed_number: str = "",
                      subject: str = "",
                      manager_user_id: int | None = None,
@@ -352,21 +350,9 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
         budget_calc.check_capacity(line, amount)
 
     with conflict_as(f"Договор с номером {number} уже зарегистрирован"):
-        return Agreement.objects.create(
-            # Объектами, а не id: обе записи уже загружены проверками выше
-            # (`_lock_line` тянет и бюджет с администратором и страной), и
-            # ответ соберётся из закэшированных связей, а не новыми запросами.
-            number=number, name=name, budget_line=line,
-            counterparty=counterparty, amount=amount,
-            payment_type=payment_type, currency=currency,
-            # Реестровые поля необязательны: договор, заведённый руками,
-            # может о них не знать — тогда действуют дефолты модели
-            # (постоплатный РиУ со стандартным типом).
-            **({"advance_share": advance_share} if advance_share is not None else {}),
-            **({"kind": kind} if kind else {}),
-            **({"contract_type": contract_type} if contract_type else {}),
-            signed_date=signed_date, status=status, created_by=created_by,
-        )
+        # Объектами, а не id: обе записи уже загружены проверками выше
+        # (`_lock_line` тянет и бюджет с администратором и страной), и ответ
+        # соберётся из закэшированных связей, а не новыми запросами.
         kwargs = {
             "number": number,
             "name": name,
@@ -391,6 +377,9 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
             "status": status,
             "created_by": created_by,
         }
+        # Необязательные поля подставляются только заданными: договор,
+        # заведённый руками, может о них не знать — тогда действуют дефолты
+        # модели, а не перезапись их на None.
         if vat_rate is not None:
             kwargs["vat_rate"] = vat_rate
         if amount_without_vat is not None:
@@ -401,6 +390,11 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
             kwargs["advance_percentage"] = advance_percentage
         if advance_amount_planned is not None:
             kwargs["advance_amount_planned"] = advance_amount_planned
+        # Доля аванса — поле реестра, из которого импорт ВЫВОДИТ payment_type;
+        # обратной силы это не имеет, поэтому доля остаётся необязательной и
+        # при ручном заведении падает на дефолт модели (0).
+        if advance_share is not None:
+            kwargs["advance_share"] = advance_share
         if retention_rate is not None:
             kwargs["retention_rate"] = retention_rate
         if retention_amount is not None:

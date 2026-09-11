@@ -17,6 +17,7 @@ from apps.tasks.models import (
     CalendarEvent, CalendarEventParticipant, EventException, Notification,
     ProductionDay, Task,
 )
+from apps.users.models import User, UserStatus
 
 from .helpers import BASE, admin_token, auth, patch_json, post_json, token
 
@@ -300,17 +301,56 @@ def test_timeline_rejects_an_inverted_or_huge_range():
                         **auth()).status_code == 400
 
 
-# ── users-options (documented gap) ──────────────────────────────────────
+# ── users-options ───────────────────────────────────────────────────────
+# Раньше здесь стоял маркерный тест на 501: контракт apps.users.interface
+# позволял только выборку по id, и пикер участников был заглушён. Блокировка
+# снята (interface.list_users_brief ищет ИЛИ-условием по username/first_name/
+# last_name/email), поэтому маркер заменён проверкой самого поведения — как и
+# предписывал его докстринг.
+
+def _picker_user(username, *, email, first_name="", last_name="",
+                 status=UserStatus.ACTIVE):
+    # ``is_active`` — вычисляемое свойство без колонки (``status == ACTIVE``),
+    # поэтому «неактивный» задаётся именно статусом.
+    return User.objects.create(username=username, email=email, password="x",
+                               first_name=first_name, last_name=last_name,
+                               status=status)
+
 
 @pytest.mark.django_db
-def test_participant_picker_reports_the_missing_interface_contract():
-    """Marker test for the §7 gap: the route answers 501 with a message
-    naming what is required, rather than an empty list that would be
-    mistaken for "no colleagues found". Replace this test when
-    ``apps.users.interface.search_user_options`` is agreed and implemented."""
-    resp = Client().get(f"{CAL}/users-options/?query=ив", **auth())
-    assert resp.status_code == 501
-    assert "search_user_options" in resp.json()["detail"]
+def test_participant_picker_finds_by_name_login_and_email():
+    """Три колонки, по которым реально ищут люди. Логин отдаётся наружу
+    намеренно: в списке однофамильцев имя не различает, а логин различает."""
+    _picker_user("ivanov", email="ivanov@htq.test",
+                 first_name="Иван", last_name="Иванов")
+    _picker_user("petrov", email="petrov@htq.test",
+                 first_name="Пётр", last_name="Петров")
+
+    by_name = Client().get(f"{CAL}/users-options/?query=Иван", **auth()).json()
+    assert [row["username"] for row in by_name] == ["ivanov"]
+
+    by_login = Client().get(f"{CAL}/users-options/?query=petrov", **auth()).json()
+    assert [row["username"] for row in by_login] == ["petrov"]
+
+    by_email = Client().get(f"{CAL}/users-options/?query=ivanov@htq",
+                            **auth()).json()
+    assert [row["email"] for row in by_email] == ["ivanov@htq.test"]
+
+
+@pytest.mark.django_db
+def test_participant_picker_hides_inactive_users():
+    """Приглашать уволенного — почти всегда ошибка, а не намерение.
+
+    Отсекает их ВЬЮХА по ``is_active``, а не интерфейс соседа:
+    ``list_users_brief`` статус намеренно не фильтрует, потому что его второму
+    потребителю (hr) нужны и неактивные.
+    """
+    _picker_user("aktiv", email="aktiv@htq.test", last_name="Сидоров")
+    _picker_user("uvolen", email="uvolen@htq.test", last_name="Сидоров",
+                 status=UserStatus.SUSPENDED)
+
+    rows = Client().get(f"{CAL}/users-options/?query=Сидоров", **auth()).json()
+    assert [row["username"] for row in rows] == ["aktiv"]
 
 
 # ── production calendar ─────────────────────────────────────────────────

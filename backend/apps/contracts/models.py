@@ -96,28 +96,43 @@ class AgreementKind(models.TextChoices):
     и ни на что в модуле не влияет. Заведён потому, что финансисты делят по
     нему отчётность («сколько ушло на РиУ»), и без колонки это деление
     пришлось бы каждый раз восстанавливать глазами по наименованию.
+
+    Реестр заказчика различает только РиУ и ТМЦ, поэтому импорт кэшфлоу
+    раскладывает строки ровно в эти два значения. Остальные три нужны
+    карточке договора, заводимого руками, где деление мельче.
     """
 
-    WORKS_SERVICES = "works_services", "Работы и услуги (РиУ)"
-    GOODS = "goods", "Товарно-материальные ценности (ТМЦ)"
+    WORKS_SERVICES = "works_services", "РиУ (Работы и услуги)"
+    GOODS = "goods", "Товары"
+    SERVICES = "services", "Услуги"
+    LEASE = "lease", "Аренда"
+    OTHER = "other", "Прочее"
 
 
 class AgreementType(models.TextChoices):
     """«Тип» из реестра заказчика: зафиксирована ли сумма договора.
 
-    ``OPEN`` — рамочный договор без общей суммы: цена известна только по
-    факту каждой поставки (ГСМ по талонам, бетон по заявкам, аренда
+    ``FRAMEWORK`` — рамочный договор без общей суммы: цена известна только
+    по факту каждой поставки (ГСМ по талонам, бетон по заявкам, аренда
     техники). У таких договоров ``amount`` равен нулю НЕ потому, что данные
     потеряли, а потому что суммы ещё нет; именно это поле и позволяет
     отличить одно от другого — иначе ноль в реестре читался бы как ошибка
     ввода.
 
-    Бюджет открытый договор при этом не занимает (нечего занимать), а
+    Бюджет рамочный договор при этом не занимает (нечего занимать), а
     расходуется он оплатами и актами, у которых суммы свои.
+
+    ⚠️ В реестре заказчика это значение называется «открытый», и импорт
+    кэшфлоу так его и читает (``cashflow_import._CONTRACT_TYPES``). Отдельного
+    ``open`` в перечислении нет намеренно: это одно и то же понятие под двумя
+    именами, и два значения на него разошлись бы по данным — часть договоров
+    легла бы в ``open``, часть в ``framework``, а проверка «сумма не обязана
+    быть» читала бы только одно из них.
     """
 
     STANDARD = "standard", "Стандартный"
-    OPEN = "open", "Открытый"
+    NON_STANDARD = "non_standard", "Нетиповой"
+    FRAMEWORK = "framework", "Рамочный"
 
 
 class AgreementStatus(models.TextChoices):
@@ -132,20 +147,6 @@ class AgreementStatus(models.TextChoices):
 class AgreementDirection(models.TextChoices):
     EXPENSE = "expense", "Расход"
     INCOME = "income", "Поступление"
-
-
-class AgreementKind(models.TextChoices):
-    WORKS_SERVICES = "works_services", "РиУ (Работы и услуги)"
-    GOODS = "goods", "Товары"
-    SERVICES = "services", "Услуги"
-    LEASE = "lease", "Аренда"
-    OTHER = "other", "Прочее"
-
-
-class AgreementType(models.TextChoices):
-    STANDARD = "standard", "Стандартный"
-    NON_STANDARD = "non_standard", "Нетиповой"
-    FRAMEWORK = "framework", "Рамочный"
 
 
 class InvoiceStatus(models.TextChoices):
@@ -565,14 +566,6 @@ class Agreement(signoff.Approvable, models.Model):
         max_digits=4, decimal_places=3, default=0, db_default=0,
         verbose_name="Доля аванса",
     )
-    kind = models.CharField(max_length=20, choices=AgreementKind.choices,
-                            default=AgreementKind.WORKS_SERVICES,
-                            db_default=AgreementKind.WORKS_SERVICES,
-                            verbose_name="Вид")
-    contract_type = models.CharField(max_length=16, choices=AgreementType.choices,
-                                     default=AgreementType.STANDARD,
-                                     db_default=AgreementType.STANDARD,
-                                     verbose_name="Тип")
     direction = models.CharField(
         max_length=20,
         choices=AgreementDirection.choices,
