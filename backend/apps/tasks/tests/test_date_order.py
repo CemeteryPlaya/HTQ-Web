@@ -32,6 +32,20 @@ from .helpers import BASE, admin_token, auth, patch_json, post_json
 D = dt.date
 
 
+def detail_text(resp) -> str:
+    """Текст 422 независимо от того, кто его поднял.
+
+    У платформы два законных источника этого кода, и envelope у них разный:
+    валидатор схемы (Pydantic) кладёт в ``detail`` СПИСОК ошибок, сервисное
+    правило (``date_rules``) — строку. Тест проверяет смысл сообщения, а не
+    того, кто первым его заметил, поэтому обе формы сводятся к тексту.
+    """
+    detail = resp.json()["detail"]
+    if isinstance(detail, str):
+        return detail
+    return " ".join(str(item.get("msg", item)) for item in detail)
+
+
 @pytest.fixture
 def site(db) -> Site:
     return Site.objects.create(name="Сазаган", code="SZG")
@@ -46,34 +60,34 @@ def block(site) -> SiteBlock:
 
 @pytest.fixture
 def project(db) -> Project:
-    return Project.objects.create(name="Алга", code="ALG")
+    return Project.objects.create(name="Алга")
 
 
 # ── создание ────────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
 def test_block_create_rejects_reversed_dates(site):
-    resp = post_json(Client(), f"{BASE}/sites/{site.id}/blocks",
+    resp = post_json(Client(), f"{BASE}/sites/{site.id}/blocks/",
                      {"name": "Блок II", "start_date": "2026-05-01",
                       "end_date": "2026-04-01"}, **auth(admin_token()))
     assert resp.status_code == 422
-    assert "позже" in resp.json()["detail"]
+    assert "позже" in detail_text(resp)
 
 
 @pytest.mark.django_db
 def test_task_create_rejects_reversed_dates(db):
     """У задачи валидатора не было вовсе — только ck_task_dates, то есть 500."""
-    resp = post_json(Client(), f"{BASE}/tasks",
+    resp = post_json(Client(), f"{BASE}/tasks/",
                      {"summary": "Развезти валы", "start_date": "2026-05-01",
                       "due_date": "2026-04-01"}, **auth(admin_token()))
     assert resp.status_code == 422
-    assert "позже" in resp.json()["detail"]
+    assert "позже" in detail_text(resp)
 
 
 @pytest.mark.django_db
 def test_project_create_rejects_reversed_dates(db):
     """У проекта нет и ограничения в БД: до этой проверки строка сохранялась."""
-    resp = post_json(Client(), f"{BASE}/projects",
+    resp = post_json(Client(), f"{BASE}/projects/",
                      {"name": "Тобол", "start_date": "2026-05-01",
                       "end_date": "2026-04-01"}, **auth(admin_token()))
     assert resp.status_code == 422
@@ -88,7 +102,7 @@ def test_block_update_rejects_reversed_dates(block):
                       {"start_date": "2026-05-01", "end_date": "2026-04-01"},
                       **auth(admin_token()))
     assert resp.status_code == 422
-    detail = resp.json()["detail"]
+    detail = detail_text(resp)
     assert "позже" in detail
     # Ровно та подмена, ради которой тест и написан: раньше отвечало 409 про
     # занятое имя, хотя имя человек не трогал.
@@ -104,7 +118,7 @@ def test_roadmap_update_rejects_reversed_dates(project, block):
                        "planned_end_date": "2026-04-01"},
                       **auth(admin_token()))
     assert resp.status_code == 422
-    assert "Плановая" in resp.json()["detail"]
+    assert "Плановая" in detail_text(resp)
 
 
 # ── частичная правка: вторая дата лежит в строке ────────────────────────

@@ -255,6 +255,13 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "counterparty_name": agreement.counterparty.name,
         "counterparty_bin_iin": agreement.counterparty.bin_iin,
         "payment_type": agreement.payment_type,
+        # Доля аванса, вид и тип пришли из реестра заказчика (импорт
+        # CashFlow.xlsx). Отдаются рядом с типом оплаты: «поэтапно» без доли
+        # не говорит, сколько платить вперёд, а нулевая сумма без «Тип:
+        # открытый» читается как ошибка ввода.
+        "advance_share": agreement.advance_share,
+        "kind": agreement.kind,
+        "contract_type": agreement.contract_type,
         "direction": agreement.direction,
         "kind": agreement.kind,
         "contract_type": agreement.contract_type,
@@ -297,6 +304,7 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
                      direction: str | None = None,
                      kind: str | None = None,
                      contract_type: str | None = None,
+                     advance_share=None,
                      sed_number: str = "",
                      subject: str = "",
                      manager_user_id: int | None = None,
@@ -342,6 +350,9 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
         budget_calc.check_capacity(line, amount)
 
     with conflict_as(f"Договор с номером {number} уже зарегистрирован"):
+        # Объектами, а не id: обе записи уже загружены проверками выше
+        # (`_lock_line` тянет и бюджет с администратором и страной), и ответ
+        # соберётся из закэшированных связей, а не новыми запросами.
         kwargs = {
             "number": number,
             "name": name,
@@ -366,6 +377,9 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
             "status": status,
             "created_by": created_by,
         }
+        # Необязательные поля подставляются только заданными: договор,
+        # заведённый руками, может о них не знать — тогда действуют дефолты
+        # модели, а не перезапись их на None.
         if vat_rate is not None:
             kwargs["vat_rate"] = vat_rate
         if amount_without_vat is not None:
@@ -376,6 +390,11 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
             kwargs["advance_percentage"] = advance_percentage
         if advance_amount_planned is not None:
             kwargs["advance_amount_planned"] = advance_amount_planned
+        # Доля аванса — поле реестра, из которого импорт ВЫВОДИТ payment_type;
+        # обратной силы это не имеет, поэтому доля остаётся необязательной и
+        # при ручном заведении падает на дефолт модели (0).
+        if advance_share is not None:
+            kwargs["advance_share"] = advance_share
         if retention_rate is not None:
             kwargs["retention_rate"] = retention_rate
         if retention_amount is not None:
