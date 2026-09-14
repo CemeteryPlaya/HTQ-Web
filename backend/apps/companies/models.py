@@ -28,9 +28,22 @@ SLUG_VALIDATOR = RegexValidator(
 
 
 class CompanyKind(models.TextChoices):
+    """Вид компании по утверждённой оргструктуре группы (10.09.2026).
+
+    Холдинг владеет долями, ДО — строительная (Hi-Tech Qazaqstan), IT
+    (Hi-Tech Systems) и сервисная (Kazakhstan Engineering Group).
+    """
+
     HOLDING = "holding", "Холдинг"
-    REGIONAL = "regional", "Региональная"
+    CONSTRUCTION = "construction", "Строительная"
+    IT = "it", "IT-компания"
     SERVICE = "service", "Сервисная"
+    # Значение первой редакции дизайна (региональные компании UZ/KG, которых в
+    # утверждённой структуре нет). Принимается, пока строка с ним есть в бою:
+    # единственная компания получает kind правкой через API блока A, после
+    # чего значение снимается отдельным contract-шагом. Убрать его сейчас —
+    # значит уронить валидацию существующей строки реестра.
+    REGIONAL = "regional", "Региональная (устар.)"
 
 
 class CompanyStatus(models.TextChoices):
@@ -77,6 +90,11 @@ class Company(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+    @property
+    def parent_slug(self) -> str | None:
+        """Slug вышестоящей компании — для схем ответа (``from_attributes``)."""
+        return self.parent.slug if self.parent_id else None
 
 
 class CompanyServiceLink(models.Model):

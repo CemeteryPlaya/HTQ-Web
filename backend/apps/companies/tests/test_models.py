@@ -79,3 +79,29 @@ def test_slug_www_prefix_is_still_allowed():
     остаются валидными slug'ами, как и у nginx-регулярки."""
     company = Company(slug="www-team", name="WWW Team", kind=CompanyKind.SERVICE)
     company.full_clean()  # не должно поднимать ValidationError
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", ["holding", "construction", "it", "service", "regional"])
+def test_kinds_of_the_approved_group_structure_validate(kind):
+    """Утверждённая структура: холдинг, строительная ДО, IT, сервисная.
+
+    ``regional`` — значение первой редакции дизайна (UZ/KG-регионы); остаётся
+    принимаемым, пока единственная боевая компания не получит kind через
+    PATCH (roadmap §3, п.6) — contract-шаг после этого.
+    """
+    Company(slug=f"k-{kind}", name=kind, kind=kind).full_clean()
+
+
+@pytest.mark.django_db
+def test_unknown_kind_is_rejected():
+    with pytest.raises(ValidationError):
+        Company(slug="k-bad", name="x", kind="branch").full_clean()
+
+
+@pytest.mark.django_db
+def test_parent_slug_property_follows_parent():
+    holding = Company.objects.create(slug="grp", name="Group", kind=CompanyKind.HOLDING)
+    child = Company.objects.create(slug="kid", name="Kid", kind=CompanyKind.IT, parent=holding)
+    assert holding.parent_slug is None
+    assert child.parent_slug == "grp"
