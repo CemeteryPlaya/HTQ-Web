@@ -96,6 +96,7 @@ cd backend
 ./.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
 ./.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
 ./.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
+./.venv/Scripts/python.exe manage.py tenancy_status [--json] [--exact]   # слепок раскладки тенантных таблиц по схемам (только чтение); снимать до и после каждой боевой выкатки
 ```
 Mail-server credentials live in **two layers**: `MailServerConfig` (one DB row, edited at `/admin/mailboxes` → «Подключение») **over** the env vars, merged by `apps/mail/services/mail_config.py` with the rule *empty field in the DB = take it from env*. Never read `settings.IMAP_HOST` (or any other `MAILCOW_*`/`IMAP_*`/`SMTP_*`) directly from `apps/mail` — go through `mail_config.get_config()`, or UI-set values will be silently ignored.
 
