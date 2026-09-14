@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { companiesApi } from '@/api/companies';
 import { BackToProfile } from '@/components/BackToProfile';
 import { CompanyFormDialog } from '@/components/companies/CompanyFormDialog';
+import { CompanyMembersPanel } from '@/components/companies/CompanyMembersPanel';
+import { CompanyModulesPanel } from '@/components/companies/CompanyModulesPanel';
 import { Footer } from '@/components/Footer';
 import { Header } from '@/components/Header';
 import { Badge } from '@/components/ui/badge';
@@ -54,6 +56,7 @@ const CompanyRegistry = () => {
   const [selected, setSelected] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<'archive' | 'restore' | null>(null);
   const [editing, setEditing] = useState(false);
+  const [panel, setPanel] = useState<'modules' | 'members'>('modules');
 
   const treeQuery = useQuery({ queryKey: ['companies', 'tree'], queryFn: async () => (await companiesApi.tree()).data });
   const listQuery = useQuery({ queryKey: ['companies', 'list'], queryFn: async () => (await companiesApi.list()).data });
@@ -173,6 +176,19 @@ const CompanyRegistry = () => {
                     </div>
                   </div>
                 )}
+
+                <div className="border-t pt-4">
+                  <div className="mb-2 flex gap-2">
+                    {(['modules', 'members'] as const).map((tab) => (
+                      <Button key={tab} size="sm" variant={panel === tab ? 'default' : 'outline'} onClick={() => setPanel(tab)}>
+                        {tab === 'modules' ? t('companies.tab.modules', 'Модули') : t('companies.tab.members', 'Участники')}
+                      </Button>
+                    ))}
+                  </div>
+                  {panel === 'modules'
+                    ? <CompanyModulesPanel slug={company.slug} canEdit={platformAdmin} />
+                    : <CompanyMembersPanel slug={company.slug} canEdit={platformAdmin} canRevoke={platformAdmin} />}
+                </div>
               </div>
             )}
           </section>
