@@ -323,6 +323,21 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
     status = status or AgreementStatus.DRAFT
     if status not in AgreementStatus.values:
         raise AgreementRuleViolation(f"Неизвестный статус договора: {status}")
+    if status == AgreementStatus.ON_REVIEW:
+        # «На согласовании» — не состояние, которое объявляют, а следствие
+        # запущенного процесса: в него договор переводит
+        # ``approval_hooks._agreement_on_started`` из транзакции движка.
+        # Создание договора сразу в нём разводит две оси: процесса нет,
+        # ``approval_state`` остаётся ``draft`` — фронтенд по нему рисует
+        # кнопку «На согласование», а ``submit_for_approval`` отвечает на неё
+        # 409 «отправляется черновик». Вернуть такой договор в ``draft``
+        # можно только через ``/status`` руками. Остальные непроектные
+        # статусы (``approved``/``signed``) остаются разрешёнными намеренно:
+        # это заведение задним числом договора, согласованного вне системы.
+        raise AgreementRuleViolation(
+            "Статус «На согласовании» ставит само согласование: заведите "
+            "черновик и отправьте его на согласование"
+        )
 
     direction = direction or AgreementDirection.EXPENSE
     if direction not in AgreementDirection.values:

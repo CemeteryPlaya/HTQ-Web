@@ -951,9 +951,17 @@ const AgreementCreate = () => {
                     </SelectTrigger>
                     <SelectContent>
                       {(enums?.agreement_status ?? [])
+                        // `executed`/`terminated` — терминальные, заводить в
+                        // них нечего. `on_review` убран по другой причине:
+                        // его ставит согласование, и договор, созданный в
+                        // нём, расходится со своим `approval_state`
+                        // (`agreement_service.create_agreement` отвечает на
+                        // такой запрос 409).
                         .filter(
                           (option) =>
-                            !['executed', 'terminated'].includes(option.value),
+                            !['executed', 'terminated', 'on_review'].includes(
+                              option.value,
+                            ),
                         )
                         .map((option) => (
                           <SelectItem key={option.value} value={option.value}>
