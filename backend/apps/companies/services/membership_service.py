@@ -21,7 +21,7 @@ filter on the returned is_active themselves"), и заводить второй 
 
 from __future__ import annotations
 
-from apps.users.interface import get_user_brief, list_users_brief
+from apps.users.interface import get_user_brief, get_users_brief, list_users_brief
 
 from ..models import Company, CompanyMembership
 
@@ -70,3 +70,38 @@ def grant_membership(company: Company, user_id: int, *,
         defaults={"is_default": is_default},
     )
     return created
+
+
+def list_memberships(company: Company) -> list[dict]:
+    """Участники компании с данными учётки.
+
+    Учётка может быть удалена, а строка членства — остаться: такую строку
+    показываем с пустыми полями учётки, а не прячем — спрятанную нельзя
+    отозвать.
+    """
+    rows = list(
+        CompanyMembership.objects.filter(company=company)
+        .order_by("-is_default", "user_id")
+        .values("user_id", "is_default")
+    )
+    briefs = {b["id"]: b for b in get_users_brief([r["user_id"] for r in rows])}
+    out = []
+    for row in rows:
+        brief = briefs.get(row["user_id"], {})
+        out.append({
+            "user_id": row["user_id"],
+            "username": brief.get("username", ""),
+            "full_name": brief.get("full_name", ""),
+            "email": brief.get("email", ""),
+            "is_active": bool(brief.get("is_active", False)),
+            "is_default": row["is_default"],
+        })
+    return out
+
+
+def revoke_membership(company: Company, user_id: int) -> bool:
+    """Снять членство. ``True`` — строка была и удалена, ``False`` — её не было."""
+    deleted, _ = CompanyMembership.objects.filter(
+        company=company, user_id=user_id,
+    ).delete()
+    return deleted > 0
