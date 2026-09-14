@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { companiesApi } from '@/api/companies';
 import { BackToProfile } from '@/components/BackToProfile';
+import { CompanyFormDialog } from '@/components/companies/CompanyFormDialog';
 import { Footer } from '@/components/Footer';
 import { Header } from '@/components/Header';
 import { Badge } from '@/components/ui/badge';
@@ -52,6 +53,7 @@ const CompanyRegistry = () => {
 
   const [selected, setSelected] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<'archive' | 'restore' | null>(null);
+  const [editing, setEditing] = useState(false);
 
   const treeQuery = useQuery({ queryKey: ['companies', 'tree'], queryFn: async () => (await companiesApi.tree()).data });
   const listQuery = useQuery({ queryKey: ['companies', 'list'], queryFn: async () => (await companiesApi.list()).data });
@@ -140,7 +142,7 @@ const CompanyRegistry = () => {
 
                 {platformAdmin && (
                   <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" size="sm" disabled title={t('companies.editSoon', 'Правка — в следующей задаче')}>
+                    <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
                       <Pencil className="mr-1 h-4 w-4" />{t('companies.edit', 'Изменить')}
                     </Button>
                     {company.status === 'active' ? (
@@ -175,6 +177,11 @@ const CompanyRegistry = () => {
             )}
           </section>
         </div>
+
+        {company && (
+          <CompanyFormDialog company={company} candidates={listQuery.data ?? []} open={editing}
+            onOpenChange={setEditing} onSaved={() => invalidate()} />
+        )}
       </main>
       <Footer />
     </div>
