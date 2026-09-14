@@ -136,11 +136,48 @@ class CompanyItemView(CompaniesView):
             return self.lifecycle_error(exc)
         return schemas.CompanyRead.model_validate(company)
 
+    @write("PATCH", body=schemas.CompanyPatch)
+    def patch(self, request, slug: str, data: schemas.CompanyPatch):
+        kwargs = {"name": data.name, "kind": data.kind, "country": data.country}
+        if "parent_slug" in data.model_fields_set:
+            kwargs["parent_slug"] = data.parent_slug
+        try:
+            company = lifecycle.update_company(slug, **kwargs)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        return schemas.CompanyRead.model_validate(company)
 
-# ── Заглушки задач 7–8 (urls.py на них ссылается уже сейчас) ───────────────
 
-class CompanyArchiveView(CompaniesView): ...
-class CompanyRestoreView(CompaniesView): ...
+# ── Архив и восстановление — платформенные операции ─────────────────────────
+
+class CompanyArchiveView(CompaniesView):
+    @platform("POST")
+    def post(self, request, slug: str):
+        denied = self.deny_unless_platform_admin()
+        if denied is not None:
+            return denied
+        try:
+            company, _changed = lifecycle.archive_company(slug)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        return schemas.CompanyRead.model_validate(company)
+
+
+class CompanyRestoreView(CompaniesView):
+    @platform("POST")
+    def post(self, request, slug: str):
+        denied = self.deny_unless_platform_admin()
+        if denied is not None:
+            return denied
+        try:
+            company, _changed = lifecycle.restore_company(slug)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        return schemas.CompanyRead.model_validate(company)
+
+
+# ── Заглушки задачи 8 (urls.py на них ссылается уже сейчас) ───────────────
+
 class CompanyModulesView(CompaniesView): ...
 class CompanyModuleItemView(CompaniesView): ...
 class CompanyMembershipsView(CompaniesView): ...
