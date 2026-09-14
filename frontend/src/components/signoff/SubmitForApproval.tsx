@@ -22,6 +22,15 @@
  * **Отсутствие маршрута — не поломка.** Пока для типа не заведён активный
  * маршрут, `/submit` отвечает 409 «маршрут не настроен», и это ровно тот
  * текст, который надо показать: согласование просто ещё не включено.
+ *
+ * **`approval_state` — не единственная ось.** У предметной строки бывает
+ * СВОЙ жизненный цикл (`Agreement.status`, `Invoice.status`), и её
+ * `/submit` требует, чтобы по нему объект был черновиком. Две оси
+ * расходятся, если строку завели сразу в непроектном статусе: согласование
+ * её не видело (`approval_state = draft`), а домен уже считает её
+ * «Согласованной». Кнопка тогда рисовалась, а бэкенд отвечал 409 — про это
+ * `blockedReason`: владелец строки передаёт причину, по которой отправлять
+ * нечего, и кнопка гаснет ВМЕСТЕ с объяснением вместо тычка в 409.
  */
 
 import { useState } from 'react';
@@ -64,6 +73,13 @@ interface Props {
   /** Показывать ли плашку состояния рядом с действием. В таблицах, где
    * состояние уже вынесено в отдельную колонку, её дублировать не нужно. */
   showState?: boolean;
+  /**
+   * Почему отправлять нечего по ПРЕДМЕТНОЙ оси (см. докстринг модуля).
+   * Непустая строка гасит кнопку и показывается подсказкой; `null` —
+   * отправка разрешена. Формулирует владелец строки: только он знает свой
+   * жизненный цикл, компонент про `Agreement.status` не знает ничего.
+   */
+  blockedReason?: string | null;
 }
 
 export function SubmitForApproval({
@@ -75,6 +91,7 @@ export function SubmitForApproval({
   size = 'sm',
   showProcessLink = false,
   showState = true,
+  blockedReason = null,
 }: Props) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -151,6 +168,22 @@ export function SubmitForApproval({
             </Link>
           </Button>
         )}
+      </div>
+    );
+  }
+
+  // Отправка заперта доменным статусом: кнопка на месте, но погашена и
+  // объясняет причину. Прятать её нельзя — иначе на карточке согласуемого
+  // объекта не остаётся ни следа согласования, и «почему нет кнопки»
+  // превращается в вопрос к разработчику.
+  if (blockedReason) {
+    return (
+      <div className="flex items-center justify-end gap-2">
+        {state === 'rework' && showState && <ApprovalStateBadge state={state} />}
+        <Button size={size} variant="outline" disabled title={blockedReason}>
+          <Send className="mr-1.5 h-4 w-4" />
+          {t('signoff.submit.action')}
+        </Button>
       </div>
     );
   }

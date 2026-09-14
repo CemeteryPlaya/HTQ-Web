@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { budgetSubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { formatAmount, remainingTone } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
@@ -157,6 +158,7 @@ const BudgetList = () => {
                         subjectId={budget.id}
                         state={budget.approval_state}
                         submit={contractsApi.submitBudget}
+                        blockedReason={budgetSubmitBlock(budget.status, budget.lines?.length)}
                         invalidate={[['contracts', 'budgets']]}
                       />
                     </TableCell>

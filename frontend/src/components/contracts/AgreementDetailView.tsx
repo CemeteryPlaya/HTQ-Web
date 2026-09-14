@@ -32,6 +32,7 @@ import {
   remainingTone,
 } from '@/components/contracts/format';
 import { reportApiError } from '@/lib/apiError';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
@@ -255,6 +256,11 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               subjectId={agreement.id}
               state={agreement.approval_state}
               submit={contractsApi.submitAgreement}
+              blockedReason={draftOnlySubmitBlock(
+                agreement.status,
+                statusLabel(agreement.status),
+                'договор',
+              )}
               invalidate={[
                 ['contracts', 'agreements'],
                 ['contracts', 'agreement', agreementId],

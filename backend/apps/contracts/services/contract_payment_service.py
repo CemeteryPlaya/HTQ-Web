@@ -145,7 +145,9 @@ def submit_for_approval(payment_id: int, *, actor_id: int | None = None) -> dict
     payment = get_contract_payment_or_404(payment_id, lock=True)
     agreement = _eligible_agreement(payment.agreement_id)
     if payment.status != AdvancePaymentStatus.DRAFT:
-        raise ContractPaymentRuleViolation("На согласование можно отправить только черновик оплаты")
+        raise ContractPaymentRuleViolation(
+            f"На согласование отправляется черновик; оплата в статусе "
+            f"«{payment.get_status_display()}»")
     check_agreement_capacity(agreement, payment.amount)
     if payment.approval_state not in signoff.ApprovalState.editable():
         payment.assert_editable()

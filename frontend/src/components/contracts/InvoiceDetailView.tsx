@@ -38,6 +38,7 @@ import {
   remainingTone,
 } from '@/components/contracts/format';
 import { reportApiError } from '@/lib/apiError';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
@@ -198,6 +199,11 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
               subjectId={invoice.id}
               state={invoice.approval_state}
               submit={contractsApi.submitInvoice}
+              blockedReason={draftOnlySubmitBlock(
+                invoice.status,
+                statusLabel(invoice.status),
+                'счёт',
+              )}
               // На момент отправки счёт ещё не уменьшает остаток; это случится
               // после одобрения, когда откроется карточка согласования.
               invalidate={[
