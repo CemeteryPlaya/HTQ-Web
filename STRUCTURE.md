@@ -219,6 +219,15 @@ backend/apps/companies/        # Реестр компаний (схема publi
 ├── models.py                    # Company (дерево владения), CompanyServiceLink (граф ТМЗ),
 │                                #   CompanyMembership, CompanyModule (рубильник на уровне компании),
 │                                #   CompanySchemaVersion (факт/цель миграций по компании)
+├── schemas.py                    # Pydantic DTO контракта api/companies/v1 (CompanyRead, CompanyTreeNode,
+│                                #   MyCompany, …) — правка формы только вслед за планом; фронт
+│                                #   (src/types/companies.ts) собран по той же таблице
+├── views.py                       # HTTP-слой me/companies/tree/companies/<slug>/{archive,restore,
+│                                #   modules,memberships}: чтение и правка реестра — api_view(module=
+│                                #   "companies"); архив/восстановление/отзыв членства — admin=True +
+│                                #   is_superuser. Заведения компании здесь нет (см. company_create)
+├── urls.py                        # path() для views.py; companies/tree стоит ВЫШЕ companies/<slug>,
+│                                #   иначе <slug:slug> матчит и слово tree
 ├── interface.py                  # get_company, active_company_slugs, user_company_slugs,
 │                                #   default_company_slug, module_enabled — точка входа соседей
 ├── admin.py                       # django-admin, под ServiceGatedAdminMixin
@@ -227,6 +236,11 @@ backend/apps/companies/        # Реестр компаний (схема publi
 │   ├── schema_service.py             # CREATE/DROP SCHEMA co_<slug>
 │   ├── migration_service.py           # migrate_company() — прогон по схеме одной компании,
 │   │                                   #   advisory-lock, BackwardsMigrationRefused/SchemaMissing
+│   ├── lifecycle.py                    # жизненный цикл компании (заведение/правка/архив/восстановление) —
+│   │                                   #   единственная точка оркестрации для management-команд И HTTP-вьюх;
+│   │                                   #   гейт LastActiveCompany (архив последней компании = 404 её трафику)
+│   ├── module_service.py                # модули ОДНОЙ компании (CompanyModule) — компанейский слой
+│   │                                    #   рубильника поверх KNOWN_SERVICES/CORE_MODULES из apps.core
 │   └── holding_views.py                # drop_holding_views()/rebuild_holding_views() — сводные
 │                                        #   UNION ALL представления схемы holding
 └── management/commands/
@@ -240,8 +254,11 @@ backend/apps/companies/        # Реестр компаний (схема publi
     │                                     #   сводок холдинга вокруг прогона)
     ├── migrate_shared.py                  # migrate только нетенантных аппок — этим стартует
     │                                      #   контейнер вместо голого migrate (RUN_MIGRATIONS=1)
-    └── tenancy_bootstrap.py                # разовый перенос hr/tasks/contracts/signoff из public
-                                             #   в схему первой компании (ALTER TABLE ... SET SCHEMA)
+    ├── tenancy_bootstrap.py                # разовый перенос hr/tasks/contracts/signoff из public
+    │                                       #   в схему первой компании (ALTER TABLE ... SET SCHEMA)
+    └── tenancy_status.py                    # слепок раскладки тенантных таблиц по схемам, ТОЛЬКО чтение —
+                                             #   information_schema + pg_stat_user_tables (--exact — настоящий
+                                             #   count(*)); --json для diff'а до/после боевой выкатки
 ```
 
 ---
@@ -258,20 +275,26 @@ frontend/src/
 │   └── components/
 ├── pages/              # ⭐ Точки входа роутов (Index, Login, Admin*, HR*, Calendar, Email/, hr/, public/, requests/)
 │   ├── Email/          # OAuth callback, inbox, compose modal, settings panel
-│   └── hr/             # HR-страницы (Departments, Employees, Vacancies, Tasks, Roadmap, …)
+│   ├── hr/             # HR-страницы (Departments, Employees, Vacancies, Tasks, Roadmap, …)
+│   └── companies/      # CompanyRegistry.tsx — «Компании группы»: дерево владения, карточка
+│                       #   (правка/архив/восстановление), вкладки «Модули»/«Участники»
 ├── features/
 │   ├── messenger/      # MessengerPage + api/ + hooks/ + types.ts (feature-sliced)
 │   └── requests/       # ⭐ RequestsLayout + pages/ + components/ + hooks.ts + types.ts
 ├── components/
 │   ├── ui/             # shadcn primitives (50+ компонентов)
 │   ├── hr/ tasks/ calendar/ profile/   # Доменные компоненты
+│   ├── companies/      # CompanySwitcher (шапка), CompanyFormDialog (правка), CompanyModulesPanel,
+│   │                   #   CompanyMembersPanel — карточка компании в реестре
 │   └── *.tsx           # Лендинг-секции, Header/Footer, RequireAuth и т.д.
 ├── api/                # ⭐ HTTP-клиенты по домену:
 │                       #   client.ts (base axios+JWT), endpoints.ts (карта префиксов),
 │                       #   users.ts, hr.ts, tasks.ts, requests.ts, cms.ts, media.ts,
-│                       #   calendar.ts, email.ts, fileManager.ts, search.ts (глобальный fan-out поиск)
+│                       #   calendar.ts, email.ts, fileManager.ts, search.ts (глобальный fan-out поиск),
+│                       #   companies.ts (реестр компаний — apps.companies)
 ├── services/           # emailService.ts (тонкие обёртки над api/)
-├── hooks/              # useActiveProfile, useHRLevel, use-mobile, use-toast, …
+├── hooks/              # useActiveProfile, useHRLevel, use-mobile, use-toast,
+│                       #   useMyCompanies (мои компании — переключатель в шапке), …
 ├── lib/
 │   ├── auth/           # profileStorage.ts, roles.ts (RBAC хелперы)
 │   ├── transport/      # IMediaTransport + WebRTCAdapter

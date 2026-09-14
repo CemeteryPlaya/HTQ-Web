@@ -169,6 +169,10 @@ read-only (правка через админку больше не сущест
 
 ### 6. `companySwitch` на фронте не подключён
 
+**ЗАКРЫТО блоком A** (docs/plans/2026-09-14-block-a-company-registry.md):
+`CompanySwitcher` в шапке зовёт `switchCompany`; правило видимости — режим
+перехода.
+
 `frontend/src/lib/auth/companySwitch.ts` экспортирует `companyFromHost` и
 `switchCompany`; за пределами собственных тестов их никто не вызывает. Переключателя
 компании в интерфейсе нет — по плану это подпроект 2.
