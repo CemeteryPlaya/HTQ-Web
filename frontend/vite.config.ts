@@ -358,6 +358,12 @@ export default defineConfig(({ mode }) => {
       target: backendTarget,
       changeOrigin: true,
     },
+    // Реестр компаний (apps.companies). Без правила запрос уходит в сам
+    // dev-сервер и возвращает index.html — сторож src/api/endpoints.proxy.test.ts.
+    "^/api/companies/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
     "^/api/requests/v1/stream": {
       target: asgiTarget,
       changeOrigin: true,
