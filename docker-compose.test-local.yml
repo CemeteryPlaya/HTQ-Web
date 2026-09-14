@@ -48,6 +48,10 @@ x-django-env: &django-env
   HTQ_ENV: staging
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
   JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
+  # Домены, с которых принимается форма входа в /django-admin/ (со схемой,
+  # через запятую). За Cloudflare/nginx запрос доезжает до Django по http, а
+  # Origin у браузера https — без этого списка админка отдаёт 403 CSRF.
+  CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-}
   # ⚠️ ЖЁСТКО `db`, а НЕ ${DB_HOST} — в этом весь смысл файла. В корневом .env
   # лежит адрес боевой БД, и подстановка увела бы «локальный» стек на прод:
   # миграции, сиды и проверки «а что если удалить» ушли бы туда же.
