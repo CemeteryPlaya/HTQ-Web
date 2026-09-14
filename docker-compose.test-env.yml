@@ -304,6 +304,15 @@ services:
       # то есть на сам контейнер фронта, и сигналинг конференции не
       # находит SFU. Имя сервиса резолвится в docker-сети.
       VITE_SFU_WS_TARGET: "ws://sfu:4443"
+      # Та же ловушка, что у SFU строкой выше, и её тоже не видно по симптому:
+      # без этих двух Vite берёт дефолты из vite.config.ts — 127.0.0.1:3002 и
+      # 127.0.0.1:9090, — а внутри контейнера фронта 127.0.0.1 это САМ фронт.
+      # /grafana и /prometheus отдают 502, в логах Vite «ECONNREFUSED
+      # 127.0.0.1:9090». Адресуем по именам сервисов и КОНТЕЙНЕРНЫМ портам:
+      # host-порты (3002 у Grafana) в docker-сети не при чём. Перебивает и
+      # frontend/.env — process.env в loadEnv применяется последним.
+      VITE_GRAFANA_TARGET: "http://grafana:3000"
+      VITE_PROMETHEUS_TARGET: "http://prometheus:9090"
     depends_on:
       backend-web:
         condition: service_healthy
