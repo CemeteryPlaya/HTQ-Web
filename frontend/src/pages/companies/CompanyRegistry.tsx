@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AxiosError } from 'axios';
 import { Archive, ArchiveRestore, Building2, CornerDownRight, Pencil, Terminal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -15,13 +14,9 @@ import { Header } from '@/components/Header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { reportApiError } from '@/lib/apiError';
 import { isPlatformAdmin } from '@/lib/auth/roles';
 import { COMPANY_KIND_LABELS, type Company, type CompanyTreeNode } from '@/types/companies';
-
-type ApiErr = AxiosError<{ detail?: string; code?: string }>;
-
-const errorText = (e: unknown, fallback: string) =>
-  (e as ApiErr)?.response?.data?.detail ?? fallback;
 
 function TreeBranch({ node, depth, selected, onSelect }: {
   node: CompanyTreeNode; depth: number; selected: string | null; onSelect: (slug: string) => void;
@@ -70,13 +65,13 @@ const CompanyRegistry = () => {
   const archiveMut = useMutation({
     mutationFn: (slug: string) => companiesApi.archive(slug),
     onSuccess: () => { toast.success(t('companies.archived', 'Компания переведена в архив')); invalidate(); },
-    onError: (e) => toast.error(errorText(e, t('companies.archiveFailed', 'Не удалось архивировать'))),
+    onError: (e) => reportApiError(e, t('companies.archiveFailed', 'Не удалось архивировать')),
     onSettled: () => setConfirm(null),
   });
   const restoreMut = useMutation({
     mutationFn: (slug: string) => companiesApi.restore(slug),
     onSuccess: () => { toast.success(t('companies.restored', 'Компания возвращена из архива')); invalidate(); },
-    onError: (e) => toast.error(errorText(e, t('companies.restoreFailed', 'Не удалось восстановить'))),
+    onError: (e) => reportApiError(e, t('companies.restoreFailed', 'Не удалось восстановить')),
     onSettled: () => setConfirm(null),
   });
 

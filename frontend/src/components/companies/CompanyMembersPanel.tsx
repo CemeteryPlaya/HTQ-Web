@@ -1,15 +1,12 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
 
 import { companiesApi } from '@/api/companies';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-
-type ApiErr = AxiosError<{ detail?: string; code?: string }>;
+import { reportApiError } from '@/lib/apiError';
 
 export function CompanyMembersPanel({ slug, canEdit, canRevoke }: { slug: string; canEdit: boolean; canRevoke: boolean }) {
   const { t } = useTranslation();
@@ -18,17 +15,16 @@ export function CompanyMembersPanel({ slug, canEdit, canRevoke }: { slug: string
   const key = ['companies', slug, 'memberships'];
   const query = useQuery({ queryKey: key, queryFn: async () => (await companiesApi.memberships(slug)).data });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: key });
-  const fail = (e: ApiErr, fallback: string) => toast.error(e.response?.data?.detail ?? fallback);
 
   const grant = useMutation({
     mutationFn: (id: number) => companiesApi.grantMembership(slug, { user_id: id, is_default: false }),
     onSuccess: () => { setUserId(''); invalidate(); },
-    onError: (e: ApiErr) => fail(e, t('companies.members.grantFailed', 'Не удалось выдать членство')),
+    onError: (e) => reportApiError(e, t('companies.members.grantFailed', 'Не удалось выдать членство')),
   });
   const revoke = useMutation({
     mutationFn: (id: number) => companiesApi.revokeMembership(slug, id),
     onSuccess: invalidate,
-    onError: (e: ApiErr) => fail(e, t('companies.members.revokeFailed', 'Не удалось снять членство')),
+    onError: (e) => reportApiError(e, t('companies.members.revokeFailed', 'Не удалось снять членство')),
   });
 
   return (

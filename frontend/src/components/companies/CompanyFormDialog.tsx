@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import type { AxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -9,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { reportApiError } from '@/lib/apiError';
 import { COMPANY_KIND_LABELS, type Company, type CompanyKind, type CompanyPatch } from '@/types/companies';
 
 interface Props {
@@ -35,8 +35,7 @@ export function CompanyFormDialog({ company, candidates, open, onOpenChange, onS
   const mutation = useMutation({
     mutationFn: (body: CompanyPatch) => companiesApi.patch(company.slug, body),
     onSuccess: (res) => { toast.success(t('companies.saved', 'Сохранено')); onSaved(res.data); onOpenChange(false); },
-    onError: (e: AxiosError<{ detail?: string }>) =>
-      toast.error(e.response?.data?.detail ?? t('companies.saveFailed', 'Не удалось сохранить')),
+    onError: (e) => reportApiError(e, t('companies.saveFailed', 'Не удалось сохранить')),
   });
 
   const submit = () => {

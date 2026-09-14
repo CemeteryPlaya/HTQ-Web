@@ -1,10 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
 
 import { companiesApi } from '@/api/companies';
 import { Switch } from '@/components/ui/switch';
+import { reportApiError } from '@/lib/apiError';
 
 export function CompanyModulesPanel({ slug, canEdit }: { slug: string; canEdit: boolean }) {
   const { t } = useTranslation();
@@ -14,8 +13,7 @@ export function CompanyModulesPanel({ slug, canEdit }: { slug: string; canEdit: 
     mutationFn: ({ appLabel, enabled }: { appLabel: string; enabled: boolean }) =>
       companiesApi.setModule(slug, appLabel, { enabled }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['companies', slug, 'modules'] }),
-    onError: (e: AxiosError<{ detail?: string }>) =>
-      toast.error(e.response?.data?.detail ?? t('companies.modules.failed', 'Не удалось переключить модуль')),
+    onError: (e) => reportApiError(e, t('companies.modules.failed', 'Не удалось переключить модуль')),
   });
 
   return (
