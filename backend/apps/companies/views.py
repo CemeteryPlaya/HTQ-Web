@@ -176,9 +176,79 @@ class CompanyRestoreView(CompaniesView):
         return schemas.CompanyRead.model_validate(company)
 
 
-# ── Заглушки задачи 8 (urls.py на них ссылается уже сейчас) ───────────────
+# ── Модули компании ─────────────────────────────────────────────────────
 
-class CompanyModulesView(CompaniesView): ...
-class CompanyModuleItemView(CompaniesView): ...
-class CompanyMembershipsView(CompaniesView): ...
-class CompanyMembershipItemView(CompaniesView): ...
+class CompanyModulesView(CompaniesView):
+    @read
+    def get(self, request, slug: str):
+        try:
+            company = self.company_or_404(slug)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        return [schemas.ModuleRead(**row) for row in module_service.list_modules(company)]
+
+
+class CompanyModuleItemView(CompaniesView):
+    @write("PATCH", body=schemas.ModulePatch)
+    def patch(self, request, slug: str, app_label: str, data: schemas.ModulePatch):
+        try:
+            company = self.company_or_404(slug)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        try:
+            row = module_service.set_module(company, app_label,
+                                            enabled=data.enabled, message=data.message)
+        except module_service.UnknownModule as exc:
+            return json_error(exc.detail, 422)
+        except module_service.CoreModuleLocked as exc:
+            return json_error(exc.detail, 409)
+        return schemas.ModuleRead(**row)
+
+
+# ── Участники компании ──────────────────────────────────────────────────
+
+class CompanyMembershipsView(CompaniesView):
+    @read
+    def get(self, request, slug: str):
+        try:
+            company = self.company_or_404(slug)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        return [schemas.MembershipRead(**row)
+                for row in membership_service.list_memberships(company)]
+
+    @write("POST", body=schemas.MembershipCreate)
+    def post(self, request, slug: str, data: schemas.MembershipCreate):
+        try:
+            company = self.company_or_404(slug)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        if get_user_brief(data.user_id) is None:
+            return json_error(f"Пользователь {data.user_id} не найден", 422)
+        created = membership_service.grant_membership(
+            company, data.user_id, is_default=data.is_default,
+        )
+        row = next(m for m in membership_service.list_memberships(company)
+                   if m["user_id"] == data.user_id)
+        return JsonResponse(schemas.MembershipRead(**row).model_dump(mode="json"),
+                            status=201 if created else 200)
+
+
+class CompanyMembershipItemView(CompaniesView):
+    @platform("DELETE")
+    def delete(self, request, slug: str, user_id: int):
+        denied = self.deny_unless_platform_admin()
+        if denied is not None:
+            return denied
+        try:
+            company = self.company_or_404(slug)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        if user_id == request.token.user_id:
+            # Запереть себя снаружи можно одним кликом, а вернуться — только
+            # через company_grant в консоли.
+            return JsonResponse({"detail": "Нельзя снять членство у себя",
+                                 "code": "self_revoke"}, status=409)
+        if not membership_service.revoke_membership(company, user_id):
+            return json_error("Членства нет", 404)
+        return HttpResponse(status=204)

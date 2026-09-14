@@ -945,6 +945,56 @@ a schema one (an unknown condition operator lands here, not in 409).
 
 ---
 
+## `apps.companies` — `/api/companies/v1`
+
+Company registry for the schema-per-company tenancy design (CLAUDE.md,
+"Мультикомпанейность"): `Company`, `CompanyModule` (per-company kill switch
+layered on top of `apps.core.models.ServiceStatus`), `CompanyMembership`
+(who may work in which company). `TENANT_APPS = (hr, tasks, contracts,
+signoff)` live in `co_<slug>` schemas; `companies` itself lives in `public`
+and needs no `X-HTQ-Company` header.
+
+**Two auth shapes.** Read/write routes go through `api_view(module=
+"companies", level="read"|"write")` — the caller needs that access level
+for the `companies` module (`apps.access`), same mechanism as every other
+domain. Archive, restore and membership revocation are **platform-level**
+instead: `api_view(admin=True)` (staff-or-superuser) plus an explicit
+`is_superuser` check inside the view (`deny_unless_platform_admin`) — a
+plain staff token gets 403. Archive/restore/revoke are irreversible-ish
+enough (archive 404s a company's whole traffic; revoke locks someone out)
+that "elevated" isn't a high enough bar.
+
+| Endpoint                                                | Method | Auth              | Notes |
+|----------------------------------------------------------|--------|-------------------|-------|
+| `/api/companies/v1/me`                                    | GET    | jwt               | Companies where the caller holds an active membership in an active company, ordered `-is_default, name`; no module gate — every signed-in user needs this to switch companies |
+| `/api/companies/v1/companies`                              | GET    | jwt (companies/read)  | `?status=all\|active\|archived`, default `all` |
+| `/api/companies/v1/companies/tree`                         | GET    | jwt (companies/read)  | Active companies only, nested by `parent_slug`. A node whose parent got archived becomes a root instead of disappearing from the tree |
+| `/api/companies/v1/companies/{slug}`                       | GET    | jwt (companies/read)  | 404 `not_found` for an unknown slug |
+| `/api/companies/v1/companies/{slug}`                       | PATCH  | jwt (companies/write) | `{name?, kind?, country?, parent_slug?}` — `slug` itself never changes: it names both the Postgres schema and the subdomain. `parent_slug: null` clears the parent; omitting the key leaves it alone (`model_fields_set`, not a `None` check). 422 `parent_not_found` / `parent_cycle` / `invalid` |
+| `/api/companies/v1/companies/{slug}/archive`               | POST   | admin (superuser)     | Idempotent. 409 `last_active` if this is the only company with `status=active` — see below. Rebuilds holding views |
+| `/api/companies/v1/companies/{slug}/restore`                | POST   | admin (superuser)     | Idempotent. Rebuilds holding views |
+| `/api/companies/v1/companies/{slug}/modules`                | GET    | jwt (companies/read)  | One row per `KNOWN_SERVICES` entry: `{app_label, enabled, message, is_core}`. No stored `CompanyModule` row means enabled |
+| `/api/companies/v1/companies/{slug}/modules/{app_label}`    | PATCH  | jwt (companies/write) | `{enabled, message?}`. 422 if `app_label` isn't in the platform service registry; 409 if it's one of `CORE_MODULES` — core modules can't be switched off per company at all |
+| `/api/companies/v1/companies/{slug}/memberships`            | GET    | jwt (companies/read)  | Account fields joined in via `apps.users.interface.get_users_brief`. A membership whose account got deleted still shows, with blank account fields, rather than being hidden — a hidden row can't be revoked |
+| `/api/companies/v1/companies/{slug}/memberships`             | POST   | jwt (companies/write) | `{user_id, is_default?}`. 422 if `user_id` doesn't resolve via `get_user_brief`. Idempotent on `(company, user_id)`: 201 on first grant, 200 on repeat, never a second row |
+| `/api/companies/v1/companies/{slug}/memberships/{user_id}`   | DELETE | admin (superuser)     | 409 `self_revoke` — can't revoke your own membership over HTTP (locking yourself out is one click; getting back in needs `manage.py company_grant` from a console). 404 if there's no such membership |
+
+**No HTTP company creation, on purpose.** `provision_company` runs a fresh
+schema plus four apps' worth of migrations (~1 minute) before it's done;
+`gunicorn --timeout 60` would kill the worker mid-DDL. Creation stays
+CLI-only — `manage.py company_create`. Archive/restore stay over HTTP
+because they're a status flip and a view rebuild, not DDL.
+
+**Archiving the last active company is refused, not silently allowed.**
+`archive_company` returns 409 `last_active` when the target is the only
+company with `status=active`: for as long as the transition mode holds
+(`docs/plans/2026-09-14-group-structure-roadmap.md` §3 — currently one
+live company, "Hi-Tech Qazaqstan"), archiving it would 404 every route on
+the platform, `contracts`/`signoff` included, since they resolve their
+schema from the company on the request.
+
+---
+
 ## Django admin — `/django-admin/`
 
 Replaces the old `sqladmin` aggregator. Standard Django admin, session +
