@@ -34,11 +34,8 @@
 """
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import ProgrammingError
-from django.utils import timezone
 
-from apps.companies.models import Company, CompanyStatus
-from apps.companies.services import holding_views
+from apps.companies.services import lifecycle
 
 
 class Command(BaseCommand):
@@ -50,37 +47,15 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         slug = opts["company_slug"]
-        company = Company.objects.filter(slug=slug).first()
-        if company is None:
-            raise CommandError(f"Компания {slug} не найдена.")
-
-        if company.status == CompanyStatus.ARCHIVED:
+        try:
+            _company, changed = lifecycle.archive_company(slug)
+        except lifecycle.LifecycleError as exc:
+            raise CommandError(exc.detail) from exc
+        if not changed:
             self.stdout.write(self.style.WARNING(
                 f"Компания {slug} уже в архиве — повторный вызов ничего не меняет."
             ))
             return
-
-        company.status = CompanyStatus.ARCHIVED
-        company.archived_at = timezone.now()
-        company.save(update_fields=["status", "archived_at", "updated_at"])
-
-        try:
-            holding_views.rebuild_holding_views()
-        except ProgrammingError as exc:
-            # Компания уже архивна — откатывать статус не за что (архивная
-            # компания вне сводок и есть желаемое состояние). Падает СБОРКА
-            # представлений из-за отставания ДРУГОЙ компании по миграциям —
-            # тот же сценарий и тот же дух сообщения, что в migrate_companies
-            # и company_create на симметричном месте.
-            raise CommandError(
-                f"Компания {slug} переведена в архив, но пересобрать сводки "
-                "холдинга не удалось: состав столбцов разошёлся с другой "
-                "компанией, отставшей по миграциям. Представления оставлены "
-                "снесёнными: читатель получит громкую ошибку вместо цифр по "
-                "полумигрированной группе. Доведите остальные компании — "
-                f"`manage.py migrate_companies` без фильтров. Причина: {exc}"
-            ) from exc
-
         self.stdout.write(self.style.SUCCESS(
             f"Компания {slug} переведена в архив. Сводки холдинга пересобраны."
         ))
