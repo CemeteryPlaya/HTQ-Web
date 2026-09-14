@@ -278,7 +278,7 @@ const CounterpartyCreate = () => {
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <Label htmlFor="contact-name">{t('contracts.counterparty.ceo')}</Label>
+                  <Label htmlFor="contact-name">{t('contracts.counterparty.ceo')} <span className="text-muted-foreground">{t('common.optionalParen')}</span></Label>
                   <Input
                     id="contact-name"
                     value={contactName}
@@ -288,7 +288,7 @@ const CounterpartyCreate = () => {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="phone">{t('profile.phone')}</Label>
+                  <Label htmlFor="phone">{t('profile.phone')} <span className="text-muted-foreground">{t('common.optionalParen')}</span></Label>
                   <InternationalPhoneInput
                     id="phone"
                     value={phone}
@@ -296,7 +296,7 @@ const CounterpartyCreate = () => {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="email">E-mail</Label>
+                  <Label htmlFor="email">E-mail <span className="text-muted-foreground">{t('common.optionalParen')}</span></Label>
                   <Input
                     id="email"
                     type="email"
@@ -310,7 +310,7 @@ const CounterpartyCreate = () => {
                 </div>
               </div>
               <div>
-                <Label htmlFor="address">{t('contracts.counterparty.address')}</Label>
+                <Label htmlFor="address">{t('contracts.counterparty.address')} <span className="text-muted-foreground">{t('common.optionalParen')}</span></Label>
                 <Textarea
                   id="address"
                   value={address}

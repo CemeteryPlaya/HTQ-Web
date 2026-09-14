@@ -3146,6 +3146,7 @@
     "onShort": "On",
     "offShort": "Off",
     "optional": "Optional",
+    "optionalParen": "(optional)",
     "changesSaved": "The changes were saved",
     "show": "Show",
     "done": "Done"

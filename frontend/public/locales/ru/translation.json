@@ -3146,6 +3146,7 @@
     "onShort": "Вкл",
     "offShort": "Выкл",
     "optional": "Необязательно",
+    "optionalParen": "(необязательно)",
     "changesSaved": "Изменения сохранены",
     "show": "Показать",
     "done": "Готово"

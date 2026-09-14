@@ -313,7 +313,7 @@ const CounterpartyEditForm = ({ counterparty, countries }: FormProps) => {
         <CardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <Label htmlFor="contact-name">Генеральный директор</Label>
+              <Label htmlFor="contact-name">Генеральный директор <span className="text-muted-foreground">(необязательно)</span></Label>
               <Input
                 id="contact-name"
                 value={contactName}
@@ -323,7 +323,7 @@ const CounterpartyEditForm = ({ counterparty, countries }: FormProps) => {
               />
             </div>
             <div>
-              <Label htmlFor="phone">Телефон</Label>
+              <Label htmlFor="phone">Телефон <span className="text-muted-foreground">(необязательно)</span></Label>
               <Input
                 id="phone"
                 type="tel"
@@ -334,7 +334,7 @@ const CounterpartyEditForm = ({ counterparty, countries }: FormProps) => {
               />
             </div>
             <div>
-              <Label htmlFor="email">E-mail</Label>
+              <Label htmlFor="email">E-mail <span className="text-muted-foreground">(необязательно)</span></Label>
               <Input
                 id="email"
                 type="email"
@@ -348,7 +348,7 @@ const CounterpartyEditForm = ({ counterparty, countries }: FormProps) => {
             </div>
           </div>
           <div>
-            <Label htmlFor="address">Адрес</Label>
+            <Label htmlFor="address">Адрес <span className="text-muted-foreground">(необязательно)</span></Label>
             <Textarea
               id="address"
               value={address}
