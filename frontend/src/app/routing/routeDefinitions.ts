@@ -204,4 +204,9 @@ export const protectedRoutes: RouteConfig[] = [
   // серверной проверки: страница сама скрывает правку у неплатформенного
   // администратора.
   { path: '/access/roles', component: lazyPages.AccessRoleCatalog, requiresAuth: true, requires: { module: 'access', level: 'admin' } },
+
+  // ─── Реестр компаний группы ───────────────────────────────────────────
+  // read — минимум для входа; архив/восстановление страница показывает только
+  // платформенному администратору, сервер отвечает 403 остальным.
+  { path: '/companies', component: lazyPages.CompanyRegistry, requiresAuth: true, requires: { module: 'companies', level: 'read' } },
 ];
