@@ -29,6 +29,7 @@ import {
   formatDate,
   formatMoment,
   formatMoney,
+  formatRemaining,
   remainingTone,
 } from '@/components/contracts/format';
 import { reportApiError } from '@/lib/apiError';
@@ -288,8 +289,12 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Договор всего (с НДС)
                 </p>
+                {/* У рамочного договора общей суммы нет по существу, и ноль вместо неё
+                    читался бы как потерянные данные — см. докстринг AgreementType. */}
                 <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums text-foreground">
-                  {formatMoney(agreement.amount, agreement.currency)}
+                  {agreement.contract_type === 'framework'
+                    ? 'Рамочный договор'
+                    : formatMoney(agreement.amount, agreement.currency)}
                 </p>
 
                 <div className="mt-3 grid grid-cols-2 gap-3 pt-3 border-t text-sm">
@@ -329,11 +334,14 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                 </div>
                 <div className="col-span-2 flex items-end justify-between gap-4 border-t pt-3">
                   <p className="text-xs text-muted-foreground">Остаток к оплате</p>
-                  <p className={`text-base font-semibold tabular-nums ${remainingTone(
-                    agreement.remaining_amount,
-                    agreement.amount,
-                  )}`}>
-                    {formatMoney(agreement.remaining_amount, agreement.currency)}
+                  {/* `null` — рамочный договор: суммы нет, значит нет и остатка,
+                      а тона «вышли за сумму» тем более. */}
+                  <p className={`text-base font-semibold tabular-nums ${
+                    agreement.remaining_amount === null
+                      ? 'text-muted-foreground'
+                      : remainingTone(agreement.remaining_amount, agreement.amount)
+                  }`}>
+                    {formatRemaining(agreement.remaining_amount, agreement.currency)}
                   </p>
                 </div>
               </div>

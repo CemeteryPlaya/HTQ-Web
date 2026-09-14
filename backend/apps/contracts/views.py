@@ -949,7 +949,7 @@ class AdvancePaymentCollectionView(ContractsView):
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.AdvancePaymentRead.model_validate(
-            adv_svc.serialize_advance_payment(payment))
+            adv_svc.serialize_advance_payment(payment, with_budget=True))
 
 
 class AdvancePaymentDetailView(ContractsView):
@@ -957,7 +957,7 @@ class AdvancePaymentDetailView(ContractsView):
     def get(self, request, payment_id: int):
         return schemas.AdvancePaymentRead.model_validate(
             adv_svc.serialize_advance_payment(
-                adv_svc.get_advance_payment_or_404(payment_id)))
+                adv_svc.get_advance_payment_or_404(payment_id), with_budget=True))
 
 
 class AdvancePaymentPaymentOrderView(ContractsView):
@@ -1184,7 +1184,7 @@ class ContractPaymentCollectionView(ContractsView):
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.ContractPaymentRead.model_validate(
-            contract_payment_svc.serialize_contract_payment(payment))
+            contract_payment_svc.serialize_contract_payment(payment, with_budget=True))
 
 
 class ContractPaymentDetailView(ContractsView):
@@ -1192,7 +1192,7 @@ class ContractPaymentDetailView(ContractsView):
     def get(self, request, payment_id: int):
         return schemas.ContractPaymentRead.model_validate(
             contract_payment_svc.serialize_contract_payment(
-                contract_payment_svc.get_contract_payment_or_404(payment_id)))
+                contract_payment_svc.get_contract_payment_or_404(payment_id), with_budget=True))
 
 
 class ContractPaymentInvoiceUrlView(ContractsView):
@@ -1277,7 +1277,7 @@ class CompletionActCollectionView(ContractsView):
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.CompletionActRead.model_validate(
-            completion_act_svc.serialize_completion_act(act))
+            completion_act_svc.serialize_completion_act(act, with_budget=True))
 
 
 class CompletionActDetailView(ContractsView):
@@ -1285,7 +1285,7 @@ class CompletionActDetailView(ContractsView):
     def get(self, request, act_id: int):
         return schemas.CompletionActRead.model_validate(
             completion_act_svc.serialize_completion_act(
-                completion_act_svc.get_completion_act_or_404(act_id)))
+                completion_act_svc.get_completion_act_or_404(act_id), with_budget=True))
 
 
 class CompletionActActUrlView(ContractsView):
@@ -1348,12 +1348,10 @@ class EnumsView(ContractsView):
             "counterparty_status": pairs(CounterpartyStatus.choices),
             "invoice_status": pairs(InvoiceStatus.choices),
             "payment_type": pairs(PaymentType.choices),
-            # «Вид» и «Тип» из реестра заказчика. Тип нужен форме не как
-            # украшение: у «открытого» договора сумма не заполняется, и
-            # выбор типа решает, требовать ли её.
-            "agreement_kind": pairs(AgreementKind.choices),
-            "agreement_type": pairs(AgreementType.choices),
             "direction": pairs(AgreementDirection.choices),
+            # «Вид» и «Тип» из реестра заказчика. Тип нужен форме не как
+            # украшение: у «открытого» (рамочного) договора сумма не
+            # заполняется, и выбор типа решает, требовать ли её.
             "kind": pairs(AgreementKind.choices),
             "contract_type": pairs(AgreementType.choices),
             # Из каких статусов договор занимает бюджет — фронтенду нужно,

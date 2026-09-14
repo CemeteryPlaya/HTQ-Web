@@ -173,7 +173,15 @@ export type AgreementStatus =
   | 'terminated';
 
 export type AgreementDirection = 'expense' | 'income';
+/** «Вид» договора. Реестр заказчика различает только РиУ / ТМЦ (импорт
+ *  CashFlow кладёт строки ровно в них); остальные нужны карточке договора. */
 export type AgreementKind = 'works_services' | 'goods' | 'services' | 'lease' | 'other';
+/**
+ * «Тип» договора. У рамочного (в реестре заказчика — «открытого») суммы нет по
+ * существу — `amount` у него `0.00`, а `remaining_amount` — `null`. Отдельного
+ * `'open'` здесь нет намеренно: это одно понятие под двумя именами — см.
+ * докстринг `AgreementType` в backend/apps/contracts/models.py.
+ */
 export type AgreementType = 'standard' | 'non_standard' | 'framework';
 
 export interface Agreement {
@@ -199,6 +207,8 @@ export interface Agreement {
   counterparty_name: string;
   counterparty_bin_iin: string;
   payment_type: PaymentType;
+  /** Доля аванса, `0.000`…`1.000`. */
+  advance_share: string;
   direction: AgreementDirection;
   kind: AgreementKind;
   contract_type: AgreementType;
@@ -224,8 +234,11 @@ export interface Agreement {
   /** Закрытая предоплата; исходную сумму договора не меняет. */
   advance_paid_amount: string;
   contract_paid_amount: string;
-  /** Остаток по договору после закрытой предоплаты. */
-  remaining_amount: string;
+  /**
+   * Остаток по договору после проведённых платежей. `null` — у открытого
+   * договора: суммы нет, значит нет и лимита, которым ограничивать оплату.
+   */
+  remaining_amount: string | null;
   currency: string;
   file_id: string | null;
   signed_date: string | null;
@@ -314,6 +327,12 @@ export interface AdvancePayment {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+  /**
+   * На сколько программа за лимитом с учётом этой оплаты по ОТКРЫТОМУ
+   * договору; `null` — не за лимитом. Предупреждение, не запрет. Приходит
+   * только в карточке и в ответе на создание — в списке всегда `null`.
+   */
+  budget_overrun?: string | null;
 }
 
 export type AccountableFundsRequestStatus =
@@ -382,6 +401,8 @@ export interface ContractPayment {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+  /** См. `AdvancePayment.budget_overrun`. */
+  budget_overrun?: string | null;
 }
 
 export interface CompletionAct {
@@ -404,6 +425,8 @@ export interface CompletionAct {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+  /** См. `AdvancePayment.budget_overrun`. */
+  budget_overrun?: string | null;
 }
 
 /** A current action in the contracts-only personal queue. */

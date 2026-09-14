@@ -156,11 +156,14 @@ class AgreementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 @admin.register(Invoice)
 class InvoiceAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "name", "counterparty", "budget_line", "amount",
-                    "currency", "status", "approval_state", "created_at")
+                    "currency", "status", "approval_state", "document_date",
+                    "created_at")
     list_filter = ("status", "approval_state", "currency",
                    "budget_line__budget__period_year")
+    # ``external_id`` — в поиске, как у договора: у импортированных счетов
+    # он начинается с «ops:», и так их все можно найти разом.
     search_fields = ("name", "note", "counterparty__name",
-                     "counterparty__bin_iin")
+                     "counterparty__bin_iin", "external_id")
     readonly_fields = ("created_at", "updated_at", "file_id", "currency",
                        "approval_state")
     raw_id_fields = ("budget_line", "counterparty")
@@ -207,9 +210,11 @@ class AdvanceReportAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 @admin.register(ContractPayment)
 class ContractPaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "administrator", "agreement", "amount", "status",
-                    "approval_state", "posting_number", "paid_by", "paid_at")
+                    "approval_state", "document_date", "posting_number",
+                    "paid_by", "paid_at")
     list_filter = ("status", "approval_state", "administrator")
-    search_fields = ("agreement__number", "agreement__name", "posting_number")
+    search_fields = ("agreement__number", "agreement__name", "posting_number",
+                     "external_id")
     readonly_fields = ("created_at", "updated_at", "approval_state", "paid_by", "paid_at")
     raw_id_fields = ("administrator", "agreement")
     list_select_related = ("administrator", "agreement", "agreement__counterparty")
