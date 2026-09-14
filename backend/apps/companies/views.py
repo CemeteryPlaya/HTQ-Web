@@ -10,6 +10,19 @@
 членства запирает человека снаружи), поэтому ``admin=True`` плюс явная
 проверка ``is_superuser``, как у каталога ролей в ``apps.access``.
 
+⚠️ ``api_view(module=…)`` считает уровень доступа в КОМПАНИИ ВЫЗЫВАЮЩЕГО
+(``current_company_or_none()``) и ничего не знает про ``slug`` из URL — сам
+по себе он не мешает компании A писать в строку компании B. Поэтому правка
+компании (``CompanyItemView.patch``), переключение модуля
+(``CompanyModuleItemView.patch``) и выдача членства
+(``CompanyMembershipsView.post``) дополнительно зовут
+``deny_unless_platform_admin`` — реестр компаний ведёт только платформенный
+администратор (roadmap §5.A), несмотря на write-декоратор снаружи. Чтение
+подресурсов одной компании (``CompanyModulesView.get``,
+``CompanyMembershipsView.get``) по той же причине зовёт
+``deny_unless_own_company``: видеть их может либо платформенный
+администратор, либо сама компания.
+
 **Заведения компании здесь нет** — намеренно: ``provision_company`` гонит
 миграции четырёх аппок около минуты, ``gunicorn --timeout 60`` убьёт воркер
 посреди DDL. Заведение — ``manage.py company_create``.
@@ -22,6 +35,7 @@ from django.utils.decorators import method_decorator
 
 from apps.users.interface import get_user_brief
 from htqweb.http import ApiView, api_view, json_error
+from htqweb.tenancy.context import current_company_or_none
 
 from . import schemas
 from .models import Company, CompanyMembership, CompanyStatus
@@ -50,6 +64,20 @@ class CompaniesView(ApiView):
                 "платформенному администратору", 403,
             )
         return None
+
+    def deny_unless_own_company(self, slug: str):
+        """Подресурсы компании читает либо платформенный администратор, либо
+        сама компания. Гейт ``api_view(module=…)`` считает уровень в КОМПАНИИ
+        ВЫЗЫВАЮЩЕГО и про ``slug`` из URL ничего не знает — без этой сверки
+        читатель реестра одной компании видел бы состав участников соседней.
+        """
+        if self.request.token.is_superuser:
+            return None
+        if slug == current_company_or_none():
+            return None
+        return json_error(
+            "Подресурсы другой компании недоступны", 403,
+        )
 
     @staticmethod
     def lifecycle_error(exc: lifecycle.LifecycleError):
@@ -138,6 +166,16 @@ class CompanyItemView(CompaniesView):
 
     @write("PATCH", body=schemas.CompanyPatch)
     def patch(self, request, slug: str, data: schemas.CompanyPatch):
+        """Переименование, смена ``kind`` и перепривязка родителя — операция
+        платформенного уровня (roadmap §5.A): реестр компаний ведёт
+        платформенный администратор. ``@write(...)`` считает уровень в
+        компании ВЫЗЫВАЮЩЕГО, а не в ``slug`` из URL, поэтому сам по себе не
+        мешает компании A переписать строку компании B — вторая проверка
+        обязательна.
+        """
+        denied = self.deny_unless_platform_admin()
+        if denied is not None:
+            return denied
         kwargs = {"name": data.name, "kind": data.kind, "country": data.country}
         if "parent_slug" in data.model_fields_set:
             kwargs["parent_slug"] = data.parent_slug
@@ -181,6 +219,14 @@ class CompanyRestoreView(CompaniesView):
 class CompanyModulesView(CompaniesView):
     @read
     def get(self, request, slug: str):
+        """Список модулей одной компании. ``@read`` (``module="companies"``)
+        считает уровень в компании ВЫЗЫВАЮЩЕГО и ничего не знает про ``slug``
+        из URL, поэтому читатель с ролью в компании A мог бы этой же ручкой
+        увидеть состояние модулей компании B — закрываем ``deny_unless_own_company``.
+        """
+        denied = self.deny_unless_own_company(slug)
+        if denied is not None:
+            return denied
         try:
             company = self.company_or_404(slug)
         except lifecycle.LifecycleError as exc:
@@ -191,6 +237,13 @@ class CompanyModulesView(CompaniesView):
 class CompanyModuleItemView(CompaniesView):
     @write("PATCH", body=schemas.ModulePatch)
     def patch(self, request, slug: str, app_label: str, data: schemas.ModulePatch):
+        """Включить/выключить модуль компании — платформенная операция: тот же
+        разрыв, что и у ``CompanyItemView.patch`` (``@write`` слеп к ``slug``
+        из URL), только с последствием «выключить соседу целый домен».
+        """
+        denied = self.deny_unless_platform_admin()
+        if denied is not None:
+            return denied
         try:
             company = self.company_or_404(slug)
         except lifecycle.LifecycleError as exc:
@@ -210,6 +263,15 @@ class CompanyModuleItemView(CompaniesView):
 class CompanyMembershipsView(CompaniesView):
     @read
     def get(self, request, slug: str):
+        """Ростер участников одной компании — ``username``/``full_name``/
+        ``email`` внутри. ``@read`` (``module="companies"``) считает уровень
+        в компании ВЫЗЫВАЮЩЕГО и не смотрит на ``slug`` из URL, поэтому без
+        ``deny_unless_own_company`` читатель реестра одной компании видел бы
+        состав соседней.
+        """
+        denied = self.deny_unless_own_company(slug)
+        if denied is not None:
+            return denied
         try:
             company = self.company_or_404(slug)
         except lifecycle.LifecycleError as exc:
@@ -219,6 +281,15 @@ class CompanyMembershipsView(CompaniesView):
 
     @write("POST", body=schemas.MembershipCreate)
     def post(self, request, slug: str, data: schemas.MembershipCreate):
+        """Выдать членство — а с ним легитимный claim ``company`` и весь
+        тенантный доступ компании. Платформенная операция по той же причине,
+        что и ``CompanyItemView.patch``: ``@write`` слеп к ``slug`` из URL,
+        поэтому без явной проверки владелец write в компании A мог бы впустить
+        кого угодно в компанию B.
+        """
+        denied = self.deny_unless_platform_admin()
+        if denied is not None:
+            return denied
         try:
             company = self.company_or_404(slug)
         except lifecycle.LifecycleError as exc:

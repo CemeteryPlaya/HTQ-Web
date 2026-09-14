@@ -92,14 +92,31 @@ vitest + RTL, i18next с инлайн-фолбэками `t('key', 'текст')
 | GET | `companies?status=active\|archived\|all` | `module=companies, level=read` | `[CompanyRead]` (по умолчанию `all`) |
 | GET | `companies/tree` | `module=companies, level=read` | `[CompanyTreeNode]` — корни дерева владения (только действующие) |
 | GET | `companies/<slug>` | `module=companies, level=read` | `CompanyRead` |
-| PATCH | `companies/<slug>` | `module=companies, level=write` | `CompanyRead`; тело `CompanyPatch` |
+| PATCH | `companies/<slug>` | `module=companies, level=write` + `is_superuser` | `CompanyRead`; тело `CompanyPatch` |
 | POST | `companies/<slug>/archive` | `admin=True` + `is_superuser` | `CompanyRead`; 409 `last_active` |
 | POST | `companies/<slug>/restore` | `admin=True` + `is_superuser` | `CompanyRead` |
-| GET | `companies/<slug>/modules` | `module=companies, level=read` | `[ModuleRead]` |
-| PATCH | `companies/<slug>/modules/<app_label>` | `module=companies, level=write` | `ModuleRead`; 422 unknown, 409 core |
-| GET | `companies/<slug>/memberships` | `module=companies, level=read` | `[MembershipRead]` |
-| POST | `companies/<slug>/memberships` | `module=companies, level=write` | `MembershipRead` (201; 200 если уже было) |
+| GET | `companies/<slug>/modules` | `module=companies, level=read` + своя компания | `[ModuleRead]` |
+| PATCH | `companies/<slug>/modules/<app_label>` | `module=companies, level=write` + `is_superuser` | `ModuleRead`; 422 unknown, 409 core |
+| GET | `companies/<slug>/memberships` | `module=companies, level=read` + своя компания | `[MembershipRead]` |
+| POST | `companies/<slug>/memberships` | `module=companies, level=write` + `is_superuser` | `MembershipRead` (201; 200 если уже было) |
 | DELETE | `companies/<slug>/memberships/<user_id>` | `admin=True` + `is_superuser` | 204; 409 `self_revoke` |
+
+⚠️ **Исправлено по итогам финального ревью блока A.** `module=companies,
+level=…` резолвит уровень в компании ВЫЗЫВАЮЩЕГО (`current_company_or_none()`
+на стороне заголовка `X-HTQ-Company`) и ничего не знает про `<slug>` из URL —
+как исходно записано в этой таблице, гейт сам по себе не мешал компании A
+писать/читать строку компании B. Ревью нашло это как критическую (запись:
+`PATCH companies/<slug>`, `PATCH .../modules/<app_label>`, `POST
+.../memberships` — включая выдачу членства, то есть легитимного claim
+`company` и целой тенантной схемы) и важную (чтение: `GET .../modules`, `GET
+.../memberships` — состав ролей и `username`/`full_name`/`email` соседней
+компании) находки. Исправление — второй, явный гейт внутри вьюхи поверх
+табличного: `deny_unless_platform_admin` на трёх записывающих ручках (тот же
+хелпер, что уже стоял на архиве/восстановлении/отзыве) и новый
+`deny_unless_own_company` на двух читающих (пропускает суперпользователя или
+компанию, совпадающую с `X-HTQ-Company`). Таблица выше — уже ИСПРАВЛЕННЫЙ
+контракт; `PATCH`/`POST` на реестре и модулях/членстве теперь фактически
+платформенные операции, несмотря на внешний декоратор `write`.
 
 Формы:
 

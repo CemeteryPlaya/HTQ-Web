@@ -3,11 +3,24 @@
 import pytest
 from django.test import Client
 
+from apps.access.models import Role, RoleAssignment, ScopeKind
+from apps.access.tests.helpers import grant as grant_permission
 from apps.companies.models import Company, CompanyKind, CompanyMembership
 from apps.companies.tests.api_helpers import (
-    BASE, auth, patch_json, post_json, superuser_token, token,
+    BASE, auth, headers, patch_json, post_json, superuser_token, token,
 )
 from apps.users.models import User, UserStatus
+
+
+def _company_write_token(user_id: int, own_slug: str) -> str:
+    """Токен с настоящим write на ``companies``, но только в ``own_slug``.
+    Копия помощника из ``test_api_write.py`` — тесты соседних файлов не
+    делят фикстуры/помощники в этой аппке (см. ``api_helpers.py``)."""
+    role = Role.objects.create(code=f"companies-writer-{user_id}", title="Реестр — запись")
+    grant_permission(role, "companies", "write")
+    RoleAssignment.objects.create(company_slug=own_slug, user_id=user_id, role=role,
+                                  scope_kind=ScopeKind.COMPANY, scope_id=None)
+    return token(user_id=user_id, sub=str(user_id), company=own_slug)
 
 
 @pytest.fixture
@@ -18,6 +31,13 @@ def client():
 @pytest.fixture
 def company(db):
     return Company.objects.create(slug="htq", name="HTQ", kind=CompanyKind.CONSTRUCTION)
+
+
+@pytest.fixture
+def other_company(db):
+    """Компания звонящего в тестах межкомпанейского гейта — отдельная от
+    ``company``, которую он пытается прочитать/изменить."""
+    return Company.objects.create(slug="beta", name="Beta", kind=CompanyKind.CONSTRUCTION)
 
 
 @pytest.fixture
@@ -94,3 +114,47 @@ def test_membership_delete_is_platform_only(client, company, user):
     CompanyMembership.objects.create(company=company, user_id=user.id)
     assert client.delete(f"{BASE}/companies/htq/memberships/{user.id}",
                          **auth(token())).status_code == 403
+
+
+# ── Финальное ревью: гейт слеп к slug из URL ─────────────────────────────
+
+@pytest.mark.django_db
+def test_membership_post_of_other_company_is_forbidden_for_company_scoped_writer(
+    client, company, other_company, user,
+):
+    """Критическая находка: write на ``companies`` в СВОЕЙ компании
+    (``beta``) не должен позволять выдать членство в чужой (``htq``) —
+    членство несёт легитимный claim ``company`` и весь тенантный доступ."""
+    tok = _company_write_token(201, other_company.slug)
+    res = post_json(client, f"{BASE}/companies/{company.slug}/memberships",
+                    {"user_id": user.id}, **headers(other_company.slug, tok))
+    assert res.status_code == 403
+    assert not CompanyMembership.objects.filter(company=company).exists()
+
+
+@pytest.mark.django_db
+def test_membership_get_of_other_company_is_forbidden_for_company_scoped_reader(
+    client, company, other_company, user,
+):
+    """Важная находка: тот же разрыв на чтении — ростер участников (username/
+    full_name/email) чужой компании не должен быть виден."""
+    CompanyMembership.objects.create(company=company, user_id=user.id)
+    tok = _company_write_token(202, other_company.slug)  # write покрывает read
+    res = client.get(f"{BASE}/companies/{company.slug}/memberships",
+                     **headers(other_company.slug, tok))
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_superuser_still_manages_memberships_of_any_company(client, company, other_company, user):
+    """Платформенный администратор проходит обе проверки независимо от того,
+    какая компания указана в заголовке шлюза."""
+    tok = superuser_token(company=other_company.slug)
+    res = post_json(client, f"{BASE}/companies/{company.slug}/memberships",
+                    {"user_id": user.id}, **headers(other_company.slug, tok))
+    assert res.status_code == 201
+
+    res = client.get(f"{BASE}/companies/{company.slug}/memberships",
+                     **headers(other_company.slug, tok))
+    assert res.status_code == 200
+    assert [m["user_id"] for m in res.json()] == [user.id]

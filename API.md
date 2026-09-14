@@ -964,19 +964,36 @@ plain staff token gets 403. Archive/restore/revoke are irreversible-ish
 enough (archive 404s a company's whole traffic; revoke locks someone out)
 that "elevated" isn't a high enough bar.
 
+⚠️ **The module gate alone is company-blind.** `api_view(module=…)` resolves
+the caller's level in *the caller's own company* (`current_company_or_none()`)
+and never looks at the `{slug}` path segment being read or mutated — so on
+its own it would let a `companies` writer in company A rename, re-parent, or
+flip a module of company B, and let a `companies` reader in company A list
+company B's module states or membership roster (`username`/`full_name`/
+`email`). The final review of Block A caught this; the fix (present in the
+rows below) is a second, explicit check inside the view: `PATCH
+/companies/{slug}`, `PATCH …/modules/{app_label}` and `POST …/memberships`
+additionally call `deny_unless_platform_admin` (same helper archive/restore
+use — the registry is run by the platform administrator, not by peer
+companies), and `GET …/modules` / `GET …/memberships` additionally call
+`deny_unless_own_company`, which passes for a superuser or for the company
+named in `X-HTQ-Company` and 403s everyone else. **A company's own
+sub-resources (modules, memberships) are visible to that company and to the
+platform administrator only.**
+
 | Endpoint                                                | Method | Auth              | Notes |
 |----------------------------------------------------------|--------|-------------------|-------|
 | `/api/companies/v1/me`                                    | GET    | jwt               | Companies where the caller holds an active membership in an active company, ordered `-is_default, name`; no module gate — every signed-in user needs this to switch companies |
 | `/api/companies/v1/companies`                              | GET    | jwt (companies/read)  | `?status=all\|active\|archived`, default `all` |
 | `/api/companies/v1/companies/tree`                         | GET    | jwt (companies/read)  | Active companies only, nested by `parent_slug`. A node whose parent got archived becomes a root instead of disappearing from the tree |
 | `/api/companies/v1/companies/{slug}`                       | GET    | jwt (companies/read)  | 404 `not_found` for an unknown slug |
-| `/api/companies/v1/companies/{slug}`                       | PATCH  | jwt (companies/write) | `{name?, kind?, country?, parent_slug?}` — `slug` itself never changes: it names both the Postgres schema and the subdomain. `parent_slug: null` clears the parent; omitting the key leaves it alone (`model_fields_set`, not a `None` check). 422 `parent_not_found` / `parent_cycle` / `invalid` |
+| `/api/companies/v1/companies/{slug}`                       | PATCH  | jwt (companies/write) + superuser | `{name?, kind?, country?, parent_slug?}` — `slug` itself never changes: it names both the Postgres schema and the subdomain. `parent_slug: null` clears the parent; omitting the key leaves it alone (`model_fields_set`, not a `None` check). 422 `parent_not_found` / `parent_cycle` / `invalid`. `deny_unless_platform_admin` inside the view — see the company-blind-gate note above |
 | `/api/companies/v1/companies/{slug}/archive`               | POST   | admin (superuser)     | Idempotent. 409 `last_active` if this is the only company with `status=active` — see below. Rebuilds holding views |
 | `/api/companies/v1/companies/{slug}/restore`                | POST   | admin (superuser)     | Idempotent. Rebuilds holding views |
-| `/api/companies/v1/companies/{slug}/modules`                | GET    | jwt (companies/read)  | One row per `KNOWN_SERVICES` entry: `{app_label, enabled, message, is_core}`. No stored `CompanyModule` row means enabled |
-| `/api/companies/v1/companies/{slug}/modules/{app_label}`    | PATCH  | jwt (companies/write) | `{enabled, message?}`. 422 if `app_label` isn't in the platform service registry; 409 if it's one of `CORE_MODULES` — core modules can't be switched off per company at all |
-| `/api/companies/v1/companies/{slug}/memberships`            | GET    | jwt (companies/read)  | Account fields joined in via `apps.users.interface.get_users_brief`. A membership whose account got deleted still shows, with blank account fields, rather than being hidden — a hidden row can't be revoked |
-| `/api/companies/v1/companies/{slug}/memberships`             | POST   | jwt (companies/write) | `{user_id, is_default?}`. 422 if `user_id` doesn't resolve via `get_user_brief`. Idempotent on `(company, user_id)`: 201 on first grant, 200 on repeat, never a second row |
+| `/api/companies/v1/companies/{slug}/modules`                | GET    | jwt (companies/read), own company only | One row per `KNOWN_SERVICES` entry: `{app_label, enabled, message, is_core}`. No stored `CompanyModule` row means enabled. `deny_unless_own_company` inside the view — see the company-blind-gate note above |
+| `/api/companies/v1/companies/{slug}/modules/{app_label}`    | PATCH  | jwt (companies/write) + superuser | `{enabled, message?}`. 422 if `app_label` isn't in the platform service registry; 409 if it's one of `CORE_MODULES` — core modules can't be switched off per company at all. `deny_unless_platform_admin` inside the view — see the company-blind-gate note above |
+| `/api/companies/v1/companies/{slug}/memberships`            | GET    | jwt (companies/read), own company only | Account fields joined in via `apps.users.interface.get_users_brief`. A membership whose account got deleted still shows, with blank account fields, rather than being hidden — a hidden row can't be revoked. `deny_unless_own_company` inside the view — see the company-blind-gate note above |
+| `/api/companies/v1/companies/{slug}/memberships`             | POST   | jwt (companies/write) + superuser | `{user_id, is_default?}`. 422 if `user_id` doesn't resolve via `get_user_brief`. Idempotent on `(company, user_id)`: 201 on first grant, 200 on repeat, never a second row. `deny_unless_platform_admin` inside the view — granting membership hands out a legitimate `company` claim and that company's whole tenant schema, see the company-blind-gate note above |
 | `/api/companies/v1/companies/{slug}/memberships/{user_id}`   | DELETE | admin (superuser)     | 409 `self_revoke` — can't revoke your own membership over HTTP (locking yourself out is one click; getting back in needs `manage.py company_grant` from a console). 404 if there's no such membership |
 
 **No HTTP company creation, on purpose.** `provision_company` runs a fresh
