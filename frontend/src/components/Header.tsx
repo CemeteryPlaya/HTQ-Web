@@ -6,6 +6,7 @@ import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useHRLevel } from '@/hooks/useHRLevel';
 import { splitForHeader, visibleNavItems, type NavItem } from '@/app/navigation/navItems';
+import { CompanySwitcher } from '@/components/companies/CompanySwitcher';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -261,12 +262,15 @@ export const Header = () => {
               </span>
             </Link>
           ) : (
-            <Link to="/myprofile">
-              <span className="inline-flex h-10 items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
-                <UserCircle className="w-5 h-5" />
-                <span>{t('header.profile')}</span>
-              </span>
-            </Link>
+            <>
+              <CompanySwitcher enabled={isLoggedIn} />
+              <Link to="/myprofile">
+                <span className="inline-flex h-10 items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
+                  <UserCircle className="w-5 h-5" />
+                  <span>{t('header.profile')}</span>
+                </span>
+              </Link>
+            </>
           )}
         </div>
 
@@ -291,17 +295,22 @@ export const Header = () => {
           <div className="md:hidden absolute top-full left-0 right-0 z-50 glass shadow-elevated animate-fade-in border-b border-border/40">
             <nav className="container-custom py-6 flex flex-col gap-2 max-h-[80vh] overflow-y-auto">
               {isLoggedIn
-                ? employeeNav.map((item) => (
-                  <Link
-                    key={item.id}
-                    to={item.href}
-                    className={`${mobileLinkClass} gap-3`}
-                    onClick={() => setIsMobileMenuOpen(false)}
-                  >
-                    <item.icon className="h-4 w-4 shrink-0" />
-                    {t(item.labelKey, item.labelFallback)}
-                  </Link>
-                ))
+                ? <>
+                  <div className="px-2 pb-2">
+                    <CompanySwitcher enabled={isLoggedIn} />
+                  </div>
+                  {employeeNav.map((item) => (
+                    <Link
+                      key={item.id}
+                      to={item.href}
+                      className={`${mobileLinkClass} gap-3`}
+                      onClick={() => setIsMobileMenuOpen(false)}
+                    >
+                      <item.icon className="h-4 w-4 shrink-0" />
+                      {t(item.labelKey, item.labelFallback)}
+                    </Link>
+                  ))}
+                </>
                 : publicLinks.map((link) => (
                   link.isInternal && location.pathname !== '/' ? (
                     <a
