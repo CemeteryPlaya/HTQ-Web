@@ -73,9 +73,17 @@ export function ExternalHierarchy() {
   });
 
   const subordinate = new Set(subordinateCompanies);
-  const registryAvailable = treeQuery.isSuccess && (treeQuery.data ?? []).length > 0;
+  // Доступность реестра — вопрос успеха запроса, а не количества узлов в
+  // ответе: пустое, но успешное дерево — это не «доступа нет», это «нижестоящих
+  // компаний нет», и это отдельное объяснение ниже (`externalEmpty`).
+  const registryAvailable = treeQuery.isSuccess;
 
-  if (isLoading) {
+  // `usePermissions()` кэшируется на 5 минут и часто уже тёплый, пока дерево
+  // компаний ещё в полёте (`useQuery` стартует в `pending`, `isSuccess` в этот
+  // момент ложно). Показывать деградацию в эту секунду означало бы на миг
+  // сказать полноправному пользователю, что реестр ему закрыт, — поэтому ждём
+  // оба источника, а не только `isLoading`.
+  if (isLoading || treeQuery.isPending) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         {t('common.loading', 'Загрузка…')}

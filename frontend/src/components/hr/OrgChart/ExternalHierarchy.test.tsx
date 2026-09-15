@@ -1,10 +1,11 @@
 /**
  * Внешняя иерархия: дерево владения компаниями, только для чтения.
  *
- * Три предмета проверки — ровно то, что отличает этот экран: дерево рисуется
- * из реестра, пустой результат ОБЪЯСНЯЕТСЯ (иначе читается как сбой загрузки),
- * и при отсутствии прав на реестр экран деградирует до списка слагов, а не
- * показывает ошибку.
+ * Четыре предмета проверки — ровно то, что отличает этот экран: дерево
+ * рисуется из реестра, пустой результат ОБЪЯСНЯЕТСЯ (иначе читается как сбой
+ * загрузки), при отсутствии прав на реестр экран деградирует до списка
+ * слагов, а не показывает ошибку, и, пока дерево ещё в полёте, экран обязан
+ * молчать о правах вовсе — не выдавать деградацию за истину.
  */
 import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,6 +35,24 @@ describe('ExternalHierarchy', () => {
       company: 'hi-tech-group', subordinateCompanies: ['hi-tech-qazaqstan', 'hi-tech-systems'],
       isLoading: false,
     });
+  });
+
+  it('пока дерево компаний ещё грузится, показывает загрузку, а не «доступа нет»', () => {
+    // permissions уже тёплые (isLoading: false, как бывает почти всегда — кэш
+    // на 5 минут), а запрос дерева ещё не разрешился и не отклонён — сознательно
+    // never-resolving промис вместо mockResolvedValue/mockRejectedValue. Синхронная
+    // проверка сразу после рендера (без findBy*, который дождался бы оседания
+    // запроса) — это и есть первый кадр, где раньше на миг показывалась
+    // деградация вместо загрузки.
+    tree.mockImplementation(() => new Promise(() => {}));
+    permissions.mockReturnValue({
+      company: 'hi-tech-group', subordinateCompanies: ['hi-tech-qazaqstan'], isLoading: false,
+    });
+    renderWithProviders(<ExternalHierarchy />);
+
+    expect(screen.getByText(/^Загрузка/)).toBeInTheDocument();
+    expect(screen.queryByText(/доступа к реестру компаний/i)).toBeNull();
+    expect(screen.queryByText('hi-tech-qazaqstan')).toBeNull();
   });
 
   it('рисует дерево владения и отмечает подчинённые компании', async () => {
