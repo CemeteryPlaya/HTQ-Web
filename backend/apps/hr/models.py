@@ -34,6 +34,25 @@ class UnitType(models.TextChoices):
     GROUP = "group", "Группа"
 
 
+class ExternalHierarchy(models.TextChoices):
+    """Участвует ли руководящая должность во ВНЕШНЕЙ иерархии.
+
+    Внешняя иерархия не хранится и не редактируется — она выводится из дерева
+    владения компаниями (``companies.Company.parent``): сотрудник вышестоящей
+    компании является начальником сотрудников нижестоящих. Хранить её отдельной
+    таблицей нельзя — два источника правды о подчинении разъедутся при первой
+    же реорганизации, причём молча.
+
+    Поле отвечает на единственный вопрос, который деревом не выводится:
+    командует ли ЭТА руководящая должность нижестоящими компаниями. Главный
+    бухгалтер холдинга руководит своим отделом и никем в дочерних — это
+    выбирается, а не следует из факта руководства.
+    """
+
+    INHERIT = "inherit", "Участвует"
+    NONE = "none", "Не участвует"
+
+
 class EmployeeStatus(models.TextChoices):
     """Полный набор из КОНТРАКТА API, а не из комментария к модели.
 
@@ -103,6 +122,20 @@ class Position(HrBase):
     # Системные должности — базовые оргединицы (сидируются): их нельзя
     # переименовать/удалить через UI, но вес/отдел/права редактируемы.
     is_system = models.BooleanField(default=False, db_default=False, db_index=True)
+    # Руководящая ли должность. Вместе с external_hierarchy включает внешнюю
+    # иерархию (apps/access/services/hierarchy.py::_is_external_manager).
+    # Умолчание False и НИКАКОГО бэкфилла: угадать руководителя по весу или
+    # названию значило бы раздать видимость чужих компаний молча.
+    is_manager = models.BooleanField(default=False, db_default=False, db_index=True)
+    # Действует только у is_manager=True. Пара «не руководитель + inherit» —
+    # законное состояние по умолчанию, поэтому ограничения в БД здесь нет:
+    # оба условия проверяет разрешение прав, а не схема.
+    external_hierarchy = models.CharField(
+        max_length=16,
+        choices=ExternalHierarchy.choices,
+        default=ExternalHierarchy.INHERIT,
+        db_default=ExternalHierarchy.INHERIT.value,
+    )
     # Явная матрица прав; когда задана, приоритетнее эвристики по названию
     # должности (app/auth/hr_access.py в исходнике).
     # Форма: {"hr_level": "junior|middle|senior|lead", "permissions": [str, ...]}
