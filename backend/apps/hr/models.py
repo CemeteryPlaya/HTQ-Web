@@ -136,6 +136,20 @@ class Position(HrBase):
         default=ExternalHierarchy.INHERIT,
         db_default=ExternalHierarchy.INHERIT.value,
     )
+    # Обслуживает ли должность дочерние компании: её роли действуют во всех
+    # компаниях ниже по дереву владения (apps/access/services/inheritance.py).
+    #
+    # Отдельно от is_manager СОЗНАТЕЛЬНО, решением заказчика: «начальник людей»
+    # и «работает на всю группу» — разные вещи. В холдинге обслуживают
+    # дочерние компании 8 менеджеров из 12 человек, и ни один из них не
+    # руководит сотрудниками ДО; переиспользовать is_manager значило бы либо
+    # не дать прав бухгалтеру, либо соврать во внешней иерархии блока B.
+    #
+    # Умолчание False и никакого бэкфилла: догадка «кто обслуживает» раздала
+    # бы права в чужих компаниях молча.
+    serves_subsidiaries = models.BooleanField(
+        default=False, db_default=False, db_index=True,
+    )
     # Явная матрица прав; когда задана, приоритетнее эвристики по названию
     # должности (app/auth/hr_access.py в исходнике).
     # Форма: {"hr_level": "junior|middle|senior|lead", "permissions": [str, ...]}
