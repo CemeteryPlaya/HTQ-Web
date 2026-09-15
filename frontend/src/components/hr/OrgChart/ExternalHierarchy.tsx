@@ -1,25 +1,79 @@
+import { useQuery } from '@tanstack/react-query';
 import { Building2, CornerDownRight, Info } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { companiesApi } from '@/api/companies';
+import { Badge } from '@/components/ui/badge';
 import { usePermissions } from '@/hooks/usePermissions';
+import type { CompanyTreeNode } from '@/types/companies';
 
 /**
- * Внешняя иерархия — компании ниже по дереву владения (§1.4 спеки стадии 2).
+ * Внешняя иерархия — дерево владения компаниями (§1.4 спеки стадии 2).
  *
  * Только чтение: редактировать здесь нечего, дерево вычисляется из реестра
- * компаний. Данные приходят полем `subordinate_companies` ответа `/access/v1/me`.
+ * компаний, а участие должности в нём задаётся в её карточке.
  *
- * **Пустой список — нормальное состояние, а не сбой загрузки.** Внешняя
- * иерархия распространяется только на руководителей, и до тех пор пока в
- * кадровом учёте ни одна должность не помечена руководящей (это делает
- * переработка HR, §1.6), список пуст у всех. Экран обязан сказать это словами:
- * пустая область без объяснения читается как «не загрузилось», и разбираться
- * пойдут не туда.
+ * **Пустой список — нормальное состояние, а не сбой загрузки**, и экран обязан
+ * различать два разных «пусто»: под компанией вообще нет нижестоящих, и
+ * нижестоящие есть, но должность смотрящего не помечена руководящей. Пустая
+ * область без объяснения читается как «не загрузилось», и разбираться пойдут
+ * не туда.
+ *
+ * **Деградация вместо ошибки.** Реестр компаний закрыт правом `companies:read`,
+ * которого у кадровика может не быть. Тогда показываем то, что доступно
+ * каждому вошедшему, — список слагов из `/access/v1/me`, — и подписываем, что
+ * полное дерево требует доступа к реестру. Это не подмена значения
+ * (`htqweb/fallback.py` тут ни при чём), а разный объём данных для разных прав.
  */
+
+function TreeBranch({ node, depth, current, subordinate }: {
+  node: CompanyTreeNode; depth: number; current: string | null; subordinate: Set<string>;
+}) {
+  const { t } = useTranslation();
+  const isCurrent = node.slug === current;
+  const isSubordinate = subordinate.has(node.slug);
+
+  return (
+    <li>
+      <div
+        className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${isCurrent ? 'bg-accent font-medium' : ''}`}
+        style={{ paddingLeft: `${0.5 + depth * 1.25}rem` }}
+      >
+        {depth > 0
+          ? <CornerDownRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+          : <Building2 className="h-4 w-4 shrink-0 text-primary" />}
+        <span>{node.name}</span>
+        {isCurrent && (
+          <Badge variant="outline">{t('access.hierarchy.youAreHere', 'ваша компания')}</Badge>
+        )}
+        {isSubordinate && (
+          <Badge variant="secondary">{t('access.hierarchy.subordinate', 'подчинённая')}</Badge>
+        )}
+      </div>
+      {node.children.length > 0 && (
+        <ul>
+          {node.children.map((child) => (
+            <TreeBranch key={child.slug} node={child} depth={depth + 1}
+              current={current} subordinate={subordinate} />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
 
 export function ExternalHierarchy() {
   const { t } = useTranslation();
   const { company, subordinateCompanies, isLoading } = usePermissions();
+  const treeQuery = useQuery({
+    queryKey: ['companies', 'tree'],
+    queryFn: async () => (await companiesApi.tree()).data,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const subordinate = new Set(subordinateCompanies);
+  const registryAvailable = treeQuery.isSuccess && (treeQuery.data ?? []).length > 0;
 
   if (isLoading) {
     return (
@@ -38,33 +92,52 @@ export function ExternalHierarchy() {
             'access.hierarchy.externalHint',
             'Дерево выводится из иерархии компаний и не редактируется: сотрудник '
             + 'вышестоящей компании является начальником сотрудников нижестоящих. '
-            + 'Правило распространяется на руководящие должности, у которых включено '
-            + 'участие во внешней иерархии.',
+            + 'Связь означает подчинение, а не передачу прав. Правило действует для '
+            + 'руководящих должностей, у которых включено участие во внешней иерархии.',
           )}
         </p>
       </div>
 
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <Building2 className="h-4 w-4 text-primary" />
-        {company ?? t('access.hierarchy.noCompany', 'компания не определена')}
-      </div>
-
-      {subordinateCompanies.length > 0 ? (
-        <ul className="mt-3 space-y-2 border-l pl-4">
-          {subordinateCompanies.map((slug) => (
-            <li key={slug} className="flex items-center gap-2 text-sm">
-              <CornerDownRight className="h-4 w-4 text-muted-foreground" />
-              <span className="font-mono">{slug}</span>
-            </li>
+      {registryAvailable ? (
+        <ul className="space-y-0.5">
+          {(treeQuery.data ?? []).map((node) => (
+            <TreeBranch key={node.slug} node={node} depth={0}
+              current={company} subordinate={subordinate} />
           ))}
         </ul>
       ) : (
-        <p className="mt-3 max-w-prose text-sm text-muted-foreground">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Building2 className="h-4 w-4 text-primary" />
+            {company ?? t('access.hierarchy.noCompany', 'компания не определена')}
+          </div>
+          {subordinateCompanies.length > 0 && (
+            <ul className="mt-3 space-y-2 border-l pl-4">
+              {subordinateCompanies.map((slug) => (
+                <li key={slug} className="flex items-center gap-2 text-sm">
+                  <CornerDownRight className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-mono">{slug}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 max-w-prose text-xs text-muted-foreground">
+            {t(
+              'access.hierarchy.registryClosed',
+              'Полное дерево компаний показывается при доступе к реестру компаний; '
+              + 'здесь перечислено то, что видно по вашим правам.',
+            )}
+          </p>
+        </div>
+      )}
+
+      {subordinateCompanies.length === 0 && (
+        <p className="mt-4 max-w-prose text-sm text-muted-foreground">
           {t(
             'access.hierarchy.externalEmpty',
-            'Подчинённых компаний нет. Так и должно выглядеть, пока ни одна должность '
-            + 'не помечена руководящей с участием во внешней иерархии — это не ошибка '
-            + 'загрузки.',
+            'Подчинённых компаний нет: ваша должность не помечена руководящей с '
+            + 'участием во внешней иерархии. Это не ошибка загрузки — отметка ставится '
+            + 'в карточке должности.',
           )}
         </p>
       )}
