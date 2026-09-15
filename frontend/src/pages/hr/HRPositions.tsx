@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useHRLevel } from '@/hooks/useHRLevel';
@@ -36,6 +37,10 @@ interface Position {
   level: number;
   grade: number;
   is_system?: boolean;
+  /** Руководящая ли должность — включает участие во внешней иерархии. */
+  is_manager?: boolean;
+  /** Действует только у руководящей: командует ли нижестоящими компаниями. */
+  external_hierarchy?: 'inherit' | 'none';
   permissions?: PositionPermissions | null;
 }
 
@@ -134,7 +139,19 @@ const HRPositions = () => {
     grade: string;
     hr_level: HRLevelKey | '';
     permissions: string[];
-  }>({ title: '', department_id: '', level: '', weight: '100', grade: '1', hr_level: '', permissions: [] });
+    is_manager: boolean;
+    external_hierarchy: 'inherit' | 'none';
+  }>({
+    title: '',
+    department_id: '',
+    level: '',
+    weight: '100',
+    grade: '1',
+    hr_level: '',
+    permissions: [],
+    is_manager: false,
+    external_hierarchy: 'inherit',
+  });
   // Сообщение о том, что серверу не удалось подобрать свободный вес в уровне
   // (диапазон порога занят целиком) — вес тогда вводится вручную.
   const [levelWeightError, setLevelWeightError] = useState<string | null>(null);
@@ -200,6 +217,8 @@ const HRPositions = () => {
         weight: Number(form.weight),
         grade: Number(form.grade),
         permissions,
+        is_manager: form.is_manager,
+        external_hierarchy: form.external_hierarchy,
       };
       // level — не поле модели, а выбор веса: бэкенд проверит, что вес попал
       // в диапазон порога (422 иначе), и выведет level из веса как обычно.
@@ -219,7 +238,17 @@ const HRPositions = () => {
       setDialogOpen(false);
       setEditingPos(null);
       setSaveError(null);
-      setForm({ title: '', department_id: '', level: '', weight: '100', grade: '1', hr_level: '', permissions: [] });
+      setForm({
+        title: '',
+        department_id: '',
+        level: '',
+        weight: '100',
+        grade: '1',
+        hr_level: '',
+        permissions: [],
+        is_manager: false,
+        external_hierarchy: 'inherit',
+      });
     },
     onError: (err) => {
       // 409 (вес занят / системная должность) и 422 (вес вне диапазона) —
@@ -315,6 +344,8 @@ const HRPositions = () => {
       grade: '1',
       hr_level: '',
       permissions: [],
+      is_manager: false,
+      external_hierarchy: 'inherit',
     });
     setDialogOpen(true);
     if (firstLevel) void suggestWeightForLevel(firstLevel.level_number);
@@ -332,6 +363,8 @@ const HRPositions = () => {
       grade: String(pos.grade),
       hr_level: pos.permissions?.hr_level ?? '',
       permissions: pos.permissions?.permissions ?? [],
+      is_manager: pos.is_manager ?? false,
+      external_hierarchy: pos.external_hierarchy ?? 'inherit',
     });
     setDialogOpen(true);
   };
@@ -612,6 +645,57 @@ const HRPositions = () => {
                           ))}
                         </SelectContent>
                       </Select>
+                    </div>
+
+                    <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
+                      <div className="text-sm font-semibold">
+                        {t('hr.positions.externalHierarchy', 'Внешняя иерархия')}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {t(
+                          'hr.positions.externalHierarchyHint',
+                          'Сотрудник вышестоящей компании является начальником сотрудников '
+                          + 'нижестоящих. Связь означает подчинение, а не передачу прав: права '
+                          + 'приходят ролями должности, иерархия лишь расширяет круг компаний, '
+                          + 'в которых они действуют.',
+                        )}
+                      </p>
+                      <label className="flex items-center justify-between gap-3 text-sm">
+                        {t('hr.positions.isManager', 'Руководящая должность')}
+                        <Switch
+                          aria-label={t('hr.positions.isManager', 'Руководящая должность')}
+                          checked={form.is_manager}
+                          onCheckedChange={(next) => setForm({ ...form, is_manager: next })}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm">
+                        {t('hr.positions.externalParticipation', 'Участие во внешней иерархии')}
+                        <select
+                          aria-label={t('hr.positions.externalParticipation', 'Участие во внешней иерархии')}
+                          className="rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-50"
+                          disabled={!form.is_manager}
+                          value={form.external_hierarchy}
+                          onChange={(e) => setForm({
+                            ...form,
+                            external_hierarchy: e.target.value as 'inherit' | 'none',
+                          })}
+                        >
+                          <option value="inherit">
+                            {t('hr.positions.externalInherit', 'Командует нижестоящими компаниями')}
+                          </option>
+                          <option value="none">
+                            {t('hr.positions.externalNone', 'Только своя компания')}
+                          </option>
+                        </select>
+                        {!form.is_manager && (
+                          <span className="text-xs text-muted-foreground">
+                            {t(
+                              'hr.positions.externalNeedsManager',
+                              'Выбор доступен только у руководящей должности.',
+                            )}
+                          </span>
+                        )}
+                      </label>
                     </div>
 
                     <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">

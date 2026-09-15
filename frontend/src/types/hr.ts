@@ -20,6 +20,10 @@ export interface Position {
   grade?: number;
   is_active?: boolean;
   is_system?: boolean;
+  /** Руководящая ли должность — включает участие во внешней иерархии. */
+  is_manager?: boolean;
+  /** Действует только у руководящей: командует ли нижестоящими компаниями. */
+  external_hierarchy?: 'inherit' | 'none';
   permissions?: {
     hr_level?: 'junior' | 'middle' | 'senior' | 'lead' | null;
     permissions?: string[];
