@@ -17,7 +17,7 @@ vi.mock('@/api/companies', () => ({
 }));
 
 const switchCompany = vi.fn();
-const companyFromHost = vi.fn<[string], string | null>();
+const companyFromHost = vi.fn<(host: string) => string | null>();
 vi.mock('@/lib/auth/companySwitch', () => ({
   switchCompany: (slug: string) => switchCompany(slug),
   companyFromHost: (host: string) => companyFromHost(host),
