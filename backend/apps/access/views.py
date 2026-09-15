@@ -272,18 +272,30 @@ class MeView(AccessView):
 
     Без контекста компании отвечает пустой картой, а НЕ ошибкой: это штатный
     переходный режим подпроекта 1, а не сбой.
+
+    Считает роли пользователя РОВНО ОДИН РАЗ (``resolve.resolve_for``) и
+    передаёт готовый контекст во все четыре обращения ниже — иначе каждый
+    вызов ``page_hidden`` (их 32, по числу узлов-страниц) пересчитывал бы
+    роли заново (задача 4 плана B, ``test_resolution_context.py``).
+    Суперпользователю контекст не строится вовсе: у него ответ уже не стоит
+    ни одного запроса, и вызов ``resolve_for`` тут же вернул бы в горячий
+    путь ровно те запросы, которые эта оптимизация убирает.
     """
 
     @read
     def get(self, request):
         company = self.company
+        resolution = (None if request.token.is_superuser
+                      else resolve.resolve_for(request.token, company))
         return schemas.MeRead(
             company=company,
-            permissions=resolve.permissions_for(request.token, company),
-            depth=resolve.depth_map(request.token, company),
+            permissions=resolve.permissions_for(request.token, company,
+                                                resolution=resolution),
+            depth=resolve.depth_map(request.token, company, resolution=resolution),
             hidden_pages=[
                 row["route"] for row in registry.page_nodes()
-                if resolve.page_hidden(request.token, row["route"], company)
+                if resolve.page_hidden(request.token, row["route"], company,
+                                       resolution=resolution)
             ],
             subordinate_companies=hierarchy.subordinate_companies(
                 request.token, company),

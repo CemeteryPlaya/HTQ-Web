@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from apps.access import depth, registry
 from apps.access.models import (
     LEVEL_ORDER,
@@ -102,30 +104,77 @@ def _nearest(nodes: dict[str, frozenset[str]], path: str) -> frozenset[str]:
     return frozenset()
 
 
+@dataclass(frozen=True)
+class Resolution:
+    """Роли пользователя в компании и их явные узлы — один расчёт на запрос.
+
+    Существует затем, что ``/me`` зовёт ``page_hidden`` по каждому узлу-странице
+    (их 32) плюс ``permissions_for`` и ``depth_map``: без общего контекста один
+    запрос стоил бы 35 пересчётов ролей (``_role_scopes`` — три запроса
+    каждый), а после наследования внешней иерархии (``inheritance.py``,
+    следующая задача) — ещё и 35 переключений схемы поверх этого.
+
+    Передаётся ЯВНО через параметр ``resolution=``, а не живёт в
+    ``contextvar``: состояние, пережившее вызов, пришлось бы сбрасывать между
+    запросами и между тестами, и ошибка в этом сбросе отдала бы права одного
+    пользователя другому. Явный параметр живёт в кадре вызывающего и не может
+    протечь никуда мимо него.
+    """
+
+    scopes: dict[int, tuple[str, int | None]]
+    rows: dict[int, dict[str, frozenset[str]]]
+
+
+def resolve_for(user, company: str | None) -> Resolution:
+    """Посчитать роли пользователя в компании один раз для повторного использования.
+
+    ⚠️ Ветка суперпользователя сюда НЕ входит: у него полный набор прав без
+    единого запроса (см. каждую публичную функцию ниже), и построение
+    ``Resolution`` для него означало бы вернуть в горячий путь ровно те
+    запросы, которые эта функция должна убрать. Решать, нужен ли вообще
+    контекст, — дело вызывающего (``identity(user)`` до вызова этой функции).
+    """
+    scopes = _role_scopes(user, company)
+    return Resolution(scopes=scopes, rows=_rows_by_role(scopes))
+
+
 # ── Публичные ответы ────────────────────────────────────────────────────────
+#
+# Каждая функция принимает необязательный ``resolution=`` — уже готовый
+# ``Resolution`` для той же пары (user, company). Без него функция считает
+# роли сама (``resolve_for``), как и раньше; так остаются рабочими все места,
+# где параметр не нужен (одиночный вызов, а не 35 в цикле /me).
+#
+# Ветка суперпользователя в каждой функции стоит ПЕРВОЙ, перед обращением к
+# ``resolution`` и до вызова ``resolve_for`` — у суперпользователя ответ не
+# стоит ни одного запроса, и строить ему контекст значило бы вернуть в горячий
+# путь ровно то, что параметр ``resolution`` должен убрать.
 
 
-def flags_for(user, node: str, company: str | None) -> frozenset[str]:
+def flags_for(user, node: str, company: str | None, *,
+              resolution: Resolution | None = None) -> frozenset[str]:
     """Действующая глубина пользователя на узле: объединение по всем ролям."""
     _user_id, is_superuser = identity(user)
     if is_superuser:
         return frozenset(depth.FLAGS)
 
-    scopes = _role_scopes(user, company)
-    if not scopes:
+    res = resolution or resolve_for(user, company)
+    if not res.scopes:
         return frozenset()
 
     result: frozenset[str] = frozenset()
-    for _role_id, nodes in _rows_by_role(scopes).items():
+    for _role_id, nodes in res.rows.items():
         result |= _nearest(nodes, node)
     return result
 
 
-def can(user, node: str, flag: str, company: str | None) -> bool:
-    return flag in flags_for(user, node, company)
+def can(user, node: str, flag: str, company: str | None, *,
+        resolution: Resolution | None = None) -> bool:
+    return flag in flags_for(user, node, company, resolution=resolution)
 
 
-def page_hidden(user, route: str, company: str | None) -> bool:
+def page_hidden(user, route: str, company: str | None, *,
+                resolution: Resolution | None = None) -> bool:
     """Закрыта ли страница явным запретом.
 
     Страница — ВЕТО, а не разрешение: отсутствие строки означает «нет особого
@@ -142,14 +191,15 @@ def page_hidden(user, route: str, company: str | None) -> bool:
         return False
 
     node = f"{registry.PAGE_PREFIX}{route}"
-    scopes = _role_scopes(user, company)
-    opinions = [nodes[node] for nodes in _rows_by_role(scopes).values() if node in nodes]
+    res = resolution or resolve_for(user, company)
+    opinions = [nodes[node] for nodes in res.rows.values() if node in nodes]
     if not opinions:
         return False
     return not any(opinions)
 
 
-def depth_map(user, company: str | None) -> dict[str, list[str]]:
+def depth_map(user, company: str | None, *,
+              resolution: Resolution | None = None) -> dict[str, list[str]]:
     """Все узлы, на которых у пользователя есть хоть что-то, → список флагов.
 
     Узлы без единого флага в карту не попадают — по той же причине, по которой
@@ -161,18 +211,19 @@ def depth_map(user, company: str | None) -> dict[str, list[str]]:
     if is_superuser:
         return {name: list(depth.FLAGS) for name in _known_modules()}
 
-    scopes = _role_scopes(user, company)
-    if not scopes:
+    res = resolution or resolve_for(user, company)
+    if not res.scopes:
         return {}
 
     merged: dict[str, frozenset[str]] = {}
-    for _role_id, nodes in _rows_by_role(scopes).items():
+    for _role_id, nodes in res.rows.items():
         for path, flags in nodes.items():
             merged[path] = merged.get(path, frozenset()) | flags
     return {path: sorted(flags) for path, flags in merged.items() if flags}
 
 
-def permissions_for(user, company: str | None) -> dict[str, dict]:
+def permissions_for(user, company: str | None, *,
+                    resolution: Resolution | None = None) -> dict[str, dict]:
     """Карта «модуль → уровень и область» — проекция глубины (§4.5).
 
     Уровень модуля считается по ВСЕМУ его поддереву, а не по одному узлу
@@ -190,11 +241,11 @@ def permissions_for(user, company: str | None) -> dict[str, dict]:
     if company is None:
         return {}
 
-    scopes = _role_scopes(user, company)
-    if not scopes:
+    res = resolution or resolve_for(user, company)
+    if not res.scopes:
         return {}
 
-    by_role = _rows_by_role(scopes)
+    by_role = res.rows
     result: dict[str, dict] = {}
     for module in _known_modules():
         for role_id, nodes in by_role.items():
@@ -205,7 +256,7 @@ def permissions_for(user, company: str | None) -> dict[str, dict]:
             level = depth.legacy_level(subtree)
             if level == Level.NONE:
                 continue
-            kind, scope_id = scopes[role_id]
+            kind, scope_id = res.scopes[role_id]
             best = result.get(module)
             if best is None or LEVEL_ORDER[level] > LEVEL_ORDER[best["level"]]:
                 result[module] = {"level": level,
@@ -218,6 +269,7 @@ def permissions_for(user, company: str | None) -> dict[str, dict]:
     return result
 
 
-def permission_level(user, module: str, company: str | None) -> str:
-    entry = permissions_for(user, company).get(module)
+def permission_level(user, module: str, company: str | None, *,
+                     resolution: Resolution | None = None) -> str:
+    entry = permissions_for(user, company, resolution=resolution).get(module)
     return entry["level"] if entry else Level.NONE
