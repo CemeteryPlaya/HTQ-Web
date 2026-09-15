@@ -71,14 +71,24 @@ def _role_scopes(user, company: str | None) -> dict[int, tuple[str, int | None]]
 
     Должностная роль действует на всю компанию: область сужается только личным
     назначением.
+
+    Наследованные роли (``apps.access.services.inheritance`` — должность
+    вышестоящей компании, помеченная обслуживающей) добавляются в карту ДО
+    личных назначений: обе они дают область ``company`` — самую широкую из
+    возможных, — поэтому личное назначение способно эту область только
+    сохранить, но не сузить (``_SCOPE_WIDTH`` сравнивает `` > ``, а не `` >= ``,
+    и не даёт более узкой области переписать уже найденную широкую).
     """
     if company is None:
         return {}
+    from apps.access.services import inheritance
+
     user_id, _ = identity(user)
     scopes: dict[int, tuple[str, int | None]] = {
         role_id: (ScopeKind.COMPANY, None)
         for role_id in _position_role_ids(user_id, company)
     }
+    scopes.update(inheritance.inherited_role_scopes(user_id, company))
     for row in RoleAssignment.objects.filter(company_slug=company, user_id=user_id):
         current = scopes.get(row.role_id)
         if current is None or _SCOPE_WIDTH[row.scope_kind] > _SCOPE_WIDTH[current[0]]:
@@ -113,8 +123,11 @@ class Resolution:
     Существует затем, что ``/me`` зовёт ``page_hidden`` по каждому узлу-странице
     (их 32) плюс ``permissions_for`` и ``depth_map``: без общего контекста один
     запрос стоил бы 35 пересчётов ролей (``_role_scopes`` — три запроса
-    каждый), а после наследования внешней иерархии (``inheritance.py``,
-    следующая задача) — ещё и 35 переключений схемы поверх этого.
+    каждый), а после наследования по дереву владения
+    (``apps.access.services.inheritance``, которое ``_role_scopes`` теперь
+    зовёт) — ещё и 35 переключений схемы поверх этого. Один расчёт на запрос
+    держит и переключения схемы в единственном числе, а не в размере списка
+    страниц.
 
     Передаётся ЯВНО через параметр ``resolution=``, а не живёт в
     ``contextvar``: состояние, пережившее вызов, пришлось бы сбрасывать между
@@ -145,10 +158,14 @@ def resolve_for(user, company: str | None) -> Resolution:
 
     Оборачивает обе карты в ``MappingProxyType`` (и ``rows`` — на обоих
     уровнях: сама карта ролей и карта узлов КАЖДОЙ роли) прежде чем положить
-    их в ``Resolution``: следующая задача читает и обогащает этот объект
-    наследованием внешней иерархии, и первая же реализация, которая правит
-    существующий ``Resolution`` на месте вместо постройки нового, иначе
-    незаметно подмешает узлы одной роли другой или одного запроса — другому.
+    их в ``Resolution``: объект — константа с момента постройки, и любой
+    код, который захочет обогатить его данными (например, наследованием по
+    дереву владения), обязан построить НОВЫЙ ``Resolution``, а не менять
+    существующий на месте, — иначе он бы подмешал узлы одной роли другой или
+    одного запроса другому. По этой же причине наследование
+    (``apps.access.services.inheritance``) не трогает готовый ``Resolution``
+    вовсе: оно работает раньше, внутри ``_role_scopes``, и участвует в самих
+    входных данных, из которых ``Resolution`` строится один-единственный раз.
     """
     scopes = _role_scopes(user, company)
     rows = _rows_by_role(scopes)
