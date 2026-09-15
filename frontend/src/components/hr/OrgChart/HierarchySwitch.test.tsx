@@ -32,6 +32,7 @@ beforeEach(() => {
   permissions.mockReturnValue({
     company: 'hi-tech-qazaqstan',
     subordinateCompanies: [],
+    inheritedFrom: [],
     isLoading: false,
     level: () => 'none',
     atLeast: () => false,
@@ -73,6 +74,7 @@ describe('ExternalHierarchy', () => {
     permissions.mockReturnValue({
       company: 'htq-holding',
       subordinateCompanies: ['htq-kz', 'kurly-kg'],
+      inheritedFrom: [],
       isLoading: false,
     });
     renderWithProviders(<ExternalHierarchy />);
@@ -98,6 +100,7 @@ describe('ExternalHierarchy', () => {
     permissions.mockReturnValue({
       company: 'htq-holding',
       subordinateCompanies: ['htq-kz'],
+      inheritedFrom: [],
       isLoading: false,
     });
     renderWithProviders(<ExternalHierarchy />);

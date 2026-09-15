@@ -97,4 +97,24 @@ describe('usePermissions', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.atLeast('hr', 'read')).toBe(false);
   });
+
+  // ── Задача 6 блока C: источник наследованных прав ─────────────────────
+
+  it('отдаёт компании, от должности в которых пришли наследованные права', async () => {
+    getMe.mockResolvedValue({ ...ACCESS_ME_FIXTURE, inherited_from: ['hi-tech-group'] });
+
+    const { result } = renderHook(() => usePermissions(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.inheritedFrom).toEqual(['hi-tech-group']);
+  });
+
+  it('пуст, когда наследования нет', async () => {
+    getMe.mockResolvedValue(ACCESS_ME_FIXTURE);
+
+    const { result } = renderHook(() => usePermissions(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.inheritedFrom).toEqual([]);
+  });
 });

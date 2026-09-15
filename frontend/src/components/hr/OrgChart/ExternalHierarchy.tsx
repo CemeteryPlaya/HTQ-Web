@@ -24,7 +24,24 @@ import type { CompanyTreeNode } from '@/types/companies';
  * каждому вошедшему, — список слагов из `/access/v1/me`, — и подписываем, что
  * полное дерево требует доступа к реестру. Это не подмена значения
  * (`htqweb/fallback.py` тут ни при чём), а разный объём данных для разных прав.
+ *
+ * **Наследованные права тоже объясняются здесь** (задача 6 блока C): экран уже
+ * про дерево владения, а наследование — это и есть эффект того дерева на
+ * зрителя. Имена компаний резолвятся по уже загруженному дереву; когда реестр
+ * закрыт, деградируем до тех же слагов, что и подчинённые компании выше.
  */
+
+function nameBySlug(tree: CompanyTreeNode[]): Map<string, string> {
+  const map = new Map<string, string>();
+  const walk = (nodes: CompanyTreeNode[]) => {
+    for (const node of nodes) {
+      map.set(node.slug, node.name);
+      if (node.children.length > 0) walk(node.children);
+    }
+  };
+  walk(tree);
+  return map;
+}
 
 function TreeBranch({ node, depth, current, subordinate }: {
   node: CompanyTreeNode; depth: number; current: string | null; subordinate: Set<string>;
@@ -64,7 +81,7 @@ function TreeBranch({ node, depth, current, subordinate }: {
 
 export function ExternalHierarchy() {
   const { t } = useTranslation();
-  const { company, subordinateCompanies, isLoading } = usePermissions();
+  const { company, subordinateCompanies, inheritedFrom = [], isLoading } = usePermissions();
   const treeQuery = useQuery({
     queryKey: ['companies', 'tree'],
     queryFn: async () => (await companiesApi.tree()).data,
@@ -77,6 +94,10 @@ export function ExternalHierarchy() {
   // ответе: пустое, но успешное дерево — это не «доступа нет», это «нижестоящих
   // компаний нет», и это отдельное объяснение ниже (`externalEmpty`).
   const registryAvailable = treeQuery.isSuccess;
+  // Имена предков резолвятся по уже загруженному дереву; без доступа к реестру
+  // (та же деградация, что и у подчинённых компаний ниже) остаются слагами.
+  const names = registryAvailable ? nameBySlug(treeQuery.data ?? []) : null;
+  const inheritedNames = inheritedFrom.map((slug) => names?.get(slug) ?? slug);
 
   // `usePermissions()` кэшируется на 5 минут и часто уже тёплый, пока дерево
   // компаний ещё в полёте (`useQuery` стартует в `pending`, `isSuccess` в этот
@@ -137,6 +158,14 @@ export function ExternalHierarchy() {
             )}
           </p>
         </div>
+      )}
+
+      {inheritedFrom.length > 0 && (
+        <p className="mt-4 max-w-prose text-sm text-muted-foreground">
+          {t('access.hierarchy.inheritedFrom',
+             'Ваши права в этой компании действуют также от должности в:')}{' '}
+          <span className="font-medium text-foreground">{inheritedNames.join(', ')}</span>
+        </p>
       )}
 
       {subordinateCompanies.length === 0 && (

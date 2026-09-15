@@ -6,6 +6,10 @@
  * загрузки), при отсутствии прав на реестр экран деградирует до списка
  * слагов, а не показывает ошибку, и, пока дерево ещё в полёте, экран обязан
  * молчать о правах вовсе — не выдавать деградацию за истину.
+ *
+ * Плюс задача 6 блока C: строка о наследованных правах появляется только
+ * когда `inheritedFrom` не пуста, показывает имена (резолвятся по дереву) и
+ * деградирует до слагов, когда реестр компаний закрыт.
  */
 import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,7 +37,7 @@ describe('ExternalHierarchy', () => {
     tree.mockReset();
     permissions.mockReturnValue({
       company: 'hi-tech-group', subordinateCompanies: ['hi-tech-qazaqstan', 'hi-tech-systems'],
-      isLoading: false,
+      inheritedFrom: [], isLoading: false,
     });
   });
 
@@ -46,7 +50,8 @@ describe('ExternalHierarchy', () => {
     // деградация вместо загрузки.
     tree.mockImplementation(() => new Promise(() => {}));
     permissions.mockReturnValue({
-      company: 'hi-tech-group', subordinateCompanies: ['hi-tech-qazaqstan'], isLoading: false,
+      company: 'hi-tech-group', subordinateCompanies: ['hi-tech-qazaqstan'],
+      inheritedFrom: [], isLoading: false,
     });
     renderWithProviders(<ExternalHierarchy />);
 
@@ -67,7 +72,7 @@ describe('ExternalHierarchy', () => {
   it('объясняет пустой результат, а не показывает пустоту', async () => {
     tree.mockResolvedValue({ data: TREE });
     permissions.mockReturnValue({
-      company: 'hi-tech-group', subordinateCompanies: [], isLoading: false,
+      company: 'hi-tech-group', subordinateCompanies: [], inheritedFrom: [], isLoading: false,
     });
     renderWithProviders(<ExternalHierarchy />);
 
@@ -80,5 +85,45 @@ describe('ExternalHierarchy', () => {
 
     expect(await screen.findByText('hi-tech-qazaqstan')).toBeInTheDocument();
     expect(screen.queryByText(/ошибк/i)).toBeNull();
+  });
+
+  it('называет компанию, от должности в которой пришли наследованные права', async () => {
+    tree.mockResolvedValue({ data: TREE });
+    permissions.mockReturnValue({
+      company: 'hi-tech-qazaqstan', subordinateCompanies: [],
+      inheritedFrom: ['hi-tech-group'], isLoading: false,
+    });
+    renderWithProviders(<ExternalHierarchy />);
+
+    // Имя, не голый слаг — резолвится по уже загруженному дереву. Проверяем
+    // текст самой строки целиком: "Hi-Tech Group" отдельно также встречается
+    // в узле дерева, поэтому сравнение через одну найденную строку, а не
+    // через второй независимый поиск по всему документу.
+    const line = await screen.findByText(/действуют также от должности в/i);
+    expect(line).toHaveTextContent('Hi-Tech Group');
+  });
+
+  it('без наследования строка не появляется вовсе', async () => {
+    tree.mockResolvedValue({ data: TREE });
+    permissions.mockReturnValue({
+      company: 'hi-tech-qazaqstan', subordinateCompanies: [],
+      inheritedFrom: [], isLoading: false,
+    });
+    renderWithProviders(<ExternalHierarchy />);
+
+    await screen.findByText('Hi-Tech Group');
+    expect(screen.queryByText(/действуют также от должности в/i)).toBeNull();
+  });
+
+  it('источник наследования деградирует до слага, когда реестр компаний закрыт', async () => {
+    tree.mockRejectedValue({ response: { status: 403 } });
+    permissions.mockReturnValue({
+      company: 'hi-tech-qazaqstan', subordinateCompanies: [],
+      inheritedFrom: ['hi-tech-group'], isLoading: false,
+    });
+    renderWithProviders(<ExternalHierarchy />);
+
+    expect(await screen.findByText(/действуют также от должности в/i)).toBeInTheDocument();
+    expect(screen.getByText('hi-tech-group')).toBeInTheDocument();
   });
 });

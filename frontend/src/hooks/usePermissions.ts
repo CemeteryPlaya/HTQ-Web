@@ -56,6 +56,12 @@ export interface Permissions {
   pageHidden: (route: string) => boolean;
   /** Компании ниже по внешней иерархии. Только отображение (§7). */
   subordinateCompanies: string[];
+  /**
+   * Компании выше по дереву владения, чья обслуживающая должность дала часть
+   * прав выше (задача 6 блока C). Права, приехавшие из другой компании,
+   * обязаны быть объяснимы — этот список и есть объяснение.
+   */
+  inheritedFrom: string[];
   isLoading: boolean;
   /**
    * Права НЕ УДАЛОСЬ получить — это не то же самое, что «прав нет».
@@ -98,6 +104,7 @@ export function usePermissions(): Permissions {
       can: (node, flag) => hasDepth(depthMap, node, flag),
       pageHidden: (route) => hiddenPages.includes(route),
       subordinateCompanies: data?.subordinate_companies ?? [],
+      inheritedFrom: data?.inherited_from ?? [],
       isLoading,
       isError,
       refetch: () => { void refetch(); },
