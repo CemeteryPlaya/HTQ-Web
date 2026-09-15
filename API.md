@@ -945,6 +945,64 @@ a schema one (an unknown condition operator lands here, not in 409).
 
 ---
 
+## `apps.access` — `/api/access/v1`
+
+Roles-and-permissions engine — stage-2 spec
+(`docs/plans/2026-08-29-stage2-access-and-roles-spec.md` §4) frozen contract.
+A role is a named set of function-registry entries (`node → depth flags`,
+one of `view/create/edit/delete`); a position normally carries a set of
+roles (`PositionRole`) — a personal `RoleAssignment` on a user is the
+exception, for what a position can't carry (acting head, temporary
+widening). **For a group of companies, cross-company access by position is
+now also the normal path** (customer decision, 2026-09-15 — see block C
+below and stage2-spec §1.2), not just within one company. The module-level
+`level` (`none|read|write|admin`) inside `permissions` is a *projection* of
+the finer `depth` map, kept for routing and the `api_view(module=)` gate —
+`depth` is the source of truth for hiding individual fields/buttons.
+
+| Endpoint | Method | Auth | Notes |
+|---|---|---|---|
+| `/api/access/v1/me` | GET | jwt | Caller's resolved permissions in the request's company — fields below |
+| `/api/access/v1/functions` | GET | jwt | Function-registry tree (`module → function → field`) + flat page list, for the roles/permissions editor |
+| `/api/access/v1/roles` | GET, POST | jwt (access/read, write) | Role catalog; global — one role acts the same in every company |
+| `/api/access/v1/roles/{id}` | GET, PATCH, DELETE | jwt (access/read, write) | 409 deleting an `is_system` role |
+| `/api/access/v1/roles/{id}/permissions` | GET, PUT | jwt (access/read, write) | Depth flags per registry node for this role |
+| `/api/access/v1/roles/{id}/holders` | GET | jwt (access/read) | Who holds the role — `position` (via `PositionRole`, fix by editing the position) vs `personal` (`RoleAssignment`, fix by editing the assignment) — named so a role can actually be unassigned before deletion |
+| `/api/access/v1/roles/{id}/copy` | POST | jwt (access/write) | Duplicate a role's permission set under a new code/title |
+| `/api/access/v1/positions/{position_id}/roles` | GET, PUT | jwt (access/read, write) | Roles carried by a position — the normal path, including the cross-company one described below |
+| `/api/access/v1/assignments/{user_id}` | GET, PUT | jwt (access/read, write) | Personal role assignments — the exception path |
+
+**`GET /me` response** (`MeRead`):
+
+| Field | Type | Notes |
+|---|---|---|
+| `company` | `string \| null` | `null` outside a company context — transitional mode (roadmap §3), not an error |
+| `permissions` | `{module: {level, scope}}` | Module-level projection; drives routing and `api_view(module=)` |
+| `depth` | `{node: flags[]}` | Full picture by function-registry node; project fields/buttons by this, not by `permissions` |
+| `hidden_pages` | `string[]` | Pages the role explicitly vetoes; a page not listed here follows the ordinary rules regardless of depth |
+| `subordinate_companies` | `string[]` | Companies *below* this one in the ownership tree where the caller is manager by external hierarchy (`hr.Position.is_manager`/`external_hierarchy`, block B). Display only — doesn't filter data (stage2-spec §7) |
+| `inherited_from` | `string[]` | **New in block C.** Companies *above* this one whose serving position (`hr.Position.serves_subsidiaries`) contributed part of `permissions`/`depth` above. Sorted; empty for a superuser and for anyone inheritance gave nothing. Ancestors are not mutually exclusive (customer decision 7) — a serving grandparent and a serving parent both contribute, so this can carry more than one slug |
+
+**Holding rights in subsidiary companies (block C).** A position marked
+`serves_subsidiaries=True` (separate from `is_manager`/`external_hierarchy`
+— "runs the group's back office" and "manages people" are different
+questions) carries its roles into every company below its own in
+the ownership tree (`apps.access.services.inheritance`, walking `parent`
+upward from the request's company, not the reverse): company-scoped,
+unioned across every serving ancestor, and an archived ancestor is skipped
+without stopping the walk further up. **This grants rights only** — the
+holder still needs an explicit `CompanyMembership` in the subsidiary to get
+a token for its subdomain at all (customer decision 3); `manage.py
+company_grant --serving` grants it in bulk for a company, and the metric
+`htqweb_access_serving_holders_without_membership` (`htqweb-domains`
+dashboard) tracks who was marked serving but never actually granted
+membership — the gap is invisible from the position screen alone otherwise.
+A subsidiary can see (but not revoke) who from above holds rights in it via
+`GET /api/companies/v1/companies/{slug}/external-holders` — see
+`apps.companies` below.
+
+---
+
 ## `apps.companies` — `/api/companies/v1`
 
 Company registry for the schema-per-company tenancy design (CLAUDE.md,
@@ -987,7 +1045,7 @@ platform administrator only.**
 | `/api/companies/v1/companies`                              | GET    | jwt (companies/read)  | `?status=all\|active\|archived`, default `all` |
 | `/api/companies/v1/companies/tree`                         | GET    | jwt (companies/read)  | Active companies only, nested by `parent_slug`. A node whose parent got archived becomes a root instead of disappearing from the tree |
 | `/api/companies/v1/companies/{slug}`                       | GET    | jwt (companies/read)  | 404 `not_found` for an unknown slug |
-| `/api/companies/v1/companies/{slug}`                       | PATCH  | jwt (companies/write) + superuser | `{name?, kind?, country?, parent_slug?}` — `slug` itself never changes: it names both the Postgres schema and the subdomain. `parent_slug: null` clears the parent; omitting the key leaves it alone (`model_fields_set`, not a `None` check). 422 `parent_not_found` / `parent_cycle` / `invalid`. `deny_unless_platform_admin` inside the view — see the company-blind-gate note above |
+| `/api/companies/v1/companies/{slug}`                       | PATCH  | jwt (companies/write) + superuser | `{name?, kind?, country?, parent_slug?, show_external_holders?}` — `slug` itself never changes: it names both the Postgres schema and the subdomain. `parent_slug: null` clears the parent; omitting any key leaves it alone (`model_fields_set`, not a `None` check). 422 `parent_not_found` / `parent_cycle` / `invalid`. `deny_unless_platform_admin` inside the view — see the company-blind-gate note above |
 | `/api/companies/v1/companies/{slug}/archive`               | POST   | admin (superuser)     | Idempotent. 409 `last_active` if this is the only company with `status=active` — see below. Rebuilds holding views |
 | `/api/companies/v1/companies/{slug}/restore`                | POST   | admin (superuser)     | Idempotent. Rebuilds holding views |
 | `/api/companies/v1/companies/{slug}/modules`                | GET    | jwt (companies/read), own company only | One row per `KNOWN_SERVICES` entry: `{app_label, enabled, message, is_core}`. No stored `CompanyModule` row means enabled. `deny_unless_own_company` inside the view — see the company-blind-gate note above |
@@ -995,6 +1053,9 @@ platform administrator only.**
 | `/api/companies/v1/companies/{slug}/memberships`            | GET    | jwt (companies/read), own company only | Account fields joined in via `apps.users.interface.get_users_brief`. A membership whose account got deleted still shows, with blank account fields, rather than being hidden — a hidden row can't be revoked. `deny_unless_own_company` inside the view — see the company-blind-gate note above |
 | `/api/companies/v1/companies/{slug}/memberships`             | POST   | jwt (companies/write) + superuser | `{user_id, is_default?}`. 422 if `user_id` doesn't resolve via `get_user_brief`. Idempotent on `(company, user_id)`: 201 on first grant, 200 on repeat, never a second row. `deny_unless_platform_admin` inside the view — granting membership hands out a legitimate `company` claim and that company's whole tenant schema, see the company-blind-gate note above |
 | `/api/companies/v1/companies/{slug}/memberships/{user_id}`   | DELETE | admin (superuser)     | 409 `self_revoke` — can't revoke your own membership over HTTP (locking yourself out is one click; getting back in needs `manage.py company_grant` from a console). 404 if there's no such membership |
+| `/api/companies/v1/companies/{slug}/external-holders`         | GET    | jwt, own company only | Block C. Who from a company *above* this one in the ownership tree currently holds rights here through a serving position (`hr.Position.serves_subsidiaries` → `apps.access.services.inheritance`) — `[{full_name, home_company, position, modules: [{module, level}]}]`, exactly those four fields and nothing else (no email/phone/department — this is holding-staff data disclosed to the subsidiary). `deny_unless_own_company`, same as the membership roster. 403 with a body (not an empty list — an empty list would mean "nobody from outside holds rights here", which would be false) when `Company.show_external_holders` is off for this company |
+
+**`show_external_holders`** (`CompanyRead`/`CompanyPatch`, migration `companies/0004`, default `true`) is a per-company, platform-admin-only setting: it controls whether a subsidiary can *see* who from a parent company holds rights in it via the endpoint above — it does not control the access itself, and a subsidiary cannot turn it off for itself (customer decision 4, block C). Defaulting to on is deliberate: hiding it by default would hide the fact of access from the company whose data is actually being read.
 
 **No HTTP company creation, on purpose.** `provision_company` runs a fresh
 schema plus four apps' worth of migrations (~1 minute) before it's done;
