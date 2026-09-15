@@ -1,0 +1,248 @@
+"""Четыре оргструктуры группы по документу «Обновленный проект Оргструктуры
+Группы — комменты Куаныш Садыев от 10.09.2026», стр. 2–5.
+
+Только данные и две чистые функции; кладёт их в базу ``seed_hr_demo``.
+Ключ словаря — ``Company.kind`` (строка, не enum: apps.hr не импортирует
+apps.companies.models). Для legacy-``regional`` структуры нет.
+
+Что здесь из документа, а что придумано для стенда:
+
+* должности, уровни, подчинение, пунктирные связи, «1 шт. ед.» — документ;
+* три дирекции холдинга и их описания — документ (стр. 1–2);
+* подразделения ДОЧЕРНИХ компаний документ не задаёт — здесь минимум:
+  «Руководство» + один профильный отдел; путь ``stroy`` у HTQ сохранён,
+  потому что его читает ``seed_tasks_demo``;
+* люди, телефоны, grade, hr_level — демо.
+
+Признаки блоков B и C выставляются по смыслу документа: дирекции
+«координируют и контролируют деятельность компаний группы» (стр. 1) →
+директора холдинга ``is_manager`` + ``inherit``; восемь менеджеров
+холдинга обслуживают ДО (решение 2 блока C) → ``serves_subsidiaries``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+# Копия hr/0024_seed_level_thresholds.LEVELS — миграция обязана быть
+# заморожена и код аппки не импортирует; равенство держит
+# tests/test_group_structures.py::test_levels_match_the_migration_seed.
+LEVELS = [
+    (1, 0, 99, "N-1", "#7c3aed"),
+    (2, 100, 299, "N-2", "#2563eb"),
+    (3, 300, 599, "N-3", "#0891b2"),
+    (4, 600, 1999, "N-4", "#059669"),
+]
+
+
+def level_for(weight: int) -> int | None:
+    return next((n for n, w_from, w_to, *_ in LEVELS if w_from <= weight <= w_to), None)
+
+
+class UnknownStructure(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class Unit:
+    path: str
+    name: str
+    unit_type: str = "department"
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class Post:
+    title: str
+    unit: str
+    weight: int
+    grade: int
+    hr_level: str
+    reports_to: str | None = None
+    is_manager: bool = False
+    external_hierarchy: str = "none"
+    serves_subsidiaries: bool = False
+
+
+@dataclass(frozen=True)
+class Person:
+    last: str
+    first: str
+    middle: str
+    post: str
+    phone: str
+
+
+@dataclass(frozen=True)
+class Structure:
+    kind: str
+    company_name: str
+    units: tuple[Unit, ...]
+    posts: tuple[Post, ...]
+    people: tuple[Person, ...]
+    functional_links: tuple[tuple[str, str], ...] = ()
+    managers: dict[str, str] = field(default_factory=dict)  # путь отдела -> должность
+
+
+def _translit(text: str) -> str:
+    table = {
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+        "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+        "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+        "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
+        "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    }
+    return "".join(table.get(ch, ch if ch.isalnum() and ch.isascii() else "")
+                   for ch in text.lower())
+
+
+def email_for(person: Person) -> str:
+    """Служебная почта: фамилия.инициал@htq.kz — общая для всей группы."""
+    return f"{_translit(person.last)}.{_translit(person.first)[:1]}@htq.kz"
+
+
+# ── Холдинг: ТОО «Hi-Tech Group LTD» (стр. 1–2) ──────────────────────────
+_HOLDING = Structure(
+    kind="holding",
+    company_name="Hi-Tech Group LTD",
+    units=(
+        Unit("upr", "Руководство"),
+        Unit("fin", "Дирекция по финансам и экономике", "directorate",
+             "Централизованное управление финансами группы: бюджетирование, "
+             "казначейство, управленческий учёт, контроль расходов и "
+             "обязательств, консолидированная отчётность."),
+        Unit("pto", "Проектно-техническая дирекция", "directorate",
+             "Внутренний проектный центр: инженерно-технические решения, "
+             "расчёты, проектная, рабочая и сметная документация, авторское "
+             "сопровождение."),
+        Unit("ops", "Дирекция по операционной деятельности", "directorate",
+             "Координация и контроль текущей деятельности компаний группы, "
+             "бизнес-процессы, исполнение решений, ресурсы."),
+    ),
+    posts=(
+        Post("Генеральный директор", "upr", 10, 10, "lead",
+             is_manager=True, external_hierarchy="inherit"),
+        Post("Финансовый директор", "fin", 110, 9, "senior", "Генеральный директор",
+             is_manager=True, external_hierarchy="inherit"),
+        Post("Технический директор", "pto", 120, 9, "senior", "Генеральный директор",
+             is_manager=True, external_hierarchy="inherit"),
+        Post("Операционный директор", "ops", 130, 9, "senior", "Генеральный директор",
+             is_manager=True, external_hierarchy="inherit"),
+        Post("Главный бухгалтер", "fin", 610, 8, "middle", "Финансовый директор",
+             serves_subsidiaries=True),
+        Post("Кадровый бухгалтер", "fin", 620, 6, "middle", "Финансовый директор",
+             serves_subsidiaries=True),
+        Post("Экономист-аналитик", "fin", 630, 6, "junior", "Финансовый директор",
+             serves_subsidiaries=True),
+        Post("ГИП", "pto", 640, 8, "middle", "Технический директор",
+             serves_subsidiaries=True),
+        Post("Менеджер ПТО и КК", "pto", 650, 6, "junior", "Технический директор",
+             serves_subsidiaries=True),
+        Post("Менеджер по кадрам", "ops", 660, 7, "senior", "Операционный директор",
+             serves_subsidiaries=True),
+        Post("Менеджер по закупкам", "ops", 670, 6, "junior", "Операционный директор",
+             serves_subsidiaries=True),
+        Post("Системный администратор", "ops", 680, 6, "junior", "Операционный директор",
+             serves_subsidiaries=True),
+    ),
+    people=(
+        Person("Абдрахманов", "Ерлан", "Серикович", "Генеральный директор", "+7 (700) 100-10-01"),
+        Person("Тулегенов", "Аскар", "Муратович", "Финансовый директор", "+7 (700) 100-20-01"),
+        Person("Ким", "Светлана", "Юрьевна", "Главный бухгалтер", "+7 (700) 100-20-02"),
+        Person("Досжанова", "Аружан", "Ерлановна", "Кадровый бухгалтер", "+7 (700) 100-20-03"),
+        Person("Сейткали", "Айдана", "Нурлановна", "Экономист-аналитик", "+7 (700) 100-20-04"),
+        Person("Нурсеитов", "Данияр", "Маратович", "Технический директор", "+7 (700) 100-30-01"),
+        Person("Байжанов", "Кайрат", "Ерболович", "ГИП", "+7 (700) 100-30-02"),
+        Person("Садыков", "Арман", "Болатович", "Менеджер ПТО и КК", "+7 (700) 100-30-03"),
+        Person("Ким", "Виктор", "Андреевич", "Операционный директор", "+7 (700) 100-40-01"),
+        Person("Сулейменова", "Динара", "Кайратовна", "Менеджер по кадрам", "+7 (700) 100-40-02"),
+        Person("Дюсенов", "Марат", "Жомартович", "Менеджер по закупкам", "+7 (700) 100-40-03"),
+        Person("Абишев", "Нурбол", "Талгатович", "Системный администратор", "+7 (700) 100-40-04"),
+    ),
+    # Пунктирные горизонтальные связи стр. 2, слева направо.
+    functional_links=(
+        ("Главный бухгалтер", "ГИП"),
+        ("ГИП", "Менеджер по кадрам"),
+        ("Менеджер ПТО и КК", "Менеджер по закупкам"),
+    ),
+    managers={"upr": "Генеральный директор", "fin": "Финансовый директор",
+              "pto": "Технический директор", "ops": "Операционный директор"},
+)
+
+# ── ТОО «HI-TECH QAZAQSTAN», строительная (стр. 3) ───────────────────────
+# «Генеральный» зачёркнуто — «Директор». N-4: два названных блока и один
+# пустой; пустой не сеется (вопрос руководству, roadmap §8.3).
+_HTQ = Structure(
+    kind="construction",
+    company_name="Hi-Tech Qazaqstan",
+    units=(
+        Unit("upr", "Руководство"),
+        Unit("stroy", "Строительство",
+             description="Работы на объектах. Путь читает seed_tasks_demo."),
+    ),
+    posts=(
+        Post("Директор", "upr", 10, 10, "lead", is_manager=True),
+        Post("Руководитель проекта", "stroy", 110, 8, "senior", "Директор", is_manager=True),
+        Post("Начальник участка", "stroy", 610, 7, "middle", "Руководитель проекта"),
+        Post("Инженер по ОТ и ТБ", "stroy", 620, 5, "junior", "Руководитель проекта"),
+    ),
+    people=(
+        Person("Исаев", "Тимур", "Русланович", "Директор", "+7 (701) 200-10-01"),
+        Person("Оспанов", "Бекзат", "Асхатович", "Руководитель проекта", "+7 (701) 200-20-01"),
+        Person("Жумабеков", "Асхат", "Нурланович", "Начальник участка", "+7 (701) 200-20-02"),
+        Person("Ткаченко", "Сергей", "Павлович", "Инженер по ОТ и ТБ", "+7 (701) 200-20-03"),
+    ),
+    managers={"upr": "Директор", "stroy": "Руководитель проекта"},
+)
+
+# ── ТОО «HI-TECH SYSTEMS», IT (стр. 4) — все трое подчинены директору ─────
+_HTS = Structure(
+    kind="it",
+    company_name="Hi-Tech Systems",
+    units=(Unit("upr", "Руководство"), Unit("dev", "Разработка")),
+    posts=(
+        Post("Директор", "upr", 10, 10, "lead", is_manager=True),
+        Post("Senior Full-stack developer", "dev", 110, 8, "senior", "Директор"),
+        Post("Middle Full-stack developer", "dev", 310, 6, "middle", "Директор"),
+        Post("Junior Full-stack developer", "dev", 610, 4, "junior", "Директор"),
+    ),
+    people=(
+        Person("Волков", "Дмитрий", "Олегович", "Директор", "+7 (702) 300-10-01"),
+        Person("Ли", "Александр", "Витальевич", "Senior Full-stack developer", "+7 (702) 300-20-01"),
+        Person("Мукашев", "Нурлан", "Кайратович", "Middle Full-stack developer", "+7 (702) 300-20-02"),
+        Person("Шевченко", "Ольга", "Ивановна", "Junior Full-stack developer", "+7 (702) 300-20-03"),
+    ),
+    managers={"upr": "Директор"},
+)
+
+# ── ТОО «KAZAKHSTAN ENGINEERING GROUP», сервисная (стр. 5) ───────────────
+_KEG = Structure(
+    kind="service",
+    company_name="Kazakhstan Engineering Group",
+    units=(Unit("upr", "Руководство"), Unit("ops", "Эксплуатация")),
+    posts=(
+        Post("Директор", "upr", 10, 10, "lead", is_manager=True),
+        Post("Диспетчер", "ops", 310, 5, "middle", "Директор"),
+        Post("Механик", "ops", 610, 5, "junior", "Директор"),
+        Post("Водитель-оператор", "ops", 620, 4, "junior", "Директор"),
+    ),
+    people=(
+        Person("Ахметова", "Айгуль", "Талгатовна", "Директор", "+7 (705) 400-10-01"),
+        Person("Копылова", "Наталья", "Сергеевна", "Диспетчер", "+7 (705) 400-20-01"),
+        Person("Петров", "Игорь", "Николаевич", "Механик", "+7 (705) 400-20-02"),
+        Person("Ерсултанова", "Жанар", "Бахытовна", "Водитель-оператор", "+7 (705) 400-20-03"),
+    ),
+    managers={"upr": "Директор"},
+)
+
+STRUCTURES: dict[str, Structure] = {s.kind: s for s in (_HOLDING, _HTQ, _HTS, _KEG)}
+
+
+def structure_for(kind: str) -> Structure:
+    try:
+        return STRUCTURES[kind]
+    except KeyError:
+        raise UnknownStructure(
+            f"Для вида компании {kind!r} утверждённой оргструктуры нет "
+            f"(есть: {', '.join(sorted(STRUCTURES))})."
+        ) from None
