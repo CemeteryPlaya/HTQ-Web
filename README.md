@@ -376,11 +376,15 @@ listenIp и пустым announced SFU падает на старте намер
 ../.venv/Scripts/python.exe manage.py migrate
 ../.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]
 ../.venv/Scripts/python.exe manage.py ensure_buckets            # идемпотентное создание бакетов S3
-../.venv/Scripts/python.exe manage.py seed_hr_demo              # демо-данные HR
-../.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]
+../.venv/Scripts/python.exe manage.py seed_hr_demo [--company SLUG]   # оргструктура документа 10.09.2026 по виду компании; без флага — HTQ в текущий search_path
+../.venv/Scripts/python.exe manage.py seed_employee_accounts [--company SLUG]
+../.venv/Scripts/python.exe manage.py seed_tasks_demo [--company SLUG] [--purge|--wipe|--wipe-only]
+../.venv/Scripts/python.exe manage.py seed_group_demo [--skip-tasks]   # стенд группы: 4 компании, структуры, учётки, членства, задачи HTQ
 ../.venv/Scripts/python.exe manage.py run_imap_idle             # live-push корпоративной почты
 ../.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]
 ```
+
+`seed_group_demo` — единственный способ увидеть группу локально: заводит `hi-tech-group` (холдинг) и три ДО с родителем, в каждой сеет утверждённую оргструктуру, заводит учётки (`demo12345`), выдаёт членства сотрудникам своей компании и обслуживающим должностям холдинга (блок C), наполняет задачи HTQ. Идемпотентна. Только локальная БД.
 
 `seed_tasks_demo` заполняет всю пятиуровневую иерархию (проект → площадка → блок → роудмап →
 задача) плюс объёмы, потребности в ресурсах и датированные ежедневные отчёты; ему нужен
