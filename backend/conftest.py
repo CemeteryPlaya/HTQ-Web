@@ -160,6 +160,16 @@ def _truncate_schema(schema: str) -> None:
         tables = [row[0] for row in cur.fetchall()]
     if not tables:
         return
+    # Django создаёт FK-констрейнты на Postgres как DEFERRABLE INITIALLY
+    # DEFERRED — проверка откладывается до COMMIT, которого внутри теста не
+    # будет (откат в конце). Циклическая связь вроде Department.manager ->
+    # Employee оставляет в очереди непроверенное событие триггера, и
+    # TRUNCATE той же таблицы в этой же транзакции падает с «cannot TRUNCATE
+    # ... because it has pending trigger events». check_constraints()
+    # форсирует проверку сейчас (тот же приём, что у
+    # TransactionTestCase._fixture_teardown) и возвращает режим обратно в
+    # DEFERRED — так же поступают штатные механизмы Django.
+    connection.check_constraints()
     with connection.cursor() as cur:
         target = sql.SQL(", ").join(sql.Identifier(schema, t) for t in tables)
         cur.execute(sql.SQL("TRUNCATE {} CASCADE").format(target))

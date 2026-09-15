@@ -143,6 +143,18 @@ def default_company_slug(user_id: int) -> str | None:
     return row
 
 
+def schema_exists(slug: str) -> bool:
+    """Есть ли у компании ФИЗИЧЕСКАЯ схема.
+
+    Строка реестра и схема — разные факты (осиротевшая строка после
+    неудачного отката ``company_create``, см. CLAUDE.md). ``SET search_path``
+    молча принимает несуществующую схему, и запросы уходят в ``public`` —
+    поэтому команда, входящая в схему по slug, обязана спросить это до входа.
+    """
+    from apps.companies.services import schema_service
+    return schema_service.schema_exists(slug)
+
+
 def module_enabled(slug: str, app_label: str) -> tuple[bool, str]:
     """Включён ли модуль у компании. Отсутствие строки означает «включён»."""
     def produce():

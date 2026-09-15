@@ -1,13 +1,16 @@
-"""Команда наполнения HR демо-данными.
+"""Команда наполнения HR демо-данными — четыре оргструктуры документа.
 
 Наполнение — такой же код, как остальной: если оно молча перестанет
 связывать сотрудника с отделом его должности или дублировать записи при
 повторном запуске, локальная база начнёт врать, а по ней потом смотрят
 глазами и делают выводы.
 
-Отдельно проверяется защита от неместной БД: команда пишет в четыре
-таблицы, а ``DB_HOST`` по умолчанию приходит из корневого ``.env``, где
-стоит боевой адрес.
+Без ``--company`` команда сеет структуру HTQ в текущий ``search_path``
+(режим перехода: единственная компания — HTQ). С ``--company`` — входит в
+схему компании и сеет структуру её ``kind``.
+
+Отдельно проверяется защита от неместной БД: ``DB_HOST`` по умолчанию
+приходит из корневого ``.env``, где стоит боевой адрес.
 """
 
 from __future__ import annotations
@@ -16,164 +19,178 @@ import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
 
-from apps.hr.models import Department, Employee, LevelThreshold, Position
+from apps.hr.management import group_structures as gs
+from apps.hr.models import (
+    Department, Employee, LevelThreshold, Position, ReportingRelation,
+    StaffingPosition,
+)
 
 
 def _seed(**kwargs):
     call_command("seed_hr_demo", verbosity=0, **kwargs)
 
 
+HTQ = gs.STRUCTURES["construction"]
+
+
 @pytest.mark.django_db
-def test_seed_creates_the_whole_chain():
+def test_seed_without_company_is_the_construction_structure():
     _seed()
-    assert LevelThreshold.objects.count() == 5
-    assert Department.objects.count() >= 8
-    assert Position.objects.count() >= 23
-    assert Employee.objects.count() >= 24
+    assert LevelThreshold.objects.count() == 4
+    assert set(Department.objects.values_list("path", flat=True)) == {"upr", "stroy"}
+    assert set(Position.objects.values_list("title", flat=True)) == {p.title for p in HTQ.posts}
+    assert Employee.objects.count() == 4
+    assert ReportingRelation.objects.filter(relation_type="direct").count() == 3
+    assert StaffingPosition.objects.count() == 4
+    assert all(line.headcount == 1 for line in StaffingPosition.objects.all())
 
 
 @pytest.mark.django_db
 def test_seed_is_idempotent():
-    """Второй запуск правит на месте, а не плодит копии."""
     _seed()
-    counts = (
-        LevelThreshold.objects.count(),
-        Department.objects.count(),
-        Position.objects.count(),
-        Employee.objects.count(),
-    )
+    counts = (LevelThreshold.objects.count(), Department.objects.count(),
+              Position.objects.count(), Employee.objects.count(),
+              ReportingRelation.objects.count(), StaffingPosition.objects.count())
     _seed()
-    assert (
-        LevelThreshold.objects.count(),
-        Department.objects.count(),
-        Position.objects.count(),
-        Employee.objects.count(),
-    ) == counts
+    assert (LevelThreshold.objects.count(), Department.objects.count(),
+            Position.objects.count(), Employee.objects.count(),
+            ReportingRelation.objects.count(), StaffingPosition.objects.count()) == counts
 
 
 @pytest.mark.django_db
-def test_levels_cover_every_seeded_position():
-    """Ни одна должность не должна попасть в запасной уровень.
-
-    Пороги считаются из веса; должность вне всех диапазонов молча получает
-    ``_DEFAULT_LEVEL = 5``, и иерархия схлопывается. Ровно в этом состоянии
-    и была локальная база до наполнения: 22 должности, 0 порогов.
-    """
+def test_no_position_falls_into_the_default_level():
     _seed()
-    thresholds = list(LevelThreshold.objects.order_by("level_number"))
-
-    for position in Position.objects.all():
-        matching = [t for t in thresholds
-                    if t.weight_from <= position.weight <= t.weight_to]
-        assert matching, (
-            f"вес {position.weight} должности «{position.title}» "
-            f"не попадает ни в один порог"
-        )
-        assert position.level == matching[0].level_number
+    for pos in Position.objects.all():
+        assert pos.level == gs.level_for(pos.weight), pos.title
+        assert pos.level != 5
 
 
 @pytest.mark.django_db
-def test_level_ranges_do_not_overlap():
-    """Пересечение диапазонов сделало бы уровень неоднозначным."""
+def test_seed_retires_foreign_levels_and_recomputes_cached_levels():
+    """Старый пятиуровневый сид на dev-базе: L5 (900–1999) пересёкся бы с
+    N-4, а кэш уровня у старых должностей остался бы прежним."""
+    dep = Department.objects.create(name="Старый", path="old")
+    LevelThreshold.objects.create(level_number=5, weight_from=900, weight_to=1999)
+    stale = Position.objects.create(title="Старая должность", department=dep,
+                                    weight=950, level=5)
     _seed()
-    ranges = list(
-        LevelThreshold.objects.order_by("weight_from")
-        .values_list("weight_from", "weight_to")
-    )
-    for (_, prev_to), (next_from, _) in zip(ranges, ranges[1:]):
-        assert prev_to < next_from, f"диапазоны пересекаются: {prev_to} >= {next_from}"
-
-
-@pytest.mark.django_db
-def test_every_level_actually_has_positions():
-    """Пустой уровень — признак того, что веса и пороги разъехались."""
-    _seed()
-    for threshold in LevelThreshold.objects.all():
-        assert Position.objects.filter(level=threshold.level_number).exists(), (
-            f"на уровне L{threshold.level_number} нет ни одной должности"
-        )
+    assert not LevelThreshold.objects.filter(level_number=5).exists()
+    stale.refresh_from_db()
+    assert stale.level == 4
 
 
 @pytest.mark.django_db
 def test_employee_department_always_matches_their_position():
-    """Ключевой инвариант наполнения.
-
-    Отдел сотрудника берётся у его должности, а не задаётся отдельно —
-    иначе связка «человек → должность → отдел» разъезжается, и отчёты по
-    отделам начинают считать людей не там.
-    """
     _seed()
-    mismatched = [
-        e.email
-        for e in Employee.objects.select_related("position")
-        if e.department_id != e.position.department_id
-    ]
+    mismatched = [e.email for e in Employee.objects.select_related("position")
+                  if e.department_id != e.position.department_id]
     assert mismatched == []
 
 
 @pytest.mark.django_db
-def test_every_seeded_department_has_people_and_a_manager():
+def test_department_managers_work_in_their_own_department():
     _seed()
-    seeded_paths = ["upr", "stroy", "stroy.elektro", "proekt", "snab",
-                    "hr", "fin", "it"]
-    for path in seeded_paths:
+    for path, title in HTQ.managers.items():
         dept = Department.objects.get(path=path)
-        assert dept.employees.exists(), f"отдел {path} пуст"
-        assert dept.manager_id is not None, f"у отдела {path} нет руководителя"
-        # Руководитель обязан работать в своём отделе, а не в соседнем.
+        assert dept.manager is not None, path
+        assert dept.manager.position.title == title
         assert dept.manager.department_id == dept.id
 
 
 @pytest.mark.django_db
-def test_positions_carry_an_explicit_hr_level():
-    """Явная матрица прав приоритетнее эвристики по названию должности
-    (apps/hr/access.py). Без неё уровень доступа кадровика зависел бы от
-    того, угадалось ли в заголовке слово «кадр»."""
+def test_direct_relations_follow_the_document():
     _seed()
-    seeded = Position.objects.filter(permissions__isnull=False)
-    assert seeded.count() >= 23
-    for position in seeded:
-        assert position.permissions.get("hr_level") in {
-            "junior", "middle", "senior", "lead",
-        }
+    by_title = {p.title: p for p in Position.objects.all()}
+    for post in HTQ.posts:
+        if post.reports_to is None:
+            assert not ReportingRelation.objects.filter(
+                subordinate_position=by_title[post.title]).exists()
+            continue
+        assert ReportingRelation.objects.filter(
+            superior_position=by_title[post.reports_to],
+            subordinate_position=by_title[post.title],
+            relation_type="direct",
+        ).exists(), post.title
+
+
+@pytest.mark.django_db
+def test_block_b_and_c_flags_come_from_the_structure():
+    _seed()
+    director = Position.objects.get(title="Директор")
+    assert director.is_manager is True
+    assert director.external_hierarchy == "none"
+    assert not Position.objects.filter(serves_subsidiaries=True).exists()
+
+
+@pytest.mark.django_db
+def test_positions_carry_an_explicit_hr_level():
+    _seed()
+    for pos in Position.objects.all():
+        assert pos.permissions["hr_level"] in {"junior", "middle", "senior", "lead"}, pos.title
 
 
 @pytest.mark.django_db
 def test_phones_use_the_platform_mask():
-    """Телефоны — в том же виде, который отдаёт PhoneInput. Данные, не
-    совпадающие с форматом форм, обесценивают проверку глазами."""
-    _seed()
     import re
-
-    mask = re.compile(r"^\+7 \(7\d{2}\) \d{3}-\d{2}-\d{2}$")
-    for employee in Employee.objects.exclude(phone__isnull=True).exclude(phone=""):
-        assert mask.match(employee.phone), (
-            f"{employee.email}: телефон «{employee.phone}» не по маске"
-        )
-
-
-@pytest.mark.django_db
-def test_weights_are_unique():
-    """weight глобально уникален; коллизия уронила бы наполнение на 409."""
     _seed()
-    weights = list(Position.objects.values_list("weight", flat=True))
-    assert len(weights) == len(set(weights))
+    mask = re.compile(r"^\+7 \(7\d\d\) \d{3}-\d\d-\d\d$")
+    for e in Employee.objects.all():
+        assert mask.match(e.phone), e.phone
 
 
-@pytest.mark.django_db
-def test_purge_removes_e2e_leftovers_only():
-    """Очистка не должна задевать боевые (сидированные) записи."""
-    _seed()
-    dept = Department.objects.create(name="E2E отдел мусор", path="e2e-junk")
-    Position.objects.create(title="E2E должность мусор", department=dept,
-                            weight=4_242_424)
-    before_real = Position.objects.filter(title="Генеральный директор").count()
+# ── --company ────────────────────────────────────────────────────────────
 
-    _seed(purge_e2e=True)
+def test_company_option_seeds_the_structure_of_its_kind(company_schema):
+    """Фикстура заводит компанию kind=service → структура KEG, в её схеме."""
+    from htqweb.tenancy.db import use_company
 
-    assert not Position.objects.filter(title__startswith="E2E ").exists()
-    assert not Department.objects.filter(name__startswith="E2E ").exists()
-    assert Position.objects.filter(title="Генеральный директор").count() == before_real
+    _seed(company=company_schema["slug"])
+    with use_company(company_schema["slug"]):
+        assert set(Position.objects.values_list("title", flat=True)) == {
+            "Директор", "Диспетчер", "Механик", "Водитель-оператор"}
+        assert set(LevelThreshold.objects.values_list("level_number", flat=True)) == {1, 2, 3, 4}
+    # public не тронут.
+    assert Position.objects.count() == 0
+
+
+def test_holding_structure_sets_serving_and_managing_flags(company_schema):
+    from django.core.cache import cache
+
+    from apps.companies.models import Company
+    from htqweb.tenancy.db import use_company
+
+    Company.objects.filter(slug=company_schema["slug"]).update(kind="holding")
+    cache.clear()  # get_company кэширует 5 с
+    _seed(company=company_schema["slug"])
+    with use_company(company_schema["slug"]):
+        assert Position.objects.filter(serves_subsidiaries=True).count() == 8
+        assert Position.objects.filter(is_manager=True, external_hierarchy="inherit").count() == 4
+        assert Department.objects.filter(unit_type="directorate").count() == 3
+        assert ReportingRelation.objects.filter(relation_type="functional").count() == 3
+        assert ReportingRelation.objects.filter(relation_type="direct").count() == 11
+
+
+def test_company_option_rejects_unknown_company(db):
+    with pytest.raises(CommandError, match="не найдена"):
+        _seed(company="t-no-such-company")
+
+
+def test_company_option_rejects_a_company_without_schema(db):
+    from apps.companies.models import Company, CompanyKind
+    Company.objects.create(slug="t-orphan", name="Сирота", kind=CompanyKind.SERVICE)
+    with pytest.raises(CommandError, match="схем"):
+        _seed(company="t-orphan")
+
+
+def test_company_option_rejects_legacy_regional_kind(company_schema):
+    from django.core.cache import cache
+
+    from apps.companies.models import Company
+
+    Company.objects.filter(slug=company_schema["slug"]).update(kind="regional")
+    cache.clear()
+    with pytest.raises(CommandError, match="regional"):
+        _seed(company=company_schema["slug"])
 
 
 # --- защита от неместной БД -------------------------------------------------
@@ -191,6 +208,30 @@ def _guard(host: str, *, force: bool = False) -> None:
 
     command = Command()
     command._assert_local(force, host=host)
+
+
+@pytest.mark.django_db
+def test_purge_removes_e2e_leftovers_only():
+    """Очистка не должна задевать боевые (сидированные) записи.
+
+    Опорная должность — «Директор» (глава HTQ по документу), а не
+    «Генеральный директор» прежней структуры: с несуществующим названием
+    утверждение выродилось бы в 0 == 0 и тест молча перестал бы что-либо
+    проверять.
+    """
+    _seed()
+    dept = Department.objects.create(name="E2E отдел мусор", path="e2e-junk")
+    Position.objects.create(title="E2E должность мусор", department=dept,
+                            weight=4_242_424)
+    before_real = Position.objects.filter(title="Директор").count()
+    assert before_real == 1, "опорная должность обязана существовать до очистки"
+
+    _seed(purge_e2e=True)
+
+    assert not Position.objects.filter(title__startswith="E2E ").exists()
+    assert not Department.objects.filter(name__startswith="E2E ").exists()
+    assert Position.objects.filter(title="Директор").count() == before_real
+    assert Employee.objects.count() == 4, "засеянные сотрудники не должны исчезнуть"
 
 
 @pytest.mark.parametrize("host", ["203.0.113.10", "db.example.com", "10.8.0.4"])

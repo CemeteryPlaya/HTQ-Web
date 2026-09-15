@@ -1,4 +1,10 @@
-"""Наполнение HR демонстрационными данными: уровни, отделы, должности, люди.
+"""Наполнение HR демонстрационными данными: одна из четырёх утверждённых
+оргструктур группы (документ 10.09.2026, `apps/hr/management/group_structures.py`).
+
+Без ``--company`` — структура HTQ (`construction`) в текущий ``search_path``
+(режим перехода: пока единственная компания — HTQ). С ``--company SLUG`` —
+команда входит в схему этой компании и сеет структуру, соответствующую её
+``Company.kind`` (holding/construction/it/service).
 
 ТОЛЬКО ДЛЯ ЛОКАЛЬНОЙ БАЗЫ. Команда отказывается работать, если ``DB_HOST``
 похож на удалённый хост, — см. ``_assert_local``. Боевую схему наполняют
@@ -8,17 +14,16 @@
 читаемым. Всё через ``update_or_create`` по естественному ключу, поэтому
 второй запуск ничего не дублирует, а правит на месте.
 
-**Порядок здесь не косметика.** Уровни идут первыми, потому что
-``Position.level`` — кэш, который считается из ``LevelThreshold`` по весу
-должности. Если порогов нет, каждая должность молча получает запасной
-уровень 5 (``position_service._DEFAULT_LEVEL``), и вся иерархия
-схлопывается в один ярус. Именно в таком состоянии и была локальная база:
-22 должности, 0 порогов.
-
-Отделы идут раньше должностей (FK), должности раньше сотрудников
-(``Employee.department``/``position`` — оба ``PROTECT NOT NULL``), а
-руководители отделов проставляются последними: ``Department.manager``
-ссылается на ``Employee``, которого до этого шага ещё нет.
+**Порядок шагов не косметика**: уровни → отделы → должности → люди →
+руководители → подчинение → штатное расписание. Уровни идут первыми,
+потому что ``Position.level`` — кэш, который считается из
+``LevelThreshold`` по весу должности; без порогов должность молча получает
+запасной уровень (``position_service._DEFAULT_LEVEL``), и иерархия
+схлопывается в один ярус. Отделы идут раньше должностей (FK), должности
+раньше сотрудников (``Employee.department``/``position`` — оба ``PROTECT
+NOT NULL``), а руководители отделов проставляются после сотрудников:
+``Department.manager`` ссылается на ``Employee``, которого до этого шага
+ещё нет.
 """
 
 from __future__ import annotations
@@ -29,154 +34,32 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from apps.hr.models import Department, Employee, LevelThreshold, Position
+from apps.hr.management import group_structures as gs
+from apps.hr.models import (
+    Department, Employee, LevelThreshold, Position, ReportingRelation,
+    StaffingPosition,
+)
+from apps.hr.services.position_service import _DEFAULT_LEVEL
 
-# ── уровни должностей ───────────────────────────────────────────────────
-#
-# Меньший вес = выше в иерархии (0 — верх). Диапазоны не пересекаются:
-# LevelThreshold несёт CHECK на weight_from <= weight_to, а сервис
-# дополнительно отвергает пересечения (ThresholdRangeOverlap).
-LEVELS = [
-    (1, 0, 99, "Руководство компании", "#7c3aed"),
-    (2, 100, 299, "Руководители направлений", "#2563eb"),
-    (3, 300, 599, "Руководители отделов", "#0891b2"),
-    (4, 600, 899, "Ведущие специалисты", "#059669"),
-    (5, 900, 1999, "Специалисты", "#64748b"),
-]
-
-# ── отделы ──────────────────────────────────────────────────────────────
-#
-# ``path`` — строковый путь, предки вычисляются как префиксы (см.
-# interface.org_ancestors). Родитель обязан идти раньше ребёнка.
-DEPARTMENTS = [
-    ("Руководство", "upr", None),
-    ("Строительство", "stroy", "Работы на объектах: земляные, общестроительные, монтаж."),
-    ("Электромонтаж", "stroy.elektro", "DC/AC, подстанции и ВЛ."),
-    ("Проектирование", "proekt", "Рабочая документация и авторский надзор."),
-    ("Снабжение", "snab", "Закупки, склад, логистика на объекты."),
-    ("Отдел кадров", "hr", "Кадровое администрирование и подбор."),
-    ("Финансы", "fin", "Бухгалтерия и финансовое планирование."),
-    ("ИТ", "it", "Инфраструктура и внутренние системы."),
-]
-
-# ── должности ───────────────────────────────────────────────────────────
-#
-# (название, путь отдела, вес, grade, hr_level)
-# ``hr_level`` кладётся в ``Position.permissions`` — явная матрица приоритетнее
-# эвристики по названию должности (apps/hr/access.py), поэтому кадровик
-# получает свой доступ из данных, а не из того, что в названии угадалось
-# слово «кадр».
-POSITIONS = [
-    ("Генеральный директор", "upr", 10, 10, "lead"),
-    ("Заместитель генерального директора", "upr", 50, 9, "lead"),
-
-    ("Директор по строительству", "stroy", 120, 9, "senior"),
-    ("Начальник участка", "stroy", 320, 7, "middle"),
-    ("Прораб", "stroy", 620, 6, "middle"),
-    ("Мастер СМР", "stroy", 920, 5, "junior"),
-    ("Инженер ПТО", "stroy", 940, 5, "junior"),
-
-    ("Главный энергетик", "stroy.elektro", 340, 8, "middle"),
-    ("Ведущий инженер-электрик", "stroy.elektro", 640, 6, "junior"),
-    ("Электромонтажник", "stroy.elektro", 960, 4, "junior"),
-
-    ("Главный инженер проекта", "proekt", 150, 9, "senior"),
-    ("Ведущий проектировщик", "proekt", 660, 6, "junior"),
-    ("Инженер-проектировщик", "proekt", 980, 5, "junior"),
-
-    ("Начальник отдела снабжения", "snab", 360, 7, "middle"),
-    ("Специалист по закупкам", "snab", 1000, 4, "junior"),
-
-    ("Директор по персоналу", "hr", 160, 9, "lead"),
-    ("Менеджер по персоналу", "hr", 380, 6, "senior"),
-    ("Специалист отдела кадров", "hr", 1020, 4, "middle"),
-
-    ("Финансовый директор", "fin", 170, 9, "senior"),
-    ("Главный бухгалтер", "fin", 400, 8, "middle"),
-    ("Бухгалтер", "fin", 1040, 4, "junior"),
-
-    ("Руководитель ИТ", "it", 420, 7, "middle"),
-    ("Системный администратор", "it", 1060, 5, "junior"),
-]
-
-# ── сотрудники ──────────────────────────────────────────────────────────
-#
-# (фамилия, имя, отчество, должность, телефон)
-# Телефоны — ровно в формате, который отдаёт PhoneInput: +7 (7XX) XXX-XX-XX.
-EMPLOYEES = [
-    ("Абдрахманов", "Ерлан", "Серикович", "Генеральный директор", "+7 (700) 100-10-01"),
-    ("Ким", "Виктор", "Андреевич", "Заместитель генерального директора", "+7 (700) 100-10-02"),
-
-    ("Нурсеитов", "Данияр", "Маратович", "Директор по строительству", "+7 (701) 200-20-01"),
-    ("Исаев", "Тимур", "Русланович", "Начальник участка", "+7 (701) 200-20-02"),
-    ("Оспанов", "Бекзат", "Асхатович", "Прораб", "+7 (701) 200-20-03"),
-    ("Жумабеков", "Асхат", "Нурланович", "Прораб", "+7 (701) 200-20-04"),
-    ("Ткаченко", "Сергей", "Павлович", "Мастер СМР", "+7 (701) 200-20-05"),
-    ("Садыков", "Арман", "Болатович", "Инженер ПТО", "+7 (701) 200-20-06"),
-
-    ("Ли", "Александр", "Витальевич", "Главный энергетик", "+7 (702) 300-30-01"),
-    ("Мукашев", "Нурлан", "Кайратович", "Ведущий инженер-электрик", "+7 (702) 300-30-02"),
-    ("Петров", "Игорь", "Николаевич", "Электромонтажник", "+7 (702) 300-30-03"),
-
-    ("Байжанов", "Кайрат", "Ерболович", "Главный инженер проекта", "+7 (705) 400-40-01"),
-    ("Шевченко", "Ольга", "Ивановна", "Ведущий проектировщик", "+7 (705) 400-40-02"),
-    ("Ахметова", "Айгуль", "Талгатовна", "Инженер-проектировщик", "+7 (705) 400-40-03"),
-
-    ("Дюсенов", "Марат", "Жомартович", "Начальник отдела снабжения", "+7 (707) 500-50-01"),
-    ("Копылова", "Наталья", "Сергеевна", "Специалист по закупкам", "+7 (707) 500-50-02"),
-
-    ("Сулейменова", "Динара", "Кайратовна", "Директор по персоналу", "+7 (708) 600-60-01"),
-    ("Ерсултанова", "Жанар", "Бахытовна", "Менеджер по персоналу", "+7 (708) 600-60-02"),
-    ("Романова", "Елена", "Андреевна", "Специалист отдела кадров", "+7 (708) 600-60-03"),
-
-    ("Тулегенов", "Аскар", "Муратович", "Финансовый директор", "+7 (747) 700-70-01"),
-    ("Ким", "Светлана", "Юрьевна", "Главный бухгалтер", "+7 (747) 700-70-02"),
-    ("Досжанова", "Аружан", "Ерлановна", "Бухгалтер", "+7 (747) 700-70-03"),
-
-    ("Волков", "Дмитрий", "Олегович", "Руководитель ИТ", "+7 (771) 800-80-01"),
-    ("Абишев", "Нурбол", "Талгатович", "Системный администратор", "+7 (771) 800-80-02"),
-]
-
-# Руководители отделов: путь отдела -> должность руководителя.
-# Ставится последним шагом — Department.manager ссылается на Employee.
-MANAGERS = {
-    "upr": "Генеральный директор",
-    "stroy": "Директор по строительству",
-    "stroy.elektro": "Главный энергетик",
-    "proekt": "Главный инженер проекта",
-    "snab": "Начальник отдела снабжения",
-    "hr": "Директор по персоналу",
-    "fin": "Финансовый директор",
-    "it": "Руководитель ИТ",
-}
-
-
-def _translit(text: str) -> str:
-    """Фамилия -> латиница для служебного e-mail."""
-    table = {
-        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
-        "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
-        "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
-        "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
-        "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
-    }
-    return "".join(table.get(ch, ch if ch.isalnum() and ch.isascii() else "")
-                   for ch in text.lower())
+# Дата документа: с неё «действуют» связи подчинения.
+STRUCTURE_EFFECTIVE_FROM = dt.date(2026, 9, 10)
 
 
 class Command(BaseCommand):
-    help = ("Наполняет HR демо-данными: уровни должностей, отделы, должности, "
-            "сотрудники. Идемпотентно. Только для локальной БД.")
+    help = ("Наполняет HR демо-данными одну из четырёх утверждённых оргструктур "
+            "группы (документ 10.09.2026). Идемпотентно. Только для локальной БД.")
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--force-remote", action="store_true",
-            help="Снять защиту от неместной БД. Не используйте.",
+            "--company", dest="company", default=None,
+            help="slug компании: войти в её схему и засеять структуру её вида "
+                 "(holding/construction/it/service). Без флага — структура "
+                 "HTQ в текущий search_path (режим перехода).",
         )
-        parser.add_argument(
-            "--purge-e2e", action="store_true",
-            help="Сначала удалить следы E2E-прогонов (префиксы «E2E » и «UI »).",
-        )
+        parser.add_argument("--force-remote", action="store_true",
+                            help="Снять защиту от неместной БД. Не используйте.")
+        parser.add_argument("--purge-e2e", action="store_true",
+                            help="Сначала удалить следы E2E-прогонов (префиксы «E2E » и «UI »).")
 
     def _assert_local(self, force: bool, host: str | None = None) -> None:
         """Отказ работать против чего-либо, кроме локальной базы.
@@ -330,120 +213,177 @@ class Command(BaseCommand):
             + (f"; связанное: {detail}" if detail else "")
         )
 
-    @transaction.atomic
     def handle(self, *args, **options):
         self._assert_local(options["force_remote"])
+        slug = options["company"]
+        if slug is None:
+            # Режим перехода (roadmap §3): единственная компания — HTQ, её
+            # таблицы — там, куда указывает текущий search_path.
+            self._run(gs.structure_for("construction"), options)
+            return
+
+        from apps.companies import interface as companies
+
+        company = companies.get_company(slug)
+        if company is None:
+            raise CommandError(f"Компания {slug!r} не найдена в реестре.")
+        if not companies.schema_exists(slug):
+            raise CommandError(
+                f"У компании {slug!r} нет схемы Postgres — SET search_path принял "
+                f"бы её молча и данные ушли бы в public. Заведите схему: "
+                f"manage.py company_create либо migrate_companies --company {slug}."
+            )
+        try:
+            structure = gs.structure_for(company["kind"])
+        except gs.UnknownStructure as exc:
+            raise CommandError(str(exc)) from exc
+
+        from htqweb.tenancy.db import use_company
+
+        with use_company(slug):
+            self.stdout.write(f"Компания {slug} ({company['kind']}): {structure.company_name}")
+            self._run(structure, options)
+
+    @transaction.atomic
+    def _run(self, structure: gs.Structure, options) -> None:
         if options["purge_e2e"]:
             self._purge_e2e()
-
         levels = self._seed_levels()
-        departments = self._seed_departments()
-        positions = self._seed_positions(departments)
-        employees = self._seed_employees(positions)
-        managers = self._seed_managers(departments, positions, employees)
-
+        units = self._seed_units(structure)
+        positions = self._seed_positions(structure, units)
+        employees = self._seed_employees(structure, positions)
+        managers = self._seed_managers(structure, units, positions, employees)
+        relations = self._seed_relations(structure, positions)
+        staffing = self._seed_staffing(positions)
         self.stdout.write(self.style.SUCCESS(
-            f"\nГотово: уровней {levels}, отделов {departments and len(departments)}, "
-            f"должностей {len(positions)}, сотрудников {len(employees)}, "
-            f"руководителей отделов {managers}."
+            f"\nГотово: уровней {levels}, подразделений {len(units)}, должностей "
+            f"{len(positions)}, сотрудников {len(employees)}, руководителей "
+            f"{managers}, связей подчинения {relations}, штатных единиц {staffing}."
         ))
 
     # ── шаги ────────────────────────────────────────────────────────────
 
     def _seed_levels(self) -> int:
         self.stdout.write("Уровни должностей...")
-        for number, w_from, w_to, label, color in LEVELS:
+        for number, w_from, w_to, label, color in gs.LEVELS:
             LevelThreshold.objects.update_or_create(
                 level_number=number,
                 defaults={"weight_from": w_from, "weight_to": w_to,
                           "label": label, "color": color},
             )
-        self.stdout.write(f"  {len(LEVELS)} порогов")
-        return len(LEVELS)
+        # Незаявленные уровни (например L5 старого сида, 900–1999) пересеклись
+        # бы с N-4 и оставили бы кэш уровня у старых должностей стар.
+        retired, _ = LevelThreshold.objects.exclude(
+            level_number__in=[n for n, *_ in gs.LEVELS]).delete()
+        recomputed = 0
+        for pos in Position.objects.all():
+            level = gs.level_for(pos.weight) or _DEFAULT_LEVEL
+            if pos.level != level:
+                Position.objects.filter(pk=pos.pk).update(level=level)
+                recomputed += 1
+        self.stdout.write(f"  {len(gs.LEVELS)} порогов; убрано чужих {retired}, "
+                          f"пересчитано должностей {recomputed}")
+        return len(gs.LEVELS)
 
-    def _seed_departments(self) -> dict[str, Department]:
-        self.stdout.write("Отделы...")
+    def _seed_units(self, structure) -> dict[str, Department]:
+        self.stdout.write("Подразделения...")
         out: dict[str, Department] = {}
-        for name, path, description in DEPARTMENTS:
+        for unit in structure.units:
             dept, _ = Department.objects.update_or_create(
-                path=path,
-                defaults={"name": name, "description": description,
-                          "is_active": True},
+                path=unit.path,
+                defaults={"name": unit.name, "description": unit.description or None,
+                          "unit_type": unit.unit_type, "is_active": True},
             )
-            out[path] = dept
-        self.stdout.write(f"  {len(out)} отделов")
+            out[unit.path] = dept
+        self.stdout.write(f"  {len(out)}")
         return out
 
-    def _seed_positions(self, departments) -> dict[str, Position]:
+    def _seed_positions(self, structure, units) -> dict[str, Position]:
         self.stdout.write("Должности...")
         out: dict[str, Position] = {}
-        for title, dept_path, weight, grade, hr_level in POSITIONS:
-            # level считаем сами, а не полагаемся на пересчёт при записи:
-            # порог уже создан выше, и явное значение делает связь весов и
-            # уровней видимой прямо здесь.
-            level = next(
-                (num for num, w_from, w_to, *_ in LEVELS
-                 if w_from <= weight <= w_to),
-                5,
-            )
+        for post in structure.posts:
+            level = gs.level_for(post.weight)
+            assert level is not None, f"{post.title}: вес {post.weight} вне LEVELS"
             position, _ = Position.objects.update_or_create(
-                title=title,
+                title=post.title,
                 defaults={
-                    "department": departments[dept_path],
-                    "grade": grade,
-                    "weight": weight,
+                    "department": units[post.unit],
+                    "grade": post.grade,
+                    "weight": post.weight,
                     "level": level,
                     "is_active": True,
+                    "is_manager": post.is_manager,
+                    "external_hierarchy": post.external_hierarchy,
+                    "serves_subsidiaries": post.serves_subsidiaries,
                     # Явная матрица приоритетнее эвристики по названию —
                     # см. apps/hr/access.py.
-                    "permissions": {"hr_level": hr_level, "permissions": []},
+                    "permissions": {"hr_level": post.hr_level, "permissions": []},
                 },
             )
-            out[title] = position
-        self.stdout.write(f"  {len(out)} должностей")
+            out[post.title] = position
+        self.stdout.write(f"  {len(out)}")
         return out
 
-    def _seed_employees(self, positions) -> dict[str, Employee]:
+    def _seed_employees(self, structure, positions) -> dict[str, Employee]:
         self.stdout.write("Сотрудники...")
         out: dict[str, Employee] = {}
         hire_base = dt.date.today() - dt.timedelta(days=900)
-        for index, (last, first, middle, title, phone) in enumerate(EMPLOYEES):
-            position = positions[title]
-            email = f"{_translit(last)}.{_translit(first)[:1]}@htq.kz"
+        for index, person in enumerate(structure.people):
+            position = positions[person.post]
             employee, _ = Employee.objects.update_or_create(
-                email=email,
+                email=gs.email_for(person),
                 defaults={
-                    "first_name": first,
-                    "last_name": last,
-                    "middle_name": middle,
-                    "phone": phone,
-                    # Отдел берётся у должности — так связка «сотрудник →
-                    # должность → отдел» не может разъехаться.
-                    "department": position.department,
-                    "position": position,
+                    "first_name": person.first, "last_name": person.last,
+                    "middle_name": person.middle, "phone": person.phone,
+                    # Отдел берётся у должности — связка «сотрудник → должность
+                    # → отдел» не может разъехаться.
+                    "department": position.department, "position": position,
                     "hire_date": hire_base + dt.timedelta(days=index * 21),
-                    "status": "active",
-                    "is_deleted": False,
+                    "status": "active", "is_deleted": False,
                 },
             )
-            out[f"{last} {first}"] = employee
-        self.stdout.write(f"  {len(out)} сотрудников")
+            out[person.post] = employee
+        self.stdout.write(f"  {len(out)}")
         return out
 
-    def _seed_managers(self, departments, positions, employees) -> int:
-        self.stdout.write("Руководители отделов...")
+    def _seed_managers(self, structure, units, positions, employees) -> int:
+        self.stdout.write("Руководители подразделений...")
         count = 0
-        by_position = {}
-        for employee in employees.values():
-            by_position.setdefault(employee.position.title, employee)
-
-        for dept_path, position_title in MANAGERS.items():
-            manager = by_position.get(position_title)
-            dept = departments.get(dept_path)
-            if manager is None or dept is None:
+        for path, title in structure.managers.items():
+            dept, holder = units[path], employees.get(title)
+            if holder is None:
                 continue
-            dept.manager = manager
+            dept.manager = holder
             dept.save(update_fields=["manager", "updated_at"])
             count += 1
-        self.stdout.write(f"  {count} назначено")
+        self.stdout.write(f"  {count}")
         return count
+
+    def _seed_relations(self, structure, positions) -> int:
+        """Вертикали документа — direct, пунктир — functional (по одной строке
+        на пару, слева направо; модель направленная, документ — нет)."""
+        self.stdout.write("Подчинение...")
+        count = 0
+        pairs = [(p.reports_to, p.title, "direct") for p in structure.posts if p.reports_to]
+        pairs += [(a, b, "functional") for a, b in structure.functional_links]
+        for superior, subordinate, kind in pairs:
+            ReportingRelation.objects.update_or_create(
+                superior_position=positions[superior],
+                subordinate_position=positions[subordinate],
+                relation_type=kind,
+                defaults={"effective_from": STRUCTURE_EFFECTIVE_FROM, "effective_to": None},
+            )
+            count += 1
+        self.stdout.write(f"  {count}")
+        return count
+
+    def _seed_staffing(self, positions) -> int:
+        """«1 шт. ед.» у каждой должности документа."""
+        self.stdout.write("Штатное расписание...")
+        for position in positions.values():
+            StaffingPosition.objects.update_or_create(
+                position=position, department=position.department,
+                defaults={"headcount": 1},
+            )
+        self.stdout.write(f"  {len(positions)}")
+        return len(positions)

@@ -99,6 +99,12 @@ def test_fresh_bypasses_the_cache(kz):
     assert interface.active_company_slugs(fresh=True) == ["htq-kz", "htq-uz"]
 
 
+def test_schema_exists_reports_the_physical_schema(company_schema):
+    from apps.companies import interface
+    assert interface.schema_exists(company_schema["slug"]) is True
+    assert interface.schema_exists("t-no-such-company") is False
+
+
 @pytest.mark.django_db
 def test_get_company_exposes_is_active_predicate(kz):
     """Потребитель (например, CompanyContextMiddleware) не должен импортировать
