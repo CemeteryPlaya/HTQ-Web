@@ -31,7 +31,10 @@
 
 from __future__ import annotations
 
+from django.db import transaction
+
 from apps.access.models import PositionRole, ScopeKind
+from apps.core.services import ServiceDisabled
 from htqweb.fallback import fallback
 from htqweb.tenancy.db import use_company
 
@@ -92,12 +95,37 @@ def inherited_role_scopes(user_id: int, company: str) -> dict[int, tuple[str, in
     Область каждой найденной роли — ``(ScopeKind.COMPANY, None)``: сузить её
     до отдела нельзя, у человека нет отдела в чужой компании.
 
-    Кадровый модуль недоступен на каком-то предке (выключен целиком — глобальный
-    рубильник ``ServiceStatus``, единственный, что реально гасит ``hr``: он в
-    ``CORE_MODULES``, и компанейский ``CompanyModule`` его не трогает) →
-    ``fallback(..., expected=True)`` и этот предок пропускается, ровно как
-    ``_position_role_ids`` уже делает для собственной должности — выключенный
-    домен не должен молча снимать права.
+    Чтение карточки предка может не удаться ДВУМЯ разными способами, и они
+    обязаны звучать по-разному, а не литься в один и тот же тихий лог:
+
+    * ``hr`` выключен целиком (глобальный рубильник ``ServiceStatus`` —
+      единственный, что реально гасит ``hr``: он в ``CORE_MODULES``, и
+      компанейский ``CompanyModule`` его не трогает) → ``get_employee_brief``
+      поднимает ``apps.core.services.ServiceDisabled`` — штатная, ожидаемая
+      деградация, ровно как у ``_position_role_ids``. Ловится отдельно и
+      уходит в ``fallback(..., expected=True)``: тихо, уровнем INFO, в
+      отдельной серии счётчика, и алерт на неё намеренно не смотрит
+      (CLAUDE.md, «Среды и политика fallback'ов»).
+    * Любая другая ошибка при чтении — например, ``django.db.DatabaseError``
+      от запроса к несуществующей физической схеме: у компании в реестре
+      может остаться активная строка БЕЗ схемы под ней, если откат
+      ``company_create`` упал ПОСЛЕ того, как схему уже снесли (CLAUDE.md,
+      «Осиротевшая строка реестра после неудачного отката company_create»).
+      ``SET search_path`` на несуществующую схему не падает сам — Postgres
+      молча пропускает отсутствующую схему в пути поиска, — поэтому разлом
+      всплывает только на первом запросе к кадровой таблице. Это НЕ
+      «hr выключен», а порча данных реестра, и должна быть ГРОМКОЙ:
+      ``fallback(..., expected=False)`` — уровень WARNING, отдельная серия
+      счётчика с ``expected="false"``, и именно её слушает алерт. Оба случая
+      всё равно пропускают предка и продолжают обход (fail closed — сломанный
+      предок прав не даёт, но и не мешает подняться выше).
+
+    Оба чтения обёрнуты в собственный ``transaction.atomic()`` (savepoint) —
+    ошибка внутри НЕ должна портить транзакцию вызывающего: без своего
+    savepoint пойманное исключение оставило бы внешнюю транзакцию (если
+    ``_role_scopes`` вызван внутри чужого ``atomic()``) в состоянии отказа, и
+    самый первый следующий запрос вызывающего упал бы с посторонней ошибкой
+    вместо того, чтобы просто не увидеть наследования от одного предка.
 
     ⚠️ ``use_company(A)`` переводит не только ``search_path`` соединения, но и
     контекст компании (``htqweb.tenancy.context``), поэтому
@@ -116,13 +144,26 @@ def inherited_role_scopes(user_id: int, company: str) -> dict[int, tuple[str, in
             continue
 
         try:
-            with use_company(ancestor):
-                brief = hr.get_employee_brief(user_id)
-        except Exception as exc:
+            with transaction.atomic():
+                with use_company(ancestor):
+                    brief = hr.get_employee_brief(user_id)
+        except ServiceDisabled as exc:
+            # Штатная деградация: hr выключен целиком, и это уже видно через
+            # свою собственную метрику/алерт на ServiceStatus. Тихо.
             fallback("access.inheritance.hr_unavailable", None,
                      reason="кадровый модуль недоступен у предка, наследование "
                             "не посчитано", exc=exc, expected=True,
                      user_id=user_id, company=ancestor)
+            continue
+        except Exception as exc:
+            # НЕ hr-рубильник: похоже на порчу данных реестра компаний, а не
+            # на предусмотренную деградацию — должно быть слышно и указывать
+            # на лечение, а не маскироваться под "hr выключен".
+            fallback("access.inheritance.ancestor_schema_unavailable", None,
+                     reason="схема предка недоступна: возможно, осиротевшая "
+                            "строка реестра после неудачного отката "
+                            "company_create, см. CLAUDE.md", exc=exc,
+                     expected=False, user_id=user_id, company=ancestor)
             continue
 
         if brief is None or not brief.get("serves_subsidiaries"):

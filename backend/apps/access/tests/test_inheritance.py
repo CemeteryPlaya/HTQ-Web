@@ -17,6 +17,7 @@ import datetime
 import logging
 
 import pytest
+from django.db import connection, transaction
 
 from apps.access.models import PositionRole, Role, RoleAssignment, ScopeKind
 from apps.access.services import inheritance, resolve
@@ -263,3 +264,67 @@ def test_disabled_hr_module_gives_empty_inheritance_and_logs_fallback(
             assert inheritance.inherited_role_scopes(user.id, subsidiary) == {}
     assert "FALLBACK" in caplog.text
     assert "access.inheritance.hr_unavailable" in caplog.text
+
+
+# ── 9. Разлом схемы предка — code review finding, не «hr выключен» ─────────
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ancestor_schema_fault_alerts_loudly_and_does_not_poison_caller_transaction(
+        user, two_company_schemas, monkeypatch, caplog, fallback_log_mode):
+    """Осиротевшая строка реестра (CLAUDE.md) — НЕ то же самое, что hr --off.
+
+    Настоящую пропавшую физическую схему здесь не воспроизвести: тестовая БД
+    держит ``hr_employee`` прямо в ``public``, и ``SET search_path`` на
+    несуществующую ``co_<slug>`` молча проваливается в ``public``, ничего не
+    роняя. Поэтому ``hr.get_employee_brief`` подменяется на функцию, которая
+    сама бьёт РЕАЛЬНЫМ битым SQL (запрос к несуществующей таблице) в ТОМ ЖЕ
+    соединении — это настоящая, а не сочинённая ``django.db.DatabaseError``,
+    и она по-настоящему переводит текущую транзакцию Postgres в состояние
+    отказа, ровно как это сделал бы запрос к ``hr_employee`` в схеме без
+    физических таблиц.
+
+    ``fallback_log_mode`` (``FALLBACK_MODE=log``) — намеренно: это ПРОДовое
+    поведение подмены (тихое логирование и продолжение обхода). Дефолт
+    settings/test.py — strict, и там ``expected=False`` поднял бы
+    ``FallbackNotAllowed`` вместо лога — здесь проверяется как раз то, что
+    происходит, когда подмена РАЗРЕШЕНА, потому что это и есть то поведение,
+    которое обязано быть слышно на проде.
+    """
+    holding, subsidiary = two_company_schemas
+    _link(subsidiary, holding)
+
+    def _broken_read(_uid):
+        # Настоящий отказ Postgres, не питоновский muляж: транзакция после
+        # этого в состоянии aborted, пока не будет ROLLBACK (или ROLLBACK TO
+        # SAVEPOINT) — ровно то, от чего должен защищать собственный
+        # transaction.atomic() внутри inherited_role_scopes.
+        with connection.cursor() as cur:
+            cur.execute("SELECT * FROM htqweb_test_inheritance_no_such_table")
+        return None  # pragma: no cover — cur.execute всегда падает раньше
+
+    monkeypatch.setattr("apps.hr.interface.get_employee_brief", _broken_read)
+
+    with caplog.at_level(logging.INFO, logger="htqweb.fallback"):
+        with transaction.atomic():
+            # (a) Ни бросить наружу, ни зависнуть — предок просто не даёт
+            # ролей.
+            result = inheritance.inherited_role_scopes(user.id, subsidiary)
+            assert result == {}
+
+            # (c) Транзакция ВЫЗЫВАЮЩЕГО не отравлена: обычный запрос сразу
+            # после — в ТОЙ ЖЕ внешней atomic()-транзакции — обязан пройти,
+            # а не упасть TransactionManagementError из-за прерванной
+            # транзакции. Без собственного savepoint внутри
+            # inherited_role_scopes это исключение здесь и получили бы.
+            assert Company.objects.filter(slug=subsidiary).exists()
+
+    # (b) Слышно и ОТЛИЧИМО от "hr выключен": свой site, уровень WARNING
+    # (а не INFO — это и есть разница между expected=False и expected=True).
+    fault_records = [
+        r for r in caplog.records
+        if "access.inheritance.ancestor_schema_unavailable" in r.getMessage()
+    ]
+    assert len(fault_records) == 1
+    assert fault_records[0].levelname == "WARNING"
+    assert "access.inheritance.hr_unavailable" not in caplog.text
