@@ -31,12 +31,30 @@
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from django.db import transaction
 
 from apps.access.models import PositionRole, ScopeKind
 from apps.core.services import ServiceDisabled
 from htqweb.fallback import fallback
 from htqweb.tenancy.db import use_company
+
+
+class Inherited(NamedTuple):
+    """Результат одного обхода вверх — роли и кто их дал (задача 6 блока C).
+
+    ``sources`` — слаги предков, чья обслуживающая должность фактически
+    прибавила хоть одну роль в ``scopes``; предок с обслуживающей должностью
+    без единой назначенной роли обходом найден, но ролей не дал, и в
+    ``sources`` не попадает — иначе ``/me`` объяснял бы наследование источником,
+    который на деле ничего не передал. Отсортирован по слагу: предки
+    накапливаются в порядке обхода (снизу вверх), а объяснение пользователю
+    не должно зависеть от формы дерева владения.
+    """
+
+    scopes: dict[int, tuple[str, int | None]]
+    sources: tuple[str, ...]
 
 
 def ancestors_of(company: str) -> list[str]:
@@ -68,7 +86,7 @@ def ancestors_of(company: str) -> list[str]:
     return result
 
 
-def inherited_role_scopes(user_id: int, company: str) -> dict[int, tuple[str, int | None]]:
+def inherit(user_id: int, company: str) -> Inherited:
     """Роли, которые ``user_id`` несёт в ``company`` из карточек выше по дереву.
 
     Для каждого действующего предка ``A``: войти в его схему
@@ -138,6 +156,7 @@ def inherited_role_scopes(user_id: int, company: str) -> dict[int, tuple[str, in
     from apps.hr import interface as hr
 
     scopes: dict[int, tuple[str, int | None]] = {}
+    sources: list[str] = []
     for ancestor in ancestors_of(company):
         row = companies.get_company(ancestor)
         if row is None or not row.get("is_active"):
@@ -169,11 +188,28 @@ def inherited_role_scopes(user_id: int, company: str) -> dict[int, tuple[str, in
         if brief is None or not brief.get("serves_subsidiaries"):
             continue
 
-        role_ids = (
+        role_ids = list(
             PositionRole.objects
             .filter(company_slug=ancestor, position_id=brief["position_id"])
             .values_list("role_id", flat=True)
         )
+        if not role_ids:
+            # Обслуживающая должность есть, но роли ей никто не назначил —
+            # предок ничего не прибавил и не заслуживает упоминания в
+            # ``sources`` (задача 6 блока C: объяснение должно быть точным,
+            # а не «предок нашёлся»).
+            continue
         for role_id in role_ids:
             scopes[role_id] = (ScopeKind.COMPANY, None)
-    return scopes
+        sources.append(ancestor)
+    return Inherited(scopes=scopes, sources=tuple(sorted(sources)))
+
+
+def inherited_role_scopes(user_id: int, company: str) -> dict[int, tuple[str, int | None]]:
+    """Тонкая обёртка над ``inherit`` — только роли, без источников.
+
+    Существует ради двенадцати мест в ``test_inheritance.py``, написанных до
+    задачи 6, которым источник не нужен: их не стоило трогать ради поля,
+    которое им безразлично.
+    """
+    return inherit(user_id, company).scopes

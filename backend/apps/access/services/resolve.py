@@ -66,8 +66,10 @@ def _position_role_ids(user_id: int, company: str) -> list[int]:
     )
 
 
-def _role_scopes(user, company: str | None) -> dict[int, tuple[str, int | None]]:
-    """``role_id`` → область, с которой роль досталась пользователю.
+def _role_scopes(
+    user, company: str | None
+) -> tuple[dict[int, tuple[str, int | None]], tuple[str, ...]]:
+    """``role_id`` → область, с которой роль досталась пользователю, + источники.
 
     Должностная роль действует на всю компанию: область сужается только личным
     назначением.
@@ -78,9 +80,15 @@ def _role_scopes(user, company: str | None) -> dict[int, tuple[str, int | None]]
     возможных, — поэтому личное назначение способно эту область только
     сохранить, но не сузить (``_SCOPE_WIDTH`` сравнивает `` > ``, а не `` >= ``,
     и не даёт более узкой области переписать уже найденную широкую).
+
+    Второй элемент — слаги предков, чья обслуживающая должность фактически
+    дала хоть одну роль (``inheritance.Inherited.sources``, задача 6 блока C):
+    один обход даёт и роли, и объяснение их происхождения — второй обход по
+    дереву владения ради одного только списка слагов был бы тем самым лишним
+    переключением схемы на страницу, которого ``Resolution`` целиком избегает.
     """
     if company is None:
-        return {}
+        return {}, ()
     from apps.access.services import inheritance
 
     user_id, _ = identity(user)
@@ -88,12 +96,13 @@ def _role_scopes(user, company: str | None) -> dict[int, tuple[str, int | None]]
         role_id: (ScopeKind.COMPANY, None)
         for role_id in _position_role_ids(user_id, company)
     }
-    scopes.update(inheritance.inherited_role_scopes(user_id, company))
+    inherited = inheritance.inherit(user_id, company)
+    scopes.update(inherited.scopes)
     for row in RoleAssignment.objects.filter(company_slug=company, user_id=user_id):
         current = scopes.get(row.role_id)
         if current is None or _SCOPE_WIDTH[row.scope_kind] > _SCOPE_WIDTH[current[0]]:
             scopes[row.role_id] = (row.scope_kind, row.scope_id)
-    return scopes
+    return scopes, inherited.sources
 
 
 def _rows_by_role(role_ids) -> dict[int, dict[str, frozenset[str]]]:
@@ -141,10 +150,19 @@ class Resolution:
     ``rows``) оборачиваются в ``MappingProxyType`` в ``resolve_for`` — только
     это и делает гарантию неизменности настоящей, а не декларативной: попытка
     мутировать бросает ``TypeError`` вместо тихой порчи чужого запроса.
+
+    ``inherited_from`` (задача 6 блока C) — слаги компаний-предков, чья
+    обслуживающая должность фактически дала хоть одну роль в ``scopes``; уже
+    ``tuple`` — неизменность не нужно достраивать ``MappingProxyType``, как для
+    словарей выше. Приходит из того же обхода, что и наследованные роли
+    (``inheritance.inherit`` внутри ``_role_scopes``), а не отдельным проходом
+    по дереву владения: второй обход стоил бы ровно того переключения схемы на
+    предка, которого весь этот класс существует, чтобы избежать.
     """
 
     scopes: Mapping[int, tuple[str, int | None]]
     rows: Mapping[int, Mapping[str, frozenset[str]]]
+    inherited_from: tuple[str, ...]
 
 
 def resolve_for(user, company: str | None) -> Resolution:
@@ -167,13 +185,14 @@ def resolve_for(user, company: str | None) -> Resolution:
     вовсе: оно работает раньше, внутри ``_role_scopes``, и участвует в самих
     входных данных, из которых ``Resolution`` строится один-единственный раз.
     """
-    scopes = _role_scopes(user, company)
+    scopes, inherited_from = _role_scopes(user, company)
     rows = _rows_by_role(scopes)
     return Resolution(
         scopes=MappingProxyType(scopes),
         rows=MappingProxyType(
             {role_id: MappingProxyType(nodes) for role_id, nodes in rows.items()}
         ),
+        inherited_from=inherited_from,
     )
 
 

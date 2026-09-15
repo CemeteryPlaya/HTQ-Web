@@ -299,4 +299,9 @@ class MeView(AccessView):
             ],
             subordinate_companies=hierarchy.subordinate_companies(
                 request.token, company),
+            # Суперпользователю ``resolution`` не строится вовсе (полный
+            # доступ уже без единого запроса) — его права ниоткуда не
+            # наследуются, поэтому [] и без обращения к resolution.
+            inherited_from=(list(resolution.inherited_from)
+                            if resolution is not None else []),
         )

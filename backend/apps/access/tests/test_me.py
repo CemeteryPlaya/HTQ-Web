@@ -1,9 +1,11 @@
 """Задача 8 плана A: ``GET /me`` и та же карта прав в ответе профиля (§4.5)."""
 
+import datetime
+
 import pytest
 from django.test import Client
 
-from apps.access.models import Level, Role, RoleAssignment, ScopeKind
+from apps.access.models import Level, PositionRole, Role, RoleAssignment, ScopeKind
 from apps.access.tests.helpers import BASE, auth, superuser_token, token
 from apps.access.tests.helpers import grant
 
@@ -24,7 +26,8 @@ def test_me_without_company_is_not_an_error(client):
     resp = client.get(f"{BASE}/me", **auth(token()))
     assert resp.status_code == 200
     assert resp.json() == {"company": None, "permissions": {}, "depth": {},
-                           "hidden_pages": [], "subordinate_companies": []}
+                           "hidden_pages": [], "subordinate_companies": [],
+                           "inherited_from": []}
 
 
 @pytest.mark.django_db
@@ -47,6 +50,7 @@ def test_me_returns_permissions_of_the_request_company(client, company_schema):
         # Страница — вето: без явного запрета список пуст.
         "hidden_pages": [],
         "subordinate_companies": [],
+        "inherited_from": [],
     }
 
 
@@ -92,6 +96,100 @@ def test_profile_carries_the_same_permission_map(client, company_schema, django_
     assert profile["permissions"] == me["permissions"]
     assert profile["company"] == me["company"]
     assert profile["subordinate_companies"] == me["subordinate_companies"]
+
+
+# ── Задача 6 блока C: /me называет источник наследованных прав ─────────────
+#
+# Схемы компаний здесь настоящие (``two_company_schemas``/``company_schema``
+# из корневого conftest) — тот же приём, что в ``test_inheritance.py``:
+# кадровая карточка обязана лечь в СВОЮ физическую схему, иначе тест не
+# отличит «дошли до предка через его схему» от случайного совпадения с
+# default.
+
+
+def _link(child_slug: str, parent_slug: str) -> None:
+    from apps.companies.models import Company
+
+    child = Company.objects.get(slug=child_slug)
+    child.parent = Company.objects.get(slug=parent_slug)
+    child.save(update_fields=["parent"])
+
+
+def _grant_serving_position(company_slug: str, user, role: Role, *, weight: int):
+    from apps.hr.models import Department, Employee, Position
+    from htqweb.tenancy.db import use_company
+
+    with use_company(company_slug):
+        dep = Department.objects.create(name=f"Отдел-{weight}", path=f"root-{weight}")
+        pos = Position.objects.create(
+            title=f"Должность-{weight}", department=dep, weight=weight,
+            serves_subsidiaries=True,
+        )
+        Employee.objects.create(
+            first_name="Имя", last_name="Фамилия", email=f"e-{weight}@htq.test",
+            department=dep, position=pos,
+            hire_date=datetime.date(2024, 1, 9), user_id=user.id,
+        )
+        PositionRole.objects.create(
+            company_slug=company_slug, position_id=pos.id, role=role)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_me_names_the_serving_ancestor(client, two_company_schemas, user):
+    """Единственный обслуживающий предок — ``inherited_from == [его слаг]``."""
+    holding, subsidiary = two_company_schemas
+    _link(subsidiary, holding)
+
+    role = Role.objects.create(code="r-me-inh", title="Роль наследуется")
+    _grant_serving_position(holding, user, role, weight=1)
+
+    tok = token(user_id=user.id, sub=str(user.id), company=subsidiary)
+    resp = client.get(f"{BASE}/me", HTTP_X_HTQ_COMPANY=subsidiary, **auth(tok))
+    assert resp.status_code == 200
+    assert resp.json()["inherited_from"] == [holding]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_me_inherited_from_empty_for_ordinary_subsidiary_employee(
+        client, two_company_schemas, user):
+    """Предок существует, но не обслуживает — объяснять пользователю нечего."""
+    holding, subsidiary = two_company_schemas
+    _link(subsidiary, holding)
+
+    tok = token(user_id=user.id, sub=str(user.id), company=subsidiary)
+    resp = client.get(f"{BASE}/me", HTTP_X_HTQ_COMPANY=subsidiary, **auth(tok))
+    assert resp.status_code == 200
+    assert resp.json()["inherited_from"] == []
+
+
+@pytest.mark.django_db
+def test_me_inherited_from_empty_for_superuser(client, company_schema):
+    """Суперпользователь: права ниоткуда не наследуются, а не «неизвестно откуда»."""
+    slug = company_schema["slug"]
+    resp = client.get(f"{BASE}/me", HTTP_X_HTQ_COMPANY=slug,
+                      **auth(superuser_token(company=slug)))
+    assert resp.status_code == 200
+    assert resp.json()["inherited_from"] == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_me_names_both_serving_ancestors_sorted(
+        client, two_company_schemas, company_schema, user):
+    """Два обслуживающих предка (решение 7: не взаимоисключающи) — оба, по алфавиту."""
+    grandparent, parent = two_company_schemas
+    bottom = company_schema["slug"]
+    _link(parent, grandparent)
+    _link(bottom, parent)
+
+    role_grandparent = Role.objects.create(code="r-me-gp", title="Роль деда")
+    role_parent = Role.objects.create(code="r-me-p", title="Роль родителя")
+    _grant_serving_position(grandparent, user, role_grandparent, weight=1)
+    _grant_serving_position(parent, user, role_parent, weight=2)
+
+    tok = token(user_id=user.id, sub=str(user.id), company=bottom)
+    resp = client.get(f"{BASE}/me", HTTP_X_HTQ_COMPANY=bottom, **auth(tok))
+    assert resp.status_code == 200
+    assert resp.json()["inherited_from"] == sorted([grandparent, parent])
 
 
 @pytest.mark.django_db
