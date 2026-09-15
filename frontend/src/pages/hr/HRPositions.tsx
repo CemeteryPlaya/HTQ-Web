@@ -4,7 +4,9 @@ import { useSearchParams } from 'react-router-dom';
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { GripVertical, KeyRound, Lock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { accessApi } from '@/api/access';
 import api from '@/api/client';
+import { companiesApi } from '@/api/companies';
 import { PositionRolesDialog } from '@/components/access/PositionRolesDialog';
 import HRLayout from '@/components/hr/HRLayout';
 import PositionLevelsPanel from '@/components/hr/PositionLevelsPanel';
@@ -18,7 +20,10 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { errorDetail, reportApiError } from '@/lib/apiError';
+import type { PositionRole } from '@/types/access';
+import type { CompanyTreeNode } from '@/types/companies';
 import type { LevelThreshold, NextWeightForLevel } from '@/types/hr';
 
 type HRLevelKey = 'junior' | 'middle' | 'senior' | 'lead';
@@ -41,6 +46,11 @@ interface Position {
   is_manager?: boolean;
   /** Действует только у руководящей: командует ли нижестоящими компаниями. */
   external_hierarchy?: 'inherit' | 'none';
+  /**
+   * Обслуживает ли должность дочерние компании: не про подчинение, а про то,
+   * с чьими данными работает должность — роли распространяются на поддерево.
+   */
+  serves_subsidiaries?: boolean;
   permissions?: PositionPermissions | null;
 }
 
@@ -83,6 +93,26 @@ function sortedPositions(items: Position[]): Position[] {
     || a.title.localeCompare(b.title)
     || a.id - b.id
   ));
+}
+
+/** Ищет узел компании по слагу в дереве владения (`companiesApi.tree()`). */
+function findCompanyNode(nodes: CompanyTreeNode[], slug: string): CompanyTreeNode | null {
+  for (const node of nodes) {
+    if (node.slug === slug) return node;
+    const found = findCompanyNode(node.children, slug);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Имена ВСЕХ компаний ниже узла — то, что реально получает признак. */
+function collectDescendantNames(node: CompanyTreeNode | null): string[] {
+  if (!node) return [];
+  const names: string[] = [];
+  for (const child of node.children) {
+    names.push(child.name, ...collectDescendantNames(child));
+  }
+  return names;
 }
 
 const HRPositions = () => {
@@ -141,6 +171,7 @@ const HRPositions = () => {
     permissions: string[];
     is_manager: boolean;
     external_hierarchy: 'inherit' | 'none';
+    serves_subsidiaries: boolean;
   }>({
     title: '',
     department_id: '',
@@ -151,6 +182,7 @@ const HRPositions = () => {
     permissions: [],
     is_manager: false,
     external_hierarchy: 'inherit',
+    serves_subsidiaries: false,
   });
   // Сообщение о том, что серверу не удалось подобрать свободный вес в уровне
   // (диапазон порога занят целиком) — вес тогда вводится вручную.
@@ -219,6 +251,7 @@ const HRPositions = () => {
         permissions,
         is_manager: form.is_manager,
         external_hierarchy: form.external_hierarchy,
+        serves_subsidiaries: form.serves_subsidiaries,
       };
       // level — не поле модели, а выбор веса: бэкенд проверит, что вес попал
       // в диапазон порога (422 иначе), и выведет level из веса как обычно.
@@ -248,6 +281,7 @@ const HRPositions = () => {
         permissions: [],
         is_manager: false,
         external_hierarchy: 'inherit',
+        serves_subsidiaries: false,
       });
     },
     onError: (err) => {
@@ -346,6 +380,7 @@ const HRPositions = () => {
       permissions: [],
       is_manager: false,
       external_hierarchy: 'inherit',
+      serves_subsidiaries: false,
     });
     setDialogOpen(true);
     if (firstLevel) void suggestWeightForLevel(firstLevel.level_number);
@@ -365,6 +400,7 @@ const HRPositions = () => {
       permissions: pos.permissions?.permissions ?? [],
       is_manager: pos.is_manager ?? false,
       external_hierarchy: pos.external_hierarchy ?? 'inherit',
+      serves_subsidiaries: pos.serves_subsidiaries ?? false,
     });
     setDialogOpen(true);
   };
@@ -386,6 +422,35 @@ const HRPositions = () => {
     }
     return Array.from(groups.entries());
   }, [permissionsCatalog]);
+
+  // Предпросмотр «что выдаёт признак» (решение 5) — существующие ручки,
+  // новых не заводим. Роли — только когда должность уже существует (у новой
+  // нет id, значит нет и назначенных ролей); дерево компаний — как только
+  // переключатель включён, независимо от того, создание это или правка.
+  const { company } = usePermissions();
+
+  const previewRolesQuery = useQuery<PositionRole[]>({
+    queryKey: ['access', 'positions', editingPos?.id, 'roles'],
+    queryFn: async () => (await accessApi.getPositionRoles(editingPos!.id)).data,
+    enabled: dialogOpen && form.serves_subsidiaries && editingPos?.id != null,
+  });
+
+  const companyTreeQuery = useQuery<CompanyTreeNode[]>({
+    queryKey: ['companies', 'tree'],
+    queryFn: async () => (await companiesApi.tree()).data,
+    enabled: dialogOpen && form.serves_subsidiaries,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Реестр компаний закрыт правом companies:read, которого у кадровика может
+  // не быть (403) — тот же приём деградации, что в ExternalHierarchy.tsx:
+  // список названий заменяется фразой «во все компании ниже по дереву
+  // владения», а не словом «ошибка».
+  const subsidiaryNames = useMemo(() => {
+    if (!company) return [];
+    return collectDescendantNames(findCompanyNode(companyTreeQuery.data ?? [], company));
+  }, [companyTreeQuery.data, company]);
 
   const onDragEnd = (result: DropResult) => {
     if (!result.destination || !isSenior) return;
@@ -696,6 +761,81 @@ const HRPositions = () => {
                           </span>
                         )}
                       </label>
+
+                      {/* Отдельная строка со своей подписью: это не про то, кто
+                          кому подчиняется (см. is_manager/external_hierarchy
+                          выше), а про то, с чьими данными работает должность. */}
+                      <div className="mt-1 grid gap-2 border-t pt-3">
+                        <label className="flex items-center justify-between gap-3 text-sm">
+                          <span className="font-medium">
+                            {t('hr.positions.servesSubsidiaries', 'Обслуживает дочерние компании')}
+                          </span>
+                          <Switch
+                            aria-label={t('hr.positions.servesSubsidiaries', 'Обслуживает дочерние компании')}
+                            checked={form.serves_subsidiaries}
+                            onCheckedChange={(next) => setForm({ ...form, serves_subsidiaries: next })}
+                          />
+                        </label>
+                        <p className="text-xs text-muted-foreground">
+                          {t(
+                            'hr.positions.servesSubsidiariesHint',
+                            'Это не про то, кто кому подчиняется: признак определяет, с чьими '
+                            + 'данными работает должность. Включённый — и роли этой должности '
+                            + 'начинают действовать также в дочерних компаниях, а не только в своей.',
+                          )}
+                        </p>
+
+                        {form.serves_subsidiaries && (
+                          <div className="grid gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                            <p>
+                              {t(
+                                'hr.positions.servesSubsidiariesMembership',
+                                'Права начнут действовать, когда держателям этой должности заведут '
+                                + 'членство в дочерней компании — на странице «Компании группы» → '
+                                + 'участники. Без членства токен на поддомен ДО не выдаётся, и признак '
+                                + 'не даёт ничего.',
+                              )}
+                            </p>
+                            <div className="grid gap-1">
+                              <div>
+                                <span className="font-medium">
+                                  {t('hr.positions.servesSubsidiariesRolesLabel', 'Роли должности')}:
+                                </span>{' '}
+                                {!editingPos ? (
+                                  t(
+                                    'hr.positions.servesSubsidiariesAfterSave',
+                                    'появятся после сохранения должности',
+                                  )
+                                ) : previewRolesQuery.isLoading ? (
+                                  t('common.loading', 'Загрузка…')
+                                ) : (previewRolesQuery.data?.length ?? 0) > 0 ? (
+                                  previewRolesQuery.data!.map((role) => role.title).join(', ')
+                                ) : (
+                                  t('hr.positions.servesSubsidiariesNoRoles', 'ролей пока не назначено')
+                                )}
+                              </div>
+                              <div>
+                                <span className="font-medium">
+                                  {t('hr.positions.servesSubsidiariesCompaniesLabel', 'Компании')}:
+                                </span>{' '}
+                                {companyTreeQuery.isSuccess ? (
+                                  subsidiaryNames.length > 0
+                                    ? subsidiaryNames.join(', ')
+                                    : t(
+                                        'hr.positions.servesSubsidiariesNoCompanies',
+                                        'нижестоящих компаний нет',
+                                      )
+                                ) : (
+                                  t(
+                                    'hr.positions.servesSubsidiariesTreeFallback',
+                                    'во все компании ниже по дереву владения',
+                                  )
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
@@ -924,6 +1064,7 @@ const HRPositions = () => {
           open={rolesFor !== null}
           onOpenChange={(next) => { if (!next) setRolesFor(null); }}
           canEdit={isSenior}
+          servesSubsidiaries={rolesFor?.serves_subsidiaries ?? false}
         />
     </div>
   );

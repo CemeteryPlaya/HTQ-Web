@@ -24,6 +24,11 @@ export interface Position {
   is_manager?: boolean;
   /** Действует только у руководящей: командует ли нижестоящими компаниями. */
   external_hierarchy?: 'inherit' | 'none';
+  /**
+   * Обслуживает ли должность дочерние компании: не про подчинение, а про то,
+   * с чьими данными работает должность — роли распространяются на поддерево.
+   */
+  serves_subsidiaries?: boolean;
   permissions?: {
     hr_level?: 'junior' | 'middle' | 'senior' | 'lead' | null;
     permissions?: string[];
