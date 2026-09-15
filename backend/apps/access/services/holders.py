@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from django.db import transaction
+
 from apps.access.models import PositionRole, RoleAssignment
 from apps.core.services import ServiceDisabled
 from htqweb.fallback import fallback
@@ -135,6 +137,14 @@ def _serving_holder_rows(company: str) -> list[tuple[int, dict]]:
     заводить ``CompanyMembership``) о нём не узнают — семантика «держит
     права» ОДНА на обоих потребителей, а не расходится между витриной и
     командой, которая по этому же признаку заводит членство.
+
+    Цена этого повторного использования: ``resolve.permissions_for`` сам
+    заново обходит всю цепочку предков на КАЖДОГО кандидата, то есть общая
+    стоимость — O(предков × кандидатов × предков), а не O(предков ×
+    кандидатов). При нынешнем размере дерева компаний это приемлемо; если
+    дерево вырастет настолько, что это станет заметно, здесь есть что
+    оптимизировать (например, посчитать уровни один раз на company и
+    переиспользовать на всех кандидатов).
     """
     from types import SimpleNamespace
 
@@ -158,17 +168,25 @@ def _serving_holder_rows(company: str) -> list[tuple[int, dict]]:
             continue
 
         try:
-            with use_company(ancestor):
-                serving_ids = [p["id"] for p in hr.get_positions_brief(position_ids)
-                              if p["serves_subsidiaries"]]
-                if not serving_ids:
-                    continue
-                users_by_position = hr.resolve_position_users(serving_ids)
-                candidates = sorted(
-                    {uid for uids in users_by_position.values() for uid in uids}
-                    - seen_users
-                )
-                descriptions = {uid: _describe(uid, ancestor, POSITION) for uid in candidates}
+            # Собственный savepoint (зеркало inheritance.inherit, см. её
+            # докстринг) — ошибка внутри НЕ должна портить транзакцию
+            # вызывающего: без него пойманное ниже исключение оставило бы
+            # внешнюю транзакцию (если эта функция вызвана внутри чужого
+            # atomic()) в состоянии отказа, и самый первый следующий запрос
+            # вызывающего упал бы посторонней ошибкой вместо того, чтобы
+            # просто не увидеть держателей от одного предка.
+            with transaction.atomic():
+                with use_company(ancestor):
+                    serving_ids = [p["id"] for p in hr.get_positions_brief(position_ids)
+                                  if p["serves_subsidiaries"]]
+                    if not serving_ids:
+                        continue
+                    users_by_position = hr.resolve_position_users(serving_ids)
+                    candidates = sorted(
+                        {uid for uids in users_by_position.values() for uid in uids}
+                        - seen_users
+                    )
+                    descriptions = {uid: _describe(uid, ancestor, POSITION) for uid in candidates}
         except ServiceDisabled as exc:
             # Штатная деградация: hr выключен целиком у предка. Та же ветка,
             # что и в inheritance.inherit — тихо, уровнем INFO.

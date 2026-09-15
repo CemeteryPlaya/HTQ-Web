@@ -18,8 +18,10 @@
 from __future__ import annotations
 
 import datetime
+import logging
 
 import pytest
+from django.db import connection, transaction
 
 from apps.access.models import PositionRole, Role
 from apps.access.services import holders
@@ -161,3 +163,75 @@ def test_external_holders_of_a_root_company_is_empty():
     top = Company.objects.create(slug="t-fixture-ext-top", name="Верх",
                                  kind=CompanyKind.SERVICE)
     assert holders.external_holders(top.slug) == []
+
+
+# ── Разлом схемы предка — итоговый обзор блока C, не «hr выключен» ─────────
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ancestor_schema_fault_alerts_loudly_and_does_not_poison_caller_transaction(
+        two_company_schemas, monkeypatch, caplog, fallback_log_mode):
+    """Тот же разлом, что у ``inheritance.py`` (см. её тест с тем же именем) —
+    ``_serving_holder_rows`` ловит ИДЕНТИЧНОЕ исключение той же веткой
+    ``expected=False`` (осиротевшая строка реестра после неудачного отката
+    ``company_create``, см. CLAUDE.md), но БЕЗ собственного
+    ``transaction.atomic()`` вокруг чтения кадров предка эта ветка
+    обманывает: ``continue`` обещает «пропустить сломанного предка и
+    продолжить», а по факту транзакция ВЫЗЫВАЮЩЕГО остаётся в состоянии
+    отказа Postgres, и первый же следующий запрос вызывающего падает
+    посторонней ошибкой вместо того, чтобы просто не увидеть держателей от
+    одного предка.
+
+    Настоящую физическую пропажу схемы здесь не воспроизвести (та же причина,
+    что в докстринге ``test_inheritance.py``): подменяем
+    ``hr.get_positions_brief`` — первое обращение к кадрам предка в
+    ``_serving_holder_rows`` — на функцию, что сама бьёт РЕАЛЬНЫМ битым SQL
+    (запрос к несуществующей таблице) в ТОМ ЖЕ соединении — настоящий, а не
+    сочинённый ``django.db.DatabaseError``, переводящий текущую транзакцию
+    Postgres в состояние отказа.
+
+    ``fallback_log_mode`` — по той же причине, что в ``test_inheritance.py``:
+    дефолт прогона (``settings/test.py``) — strict, и там ``expected=False``
+    поднял бы ``FallbackNotAllowed`` вместо лога; здесь проверяется именно
+    продовое поведение подмены (тихий лог и продолжение обхода).
+    """
+    holding, subsidiary = two_company_schemas
+    _link(subsidiary, holding)
+
+    role = Role.objects.create(code="r-ext-fault", title="Роль")
+    _serving_position(holding, 601, role, weight=7)
+
+    def _broken_read(_position_ids):
+        # Настоящий отказ Postgres, не питоновский муляж: транзакция после
+        # этого в состоянии aborted, пока не будет ROLLBACK (или ROLLBACK TO
+        # SAVEPOINT) — ровно то, от чего должен защищать собственный
+        # transaction.atomic() внутри _serving_holder_rows.
+        with connection.cursor() as cur:
+            cur.execute("SELECT * FROM htqweb_test_external_holders_no_such_table")
+        return []  # pragma: no cover — cur.execute всегда падает раньше
+
+    monkeypatch.setattr("apps.hr.interface.get_positions_brief", _broken_read)
+
+    with caplog.at_level(logging.INFO, logger="htqweb.fallback"):
+        with transaction.atomic():
+            # (a) Ни бросить наружу, ни зависнуть — сломанный предок просто
+            # не даёт держателей.
+            result = holders.external_holders(subsidiary)
+            assert result == []
+
+            # (b) Транзакция ВЫЗЫВАЮЩЕГО не отравлена: обычный запрос сразу
+            # после — в ТОЙ ЖЕ внешней atomic()-транзакции — обязан пройти, а
+            # не упасть посторонней ошибкой из-за прерванной транзакции. Без
+            # собственного savepoint внутри _serving_holder_rows это
+            # исключение здесь и получили бы.
+            assert Company.objects.filter(slug=subsidiary).exists()
+
+    # (c) Слышно и ОТЛИЧИМО от «hr выключен»: свой site, уровень WARNING (а
+    # не INFO — это и есть разница между expected=False и expected=True).
+    fault_records = [
+        r for r in caplog.records
+        if "access.holders.ancestor_schema_unavailable" in r.getMessage()
+    ]
+    assert len(fault_records) == 1
+    assert fault_records[0].levelname == "WARNING"
+    assert "access.holders.hr_unavailable" not in caplog.text
