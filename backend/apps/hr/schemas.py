@@ -47,6 +47,7 @@ class DepartmentUpdate(BaseModel):
 # ── positions — порт services/hr/app/schemas/position.py ────────────────────
 
 HRLevelLiteral = Literal["junior", "middle", "senior", "lead"]
+ExternalHierarchyLiteral = Literal["inherit", "none"]
 
 
 class PositionPermissions(BaseModel):
@@ -70,6 +71,8 @@ class PositionCreate(BaseModel):
     requirements: dict | None = None
     is_active: bool = True
     weight: int = Field(default=100, ge=0)
+    is_manager: bool = False
+    external_hierarchy: ExternalHierarchyLiteral = "inherit"
     # НЕ поле модели: level в БД — кэш, вычисляемый из веса. Здесь это способ
     # выбрать вес («поставь должность на уровень L3»): сервис подбирает
     # свободный вес внутри диапазона порога, а level, как и прежде, приходит
@@ -90,6 +93,8 @@ class PositionUpdate(BaseModel):
     requirements: dict | None = None
     is_active: bool | None = None
     weight: int | None = Field(default=None, ge=0)
+    is_manager: bool | None = None
+    external_hierarchy: ExternalHierarchyLiteral | None = None
     level: int | None = Field(default=None, ge=1)  # см. PositionCreate.level
     permissions: PositionPermissions | None = None
 

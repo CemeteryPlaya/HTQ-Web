@@ -176,6 +176,8 @@ def serialize(pos: Position) -> dict:
         "permissions": _serialize_permissions(pos.permissions),
         "level": pos.level,
         "is_system": pos.is_system,
+        "is_manager": pos.is_manager,
+        "external_hierarchy": pos.external_hierarchy,
         "created_at": pos.created_at.isoformat(),
         "updated_at": pos.updated_at.isoformat(),
     }

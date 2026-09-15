@@ -41,7 +41,8 @@ def get_employee_brief(user_id: int) -> dict | None:
     row = (
         Employee.objects.filter(user_id=user_id, is_deleted=False)
         .values("id", "first_name", "last_name", "department_id",
-                "position_id", "position__title", "status")
+                "position_id", "position__title", "status",
+                "position__is_manager", "position__external_hierarchy")
         .first()
     )
     if row is None:
@@ -56,6 +57,12 @@ def get_employee_brief(user_id: int) -> dict | None:
         # Ключ добавлен АДДИТИВНО — остальные читает действующий фронт.
         "position_id": row["position_id"],
         "position_title": row["position__title"],
+        # Второй шов стадии 2 с кадровым доменом: внешнюю иерархию включают
+        # два поля ДОЛЖНОСТИ, а читает их apps.access, который моделей HR не
+        # импортирует (apps/access/services/hierarchy.py::_is_external_manager).
+        # Ключи добавлены АДДИТИВНО — остальные читает действующий фронт.
+        "is_manager": row["position__is_manager"],
+        "external_hierarchy": row["position__external_hierarchy"],
         "status": row["status"],
     }
 
