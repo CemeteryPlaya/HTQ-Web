@@ -82,7 +82,7 @@
 |---|---|---|
 | Реестр компаний, схемы, `search_path`, claim `company` | ✅ | нет HTTP-API и экранов (`apps.companies` без `urls.py`); переключателя компании нет; спека описывает старый состав группы (UZ/KG/КУП/СЭС) |
 | Уровни N-1…N-4 | ✅ `LevelThreshold` | новая схема без порогов → все должности L5; нет `UnitType` «Дирекция» |
-| Внешняя иерархия (правило 4) | заглушка | `Position.is_manager`/`external_hierarchy` отсутствуют; `subordinate_companies` всегда пуст |
+| Внешняя иерархия (правило 4) | ✅ | поля `is_manager`/`external_hierarchy` есть, `subordinate_companies` считается по ним; отметку «руководящая» ставит кадровик вручную в карточке должности — автоматического бэкфилла по оргструктуре нет |
 | Роли «функция × глубина» | ✅ | гейт `api_view(module=…)` не навешен ни на одну из 470 ручек; `Position.permissions`+`hr-level` живут параллельно |
 | Сводки холдинга | строятся | никем не читаются |
 | Матрица полномочий | движок signoff | только финансы; нет относительных согласующих («руководитель блока», ОСУ); нет кросс-компанейских этапов |
@@ -109,14 +109,16 @@
 - гейт `LastActiveCompany`;
 - docs: `design.md §1/§5`, `API.md`, `STRUCTURE.md`, `CLAUDE.md`.
 
-### B. Внешняя иерархия — снять заглушку
-- `hr.Position.is_manager: bool`, `external_hierarchy: inherit|none`
-  (expand-миграция `hr/0021`); `get_employee_brief` отдаёт оба ключа
-  аддитивно → `apps/access/services/hierarchy.py::_is_external_manager`
-  начинает работать без правок;
-- редактирование полей в `HRPositions.tsx`;
-- `ExternalHierarchy.tsx`: дерево компаний (API блока A) с руководящими
-  должностями вместо списка слагов.
+### B. Внешняя иерархия — снять заглушку (выполнено)
+Ход работ и разбивка на задачи: [2026-09-15-block-b-external-hierarchy.md](2026-09-15-block-b-external-hierarchy.md).
+`hr.Position.is_manager`/`external_hierarchy` появились (expand-миграция
+`hr/0021`), `get_employee_brief` отдаёт оба ключа аддитивно →
+`apps/access/services/hierarchy.py::_is_external_manager` заработал на
+реальных данных без правок самого `apps.access`; поля редактируются в
+`HRPositions.tsx`; `ExternalHierarchy.tsx` показывает дерево компаний (API
+блока A) вместо списка слагов. Отметку «руководящая» по-прежнему ставит
+кадровик вручную (см. §4) — фильтрацию данных по иерархии блок не делает
+(см. [stage2-spec](2026-08-29-stage2-access-and-roles-spec.md) §7).
 
 ### C. Права холдинга в подчинённых компаниях — проектное решение
 Холдинг по документам — сервисный центр (финансы, кадры, закупки, ИТ для

@@ -80,23 +80,23 @@ Playwright: the chromium binary isn't installed; launch with `{ channel: 'msedge
 ```bash
 docker compose -f docker-compose.test-local.yml up -d db   # ТОЛЬКО Postgres на :55432 (НЕ docker restart!)
 cd backend
-./.venv/Scripts/python.exe -m pytest -q                                   # whole suite
-./.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
+../.venv/Scripts/python.exe -m pytest -q                                   # whole suite
+../.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name   # single test
 ```
 `DJANGO_SETTINGS_MODULE=htqweb.settings.test` and `JWT_SECRET` are both fixed by `pytest.ini`/`settings/test.py` — nothing to export by hand. Full detail (including the `max_connections=300` bump): [backend/README-tests.md](backend/README-tests.md).
 
-⚠️ **The interpreter is `backend/.venv`, not the repo-root `.venv`.** Both exist. The root one carries Django 6.0.2 and is NOT the project environment: every command run through it dies at import with 155 `ImproperlyConfigured` collection errors, which looks like a broken test suite rather than a wrong interpreter. `backend/.venv` has the pinned Django 5.2.7. All commands in this section are relative to `backend/`, hence `./.venv/…`.
+⚠️ **The interpreter is the repo-root `.venv`, not `backend/.venv`.** `backend/.venv` does not exist — only the root one does, with the pinned Python 3.13 and Django 5.2.7 the project runs on. All commands in this section are run from `backend/`, hence the `../.venv/…` prefix (not `./.venv/…`) — a bare `./.venv/…` from `backend/` fails outright since there's nothing there to find.
 **CI** is two GitHub Actions workflows, split by runtime rather than by kind. `.github/workflows/ci.yml` runs on every push and PR (~10 min): monitoring configs, frontend (lint + typecheck + vitest + build), and the backend **guard** tests only — `test_invariants`, `test_app_isolation`, `test_metrics*`, `test_digest`. `.github/workflows/backend-full.yml` runs the whole ~50-minute suite on PRs to `main`, nightly at 02:00 UTC, and on manual dispatch — an hour per commit means nobody reads the result. Both bring Postgres up with `docker compose -f docker-compose.test-local.yml up -d db` rather than an Actions `services:` block, because the suite needs `max_connections=300` and `services:` cannot override a container's command. **Nine tests fail for reasons that predate CI** (signoff quorum, contracts budget maths, hr employee cards); they are listed with TODOs in [backend/ci-known-failures.txt](backend/ci-known-failures.txt) and deselected, so the pipeline is green and therefore worth reading — a separate always-run step re-runs them and tells you when one starts passing, so the list shrinks instead of rotting. `./scripts/check-monitoring-config.sh` is the config half of CI and is meant to be run locally too: it boots a real Grafana against the real provisioning, which is the only way to catch the failure that had prod's Grafana in a restart loop.
 
 **Django management** (`cd backend`, same venv):
 ```bash
-./.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
-./.venv/Scripts/python.exe manage.py migrate
-./.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
-./.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
-./.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
-./.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
-./.venv/Scripts/python.exe manage.py tenancy_status [--json] [--exact]   # слепок раскладки тенантных таблиц по схемам (только чтение); снимать до и после каждой боевой выкатки
+../.venv/Scripts/python.exe manage.py makemigrations <app>   # after model changes
+../.venv/Scripts/python.exe manage.py migrate
+../.venv/Scripts/python.exe manage.py service <name> --on|--off [--message "..."]   # ServiceStatus switch
+../.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]  # phase-10 legacy-data cutover
+../.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe|--wipe-only]  # demo data, local DB only
+../.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
+../.venv/Scripts/python.exe manage.py tenancy_status [--json] [--exact]   # слепок раскладки тенантных таблиц по схемам (только чтение); снимать до и после каждой боевой выкатки
 ```
 Mail-server credentials live in **two layers**: `MailServerConfig` (one DB row, edited at `/admin/mailboxes` → «Подключение») **over** the env vars, merged by `apps/mail/services/mail_config.py` with the rule *empty field in the DB = take it from env*. Never read `settings.IMAP_HOST` (or any other `MAILCOW_*`/`IMAP_*`/`SMTP_*`) directly from `apps/mail` — go through `mail_config.get_config()`, or UI-set values will be silently ignored.
 
@@ -109,7 +109,7 @@ Mail-server credentials live in **two layers**: `MailServerConfig` (one DB row, 
 cd backend
 DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
   DB_NAME=htqweb DB_USER=htqweb DB_PASSWORD=change-me JWT_SECRET=dev PYTHONIOENCODING=utf-8 \
-  ./.venv/Scripts/python.exe manage.py <command>
+  ../.venv/Scripts/python.exe manage.py <command>
 ```
 (`:55432` comes up with `docker compose -f docker-compose.test-local.yml up -d db`. `PYTHONIOENCODING=utf-8` is needed or Russian output comes out mojibake on the Windows console.)
 
@@ -140,6 +140,8 @@ DJANGO_SETTINGS_MODULE=htqweb.settings.dev DB_HOST=localhost DB_PORT=55432 \
 - **В Celery компания передаётся явно.** `@company_task` (`htqweb/tenancy/celery.py`) разворачивает именованный kwarg `company_slug` в контекст; без него — `MissingCompanyArgument`, а не молчаливый откат на `public`.
 - **Миграции тенантных аппок НЕ идут при старте контейнера.** `RUN_MIGRATIONS=1` в `docker-entrypoint.sh` вызывает `manage.py migrate_shared`, а не голый `migrate`: список общих аппок вычисляется из графа миграций минус `TENANT_APPS`, потому что после `tenancy_bootstrap` голый `migrate` при `search_path=public` счёл бы `hr`/`tasks`/`contracts`/`signoff` непромигрированными и создал бы их таблицы заново — пустыми, поверх боевых данных, уже переехавших в схемы компаний. Схемы компаний доводит `manage.py migrate_companies`, отдельно, во время выкатки. Разные компании штатно стоят на разных версиях, поэтому **любое изменение схемы тенантной аппки — по expand/contract**: обратно-совместимый шаг отдельной миграцией от разрушающего.
 - **Сводное чтение холдинга** — схема `holding`, `UNION ALL`-представления по всем действующим компаниям (`apps.companies.services.holding_views`). Каждая tenant-аппка **обязана** объявить `apps/<domain>/holding.py` с `HOLDING_MODELS` (пустым кортежем, если сводить нечего) — отсутствие файла или атрибута роняет сборку `ImproperlyConfigured`, чтобы аппка не выпала из сводок молча. Представления физически **блокируют contract-миграции** (Postgres не даёт удалить столбец или сменить тип, пока от него зависит вьюха), поэтому `migrate_companies` сносит их до прогона и собирает после; заведение, архивация и восстановление компании тоже пересобирают их.
+
+⚠️ **Expand по тенантной аппке требует `migrate_companies` отдельным шагом выкатки.** Старт контейнера зовёт `migrate_shared` и схем компаний не трогает, поэтому новый столбец появится в `public`-части и не появится в `co_<slug>` — код, который его читает, упадёт у всех компаний. Образец такого шага — `hr/0021_position_external_hierarchy`.
 
 ⚠️ **`RUN_MIGRATIONS` в `docker-compose.yml` по умолчанию `1`** (`${RUN_MIGRATIONS:-1}`), и ни `.env`, ни `.env.example`, ни `.env.production` его не переопределяют — «миграции на проде выключены» не гарантировано репозиторием. Перед `tenancy_bootstrap` на бою флаг надо выставить явно.
 
