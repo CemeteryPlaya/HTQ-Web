@@ -1261,7 +1261,124 @@
         }
       ],
       "id": 62
+    },
+    {
+      "type": "row",
+      "title": "Доступ",
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 800
+    },
+    {
+      "type": "stat",
+      "title": "Держателей обслуживающей должности без членства",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 73,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(htqweb_access_serving_holders_without_membership)",
+          "refId": "A"
+        }
+      ],
+      "description": "Должность компании-предка помечена обслуживающей и реально даёт права в дочерней компании (apps.access.services.inheritance, решение заказчика 1), но у держателя ещё нет CompanyMembership — без неё токен для поддомена дочерней компании не выпускается вовсе. Не инцидент, а незавершённая настройка (поэтому без правила алерта) — закрывается `manage.py company_grant --company <slug> --serving`; ту же команду печатает `company_create` сразу при заведении компании.",
+      "id": 70
+    },
+    {
+      "type": "timeseries",
+      "title": "Разрыв по компаниям",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 73,
+        "w": 18,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "htqweb_access_serving_holders_without_membership",
+          "refId": "A",
+          "legendFormat": "{{company}}"
+        }
+      ],
+      "id": 71
     }
   ],
-  "description": "Доменные метрики семи аппок, у которых до этого не было ни одной. Считает Celery-beat раз в 60 с; ПУСТАЯ панель = сборщик не отработал, а не «ноль» (см. apps/core/metrics.py). Окно по умолчанию — неделя, а не 6 часов: эти величины меняются днями, а не минутами. Красный ноль на панелях «Согласован, но статус не переведён», «Строк бюджета в перерасходе», «Уволены, но активны» и «Этапов некому согласовать» означает нарушенный инвариант, а не нагрузку."
+  "description": "Доменные метрики семи аппок, у которых до этого не было ни одной, плюс раздел «Доступ» (задача 8 блока C: обслуживающая должность есть, членства нет). Считает Celery-beat раз в 60 с; ПУСТАЯ панель = сборщик не отработал, а не «ноль» (см. apps/core/metrics.py). Окно по умолчанию — неделя, а не 6 часов: эти величины меняются днями, а не минутами. Красный ноль на панелях «Согласован, но статус не переведён», «Строк бюджета в перерасходе», «Уволены, но активны» и «Этапов некому согласовать» означает нарушенный инвариант, а не нагрузку; «Держателей обслуживающей должности без членства» намеренно оранжевая, а не красная — это незавершённая настройка, а не авария."
 }

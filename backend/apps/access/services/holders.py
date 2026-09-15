@@ -101,14 +101,14 @@ def holders(role_id: int) -> list[dict]:
     return sorted(found, key=lambda row: (row["company"], row["full_name"]))
 
 
-def external_holders(company: str) -> list[dict]:
-    """Кто из компаний-предков сейчас держит права В ``company`` благодаря
-    обслуживающей должности — задача 7 блока C.
+def _serving_holder_rows(company: str) -> list[tuple[int, dict]]:
+    """Обход предков → пары ``(user_id, витринная запись)`` — ядро задачи 7
+    (``external_holders``) и задачи 8 блока C (``serving_holder_ids``).
 
     Обход — зеркало ``inheritance.ancestors_of``, и по той же причине: вопрос
     здесь тот же, что решает ``inheritance.inherit`` для одного пользователя
     («кто НАДО МНОЙ даёт права здесь»), только сразу для ВСЕХ, кто фактически
-    что-то держит, а не для одного. Видимость этого списка
+    что-то держит, а не для одного. Видимость итогового списка
     (``Company.show_external_holders``, решение заказчика 4) — забота
     ``apps.companies`` и её HTTP-гейта; эта функция безусловно отвечает на
     вопрос «кто держит права» и о настройке видимости не знает вовсе —
@@ -130,7 +130,11 @@ def external_holders(company: str) -> list[dict]:
     разойтись с тем, что кандидат реально увидит на своём ``/me``, зайдя в
     ``company``. Кандидат без единого уровня (роль назначена, но её
     ``RolePermission`` не открывает ни одного модуля) в список не попадает —
-    он ничего не «держит», только числится.
+    он ничего не «держит», только числится, и его отсутствие здесь означает,
+    что ни ``external_holders``, ни ``serving_holder_ids`` (задача 8: кому
+    заводить ``CompanyMembership``) о нём не узнают — семантика «держит
+    права» ОДНА на обоих потребителей, а не расходится между витриной и
+    командой, которая по этому же признаку заводит членство.
     """
     from types import SimpleNamespace
 
@@ -139,7 +143,7 @@ def external_holders(company: str) -> list[dict]:
     from apps.hr import interface as hr
     from htqweb.tenancy.db import use_company
 
-    found: list[dict] = []
+    rows: list[tuple[int, dict]] = []
     seen_users: set[int] = set()
     for ancestor in inheritance.ancestors_of(company):
         row = companies.get_company(ancestor)
@@ -192,12 +196,36 @@ def external_holders(company: str) -> list[dict]:
             if not levels:
                 continue
             seen_users.add(user_id)
-            found.append({
+            rows.append((user_id, {
                 "full_name": description["full_name"],
                 "home_company": row["name"],
                 "position": description["position"],
                 "modules": [{"module": module, "level": info["level"]}
                            for module, info in sorted(levels.items())],
-            })
+            }))
 
-    return sorted(found, key=lambda row: (row["home_company"], row["full_name"]))
+    return rows
+
+
+def external_holders(company: str) -> list[dict]:
+    """Кто из компаний-предков сейчас держит права В ``company`` благодаря
+    обслуживающей должности — задача 7 блока C. Витрина над
+    ``_serving_holder_rows`` (см. её докстринг для полной механики обхода)."""
+    return sorted(
+        (record for _user_id, record in _serving_holder_rows(company)),
+        key=lambda row: (row["home_company"], row["full_name"]),
+    )
+
+
+def serving_holder_ids(company: str) -> list[int]:
+    """Id держателей обслуживающих должностей предков, реально несущих права
+    в ``company`` — задача 8 блока C.
+
+    То же ядро, что ``external_holders`` выше, без витринного оформления:
+    используется, чтобы завести им ``CompanyMembership``
+    (``manage.py company_grant --serving``), посчитать разрыв при заведении
+    компании (``company_create``) и в метрике
+    ``apps.access.metrics``. Три места читают ОДИН и тот же список, а не три
+    независимых определения «кто держит права через обслуживающую должность».
+    """
+    return sorted({user_id for user_id, _record in _serving_holder_rows(company)})

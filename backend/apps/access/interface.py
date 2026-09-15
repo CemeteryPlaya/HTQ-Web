@@ -56,4 +56,21 @@ def external_holders(company: str) -> list[dict]:
     return holders.external_holders(company)
 
 
-__all__ = ["external_holders", "permission_level", "permissions_for", "subordinate_companies"]
+def serving_holders(company: str) -> list[int]:
+    """Id пользователей, чья должность в компании-предке помечена
+    обслуживающей и реально несёт им права в ``company`` — задача 8 блока C
+    (``apps.access.services.holders.serving_holder_ids``).
+
+    То же ядро обхода, что у ``external_holders`` выше, только голые id вместо
+    витрины: ``apps.companies`` использует их, чтобы завести
+    ``CompanyMembership`` (``manage.py company_grant --serving``) и напечатать
+    разрыв при заведении компании (``company_create``) — членство остаётся
+    отдельным, явным решением человека (решение заказчика 3), эта функция
+    только называет, кому оно понадобится.
+    """
+    require_service("access")
+    return holders.serving_holder_ids(company)
+
+
+__all__ = ["external_holders", "permission_level", "permissions_for",
+           "serving_holders", "subordinate_companies"]

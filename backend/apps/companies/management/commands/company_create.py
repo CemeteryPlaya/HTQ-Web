@@ -38,8 +38,9 @@
 
 from django.core.management.base import BaseCommand, CommandError
 
+from apps.access.interface import serving_holders
 from apps.companies.models import CompanyKind
-from apps.companies.services import lifecycle
+from apps.companies.services import lifecycle, membership_service
 
 
 class Command(BaseCommand):
@@ -63,4 +64,22 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"Компания {company.slug} создана, схема "
             f"co_{company.slug.replace('-', '_')} готова."
+        ))
+        self._print_serving_gap(company)
+
+    def _print_serving_gap(self, company) -> None:
+        """Задача 8 блока C: разрыв «обслуживающая должность есть, членства
+        нет» — только ПЕЧАТАЕТ, не заводит (решение заказчика 3: членство —
+        отдельное, явное решение человека). Без родителя ``serving_holders``
+        честно вернёт пустой список (у корня дерева предков нет), и вывода
+        не будет вовсе — молчание здесь не подмена, а факт: разрыва нет.
+        """
+        holder_ids = serving_holders(company.slug)
+        missing = membership_service.user_ids_missing_membership(company, holder_ids)
+        if not missing:
+            return
+        self.stdout.write(self.style.WARNING(
+            f"Держателей обслуживающих должностей вышестоящих компаний без "
+            f"членства в {company.slug}: {len(missing)}. Выдать: "
+            f"`manage.py company_grant --company {company.slug} --serving`."
         ))

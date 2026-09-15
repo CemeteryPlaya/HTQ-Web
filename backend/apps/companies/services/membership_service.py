@@ -72,6 +72,26 @@ def grant_membership(company: Company, user_id: int, *,
     return created
 
 
+def user_ids_missing_membership(company: Company, user_ids) -> list[int]:
+    """Из ``user_ids`` — те, у кого ЕЩЁ нет членства в ``company``.
+
+    Для печати разрыва «обслуживающая должность есть, членства нет» в
+    ``manage.py company_create`` (задача 8 блока C) сразу после заведения
+    компании: список держателей приходит через
+    ``apps.access.interface.serving_holders``, а сверка с фактическим
+    членством — тут же, одним запросом, без импорта модели соседней аппки
+    в саму команду.
+    """
+    ids = list(user_ids)
+    if not ids:
+        return []
+    existing = set(
+        CompanyMembership.objects.filter(company=company, user_id__in=ids)
+        .values_list("user_id", flat=True)
+    )
+    return sorted(uid for uid in ids if uid not in existing)
+
+
 def list_memberships(company: Company) -> list[dict]:
     """Участники компании с данными учётки.
 
