@@ -32,6 +32,8 @@ class UnitType(models.TextChoices):
     DEPARTMENT = "department", "Отдел"
     DIVISION = "division", "Управление"
     GROUP = "group", "Группа"
+    # Оргструктура группы (10.09.2026): три дирекции головной компании.
+    DIRECTORATE = "directorate", "Дирекция"
 
 
 class ExternalHierarchy(models.TextChoices):

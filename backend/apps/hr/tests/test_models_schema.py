@@ -153,3 +153,19 @@ def test_audit_log_changed_by_has_no_fk_constraint():
             ["hr_auditlog", "changed_by"],
         )
         assert cur.fetchall() == []
+
+
+@pytest.mark.django_db
+def test_directorate_is_a_unit_type():
+    """Оргструктура холдинга (10.09.2026) — три ДИРЕКЦИИ; подпись в
+    дереве не должна врать «Подразделение»."""
+    from apps.hr.models import Department, UnitType
+
+    assert UnitType.DIRECTORATE == "directorate"
+    dep = Department.objects.create(
+        name="Дирекция по финансам и экономике", path="fin",
+        unit_type=UnitType.DIRECTORATE,
+    )
+    dep.refresh_from_db()
+    assert dep.unit_type == "directorate"
+    assert dep.get_unit_type_display() == "Дирекция"

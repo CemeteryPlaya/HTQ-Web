@@ -37,6 +37,7 @@ const UNIT_LABELS: Record<string, string> = translatedMap({
   headquarters: 'hr.orgChart.unit.headquarters',
   division: 'hr.orgChart.unit.division',
   department: 'hr.orgChart.unit.department',
+  directorate: 'hr.orgChart.unit.directorate',
   pmo: 'hr.orgChart.unit.pmo',
 });
 
