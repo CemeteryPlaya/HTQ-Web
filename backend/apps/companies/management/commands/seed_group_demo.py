@@ -90,10 +90,28 @@ class Command(BaseCommand):
                          verbosity=opts["verbosity"], **account_opts)
             self._grant(slug, _own_staff_user_ids(slug), "своим сотрудникам")
 
-        # Обслуживающие должности холдинга видны только после того, как
-        # засеяны ВСЕ компании: serving_holders идёт вверх по дереву.
+        # Второй проход отдельный и идёт ПОСЛЕ сида всех компаний:
+        # serving_holders поднимается вверх по дереву владения и читает
+        # кадровые карточки предка — до сида холдинга он вернул бы пусто.
+        #
+        # Обслуживающие должности холдинга дают членство только тогда, когда
+        # должности НАЗНАЧЕНА роль: наследование несёт роли, а признак
+        # serves_subsidiaries — лишь канал для них (apps/access/services/holders.py).
+        # Демо-сид роли не назначает намеренно — раздача прав это решение
+        # человека, а не демо-данные, — поэтому на свежем стенде здесь ноль.
+        # Печатаем это явно: молчание читалось бы как «наследование сломано».
+        granted_serving = 0
         for slug, *_ in GROUP:
-            self._grant(slug, serving_holders(slug), "обслуживающим из вышестоящих")
+            granted_serving += self._grant(slug, serving_holders(slug),
+                                           "обслуживающим из вышестоящих")
+        if granted_serving == 0:
+            self.stdout.write(
+                "\n  Обслуживающих держателей из вышестоящих компаний нет: "
+                "должностям холдинга ещё не назначены роли, а без роли признак "
+                "«обслуживает дочерние компании» ничего не выдаёт. Назначьте "
+                "роль должности на экране должностей — членства доберёт "
+                "`manage.py company_grant --company <slug> --serving`."
+            )
 
         if not opts["skip_tasks"]:
             self.stdout.write(f"\n== задачи {TASKS_COMPANY} ==")
@@ -125,9 +143,10 @@ class Command(BaseCommand):
             return
         self.stdout.write(f"  {slug}: уже есть")
 
-    def _grant(self, slug: str, user_ids, label: str) -> None:
+    def _grant(self, slug: str, user_ids: list[int], label: str) -> int:
         if not user_ids:
-            return
+            return 0
         company = Company.objects.get(slug=slug)
         granted = sum(1 for uid in user_ids if membership_service.grant_membership(company, uid))
         self.stdout.write(f"  членства {label}: новых {granted}, было {len(user_ids) - granted}")
+        return granted

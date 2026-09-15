@@ -113,6 +113,17 @@ def test_is_idempotent(fake_provisioning):
     assert Company.objects.count() == 4
 
 
+@pytest.mark.django_db
+def test_explains_why_there_are_no_serving_holders(fake_provisioning, capsys):
+    """Ноль обслуживающих — штатное состояние свежего стенда (ролей ещё нет),
+    и оно обязано быть объяснено: молчание здесь читается как «наследование
+    прав сломано»."""
+    _run(skip_tasks=True)
+    out = capsys.readouterr().out
+    assert "не назначены роли" in out
+    assert "company_grant" in out
+
+
 @pytest.mark.parametrize("host", ["10.0.0.5", "db.example.com", "203.0.113.10"])
 def test_refuses_to_run_against_a_remote_database(host):
     with pytest.raises(CommandError, match="не похож на локальную"):
