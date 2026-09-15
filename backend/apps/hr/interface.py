@@ -144,19 +144,30 @@ def get_positions_brief(position_ids: list[int]) -> list[dict]:
     Inactive positions are returned too: an administrator must be able to see
     and repair an old route rather than have its reference disappear from the
     editor.
+
+    ``serves_subsidiaries`` was added additively (block C, task 7): apps.access
+    already knows a position's *own* serving flag one at a time via
+    ``get_employee_brief`` (``inheritance.inherit``); the external-holders
+    listing (``apps.access.services.holders.external_holders``) instead starts
+    from a batch of position ids that already hold a granted role
+    (``PositionRole``) and needs the flag for all of them at once, without a
+    second bespoke bulk function. Existing callers destructure specific keys
+    and are unaffected by the extra one.
     """
     require_service("hr")
     ids = list(dict.fromkeys(position_ids))
     if not ids:
         return []
     rows = (Position.objects.filter(id__in=ids).select_related("department")
-            .values("id", "title", "department__name", "is_active"))
+            .values("id", "title", "department__name", "is_active",
+                    "serves_subsidiaries"))
     return [
         {
             "id": row["id"],
             "title": row["title"],
             "department_name": row["department__name"],
             "is_active": row["is_active"],
+            "serves_subsidiaries": row["serves_subsidiaries"],
         }
         for row in rows
     ]

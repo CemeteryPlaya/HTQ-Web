@@ -182,7 +182,8 @@ const CompanyRegistry = () => {
                   </div>
                   {panel === 'modules'
                     ? <CompanyModulesPanel slug={company.slug} canEdit={platformAdmin} />
-                    : <CompanyMembersPanel slug={company.slug} canEdit={platformAdmin} canRevoke={platformAdmin} />}
+                    : <CompanyMembersPanel slug={company.slug} canEdit={platformAdmin} canRevoke={platformAdmin}
+                        showExternalHolders={company.show_external_holders} />}
                 </div>
               </div>
             )}

@@ -12,11 +12,13 @@ const setModule = vi.fn();
 const memberships = vi.fn();
 const grantMembership = vi.fn();
 const revokeMembership = vi.fn();
+const externalHolders = vi.fn();
 vi.mock('@/api/companies', () => ({
   companiesApi: {
     modules: () => modules(), setModule: (s: string, a: string, b: unknown) => setModule(s, a, b),
     memberships: () => memberships(), grantMembership: (s: string, b: unknown) => grantMembership(s, b),
     revokeMembership: (s: string, u: number) => revokeMembership(s, u),
+    externalHolders: () => externalHolders(),
   },
 }));
 const toastError = vi.fn();
@@ -47,11 +49,12 @@ describe('CompanyMembersPanel', () => {
     ] });
     grantMembership.mockResolvedValue({ data: { user_id: 8, username: 'petrov', full_name: '', email: '', is_active: true, is_default: false } });
     revokeMembership.mockReset();
+    externalHolders.mockReset();
   });
 
   it('выдаёт членство по id и показывает отказ self_revoke', async () => {
     revokeMembership.mockRejectedValue({ response: { status: 409, data: { detail: 'Нельзя снять членство у себя', code: 'self_revoke' } } });
-    renderWithProviders(<CompanyMembersPanel slug="htq" canEdit canRevoke />);
+    renderWithProviders(<CompanyMembersPanel slug="htq" canEdit canRevoke showExternalHolders={false} />);
     expect(await screen.findByText('ivanov')).toBeInTheDocument();
 
     await userEvent.type(screen.getByLabelText(/id пользователя/i), '8');
@@ -60,5 +63,24 @@ describe('CompanyMembersPanel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /Снять/ }));
     expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/у себя/));
+  });
+
+  it('задача 7 блока C: секция «Из холдинга» отсутствует, когда настройка выключена', async () => {
+    renderWithProviders(<CompanyMembersPanel slug="htq" canEdit canRevoke showExternalHolders={false} />);
+    await screen.findByText('ivanov');
+    expect(screen.queryByText(/Из холдинга/i)).not.toBeInTheDocument();
+    expect(externalHolders).not.toHaveBeenCalled();
+  });
+
+  it('задача 7 блока C: секция «Из холдинга» показывает держателей, когда настройка включена', async () => {
+    externalHolders.mockResolvedValue({ data: [
+      { full_name: 'Петров Пётр', home_company: 'Hi-Tech Group', position: 'Главный бухгалтер',
+        modules: [{ module: 'hr', level: 'read' }] },
+    ] });
+    renderWithProviders(<CompanyMembersPanel slug="htq" canEdit canRevoke showExternalHolders />);
+    expect(await screen.findByText(/Из холдинга/i)).toBeInTheDocument();
+    expect(await screen.findByText('Петров Пётр')).toBeInTheDocument();
+    expect(screen.getByText(/Hi-Tech Group/)).toBeInTheDocument();
+    expect(screen.getByText(/Главный бухгалтер/)).toBeInTheDocument();
   });
 });
