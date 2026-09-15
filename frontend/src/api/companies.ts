@@ -15,6 +15,7 @@ import type {
   CompanyModule,
   CompanyPatch,
   CompanyTreeNode,
+  ExternalHolder,
   MyCompany,
 } from '@/types/companies';
 
@@ -46,4 +47,13 @@ export const companiesApi = {
   /** 409 `self_revoke` — своё членство снять нельзя. */
   revokeMembership: (slug: string, userId: number) =>
     api.delete<void>(path(`companies/${slug}/memberships/${userId}`)),
+
+  /**
+   * Задача 7 блока C: держатели прав из вышестоящих компаний. 403 с телом,
+   * если `show_external_holders` у компании выключен, — вызывающий обязан
+   * проверить настройку ДО запроса (см. `CompanyMembersPanel`), чтобы не
+   * показать пользователю голую ошибку вместо отсутствующей секции.
+   */
+  externalHolders: (slug: string) =>
+    api.get<ExternalHolder[]>(path(`companies/${slug}/external-holders`)),
 };

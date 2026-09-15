@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { reportApiError } from '@/lib/apiError';
 import { COMPANY_KIND_LABELS, type Company, type CompanyKind, type CompanyPatch } from '@/types/companies';
 
@@ -27,9 +28,11 @@ export function CompanyFormDialog({ company, candidates, open, onOpenChange, onS
   const [kind, setKind] = useState<CompanyKind>(company.kind);
   const [country, setCountry] = useState(company.country);
   const [parent, setParent] = useState(company.parent_slug ?? '');
+  const [showExternalHolders, setShowExternalHolders] = useState(company.show_external_holders);
 
   useEffect(() => {
     setName(company.name); setKind(company.kind); setCountry(company.country); setParent(company.parent_slug ?? '');
+    setShowExternalHolders(company.show_external_holders);
   }, [company]);
 
   const mutation = useMutation({
@@ -44,6 +47,7 @@ export function CompanyFormDialog({ company, candidates, open, onOpenChange, onS
     if (kind !== company.kind) body.kind = kind;
     if (country !== company.country) body.country = country;
     if ((parent || null) !== company.parent_slug) body.parent_slug = parent || null;
+    if (showExternalHolders !== company.show_external_holders) body.show_external_holders = showExternalHolders;
     mutation.mutate(body);
   };
 
@@ -67,6 +71,23 @@ export function CompanyFormDialog({ company, candidates, open, onOpenChange, onS
             </select></div>
           <div><Label htmlFor="cf-country">{t('companies.field.country', 'Страна')}</Label>
             <Input id="cf-country" maxLength={2} value={country} onChange={(e) => setCountry(e.target.value.toUpperCase())} /></div>
+          <div className="flex items-center justify-between gap-2 rounded-lg border p-3">
+            <div>
+              <Label htmlFor="cf-external-holders">
+                {t('companies.field.showExternalHolders', 'Показывать внешних держателей прав')}
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {t('companies.showExternalHoldersHint',
+                  'Список сотрудников вышестоящих компаний, чьи должности несут им права здесь. Настройка платформенного уровня.')}
+              </p>
+            </div>
+            <Switch
+              id="cf-external-holders"
+              aria-label={t('companies.field.showExternalHolders', 'Показывать внешних держателей прав')}
+              checked={showExternalHolders}
+              onCheckedChange={setShowExternalHolders}
+            />
+          </div>
           <p className="text-xs text-muted-foreground">
             {t('companies.slugLocked', 'slug не правится: он — имя схемы данных и поддомен компании.')}
           </p>

@@ -24,6 +24,7 @@ class CompanyRead(BaseModel):
     country: str
     parent_slug: str | None
     archived_at: datetime | None
+    show_external_holders: bool
 
 
 class CompanyTreeNode(BaseModel):
@@ -54,6 +55,10 @@ class CompanyPatch(BaseModel):
     kind: str | None = None
     country: str | None = Field(default=None, max_length=2)
     parent_slug: str | None = None
+    # Задача 7 блока C: `None` — «не трогать» (правит только PATCH, которого
+    # само поле не прислало); значение задаётся ТОЛЬКО платформенным
+    # администратором — тем же гейтом, что и остальные поля этой схемы.
+    show_external_holders: bool | None = None
 
     @field_validator("kind")
     @classmethod
@@ -82,6 +87,26 @@ class MembershipRead(BaseModel):
     email: str
     is_active: bool
     is_default: bool
+
+
+class ExternalHolderModule(BaseModel):
+    module: str
+    level: str
+
+
+class ExternalHolderRead(BaseModel):
+    """Строка ``GET companies/<slug>/external-holders`` — задача 7 блока C.
+
+    ⚠️ Ровно четыре поля НАМЕРЕННО: это раскрытие данных сотрудника холдинга
+    дочерней компании, и им управляет ``Company.show_external_holders``. Ни
+    email, ни телефон, ни отдел сюда не попадают — apps.access.interface их
+    и не отдаёт (см. докстринг ``apps.access.services.holders.external_holders``).
+    """
+
+    full_name: str
+    home_company: str
+    position: str
+    modules: list[ExternalHolderModule]
 
 
 class MembershipCreate(BaseModel):

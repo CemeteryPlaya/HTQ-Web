@@ -18,6 +18,13 @@ export interface Company {
   country: string;
   parent_slug: string | null;
   archived_at: string | null;
+  /**
+   * Задача 7 блока C, решение заказчика 4: показывать ли дочерней компании
+   * список держателей прав из вышестоящих компаний. Настройка компании —
+   * правит её только платформенный администратор (`PATCH companies/<slug>`,
+   * тот же гейт, что у остальных полей).
+   */
+  show_external_holders: boolean;
 }
 
 export interface CompanyTreeNode {
@@ -43,6 +50,7 @@ export interface CompanyPatch {
   kind?: CompanyKind;
   country?: string;
   parent_slug?: string | null;
+  show_external_holders?: boolean;
 }
 
 export interface CompanyModule {
@@ -59,6 +67,24 @@ export interface CompanyMembership {
   email: string;
   is_active: boolean;
   is_default: boolean;
+}
+
+/** Уровень модуля — то же множество, что `AccessLevel` в `src/types/access.ts`. */
+export interface ExternalHolderModule {
+  module: string;
+  level: string;
+}
+
+/**
+ * Строка `GET companies/<slug>/external-holders` (задача 7 блока C). Ровно
+ * четыре поля — раскрытие данных сотрудника холдинга дочерней компании
+ * намеренно ограничено ими на бэкенде; лишнего здесь не бывает.
+ */
+export interface ExternalHolder {
+  full_name: string;
+  home_company: string;
+  position: string;
+  modules: ExternalHolderModule[];
 }
 
 export const COMPANY_KIND_LABELS: Record<CompanyKind, string> = {

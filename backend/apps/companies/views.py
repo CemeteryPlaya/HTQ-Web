@@ -176,7 +176,8 @@ class CompanyItemView(CompaniesView):
         denied = self.deny_unless_platform_admin()
         if denied is not None:
             return denied
-        kwargs = {"name": data.name, "kind": data.kind, "country": data.country}
+        kwargs = {"name": data.name, "kind": data.kind, "country": data.country,
+                 "show_external_holders": data.show_external_holders}
         if "parent_slug" in data.model_fields_set:
             kwargs["parent_slug"] = data.parent_slug
         try:
@@ -323,3 +324,39 @@ class CompanyMembershipItemView(CompaniesView):
         if not membership_service.revoke_membership(company, user_id):
             return json_error("Членства нет", 404)
         return HttpResponse(status=204)
+
+
+# ── Внешние держатели прав ──────────────────────────────────────────────
+
+class CompanyExternalHoldersView(CompaniesView):
+    """``GET companies/<slug>/external-holders`` — задача 7 блока C.
+
+    Кто из компаний-предков сейчас держит права ЗДЕСЬ через обслуживающую
+    должность (``apps.access.services.holders.external_holders``, за
+    ``apps.access.interface`` — companies не видит внутренности access).
+
+    Гейт — тот же ``deny_unless_own_company``, что и у ростера участников:
+    своя компания либо платформенный администратор. Настройка
+    ``Company.show_external_holders`` (решение заказчика 4) проверяется
+    ПОСЛЕ гейта и отдаёт 403 с телом, а не пустой список — пустой список
+    сказал бы «внешних держателей нет», а это неправда, когда их просто не
+    показывают.
+    """
+
+    @read
+    def get(self, request, slug: str):
+        denied = self.deny_unless_own_company(slug)
+        if denied is not None:
+            return denied
+        try:
+            company = self.company_or_404(slug)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        if not company.show_external_holders:
+            return json_error(
+                "Видимость держателей прав из вышестоящих компаний выключена "
+                "для этой компании платформенным администратором", 403,
+            )
+        from apps.access import interface as access
+
+        return [schemas.ExternalHolderRead(**row) for row in access.external_holders(slug)]

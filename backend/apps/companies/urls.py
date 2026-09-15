@@ -27,6 +27,8 @@ urlpatterns = [
     path("companies/<slug:slug>/memberships/<int:user_id>/", views.CompanyMembershipItemView.as_view()),
     path("companies/<slug:slug>/memberships", views.CompanyMembershipsView.as_view()),
     path("companies/<slug:slug>/memberships/", views.CompanyMembershipsView.as_view()),
+    path("companies/<slug:slug>/external-holders", views.CompanyExternalHoldersView.as_view()),
+    path("companies/<slug:slug>/external-holders/", views.CompanyExternalHoldersView.as_view()),
     path("companies/<slug:slug>", views.CompanyItemView.as_view()),
     path("companies/<slug:slug>/", views.CompanyItemView.as_view()),
     path("companies", views.CompanyCollectionView.as_view()),

@@ -11,8 +11,8 @@ const patch = vi.fn();
 vi.mock('@/api/companies', () => ({ companiesApi: { patch: (s: string, b: unknown) => patch(s, b) } }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
-const group: Company = { id: 1, slug: 'hi-tech-group', name: 'Hi-Tech Group', kind: 'holding', status: 'active', country: '', parent_slug: null, archived_at: null };
-const htq: Company = { id: 2, slug: 'hi-tech-qazaqstan', name: 'Hi-Tech Qazaqstan', kind: 'regional', status: 'active', country: '', parent_slug: null, archived_at: null };
+const group: Company = { id: 1, slug: 'hi-tech-group', name: 'Hi-Tech Group', kind: 'holding', status: 'active', country: '', parent_slug: null, archived_at: null, show_external_holders: true };
+const htq: Company = { id: 2, slug: 'hi-tech-qazaqstan', name: 'Hi-Tech Qazaqstan', kind: 'regional', status: 'active', country: '', parent_slug: null, archived_at: null, show_external_holders: true };
 
 describe('CompanyFormDialog', () => {
   it('отправляет PATCH только с изменёнными полями, parent_slug — явно', async () => {
@@ -37,5 +37,21 @@ describe('CompanyFormDialog', () => {
     );
     const options = Array.from((screen.getByLabelText(/Вышестоящая/) as HTMLSelectElement).options).map((o) => o.value);
     expect(options).toEqual(['', 'hi-tech-group']);
+  });
+
+  it('переключатель видимости внешних держателей отражает состояние компании и уходит в PATCH', async () => {
+    patch.mockResolvedValue({ data: { ...htq, show_external_holders: false } });
+    const onSaved = vi.fn();
+    renderWithProviders(
+      <CompanyFormDialog company={htq} candidates={[group, htq]} open onOpenChange={() => {}} onSaved={onSaved} />,
+    );
+    const toggle = screen.getByRole('switch', { name: /внешних держателей/i });
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole('button', { name: /Сохранить/ }));
+
+    expect(patch).toHaveBeenCalledWith('hi-tech-qazaqstan', { show_external_holders: false });
+    expect(onSaved).toHaveBeenCalled();
   });
 });

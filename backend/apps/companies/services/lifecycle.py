@@ -177,8 +177,15 @@ def provision_company(*, slug: str, name: str, kind: str,
 
 
 def update_company(slug: str, *, name: str | None = None, kind: str | None = None,
-                   country: str | None = None, parent_slug=UNSET) -> Company:
-    """Правка реестровых полей. Slug не правится никогда: он — имя схемы и поддомен."""
+                   country: str | None = None, parent_slug=UNSET,
+                   show_external_holders: bool | None = None) -> Company:
+    """Правка реестровых полей. Slug не правится никогда: он — имя схемы и поддомен.
+
+    ``show_external_holders`` (задача 7 блока C) не нуждается в ``UNSET``, в
+    отличие от ``parent_slug``: это простой булев переключатель, и у него нет
+    третьего, «явно пустого» значения — ``None`` однозначно значит «не
+    трогать».
+    """
     company = get_company_or_raise(slug)
     if name is not None:
         company.name = name
@@ -192,6 +199,8 @@ def update_company(slug: str, *, name: str | None = None, kind: str | None = Non
         parent = _resolve_parent(parent_slug)
         _assert_no_cycle(company, parent)
         company.parent = parent
+    if show_external_holders is not None:
+        company.show_external_holders = show_external_holders
     _full_clean(company)
     company.save()
     return company

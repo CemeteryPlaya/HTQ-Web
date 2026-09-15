@@ -80,6 +80,15 @@ class Company(models.Model):
         related_name="predecessors",
     )
     archived_at = models.DateTimeField(null=True, blank=True)
+    # Задача 7 блока C, решение заказчика 4: видимость списка внешних
+    # держателей прав (сотрудников вышестоящих компаний, чья обслуживающая
+    # должность несёт им права здесь) — настройка КОМПАНИИ, а не выбор её
+    # собственного администратора и не «всегда показывать». Правит её только
+    # платформенный администратор — тем же гейтом, что и остальные поля
+    # реестра (``CompanyItemView.patch::deny_unless_platform_admin``), новый
+    # гейт не заводится. Включено по умолчанию: скрывать по умолчанию значило
+    # бы прятать сам факт доступа от той компании, чьи данные читают.
+    show_external_holders = models.BooleanField(default=True, db_default=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 

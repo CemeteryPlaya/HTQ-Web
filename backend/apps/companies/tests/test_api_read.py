@@ -72,7 +72,9 @@ def test_superuser_lists_all_by_default_and_filters_by_status(client, group):
     htq = next(c for c in res.json() if c["slug"] == "hi-tech-qazaqstan")
     assert htq == {"id": group["htq"].id, "slug": "hi-tech-qazaqstan", "name": "Hi-Tech Qazaqstan",
                    "kind": "construction", "status": "active", "country": "KZ",
-                   "parent_slug": "hi-tech-group", "archived_at": None}
+                   "parent_slug": "hi-tech-group", "archived_at": None,
+                   # Задача 7 блока C: включено по умолчанию (решение заказчика 4).
+                   "show_external_holders": True}
 
     res = client.get(f"{BASE}/companies?status=archived", **auth(superuser_token()))
     assert [c["slug"] for c in res.json()] == ["keg"]

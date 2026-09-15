@@ -122,6 +122,35 @@ def test_module_patch_of_other_company_is_forbidden_for_company_scoped_writer(cl
 
 
 @pytest.mark.django_db
+def test_show_external_holders_is_editable_only_by_platform_admin(client, pair):
+    """Задача 7 блока C, решение заказчика 4: настройка видимости внешних
+    держателей правится ровно тем же гейтом, что и остальные поля реестра —
+    ``deny_unless_platform_admin`` в ``CompanyItemView.patch``. Проверяем это
+    тестом, а не предполагаем: обычный токен без прав получает 403, поле не
+    меняется; платформенный администратор меняет его, и PATCH/GET оба видят
+    новое значение."""
+    holding, htq = pair
+    assert htq.show_external_holders is True  # умолчание — включено (решение 7 плана)
+
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}",
+                     {"show_external_holders": False}, **auth(token()))
+    assert res.status_code == 403
+    htq.refresh_from_db()
+    assert htq.show_external_holders is True
+
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}",
+                     {"show_external_holders": False}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["show_external_holders"] is False
+    htq.refresh_from_db()
+    assert htq.show_external_holders is False
+
+    res = client.get(f"{BASE}/companies/{htq.slug}", **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["show_external_holders"] is False
+
+
+@pytest.mark.django_db
 def test_superuser_still_writes_across_companies(client, pair):
     """Платформенный администратор не привязан к «своей» компании — новая
     проверка бьёт только company-scoped роли, не is_superuser."""
