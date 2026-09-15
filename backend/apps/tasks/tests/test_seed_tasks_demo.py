@@ -66,13 +66,12 @@ def hr_data(db):
 
     Полный ``seed_hr_demo`` здесь не гоняем: команде задач нужны только
     отделы по путям и сотрудники с ``user_id`` — минимальный набор быстрее
-    и точнее показывает, что именно она из hr читает.
+    и точнее показывает, что именно она из hr читает. Пути отделов должны
+    совпадать с утверждённой структурой HTQ.
     """
     departments = {}
-    for path, name in (("stroy", "Строительство"),
-                       ("stroy.elektro", "Электромонтаж"),
-                       ("proekt", "Проектирование"),
-                       ("snab", "Снабжение")):
+    for path, name in (("upr", "Руководство"),
+                       ("stroy", "Строительство")):
         departments[path] = Department.objects.create(name=name, path=path)
 
     position = Position.objects.create(
@@ -447,6 +446,43 @@ def test_staff_reports_land_on_blocks_that_have_a_plan(hr_data):
     assert reported and reported <= planned_blocks
 
 
+# ── структура компании ────────────────────────────────────────────────────
+
+def test_every_project_department_path_exists_in_the_htq_structure():
+    """Пути отделов, которые ждёт сид задач, обязаны быть в утверждённой
+    структуре HTQ — иначе проекты остаются без отдела молча (department_id
+    nullable)."""
+    from apps.hr.management import group_structures as gs  # тесты вне сторожа изоляции
+    from apps.tasks.management.commands.seed_tasks_demo import PROJECTS
+
+    paths = {u.path for u in gs.STRUCTURES["construction"].units}
+    for spec in PROJECTS:
+        assert spec["department_path"] in paths, spec["name"]
+
+
+# ── опция --company ────────────────────────────────────────────────────────
+
+def test_company_option_writes_into_the_company_schema(company_schema):
+    from htqweb.tenancy.db import use_company
+
+    with use_company(company_schema["slug"]):
+        departments = {}
+        for path, name in (("upr", "Руководство"), ("stroy", "Строительство")):
+            departments[path] = Department.objects.create(name=name, path=path)
+        position = Position.objects.create(title="Инженер", department=departments["stroy"], weight=1000)
+        for i in range(4):
+            Employee.objects.create(
+                first_name=f"Имя{i}", last_name=f"Фамилия{i}", email=f"seed{i}@htq.test",
+                department=departments["stroy"], position=position,
+                hire_date="2024-01-09", user_id=100 + i)
+
+    _seed(company=company_schema["slug"])
+
+    with use_company(company_schema["slug"]):
+        assert Project.objects.count() >= 4
+    assert Project.objects.count() == 0  # public не тронут
+
+
 def test_staff_report_dates_are_never_in_the_future(hr_data):
     """Дата ВЫХОДА людей: отчитаться за завтра нельзя."""
     _seed()
@@ -665,7 +701,7 @@ def test_wipe_touches_nothing_outside_the_app(hr_data):
     держатся ни на чём отсюда (кросс-доменных FK в проекте нет)."""
     _seed()
     _seed(wipe_only=True)
-    assert Department.objects.count() == 4
+    assert Department.objects.count() == 2
     assert Employee.objects.count() == 4
 
 

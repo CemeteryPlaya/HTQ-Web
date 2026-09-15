@@ -167,6 +167,10 @@ BLOCK_VOLUMES = [
     ("Жанаозен", "РП-3", "Кабель 10 кВ", 400),
 ]
 
+# Пути отделов — из утверждённой структуры HTQ
+# (apps/hr/management/group_structures.py): у строительной компании один
+# профильный отдел ``stroy``. Прежние ``stroy.elektro``/``proekt`` были из
+# старого одно-компанейского сида и оставляли бы проекты без отдела молча.
 PROJECTS = [
     {"name": "Алга-2026: подстанция 110/10",
      "description": "Строительство и ввод подстанции на объекте Алга.",
@@ -180,14 +184,14 @@ PROJECTS = [
     {"name": "Сазаган: СЭС, вторая очередь",
      "description": "Монтаж второй очереди солнечной электростанции.",
      "status": ProjectStatus.ACTIVE, "color": "#16a34a",
-     "department_path": "stroy.elektro",
+     "department_path": "stroy",
      "sites": ["Сазаган"], "primary": "Сазаган",
      "start": _d(-30), "end": _d(180),
      "production_calendar": False},
     {"name": "Западный контур: ЛЭП и РП",
      "description": "Сквозной проект по двум объектам западного контура.",
      "status": ProjectStatus.ACTIVE, "color": "#f97316",
-     "department_path": "proekt",
+     "department_path": "stroy",
      "sites": ["Кандыагаш", "Жанаозен"], "primary": "Кандыагаш",
      "start": _d(-120), "end": _d(60),
      # Проектный, а не монтажный: бюро действительно работает по
@@ -666,6 +670,11 @@ class Command(BaseCommand):
                                  "наполнением — сносит и чужие строки.")
         parser.add_argument("--wipe-only", action="store_true",
                             help="Только полная очистка домена.")
+        parser.add_argument(
+            "--company", dest="company", default=None,
+            help="slug компании: данные пишутся в её схему. Без флага — "
+                 "текущий search_path (режим перехода).",
+        )
         parser.add_argument("--force-remote", action="store_true",
                             help="Осознанно разрешить неместную БД.")
 
@@ -1277,10 +1286,24 @@ class Command(BaseCommand):
 
     # ── точка входа ────────────────────────────────────────────────────────
 
-    @transaction.atomic
     def handle(self, *args, **options):
         self._assert_local(options["force_remote"])
+        slug = options["company"]
+        if slug is None:
+            self._run(options)
+            return
+        from apps.companies import interface as companies
+        from htqweb.tenancy.db import use_company
 
+        if companies.get_company(slug) is None:
+            raise CommandError(f"Компания {slug!r} не найдена в реестре.")
+        if not companies.schema_exists(slug):
+            raise CommandError(f"У компании {slug!r} нет схемы Postgres.")
+        with use_company(slug):
+            self._run(options)
+
+    @transaction.atomic
+    def _run(self, options) -> None:
         if options["wipe"] or options["wipe_only"]:
             self.stdout.write("Полная очистка домена задач...")
             self._wipe()
