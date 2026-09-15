@@ -42,7 +42,8 @@ def get_employee_brief(user_id: int) -> dict | None:
         Employee.objects.filter(user_id=user_id, is_deleted=False)
         .values("id", "first_name", "last_name", "department_id",
                 "position_id", "position__title", "status",
-                "position__is_manager", "position__external_hierarchy")
+                "position__is_manager", "position__external_hierarchy",
+                "position__serves_subsidiaries")
         .first()
     )
     if row is None:
@@ -63,6 +64,10 @@ def get_employee_brief(user_id: int) -> dict | None:
         # Ключи добавлены АДДИТИВНО — остальные читает действующий фронт.
         "is_manager": row["position__is_manager"],
         "external_hierarchy": row["position__external_hierarchy"],
+        # Третий шов: «обслуживает дочерние компании» — читает apps.access
+        # (roadmap §5.C), тем же способом, что и пара полей внешней иерархии
+        # выше. Ключ добавлен АДДИТИВНО — остальные читает действующий фронт.
+        "serves_subsidiaries": row["position__serves_subsidiaries"],
         "status": row["status"],
     }
 

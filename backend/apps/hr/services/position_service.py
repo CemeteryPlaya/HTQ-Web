@@ -178,6 +178,7 @@ def serialize(pos: Position) -> dict:
         "is_system": pos.is_system,
         "is_manager": pos.is_manager,
         "external_hierarchy": pos.external_hierarchy,
+        "serves_subsidiaries": pos.serves_subsidiaries,
         "created_at": pos.created_at.isoformat(),
         "updated_at": pos.updated_at.isoformat(),
     }

@@ -123,7 +123,7 @@ def test_list_returns_paginated_envelope_ordered_by_weight(admin_auth, dep):
     assert [p["title"] for p in body["items"]] == ["Первый", "Второй"]
     assert {"id", "title", "department_id", "grade", "description", "requirements",
             "is_active", "weight", "permissions", "level", "is_system",
-            "is_manager", "external_hierarchy",
+            "is_manager", "external_hierarchy", "serves_subsidiaries",
             "created_at", "updated_at"} == set(body["items"][0])
 
 

@@ -73,6 +73,7 @@ class PositionCreate(BaseModel):
     weight: int = Field(default=100, ge=0)
     is_manager: bool = False
     external_hierarchy: ExternalHierarchyLiteral = "inherit"
+    serves_subsidiaries: bool = False
     # НЕ поле модели: level в БД — кэш, вычисляемый из веса. Здесь это способ
     # выбрать вес («поставь должность на уровень L3»): сервис подбирает
     # свободный вес внутри диапазона порога, а level, как и прежде, приходит
@@ -95,6 +96,7 @@ class PositionUpdate(BaseModel):
     weight: int | None = Field(default=None, ge=0)
     is_manager: bool | None = None
     external_hierarchy: ExternalHierarchyLiteral | None = None
+    serves_subsidiaries: bool | None = None
     level: int | None = Field(default=None, ge=1)  # см. PositionCreate.level
     permissions: PositionPermissions | None = None
 
