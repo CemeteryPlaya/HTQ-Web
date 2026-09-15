@@ -88,16 +88,41 @@ def test_gate_without_company_context_rejects():
     assert resp.status_code == 403
 
 
+# Аппки, чьи ручки и гейты авторизации разработаны вместе.
+# Гейт на них не ретрофит на старые ручки — он часть исходного дизайна.
+# Список должен быть КОРОТКИМ: каждая запись — это декларация, что у аппки
+# нет старых ручек без авторизации, к которым гейт был приклеен потом.
+_GATE_ALLOWLIST = {
+    "apps/companies/views.py",  # новая аппка, ручки и гейт авторизации спроектированы вместе
+}
+
+
 def test_gate_is_declared_but_not_hung_anywhere():
-    """В этой стадии гейт не навешивается ни на одну существующую ручку."""
+    """Гейт не навешивается ни на одну ручку, которая его не предусматривала.
+
+    В этой стадии гейт объявлен, но ни на какую существующую ручку он не
+    навешивается — это отдельная работа поверх переработанного HR (спека A8).
+    Причина: модели доступа старых аппок (особенно HR) переделываются отдельно,
+    и ретрофит гейта на них произойдёт в тот же момент — не раньше.
+
+    Исключение: аппки вроде ``companies``, где ручки и гейты авторизации
+    спроектированы и разработаны вместе с самого начала, уже в этой стадии.
+    Для них гейт не ретрофит, а часть контракта.
+
+    Список исключений (_GATE_ALLOWLIST) обязан быть коротким и содержать только
+    аппки, где есть уверенность, что все существующие ручки правильно гейтированы.
+    """
     import pathlib
 
     backend = pathlib.Path(__file__).resolve().parents[3]
     offenders = []
     for path in (backend / "apps").rglob("views.py"):
+        posix_path = path.relative_to(backend).as_posix()
+        if posix_path in _GATE_ALLOWLIST:
+            continue
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if "module=" in line and "api_view" in line:
-                offenders.append(f"{path.relative_to(backend)}:{lineno}")
+                offenders.append(f"{posix_path}:{lineno}")
     assert offenders == [], f"гейт навешен раньше времени: {offenders}"
 
 
