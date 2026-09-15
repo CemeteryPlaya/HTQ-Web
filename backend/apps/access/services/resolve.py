@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from apps.access import depth, registry
 from apps.access.models import (
@@ -119,10 +121,17 @@ class Resolution:
     запросами и между тестами, и ошибка в этом сбросе отдала бы права одного
     пользователя другому. Явный параметр живёт в кадре вызывающего и не может
     протечь никуда мимо него.
+
+    ``frozen=True`` запрещает только переприсвоить ``scopes``/``rows``, а не
+    поменять их содержимое — ``res.rows[42]["hr"] = ...`` для обычных ``dict``
+    прошло бы молча. Поэтому обе карты (и вложенная карта узлов внутри
+    ``rows``) оборачиваются в ``MappingProxyType`` в ``resolve_for`` — только
+    это и делает гарантию неизменности настоящей, а не декларативной: попытка
+    мутировать бросает ``TypeError`` вместо тихой порчи чужого запроса.
     """
 
-    scopes: dict[int, tuple[str, int | None]]
-    rows: dict[int, dict[str, frozenset[str]]]
+    scopes: Mapping[int, tuple[str, int | None]]
+    rows: Mapping[int, Mapping[str, frozenset[str]]]
 
 
 def resolve_for(user, company: str | None) -> Resolution:
@@ -133,9 +142,22 @@ def resolve_for(user, company: str | None) -> Resolution:
     ``Resolution`` для него означало бы вернуть в горячий путь ровно те
     запросы, которые эта функция должна убрать. Решать, нужен ли вообще
     контекст, — дело вызывающего (``identity(user)`` до вызова этой функции).
+
+    Оборачивает обе карты в ``MappingProxyType`` (и ``rows`` — на обоих
+    уровнях: сама карта ролей и карта узлов КАЖДОЙ роли) прежде чем положить
+    их в ``Resolution``: следующая задача читает и обогащает этот объект
+    наследованием внешней иерархии, и первая же реализация, которая правит
+    существующий ``Resolution`` на месте вместо постройки нового, иначе
+    незаметно подмешает узлы одной роли другой или одного запроса — другому.
     """
     scopes = _role_scopes(user, company)
-    return Resolution(scopes=scopes, rows=_rows_by_role(scopes))
+    rows = _rows_by_role(scopes)
+    return Resolution(
+        scopes=MappingProxyType(scopes),
+        rows=MappingProxyType(
+            {role_id: MappingProxyType(nodes) for role_id, nodes in rows.items()}
+        ),
+    )
 
 
 # ── Публичные ответы ────────────────────────────────────────────────────────

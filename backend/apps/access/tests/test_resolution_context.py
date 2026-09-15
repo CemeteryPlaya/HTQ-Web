@@ -56,11 +56,16 @@ def test_me_endpoint_computes_roles_once(client, user, employee_with_position):
     До починки MeView зовёт page_hidden один раз на узел-страницу (их 32)
     плюс permissions_for и depth_map — каждый вызов пересчитывал роли и
     отдельно бил в access_rolepermission, то есть запросов к этой таблице
-    было ПОРЯДКА ЧИСЛА СТРАНИЦ. После починки Resolution строится один раз
-    на весь запрос, а _rows_by_role (единственное место, читающее
+    было ПОРЯДКА ЧИСЛА СТРАНИЦ (фактически — 34 при прогоне этого же теста
+    против кода до Step 3-4 брифа). После починки Resolution строится один
+    раз на весь запрос, а _rows_by_role (единственное место, читающее
     access_rolepermission) вызывается ровно один раз внутри resolve_for —
-    отсюда предел "не больше 1": число подобрано наблюдением за фактическим
-    прогоном этого теста после Step 3-4 брифа, а не взято с потолка.
+    отсюда точное число "1", а не просто верхняя граница: число подобрано
+    наблюдением за фактическим прогоном этого теста, а не взято с потолка.
+    "==1", а не "<=1" — точное равенство ловит и рост (снова считать роли
+    в цикле), и случайное исчезновение этого единственного запроса (кто-то
+    закэшировал не то и сломал наблюдаемость), а не только регрессию в одну
+    сторону.
     """
     Company.objects.create(slug=COMPANY, name="ХТЛ Холдинг", kind=CompanyKind.HOLDING)
     role = Role.objects.create(code="r-me", title="Роль /me")
@@ -76,8 +81,9 @@ def test_me_endpoint_computes_roles_once(client, user, employee_with_position):
     role_permission_queries = [
         q for q in ctx.captured_queries if "access_rolepermission" in q["sql"]
     ]
-    assert len(role_permission_queries) <= 1, (
+    assert len(role_permission_queries) == 1, (
         f"запросов к access_rolepermission: {len(role_permission_queries)} — "
-        "не должно расти с числом страниц (один расчёт Resolution на /me): "
+        "должен быть ровно 1 (один расчёт Resolution на /me), не должно расти "
+        "с числом страниц: "
         f"{[q['sql'] for q in role_permission_queries]}"
     )
