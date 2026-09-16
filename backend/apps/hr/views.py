@@ -63,6 +63,7 @@ from .services import position_service as pos_svc
 from .services import recruitment_service as rec_svc
 from .services import share_link_service as share_link_svc
 from .services import staffing_service as staffing_svc
+from .services import substitution_service as sub_svc
 from .services import time_service as time_svc
 
 
@@ -395,6 +396,69 @@ def position_detail(request, id: int):
         return _update_position(request, id=id)
     if request.method == "DELETE":
         return _delete_position(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /positions/{id}/substitutions — матрица замещения (блок E) ────────────────
+
+def _substitution_error(exc: sub_svc.SubstitutionError):
+    """Одна точка перевода доменной ошибки в HTTP: каждая ошибка сервиса
+    несёт свой status и detail, и дублировать таблицу соответствий в каждой
+    вьюхе не нужно."""
+    return json_error(exc.detail, exc.status)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def _list_substitutions(request, id: int):
+    return [sub_svc.serialize(row) for row in sub_svc.list_for_position(id)]
+
+
+@api_view(methods=("POST",), auth="jwt", admin=True,
+          body=schemas.SubstitutionCreate, status=201)
+def _create_substitution(request, id: int, data: schemas.SubstitutionCreate):
+    try:
+        row = sub_svc.create(
+            position_id=id, substitute_position_id=data.substitute_position_id,
+            kind=data.kind, basis=data.basis, note=data.note,
+            valid_from=data.valid_from, valid_to=data.valid_to,
+        )
+    except sub_svc.SubstitutionError as exc:
+        return _substitution_error(exc)
+    return sub_svc.serialize(row)
+
+
+def position_substitutions(request, id: int):
+    if request.method == "GET":
+        return _list_substitutions(request, id=id)
+    if request.method == "POST":
+        return _create_substitution(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.SubstitutionUpdate)
+def _update_substitution(request, sub_id: int, data: schemas.SubstitutionUpdate):
+    fields = data.model_dump(exclude_unset=True)
+    try:
+        row = sub_svc.update(sub_id, **fields)
+    except sub_svc.SubstitutionError as exc:
+        return _substitution_error(exc)
+    return sub_svc.serialize(row)
+
+
+@api_view(methods=("DELETE",), auth="jwt", admin=True)
+def _delete_substitution(request, sub_id: int):
+    try:
+        sub_svc.delete(sub_id)
+    except sub_svc.SubstitutionError as exc:
+        return _substitution_error(exc)
+    return HttpResponse(status=204)
+
+
+def substitution_detail(request, sub_id: int):
+    if request.method == "PATCH":
+        return _update_substitution(request, sub_id=sub_id)
+    if request.method == "DELETE":
+        return _delete_substitution(request, sub_id=sub_id)
     return json_error("Method Not Allowed", 405)
 
 

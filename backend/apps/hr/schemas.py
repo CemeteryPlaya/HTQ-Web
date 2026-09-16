@@ -142,6 +142,32 @@ class LevelThresholdUpdate(BaseModel):
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
 
 
+class SubstitutionCreate(BaseModel):
+    substitute_position_id: int
+    kind: Literal["primary", "reserve"] = "primary"
+    basis: str = Field(..., min_length=1, max_length=255)
+    note: str | None = Field(default=None, max_length=255)
+    valid_from: date
+    valid_to: date | None = None
+
+    @model_validator(mode="after")
+    def _period_is_sane(self):
+        # Тот же инвариант, что в CheckConstraint модели: 422 из схемы
+        # понятнее клиенту, чем 500 из БД.
+        if self.valid_to is not None and self.valid_to < self.valid_from:
+            raise ValueError("valid_to не может быть раньше valid_from")
+        return self
+
+
+class SubstitutionUpdate(BaseModel):
+    substitute_position_id: int | None = None
+    kind: Literal["primary", "reserve"] | None = None
+    basis: str | None = Field(default=None, min_length=1, max_length=255)
+    note: str | None = Field(default=None, max_length=255)
+    valid_from: date | None = None
+    valid_to: date | None = None
+
+
 # ── employees — порт services/hr/app/schemas/employee.py ────────────────────
 #
 # ``status`` — ШЕСТЬ значений контракта (см. models.py::EmployeeStatus

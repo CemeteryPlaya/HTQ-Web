@@ -72,6 +72,12 @@ urlpatterns = [
     path("positions/<int:id>/", views.position_detail),
     path("positions/<int:id>", views.position_detail),
 
+    # Матрица замещения (блок E). Обе формы пути — APPEND_SLASH=False.
+    path("positions/<int:id>/substitutions", views.position_substitutions),
+    path("positions/<int:id>/substitutions/", views.position_substitutions),
+    path("substitutions/<int:sub_id>", views.substitution_detail),
+    path("substitutions/<int:sub_id>/", views.substitution_detail),
+
     # ── employees ─────────────────────────────────────────────────────────
     # Литеральные роуты (hr-level/, me/) — ДО /<int:id>/, ровно как в
     # роутере исходника (users/ тоже был бы здесь, но эндпойнт отложен —
