@@ -305,6 +305,8 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/hr/v1/departments/tree`             | GET    | Full tree                      |
 | `/api/hr/v1/positions/`                   | GET, POST |                              |
 | `/api/hr/v1/positions/levels/`            | GET, POST | Level thresholds                |
+| `/api/hr/v1/positions/{id}/substitutions` | GET, POST | Substitution matrix — GET: JWT, POST: admin=True |
+| `/api/hr/v1/substitutions/{id}`          | PATCH, DELETE | Edit/delete (admin=True) |
 | `/api/hr/v1/vacancies/`                   | GET, POST |                              |
 | `/api/hr/v1/applications/`                | GET, POST | Candidate applications      |
 | `/api/hr/v1/time/`                        | GET, POST | Time tracking               |

@@ -87,7 +87,7 @@
 | Роли «функция × глубина» | ✅ | гейт `api_view(module=…)` не навешен ни на одну из 470 ручек; `Position.permissions`+`hr-level` живут параллельно |
 | Сводки холдинга | строятся | никем не читаются |
 | Матрица полномочий | движок signoff | только финансы; нет относительных согласующих («руководитель блока», ОСУ); нет кросс-компанейских этапов |
-| Замещение | — | модели нет нигде |
+| Замещение | ✅ `hr.Substitution` + `substitutes_for` | расхождение названия должностей в HR-FRM-006 и оргструктуре (§8.2); строка «Системный администратор → внутригрупповой ИТ-подрядчик» не выражается должностью |
 | Демо-данные | ✅ `seed_group_demo` | `group_structures.py` (4 утверждённые структуры), `seed_group_demo` заводит холдинг и ДО, сеет структуры и учётки |
 
 ## 5. Блоки работ (моя зона)
@@ -189,11 +189,13 @@
 
 Пунктирные связи как `ReportingRelation.functional`. Пустой блок на N-4 HTQ (вопрос руководству §8.3) не сеется.
 
-### E. Замещение (HR-FRM-006)
-- `hr.Substitution(position, substitute_position, kind=primary|reserve,
-  basis, valid_from, valid_to)` + UI на карточке должности;
-- `apps.hr.interface.substitutes_for(position_id, on_date) -> list[dict]`
-  — контракт для signoff (§6).
+### E. Замещение (HR-FRM-006) — (выполнено)
+
+**Что сделано:**
+- `hr.Substitution(position, substitute_position, kind=primary|reserve, basis, valid_from, valid_to, note)` (expand-миграция `hr/0025`) + сервис `substitution_service.py` (пересечения, валидация, история);
+- `apps.hr.interface.substitutes_for(position_id, on_date) -> list[{position_id, kind, basis}]` — контракт для signoff (§6.1), закреплён тестом на точный набор ключей;
+- HTTP: `GET/POST positions/{id}/substitutions`, `PATCH/DELETE substitutions/{id}` (чтение — JWT, запись — админ);
+- `PositionSubstitutions.tsx` на карточке должности, сеялка матрицы в демо-стенде (10 строк; «Системный администратор → ИТ-подрядчик» не сеется из-за расхождения названий, команда печатает предупреждение).
 
 ### F. ОСУ / «Участник»
 Должность уровня N-0 в холдинге («Участник (ОСУ)», `is_system`) — тогда
@@ -230,7 +232,7 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
 | `hr.get_positions_brief(ids)`, `hr.resolve_position_users(ids)` | есть; действуют в контексте текущей компании | без изменений |
 | `hr.get_employee_brief(user_id)` → `+is_manager`, `+external_hierarchy` | блок B | меняет `access.subordinate_companies` |
 | `hr.manager_position_of(position_id) -> int \| None` | новое (B) | «Руководитель блока» = руководитель дирекции инициатора |
-| `hr.substitutes_for(position_id, on_date) -> list[{position_id, kind: primary\|reserve, basis}]` | новое (E) | подмена согласующего |
+| `hr.substitutes_for(position_id, on_date) -> list[{position_id, kind: primary\|reserve, basis}]` | есть, блок E | подмена согласующего |
 | `companies.get_company(slug)`, `companies.active_company_slugs()` | есть | кросс-компанейские этапы |
 | `access.subordinate_companies(user, company)` | есть (пусто до B) | право ГД/CFO холдинга согласовывать в ДО |
 | `access.permission_level(token, module, company)` | есть | их `api_view(module="contracts"/"signoff")` |
@@ -277,7 +279,7 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
 
 1. **A** (реестр, переключатель, `tenancy_status`, гейт последней компании)
    — безопасно при одной компании; слепок до/после.
-2. **D** + **B** — expand-миграции `hr/0021`–`0024` через `migrate_companies` на HTQ (миграции `hr/0023`–`0024` no-op по данным: choices без DDL; пороги уже есть); слепок до/после; contracts/signoff не затронуты.
+2. **D** + **B** + **E** — expand-миграции `hr/0021`–`0025` через `migrate_companies` на HTQ (миграции `hr/0023`–`0025` no-op по данным: choices без DDL, пороги и матрица уже есть); слепок до/после; contracts/signoff не затронуты.
 3. **C** — решение и реализация в `access`; **E**, **F** — модели и интерфейс;
    передать §6.1 другому разработчику. Параллельно у него — §6.2/6.3.
 4. **G** — HR-субъекты (моя половина) после их `ApproverKind`.
