@@ -10,6 +10,13 @@ import type {
   BulkImportResult,
 } from '@/types/hr';
 
+export type {
+  Department, Position, Employee, EmployeeStats, HRUserOption, HRUserPrefill,
+  Vacancy, Application,
+  PrefillSourceRef, PrefillPreview, MailboxSource, MatchSuggestions,
+  BulkImportResult,
+};
+
 const HR = `${API_ENDPOINTS.hr}/`;
 
 /* Unwrap paginated or plain array response */
@@ -115,6 +122,56 @@ export const updatePosition = async (id: number, data: Partial<Position>): Promi
 
 export const deletePosition = async (id: number): Promise<void> => {
   await api.delete(`${HR}positions/${id}/`);
+};
+
+/* ---------- Замещение (HR-FRM-006) ---------- */
+
+export type SubstitutionKind = 'primary' | 'reserve';
+
+export interface Substitution {
+  id: number;
+  position_id: number;
+  substitute_position_id: number;
+  substitute_position_title: string;
+  kind: SubstitutionKind;
+  basis: string;
+  note: string | null;
+  valid_from: string;
+  valid_to: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubstitutionInput {
+  substitute_position_id: number;
+  kind: SubstitutionKind;
+  basis: string;
+  note?: string | null;
+  valid_from: string;
+  valid_to?: string | null;
+}
+
+export const fetchSubstitutions = async (positionId: number): Promise<Substitution[]> => {
+  const res = await api.get(`${HR}positions/${positionId}/substitutions`);
+  return unwrap<Substitution>(res.data);
+};
+
+export const createSubstitution = async (
+  positionId: number, data: SubstitutionInput,
+): Promise<Substitution> => {
+  const res = await api.post(`${HR}positions/${positionId}/substitutions`, data);
+  return res.data;
+};
+
+export const updateSubstitution = async (
+  id: number, data: Partial<SubstitutionInput>,
+): Promise<Substitution> => {
+  const res = await api.patch(`${HR}substitutions/${id}`, data);
+  return res.data;
+};
+
+export const deleteSubstitution = async (id: number): Promise<void> => {
+  await api.delete(`${HR}substitutions/${id}`);
 };
 
 /* ---------- Employees ---------- */

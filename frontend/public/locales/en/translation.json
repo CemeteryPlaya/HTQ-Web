@@ -1611,6 +1611,33 @@
       "weightRangeHint": "Ordering within the level. Range for L{{level}}: {{from}}–{{to}}",
       "gradeValue": "· grade {{grade}}"
     },
+    "substitutions": {
+      "title": "Substitution",
+      "hint": "The substitution matrix is approved by an order and applies in approval workflows",
+      "add": "Add",
+      "addTitle": "Add substitution",
+      "addHint": "Select the substitute position and the effective period",
+      "created": "Substitution added",
+      "createFailed": "Could not add substitution",
+      "deleted": "Substitution deleted",
+      "deleteFailed": "Could not delete substitution",
+      "deleteConfirmTitle": "Delete substitution?",
+      "deleteConfirmDesc": "This action cannot be undone",
+      "empty": "No substitutes assigned",
+      "kindPrimary": "Primary",
+      "kindReserve": "Reserve",
+      "substitutePosition": "Substitute position",
+      "selectPosition": "Select a position",
+      "kind": "Kind",
+      "basis": "Basis",
+      "basisPlaceholder": "Order, power of attorney…",
+      "note": "Note",
+      "notePlaceholder": "Right to sign first, restrictions…",
+      "validFrom": "Start date",
+      "validTo": "End date",
+      "indefinite": "indefinitely",
+      "expired": "expired"
+    },
     "orgChart": {
       "origin": {
         "employee": "set by hand",

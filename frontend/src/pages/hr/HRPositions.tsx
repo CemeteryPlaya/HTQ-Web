@@ -10,6 +10,7 @@ import { companiesApi } from '@/api/companies';
 import { PositionRolesDialog } from '@/components/access/PositionRolesDialog';
 import HRLayout from '@/components/hr/HRLayout';
 import PositionLevelsPanel from '@/components/hr/PositionLevelsPanel';
+import { PositionSubstitutions } from '@/components/hr/PositionSubstitutions';
 import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { HR_LIMITS } from '@/lib/fieldLimits';
 import { Button } from '@/components/ui/button';
@@ -872,6 +873,15 @@ const HRPositions = () => {
                         )}
                       </div>
                     </div>
+
+                    {editingPos?.id != null && (
+                      <div className="border-t pt-4">
+                        <PositionSubstitutions
+                          positionId={editingPos.id}
+                          positions={positions}
+                        />
+                      </div>
+                    )}
 
                     {saveError && (
                       <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
