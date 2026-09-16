@@ -25,8 +25,9 @@
 """
 
 from apps.hr.models import (
-    Bonus, BonusKind, Department, PersonnelHistory, PersonnelHistoryEventType,
-    PersonnelOrder, PersonnelOrderKind, Reprimand, ReprimandSeverity, StaffingPosition,
+    Bonus, BonusKind, BusinessTrip, Department, LeaveKind, LeaveRequest,
+    PersonnelHistory, PersonnelHistoryEventType, PersonnelOrder, PersonnelOrderKind,
+    Reprimand, ReprimandSeverity, StaffingPosition,
 )
 from apps.signoff import interface as signoff
 
@@ -262,6 +263,105 @@ def _reprimand_fact_fields() -> list[dict]:
     ]
 
 
+# ── строка 10б: заявление на отпуск ──────────────────────────────────────
+
+def _describe_leave_request(subject_id: int) -> dict | None:
+    leave = (LeaveRequest.objects
+             .select_related("employee")
+             .filter(pk=subject_id).first())
+    if leave is None:
+        return None
+    return {
+        "title": (f"{leave.get_kind_display()}: "
+                  f"{leave.employee.last_name} {leave.employee.first_name} — "
+                  f"с {leave.date_from.isoformat()} по {leave.date_to.isoformat()}"),
+        "url": f"/hr/leave-requests/{leave.pk}",
+    }
+
+
+def _leave_request_facts(subject_id: int) -> dict:
+    leave = (LeaveRequest.objects
+             .select_related("employee")
+             .filter(pk=subject_id).first())
+    if leave is None:
+        return {}
+    return {
+        "employee_id": leave.employee_id,
+        "department_id": leave.employee.department_id,
+        "kind": leave.kind,
+        # Срок отпуска (roadmap §6.2 называет его вторым из трёх поимённых
+        # фактов) — границы включительные: с 1-го по 1-е число это ОДИН
+        # день, а не ноль. Считается здесь, а не хранится полем: хранимое
+        # разъехалось бы с датами при первой же правке.
+        "days": (leave.date_to - leave.date_from).days + 1,
+        "date_from": leave.date_from,
+        "date_to": leave.date_to,
+    }
+
+
+def _leave_request_fact_fields() -> list[dict]:
+    return [
+        {"key": "employee_id", "label": "Сотрудник", "type": "number"},
+        {"key": "department_id", "label": "Подразделение", "type": "choice",
+         "options": _department_options()},
+        {"key": "kind", "label": "Вид отпуска", "type": "choice",
+         "options": [{"value": v, "label": l} for v, l in LeaveKind.choices]},
+        {"key": "days", "label": "Срок отпуска, дней", "type": "number"},
+        {"key": "date_from", "label": "Дата начала", "type": "string"},
+        {"key": "date_to", "label": "Дата окончания", "type": "string"},
+    ]
+
+
+# ── строка 10в: командировка ─────────────────────────────────────────────
+
+def _describe_business_trip(subject_id: int) -> dict | None:
+    trip = (BusinessTrip.objects
+            .select_related("employee")
+            .filter(pk=subject_id).first())
+    if trip is None:
+        return None
+    return {
+        "title": (f"Командировка: {trip.employee.last_name} {trip.employee.first_name} — "
+                  f"{trip.destination}, с {trip.date_from.isoformat()} "
+                  f"по {trip.date_to.isoformat()}"),
+        "url": f"/hr/business-trips/{trip.pk}",
+    }
+
+
+def _business_trip_facts(subject_id: int) -> dict:
+    trip = (BusinessTrip.objects
+            .select_related("employee")
+            .filter(pk=subject_id).first())
+    if trip is None:
+        return {}
+    return {
+        "employee_id": trip.employee_id,
+        "department_id": trip.employee.department_id,
+        "destination": trip.destination,
+        "country": trip.country,
+        "days": (trip.date_to - trip.date_from).days + 1,
+        # Сумма командировки — тоже факт маршрута: согласование ветвится по
+        # ней так же, как по сумме премии у строки 8.
+        "estimated_cost": trip.estimated_cost,
+        "date_from": trip.date_from,
+        "date_to": trip.date_to,
+    }
+
+
+def _business_trip_fact_fields() -> list[dict]:
+    return [
+        {"key": "employee_id", "label": "Сотрудник", "type": "number"},
+        {"key": "department_id", "label": "Подразделение", "type": "choice",
+         "options": _department_options()},
+        {"key": "destination", "label": "Пункт назначения", "type": "string"},
+        {"key": "country", "label": "Код страны", "type": "string"},
+        {"key": "days", "label": "Срок командировки, дней", "type": "number"},
+        {"key": "estimated_cost", "label": "Сумма командировки", "type": "number"},
+        {"key": "date_from", "label": "Дата начала", "type": "string"},
+        {"key": "date_to", "label": "Дата окончания", "type": "string"},
+    ]
+
+
 # ── регистрация ──────────────────────────────────────────────────────────
 
 #: Тип предмета → класс модели. Единственное место соответствия: и
@@ -271,6 +371,8 @@ SUBJECT_MODELS: dict[str, type] = {
     PersonnelOrder.SIGNOFF_SUBJECT_TYPE: PersonnelOrder,
     Bonus.SIGNOFF_SUBJECT_TYPE: Bonus,
     Reprimand.SIGNOFF_SUBJECT_TYPE: Reprimand,
+    LeaveRequest.SIGNOFF_SUBJECT_TYPE: LeaveRequest,
+    BusinessTrip.SIGNOFF_SUBJECT_TYPE: BusinessTrip,
 }
 
 #: Тип предмета → как его показывать и по каким фактам ветвить маршрут.
@@ -288,9 +390,11 @@ SUBJECT_SPECS: dict[str, dict] = {
         "fact_fields": _personnel_order_fact_fields,
         "on_approved": _personnel_order_on_approved,
     },
-    # Ни у премии, ни у взыскания нет "on_approved" (решение 11 плана блока
-    # G): единственный автоматический эффект утверждения во всём блоке — у
-    # кадрового приказа выше. Взыскание объявляет приказ, а не платформа.
+    # Ни у премии, ни у взыскания, ни у отпуска, ни у командировки нет
+    # "on_approved" (решение 11 плана блока G): единственный автоматический
+    # эффект утверждения во всём блоке — у кадрового приказа выше. Взыскание
+    # объявляет приказ, а не платформа; утверждённый отпуск не проставляет
+    # отсутствие в календаре и не трогает табель — это делает кадровик.
     Bonus.SIGNOFF_SUBJECT_TYPE: {
         "label": "Премия",
         "describe": _describe_bonus,
@@ -302,6 +406,18 @@ SUBJECT_SPECS: dict[str, dict] = {
         "describe": _describe_reprimand,
         "facts": _reprimand_facts,
         "fact_fields": _reprimand_fact_fields,
+    },
+    LeaveRequest.SIGNOFF_SUBJECT_TYPE: {
+        "label": "Заявление на отпуск",
+        "describe": _describe_leave_request,
+        "facts": _leave_request_facts,
+        "fact_fields": _leave_request_fact_fields,
+    },
+    BusinessTrip.SIGNOFF_SUBJECT_TYPE: {
+        "label": "Командировка",
+        "describe": _describe_business_trip,
+        "facts": _business_trip_facts,
+        "fact_fields": _business_trip_fact_fields,
     },
 }
 

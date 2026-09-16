@@ -1150,6 +1150,103 @@ class Reprimand(signoff.Approvable, HrBase):
         return f"<Reprimand(id={self.id}, employee_id={self.employee_id}, severity='{self.severity}')>"
 
 
+class LeaveKind(models.TextChoices):
+    ANNUAL = "annual", "Ежегодный оплачиваемый"
+    UNPAID = "unpaid", "Без содержания"
+    SICK = "sick", "По болезни"
+    STUDY = "study", "Учебный"
+    PARENTAL = "parental", "По уходу за ребёнком"
+
+
+class LeaveRequest(signoff.Approvable, HrBase):
+    """Заявление на отпуск — строка 10б матрицы HR-FRM-004.
+
+    Заказчик развёл строку 10 на три предмета (решение 16.09.2026): график,
+    отпуск и командировка ведут себя слишком по-разному, чтобы быть одной
+    моделью с необязательными полями. Эта модель — только отпуск.
+
+    Срок отпуска (roadmap §6.2 называет его вторым из трёх поимённых
+    фактов) считается ``(date_to - date_from).days + 1`` — границы
+    включительные, отпуск с 1-го по 1-е число это ОДИН день, а не ноль.
+    Считается в ``approval_hooks._leave_request_facts``, а не хранится
+    полем: хранимое разъехалось бы с датами при первой же правке.
+
+    Утверждение не имеет автоматических последствий (решение 11 плана
+    блока G — единственный такой эффект во всём блоке принадлежит
+    кадровому приказу): отпуск не проставляет отсутствие в календаре и не
+    трогает табель, это отдельное действие кадровика.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.leave_request"
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="leave_requests")
+    kind = models.CharField(
+        max_length=16, choices=LeaveKind.choices,
+        default=LeaveKind.ANNUAL, db_default=LeaveKind.ANNUAL.value,
+        db_index=True)
+    date_from = models.DateField()
+    date_to = models.DateField()
+    basis = models.CharField(max_length=255, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "Заявление на отпуск"
+        verbose_name_plural = "Заявления на отпуск"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(date_to__gte=models.F("date_from")),
+                name="ck_leaverequest_dates",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<LeaveRequest(id={self.id}, employee_id={self.employee_id}, kind='{self.kind}')>"
+
+
+class BusinessTrip(signoff.Approvable, HrBase):
+    """Командировка — строка 10в матрицы HR-FRM-004.
+
+    ``country`` — двухбуквенный код; пусто значит «своя страна» (внутренняя
+    командировка). Сумма командировки (``estimated_cost``) — тоже факт
+    маршрута: согласование ветвится по ней так же, как по сумме премии у
+    строки 8.
+
+    Срок командировки считается в фактах тем же способом и по той же
+    причине, что и срок отпуска у ``LeaveRequest`` — см. её докстринг.
+
+    Утверждение не имеет автоматических последствий (решение 11 плана
+    блока G): проездные документы и приказ на командировку оформляет
+    кадровик, платформа их не порождает.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.business_trip"
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="business_trips")
+    destination = models.CharField(max_length=255)
+    country = models.CharField(max_length=2, default="", db_default="")
+    purpose = models.CharField(max_length=255, default="", db_default="")
+    date_from = models.DateField()
+    date_to = models.DateField()
+    estimated_cost = models.DecimalField(max_digits=12, decimal_places=2,
+                                         default=0, db_default=0)
+    basis = models.CharField(max_length=255, default="", db_default="")
+
+    class Meta:
+        verbose_name = "Командировка"
+        verbose_name_plural = "Командировки"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(date_to__gte=models.F("date_from")),
+                name="ck_businesstrip_dates",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<BusinessTrip(id={self.id}, employee_id={self.employee_id}, destination='{self.destination}')>"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  calendar: WeekTemplate + CalendarDay + EmployeeWeekTemplate + ShiftPattern +
 #  EmployeeShiftAssignment + EmployeeDayOverride — порт services/hr/app/models/
