@@ -83,11 +83,14 @@ class Command(BaseCommand):
             self._ensure_company(slug, name, kind, parent)
 
         account_opts = {"password": opts["password"]} if opts["password"] else {}
+        force_remote = opts["force_remote"]
         for slug, *_ in GROUP:
             self.stdout.write(f"\n== {slug} ==")
-            call_command("seed_hr_demo", company=slug, verbosity=opts["verbosity"])
+            call_command("seed_hr_demo", company=slug, verbosity=opts["verbosity"],
+                        force_remote=force_remote)
             call_command("seed_employee_accounts", company=slug,
-                         verbosity=opts["verbosity"], **account_opts)
+                         verbosity=opts["verbosity"], force_remote=force_remote,
+                         **account_opts)
             self._grant(slug, _own_staff_user_ids(slug), "своим сотрудникам")
 
         # Второй проход отдельный и идёт ПОСЛЕ сида всех компаний:
@@ -100,11 +103,21 @@ class Command(BaseCommand):
         # Демо-сид роли не назначает намеренно — раздача прав это решение
         # человека, а не демо-данные, — поэтому на свежем стенде здесь ноль.
         # Печатаем это явно: молчание читалось бы как «наследование сломано».
-        granted_serving = 0
+        #
+        # Гейт сообщения — число ДЕРЖАТЕЛЕЙ (serving_holders), а не число
+        # НОВЫХ членств за этот прогон: на третьем прогоне, когда оператор
+        # уже назначил роли и второй прогон их раздал, новых членств снова
+        # ноль — но держатели есть, и повторять «роли не назначены» здесь
+        # было бы ложью, отправляющей оператора переделывать уже сделанное.
+        # serving_holders(slug) поэтому зовётся РОВНО ОДИН раз на компанию —
+        # она обходит дерево предков и читает чужие схемы, второй вызов
+        # ради счётчика был бы лишним обходом.
+        total_holders = 0
         for slug, *_ in GROUP:
-            granted_serving += self._grant(slug, serving_holders(slug),
-                                           "обслуживающим из вышестоящих")
-        if granted_serving == 0:
+            holders = serving_holders(slug)
+            total_holders += len(holders)
+            self._grant(slug, holders, "обслуживающим из вышестоящих")
+        if total_holders == 0:
             self.stdout.write(
                 "\n  Обслуживающих держателей из вышестоящих компаний нет: "
                 "должностям холдинга ещё не назначены роли, а без роли признак "
@@ -115,7 +128,8 @@ class Command(BaseCommand):
 
         if not opts["skip_tasks"]:
             self.stdout.write(f"\n== задачи {TASKS_COMPANY} ==")
-            call_command("seed_tasks_demo", company=TASKS_COMPANY, verbosity=opts["verbosity"])
+            call_command("seed_tasks_demo", company=TASKS_COMPANY, verbosity=opts["verbosity"],
+                        force_remote=force_remote)
 
         self.stdout.write(self.style.SUCCESS("\nСтенд группы готов."))
 
@@ -130,18 +144,26 @@ class Command(BaseCommand):
             return
         if company.status != CompanyStatus.ACTIVE:
             raise CommandError(f"Компания {slug} в архиве — верните её: manage.py company_restore {slug}.")
+
+        # Обе проверки ниже — независимые: раньше выставление родителя
+        # делало return и проглатывало проверку kind, и компания с неверным
+        # видом И без родителя предупреждения о виде не получала вовсе.
+        parent_fixed = False
         if parent and company.parent_id is None:
             # dev-база после tenancy_bootstrap: HTQ есть, родителя нет
             # (на бою его выставляет PATCH блока A — roadmap §7 шаг 5).
             company.parent = Company.objects.get(slug=parent)
             company.save(update_fields=["parent", "updated_at"])
+            parent_fixed = True
             self.stdout.write(f"  {slug}: уже есть, родитель выставлен → {parent}")
-            return
-        if company.kind != kind:
+
+        kind_mismatch = company.kind != kind
+        if kind_mismatch:
             self.stdout.write(self.style.WARNING(
                 f"  {slug}: уже есть с kind={company.kind!r} (в документе {kind!r}) — не меняю"))
-            return
-        self.stdout.write(f"  {slug}: уже есть")
+
+        if not parent_fixed and not kind_mismatch:
+            self.stdout.write(f"  {slug}: уже есть")
 
     def _grant(self, slug: str, user_ids: list[int], label: str) -> int:
         if not user_ids:

@@ -66,6 +66,46 @@ def test_no_position_falls_into_the_default_level():
 
 
 @pytest.mark.django_db
+def test_position_weight_conflict_from_a_previous_seed_is_a_clear_error():
+    """Старый пятиуровневый сид на dev-базе держит «Генеральный директор» на
+    весе 10 — том же, что новая структура HTQ хочет для «Директор». Отказ
+    обязан называть конкретную пару «вес — чужая должность», а не падать
+    сырым IntegrityError на уникальности веса."""
+    dept = Department.objects.create(name="Старое", path="old-root")
+    Position.objects.create(title="Генеральный директор", department=dept, weight=10)
+
+    with pytest.raises(CommandError, match="Директор") as excinfo:
+        _seed()
+
+    assert "Генеральный директор" in str(excinfo.value)
+    assert "вес 10" in str(excinfo.value)
+    # Отказ — не половинчатая запись: до положений в этой же транзакции
+    # ничего из демо-набора не осело.
+    assert Employee.objects.count() == 0
+    assert ReportingRelation.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_staffing_upserts_by_position_even_if_department_changed():
+    """Симулируем перенос должности в другое подразделение вручную: старая
+    штатная строка указывает на прежний отдел. Ключом обязан быть только
+    ``position`` — иначе перенос заводит вторую строку вместо обновления
+    существующей, и следующий прогон рискует упасть на
+    ``MultipleObjectsReturned``."""
+    _seed()
+    director = Position.objects.get(title="Директор")
+    other_dept = Department.objects.create(name="Другое", path="other-dept")
+    StaffingPosition.objects.filter(position=director).delete()
+    StaffingPosition.objects.create(position=director, department=other_dept, headcount=1)
+
+    _seed()  # не должен ни упасть, ни задвоить строку
+
+    rows = StaffingPosition.objects.filter(position=director)
+    assert rows.count() == 1
+    assert rows.first().department_id == director.department_id
+
+
+@pytest.mark.django_db
 def test_seed_retires_foreign_levels_and_recomputes_cached_levels():
     """Старый пятиуровневый сид на dev-базе: L5 (900–1999) пересёкся бы с
     N-4, а кэш уровня у старых должностей остался бы прежним."""

@@ -298,8 +298,46 @@ class Command(BaseCommand):
         self.stdout.write(f"  {len(out)}")
         return out
 
+    def _check_no_foreign_positions_on_our_weights(self, structure) -> None:
+        """Отказ ПОНЯТНОЙ ошибкой, если вес будущей должности уже занят чужой.
+
+        ``Position.weight`` уникален в пределах схемы, а апдейт в
+        ``_seed_positions`` идёт по ``title`` — чужую должность на нужном
+        весе он не снимает. Такое бывает на dev-базе, где раньше уже
+        прогонялся ДРУГОЙ сид (например, старый пятиуровневый
+        ``seed_hr_demo`` с «Генеральный директор» на весе 10, которого
+        новая структура HTQ хочет для «Директор»): без этой проверки запись
+        падает ``IntegrityError: duplicate key value violates unique
+        constraint "hr_position_weight_key"``, и причина по этому сообщению
+        не восстанавливается.
+
+        Молча снести чужую должность здесь опаснее отказа: на ней могут
+        висеть сотрудники, вакансии, штатные строки — все ``PROTECT``, и
+        снос попал бы в ``ProtectedError`` в месте, которое тоже не укажет
+        на настоящую причину.
+        """
+        wanted_titles = {post.title for post in structure.posts}
+        wanted_weights = {post.weight: post.title for post in structure.posts}
+        conflicts = list(
+            Position.objects.filter(weight__in=wanted_weights)
+            .exclude(title__in=wanted_titles)
+            .values_list("weight", "title")
+        )
+        if not conflicts:
+            return
+        pairs = "; ".join(
+            f"вес {weight} — чужая должность «{title}» (нужен «{wanted_weights[weight]}»)"
+            for weight, title in conflicts
+        )
+        raise CommandError(
+            f"В этой схеме уже есть должности на весах новой структуры: {pairs}. "
+            f"Похоже на следы прежнего сида — используйте пустую схему "
+            f"(--company <slug>) либо снесите прежние демо-данные вручную."
+        )
+
     def _seed_positions(self, structure, units) -> dict[str, Position]:
         self.stdout.write("Должности...")
+        self._check_no_foreign_positions_on_our_weights(structure)
         out: dict[str, Position] = {}
         for post in structure.posts:
             level = gs.level_for(post.weight)
@@ -378,12 +416,21 @@ class Command(BaseCommand):
         return count
 
     def _seed_staffing(self, positions) -> int:
-        """«1 шт. ед.» у каждой должности документа."""
+        """«1 шт. ед.» у каждой должности документа.
+
+        Ключ upsert'а — только ``position``: модель не несёт уникального
+        ограничения на пару ``(position, department)``, и ключ по обеим
+        полям при переносе должности в другое подразделение оставлял бы
+        старую штатную строку сиротой и заводил вторую — второй прогон на
+        таких данных падал бы ``MultipleObjectsReturned``. Отдел поэтому
+        только в ``defaults``: перенос обновляет существующую строку на
+        месте, а не плодит новую.
+        """
         self.stdout.write("Штатное расписание...")
         for position in positions.values():
             StaffingPosition.objects.update_or_create(
-                position=position, department=position.department,
-                defaults={"headcount": 1},
+                position=position,
+                defaults={"department": position.department, "headcount": 1},
             )
         self.stdout.write(f"  {len(positions)}")
         return len(positions)
