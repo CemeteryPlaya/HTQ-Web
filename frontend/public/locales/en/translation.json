@@ -1636,7 +1636,14 @@
       "validFrom": "Start date",
       "validTo": "End date",
       "indefinite": "indefinitely",
-      "expired": "expired"
+      "expired": "expired",
+      "close": "Close",
+      "closeAction": "Close substitution",
+      "closeTitle": "Close substitution?",
+      "closeHint": "Specify the end date for this rule",
+      "closed": "Substitution closed",
+      "closeFailed": "Could not close substitution",
+      "inactivePosition": "position inactive"
     },
     "orgChart": {
       "origin": {

@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Calendar, Loader2, Plus, Trash2 } from 'lucide-react';
+import { Calendar, Loader2, Plus, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
-import { createSubstitution, deleteSubstitution, fetchSubstitutions, type Substitution, type SubstitutionInput, type SubstitutionKind } from '@/api/hr';
+import { createSubstitution, deleteSubstitution, fetchSubstitutions, updateSubstitution, type Substitution, type SubstitutionInput, type SubstitutionKind } from '@/api/hr';
 import { reportApiError } from '@/lib/apiError';
 import { datesOutOfOrder } from '@/lib/validation';
+import { todayIso } from '@/lib/dates';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -27,7 +28,7 @@ import { translatedMap } from '@/lib/i18n/translatedMap';
 
 interface PositionSubstitutionsProps {
   positionId: number;
-  positions: Array<{ id: number; title: string }>;
+  positions: Array<{ id: number; title: string; is_active?: boolean }>;
 }
 
 const KIND_LABELS = translatedMap<SubstitutionKind>({
@@ -40,12 +41,13 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [closeTarget, setCloseTarget] = useState<{ id: number; validTo: string } | null>(null);
   const [formData, setFormData] = useState<SubstitutionInput>({
     substitute_position_id: 0,
     kind: 'primary',
     basis: '',
     note: null,
-    valid_from: new Date().toISOString().split('T')[0],
+    valid_from: todayIso(),
     valid_to: null,
   });
 
@@ -61,7 +63,7 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
         kind: 'primary',
         basis: '',
         note: null,
-        valid_from: new Date().toISOString().split('T')[0],
+        valid_from: todayIso(),
         valid_to: null,
       });
     }
@@ -91,9 +93,26 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
     },
   });
 
+  const closeMutation = useMutation({
+    mutationFn: ({ id, validTo }: { id: number; validTo: string }) =>
+      updateSubstitution(id, { valid_to: validTo }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['hr', 'substitutions', positionId] });
+      toast.success(t('hr.substitutions.closed', 'Замещение закрыто'));
+      setCloseTarget(null);
+    },
+    onError: (err) => {
+      reportApiError(err, t('hr.substitutions.closeFailed', 'Не удалось закрыть замещение'));
+    },
+  });
+
+  // Границы ВКЛЮЧИТЕЛЬНЫЕ на бэкенде (substitution_service): правило,
+  // действующее ПО дате X, всё ещё действует В день X. Сравниваем ISO-строки
+  // `ГГГГ-ММ-ДД`, а не `new Date(...)`, — иначе `substitutes_for` ещё
+  // возвращает строку, а бейдж загорается с полуночи UTC (05:00 по Алматы).
   const isExpired = (validTo: string | null): boolean => {
     if (!validTo) return false;
-    return new Date(validTo) < new Date();
+    return validTo < todayIso();
   };
 
   const formatDateRange = (from: string, to: string | null): string => {
@@ -101,7 +120,10 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
     return `${from} — ${to}`;
   };
 
-  const availablePositions = positions.filter((p) => p.id !== positionId);
+  // Неактивную должность в матрицу не назначить: substitutes_for её не
+  // вернёт (substitution_service.active_for_position), и правило выглядело
+  // бы действующим, а маршрут согласования звал бы некого.
+  const availablePositions = positions.filter((p) => p.id !== positionId && p.is_active !== false);
 
   return (
     <div className="space-y-4">
@@ -135,7 +157,12 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
         <div className="space-y-2">
           {substitutions.map((sub) => {
             const expired = isExpired(sub.valid_to);
-            const substitutePos = positions.find((p) => p.id === sub.substitute_position_id);
+            // Неактивная должность правило не прикроет: substitutes_for её
+            // не вернёт (active_for_position фильтрует по is_active), а
+            // строка на карточке выглядела бы как действующая.
+            const substituteInactive = positions.find(
+              (p) => p.id === sub.substitute_position_id,
+            )?.is_active === false;
 
             return (
               <div
@@ -154,6 +181,11 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
                           {t('hr.substitutions.expired', 'истекло')}
                         </Badge>
                       )}
+                      {substituteInactive && (
+                        <Badge variant="outline" className="text-xs">
+                          {t('hr.substitutions.inactivePosition', 'должность неактивна')}
+                        </Badge>
+                      )}
                     </div>
                     <div className="mt-1 space-y-1 text-xs text-muted-foreground">
                       <div>
@@ -170,14 +202,28 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
                       </div>
                     </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setDeleteConfirm(sub.id)}
-                    disabled={deleteMutation.isPending}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    {sub.valid_to === null && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setCloseTarget({ id: sub.id, validTo: todayIso() })}
+                        disabled={closeMutation.isPending}
+                        aria-label={t('hr.substitutions.closeAction', 'Закрыть замещение')}
+                        title={t('hr.substitutions.closeAction', 'Закрыть замещение')}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setDeleteConfirm(sub.id)}
+                      disabled={deleteMutation.isPending}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               </div>
             );
@@ -328,6 +374,43 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
           </div>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Диалог закрытия бессрочного замещения */}
+      <Dialog open={closeTarget !== null} onOpenChange={(open) => !open && setCloseTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('hr.substitutions.closeTitle', 'Закрыть замещение?')}</DialogTitle>
+            <DialogDescription>
+              {t('hr.substitutions.closeHint', 'Укажите дату окончания действия правила')}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label htmlFor="close-valid-to" className="text-sm">
+              {t('hr.substitutions.validTo', 'Дата окончания')}
+            </Label>
+            <DateInput
+              id="close-valid-to"
+              value={closeTarget?.validTo ?? ''}
+              onChange={(v) => closeTarget && setCloseTarget({ ...closeTarget, validTo: v })}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCloseTarget(null)}>
+              {t('common.cancel', 'Отмена')}
+            </Button>
+            <Button
+              onClick={() => {
+                if (closeTarget) closeMutation.mutate({ id: closeTarget.id, validTo: closeTarget.validTo });
+              }}
+              disabled={!closeTarget?.validTo || closeMutation.isPending}
+            >
+              {closeMutation.isPending ? t('common.saving', 'Сохранение…') : t('hr.substitutions.close', 'Закрыть')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

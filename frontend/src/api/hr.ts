@@ -10,13 +10,6 @@ import type {
   BulkImportResult,
 } from '@/types/hr';
 
-export type {
-  Department, Position, Employee, EmployeeStats, HRUserOption, HRUserPrefill,
-  Vacancy, Application,
-  PrefillSourceRef, PrefillPreview, MailboxSource, MatchSuggestions,
-  BulkImportResult,
-};
-
 const HR = `${API_ENDPOINTS.hr}/`;
 
 /* Unwrap paginated or plain array response */

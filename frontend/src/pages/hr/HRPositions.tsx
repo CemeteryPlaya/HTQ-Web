@@ -42,6 +42,9 @@ interface Position {
   weight: number;
   level: number;
   grade: number;
+  /** Матрица замещения (PositionSubstitutions) исключает неактивные
+   * должности и из выбора замещающего, и из списка «кого назначить». */
+  is_active: boolean;
   is_system?: boolean;
   /** Руководящая ли должность — включает участие во внешней иерархии. */
   is_manager?: boolean;
