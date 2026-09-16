@@ -1943,6 +1943,8 @@ def _update_staffing_line(request, line_id: int, data: schemas.StaffingLineIn):
         return json_error("Staffing line not found", 404)
     except staffing_svc.StaffingRefNotFound as exc:
         return json_error(exc.detail, 422)
+    except signoff.SubjectLocked as exc:
+        return json_error(str(exc), 409)
     return staffing_svc.line_out(line)
 
 
@@ -1955,6 +1957,8 @@ def _delete_staffing_line(request, line_id: int):
         staffing_svc.delete_line(line_id)
     except staffing_svc.StaffingLineNotFound:
         return json_error("Staffing line not found", 404)
+    except signoff.SubjectLocked as exc:
+        return json_error(str(exc), 409)
     return HttpResponse(status=204)
 
 

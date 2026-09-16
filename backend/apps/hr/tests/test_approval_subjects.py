@@ -13,15 +13,31 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 from django.test import Client
 
 from apps.hr.models import Department, Position, StaffingPosition
+from apps.hr.services import staffing_service as staffing_svc
 from apps.signoff import interface as signoff
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/hr/v1"
+
+# Три состояния, в которых предмет заперт для правки (Approvable.editable()
+# белым списком отпускает только draft/rework), и два, в которых он открыт —
+# ровно все пять значений ApprovalState.
+LOCKED_STATES = (
+    signoff.ApprovalState.PENDING,
+    signoff.ApprovalState.APPROVED,
+    signoff.ApprovalState.REJECTED,
+)
+EDITABLE_STATES = (
+    signoff.ApprovalState.DRAFT,
+    signoff.ApprovalState.REWORK,
+)
 
 
 @pytest.fixture
@@ -143,3 +159,53 @@ def test_both_url_spellings_work(staffing_line, auth):
     for url in (f"{BASE}/approvals/hr.staffing_position/{staffing_line.id}/submit",
                 f"{BASE}/approvals/hr.staffing_position/{staffing_line.id}/submit/"):
         assert Client().post(url, **auth).status_code != 404
+
+
+# ── замок согласования на строке штатного расписания (Task 8a) ──────────
+#
+# StaffingPosition наследует Approvable, но задача 1 пропустила четвёртый
+# шаг подключения (STRUCTURE.md): assert_editable() первой строкой каждой
+# операции правки/удаления. Без него строку на согласовании можно менять
+# посреди маршрута — согласующие подписывают факты, которых уже нет.
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("state", LOCKED_STATES)
+def test_update_line_is_locked_while_subject_is_pending_or_decided(staffing_line, state):
+    StaffingPosition.objects.filter(pk=staffing_line.pk).update(approval_state=state)
+
+    with pytest.raises(signoff.SubjectLocked):
+        staffing_svc.update_line(staffing_line.id, {"salary": "999999"})
+
+    staffing_line.refresh_from_db()
+    assert staffing_line.salary == Decimal("800000.00")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("state", LOCKED_STATES)
+def test_delete_line_is_locked_while_subject_is_pending_or_decided(staffing_line, state):
+    StaffingPosition.objects.filter(pk=staffing_line.pk).update(approval_state=state)
+
+    with pytest.raises(signoff.SubjectLocked):
+        staffing_svc.delete_line(staffing_line.id)
+
+    assert StaffingPosition.objects.filter(pk=staffing_line.pk).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("state", EDITABLE_STATES)
+def test_update_line_still_works_in_draft_and_rework(staffing_line, state):
+    StaffingPosition.objects.filter(pk=staffing_line.pk).update(approval_state=state)
+
+    line = staffing_svc.update_line(staffing_line.id, {"salary": "999999"})
+
+    assert line.salary == Decimal("999999.00")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("state", EDITABLE_STATES)
+def test_delete_line_still_works_in_draft_and_rework(staffing_line, state):
+    StaffingPosition.objects.filter(pk=staffing_line.pk).update(approval_state=state)
+
+    staffing_svc.delete_line(staffing_line.id)
+
+    assert not StaffingPosition.objects.filter(pk=staffing_line.pk).exists()

@@ -29,11 +29,13 @@ employees/apps.hr.access). Порт: occupancy/summary/list -> access.has(
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 
 import pytest
 from django.test import Client
 
 from apps.hr.models import Department, Employee, Position, StaffingPosition
+from apps.signoff import interface as signoff
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -279,6 +281,40 @@ def test_delete_line_204(admin_auth, pos, dep):
 def test_delete_line_not_found_404(admin_auth):
     resp = Client().delete(f"{BASE}/999999", **admin_auth)
     assert resp.status_code == 404
+
+
+# ── замок согласования: PUT/DELETE 409 на строке, отправленной на
+#    согласование (Task 8a) — signoff.SubjectLocked -> json_error(..., 409) ──
+
+@pytest.mark.django_db
+def test_update_line_pending_approval_is_409(admin_auth, pos, dep):
+    line = _line(pos, dep, headcount="1", salary="500")
+    StaffingPosition.objects.filter(pk=line.pk).update(
+        approval_state=signoff.ApprovalState.PENDING)
+
+    resp = Client().put(
+        f"{BASE}/{line.id}",
+        data={"position_id": pos.id, "department_id": dep.id, "salary": "999"},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409
+    assert isinstance(resp.json()["detail"], str)
+
+    line.refresh_from_db()
+    assert line.salary == Decimal("500.00")
+
+
+@pytest.mark.django_db
+def test_delete_line_pending_approval_is_409(admin_auth, pos, dep):
+    line = _line(pos, dep)
+    StaffingPosition.objects.filter(pk=line.pk).update(
+        approval_state=signoff.ApprovalState.PENDING)
+
+    resp = Client().delete(f"{BASE}/{line.id}", **admin_auth)
+    assert resp.status_code == 409
+    assert isinstance(resp.json()["detail"], str)
+
+    assert StaffingPosition.objects.filter(pk=line.pk).exists()
 
 
 # ── GET /staffing/occupancy ───────────────────────────────────────────────
