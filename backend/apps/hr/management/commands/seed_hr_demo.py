@@ -341,7 +341,26 @@ class Command(BaseCommand):
         self.stdout.write("Должности...")
         self._check_no_foreign_positions_on_our_weights(structure)
         out: dict[str, Position] = {}
+
+        # Системные должности заводит их сервис, а не upsert сида: на бою их
+        # кладёт та же функция (hr_participant), и два пути к одной строке
+        # разъехались бы. Сегодня системная должность одна — ОСУ.
+        from apps.hr.services import participant_service
+
         for post in structure.posts:
+            if not post.is_system:
+                continue
+            assert post.title == participant_service.PARTICIPANT_TITLE, post.title
+            assert post.unit == participant_service.PARTICIPANT_UNIT_PATH, post.unit
+            try:
+                position, _ = participant_service.ensure_participant()
+            except participant_service.ParticipantWeightTaken as exc:
+                raise CommandError(exc.detail) from exc
+            out[post.title] = position
+
+        for post in structure.posts:
+            if post.is_system:
+                continue
             level = gs.level_for(post.weight)
             assert level is not None, f"{post.title}: вес {post.weight} вне LEVELS"
             position, _ = Position.objects.update_or_create(

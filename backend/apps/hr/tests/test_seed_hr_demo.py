@@ -214,6 +214,25 @@ def test_substitution_seed_is_idempotent(company_schema):
         assert Substitution.objects.count() == 10
 
 
+def test_holding_seed_creates_the_participant_through_the_service(company_schema):
+    from django.core.cache import cache
+
+    from apps.companies.models import Company
+    from htqweb.tenancy.db import use_company
+
+    Company.objects.filter(slug=company_schema["slug"]).update(kind="holding")
+    cache.clear()
+    _seed(company=company_schema["slug"])
+    with use_company(company_schema["slug"]):
+        osu = Position.objects.get(title="Участник (ОСУ)")
+        assert osu.is_system is True and osu.weight == 0
+        assert osu.department.path == "osu" and osu.department.manager_id is None
+        ceo = Position.objects.get(title="Генеральный директор")
+        assert ReportingRelation.objects.filter(
+            superior_position=osu, subordinate_position=ceo, relation_type="direct").exists()
+        assert Employee.objects.filter(position=osu).count() == 1
+
+
 @pytest.mark.django_db
 def test_construction_structure_has_no_substitutions():
     _seed()
@@ -268,10 +287,12 @@ def test_holding_structure_sets_serving_and_managing_flags(company_schema):
     _seed(company=company_schema["slug"])
     with use_company(company_schema["slug"]):
         assert Position.objects.filter(serves_subsidiaries=True).count() == 8
-        assert Position.objects.filter(is_manager=True, external_hierarchy="inherit").count() == 4
+        # Блок F: is_manager=True, external_hierarchy="inherit" становится 5 (4 директора + ОСУ)
+        assert Position.objects.filter(is_manager=True, external_hierarchy="inherit").count() == 5
         assert Department.objects.filter(unit_type="directorate").count() == 3
         assert ReportingRelation.objects.filter(relation_type="functional").count() == 3
-        assert ReportingRelation.objects.filter(relation_type="direct").count() == 11
+        # Блок F: direct-связей 12 (ОСУ → ГД + 11 прежних)
+        assert ReportingRelation.objects.filter(relation_type="direct").count() == 12
 
 
 def test_company_option_rejects_unknown_company(db):

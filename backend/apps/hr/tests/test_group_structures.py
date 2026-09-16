@@ -36,22 +36,34 @@ def test_one_structure_per_company_kind():
     (HOLDING, 12, 12), (HTQ, 4, 4), (HTS, 4, 4), (KEG, 4, 4),
 ])
 def test_headcount_matches_the_document(structure, posts, people):
-    assert len(structure.posts) == posts
-    assert len(structure.people) == people
-    assert len({p.title for p in structure.posts}) == posts  # title unique в схеме
-    assert len({p.weight for p in structure.posts}) == posts  # weight unique в схеме
+    # Блок F: холдинг — posts 13 и people 13, но ДОКУМЕНТ говорит 12 → считаем штатные
+    if structure.kind == "holding":
+        actual_posts = [p for p in structure.posts if not p.is_system]
+        system_titles = {p.title for p in structure.posts if p.is_system}
+        actual_people = [p for p in structure.people if p.post not in system_titles]
+        assert len(actual_posts) == posts
+        assert len(actual_people) == people
+        assert sum(p.is_system for p in structure.posts) == 1
+    else:
+        assert len(structure.posts) == posts
+        assert len(structure.people) == people
+    assert len({p.title for p in structure.posts}) == len(structure.posts)  # title unique в схеме
+    assert len({p.weight for p in structure.posts}) == len(structure.posts)  # weight unique в схеме
 
 
 def test_holding_has_four_managers_and_eight_serving_specialists():
-    directors = [p for p in HOLDING.posts if p.is_manager]
+    # Блок F: ОСУ — пятый is_manager (4 директора + ОСУ), но не serves_subsidiaries
+    directors = [p for p in HOLDING.posts if p.is_manager and not p.is_system]
     serving = [p for p in HOLDING.posts if p.serves_subsidiaries]
     assert len(directors) == 4 and len(serving) == 8
     assert not {p.title for p in directors} & {p.title for p in serving}
     assert all(p.external_hierarchy == "inherit" for p in directors)
+    participant = next(p for p in HOLDING.posts if p.is_system)
+    assert participant.is_manager and participant.external_hierarchy == "inherit" and not participant.serves_subsidiaries
 
 
 @pytest.mark.parametrize("structure, levels", [
-    (HOLDING, {1, 2, 4}),      # N-3 пропущен (стр. 2)
+    (HOLDING, {1, 2, 4}),      # N-3 пропущен (стр. 2); блок F: вес 0 ОСУ попадает в N-1 (решение 1)
     (HTQ, {1, 2, 4}),          # N-3 пропущен (стр. 3)
     (HTS, {1, 2, 3, 4}),       # стр. 4
     (KEG, {1, 3, 4}),          # N-2 пуст (стр. 5)
@@ -66,6 +78,11 @@ def test_every_reference_resolves(structure):
     paths = {u.path for u in structure.units}
     heads = [p for p in structure.posts if p.reports_to is None]
     assert len(heads) == 1, "ровно одна должность без начальника — глава компании"
+    # Блок F: для холдинга единственная должность без начальника — ОСУ
+    if structure.kind == "holding":
+        assert heads[0].title == "Участник (ОСУ)"
+    else:
+        assert heads[0].title == "Директор"
     for post in structure.posts:
         assert post.unit in paths
         assert post.reports_to is None or post.reports_to in titles
@@ -89,6 +106,8 @@ def test_direct_chain_matches_the_document():
     """
     expected = {
         "holding": {
+            # Блок F: стр. 1: ОСУ над ГД
+            ("Генеральный директор", "Участник (ОСУ)"),
             ("Финансовый директор", "Генеральный директор"),
             ("Технический директор", "Генеральный директор"),
             ("Операционный директор", "Генеральный директор"),
@@ -132,11 +151,14 @@ def test_subsidiary_heads_are_directors_not_general_directors():
     for s in (HTQ, HTS, KEG):
         head = next(p for p in s.posts if p.reports_to is None)
         assert head.title == "Директор"
-    assert next(p for p in HOLDING.posts if p.reports_to is None).title == "Генеральный директор"
+    # Блок F: в холдинге главная должность — Участник (ОСУ), не ГД
+    assert next(p for p in HOLDING.posts if p.reports_to is None).title == "Участник (ОСУ)"
 
 
 def test_holding_directorates_are_directorates():
-    assert [u.unit_type for u in HOLDING.units if u.path != "upr"] == ["directorate"] * 3
+    # Блок F: ОСУ исключаем — это орган владельцев, не дирекция
+    types = [u.unit_type for u in HOLDING.units if u.path not in ("upr", "osu")]
+    assert types == ["directorate"] * 3
 
 
 def test_functional_links_are_exactly_the_dashed_lines():
@@ -146,6 +168,18 @@ def test_functional_links_are_exactly_the_dashed_lines():
         ("Менеджер ПТО и КК", "Менеджер по закупкам"),
     )
     assert all(s.functional_links == () for s in (HTQ, HTS, KEG))
+
+
+def test_participant_is_the_only_system_post_and_sits_on_top():
+    """ОСУ — единственная системная должность, с весом 0 (вершина шкалы),
+    в своём подразделении, и оно есть только у холдинга."""
+    system = [p for p in HOLDING.posts if p.is_system]
+    assert [p.title for p in system] == ["Участник (ОСУ)"]
+    assert system[0].weight == 0 and system[0].unit == "osu"
+    assert min(p.weight for p in HOLDING.posts) == 0
+    for kind in ("construction", "it", "service"):
+        assert not any(p.is_system for p in gs.STRUCTURES[kind].posts)
+        assert not any(u.path == "osu" for u in gs.STRUCTURES[kind].units)
 
 
 def test_emails_are_unique_across_the_whole_group():
