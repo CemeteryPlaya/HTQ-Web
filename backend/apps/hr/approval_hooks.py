@@ -30,8 +30,9 @@ from django.db.models import Count, F, Sum
 
 from apps.hr.models import (
     Bonus, BonusKind, BusinessTrip, Department, JobDescription, LeaveKind, LeaveRequest,
-    PersonnelHistory, PersonnelHistoryEventType, PersonnelOrder, PersonnelOrderKind,
-    Policy, PolicyKind, Reprimand, ReprimandSeverity, StaffingPosition, VacationSchedule,
+    OrgChangeKind, OrgChangeRequest, PersonnelHistory, PersonnelHistoryEventType,
+    PersonnelOrder, PersonnelOrderKind, Policy, PolicyKind, Reprimand, ReprimandSeverity,
+    StaffingPosition, VacationSchedule,
 )
 from apps.signoff import interface as signoff
 
@@ -501,6 +502,58 @@ def _job_description_fact_fields() -> list[dict]:
     ]
 
 
+# ── строка 1: заявка на изменение оргструктуры ──────────────────────────
+
+def _describe_org_change(subject_id: int) -> dict | None:
+    req = (OrgChangeRequest.objects
+           .select_related("department")
+           .filter(pk=subject_id).first())
+    if req is None:
+        return None
+    kind_label = req.get_kind_display()
+    if req.department_id:
+        # Вид изменения человеческим названием + подразделение, если есть.
+        title = (f"{kind_label}: {req.department.name} — "
+                 f"с {req.effective_date.isoformat()}")
+    else:
+        # «Другое» (и любой другой вид) без подразделения — только вид и
+        # дата: заявка «создать подразделение» подразделения ещё не имеет.
+        title = f"{kind_label} — с {req.effective_date.isoformat()}"
+    return {
+        "title": title,
+        "url": f"/hr/org-change-requests/{req.pk}",
+    }
+
+
+def _org_change_facts(subject_id: int) -> dict:
+    req = OrgChangeRequest.objects.filter(pk=subject_id).first()
+    if req is None:
+        return {}
+    return {
+        "kind": req.kind,
+        # Nullable (SET_NULL, как employee у PersonnelOrder) — «создать
+        # подразделение» подразделения ещё не имеет, и это штатно.
+        "department_id": req.department_id,
+        # Сырая date — движок нормализует сам (как effective_from у
+        # Policy/JobDescription).
+        "effective_date": req.effective_date,
+        # Целое со знаком, БЕЗ abs(): маршрут вправе развести «добавить
+        # единицу» и «сократить» (сокращение приходит отрицательным).
+        "headcount_delta": req.headcount_delta,
+    }
+
+
+def _org_change_fact_fields() -> list[dict]:
+    return [
+        {"key": "kind", "label": "Вид изменения", "type": "choice",
+         "options": [{"value": v, "label": l} for v, l in OrgChangeKind.choices]},
+        {"key": "department_id", "label": "Подразделение", "type": "choice",
+         "options": _department_options()},
+        {"key": "effective_date", "label": "Дата вступления в силу", "type": "string"},
+        {"key": "headcount_delta", "label": "Изменение штата", "type": "number"},
+    ]
+
+
 # ── регистрация ──────────────────────────────────────────────────────────
 
 #: Тип предмета → класс модели. Единственное место соответствия: и
@@ -515,6 +568,7 @@ SUBJECT_MODELS: dict[str, type] = {
     VacationSchedule.SIGNOFF_SUBJECT_TYPE: VacationSchedule,
     Policy.SIGNOFF_SUBJECT_TYPE: Policy,
     JobDescription.SIGNOFF_SUBJECT_TYPE: JobDescription,
+    OrgChangeRequest.SIGNOFF_SUBJECT_TYPE: OrgChangeRequest,
 }
 
 #: Тип предмета → как его показывать и по каким фактам ветвить маршрут.
@@ -584,6 +638,19 @@ SUBJECT_SPECS: dict[str, dict] = {
         "describe": _describe_job_description,
         "facts": _job_description_facts,
         "fact_fields": _job_description_fact_fields,
+    },
+    # Без "on_approved" — и это решение 6 плана блока G, самое важное в
+    # предмете: утверждение заявки НЕ применяет изменение к дереву
+    # оргструктуры. Согласовать «дерево» нельзя — у него нет ни версии, ни
+    # момента; после утверждения правку вносит кадровик руками. Полуавтомат,
+    # молча правящий Department/Position по текстовому описанию, опаснее
+    # ручной работы, и применение диффа оргструктуры — отдельный крупный
+    # проект, не эта задача.
+    OrgChangeRequest.SIGNOFF_SUBJECT_TYPE: {
+        "label": "Заявка на изменение оргструктуры",
+        "describe": _describe_org_change,
+        "facts": _org_change_facts,
+        "fact_fields": _org_change_fact_fields,
     },
 }
 

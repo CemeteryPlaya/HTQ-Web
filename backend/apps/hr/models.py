@@ -2152,3 +2152,48 @@ class JobDescription(signoff.Approvable, HrBase):
             models.UniqueConstraint(fields=["position", "version"],
                                     name="uq_job_description_version"),
         ]
+
+
+class OrgChangeKind(models.TextChoices):
+    CREATE_UNIT = "create_unit", "Создать подразделение"
+    RENAME_UNIT = "rename_unit", "Переименовать подразделение"
+    MOVE_UNIT = "move_unit", "Перенести подразделение"
+    CLOSE_UNIT = "close_unit", "Закрыть подразделение"
+    CREATE_POSITION = "create_position", "Ввести должность"
+    CLOSE_POSITION = "close_position", "Сократить должность"
+    OTHER = "other", "Другое"
+
+
+class OrgChangeRequest(signoff.Approvable, HrBase):
+    """Заявка на изменение оргструктуры — строка 1 матрицы HR-FRM-004.
+
+    Согласовать «дерево» нельзя: у дерева нет ни версии, ни момента. Эта
+    модель — приказ: что меняем, с какой даты, кто инициатор, чем
+    обосновано. После утверждения изменение вносит кадровик руками, и
+    автоматического применения тут нет намеренно (решение 6 плана блока G):
+    применение диффа оргструктуры — отдельный крупный проект, а
+    «полуавтомат», молча правящий дерево по текстовому описанию, опаснее
+    ручной работы.
+
+    ``description`` — что именно меняется, словами. Это не слабость модели,
+    а её честная граница: поля, достаточного для машинного применения
+    любого из семи видов изменений, не существует.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.org_change"
+
+    kind = models.CharField(max_length=20, choices=OrgChangeKind.choices,
+                            default=OrgChangeKind.OTHER, db_default=OrgChangeKind.OTHER.value)
+    department = models.ForeignKey(
+        Department, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="org_change_requests")
+    description = models.TextField()
+    headcount_delta = models.IntegerField(default=0, db_default=0)
+    effective_date = models.DateField()
+
+    class Meta:
+        verbose_name = "Заявка на изменение оргструктуры"
+        verbose_name_plural = "Заявки на изменение оргструктуры"
+
+    def __str__(self) -> str:
+        return f"<OrgChangeRequest(id={self.id}, kind='{self.kind}', department_id={self.department_id})>"
