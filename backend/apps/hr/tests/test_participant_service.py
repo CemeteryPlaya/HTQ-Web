@@ -42,9 +42,14 @@ def test_participant_oversees_the_group_but_does_not_serve_it():
 
 @pytest.mark.django_db
 def test_level_is_computed_from_thresholds_not_hardcoded():
-    """Уровень — кэш от веса; в схеме без порогов это запасной уровень,
-    с порогами — тот, куда попадает вес 0."""
+    """Уровень — кэш от веса через пороги, не литерал: с порогом N-1 (0–99)
+    вес 0 попадает в уровень 1; без порогов был бы запасной 5 — и тест,
+    написанный без порога, не отличил бы одно от другого."""
+    from apps.hr.models import LevelThreshold
+
+    LevelThreshold.objects.create(level_number=1, weight_from=0, weight_to=99, label="N-1")
     position, _ = svc.ensure_participant()
+    assert position.level == 1
     assert position.level == position_service._compute_level(0)
 
 
