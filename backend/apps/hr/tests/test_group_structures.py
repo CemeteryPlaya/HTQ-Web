@@ -147,12 +147,19 @@ def test_direct_chain_matches_the_document():
 
 
 def test_subsidiary_heads_are_directors_not_general_directors():
-    """Правка Садыева: в ДО «Директор», не «Генеральный директор»."""
+    """Правка Садыева: в ДО «Директор», не «Генеральный директор».
+
+    Блок F: в холдинге главная должность — Участник (ОСУ), не ГД, а в ДО
+    остаётся «Директор» (не ГД, который только в холдинге)."""
     for s in (HTQ, HTS, KEG):
         head = next(p for p in s.posts if p.reports_to is None)
         assert head.title == "Директор"
+        # ГД в ДО нет — проверяем, чтобы ошибочно привезённый ГД был замечен.
+        assert "Генеральный директор" not in {p.title for p in s.posts}
     # Блок F: в холдинге главная должность — Участник (ОСУ), не ГД
     assert next(p for p in HOLDING.posts if p.reports_to is None).title == "Участник (ОСУ)"
+    # ГД в холдинге есть, но не как главная (подчинён ОСУ).
+    assert any(p.title == "Генеральный директор" for p in HOLDING.posts)
 
 
 def test_holding_directorates_are_directorates():
@@ -235,3 +242,21 @@ def test_document_titles_are_preserved_where_they_differ():
         ("Специалист ПТО", "Менеджер ПТО и КК"),
         ("HR-специалист", "Менеджер по кадрам"),
     }
+
+
+def test_participant_unit_name_matches_the_service_definition():
+    """Имя подразделения ОСУ определено в двух местах: в справочнике структур
+    (group_structures) и в сервисе (participant_service). Расхождение будет
+    молчаливым: сид пишет первое, ensure_participant тут же переписывает вторым.
+    
+    Прецедент: LEVELS в миграции 0024 и в group_structures.py — тест
+    test_levels_match_the_migration_seed держит их в синхронизме."""
+    from apps.hr.services import participant_service
+    
+    # Имя подразделения в структуре должно совпадать с именем в сервисе.
+    gs_unit = next(u for u in HOLDING.units if u.path == "osu")
+    assert gs_unit.name == participant_service.PARTICIPANT_UNIT_NAME, (
+        f"Расхождение имён: '{gs_unit.name}' vs '{participant_service.PARTICIPANT_UNIT_NAME}' — "
+        f"сид и сервис не совпадают"
+    )
+    assert gs_unit.path == participant_service.PARTICIPANT_UNIT_PATH

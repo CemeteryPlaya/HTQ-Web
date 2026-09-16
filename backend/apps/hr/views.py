@@ -128,6 +128,10 @@ def _delete_department(request, department_id: int):
         svc.delete_department(department_id, cascade=_wants_cascade(request))
     except svc.DepartmentNotFound:
         return json_error("Department not found", 404)
+    except svc.DepartmentHasSystemPositions as exc:
+        # Системные должности защищены от удаления — они могут быть в маршрутах
+        # согласования и их удаление привело бы к невалидным ссылкам.
+        return json_error(exc.detail, 409)
     except svc.DepartmentHasDependents as exc:
         # СТРУКТУРНЫЙ detail (объект, не строка) — по нему фронт рисует
         # точное подтверждение и повторяет запрос с cascade=true.

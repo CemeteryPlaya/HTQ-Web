@@ -63,7 +63,10 @@ def test_is_idempotent_and_repairs_drift():
     second, created_again = svc.ensure_participant()
     assert created_again is False
     assert second.pk == first.pk
-    assert second.is_manager is True
+    # ВАЖНО: перечитываем из БД, чтобы проверить действительно ли сохранены изменения
+    second.refresh_from_db()
+    assert second.is_manager is True, "is_manager должно быть восстановлено"
+    assert second.grade == 10, "grade должно быть восстановлено"
     assert Position.objects.filter(title="Участник (ОСУ)").count() == 1
     assert Department.objects.filter(path="osu").count() == 1
 
@@ -78,6 +81,8 @@ def test_refuses_when_weight_zero_belongs_to_someone_else():
         svc.ensure_participant()
     assert "Председатель" in exc.value.detail
     assert not Position.objects.filter(title="Участник (ОСУ)").exists()
+    # Подразделение ОСУ тоже не создано при отказе.
+    assert not Department.objects.filter(path="osu").exists()
 
 
 @pytest.mark.django_db
@@ -100,3 +105,48 @@ def test_system_position_is_locked_for_ui_edits():
             position.id, schemas.PositionUpdate(title="Совет"))
     with pytest.raises(position_service.SystemPositionProtected):
         position_service.delete_position(position.id)
+
+
+@pytest.mark.django_db
+def test_refuses_when_title_already_taken_by_normal_position():
+    """Кадровик завёл обычную должность с названием ОСУ. Системная должность
+    должна отказать, пока чужую не переименуют."""
+    dep = Department.objects.create(name="Отдел", path="dept")
+    Position.objects.create(title="Участник (ОСУ)", department=dep, weight=50)
+    
+    with pytest.raises(svc.ParticipantTitleConflict) as exc:
+        svc.ensure_participant()
+    assert "зарезервирована" in exc.value.detail
+    assert "Переименуйте" in exc.value.detail
+    # ОСУ не создана.
+    assert not Position.objects.filter(is_system=True).exists()
+    # Подразделение ОСУ тоже не создано.
+    assert not Department.objects.filter(path="osu").exists()
+
+
+@pytest.mark.django_db
+def test_refuses_when_unit_name_already_taken_by_normal_department():
+    """Кадровик завёл обычное подразделение с названием ОСУ. Системное подразделение
+    должно отказать, пока чужое не переименуют."""
+    Department.objects.create(name="Общее собрание участников", path="other-path")
+    
+    with pytest.raises(svc.ParticipantUnitConflict) as exc:
+        svc.ensure_participant()
+    assert "зарезервировано" in exc.value.detail
+    assert "Переименуйте" in exc.value.detail
+    # ОСУ не создана.
+    assert not Position.objects.filter(is_system=True).exists()
+    # Подразделение ОСУ не создано.
+    assert not Department.objects.filter(path="osu").exists()
+
+
+@pytest.mark.django_db
+def test_refuses_both_title_and_unit_conflicts():
+    """Если конфликтуют оба, отказываем на первой (title)."""
+    dep1 = Department.objects.create(name="Участник (ОСУ)", path="path1")
+    dep2 = Department.objects.create(name="Общее собрание участников", path="path2")
+    Position.objects.create(title="Участник (ОСУ)", department=dep1, weight=50)
+    
+    # Первый отказ — на title
+    with pytest.raises(svc.ParticipantTitleConflict):
+        svc.ensure_participant()

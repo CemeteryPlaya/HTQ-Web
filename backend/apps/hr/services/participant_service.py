@@ -42,7 +42,12 @@ PARTICIPANT_UNIT_NAME = "Общее собрание участников"
 PARTICIPANT_WEIGHT = 0
 
 
-class ParticipantWeightTaken(Exception):
+class ParticipantException(Exception):
+    """Базовый класс для ошибок сервиса ОСУ."""
+    pass
+
+
+class ParticipantWeightTaken(ParticipantException):
     """Вес 0 держит другая должность. Двигать её молча нельзя — это чужие
     данные; человек решает сам, что с ней делать."""
 
@@ -51,6 +56,36 @@ class ParticipantWeightTaken(Exception):
             f"Вес {PARTICIPANT_WEIGHT} уже занят должностью «{holder.title}» "
             f"(id={holder.id}). Освободите его (смените вес той должности) "
             f"и повторите."
+        )
+        super().__init__(self.detail)
+
+
+class ParticipantTitleConflict(ParticipantException):
+    """Должность с названием «Участник (ОСУ)» уже существует (обычная, не системная).
+
+    Кадровик завел такую должность через UI — она не системная и не защищена.
+    Нужно переименовать чужую должность, чтобы освободить имя для системной.
+    """
+
+    def __init__(self) -> None:
+        self.detail = (
+            f"Должность «{PARTICIPANT_TITLE}» уже зарезервирована. "
+            f"Переименуйте существующую должность и повторите."
+        )
+        super().__init__(self.detail)
+
+
+class ParticipantUnitConflict(ParticipantException):
+    """Подразделение с названием ОСУ уже существует (обычное, не системное).
+
+    Кадровик завел такое подразделение через UI. Нужно переименовать
+    чужое подразделение, чтобы освободить имя для системного.
+    """
+
+    def __init__(self) -> None:
+        self.detail = (
+            f"Подразделение «{PARTICIPANT_UNIT_NAME}» уже зарезервировано. "
+            f"Переименуйте существующее подразделение и повторите."
         )
         super().__init__(self.detail)
 
@@ -88,6 +123,16 @@ def ensure_participant() -> tuple[Position, bool]:
 
     Возвращает ``(должность, создана_ли_заново)``.
     """
+    # Проверка конфликта имён: кадровик мог завести обычную должность с
+    # таким же названием. Системная должность должна её предварить.
+    if Position.objects.filter(title=PARTICIPANT_TITLE, is_system=False).exists():
+        raise ParticipantTitleConflict()
+
+    # Проверка конфликта подразделения: кадровик мог завести обычный отдел
+    # с таким же названием. Системное подразделение должно его предварить.
+    if Department.objects.filter(name=PARTICIPANT_UNIT_NAME).exclude(path=PARTICIPANT_UNIT_PATH).exists():
+        raise ParticipantUnitConflict()
+
     unit, _ = Department.objects.update_or_create(
         path=PARTICIPANT_UNIT_PATH,
         defaults={

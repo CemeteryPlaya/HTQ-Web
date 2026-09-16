@@ -322,3 +322,49 @@ def test_delete_cascade_drops_pmo_memberships_of_subtree_employees(auth):
     assert not Employee.objects.filter(id=emp.id).exists()
     # PMO сам по себе — вне удаляемого поддерева, не должен быть тронут.
     assert PMO.objects.filter(id=pmo.id).exists()
+
+
+# ── система защиты (блок F) ──────────────────────────────────────────────────
+
+@pytest.mark.django_db
+def test_delete_with_system_positions_returns_409_refuses_cascade(auth):
+    """Системные должности защищены от удаления всегда, даже с cascade=true,
+    потому что на них могут ссылаться маршруты согласования."""
+    from apps.hr.services import participant_service
+
+    dep = _dep("ОСУ", "osu")
+    position, _ = participant_service.ensure_participant()
+    assert position.is_system is True
+
+    # Попытка удалить БЕЗ cascade.
+    resp = Client().delete(f"{BASE}/{dep.id}/", **auth)
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "department_has_system_positions"
+    assert "Участник (ОСУ)" in detail["system_positions"]
+    assert Department.objects.filter(id=dep.id).exists()
+    assert Position.objects.filter(id=position.id).exists()
+
+    # Попытка с cascade=true — тоже отказывает.
+    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **auth)
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "department_has_system_positions"
+    assert Department.objects.filter(id=dep.id).exists()
+    assert Position.objects.filter(id=position.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_cascade_normal_department_still_works(auth):
+    """Проверка регрессии: каскадное удаление обычного подразделения
+    по-прежнему работает без системных должностей."""
+    dep = _dep("ИТ", "it")
+    child = _dep("Разработка", "it.dev")
+    pos = _pos("Инженер", dep, weight=50)
+    emp = _emp(dep, pos, "a@htq.test")
+
+    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **auth)
+    assert resp.status_code == 204
+    assert not Department.objects.filter(id__in=[dep.id, child.id]).exists()
+    assert not Position.objects.filter(id=pos.id).exists()
+    assert not Employee.objects.filter(id=emp.id).exists()

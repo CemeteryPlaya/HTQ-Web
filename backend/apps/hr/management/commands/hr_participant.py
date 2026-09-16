@@ -47,7 +47,7 @@ class Command(BaseCommand):
         with use_company(slug):
             try:
                 position, created = participant_service.ensure_participant()
-            except participant_service.ParticipantWeightTaken as exc:
+            except participant_service.ParticipantException as exc:
                 raise CommandError(exc.detail) from exc
 
         state = "заведена" if created else "уже есть, приведена к предписанному состоянию"

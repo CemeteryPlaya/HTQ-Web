@@ -396,3 +396,37 @@ def test_guard_runs_before_anything_is_written(monkeypatch):
         _seed()
     assert LevelThreshold.objects.count() == 0
     assert Department.objects.count() == 0
+
+
+# ── блок F: Участник (ОСУ) ─────────────────────────────────────────────────
+
+def test_holding_staffing_excludes_system_positions(company_schema):
+    """ОСУ в документе — без штатной единицы; в счётчик «всего 12» не входит.
+    Сид должен заводить штатные строки только для обычных должностей."""
+    from django.core.cache import cache
+
+    from apps.companies.models import Company
+    from htqweb.tenancy.db import use_company
+
+    Company.objects.filter(slug=company_schema["slug"]).update(kind="holding")
+    cache.clear()
+    _seed(company=company_schema["slug"])
+    
+    with use_company(company_schema["slug"]):
+        # Количество должностей = 13 (12 обычных + 1 ОСУ)
+        positions = Position.objects.all()
+        assert positions.count() == 13
+        
+        # Штатных строк = 12 (только обычные, ОСУ исключена)
+        staffing = StaffingPosition.objects.all()
+        assert staffing.count() == 12
+        
+        # Проверяем, что ОСУ нет в штатном расписании
+        osu = Position.objects.get(title="Участник (ОСУ)")
+        assert not StaffingPosition.objects.filter(position=osu).exists()
+        
+        # Остальные 12 должностей в штатном расписании есть
+        regular_positions = Position.objects.filter(is_system=False)
+        assert regular_positions.count() == 12
+        for pos in regular_positions:
+            assert StaffingPosition.objects.filter(position=pos).exists(), pos.title

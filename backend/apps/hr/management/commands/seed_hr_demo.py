@@ -504,12 +504,22 @@ class Command(BaseCommand):
         таких данных падал бы ``MultipleObjectsReturned``. Отдел поэтому
         только в ``defaults``: перенос обновляет существующую строку на
         месте, а не плодит новую.
+
+        Системные должности (блок F: ОСУ) НЕ получают штатную единицу — это
+        закреплено в документе: ОСУ нарисована без единицы и в счётчик
+        «всего 12» не входит. Штатное расписание касается только обычных
+        должностей (тех, что ``is_system=False``).
         """
         self.stdout.write("Штатное расписание...")
+        staffed_count = 0
         for position in positions.values():
+            # Системные должности пропускаем: они не носят в себе штатной единицы.
+            if position.is_system:
+                continue
             StaffingPosition.objects.update_or_create(
                 position=position,
                 defaults={"department": position.department, "headcount": 1},
             )
-        self.stdout.write(f"  {len(positions)}")
-        return len(positions)
+            staffed_count += 1
+        self.stdout.write(f"  {staffed_count}")
+        return staffed_count
