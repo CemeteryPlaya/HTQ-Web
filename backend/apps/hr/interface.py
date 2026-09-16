@@ -309,3 +309,28 @@ def substitutes_for(position_id: int, on_date: date | None = None) -> list[dict]
              "kind": row.kind,
              "basis": row.basis}
             for row in rows]
+
+
+def participant_position() -> dict | None:
+    """Должность «Участник (ОСУ)» в ТЕКУЩЕЙ компании — или ``None``.
+
+    Общее собрание участников утверждает назначение директора ДО, бюджет
+    группы и крупные сделки (HR-FRM-004, п. 7, 11, 14); маршрут
+    согласования ссылается на него обычным ``position_id`` — этим и берёт.
+    Держателей резолвит ``resolve_position_users``, как для любой должности.
+
+    Сосед не хардкодит название: оно закреплено ``is_system``, но знать его
+    соседу незачем. ``None`` — законный ответ: у дочерних компаний органа
+    владельцев в платформе нет, там «участник» — сам холдинг, и решение
+    принимает его генеральный директор (кросс-компанейский этап, roadmap §6.2).
+
+    Ровно три ключа — форма закреплена в roadmap §6.1.
+    """
+    require_service("hr")
+    from apps.hr.services import participant_service
+
+    position = participant_service.find_participant()
+    if position is None:
+        return None
+    return {"id": position.id, "title": position.title,
+            "is_active": position.is_active}
