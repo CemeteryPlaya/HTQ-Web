@@ -88,6 +88,7 @@
 | Сводки холдинга | строятся | никем не читаются |
 | Матрица полномочий | движок signoff | только финансы; нет относительных согласующих («руководитель блока», ОСУ); нет кросс-компанейских этапов |
 | Замещение | ✅ `hr.Substitution` + `substitutes_for` | расхождение названия должностей в HR-FRM-006 и оргструктуре (§8.2); строка «Системный администратор → внутригрупповой ИТ-подрядчик» не выражается должностью |
+| ОСУ / Участник | ✅ системная должность `Участник (ОСУ)` над ГД, `hr_participant`, `hr.participant_position()` | «N-0» реализован положением в дереве, не порогом (решение 1 плана F) |
 | Демо-данные | ✅ `seed_group_demo` | `group_structures.py` (4 утверждённые структуры), `seed_group_demo` заводит холдинг и ДО, сеет структуры и учётки |
 
 ## 5. Блоки работ (моя зона)
@@ -197,10 +198,15 @@
 - HTTP: `GET/POST positions/{id}/substitutions`, `PATCH/DELETE substitutions/{id}` (чтение — JWT, запись — админ);
 - `PositionSubstitutions.tsx` на карточке должности; матрица документа в демо-стенде холдинга (10 строк). Строка «Системный администратор → внутригрупповой ИТ-подрядчик» не сеется: замещающий — внешний подрядчик, а не должность, и команда печатает об этом предупреждение.
 
-### F. ОСУ / «Участник»
-Должность уровня N-0 в холдинге («Участник (ОСУ)», `is_system`) — тогда
-маршруты signoff ссылаются на неё обычным `position_id`, движку ничего
-нового для этого случая не нужно.
+### F. ОСУ / «Участник» — (выполнено)
+
+**Что сделано:**
+- `hr.Position` системная должность «Участник (ОСУ)» (`is_system=True`, вес 0, подразделение `osu`) над генеральным директором холдинга;
+- `apps.hr.services.participant_service.ensure_participant()` — заведение идемпотентно, заводит/проверяет статус, отказывает, если вес 0 занят;
+- `apps.hr.interface.participant_position() -> {id, title, is_active} | None` — способ для соседей узнать id без хардкода названия;
+- `manage.py hr_participant --company SLUG` — боевой путь (через API `is_system` не ставится); `seed_hr_demo` сеет ОСУ + связь с ГД.
+
+Маршруты signoff ссылаются на ОСУ обычным `position_id`, движку ничего нового для этого случая не нужно.
 
 ### G. HR-субъекты согласования (строки 1–10 матрицы) — моя половина
 Модели-объекты в `hr` (штатное расписание, приём/увольнение, премия,
@@ -232,6 +238,7 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
 | `hr.get_positions_brief(ids)`, `hr.resolve_position_users(ids)` | есть; действуют в контексте текущей компании | без изменений |
 | `hr.get_employee_brief(user_id)` → `+is_manager`, `+external_hierarchy` | блок B | меняет `access.subordinate_companies` |
 | `hr.manager_position_of(position_id) -> int \| None` | новое (B) | «Руководитель блока» = руководитель дирекции инициатора |
+| `hr.participant_position() -> {id, title, is_active} \| None` | новое (F) | утверждающий ОСУ в маршрутах согласования (HR-FRM-004 п. 7, 11, 14) |
 | `hr.substitutes_for(position_id, on_date) -> list[{position_id, kind: primary\|reserve, basis}]` | есть, блок E | подмена согласующего |
 | `companies.get_company(slug)`, `companies.active_company_slugs()` | есть | кросс-компанейские этапы |
 | `access.subordinate_companies(user, company)` | есть (пусто до B) | право ГД/CFO холдинга согласовывать в ДО |
@@ -239,8 +246,7 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
 | `htqweb.tenancy.db.use_company(slug)` | есть | войти в схему ДО и резолвить её должности |
 
 ### 6.2 Требования к signoff (их работа)
-- `ApproverKind`: `manager_of_initiator` (через `hr.manager_position_of`);
-  `user`/`role` — если ОСУ не пойдёт по варианту F.
+- `ApproverKind`: `manager_of_initiator` (через `hr.manager_position_of`); ОСУ — обычная должность по `hr.participant_position()`, отдельного вида согласующего не нужно.
 - Кросс-компанейский согласующий: `ApprovalRouteStageRole.company_slug`,
   резолв через `use_company`, проверка права в той компании через
   `access.permission_level`.
@@ -285,8 +291,10 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
 4. **G** — HR-субъекты (моя половина) после их `ApproverKind`.
 5. **Заведение остальных компаний** (`company_create` холдинг → HTS → KEG,
    `--parent hi-tech-group`; HTQ получает `parent` и `kind=construction`
-   через PATCH из A); `company_grant` персоналу холдинга; сид уровней
-   отработает сам. Только теперь появляется второй поддомен.
+   через PATCH из A); `manage.py hr_participant --company hi-tech-group`
+   — завести ОСУ в холдинге; затем кадровик соединяет ОСУ с ГД в дереве.
+   `company_grant` персоналу холдинга; сид уровней отработает сам. Только
+   теперь появляется второй поддомен.
 6. **H**, **I** — сводки и снятие параллельного RBAC; `api_view(module=)`
    навешивается по аппкам, каждая — отдельным коммитом с прогоном.
 7. **J** — документы закрываются вместе с каждым блоком, финальная сверка.

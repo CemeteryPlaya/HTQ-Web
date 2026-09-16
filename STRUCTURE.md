@@ -69,7 +69,7 @@ HTQWeb1/
 |---|---|---|---|
 | **core** | — (примонтирована в корень `htqweb/urls.py`, свой префикс `api/core/v1/` объявляет сама) | — (сам реестр) | `/health/`, `/health/ready/`, `/api/core/v1/services/`; общий ETL-хелпер (`etl.py`) |
 | **users** | `api/users/v1/` | `users` | Identity, JWT issuer+validator, профиль, регистрация, админ-юзеры, items |
-| **hr** | `api/hr/v1/` | `hr` | Сотрудники, отделы, должности (`is_manager`/`external_hierarchy` — руководящая должность и участие во внешней иерархии между компаниями, `substitutes_for` — матрица замещения), вакансии, табель, документы, аудит, оргдерево, PMO |
+| **hr** | `api/hr/v1/` | `hr` | Сотрудники, отделы, должности (`is_manager`/`external_hierarchy` — руководящая должность и участие во внешней иерархии между компаниями, `substitutes_for` — матрица замещения, `participant_position()` — ОСУ), вакансии, табель, документы, аудит, оргдерево, PMO |
 | **tasks** | `api/tasks/v1/` | `tasks` | Workflow-движок Jira+SharePoint (см. §4.2) |
 | **approvals** | `api/requests/v1/` | `approvals` | ⭐ Lark-style конструктор форм + workflow согласований (см. §3.4). Префикс URL (`requests`) и app_label (`approvals`) сознательно расходятся — см. `apps/approvals/urls.py` докстринг |
 | **cms** | `api/cms/v1/` | `cms` | Новости, категории/теги, contact-requests, ConferenceConfig |

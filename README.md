@@ -380,6 +380,7 @@ listenIp и пустым announced SFU падает на старте намер
 ../.venv/Scripts/python.exe manage.py seed_employee_accounts [--company SLUG]
 ../.venv/Scripts/python.exe manage.py seed_tasks_demo [--company SLUG] [--purge|--wipe|--wipe-only]
 ../.venv/Scripts/python.exe manage.py seed_group_demo [--skip-tasks]   # стенд группы: 4 компании, структуры, учётки, членства, задачи HTQ
+../.venv/Scripts/python.exe manage.py hr_participant --company SLUG   # системная должность «Участник (ОСУ)» в схеме компании; идемпотентно
 ../.venv/Scripts/python.exe manage.py run_imap_idle             # live-push корпоративной почты
 ../.venv/Scripts/python.exe manage.py etl_<domain> [--dry-run] [--verify] [--limit N]
 ```
