@@ -141,10 +141,17 @@ class TimeEntryAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 @admin.register(StaffingPosition)
 class StaffingPositionAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "position", "department", "grade", "headcount", "salary")
-    list_filter = ("department",)
-    readonly_fields = ("created_at", "updated_at")
+    list_display = ("id", "position", "department", "grade", "headcount", "salary",
+                    "approval_state")
+    list_filter = ("department", "approval_state")
+    readonly_fields = ("created_at", "updated_at", "approval_state")
     autocomplete_fields = ("position", "department")
+    # ``approval_state`` показывается, но не правится — как у всех восьми
+    # согласуемых моделей contracts (``apps/contracts/admin.py``): его
+    # единственный писатель — ``apps.signoff.services.engine``, и он пишет
+    # его в одной транзакции с состоянием процесса. Правка отсюда развела бы
+    # их, и «согласовано» на строке перестало бы значить, что согласование
+    # было.
 
 
 @admin.register(PersonnelHistory)

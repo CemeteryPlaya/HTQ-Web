@@ -361,3 +361,103 @@ def every_subject(db):
             headcount_delta=1, effective_date=dt.date(2026, 12, 1)),
     }
     return {subject_type: row.id for subject_type, row in rows.items()}
+
+
+@pytest.mark.django_db
+def test_every_subject_declares_fields_the_engine_accepts(dep):
+    """Объявления полей прогоняются через САМ движок, а не сверяются с
+    локальным списком типов.
+
+    Сторож завёлся по находке финального ревью: у кадрового приказа тип поля
+    был написан как ``"boolean"``, а движок знает только ``"bool"``
+    (``conditions.FIELD_TYPES``). Падало это молча и далеко: редактор
+    маршрутов (``signoff.views.SubjectsView._fields``) глотает исключение и
+    показывает предмет БЕЗ условий, то есть строки 5–7 матрицы нельзя было
+    развести ветвлением — ровно то, ради чего факты и объявлялись.
+
+    Импорт внутренностей соседа — сознательный и ровно такой же, как в
+    ``apps/contracts/tests/test_approval_facts.py``: проверять объявления
+    полей больше нечем, пока signoff не вынес валидатор в свой interface
+    (запрошено в roadmap §6.2). Сторож границ каталоги ``tests/`` не
+    сканирует, так что правило аппок этим не нарушается.
+
+    Фикстура ``dep`` здесь обязательна, и это не деталь теста: шесть из
+    десяти предметов объявляют ``department_id`` полем типа ``choice``, а
+    движок требует у ``choice`` непустой список вариантов. В компании БЕЗ
+    подразделений объявление полей поэтому не проходит проверку целиком —
+    известная ловушка платформы (STRUCTURE.md, «пустой справочник»), теперь
+    распространяющаяся и на кадры. Самолечится данными: без подразделения не
+    завести ни должность, ни сотрудника, то есть и предмета согласования не
+    возникнет. Ниже это зафиксировано отдельным тестом, чтобы поведение было
+    описано, а не обнаружено.
+    """
+    from apps.signoff.services import registry
+
+    for subject_type in MATRIX_SUBJECTS:
+        fields = registry.fields_for(subject_type)
+        assert {f["key"] for f in fields} == MATRIX_SUBJECTS[subject_type], subject_type
+
+
+@pytest.mark.django_db
+def test_a_long_basis_survives_approval(every_subject):
+    """Основание приказа (255) должно влезать в номер приказа в истории.
+
+    Вторая находка финального ревью: колонка истории была 64, и на обычном
+    тексте «Приказ Генерального директора № …» запись падала ``DataError``.
+    Колбэк идёт ВНУТРИ транзакции движка, поэтому вместе с записью
+    откатывалось решение согласующего — приказ нельзя было утвердить вовсе.
+    Тест держит равенство длин: разъедутся — упадёт здесь, а не на бою.
+    """
+    from apps.hr import approval_hooks
+    from apps.hr.models import PersonnelHistory, PersonnelOrder
+
+    order_id = every_subject["hr.personnel_order"]
+    basis = "Приказ Генерального директора № 123-К от 01.10.2026 «" + "О" * 200 + "»"
+    PersonnelOrder.objects.filter(pk=order_id).update(basis=basis[:255])
+
+    approval_hooks._personnel_order_on_approved(order_id)
+
+    row = PersonnelHistory.objects.get(employee_id=PersonnelOrder.objects.get(
+        pk=order_id).employee_id)
+    assert row.order_number == basis[:255]
+
+
+@pytest.mark.django_db
+def test_approving_the_same_order_twice_does_not_duplicate_history(every_subject):
+    """Утвердить приказ дважды можно штатным путём: согласующий возвращает
+    завершённый процесс на доработку (``engine.reopen``), приказ правят и
+    отправляют заново — новым процессом, с новым ``on_approved``. Через
+    ``create`` сотрудник получал бы две записи «Уволен», а кадровую историю
+    читают карточка, стаж и отчёты."""
+    from apps.hr import approval_hooks
+    from apps.hr.models import PersonnelHistory
+
+    order_id = every_subject["hr.personnel_order"]
+
+    approval_hooks._personnel_order_on_approved(order_id)
+    approval_hooks._personnel_order_on_approved(order_id)
+
+    assert PersonnelHistory.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_without_departments_the_route_editor_sees_no_conditions():
+    """Обратная сторона предыдущего теста, описанная явно.
+
+    В компании без активных подразделений ``_department_options()`` пуст,
+    движок отвергает объявление полей целиком (``choice`` без вариантов), а
+    редактор маршрутов (``signoff.views.SubjectsView._fields``) глотает
+    исключение и показывает предмет без условий. Это НЕ бессимптомная
+    поломка блока: без подразделения в компании нет ни должностей, ни
+    сотрудников, ни самих кадровых заявок. Тест здесь затем, чтобы тот, кто
+    настраивает маршруты на пустой компании и видит предмет без условий,
+    нашёл объяснение, а не считал редактор сломанным.
+    """
+    from apps.signoff.services import conditions, registry
+
+    with pytest.raises(conditions.ConditionError):
+        registry.fields_for("hr.staffing_position")
+
+    # Предметы без ``choice``-полей от пустого справочника не страдают.
+    assert {f["key"] for f in registry.fields_for("hr.vacation_schedule")} == \
+        MATRIX_SUBJECTS["hr.vacation_schedule"]

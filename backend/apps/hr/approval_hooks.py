@@ -146,7 +146,7 @@ def _personnel_order_fact_fields() -> list[dict]:
          "options": [{"value": v, "label": l} for v, l in PersonnelOrderKind.choices]},
         {"key": "position_id", "label": "Должность", "type": "number"},
         {"key": "position_level", "label": "Уровень должности", "type": "number"},
-        {"key": "is_manager", "label": "Руководящая должность", "type": "boolean"},
+        {"key": "is_manager", "label": "Руководящая должность", "type": "bool"},
         {"key": "target_company_slug", "label": "Компания назначения", "type": "string"},
         {"key": "salary", "label": "Оклад", "type": "number"},
         {"key": "effective_date", "label": "Дата вступления в силу", "type": "string"},
@@ -164,14 +164,26 @@ def _personnel_order_on_approved(subject_id: int) -> None:
     order = PersonnelOrder.objects.filter(pk=subject_id).first()
     if order is None or order.employee_id is None:
         return
-    PersonnelHistory.objects.create(
+    # get_or_create, а не create: утвердить один и тот же приказ можно дважды
+    # штатным путём — согласующий возвращает завершённый процесс на доработку
+    # (``engine.reopen``), приказ правят и отправляют ЗАНОВО, новым процессом,
+    # и колбэк приходит второй раз. Через create сотрудник получил бы две
+    # записи «Уволен» в кадровой истории, а её читают карточка, стаж и
+    # отчёты. Ключ — само событие: тот же человек, то же событие, та же дата,
+    # та же должность и то же основание — это один факт, а не два.
+    #
+    # ``order.basis`` уходит в ``order_number`` целиком: обе колонки — 255
+    # (миграция 0034 расширила историю с 64), и обрезки здесь нет намеренно —
+    # молча потерять хвост номера приказа хуже, чем упасть. То, что длины
+    # совпадают, держит тест ``test_a_long_basis_survives_approval``.
+    PersonnelHistory.objects.get_or_create(
         employee_id=order.employee_id,
         event_type=_ORDER_EVENT.get(order.kind, PersonnelHistoryEventType.OTHER),
         event_date=order.effective_date,
         to_department_id=order.department_id,
         to_position_id=order.position_id,
         order_number=order.basis,
-        comment=order.comment,
+        defaults={"comment": order.comment},
     )
 
 

@@ -979,7 +979,12 @@ class PersonnelHistory(HrBase):
         related_name="personnel_history_to_position",
     )
 
-    order_number = models.CharField(max_length=64, default="", db_default="")
+    # 255, а не 64 исходника: утверждённый кадровый приказ пишет сюда своё
+    # основание (``PersonnelOrder.basis``, тоже 255), и на обычном тексте
+    # «Приказ ГД № 123-К от 01.10.2026 «О приёме…»» короткая колонка роняла
+    # решение согласующего целиком — колбэк идёт внутри транзакции движка
+    # (миграция 0034).
+    order_number = models.CharField(max_length=255, default="", db_default="")
     comment = models.TextField(default="", db_default="")
 
     # D10-подобное решение (см. AuditLog.changed_by выше): TokenPayload.user_id
