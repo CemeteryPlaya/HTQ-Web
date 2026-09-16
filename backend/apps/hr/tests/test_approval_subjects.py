@@ -13,12 +13,28 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from decimal import Decimal
 
 import pytest
 from django.test import Client
 
-from apps.hr.models import Department, Position, StaffingPosition
+from apps.hr.models import (
+    Bonus,
+    BusinessTrip,
+    Department,
+    Employee,
+    JobDescription,
+    LeaveRequest,
+    OrgChangeRequest,
+    PersonnelOrder,
+    Policy,
+    Position,
+    Reprimand,
+    StaffingPosition,
+    VacationSchedule,
+    VacationScheduleLine,
+)
 from apps.hr.services import staffing_service as staffing_svc
 from apps.signoff import interface as signoff
 from apps.users.models import User, UserStatus
@@ -209,3 +225,139 @@ def test_delete_line_still_works_in_draft_and_rework(staffing_line, state):
     staffing_svc.delete_line(staffing_line.id)
 
     assert not StaffingPosition.objects.filter(pk=staffing_line.pk).exists()
+
+
+# ── сводные сторожа блока G ─────────────────────────────────────────────
+#
+# Десять предметов делались семью задачами, и каждая пинила СВОИ ключи в
+# своём файле. Эти три теста держат картину целиком: список типов, набор
+# ключей у каждого и единственность автоматического эффекта. Контракт
+# уезжает в чужой код (roadmap §6.4) — менять его в одиночку нельзя.
+
+# Ровно то, что записано в roadmap §6.4. Дублирование с per-subject тестами
+# намеренное: там проверяется «предмет отдаёт свои ключи», здесь — «список
+# предметов и ключей целиком такой, каким его получил второй разработчик».
+MATRIX_SUBJECTS = {
+    "hr.org_change": {"kind", "department_id", "effective_date", "headcount_delta"},
+    "hr.staffing_position": {"department_id", "position_id", "position_level",
+                             "headcount", "salary", "payroll"},
+    "hr.policy": {"kind", "version", "effective_from"},
+    "hr.job_description": {"position_id", "position_level", "department_id",
+                           "version", "effective_from"},
+    "hr.personnel_order": {"kind", "position_id", "position_level", "is_manager",
+                           "target_company_slug", "salary", "effective_date"},
+    "hr.bonus": {"employee_id", "department_id", "position_level", "amount",
+                 "period", "kind"},
+    "hr.reprimand": {"employee_id", "department_id", "position_level",
+                     "severity", "event_date"},
+    "hr.vacation_schedule": {"year", "lines_count", "employees_count", "total_days"},
+    "hr.leave_request": {"employee_id", "department_id", "kind", "days",
+                         "date_from", "date_to"},
+    "hr.business_trip": {"employee_id", "department_id", "destination", "country",
+                         "days", "estimated_cost", "date_from", "date_to"},
+}
+
+
+@pytest.mark.django_db
+def test_every_matrix_row_has_its_subject_and_facts():
+    """Контракт со вторым разработчиком (roadmap §6.4): список типов и
+    ключей фактов. Он уезжает в чужой код маршрутами и условиями —
+    переименовать ключ молча значит сломать настроенный маршрут.
+    """
+    from apps.hr import approval_hooks
+
+    assert set(approval_hooks.SUBJECT_MODELS) == set(MATRIX_SUBJECTS)
+    assert set(approval_hooks.SUBJECT_SPECS) == set(MATRIX_SUBJECTS)
+    for subject_type, keys in MATRIX_SUBJECTS.items():
+        declared = {f["key"]
+                    for f in approval_hooks.SUBJECT_SPECS[subject_type]["fact_fields"]()}
+        assert declared == keys, subject_type
+
+
+@pytest.mark.django_db
+def test_only_the_personnel_order_has_an_automatic_effect():
+    """Решение 11: единственный автоматический эффект во всём блоке —
+    запись в кадровую историю при утверждении приказа. Появление второго
+    обязано быть осознанным, а не случайным."""
+    from apps.hr import approval_hooks
+
+    with_effects = {t for t, spec in approval_hooks.SUBJECT_SPECS.items()
+                    if {"on_approved", "on_rejected", "on_rework",
+                        "on_started", "on_cancelled"} & set(spec)}
+    assert with_effects == {"hr.personnel_order"}
+
+
+@pytest.mark.django_db
+def test_every_subject_gives_the_engine_only_values_it_can_normalize(every_subject):
+    """Факты уходят в условия маршрута, а те сравнивают ТОЛЬКО скаляры:
+    ``apps/signoff/services/conditions.py::normalize_facts`` переводит
+    ``Decimal`` в ``float`` и даты в ISO-строку, а на любом другом
+    нескалярном значении поднимает ``ConditionError`` — то есть ошибка
+    вылезет в чужом коде, на живом маршруте, а не здесь.
+
+    Список типов повторён здесь, а не спрошен у signoff: валидатора фактов
+    интерфейс соседа не экспортирует (запрошено в roadmap §6.2), а
+    импортировать его внутренности домен кадров не вправе. Если движок
+    сузит набор — этот тест придётся сверить руками.
+
+    Сторож не теоретический: у графика отпусков ``total_days`` собирается
+    агрегатом по датам, и в первой редакции приезжал ``timedelta``.
+    """
+    from apps.hr import approval_hooks
+
+    allowed = (str, int, float, bool, type(None), Decimal, dt.date, dt.datetime)
+    for subject_type, subject_id in every_subject.items():
+        facts = approval_hooks.SUBJECT_SPECS[subject_type]["facts"](subject_id)
+        assert set(facts) == MATRIX_SUBJECTS[subject_type], subject_type
+        for key, value in facts.items():
+            assert isinstance(value, allowed), f"{subject_type}.{key}: {type(value)}"
+
+
+@pytest.fixture
+def every_subject(db):
+    """По одной живой строке каждого из десяти предметов — {тип: id}.
+
+    Нужна ровно одному тесту (типы значений в фактах), но заводится
+    фикстурой, а не внутри него: следующий сводный сторож — «у каждого
+    предмета есть describe» или «карточка каждого предмета непуста» —
+    возьмёт её же, вместо того чтобы завести второй набор из десяти строк.
+    """
+    dep = Department.objects.create(name="Дирекция по эксплуатации", path="ops")
+    position = Position.objects.create(
+        title="Ведущий инженер", department=dep, weight=650, level=3)
+    employee = Employee.objects.create(
+        first_name="Асель", last_name="Нурланова", email="a.n@htq.kz",
+        department=dep, position=position, hire_date="2022-03-01")
+    schedule = VacationSchedule.objects.create(year=2027)
+    VacationScheduleLine.objects.create(
+        schedule=schedule, employee=employee,
+        date_from=dt.date(2027, 6, 1), date_to=dt.date(2027, 6, 14))
+    rows = {
+        "hr.staffing_position": StaffingPosition.objects.create(
+            position=position, department=dep, headcount=1, salary=700000, grade=7),
+        "hr.personnel_order": PersonnelOrder.objects.create(
+            employee=employee, position=position, department=dep,
+            effective_date=dt.date(2026, 10, 1), salary=700000),
+        "hr.bonus": Bonus.objects.create(
+            employee=employee, amount=Decimal("120000.00"), period="2026-09"),
+        "hr.reprimand": Reprimand.objects.create(
+            employee=employee, event_date=dt.date(2026, 9, 10),
+            reason="Нарушение регламента выдачи пропусков"),
+        "hr.leave_request": LeaveRequest.objects.create(
+            employee=employee, date_from=dt.date(2026, 10, 5),
+            date_to=dt.date(2026, 10, 18)),
+        "hr.business_trip": BusinessTrip.objects.create(
+            employee=employee, destination="Астана",
+            date_from=dt.date(2026, 11, 2), date_to=dt.date(2026, 11, 6),
+            estimated_cost=Decimal("350000.00")),
+        "hr.vacation_schedule": schedule,
+        "hr.policy": Policy.objects.create(
+            title="Положение о пропускном режиме", version="1.0",
+            effective_from=dt.date(2026, 10, 1)),
+        "hr.job_description": JobDescription.objects.create(
+            position=position, version="1.0", effective_from=dt.date(2026, 10, 1)),
+        "hr.org_change": OrgChangeRequest.objects.create(
+            department=dep, description="Ввести вторую единицу ведущего инженера",
+            headcount_delta=1, effective_date=dt.date(2026, 12, 1)),
+    }
+    return {subject_type: row.id for subject_type, row in rows.items()}

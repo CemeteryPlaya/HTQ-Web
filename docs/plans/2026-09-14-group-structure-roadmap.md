@@ -86,7 +86,7 @@
 | Права холдинга в ДО (блок C) | ✅ `serves_subsidiaries` + `apps/access/services/inheritance.py`, `inherited_from` в `/me` | членство (`CompanyMembership`) в ДО остаётся отдельным явным шагом — без него признак не даёт ничего (`company_grant --serving`, разрыв виден на дашборде); данные по внешней иерархии по-прежнему не режутся, только наследуются права (см. строку выше) |
 | Роли «функция × глубина» | ✅ | гейт `api_view(module=…)` не навешен ни на одну из 470 ручек; `Position.permissions`+`hr-level` живут параллельно |
 | Сводки холдинга | строятся | никем не читаются |
-| Матрица полномочий | движок signoff | только финансы; нет относительных согласующих («руководитель блока», ОСУ); нет кросс-компанейских этапов |
+| Матрица полномочий | ✅ десять кадровых предметов согласования (`hr.*`) с фактами для условий, блок G | финансовые строки 11–15 — зона contracts; относительные согласующие («руководитель блока», ОСУ) и кросс-компанейские этапы — зона signoff (§6.2), у меня для них готовы `participant_position()`, `manager_position_of`, `substitutes_for` |
 | Замещение | ✅ `hr.Substitution` + `substitutes_for` | расхождение названия должностей в HR-FRM-006 и оргструктуре (§8.2); строка «Системный администратор → внутригрупповой ИТ-подрядчик» не выражается должностью |
 | ОСУ / Участник | ✅ системная должность `Участник (ОСУ)` над ГД, `hr_participant`, `hr.participant_position()` | «N-0» реализован положением в дереве, не порогом (решение 1 плана F) |
 | Демо-данные | ✅ `seed_group_demo` | `group_structures.py` (4 утверждённые структуры), `seed_group_demo` заводит холдинг и ДО, сеет структуры и учётки |
@@ -208,12 +208,27 @@
 
 Маршруты signoff ссылаются на ОСУ обычным `position_id`, движку ничего нового для этого случая не нужно.
 
-### G. HR-субъекты согласования (строки 1–10 матрицы) — моя половина
-Модели-объекты в `hr` (штатное расписание, приём/увольнение, премия,
-взыскание, отпуск/командировка): наследовать `signoff.Approvable`,
-`SIGNOFF_SUBJECT_TYPE = "hr.<…>"`, `register_subject` в `HrConfig.ready()`,
-ручки «отправить на согласование» через `apps.signoff.interface` — ровно как
-`apps/contracts/models.py:66-67`. Движок не трогаю.
+### G. HR-субъекты согласования (строки 1–10 матрицы) — моя половина (выполнено)
+Десять моделей в `hr` наследуют `signoff.Approvable` с
+`SIGNOFF_SUBJECT_TYPE = "hr.<…>"`, регистрируются одной таблицей из
+`HrConfig.ready()` (`apps/hr/approval_hooks.py`), отправляются одной ручкой
+`POST /api/hr/v1/approvals/{subject_type}/{id}/submit` через
+`apps.signoff.interface`. Движок не тронут: в чужой зоне изменена ровно одна
+строка — `"registered_subjects"` в `__all__` его `interface.py`.
+
+Десять типов по строкам матрицы: `hr.org_change` (1), `hr.staffing_position`
+(2), `hr.policy` (3), `hr.job_description` (4), `hr.personnel_order` (5, 6,
+7), `hr.bonus` (8), `hr.reprimand` (9), `hr.vacation_schedule` +
+`hr.leave_request` + `hr.business_trip` (10 — заказчик развёл строку на три
+предмета 16.09.2026). Ключи фактов каждого — §6.4.
+
+Чего в блоке НЕТ намеренно: экранов заведения заявок; настройки самих
+маршрутов (данные второго разработчика); применения утверждённой заявки к
+дереву оргструктуры и проставления отсутствий в календаре после отпуска —
+и то и другое остаётся ручной работой кадровика. Единственный
+автоматический эффект утверждения во всём блоке — кадровый приказ пишет
+`PersonnelHistory`; это закреплено тестом
+`test_only_the_personnel_order_has_an_automatic_effect`.
 
 ### H. Сводки холдинга — читатели для `hr` и `tasks`
 `managed=False`-модели поверх `holding.hr_employee/department/position`,
@@ -252,8 +267,18 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
   `access.permission_level`.
 - Замещение при формировании `ApprovalTask` (по `hr.substitutes_for`) и
   переназначение открытых задач.
-- Принять субъекты `hr.*` (реестр generic) и согласовать `subject_facts`
-  для условий: сумма премии, срок отпуска, категория должности.
+- ✅ с моей стороны: субъекты `hr.*` зарегистрированы, факты объявлены,
+  список закреплён тестом и лежит в §6.4 — сумма премии (`hr.bonus.amount`),
+  срок отпуска (`hr.leave_request.days`, включительные границы), категория
+  должности (`position_level`, `is_manager`). Осталась ваша половина:
+  условия маршрутов по этим ключам.
+- Экспортировать из `signoff.interface` проверку фактов (обёртку над
+  `conditions.normalize_facts` или хотя бы кортеж допустимых типов):
+  сейчас предметная аппка не может спросить у движка, переварит ли он её
+  факты, и вынуждена повторять список типов у себя
+  (`test_every_subject_gives_the_engine_only_values_it_can_normalize`) —
+  ошибка вылезает на живом маршруте, в вашем коде, а не в тесте владельца
+  предмета.
 - Навесить `api_view(module="signoff", level=…)` на свои ручки — гейт готов,
   `access_functions.py` у них уже объявлен.
 
@@ -271,7 +296,36 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
 - канонический справочник должностей (после ответа на §8 п.2) — маршруты
   ключуются на `position_id`;
 - матрица HR-FRM-004, строки 11–15, с лимитами;
-- список `hr.*` subject-типов и их фактов (после блока G).
+- **список `hr.*` subject-типов и ключей их фактов** (блок G выполнен).
+  Набор закреплён тестом `test_every_matrix_row_has_its_subject_and_facts`
+  (`backend/apps/hr/tests/test_approval_subjects.py`): переименование ключа
+  ломает уже настроенное условие в маршруте, поэтому менять таблицу в
+  одиночку нельзя — только согласованной правкой с обеих сторон.
+
+| Строка HR-FRM-004 | `subject_type` | `label` | Ключи фактов |
+|---|---|---|---|
+| 1 | `hr.org_change` | Заявка на изменение оргструктуры | `kind`, `department_id`, `effective_date`, `headcount_delta` |
+| 2 | `hr.staffing_position` | Штатная единица | `department_id`, `position_id`, `position_level`, `headcount`, `salary`, `payroll` |
+| 3 | `hr.policy` | Локальный нормативный акт | `kind`, `version`, `effective_from` |
+| 4 | `hr.job_description` | Должностная инструкция | `position_id`, `position_level`, `department_id`, `version`, `effective_from` |
+| 5, 6, 7 | `hr.personnel_order` | Кадровый приказ | `kind`, `position_id`, `position_level`, `is_manager`, `target_company_slug`, `salary`, `effective_date` |
+| 8 | `hr.bonus` | Премия | `employee_id`, `department_id`, `position_level`, `amount`, `period`, `kind` |
+| 9 | `hr.reprimand` | Дисциплинарное взыскание | `employee_id`, `department_id`, `position_level`, `severity`, `event_date` |
+| 10а | `hr.vacation_schedule` | График отпусков | `year`, `lines_count`, `employees_count`, `total_days` |
+| 10б | `hr.leave_request` | Заявление на отпуск | `employee_id`, `department_id`, `kind`, `days`, `date_from`, `date_to` |
+| 10в | `hr.business_trip` | Командировка | `employee_id`, `department_id`, `destination`, `country`, `days`, `estimated_cost`, `date_from`, `date_to` |
+
+  Что важно знать про сами значения: `position_level` — номер уровня с
+  должности (`hr.Position.level`, N-1 самый высокий: чем меньше число, тем
+  выше), `is_manager` — булево с должности, а не догадка по названию;
+  `days` у отпуска и командировки считается включительно (с 1-го по 1-е —
+  один день) и НЕ хранится полем; `target_company_slug` — slug компании
+  назначения, заполняется у приказа строки 7 и приезжает `None` у остальных
+  (модель его не требует — это крючок для кросс-компанейского этапа, а не
+  обязательное поле); `payroll` штатной строки — оклад × число
+  единиц, именно по нему ветвится примечание «ФОТ — в пределах бюджета».
+  Даты уезжают как `date`, суммы как `Decimal` — движок нормализует и то и
+  другое сам (`conditions.normalize_facts`).
 
 ### 6.5 Что им нужно знать про режим перехода (§3)
 - Одна компания; их данные лежат в её схеме (или в `public` до bootstrap);
@@ -288,7 +342,15 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
 2. **D** + **B** — expand-миграции `hr/0021`–`0024` через `migrate_companies` на HTQ (миграции `hr/0023`–`0024` no-op по данным: choices без DDL; пороги уже есть); слепок до/после; contracts/signoff не затронуты.
 3. **C** — решение и реализация в `access`; **E**, **F** — модели и интерфейс; (`hr/0025_substitution` — expand, НОВАЯ таблица, через `migrate_companies`; на бою матрица заполняется руками с карточки должности, демо-сид на бой не идёт);
    передать §6.1 другому разработчику. Параллельно у него — §6.2/6.3.
-4. **G** — HR-субъекты (моя половина) после их `ApproverKind`.
+4. **G** — HR-субъекты (моя половина) после их `ApproverKind`. Семь
+   expand-миграций `hr/0027`–`0033` через `migrate_companies`: `0027` —
+   колонка `approval_state` на `hr_staffingposition`, `0028`–`0033` — десять
+   НОВЫХ таблиц: девять предметов (`hr_personnelorder`, `hr_bonus`,
+   `hr_reprimand`, `hr_leaverequest`, `hr_businesstrip`,
+   `hr_vacationschedule`, `hr_policy`, `hr_jobdescription`,
+   `hr_orgchangerequest`) плюс строка графика (`hr_vacationscheduleline`). Данные не переносятся, откат — снос таблиц;
+   слепок `tenancy_status` до/после. Маршруты на бою пусты: до их настройки
+   ручка отправки отвечает 409 «маршрут не настроен», и это ожидаемо.
 5. **Заведение остальных компаний** (`company_create` холдинг → HTS → KEG,
    `--parent hi-tech-group`; HTQ получает `parent` и `kind=construction`
    через PATCH из A); `manage.py hr_participant --company hi-tech-group`

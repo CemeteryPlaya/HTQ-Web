@@ -307,6 +307,7 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/hr/v1/positions/levels/`            | GET, POST | Level thresholds                |
 | `/api/hr/v1/positions/{id}/substitutions` | GET, POST | Substitution matrix — GET: JWT, POST: admin=True |
 | `/api/hr/v1/substitutions/{id}`          | PATCH, DELETE | Edit/delete (admin=True) |
+| `/api/hr/v1/approvals/{subject_type}/{id}/submit` | POST | Отправить кадровый объект на согласование через `apps.signoff`. JWT, БЕЗ `admin=True` — отправляет тот, кто завёл заявку, а решает маршрут. `subject_type` — один из десяти `hr.*` (матрица HR-FRM-004, список в roadmap §6.4); 404 — неизвестный тип или нет такой строки, 409 — маршрут не настроен / объект уже на согласовании / в этапе не осталось согласующих / объект заперт. Ответ — карточка процесса с этапами |
 | `/api/hr/v1/vacancies/`                   | GET, POST |                              |
 | `/api/hr/v1/applications/`                | GET, POST | Candidate applications      |
 | `/api/hr/v1/time/`                        | GET, POST | Time tracking               |
