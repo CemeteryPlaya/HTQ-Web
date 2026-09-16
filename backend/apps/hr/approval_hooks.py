@@ -25,8 +25,8 @@
 """
 
 from apps.hr.models import (
-    Department, PersonnelHistory, PersonnelHistoryEventType, PersonnelOrder,
-    PersonnelOrderKind, StaffingPosition,
+    Bonus, BonusKind, Department, PersonnelHistory, PersonnelHistoryEventType,
+    PersonnelOrder, PersonnelOrderKind, Reprimand, ReprimandSeverity, StaffingPosition,
 )
 from apps.signoff import interface as signoff
 
@@ -169,6 +169,99 @@ def _personnel_order_on_approved(subject_id: int) -> None:
     )
 
 
+# ── строка 8: премия ─────────────────────────────────────────────────────
+
+def _describe_bonus(subject_id: int) -> dict | None:
+    bonus = (Bonus.objects
+             .select_related("employee")
+             .filter(pk=subject_id).first())
+    if bonus is None:
+        return None
+    return {
+        "title": (f"Премия: {bonus.employee.last_name} {bonus.employee.first_name} — "
+                  f"{bonus.amount} ({bonus.get_kind_display()}, {bonus.period})"),
+        "url": f"/hr/bonuses/{bonus.pk}",
+    }
+
+
+def _bonus_facts(subject_id: int) -> dict:
+    bonus = (Bonus.objects
+             .select_related("employee", "employee__position")
+             .filter(pk=subject_id).first())
+    if bonus is None:
+        return {}
+    return {
+        "employee_id": bonus.employee_id,
+        "department_id": bonus.employee.department_id,
+        # Категория должности (roadmap §6.2) — читается через сотрудника: у
+        # премии, в отличие от штатной строки, нет своего FK на должность.
+        "position_level": bonus.employee.position.level,
+        # Главный факт этого предмета (roadmap §6.2 называет её первой из
+        # трёх) — по ней второй разработчик строит условия маршрута.
+        "amount": bonus.amount,
+        "period": bonus.period,
+        "kind": bonus.kind,
+    }
+
+
+def _bonus_fact_fields() -> list[dict]:
+    return [
+        {"key": "employee_id", "label": "Сотрудник", "type": "number"},
+        {"key": "department_id", "label": "Подразделение", "type": "choice",
+         "options": _department_options()},
+        {"key": "position_level", "label": "Уровень должности", "type": "number"},
+        {"key": "amount", "label": "Сумма премии", "type": "number"},
+        {"key": "period", "label": "Период", "type": "string"},
+        {"key": "kind", "label": "Вид премии", "type": "choice",
+         "options": [{"value": v, "label": l} for v, l in BonusKind.choices]},
+    ]
+
+
+# ── строка 9: дисциплинарное взыскание ───────────────────────────────────
+
+def _describe_reprimand(subject_id: int) -> dict | None:
+    reprimand = (Reprimand.objects
+                 .select_related("employee")
+                 .filter(pk=subject_id).first())
+    if reprimand is None:
+        return None
+    return {
+        "title": (f"{reprimand.get_severity_display()}: "
+                  f"{reprimand.employee.last_name} {reprimand.employee.first_name} — "
+                  f"с {reprimand.event_date.isoformat()}"),
+        "url": f"/hr/reprimands/{reprimand.pk}",
+    }
+
+
+def _reprimand_facts(subject_id: int) -> dict:
+    reprimand = (Reprimand.objects
+                 .select_related("employee", "employee__position")
+                 .filter(pk=subject_id).first())
+    if reprimand is None:
+        return {}
+    return {
+        "employee_id": reprimand.employee_id,
+        "department_id": reprimand.employee.department_id,
+        "position_level": reprimand.employee.position.level,
+        # Маршрут ветвится именно по ней: замечание и строгий выговор
+        # проходят разный круг согласования.
+        "severity": reprimand.severity,
+        "event_date": reprimand.event_date.isoformat(),
+    }
+
+
+def _reprimand_fact_fields() -> list[dict]:
+    return [
+        {"key": "employee_id", "label": "Сотрудник", "type": "number"},
+        {"key": "department_id", "label": "Подразделение", "type": "choice",
+         "options": _department_options()},
+        {"key": "position_level", "label": "Уровень должности", "type": "number"},
+        {"key": "severity", "label": "Степень взыскания", "type": "choice",
+         "options": [{"value": v, "label": l} for v, l in ReprimandSeverity.choices]},
+        {"key": "event_date", "label": "Дата события", "type": "string"},
+    ]
+
+
 # ── регистрация ──────────────────────────────────────────────────────────
 
 #: Тип предмета → класс модели. Единственное место соответствия: и
@@ -176,6 +269,8 @@ def _personnel_order_on_approved(subject_id: int) -> None:
 SUBJECT_MODELS: dict[str, type] = {
     StaffingPosition.SIGNOFF_SUBJECT_TYPE: StaffingPosition,
     PersonnelOrder.SIGNOFF_SUBJECT_TYPE: PersonnelOrder,
+    Bonus.SIGNOFF_SUBJECT_TYPE: Bonus,
+    Reprimand.SIGNOFF_SUBJECT_TYPE: Reprimand,
 }
 
 #: Тип предмета → как его показывать и по каким фактам ветвить маршрут.
@@ -192,6 +287,21 @@ SUBJECT_SPECS: dict[str, dict] = {
         "facts": _personnel_order_facts,
         "fact_fields": _personnel_order_fact_fields,
         "on_approved": _personnel_order_on_approved,
+    },
+    # Ни у премии, ни у взыскания нет "on_approved" (решение 11 плана блока
+    # G): единственный автоматический эффект утверждения во всём блоке — у
+    # кадрового приказа выше. Взыскание объявляет приказ, а не платформа.
+    Bonus.SIGNOFF_SUBJECT_TYPE: {
+        "label": "Премия",
+        "describe": _describe_bonus,
+        "facts": _bonus_facts,
+        "fact_fields": _bonus_fact_fields,
+    },
+    Reprimand.SIGNOFF_SUBJECT_TYPE: {
+        "label": "Дисциплинарное взыскание",
+        "describe": _describe_reprimand,
+        "facts": _reprimand_facts,
+        "fact_fields": _reprimand_fact_fields,
     },
 }
 

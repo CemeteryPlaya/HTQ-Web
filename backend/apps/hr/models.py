@@ -1071,6 +1071,85 @@ class PersonnelOrder(signoff.Approvable, HrBase):
         return f"<PersonnelOrder(id={self.id}, kind='{self.kind}', pos={self.position_id})>"
 
 
+class BonusKind(models.TextChoices):
+    KPI = "kpi", "По KPI"
+    ONE_TIME = "one_time", "Разовая"
+    ANNUAL = "annual", "Годовая"
+
+
+class Bonus(signoff.Approvable, HrBase):
+    """Премирование работника — строка 8 матрицы HR-FRM-004.
+
+    Примечание документа: «По KPI и Положению о премировании» — отсюда
+    ``kind`` и ``basis``: маршрут отличает премию по KPI от разовой, а
+    ссылка на положение хранится рядом с суммой.
+
+    Сумма — главный факт этого предмета (roadmap §6.2 называет её первой из
+    трёх), поэтому она обязательна и строго положительна: «премия на 0 ₸» —
+    ошибка ввода, а не решение, и согласовывать её нечего.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.bonus"
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="bonuses")
+    kind = models.CharField(
+        max_length=16, choices=BonusKind.choices,
+        default=BonusKind.ONE_TIME, db_default=BonusKind.ONE_TIME.value)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    period = models.CharField(max_length=32, default="", db_default="")
+    basis = models.CharField(max_length=255, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "Премия"
+        verbose_name_plural = "Премии"
+        constraints = [
+            models.CheckConstraint(condition=models.Q(amount__gt=0),
+                                   name="ck_bonus_amount_positive"),
+        ]
+
+    def __str__(self) -> str:
+        return f"<Bonus(id={self.id}, employee_id={self.employee_id}, amount={self.amount})>"
+
+
+class ReprimandSeverity(models.TextChoices):
+    REMARK = "remark", "Замечание"
+    REPRIMAND = "reprimand", "Выговор"
+    SEVERE = "severe", "Строгий выговор"
+
+
+class Reprimand(signoff.Approvable, HrBase):
+    """Дисциплинарное взыскание — строка 9 матрицы HR-FRM-004.
+
+    ``severity`` — не украшение: маршрут по нему ветвится (замечание и
+    строгий выговор проходят разный круг согласования), и это тот самый
+    случай, ради которого у предмета вообще есть факты.
+
+    Автоматических последствий у утверждения нет (решение 11 плана блока G):
+    взыскание объявляет приказ, а не платформа.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.reprimand"
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="reprimands")
+    severity = models.CharField(
+        max_length=16, choices=ReprimandSeverity.choices,
+        default=ReprimandSeverity.REMARK, db_default=ReprimandSeverity.REMARK.value,
+        db_index=True)
+    event_date = models.DateField()
+    reason = models.TextField()
+    basis = models.CharField(max_length=255, default="", db_default="")
+
+    class Meta:
+        verbose_name = "Дисциплинарное взыскание"
+        verbose_name_plural = "Дисциплинарные взыскания"
+
+    def __str__(self) -> str:
+        return f"<Reprimand(id={self.id}, employee_id={self.employee_id}, severity='{self.severity}')>"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  calendar: WeekTemplate + CalendarDay + EmployeeWeekTemplate + ShiftPattern +
 #  EmployeeShiftAssignment + EmployeeDayOverride — порт services/hr/app/models/
