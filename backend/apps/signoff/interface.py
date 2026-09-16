@@ -71,6 +71,7 @@ __all__ = [
     "approval_state_of",
     "count_awaiting",
     "has_active_route",
+    "registered_subjects",
 ]
 
 

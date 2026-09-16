@@ -30,6 +30,7 @@ from htqweb.authn.rbac import require_admin
 from htqweb.http import api_view, json_error
 
 from apps.mail import interface as mail_interface
+from apps.signoff import interface as signoff
 from apps.users import interface as users_interface
 
 from . import access as hr_access
@@ -47,6 +48,7 @@ from .permissions import (
     STAFFING_MANAGE,
     STAFFING_VIEW,
 )
+from .services import approval_service as approval_svc
 from .services import audit_service
 from .services import calendar_service as cal_svc
 from .services import department_file_service as dept_file_svc
@@ -3245,3 +3247,28 @@ def identity_approver(request):
     )
     brief = users_interface.get_user_brief(row.user_id) if row.user_id else None
     return {"user_id": row.user_id, "user": brief}
+
+
+# ── /approvals/{subject_type}/{id}/submit — отправка на согласование (блок G) ──
+
+@api_view(methods=("POST",), auth="jwt", status=201)
+def submit_subject(request, subject_type: str, subject_id: int):
+    """Отправить кадровый предмет на согласование.
+
+    Без ``admin=True``: заявку подаёт сотрудник или кадровик, а не
+    платформенный администратор — тот же выбор и та же причина, что у
+    ``SubmitView`` в apps/contracts. Кто её УТВЕРДИТ, решает маршрут.
+    """
+    try:
+        return approval_svc.submit_for_approval(
+            subject_type, subject_id, actor_id=request.token.user_id)
+    except approval_svc.SubjectNotFound as exc:
+        return json_error(exc.detail, exc.status)
+    except signoff.RouteNotConfigured as exc:
+        # Маршрута нет — незаконченная настройка, а не поломка.
+        return json_error(str(exc), 409)
+    except (signoff.AlreadyInApproval, signoff.RouteUnusable,
+            signoff.SubjectLocked) as exc:
+        # Ни у одного из трёх нет .detail (см. apps/signoff/services/engine.py) —
+        # str(exc) несёт текст, который движок сформировал для человека.
+        return json_error(str(exc), 409)

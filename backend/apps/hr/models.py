@@ -879,14 +879,38 @@ class TimeEntry(HrBase):
         return f"<TimeEntry(id={self.id}, employee_id={self.employee_id}, date={self.date})>"
 
 
-class StaffingPosition(HrBase):
+# Сосед — только через interface (apps/core/tests/test_app_isolation.py).
+# Из signoff здесь берётся ровно один класс — абстрактная примесь.
+#
+# Импорт НЕ в шапке файла (как у apps.contracts.models — там цикла нет),
+# а здесь, НИЖЕ Department/Position/Employee/EmployeeStatus: у ``signoff``
+# ЭТИ ЖЕ классы — рантайм-зависимость (``services/engine.py`` резолвит
+# согласующих по HR-должности через ``apps.hr.interface``), поэтому импорт
+# в шапку замкнул бы цикл apps.hr.models → apps.signoff.interface →
+# apps.signoff.services.engine → apps.hr.interface → apps.hr.models (ещё не
+# доисполненный) и падал бы ImportError на самом импорте Department. К
+# моменту этой строки нужные классы уже определены в модуле, и
+# apps.hr.interface получает их без проблем.
+from apps.signoff import interface as signoff
+
+
+class StaffingPosition(signoff.Approvable, HrBase):
     """Строка штатного расписания — порт models/staffing.py.
 
     Таблица — дефолтное имя Django: hr_staffingposition (не
     hr_staffing_positions исходника, решение D2). Оба FK исходник объявляет
     с явным ``index=True`` — дефолтное индексирование Django FK уже
     воспроизводит это без дополнительных пометок.
+
+    Блок G: строка 2 матрицы полномочий HR-FRM-004 («Утверждение и
+    изменение штатного расписания УК»). Согласуется СТРОКА, а не расписание
+    целиком: контейнера «штатное расписание» в домене нет, а приказ на
+    практике меняет конкретную позицию — добавить единицу, изменить оклад.
+    Примесь добавляет колонку ``approval_state`` в ЭТУ таблицу; межаппного
+    FK при этом не возникает.
     """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.staffing_position"
 
     position = models.ForeignKey(
         Position, on_delete=models.CASCADE, related_name="staffing_lines",

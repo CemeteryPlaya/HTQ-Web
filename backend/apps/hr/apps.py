@@ -10,3 +10,14 @@ class HrConfig(AppConfig):
     # "hr" (apps/core/models.KNOWN_SERVICES,
     # htqweb/middleware/service_gate.PREFIX_TO_SERVICE).
     API_PREFIX = "api/hr/v1/"
+
+    def ready(self):
+        """Объявить кадровые объекты согласуемыми (блок G).
+
+        Явный вызов, а не автопоиск: тот же приём и та же причина, что в
+        ``apps/contracts/apps.py``. Импорт локальный — ``ready()`` вызывается
+        после загрузки моделей, и импорт верхнего уровня их бы не дождался.
+        """
+        from . import approval_hooks
+
+        approval_hooks.register()

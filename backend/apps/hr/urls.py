@@ -415,4 +415,10 @@ urlpatterns = [
     # резолвит руководителя через apps.hr.interface напрямую
     # (assignee_resolver._supervisor_of), без HTTP. Живых потребителей у
     # роута не было (grep по backend+frontend перед сносом — пусто).
+
+    # Отправка кадрового предмета на согласование (блок G). Тип предмета в
+    # пути, а не в теле: он часть адреса ресурса, и по нему же роутится
+    # реестр signoff.
+    path("approvals/<str:subject_type>/<int:subject_id>/submit", views.submit_subject),
+    path("approvals/<str:subject_type>/<int:subject_id>/submit/", views.submit_subject),
 ]
