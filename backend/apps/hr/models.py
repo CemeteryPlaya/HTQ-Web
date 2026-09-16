@@ -2022,3 +2022,68 @@ class IdentityApprover(HrBase):
 
     def __str__(self) -> str:
         return f"<IdentityApprover(user_id={self.user_id})>"
+
+
+class VacationSchedule(signoff.Approvable, HrBase):
+    """Годовой график отпусков — строка 10, часть а матрицы HR-FRM-004.
+
+    Согласуется ЦЕЛИКОМ: график утверждают раз в год на всю компанию, и
+    согласовать половину графика нельзя — в этом и смысл контейнера. Строки
+    (``VacationScheduleLine``) поэтому НЕ являются предметом согласования и
+    в реестре не регистрируются.
+
+    Отдельное заявление на отпуск (``LeaveRequest``) — другой предмет с
+    другим маршрутом: график планирует год вперёд, заявление отпускает
+    человека на конкретные даты. Документ соединяет их в одной строке, но
+    это две разные процедуры (решение заказчика 2).
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.vacation_schedule"
+
+    year = models.IntegerField(unique=True)
+    basis = models.CharField(max_length=255, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "График отпусков"
+        verbose_name_plural = "Графики отпусков"
+
+    def __str__(self) -> str:
+        return f"<VacationSchedule(id={self.id}, year={self.year})>"
+
+
+class VacationScheduleLine(HrBase):
+    """Строка годового графика отпусков — период отпуска одного сотрудника.
+
+    Обычная ``HrBase``-модель: БЕЗ ``signoff.Approvable``, БЕЗ
+    ``SIGNOFF_SUBJECT_TYPE``. Предметом согласования является график
+    целиком (``VacationSchedule``, см. её докстринг) — согласовать
+    отдельную строку в отрыве от остального графика нельзя, поэтому строка
+    не регистрируется в ``SUBJECT_MODELS``/``SUBJECT_SPECS``.
+
+    ``days`` не хранится, как и у ``LeaveRequest``/``BusinessTrip`` — число
+    дней строки считается запросом в ``approval_hooks`` вместе с фактами
+    всего графика, а не полем на модели: хранимое разъехалось бы с датами
+    при первой же правке.
+    """
+
+    schedule = models.ForeignKey(
+        VacationSchedule, on_delete=models.CASCADE, related_name="lines")
+    employee = models.ForeignKey(
+        Employee, on_delete=models.PROTECT, related_name="vacation_schedule_lines")
+    date_from = models.DateField()
+    date_to = models.DateField()
+
+    class Meta:
+        verbose_name = "Строка графика отпусков"
+        verbose_name_plural = "Строки графика отпусков"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(date_to__gte=models.F("date_from")),
+                name="ck_vacationscheduleline_dates",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (f"<VacationScheduleLine(id={self.id}, "
+                f"schedule_id={self.schedule_id}, employee_id={self.employee_id})>")

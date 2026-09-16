@@ -24,10 +24,14 @@
 Образец — ``apps/contracts/approval_hooks.py``.
 """
 
+from datetime import timedelta
+
+from django.db.models import Count, F, Sum
+
 from apps.hr.models import (
     Bonus, BonusKind, BusinessTrip, Department, LeaveKind, LeaveRequest,
     PersonnelHistory, PersonnelHistoryEventType, PersonnelOrder, PersonnelOrderKind,
-    Reprimand, ReprimandSeverity, StaffingPosition,
+    Reprimand, ReprimandSeverity, StaffingPosition, VacationSchedule,
 )
 from apps.signoff import interface as signoff
 
@@ -362,6 +366,63 @@ def _business_trip_fact_fields() -> list[dict]:
     ]
 
 
+# ── строка 10а: годовой график отпусков ──────────────────────────────────
+
+def _describe_vacation_schedule(subject_id: int) -> dict | None:
+    schedule = VacationSchedule.objects.filter(pk=subject_id).first()
+    if schedule is None:
+        return None
+    lines_count = schedule.lines.count()
+    return {
+        "title": f"График отпусков на {schedule.year} год — {lines_count} строк",
+        "url": f"/hr/vacation-schedules/{schedule.pk}",
+    }
+
+
+def _vacation_schedule_facts(subject_id: int) -> dict:
+    """Факты графика — агрегат по его строкам одним запросом, а не циклом
+    по ``.lines.all()`` в Python: годовой график на компанию — это сотни
+    строк, и разворачивать ``Employee`` за каждой не нужно.
+
+    ``total_days`` — сумма ``(date_to - date_from) + 1`` по каждой строке
+    (включительные границы, как у ``LeaveRequest``/``BusinessTrip``).
+    Считается в два слагаемых: ``Sum`` разности дат за все строки плюс
+    ``lines_count`` — по одной единице на строку, что в сумме и даёт
+    построчный ``+ 1`` без цикла в Python. ``F("date_to") - F("date_from")``
+    между двумя ``DateField`` Django всегда переводит в ``DurationField``
+    (temporal subtraction — так ORM остаётся кросс-бэкендным), поэтому
+    агрегат приезжает ``timedelta`` независимо от заявленного
+    ``output_field``: явный ``IntegerField()`` здесь не сработал бы — драйвер
+    уже отдаёт Python ``timedelta``, и приведение ``int()`` падает на нём.
+    Берём ``.days`` у уже посчитанной в БД суммы вместо этого.
+    """
+    schedule = VacationSchedule.objects.filter(pk=subject_id).first()
+    if schedule is None:
+        return {}
+    agg = schedule.lines.aggregate(
+        lines_count=Count("id"),
+        employees_count=Count("employee", distinct=True),
+        days_span=Sum(F("date_to") - F("date_from")),
+    )
+    lines_count = agg["lines_count"] or 0
+    days_span = agg["days_span"] or timedelta(0)
+    return {
+        "year": schedule.year,
+        "lines_count": lines_count,
+        "employees_count": agg["employees_count"] or 0,
+        "total_days": days_span.days + lines_count,
+    }
+
+
+def _vacation_schedule_fact_fields() -> list[dict]:
+    return [
+        {"key": "year", "label": "Год", "type": "number"},
+        {"key": "lines_count", "label": "Число строк", "type": "number"},
+        {"key": "employees_count", "label": "Число сотрудников", "type": "number"},
+        {"key": "total_days", "label": "Суммарное число дней отпуска", "type": "number"},
+    ]
+
+
 # ── регистрация ──────────────────────────────────────────────────────────
 
 #: Тип предмета → класс модели. Единственное место соответствия: и
@@ -373,6 +434,7 @@ SUBJECT_MODELS: dict[str, type] = {
     Reprimand.SIGNOFF_SUBJECT_TYPE: Reprimand,
     LeaveRequest.SIGNOFF_SUBJECT_TYPE: LeaveRequest,
     BusinessTrip.SIGNOFF_SUBJECT_TYPE: BusinessTrip,
+    VacationSchedule.SIGNOFF_SUBJECT_TYPE: VacationSchedule,
 }
 
 #: Тип предмета → как его показывать и по каким фактам ветвить маршрут.
@@ -418,6 +480,16 @@ SUBJECT_SPECS: dict[str, dict] = {
         "describe": _describe_business_trip,
         "facts": _business_trip_facts,
         "fact_fields": _business_trip_fact_fields,
+    },
+    # Тоже без "on_approved" (решение 11): график — план на год, а не
+    # действие, и утверждение не проставляет отсутствия задним числом.
+    # Строка (VacationScheduleLine) здесь намеренно не появляется — она не
+    # предмет согласования, см. докстринг VacationSchedule.
+    VacationSchedule.SIGNOFF_SUBJECT_TYPE: {
+        "label": "График отпусков",
+        "describe": _describe_vacation_schedule,
+        "facts": _vacation_schedule_facts,
+        "fact_fields": _vacation_schedule_fact_fields,
     },
 }
 
