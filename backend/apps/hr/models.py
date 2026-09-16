@@ -374,6 +374,86 @@ class ReportingRelation(HrBase):
         return f"<ReportingRelation(sup={self.superior_position_id}, sub={self.subordinate_position_id}, type='{self.relation_type}')>"
 
 
+class SubstitutionKind(models.TextChoices):
+    PRIMARY = "primary", "Основной"
+    RESERVE = "reserve", "Резервный"
+
+
+class Substitution(HrBase):
+    """Строка матрицы замещения ключевых должностей (HR-FRM-006).
+
+    Замещающий — ДОЛЖНОСТЬ, а не сотрудник: документ руководства составлен
+    по должностям, и только так правило переживает смену держателя —
+    назначили нового главбуха, и матрица не устарела. Кто именно замещает
+    сегодня, потребитель резолвит сам (``hr.interface.resolve_position_users``).
+
+    Это ПРАВИЛО, а не событие отсутствия. ``valid_from``/``valid_to``
+    описывают период действия самого правила (приказ подписан — приказ
+    отменён), а не отпуск держателя: модели отсутствий в домене нет вовсе,
+    и вопрос «болеет ли он сегодня» этой таблицей не решается.
+
+    ``basis`` — колонка документа «Порядок оформления замещения» («Приказ
+    ГД», «Приказ ГД; доверенность на банк»): в платформе замещение только
+    отражается, юридическую силу ему даёт приказ, и ссылка на него обязана
+    храниться рядом с правилом. ``note`` — колонка «Примечание» («Право
+    первой подписи по доверенности»), она ограничивает то, что замещающий
+    вправе делать, и теряться не должна.
+
+    ``on_delete=CASCADE`` у обоих FK — как у ``ReportingRelation``: правило
+    между двумя должностями не переживает ни одну из них. Практически
+    удалить занятую должность и так нельзя (``Employee.position`` —
+    ``PROTECT``).
+    """
+
+    position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="substitutions",
+    )
+    substitute_position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="substitutes_in",
+    )
+    kind = models.CharField(
+        max_length=16,
+        choices=SubstitutionKind.choices,
+        default=SubstitutionKind.PRIMARY,
+        db_default=SubstitutionKind.PRIMARY.value,
+    )
+    basis = models.CharField(max_length=255)
+    note = models.CharField(max_length=255, null=True, blank=True)
+    valid_from = models.DateField()
+    valid_to = models.DateField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Замещение"
+        verbose_name_plural = "Матрица замещения"
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(position=models.F("substitute_position")),
+                name="ck_no_self_substitution",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(valid_to__isnull=True)
+                | models.Q(valid_to__gte=models.F("valid_from")),
+                name="ck_substitution_range",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(kind__in=list(SubstitutionKind.values)),
+                name="ck_substitution_kind",
+            ),
+            # Точное совпадение (должность, вид, дата начала) — ошибка ввода.
+            # ПЕРЕСЕЧЕНИЯ периодов ловит substitution_service: выразить их
+            # ограничением БД без EXCLUDE-констрейнта нельзя, а EXCLUDE
+            # потребовал бы расширения btree_gist ради одной таблицы.
+            models.UniqueConstraint(
+                fields=["position", "kind", "valid_from"],
+                name="uq_substitution_start",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (f"<Substitution(pos={self.position_id}, "
+                f"sub={self.substitute_position_id}, kind='{self.kind}')>")
+
+
 class EmployeeReportingOverride(HrBase):
     """Персональное подчинение — сотрудник X подчиняется сотруднику Y
     НЕЗАВИСИМО от связей их должностей.
