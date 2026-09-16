@@ -14,6 +14,8 @@ ServiceDisabled (api_view → 503), а не молчаливый неверны�
 """
 from __future__ import annotations
 
+from datetime import date
+
 from apps.core.services import require_service
 
 from apps.hr.models import Department, Employee, EmployeeStatus, Position
@@ -272,3 +274,38 @@ def notice_user_profile_changed(user_id: int) -> None:
     if employee_id is None:
         return
     identity_sync_service.sync_employee(employee_id)
+
+
+def substitutes_for(position_id: int, on_date: date | None = None) -> list[dict]:
+    """Кто по регламенту замещает эту должность на эту дату (HR-FRM-006).
+
+    Контракт для соседнего домена, зафиксированный в
+    docs/plans/2026-09-14-group-structure-roadmap.md §6.1: РОВНО три ключа —
+    ``position_id`` (должность замещающего), ``kind`` (``primary``/``reserve``),
+    ``basis`` (чем оформлено: «Приказ ГД», «Приказ ГД; доверенность на банк»).
+    Форма согласована с разработчиком signoff; расширять её в одиночку
+    нельзя — лишний ключ здесь становится лишним ключом в чужом коде.
+
+    Отвечает на вопрос «кто ВПРАВЕ подменить», а не «кто подменяет прямо
+    сейчас»: отсутствие держателя (отпуск, болезнь) домен `hr` не
+    моделирует вовсе, и решение «пора ли звать замещающего» принимает
+    вызывающий.
+
+    Действует в контексте ТЕКУЩЕЙ компании, как и остальные функции этого
+    модуля: матрица замещения лежит в схеме компании. Чтобы спросить про
+    должность другой компании, вызывающий сам входит в её схему через
+    ``htqweb.tenancy.db.use_company`` — так же, как он уже делает ради
+    ``get_positions_brief``.
+
+    Неизвестная должность — пустой список, а не ошибка: «в этой компании
+    такой должности нет» и «замещающих не назначено» для потребителя один и
+    тот же ответ «звать некого».
+    """
+    require_service("hr")
+    from apps.hr.services import substitution_service
+
+    rows = substitution_service.active_for_position(position_id, on_date or date.today())
+    return [{"position_id": row.substitute_position_id,
+             "kind": row.kind,
+             "basis": row.basis}
+            for row in rows]
