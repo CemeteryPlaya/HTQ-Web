@@ -2087,3 +2087,68 @@ class VacationScheduleLine(HrBase):
     def __str__(self) -> str:
         return (f"<VacationScheduleLine(id={self.id}, "
                 f"schedule_id={self.schedule_id}, employee_id={self.employee_id})>")
+
+
+class PolicyKind(models.TextChoices):
+    REGULATION = "regulation", "Положение"
+    POLICY = "policy", "Политика"
+    INSTRUCTION = "instruction", "Инструкция"
+    ORDER = "order", "Приказ"
+
+
+class Policy(signoff.Approvable, HrBase):
+    """Локальный нормативный акт — строка 3 матрицы HR-FRM-004.
+
+    Своя модель, а не ``Document``: тот привязан к СОТРУДНИКУ
+    (``Document.employee``), а политика компании ничьей карточке не
+    принадлежит. Переиспользовать его значило бы завести «документ ничей» и
+    сломать смысл поля.
+
+    Примечание документа к строке 3 — «Юр. экспертиза — юрконсультант»:
+    это этап маршрута, а не поле модели; здесь он не отражается ничем, и
+    это правильно — состав согласующих настраивается, а не зашивается.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.policy"
+
+    kind = models.CharField(max_length=16, choices=PolicyKind.choices,
+                            default=PolicyKind.POLICY, db_default=PolicyKind.POLICY.value)
+    title = models.CharField(max_length=255)
+    version = models.CharField(max_length=32)
+    effective_from = models.DateField()
+    file_key = models.CharField(max_length=500, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "Локальный нормативный акт"
+        verbose_name_plural = "Локальные нормативные акты"
+        constraints = [
+            models.UniqueConstraint(fields=["kind", "version"], name="uq_policy_version"),
+        ]
+
+
+class JobDescription(signoff.Approvable, HrBase):
+    """Должностная инструкция — строка 4 матрицы HR-FRM-004.
+
+    Своя модель, а не поле ``Position.description``: инструкция
+    утверждается ВЕРСИЯМИ и живёт своей историей, а описание должности —
+    редактируемый текст карточки, который правят когда угодно и без
+    согласования.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.job_description"
+
+    position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="job_descriptions")
+    version = models.CharField(max_length=32)
+    effective_from = models.DateField()
+    body = models.TextField(default="", db_default="")
+    file_key = models.CharField(max_length=500, default="", db_default="")
+
+    class Meta:
+        verbose_name = "Должностная инструкция"
+        verbose_name_plural = "Должностные инструкции"
+        constraints = [
+            models.UniqueConstraint(fields=["position", "version"],
+                                    name="uq_job_description_version"),
+        ]

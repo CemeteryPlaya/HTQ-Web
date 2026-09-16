@@ -29,9 +29,9 @@ from datetime import timedelta
 from django.db.models import Count, F, Sum
 
 from apps.hr.models import (
-    Bonus, BonusKind, BusinessTrip, Department, LeaveKind, LeaveRequest,
+    Bonus, BonusKind, BusinessTrip, Department, JobDescription, LeaveKind, LeaveRequest,
     PersonnelHistory, PersonnelHistoryEventType, PersonnelOrder, PersonnelOrderKind,
-    Reprimand, ReprimandSeverity, StaffingPosition, VacationSchedule,
+    Policy, PolicyKind, Reprimand, ReprimandSeverity, StaffingPosition, VacationSchedule,
 )
 from apps.signoff import interface as signoff
 
@@ -423,6 +423,84 @@ def _vacation_schedule_fact_fields() -> list[dict]:
     ]
 
 
+# ── строка 3: локальный нормативный акт ──────────────────────────────────
+
+def _describe_policy(subject_id: int) -> dict | None:
+    policy = Policy.objects.filter(pk=subject_id).first()
+    if policy is None:
+        return None
+    return {
+        "title": (f"{policy.get_kind_display()}: {policy.title} — "
+                  f"версия {policy.version}, с {policy.effective_from.isoformat()}"),
+        "url": f"/hr/policies/{policy.pk}",
+    }
+
+
+def _policy_facts(subject_id: int) -> dict:
+    policy = Policy.objects.filter(pk=subject_id).first()
+    if policy is None:
+        return {}
+    return {
+        "kind": policy.kind,
+        "version": policy.version,
+        "effective_from": policy.effective_from,
+    }
+
+
+def _policy_fact_fields() -> list[dict]:
+    return [
+        {"key": "kind", "label": "Вид акта", "type": "choice",
+         "options": [{"value": v, "label": l} for v, l in PolicyKind.choices]},
+        {"key": "version", "label": "Версия", "type": "string"},
+        {"key": "effective_from", "label": "Дата вступления в силу", "type": "string"},
+    ]
+
+
+# ── строка 4: должностная инструкция ─────────────────────────────────────
+
+def _describe_job_description(subject_id: int) -> dict | None:
+    job = (JobDescription.objects
+           .select_related("position")
+           .filter(pk=subject_id).first())
+    if job is None:
+        return None
+    return {
+        "title": (f"Должностная инструкция: {job.position.title} — "
+                  f"версия {job.version}, с {job.effective_from.isoformat()}"),
+        "url": f"/hr/job-descriptions/{job.pk}",
+    }
+
+
+def _job_description_facts(subject_id: int) -> dict:
+    job = (JobDescription.objects
+           .select_related("position")
+           .filter(pk=subject_id).first())
+    if job is None:
+        return {}
+    return {
+        "position_id": job.position_id,
+        # Категория должности (roadmap §6.2) — строка 4 согласуется
+        # по-разному для разных категорий, ровно как строка 5/6 у приказа
+        # (``_personnel_order_facts``): своего сотрудника у инструкции нет,
+        # она про должность.
+        "position_level": job.position.level,
+        "department_id": job.position.department_id,
+        "version": job.version,
+        "effective_from": job.effective_from,
+    }
+
+
+def _job_description_fact_fields() -> list[dict]:
+    return [
+        {"key": "position_id", "label": "Должность", "type": "number"},
+        {"key": "position_level", "label": "Уровень должности", "type": "number"},
+        {"key": "department_id", "label": "Подразделение", "type": "choice",
+         "options": _department_options()},
+        {"key": "version", "label": "Версия", "type": "string"},
+        {"key": "effective_from", "label": "Дата вступления в силу", "type": "string"},
+    ]
+
+
 # ── регистрация ──────────────────────────────────────────────────────────
 
 #: Тип предмета → класс модели. Единственное место соответствия: и
@@ -435,6 +513,8 @@ SUBJECT_MODELS: dict[str, type] = {
     LeaveRequest.SIGNOFF_SUBJECT_TYPE: LeaveRequest,
     BusinessTrip.SIGNOFF_SUBJECT_TYPE: BusinessTrip,
     VacationSchedule.SIGNOFF_SUBJECT_TYPE: VacationSchedule,
+    Policy.SIGNOFF_SUBJECT_TYPE: Policy,
+    JobDescription.SIGNOFF_SUBJECT_TYPE: JobDescription,
 }
 
 #: Тип предмета → как его показывать и по каким фактам ветвить маршрут.
@@ -490,6 +570,20 @@ SUBJECT_SPECS: dict[str, dict] = {
         "describe": _describe_vacation_schedule,
         "facts": _vacation_schedule_facts,
         "fact_fields": _vacation_schedule_fact_fields,
+    },
+    # Тоже без "on_approved" (решение 11): версионируемые документы без
+    # автоматических последствий утверждения — как у отпуска и командировки.
+    Policy.SIGNOFF_SUBJECT_TYPE: {
+        "label": "Локальный нормативный акт",
+        "describe": _describe_policy,
+        "facts": _policy_facts,
+        "fact_fields": _policy_fact_fields,
+    },
+    JobDescription.SIGNOFF_SUBJECT_TYPE: {
+        "label": "Должностная инструкция",
+        "describe": _describe_job_description,
+        "facts": _job_description_facts,
+        "fact_fields": _job_description_fact_fields,
     },
 }
 
