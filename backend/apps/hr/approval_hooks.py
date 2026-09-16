@@ -164,26 +164,33 @@ def _personnel_order_on_approved(subject_id: int) -> None:
     order = PersonnelOrder.objects.filter(pk=subject_id).first()
     if order is None or order.employee_id is None:
         return
-    # get_or_create, а не create: утвердить один и тот же приказ можно дважды
-    # штатным путём — согласующий возвращает завершённый процесс на доработку
-    # (``engine.reopen``), приказ правят и отправляют ЗАНОВО, новым процессом,
-    # и колбэк приходит второй раз. Через create сотрудник получил бы две
-    # записи «Уволен» в кадровой истории, а её читают карточка, стаж и
-    # отчёты. Ключ — само событие: тот же человек, то же событие, та же дата,
-    # та же должность и то же основание — это один факт, а не два.
+    # update_or_create ПО САМОМУ ПРИКАЗУ, а не по данным события: утвердить
+    # один и тот же приказ можно дважды штатным путём — согласующий
+    # возвращает завершённый процесс на доработку (``engine.reopen``),
+    # приказ правят и отправляют ЗАНОВО, новым процессом, и колбэк приходит
+    # второй раз. Через ``create`` сотрудник получил бы две записи «Уволен»,
+    # а кадровую историю читают карточка, стаж и отчёты. Ключ по данным
+    # события эту пару склеил бы только пока правка их не задела — а правят
+    # обычно ровно их (дату, должность, основание), и рядом с новой записью
+    # осталась бы старая, уже неверная. Связь ``source_order`` (OneToOne)
+    # держит ровно одну запись на приказ и обновляет её целиком.
     #
     # ``order.basis`` уходит в ``order_number`` целиком: обе колонки — 255
     # (миграция 0034 расширила историю с 64), и обрезки здесь нет намеренно —
     # молча потерять хвост номера приказа хуже, чем упасть. То, что длины
     # совпадают, держит тест ``test_a_long_basis_survives_approval``.
-    PersonnelHistory.objects.get_or_create(
-        employee_id=order.employee_id,
-        event_type=_ORDER_EVENT.get(order.kind, PersonnelHistoryEventType.OTHER),
-        event_date=order.effective_date,
-        to_department_id=order.department_id,
-        to_position_id=order.position_id,
-        order_number=order.basis,
-        defaults={"comment": order.comment},
+    PersonnelHistory.objects.update_or_create(
+        source_order=order,
+        defaults={
+            "employee_id": order.employee_id,
+            "event_type": _ORDER_EVENT.get(order.kind,
+                                           PersonnelHistoryEventType.OTHER),
+            "event_date": order.effective_date,
+            "to_department_id": order.department_id,
+            "to_position_id": order.position_id,
+            "order_number": order.basis,
+            "comment": order.comment,
+        },
     )
 
 

@@ -381,7 +381,7 @@ def test_every_subject_declares_fields_the_engine_accepts(dep):
     (запрошено в roadmap §6.2). Сторож границ каталоги ``tests/`` не
     сканирует, так что правило аппок этим не нарушается.
 
-    Фикстура ``dep`` здесь обязательна, и это не деталь теста: шесть из
+    Фикстура ``dep`` здесь обязательна, и это не деталь теста: семь из
     десяти предметов объявляют ``department_id`` полем типа ``choice``, а
     движок требует у ``choice`` непустой список вариантов. В компании БЕЗ
     подразделений объявление полей поэтому не проходит проверку целиком —
@@ -406,20 +406,30 @@ def test_a_long_basis_survives_approval(every_subject):
     тексте «Приказ Генерального директора № …» запись падала ``DataError``.
     Колбэк идёт ВНУТРИ транзакции движка, поэтому вместе с записью
     откатывалось решение согласующего — приказ нельзя было утвердить вовсе.
-    Тест держит равенство длин: разъедутся — упадёт здесь, а не на бою.
+    Тест держит равенство длин ДВУМЯ концами: сверяет сами объявления полей
+    и прогоняет через колбэк основание ПРЕДЕЛЬНОЙ длины. Разъедутся —
+    упадёт здесь, а не на бою.
     """
     from apps.hr import approval_hooks
     from apps.hr.models import PersonnelHistory, PersonnelOrder
 
+    basis_max = PersonnelOrder._meta.get_field("basis").max_length
+    number_max = PersonnelHistory._meta.get_field("order_number").max_length
+    assert number_max >= basis_max, (
+        f"основание приказа ({basis_max}) не влезает в номер приказа "
+        f"в истории ({number_max}) — утверждение упадёт DataError внутри "
+        f"транзакции движка, и решение согласующего откатится")
+
     order_id = every_subject["hr.personnel_order"]
-    basis = "Приказ Генерального директора № 123-К от 01.10.2026 «" + "О" * 200 + "»"
-    PersonnelOrder.objects.filter(pk=order_id).update(basis=basis[:255])
+    prefix = "Приказ Генерального директора № 123-К от 01.10.2026 «О приёме» "
+    basis = (prefix + "О" * basis_max)[:basis_max]
+    PersonnelOrder.objects.filter(pk=order_id).update(basis=basis)
 
     approval_hooks._personnel_order_on_approved(order_id)
 
-    row = PersonnelHistory.objects.get(employee_id=PersonnelOrder.objects.get(
-        pk=order_id).employee_id)
-    assert row.order_number == basis[:255]
+    row = PersonnelHistory.objects.get(source_order_id=order_id)
+    assert row.order_number == basis
+    assert len(row.order_number) == basis_max
 
 
 @pytest.mark.django_db
@@ -445,10 +455,13 @@ def test_without_departments_the_route_editor_sees_no_conditions():
     """Обратная сторона предыдущего теста, описанная явно.
 
     В компании без активных подразделений ``_department_options()`` пуст,
-    движок отвергает объявление полей целиком (``choice`` без вариантов), а
-    редактор маршрутов (``signoff.views.SubjectsView._fields``) глотает
-    исключение и показывает предмет без условий. Это НЕ бессимптомная
-    поломка блока: без подразделения в компании нет ни должностей, ни
+    движок отвергает объявление полей целиком (``choice`` без вариантов).
+    Симптомов два: редактор маршрутов (``signoff.views.SubjectsView._fields``)
+    глотает исключение и показывает предмет без условий, а сохранение ЛЮБОГО
+    условия этапа для такого предмета — даже не упоминающего подразделение,
+    вроде «оклад больше 5 млн» — отбивается 409
+    (``signoff.services.route_service`` зовёт тот же ``fields_for``). Это НЕ
+    бессимптомная поломка блока: без подразделения в компании нет ни должностей, ни
     сотрудников, ни самих кадровых заявок. Тест здесь затем, чтобы тот, кто
     настраивает маршруты на пустой компании и видит предмет без условий,
     нашёл объяснение, а не считал редактор сломанным.
@@ -461,3 +474,32 @@ def test_without_departments_the_route_editor_sees_no_conditions():
     # Предметы без ``choice``-полей от пустого справочника не страдают.
     assert {f["key"] for f in registry.fields_for("hr.vacation_schedule")} == \
         MATRIX_SUBJECTS["hr.vacation_schedule"]
+
+
+@pytest.mark.django_db
+def test_reapproving_an_edited_order_updates_its_history_instead_of_doubling_it(
+        every_subject):
+    """Самый неприятный из путей повторного утверждения, и именно он не
+    закрывался ключом по данным события.
+
+    Согласующий вернул завершённый процесс на доработку (``engine.reopen``),
+    кадровик исправил дату приказа и отправил его заново. Колбэк приходит
+    второй раз — и если искать прежнюю запись по самим данным (дата,
+    должность, основание), после правки он её не найдёт: рядом с новой
+    записью останется старая, с НЕВЕРНОЙ датой. Связь ``source_order``
+    держит одну запись на приказ и обновляет её целиком.
+    """
+    from apps.hr import approval_hooks
+    from apps.hr.models import PersonnelHistory, PersonnelOrder
+
+    order_id = every_subject["hr.personnel_order"]
+    approval_hooks._personnel_order_on_approved(order_id)
+
+    PersonnelOrder.objects.filter(pk=order_id).update(
+        effective_date=dt.date(2026, 11, 15), comment="Исправлена дата приёма")
+    approval_hooks._personnel_order_on_approved(order_id)
+
+    rows = PersonnelHistory.objects.filter(source_order_id=order_id)
+    assert rows.count() == 1
+    assert rows.get().event_date == dt.date(2026, 11, 15)
+    assert rows.get().comment == "Исправлена дата приёма"
