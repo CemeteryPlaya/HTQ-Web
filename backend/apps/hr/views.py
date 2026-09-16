@@ -25,6 +25,7 @@ from django.db import transaction
 from django.http import HttpResponse, JsonResponse
 from pydantic import ValidationError
 
+from htqweb import date_rules
 from htqweb.authn.rbac import require_admin
 from htqweb.http import api_view, json_error
 
@@ -422,6 +423,9 @@ def _create_substitution(request, id: int, data: schemas.SubstitutionCreate):
             kind=data.kind, basis=data.basis, note=data.note,
             valid_from=data.valid_from, valid_to=data.valid_to,
         )
+    except date_rules.DatesOutOfOrder as exc:
+        # 422, а не 500: до правила дат иначе добиралась бы только БД.
+        return json_error(str(exc), 422)
     except sub_svc.SubstitutionError as exc:
         return _substitution_error(exc)
     return sub_svc.serialize(row)
@@ -440,6 +444,10 @@ def _update_substitution(request, sub_id: int, data: schemas.SubstitutionUpdate)
     fields = data.model_dump(exclude_unset=True)
     try:
         row = sub_svc.update(sub_id, **fields)
+    except date_rules.DatesOutOfOrder as exc:
+        # 422, а не 500: PATCH с одной датой, переворачивающей период,
+        # раньше доходил до ck_substitution_dates и падал IntegrityError'ом.
+        return json_error(str(exc), 422)
     except sub_svc.SubstitutionError as exc:
         return _substitution_error(exc)
     return sub_svc.serialize(row)

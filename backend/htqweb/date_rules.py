@@ -52,6 +52,7 @@ DATE_PAIRS: tuple[tuple[str, str, str], ...] = (
      "Плановая дата начала позже даты окончания"),
     ("start_date", "due_date", MESSAGE),
     ("from_date", "to_date", "Дата начала участия позже даты окончания"),
+    ("valid_from", "valid_to", MESSAGE),
 )
 
 

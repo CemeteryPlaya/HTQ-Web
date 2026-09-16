@@ -22,6 +22,8 @@ import datetime as dt
 
 from django.db.models import Q
 
+from htqweb import date_rules
+
 from apps.hr.models import Position, Substitution, SubstitutionKind
 
 
@@ -141,11 +143,18 @@ def create(*, position_id: int, substitute_position_id: int, kind: str,
     _require_positions(position_id, substitute_position_id)
     _check_overlap(position_id=position_id, kind=kind,
                    valid_from=valid_from, valid_to=valid_to)
-    return Substitution.objects.create(
+    row = Substitution(
         position_id=position_id, substitute_position_id=substitute_position_id,
         kind=kind, basis=basis, note=note,
         valid_from=valid_from, valid_to=valid_to,
     )
+    # Схема (``SubstitutionCreate(OrderedDates)``) уже проверяет ту же пару,
+    # если обе даты приехали в теле запроса — этот вызов её не дублирует
+    # зря: он делает create() симметричным update(), где схема частичный
+    # PATCH не видит и проверка целиком лежит здесь.
+    date_rules.assert_instance_ordered(row)
+    row.save()
+    return row
 
 
 def update(substitution_id: int, **fields) -> Substitution:
@@ -171,6 +180,10 @@ def update(substitution_id: int, **fields) -> Substitution:
     _check_overlap(position_id=row.position_id, kind=row.kind,
                    valid_from=row.valid_from, valid_to=row.valid_to,
                    exclude_id=row.id)
+    # По СЛИТОЙ паре, а не по присланным полям: PATCH может прислать только
+    # одну дату, вторая лежит в уже загруженной строке. Без этой проверки
+    # нарушение доходит до ck_substitution_dates и возвращается как 500.
+    date_rules.assert_instance_ordered(row)
     row.save(update_fields=[*changes, "updated_at"])
     row.refresh_from_db()
     return row

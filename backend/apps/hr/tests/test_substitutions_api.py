@@ -16,6 +16,7 @@ from apps.hr.models import Department, Position, SubstitutionKind
 from apps.hr.services import substitution_service as svc
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
+from htqweb.date_rules import MESSAGE
 
 BASE = "/api/hr/v1"
 
@@ -160,3 +161,77 @@ def test_valid_to_before_valid_from_is_422(trio, admin_auth):
                          data=_body(trio, valid_from="2026-06-01", valid_to="2026-01-01"),
                          content_type="application/json", **admin_auth)
     assert resp.status_code == 422
+
+
+@pytest.mark.django_db
+def test_patch_with_one_date_flipping_the_period_is_422(trio, admin_auth):
+    """PATCH шлёт только ``valid_from`` — вторая дата (``valid_to``) лежит в
+    уже сохранённой строке. Схема эту пару не видит (в теле только одна
+    дата), поэтому без проверки в сервисе нарушение раньше доходило до
+    ``ck_substitution_dates`` и падало IntegrityError'ом — 500 вместо 422."""
+    row = svc.create(position_id=trio["ceo"].id,
+                     substitute_position_id=trio["ops"].id,
+                     kind=SubstitutionKind.PRIMARY, basis="Приказ ГД", note=None,
+                     valid_from=dt.date(2026, 1, 1), valid_to=dt.date(2026, 5, 31))
+    resp = Client().patch(f"{BASE}/substitutions/{row.id}",
+                          data={"valid_from": "2026-12-01"},
+                          content_type="application/json", **admin_auth)
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == MESSAGE
+
+
+@pytest.mark.parametrize("field,value", [
+    ("substitute_position_id", None),
+    ("kind", None),
+    ("basis", None),
+    ("valid_from", None),
+])
+@pytest.mark.django_db
+def test_explicit_null_on_a_not_null_column_is_422(trio, admin_auth, field, value):
+    """``exclude_unset`` защищает от «поле не прислали», но НЕ от явного
+    ``null`` в присланном поле — а колонка NOT NULL такой null не примет и
+    упадёт IntegrityError'ом (500), а не понятным отказом."""
+    row = svc.create(position_id=trio["ceo"].id,
+                     substitute_position_id=trio["ops"].id,
+                     kind=SubstitutionKind.PRIMARY, basis="Приказ ГД", note=None,
+                     valid_from=dt.date(2026, 1, 1), valid_to=None)
+    resp = Client().patch(f"{BASE}/substitutions/{row.id}",
+                          data={field: value}, content_type="application/json",
+                          **admin_auth)
+    assert resp.status_code == 422
+
+
+@pytest.mark.django_db
+def test_explicit_null_on_note_and_valid_to_is_legal(trio, admin_auth):
+    """``note`` и ``valid_to`` — законно nullable: снять примечание и сделать
+    правило бессрочным."""
+    row = svc.create(position_id=trio["ceo"].id,
+                     substitute_position_id=trio["ops"].id,
+                     kind=SubstitutionKind.PRIMARY, basis="Приказ ГД",
+                     note="Было", valid_from=dt.date(2026, 1, 1),
+                     valid_to=dt.date(2026, 12, 31))
+    resp = Client().patch(f"{BASE}/substitutions/{row.id}",
+                          data={"note": None, "valid_to": None},
+                          content_type="application/json", **admin_auth)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["note"] is None
+    assert body["valid_to"] is None
+
+
+@pytest.mark.django_db
+def test_both_url_spellings_work_for_patch_and_delete(trio, admin_auth):
+    """``test_both_url_spellings_work`` покрывает только GET списка —
+    ``APPEND_SLASH=False`` требует зарегистрированных обеих форм и у
+    ``substitutions/<id>``, которым PATCH/DELETE пользуются чаще GET."""
+    for suffix in ("", "/"):
+        row = svc.create(position_id=trio["ceo"].id,
+                         substitute_position_id=trio["ops"].id,
+                         kind=SubstitutionKind.PRIMARY, basis="Приказ ГД", note=None,
+                         valid_from=dt.date(2026, 1, 1), valid_to=None)
+        patched = Client().patch(f"{BASE}/substitutions/{row.id}{suffix}",
+                                 data={"note": "правка"}, content_type="application/json",
+                                 **admin_auth)
+        assert patched.status_code == 200, f"PATCH с суффиксом {suffix!r}"
+        deleted = Client().delete(f"{BASE}/substitutions/{row.id}{suffix}", **admin_auth)
+        assert deleted.status_code == 204, f"DELETE с суффиксом {suffix!r}"

@@ -62,9 +62,28 @@ def test_unknown_position_returns_empty_list_not_an_error(matrix):
     assert interface.substitutes_for(10_000_000, TODAY) == []
 
 
-def test_expired_rule_is_not_returned(matrix):
+def test_rule_that_has_not_started_yet_is_not_returned(matrix):
+    """Дата запроса РАНЬШЕ ``valid_from`` обеих строк фикстуры (2026-01-01) —
+    правило ещё не вступило в силу. Другой случай, чем «истекло» (см. ниже):
+    там ``valid_to`` уже в прошлом, а здесь оно вовсе бессрочное."""
     rows = interface.substitutes_for(matrix["ceo"].id, dt.date(2025, 1, 1))
     assert rows == []
+
+
+def test_expired_rule_is_not_returned(db):
+    """Настоящий «истекло»: ``valid_to`` уже в прошлом относительно даты
+    запроса. Граница ВКЛЮЧИТЕЛЬНАЯ — в последний день действия правило ещё
+    возвращается."""
+    dep = Department.objects.create(name="Руководство", path="upr-expired")
+    ceo = Position.objects.create(title="Генеральный директор", department=dep, weight=11)
+    ops = Position.objects.create(title="Операционный директор", department=dep, weight=131)
+    svc.create(position_id=ceo.id, substitute_position_id=ops.id,
+               kind=SubstitutionKind.PRIMARY, basis="Приказ ГД", note=None,
+               valid_from=dt.date(2026, 1, 1), valid_to=dt.date(2026, 6, 30))
+
+    assert interface.substitutes_for(ceo.id, dt.date(2026, 9, 16)) == []
+    assert [r["position_id"] for r in interface.substitutes_for(ceo.id, dt.date(2026, 6, 30))] \
+        == [ops.id]
 
 
 def test_disabled_hr_refuses(matrix, monkeypatch):

@@ -142,7 +142,7 @@ class LevelThresholdUpdate(BaseModel):
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
 
 
-class SubstitutionCreate(BaseModel):
+class SubstitutionCreate(OrderedDates):
     substitute_position_id: int
     kind: Literal["primary", "reserve"] = "primary"
     basis: str = Field(..., min_length=1, max_length=255)
@@ -150,22 +150,29 @@ class SubstitutionCreate(BaseModel):
     valid_from: date
     valid_to: date | None = None
 
-    @model_validator(mode="after")
-    def _period_is_sane(self):
-        # Тот же инвариант, что в CheckConstraint модели: 422 из схемы
-        # понятнее клиенту, чем 500 из БД.
-        if self.valid_to is not None and self.valid_to < self.valid_from:
-            raise ValueError("valid_to не может быть раньше valid_from")
-        return self
 
+class SubstitutionUpdate(OrderedDates):
+    """Патч через ``exclude_unset``: поле, которого нет в запросе, строку не
+    трогает. Но ``substitute_position_id``/``kind``/``basis``/``valid_from``
+    — колонки NOT NULL, и явный ``null`` в присланном поле доехал бы до
+    ``IntegrityError`` → 500 мимо любой проверки сервиса (он видит только
+    ``exclude_unset``, а явный null неотличим от отсутствия поля в питоновском
+    ``None``). ``note`` и ``valid_to`` — legitimate ``null`` (снять примечание,
+    сделать бессрочным), их проверка не касается."""
 
-class SubstitutionUpdate(BaseModel):
     substitute_position_id: int | None = None
     kind: Literal["primary", "reserve"] | None = None
     basis: str | None = Field(default=None, min_length=1, max_length=255)
     note: str | None = Field(default=None, max_length=255)
     valid_from: date | None = None
     valid_to: date | None = None
+
+    @model_validator(mode="after")
+    def _no_explicit_null_on_not_null_columns(self):
+        for field in ("substitute_position_id", "kind", "basis", "valid_from"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} не может быть null")
+        return self
 
 
 # ── employees — порт services/hr/app/schemas/employee.py ────────────────────

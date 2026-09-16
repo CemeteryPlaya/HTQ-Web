@@ -433,7 +433,11 @@ class Substitution(HrBase):
             models.CheckConstraint(
                 condition=models.Q(valid_to__isnull=True)
                 | models.Q(valid_to__gte=models.F("valid_from")),
-                name="ck_substitution_range",
+                # Суффикс "dates" — не "range": сторож
+                # test_date_pairs_table_matches_the_database_constraints
+                # (apps/core/tests/test_invariants.py) находит новые пары
+                # дат ИМЕННО по ``ck_*dates``, иначе не заметит эту пару.
+                name="ck_substitution_dates",
             ),
             models.CheckConstraint(
                 condition=models.Q(kind__in=list(SubstitutionKind.values)),
