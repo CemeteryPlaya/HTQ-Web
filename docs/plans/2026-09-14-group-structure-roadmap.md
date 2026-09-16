@@ -238,7 +238,7 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
 | `hr.get_positions_brief(ids)`, `hr.resolve_position_users(ids)` | есть; действуют в контексте текущей компании | без изменений |
 | `hr.get_employee_brief(user_id)` → `+is_manager`, `+external_hierarchy` | блок B | меняет `access.subordinate_companies` |
 | `hr.manager_position_of(position_id) -> int \| None` | новое (B) | «Руководитель блока» = руководитель дирекции инициатора |
-| `hr.participant_position() -> {id, title, is_active} \| None` | новое (F) | утверждающий ОСУ в маршрутах согласования (HR-FRM-004 п. 7, 11, 14) |
+| `hr.participant_position() -> {id, title, is_active} \| None` | есть, блок F | утверждающий ОСУ в маршрутах согласования (HR-FRM-004 п. 7, 11, 14) |
 | `hr.substitutes_for(position_id, on_date) -> list[{position_id, kind: primary\|reserve, basis}]` | есть, блок E | подмена согласующего |
 | `companies.get_company(slug)`, `companies.active_company_slugs()` | есть | кросс-компанейские этапы |
 | `access.subordinate_companies(user, company)` | есть (пусто до B) | право ГД/CFO холдинга согласовывать в ДО |
