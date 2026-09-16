@@ -24,7 +24,10 @@
 Образец — ``apps/contracts/approval_hooks.py``.
 """
 
-from apps.hr.models import Department, Position, StaffingPosition
+from apps.hr.models import (
+    Department, PersonnelHistory, PersonnelHistoryEventType, PersonnelOrder,
+    PersonnelOrderKind, StaffingPosition,
+)
 from apps.signoff import interface as signoff
 
 
@@ -87,12 +90,92 @@ def _department_options() -> list[dict]:
             for d in Department.objects.filter(is_active=True).order_by("path")]
 
 
+# ── строки 5, 6, 7: кадровый приказ ──────────────────────────────────────
+
+_ORDER_EVENT = {
+    PersonnelOrderKind.HIRE: PersonnelHistoryEventType.HIRED,
+    PersonnelOrderKind.DISMISS: PersonnelHistoryEventType.DISMISSED,
+    PersonnelOrderKind.TRANSFER: PersonnelHistoryEventType.TRANSFER,
+}
+
+
+def _describe_personnel_order(subject_id: int) -> dict | None:
+    order = (PersonnelOrder.objects
+             .select_related("position", "department", "employee")
+             .filter(pk=subject_id).first())
+    if order is None:
+        return None
+    who = (f"{order.employee.last_name} {order.employee.first_name}"
+           if order.employee_id else order.candidate_name)
+    return {
+        "title": (f"{order.get_kind_display()}: {who} — {order.position.title}, "
+                  f"{order.department.name}, с {order.effective_date.isoformat()}"),
+        "url": f"/hr/orders/{order.pk}",
+    }
+
+
+def _personnel_order_facts(subject_id: int) -> dict:
+    order = (PersonnelOrder.objects
+             .select_related("position")
+             .filter(pk=subject_id).first())
+    if order is None:
+        return {}
+    return {
+        "kind": order.kind,
+        "position_id": order.position_id,
+        # Категория должности (roadmap §6.2): уровень и признак руководителя
+        # — то, чем строка 5 матрицы отличается от строки 6.
+        "position_level": order.position.level,
+        "is_manager": order.position.is_manager,
+        # Пусто для своей компании. Строка 7 — назначение директора ДО.
+        "target_company_slug": order.target_company_slug or None,
+        "salary": order.salary,
+        "effective_date": order.effective_date.isoformat(),
+    }
+
+
+def _personnel_order_fact_fields() -> list[dict]:
+    return [
+        {"key": "kind", "label": "Вид приказа", "type": "choice",
+         "options": [{"value": v, "label": l} for v, l in PersonnelOrderKind.choices]},
+        {"key": "position_id", "label": "Должность", "type": "number"},
+        {"key": "position_level", "label": "Уровень должности", "type": "number"},
+        {"key": "is_manager", "label": "Руководящая должность", "type": "boolean"},
+        {"key": "target_company_slug", "label": "Компания назначения", "type": "string"},
+        {"key": "salary", "label": "Оклад", "type": "number"},
+        {"key": "effective_date", "label": "Дата вступления в силу", "type": "string"},
+    ]
+
+
+def _personnel_order_on_approved(subject_id: int) -> None:
+    """Утверждённый приказ пишет запись в кадровую историю.
+
+    Единственный автоматический эффект во всём блоке — и он заказан
+    (решение заказчика 3). Приказ о приёме, у которого ещё нет карточки
+    сотрудника, не пишет ничего: карточку заводит кадровик, глядя на
+    утверждённый приказ.
+    """
+    order = PersonnelOrder.objects.filter(pk=subject_id).first()
+    if order is None or order.employee_id is None:
+        return
+    PersonnelHistory.objects.create(
+        employee_id=order.employee_id,
+        event_type=_ORDER_EVENT.get(order.kind, PersonnelHistoryEventType.OTHER),
+        event_date=order.effective_date,
+        to_department_id=order.department_id,
+        to_position_id=order.position_id,
+        order_number=order.basis,
+        comment=order.comment,
+    )
+
+
 # ── регистрация ──────────────────────────────────────────────────────────
 
 #: Тип предмета → класс модели. Единственное место соответствия: и
 #: register(), и approval_service берут его отсюда.
 SUBJECT_MODELS: dict[str, type] = {
     StaffingPosition.SIGNOFF_SUBJECT_TYPE: StaffingPosition,
+    PersonnelOrder.SIGNOFF_SUBJECT_TYPE: PersonnelOrder,
 }
 
 #: Тип предмета → как его показывать и по каким фактам ветвить маршрут.
@@ -102,6 +185,13 @@ SUBJECT_SPECS: dict[str, dict] = {
         "describe": _describe_staffing,
         "facts": _staffing_facts,
         "fact_fields": _staffing_fact_fields,
+    },
+    PersonnelOrder.SIGNOFF_SUBJECT_TYPE: {
+        "label": "Кадровый приказ",
+        "describe": _describe_personnel_order,
+        "facts": _personnel_order_facts,
+        "fact_fields": _personnel_order_fact_fields,
+        "on_approved": _personnel_order_on_approved,
     },
 }
 

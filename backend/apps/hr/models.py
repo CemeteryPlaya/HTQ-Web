@@ -997,6 +997,80 @@ class PersonnelHistory(HrBase):
         return f"<PersonnelHistory(id={self.id}, employee_id={self.employee_id}, event={self.event_type})>"
 
 
+class PersonnelOrderKind(models.TextChoices):
+    HIRE = "hire", "Приём"
+    DISMISS = "dismiss", "Увольнение"
+    TRANSFER = "transfer", "Перевод"
+
+
+class PersonnelOrder(signoff.Approvable, HrBase):
+    """Кадровый приказ — строки 5, 6, 7 матрицы HR-FRM-004.
+
+    Согласуется ПРИКАЗ, а не запись кадровой истории (решение заказчика
+    16.09.2026): ``PersonnelHistory`` остаётся журналом состоявшегося, и её
+    читателям — карточке сотрудника, стажу, отчётам — не нужно знать про
+    состояние согласования. Запись в журнал появляется в момент утверждения
+    (``approval_hooks._personnel_order_on_approved``).
+
+    Три строки матрицы — один тип предмета. Приём специалиста (5), приём
+    руководителя блока (6) и назначение директора дочернего общества (7)
+    различаются не действием, а КАТЕГОРИЕЙ должности и компанией, и маршрут
+    ветвится по фактам ``is_manager``/``position_level``/
+    ``target_company_slug``. Три модели с одинаковыми полями лишили бы
+    маршрут возможности сказать «для руководителей блоков — такой-то этап».
+
+    ``employee`` и ``candidate_name`` — «или/или»: увольнение и перевод про
+    существующего человека, приём — про того, чьей карточки ещё нет.
+    Заводить карточку по приказу автоматически нельзя: имя строкой не
+    содержит ни почты, ни даты рождения, ни документов, и «сотрудник,
+    созданный из приказа» оказался бы наполовину пустым.
+
+    ``target_company_slug`` пуст для приказов своей компании. Он не FK и не
+    проверяется на существование: компании живут в ``public``, кадры — в
+    схеме компании, и межаппных FK в платформе нет; резолвит его маршрут
+    через ``companies.interface`` уже на своей стороне.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.personnel_order"
+
+    kind = models.CharField(
+        max_length=16, choices=PersonnelOrderKind.choices,
+        default=PersonnelOrderKind.HIRE, db_default=PersonnelOrderKind.HIRE.value,
+        db_index=True,
+    )
+    employee = models.ForeignKey(
+        Employee, null=True, blank=True, on_delete=models.CASCADE,
+        related_name="personnel_orders",
+    )
+    candidate_name = models.CharField(max_length=255, default="", db_default="")
+    position = models.ForeignKey(
+        Position, on_delete=models.PROTECT, related_name="personnel_orders",
+    )
+    department = models.ForeignKey(
+        Department, on_delete=models.PROTECT, related_name="personnel_orders",
+    )
+    target_company_slug = models.CharField(
+        max_length=63, null=True, blank=True, db_index=True,
+    )
+    effective_date = models.DateField()
+    salary = models.DecimalField(max_digits=12, decimal_places=2, default=0, db_default=0)
+    basis = models.CharField(max_length=255, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "Кадровый приказ"
+        verbose_name_plural = "Кадровые приказы"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(employee__isnull=False) | ~models.Q(candidate_name=""),
+                name="ck_personnel_order_subject",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<PersonnelOrder(id={self.id}, kind='{self.kind}', pos={self.position_id})>"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  calendar: WeekTemplate + CalendarDay + EmployeeWeekTemplate + ShiftPattern +
 #  EmployeeShiftAssignment + EmployeeDayOverride — порт services/hr/app/models/
