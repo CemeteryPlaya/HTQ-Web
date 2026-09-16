@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import { createSubstitution, deleteSubstitution, fetchSubstitutions, type Substitution, type SubstitutionInput, type SubstitutionKind } from '@/api/hr';
+import { reportApiError } from '@/lib/apiError';
+import { datesOutOfOrder } from '@/lib/validation';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -19,6 +21,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { DateInput } from '@/components/ui/date-input';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { translatedMap } from '@/lib/i18n/translatedMap';
 
@@ -51,8 +54,6 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
     queryFn: () => fetchSubstitutions(positionId),
   });
 
-  const [createError, setCreateError] = useState<string | null>(null);
-
   useEffect(() => {
     if (!dialogOpen) {
       setFormData({
@@ -63,7 +64,6 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
         valid_from: new Date().toISOString().split('T')[0],
         valid_to: null,
       });
-      setCreateError(null);
     }
   }, [dialogOpen]);
 
@@ -73,12 +73,9 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
       await queryClient.invalidateQueries({ queryKey: ['hr', 'substitutions', positionId] });
       toast.success(t('hr.substitutions.created', 'Замещение добавлено'));
       setDialogOpen(false);
-      setCreateError(null);
     },
     onError: (err) => {
-      const errorMsg = (err as any)?.response?.data?.detail
-        ?? t('hr.substitutions.createFailed', 'Не удалось добавить замещение');
-      setCreateError(errorMsg);
+      reportApiError(err, t('hr.substitutions.createFailed', 'Не удалось добавить замещение'));
     },
   });
 
@@ -90,9 +87,7 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
       setDeleteConfirm(null);
     },
     onError: (err) => {
-      const errorMsg = (err as any)?.response?.data?.detail
-        ?? t('hr.substitutions.deleteFailed', 'Не удалось удалить замещение');
-      toast.error(errorMsg);
+      reportApiError(err, t('hr.substitutions.deleteFailed', 'Не удалось удалить замещение'));
     },
   });
 
@@ -200,12 +195,6 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
             </DialogDescription>
           </DialogHeader>
 
-          {createError && (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {createError}
-            </div>
-          )}
-
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="substitute-pos" className="text-sm">
@@ -276,22 +265,21 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
                 <Label htmlFor="valid-from" className="text-sm">
                   {t('hr.substitutions.validFrom', 'Дата начала')}
                 </Label>
-                <Input
+                <DateInput
                   id="valid-from"
-                  type="date"
                   value={formData.valid_from}
-                  onChange={(e) => setFormData({ ...formData, valid_from: e.target.value })}
+                  onChange={(v) => setFormData({ ...formData, valid_from: v })}
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="valid-to" className="text-sm">
                   {t('hr.substitutions.validTo', 'Дата окончания')}
                 </Label>
-                <Input
+                <DateInput
                   id="valid-to"
-                  type="date"
                   value={formData.valid_to ?? ''}
-                  onChange={(e) => setFormData({ ...formData, valid_to: e.target.value || null })}
+                  onChange={(v) => setFormData({ ...formData, valid_to: v || null })}
+                  invalid={datesOutOfOrder(formData.valid_from, formData.valid_to)}
                 />
               </div>
             </div>
@@ -302,7 +290,13 @@ export function PositionSubstitutions({ positionId, positions }: PositionSubstit
               {t('common.cancel', 'Отмена')}
             </Button>
             <Button
-              onClick={() => createMutation.mutate(formData)}
+              onClick={() => {
+                if (datesOutOfOrder(formData.valid_from, formData.valid_to)) {
+                  toast.error(t('validation.datesOutOfOrder', 'Дата начала позже даты окончания'));
+                  return;
+                }
+                createMutation.mutate(formData);
+              }}
               disabled={!formData.substitute_position_id || !formData.basis || createMutation.isPending}
             >
               {createMutation.isPending ? t('common.saving', 'Сохранение…') : t('common.save', 'Сохранить')}

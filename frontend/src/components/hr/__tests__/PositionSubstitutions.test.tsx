@@ -12,6 +12,16 @@ import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '@/test/renderWithProviders';
 import { PositionSubstitutions } from '../PositionSubstitutions';
 import * as hrApi from '@/api/hr';
+import * as apiError from '@/lib/apiError';
+
+const reportApiErrorMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/apiError', async (importOriginal) => {
+  const actual = await importOriginal<typeof apiError>();
+  return { ...actual, reportApiError: reportApiErrorMock };
+});
+
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 vi.mock('@/api/hr', async (importOriginal) => {
   const actual = await importOriginal<typeof hrApi>();
@@ -62,9 +72,17 @@ describe('PositionSubstitutions', () => {
 
   it('ошибку пересечения от сервера показывает человеку', async () => {
     vi.mocked(hrApi.fetchSubstitutions).mockResolvedValue([]);
-    vi.mocked(hrApi.createSubstitution).mockRejectedValue({
+    const testError = {
       response: { status: 409, data: { detail: 'Закройте прежнее замещение датой окончания перед добавлением нового' } },
+    };
+    vi.mocked(hrApi.createSubstitution).mockRejectedValue(testError);
+    
+    // Mock reportApiError to capture the error that was passed to it
+    let capturedError: unknown;
+    reportApiErrorMock.mockImplementation((err) => {
+      capturedError = err;
     });
+    
     renderWithProviders(<PositionSubstitutions positionId={1} positions={POSITIONS} />);
 
     const addBtn = await screen.findByRole('button', { name: /добавить/i });
@@ -83,8 +101,10 @@ describe('PositionSubstitutions', () => {
     const saveBtn = screen.getByRole('button', { name: /сохранить/i });
     await userEvent.click(saveBtn);
 
-    // Проверить, что ошибка показана
-    await waitFor(() =>
-      expect(screen.getByText(/Закройте прежнее замещение/i)).toBeInTheDocument());
+    // Проверить, что reportApiError была вызвана с ошибкой от сервера
+    await waitFor(() => {
+      expect(reportApiErrorMock).toHaveBeenCalledWith(testError, expect.any(String));
+      expect(capturedError).toEqual(testError);
+    });
   });
 });
