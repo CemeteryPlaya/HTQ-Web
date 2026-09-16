@@ -37,7 +37,7 @@ from django.db import transaction
 from apps.hr.management import group_structures as gs
 from apps.hr.models import (
     Department, Employee, LevelThreshold, Position, ReportingRelation,
-    StaffingPosition,
+    StaffingPosition, Substitution,
 )
 from apps.hr.services.position_service import _DEFAULT_LEVEL
 
@@ -254,11 +254,13 @@ class Command(BaseCommand):
         employees = self._seed_employees(structure, positions)
         managers = self._seed_managers(structure, units, positions, employees)
         relations = self._seed_relations(structure, positions)
+        substitutions = self._seed_substitutions(structure, positions)
         staffing = self._seed_staffing(positions)
         self.stdout.write(self.style.SUCCESS(
             f"\nГотово: уровней {levels}, подразделений {len(units)}, должностей "
             f"{len(positions)}, сотрудников {len(employees)}, руководителей "
-            f"{managers}, связей подчинения {relations}, штатных единиц {staffing}."
+            f"{managers}, связей подчинения {relations}, замещений {substitutions}, "
+            f"штатных единиц {staffing}."
         ))
 
     # ── шаги ────────────────────────────────────────────────────────────
@@ -414,6 +416,64 @@ class Command(BaseCommand):
             count += 1
         self.stdout.write(f"  {count}")
         return count
+
+    def _seed_substitutions(self, structure, positions) -> int:
+        """Матрица замещения документа (HR-FRM-006).
+
+        Через сервис, а не напрямую в модель: сервис проверяет пересечение
+        периодов, и сид обязан проходить ту же проверку, что живой ввод, —
+        иначе демо-данные окажутся тем состоянием, которого UI не допускает.
+
+        Идемпотентность — по тройке (должность, вид, дата начала): повторный
+        запуск не плодит строк и не падает на пересечении с самим собой.
+        """
+        from apps.hr.services import substitution_service as sub_svc
+
+        if not structure.substitutions:
+            return 0
+        self.stdout.write("Замещение...")
+        count = 0
+        for row in structure.substitutions:
+            existing = Substitution.objects.filter(
+                position=positions[row.position], kind=row.kind,
+                valid_from=STRUCTURE_EFFECTIVE_FROM,
+            ).first()
+            if existing is not None:
+                existing.substitute_position = positions[row.substitute]
+                existing.basis = row.basis
+                existing.note = row.note or None
+                existing.save(update_fields=["substitute_position", "basis",
+                                             "note", "updated_at"])
+            else:
+                sub_svc.create(
+                    position_id=positions[row.position].id,
+                    substitute_position_id=positions[row.substitute].id,
+                    kind=row.kind, basis=row.basis, note=row.note or None,
+                    valid_from=STRUCTURE_EFFECTIVE_FROM, valid_to=None,
+                )
+            count += 1
+        self.stdout.write(f"  {count}")
+        self._warn_unmapped_substitutions(structure, positions)
+        return count
+
+    def _warn_unmapped_substitutions(self, structure, positions) -> None:
+        """Строка документа, которую нельзя выразить должностью.
+
+        HR-FRM-006 называет замещающим системного администратора
+        «Внутригрупповой ИТ-подрядчика» — это не должность и не
+        пользователь платформы. Молчать об этом нельзя: незакрытая строка
+        утверждённого документа должна быть видна оператору стенда.
+        """
+        if structure.kind != "holding":
+            return
+        if "Специалист технической поддержки" not in positions:
+            return
+        self.stdout.write(self.style.WARNING(
+            "  Строка HR-FRM-006 «Системный администратор (у нас — Специалист "
+            "технической поддержки) → Внутригрупповой "
+            "ИТ-подрядчик» не заведена: замещающий в документе — внешний "
+            "подрядчик, а не должность. Вопрос руководству (roadmap §8)."
+        ))
 
     def _seed_staffing(self, positions) -> int:
         """«1 шт. ед.» у каждой должности документа.

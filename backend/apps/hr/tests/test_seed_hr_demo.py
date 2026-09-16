@@ -178,6 +178,70 @@ def test_phones_use_the_platform_mask():
         assert mask.match(e.phone), e.phone
 
 
+def test_holding_seed_lays_out_the_substitution_matrix(company_schema):
+    from django.core.cache import cache
+
+    from apps.companies.models import Company
+    from apps.hr.models import Substitution
+    from htqweb.tenancy.db import use_company
+
+    Company.objects.filter(slug=company_schema["slug"]).update(kind="holding")
+    cache.clear()
+    _seed(company=company_schema["slug"])
+    with use_company(company_schema["slug"]):
+        assert Substitution.objects.count() == 10
+        assert Substitution.objects.filter(kind="primary").count() == 5
+        ceo = Substitution.objects.get(position__title="Генеральный директор",
+                                       kind="primary")
+        assert ceo.substitute_position.title == "Операционный директор"
+        assert ceo.basis.startswith("Приказ ГД / решение участника")
+        assert not Substitution.objects.filter(
+            position__title="Специалист технической поддержки").exists()
+
+
+def test_substitution_seed_is_idempotent(company_schema):
+    from django.core.cache import cache
+
+    from apps.companies.models import Company
+    from apps.hr.models import Substitution
+    from htqweb.tenancy.db import use_company
+
+    Company.objects.filter(slug=company_schema["slug"]).update(kind="holding")
+    cache.clear()
+    _seed(company=company_schema["slug"])
+    _seed(company=company_schema["slug"])
+    with use_company(company_schema["slug"]):
+        assert Substitution.objects.count() == 10
+
+
+@pytest.mark.django_db
+def test_construction_structure_has_no_substitutions():
+    _seed()
+    from apps.hr.models import Substitution
+    assert Substitution.objects.count() == 0
+
+
+def test_seed_warns_about_the_document_row_it_cannot_express(company_schema, capsys):
+    """Строка HR-FRM-006, которую нельзя выразить должностью, обязана быть
+    названа вслух.
+
+    Замещающий системного администратора в документе — внешний подрядчик, а
+    не должность платформы. Это единственное место, где оператор стенда
+    узнаёт, что строка утверждённого приказа осталась незакрытой; молчание
+    здесь означало бы, что о ней просто забыли.
+    """
+    from django.core.cache import cache
+
+    from apps.companies.models import Company
+
+    Company.objects.filter(slug=company_schema["slug"]).update(kind="holding")
+    cache.clear()
+    call_command("seed_hr_demo", company=company_schema["slug"], verbosity=1)
+    out = capsys.readouterr().out
+    assert "Внутригрупповой ИТ-подрядчик" in out
+    assert "Специалист технической поддержки" in out
+
+
 # ── --company ────────────────────────────────────────────────────────────
 
 def test_company_option_seeds_the_structure_of_its_kind(company_schema):

@@ -152,3 +152,52 @@ def test_emails_are_unique_across_the_whole_group():
     """Учётки платформы общие на группу — почта не может повториться."""
     emails = [gs.email_for(p) for s in gs.STRUCTURES.values() for p in s.people]
     assert len(emails) == len(set(emails))
+
+
+def test_substitution_matrix_matches_the_document():
+    """Десять строк HR-FRM-006, литералами. Одиннадцатая («Системный
+    администратор» → «Внутригрупповой ИТ-подрядчик») намеренно отсутствует:
+    подрядчик — не должность."""
+    actual = {(r.position, r.kind, r.substitute) for r in HOLDING.substitutions}
+    assert actual == {
+        ("Генеральный директор", "primary", "Операционный директор"),
+        ("Генеральный директор", "reserve", "Финансовый директор"),
+        ("Финансовый директор", "primary", "Главный бухгалтер"),
+        ("Финансовый директор", "reserve", "Экономист-аналитик"),
+        ("Технический директор", "primary", "Менеджер ПТО и КК"),
+        ("Технический директор", "reserve", "Операционный директор"),
+        ("Операционный директор", "primary", "Менеджер по кадрам"),
+        ("Операционный директор", "reserve", "Финансовый директор"),
+        ("Главный бухгалтер", "primary", "Бухгалтер"),
+        ("Главный бухгалтер", "reserve", "Экономист-аналитик"),
+    }
+    assert not any(r.position == "Специалист технической поддержки"
+                   for r in HOLDING.substitutions)
+
+
+def test_every_substitution_names_real_positions_of_its_structure():
+    for structure in gs.STRUCTURES.values():
+        titles = {p.title for p in structure.posts}
+        for row in structure.substitutions:
+            assert row.position in titles, (structure.kind, row.position)
+            assert row.substitute in titles, (structure.kind, row.substitute)
+            assert row.position != row.substitute
+
+
+def test_only_the_holding_has_a_substitution_matrix():
+    """Документ описывает матрицу только для управляющей компании."""
+    for kind in ("construction", "it", "service"):
+        assert gs.STRUCTURES[kind].substitutions == ()
+
+
+def test_document_titles_are_preserved_where_they_differ():
+    """Расхождение названий (roadmap §8.2) обязано быть видимым: пока
+    руководство не ответило, оригинал документа хранится рядом."""
+    differing = {(r.document_title, r.substitute) for r in HOLDING.substitutions
+                 if r.document_title != r.substitute}
+    assert differing == {
+        ("Финансовый директор (CFO)", "Финансовый директор"),
+        ("Экономист", "Экономист-аналитик"),
+        ("Специалист ПТО", "Менеджер ПТО и КК"),
+        ("HR-специалист", "Менеджер по кадрам"),
+    }
