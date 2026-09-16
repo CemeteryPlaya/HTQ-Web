@@ -1,0 +1,97 @@
+"""Системная должность «Участник (ОСУ)».
+
+ОСУ в документах — орган владельцев над генеральным директором, без штатной
+единицы. В платформе это должность с ``is_system=True``: её нельзя
+переименовать, перевести или удалить через интерфейс, а маршрут
+согласования может сослаться на неё обычным ``position_id``. Заводится
+ровно одним способом — этим сервисом, — чтобы стенд и бой не разъехались.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from apps.hr.models import Department, ExternalHierarchy, Position, UnitType
+from apps.hr.services import participant_service as svc
+from apps.hr.services import position_service
+
+
+@pytest.mark.django_db
+def test_creates_the_unit_and_the_system_position():
+    position, created = svc.ensure_participant()
+    assert created is True
+    assert position.title == "Участник (ОСУ)"
+    assert position.is_system is True
+    assert position.weight == 0
+    assert position.department.path == "osu"
+    assert position.department.name == "Общее собрание участников"
+    assert position.department.unit_type == UnitType.DEPARTMENT
+    assert position.department.manager_id is None
+
+
+@pytest.mark.django_db
+def test_participant_oversees_the_group_but_does_not_serve_it():
+    """Владелец видит дочерние компании (блок B), но не «обслуживает» их
+    (блок C): права в ДО ему раздаются членством и ролями, как любому."""
+    position, _ = svc.ensure_participant()
+    assert position.is_manager is True
+    assert position.external_hierarchy == ExternalHierarchy.INHERIT
+    assert position.serves_subsidiaries is False
+    assert position.permissions == {"hr_level": "lead", "permissions": []}
+
+
+@pytest.mark.django_db
+def test_level_is_computed_from_thresholds_not_hardcoded():
+    """Уровень — кэш от веса; в схеме без порогов это запасной уровень,
+    с порогами — тот, куда попадает вес 0."""
+    position, _ = svc.ensure_participant()
+    assert position.level == position_service._compute_level(0)
+
+
+@pytest.mark.django_db
+def test_is_idempotent_and_repairs_drift():
+    first, created = svc.ensure_participant()
+    assert created
+    # Кто-то через ORM снял руководящий признак и поменял грейд — повторный
+    # вызов возвращает ОСУ в предписанное состояние, не плодя вторую строку.
+    Position.objects.filter(pk=first.pk).update(is_manager=False, grade=3)
+    second, created_again = svc.ensure_participant()
+    assert created_again is False
+    assert second.pk == first.pk
+    assert second.is_manager is True
+    assert Position.objects.filter(title="Участник (ОСУ)").count() == 1
+    assert Department.objects.filter(path="osu").count() == 1
+
+
+@pytest.mark.django_db
+def test_refuses_when_weight_zero_belongs_to_someone_else():
+    """Вес 0 — вершина шкалы. Если его уже держит другая должность, молча
+    подвинуть её нельзя: это чужие данные."""
+    dep = Department.objects.create(name="Руководство", path="upr")
+    Position.objects.create(title="Председатель", department=dep, weight=0)
+    with pytest.raises(svc.ParticipantWeightTaken) as exc:
+        svc.ensure_participant()
+    assert "Председатель" in exc.value.detail
+    assert not Position.objects.filter(title="Участник (ОСУ)").exists()
+
+
+@pytest.mark.django_db
+def test_find_participant_returns_none_when_absent():
+    assert svc.find_participant() is None
+    position, _ = svc.ensure_participant()
+    assert svc.find_participant().pk == position.pk
+
+
+@pytest.mark.django_db
+def test_system_position_is_locked_for_ui_edits():
+    """Смысл is_system: через API нельзя переименовать, перевести и
+    деактивировать, нельзя удалить — иначе маршрут согласования, который
+    ссылается на ОСУ, однажды укажет в пустоту."""
+    from apps.hr import schemas
+
+    position, _ = svc.ensure_participant()
+    with pytest.raises(position_service.SystemPositionFieldsLocked):
+        position_service.update_position(
+            position.id, schemas.PositionUpdate(title="Совет"))
+    with pytest.raises(position_service.SystemPositionProtected):
+        position_service.delete_position(position.id)
