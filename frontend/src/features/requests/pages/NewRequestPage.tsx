@@ -16,6 +16,7 @@ import { requestsApi } from '@/api/requests';
 import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { FormRenderer } from '@/features/requests/components/FormRenderer';
 import { useTemplate, useTemplates, useTemplateVersion } from '@/features/requests/hooks';
+import { blockedByRequired } from '@/features/requests/requiredFields';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
 import type { FormTemplate } from '@/features/requests/types';
@@ -59,6 +60,8 @@ export default function NewRequestPage() {
 
   const tpl = useTemplate(tplId);
   const ver = useTemplateVersion(tplId, tpl.data?.current_version_id ?? null);
+  /** Почему отправлять рано: незаполненные обязательные поля. `null` — можно. */
+  const blocked = blockedByRequired(ver.data?.schema_json, values);
 
   const activeTemplates = useMemo(
     () => (templates.data ?? []).filter((t) => t.is_active && t.current_version_id != null),
@@ -80,9 +83,10 @@ export default function NewRequestPage() {
       });
       if (submitAfter) {
         try {
-          const sent = await requestsApi.instances.submit(draft.id);
-          toast.success(t('requests.new.submitted', { code: sent.code }));
-          navigate(`/requests/${sent.id}`);
+          // Ответ — карточка процесса signoff; заявка та же, что создали.
+          await requestsApi.instances.submit(draft.id);
+          toast.success(t('requests.new.submitted', { code: draft.code }));
+          navigate(`/requests/${draft.id}`);
           return;
         } catch (e: any) {
           toast.error(e?.response?.data?.detail ?? t('requests.new.submitError'));
@@ -188,13 +192,20 @@ export default function NewRequestPage() {
       )}
 
       {ver.data && (
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" disabled={busy} onClick={() => persistAndOptionallySubmit(false)}>
-            {t('requests.new.saveDraft')}
-          </Button>
-          <Button disabled={busy} onClick={() => persistAndOptionallySubmit(true)}>
-            {t('requests.new.submit')}
-          </Button>
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" disabled={busy} onClick={() => persistAndOptionallySubmit(false)}>
+              {t('requests.new.saveDraft')}
+            </Button>
+            {/* Черновик сохраняется всегда, отправка — только заполненной
+                формой: незаполненное обязательное поле иначе всплыло бы
+                422-й ошибкой уже ПОСЛЕ нажатия. */}
+            <Button disabled={busy || blocked !== null} onClick={() => persistAndOptionallySubmit(true)}
+                    title={blocked ?? undefined}>
+              {t('requests.new.submit')}
+            </Button>
+          </div>
+          {blocked && <p className="text-xs text-muted-foreground">{blocked}</p>}
         </div>
       )}
     </RequestsLayout>

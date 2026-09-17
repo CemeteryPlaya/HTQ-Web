@@ -117,6 +117,16 @@ export interface DecisionTarget {
    *  его, закрыть диалог и вернуться. Тогда файл выбирать заново не нужно —
    *  но заменить можно. */
   attachedFileId?: string | null;
+  /** Название этапа. Показывается, только когда этап чего-то ТРЕБУЕТ: имя
+   *  этапа и есть единственное место, где написано, ЧТО именно приложить и
+   *  пояснить («Подбор поставщика и счёт на оплату» — значит счёт и
+   *  поставщика). Без него человек видит пустое поле для файла и не знает,
+   *  какой файл от него ждут. */
+  stageName?: string;
+  /** Что этап требует от объекта (подпись) — попадёт в ту же строку, что
+   *  документ и пояснение: человек должен узнать об этом до нажатия, а не
+   *  из отказа сервера. */
+  requirementLabel?: string | null;
 }
 
 interface Props {
@@ -156,6 +166,26 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
       ? 'На этом этапе согласование возможно только с пояснением к решению.'
       : undefined);
   const needsComment = Boolean(commentRequiredMessage);
+
+  /** Чего требует ИМЕННО ЭТОТ этап — одной строкой, его собственным именем.
+   *  Требования задаёт маршрут, а не диалог, поэтому объяснить их можно
+   *  только так: назвать этап и перечислить, что он просит.
+   *
+   *  Смотрит на флаги ЭТАПА, а не на `needsComment`: у отказа и доработки
+   *  пояснение обязательно всегда, и приписывать это требование этапу —
+   *  врать о маршруте. Там строку не показываем вовсе. */
+  const stageAsksComment = Boolean(target?.requiresComment) && isApprove;
+  const stageAsksSubject = Boolean(target?.requirementLabel) && isApprove;
+  const stageDemand = (() => {
+    if (!target?.stageName
+        || (!needsDocument && !stageAsksComment && !stageAsksSubject)) return null;
+    const asks = [
+      stageAsksSubject && `в заявке должно быть: ${target.requirementLabel}`,
+      needsDocument && 'приложите документ',
+      stageAsksComment && 'напишите пояснение',
+    ].filter(Boolean).join('; ');
+    return `Этап «${target.stageName}»: ${asks} — без этого решение не принимается.`;
+  })();
 
   const mutation = useMutation({
     mutationFn: async ({
@@ -202,7 +232,10 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
       return;
     }
     if (needsDocument && !file && !alreadyAttached) {
-      setError('На этом этапе согласование возможно только с приложенным PDF.');
+      setError(target.stageName
+        ? `На этапе «${target.stageName}» согласование возможно только с `
+          + 'приложенным документом — выберите PDF.'
+        : 'На этом этапе согласование возможно только с приложенным PDF.');
       return;
     }
     setError('');
@@ -216,6 +249,9 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
           <DialogTitle>{kind?.title}</DialogTitle>
           <DialogDescription>
             {target?.subjectLabel}
+            {stageDemand && (
+              <span className="block mt-2">{stageDemand}</span>
+            )}
             {kind?.warning && (
               <span
                 className={`block mt-2 ${

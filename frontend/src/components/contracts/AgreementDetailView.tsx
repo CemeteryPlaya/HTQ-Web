@@ -40,6 +40,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import AgreementDocumentViewer from '@/components/contracts/AgreementDocumentViewer';
 import ProjectLinkBadge from '@/components/contracts/ProjectLinkBadge';
+import { LinkedRequestBadge } from '@/components/contracts/LinkedRequestPicker';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
@@ -470,6 +471,11 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               <Field label="Статья бюджета / расходов">
                 <span className="font-medium">{agreement.expense_item}</span>
               </Field>
+              {agreement.request_id != null && (
+                <Field label="По заявке на закуп" className="sm:col-span-2">
+                  <LinkedRequestBadge requestId={agreement.request_id} />
+                </Field>
+              )}
             </dl>
 
             {line && (

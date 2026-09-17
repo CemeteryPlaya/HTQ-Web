@@ -55,7 +55,7 @@ interface Props {
   /** Эндпоинт предметной аппки — `contractsApi.submitBudget` и соседи. */
   submit: (id: number) => Promise<AxiosResponse<ApprovalProcess>>;
   /** Ключи TanStack Query, которые надо сбросить после отправки. */
-  invalidate?: unknown[][];
+  invalidate?: readonly (readonly unknown[])[];
   size?: 'sm' | 'default';
   /**
    * Вести ли на карточку согласования у РЕШЁННОГО объекта

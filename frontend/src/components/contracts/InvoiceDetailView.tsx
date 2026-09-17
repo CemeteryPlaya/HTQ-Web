@@ -31,6 +31,7 @@ import { Download, Loader2, Paperclip, Pencil, Receipt, Upload } from 'lucide-re
 import { toast } from 'sonner';
 
 import { DetailSkeleton, Field } from '@/components/contracts/detail';
+import { LinkedRequestBadge } from '@/components/contracts/LinkedRequestPicker';
 import {
   formatAmount,
   formatMoment,
@@ -273,6 +274,11 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
               <Field label="Администратор">{invoice.administrator_name}</Field>
               <Field label="Программа">{invoice.program_name}</Field>
               <Field label="Статья расходов">{invoice.expense_item}</Field>
+              {invoice.request_id != null && (
+                <Field label="По заявке на закуп" className="sm:col-span-2">
+                  <LinkedRequestBadge requestId={invoice.request_id} />
+                </Field>
+              )}
             </dl>
             {line && (
               <div className="rounded-md border bg-muted/40 p-4 text-sm">

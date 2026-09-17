@@ -5,8 +5,9 @@
  *  granted access to; owners can manage that access. */
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, Table2, Users } from 'lucide-react';
+import { LineChart, RefreshCw, Table2, Users } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
@@ -18,7 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 import { requestsApi } from '@/api/requests';
 import { RequestsLayout } from '@/features/requests/RequestsLayout';
-import { EmployeePicker } from '@/features/requests/components/EmployeePicker';
+import { EmployeePicker } from '@/components/common/EmployeePicker';
 import { useMyDataTables } from '@/features/requests/hooks';
 import type { DataTable } from '@/features/requests/types';
 import { useTranslation } from 'react-i18next';
@@ -76,8 +77,18 @@ export default function DataManagementPage() {
             <div className="border-b px-4 py-2 text-xs font-semibold uppercase text-muted-foreground">{t('requests.data.tables')}</div>
             {tablesQ.isLoading && <div className="space-y-2 p-4"><Skeleton className="h-9" /><Skeleton className="h-9" /></div>}
             {!tablesQ.isLoading && tables.length === 0 && (
-              <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                {t('requests.data.noTables')}
+              <div className="space-y-3 px-4 py-8 text-center text-sm text-muted-foreground">
+                <p>{t('requests.data.noTables')}</p>
+                {/* Таблицы данных видит владелец шаблона; обычному человеку
+                    здесь пусто, и уходить ни с чем он не должен — своя
+                    сводка по заявкам доступна ему всегда. */}
+                <Link
+                  to="/requests/my-stats"
+                  className="inline-flex items-center gap-1.5 text-primary hover:underline underline-offset-2"
+                >
+                  <LineChart className="h-4 w-4" />
+                  {t('requests.data.seeMyStats')}
+                </Link>
               </div>
             )}
             {tables.map((t) => (

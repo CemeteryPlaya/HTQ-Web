@@ -238,6 +238,9 @@ export interface Agreement {
    * и расторгнут по существу.
    */
   approval_state: ApprovalState;
+  /** Заявка конструктора «Запросы», по которой заключён договор; `null` —
+   *  договор без заявки. Карточка заявки — `contractsApi.getLinkedRequest`. */
+  request_id: number | null;
   created_by: number | null;
   created_at: string;
   updated_at: string;
@@ -290,9 +293,35 @@ export interface Invoice {
   status: InvoiceStatus;
   /** Ось согласования: отдельна от доменного статуса счёта. */
   approval_state: ApprovalState;
+  /** Заявка конструктора, по которой выставлен счёт (как у договора). */
+  request_id: number | null;
   created_by: number | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Заявка конструктора «Запросы» глазами договорного контура — ровно то, что
+ * отдаёт `apps.approvals.interface.get_request_brief` через прокси
+ * `/api/contracts/v1/requests`. Договор или счёт по заявке заводятся только
+ * на её `budget_line_id` — иначе 409 (`services/request_link.py`).
+ */
+export interface LinkedRequest {
+  id: number;
+  code: string;
+  title: string;
+  status: string;
+  initiator_id: number;
+  template_id: number;
+  template_name: string;
+  budget_line_id: number | null;
+  submitted_at: string | null;
+  finalized_at: string | null;
+}
+
+export interface LinkedRequestDocuments {
+  agreements: Agreement[];
+  invoices: Invoice[];
 }
 
 /** Предоплата, оформляемая по уже согласованному договору. */

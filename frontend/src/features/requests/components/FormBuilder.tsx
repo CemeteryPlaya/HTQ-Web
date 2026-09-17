@@ -32,6 +32,7 @@ const FIELD_TYPES: { type: FormFieldType; labelKey: string }[] = [
   { type: 'amount', labelKey: 'requests.fieldTypes.amount' },
   { type: 'dropdown', labelKey: 'requests.fieldTypes.dropdown' },
   { type: 'reference', labelKey: 'requests.fieldTypes.reference' },
+  { type: 'budget_line_ref', labelKey: 'requests.fieldTypes.budget_line_ref' },
   { type: 'date', labelKey: 'requests.fieldTypes.date' },
   { type: 'file', labelKey: 'requests.fieldTypes.file' },
   { type: 'serial', labelKey: 'requests.fieldTypes.serial' },
@@ -39,6 +40,7 @@ const FIELD_TYPES: { type: FormFieldType; labelKey: string }[] = [
   { type: 'formula', labelKey: 'requests.fieldTypes.formula' },
   { type: 'checkbox', labelKey: 'requests.fieldTypes.checkbox' },
   { type: 'link_ref', labelKey: 'requests.fieldTypes.link_ref' },
+  { type: 'supplier_quotes', labelKey: 'requests.fieldTypes.supplier_quotes' },
 ];
 const TYPE_LABEL: Record<string, string> = translatedMap(
   Object.fromEntries(FIELD_TYPES.map((f) => [f.type, f.labelKey])),
@@ -59,6 +61,10 @@ function makeField(type: FormFieldType): FormField {
     case 'group':       return { ...base, type, fields: [], repeatable: true, summarize_keys: [] };
     case 'formula':     return { ...base, type, expr: 'sum(items[].amount)', contributes_to_total: false } as FormField;
     case 'link_ref':    return { ...base, type, multiple: false };
+    // items_field пуст намеренно: строки таблицы берутся из повторяемой
+    // группы, и какой именно — знает только автор формы. Пустой ключ
+    // отвергнет публикация, а не тихо соберёт таблицу без строк.
+    case 'supplier_quotes': return { ...base, type, items_field: '', quantity_key: '', currency: 'KZT', contributes_to_total: false } as FormField;
     default:            return { ...base, type } as FormField;
   }
 }
@@ -224,7 +230,7 @@ export function FormBuilder({ schema, onChange }: Props) {
           <div className="mb-3 text-xs font-semibold uppercase text-muted-foreground">
             {t('requests.builder.fieldProps', { type: TYPE_LABEL[selected.type] ?? selected.type })}
           </div>
-          <FieldEditor field={selected} onChange={(next) => setFields(mapAt(schema.fields, sel, () => next))} />
+          <FieldEditor field={selected} schema={schema} onChange={(next) => setFields(mapAt(schema.fields, sel, () => next))} />
         </aside>
       ) : (
         <aside className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
@@ -328,10 +334,31 @@ function FieldList({ fields, basePath, droppableId, sel, onSelect, onDelete, onA
 
 /* ─── per-field editor ──────────────────────────────────────────────────── */
 
+/** Числовые поля формы с путями и подписями — цели для `must_equal`;
+ *  само поле из списка убираем, «равно самому себе» бессмысленно. */
+function numericPaths(schema: FormSchema, exceptKey: string): [string, string][] {
+  const out: [string, string][] = [];
+  const numeric = (t: string) => t === 'money' || t === 'number';
+  for (const top of schema.fields) {
+    if (numeric(top.type) && top.key !== exceptKey) out.push([top.key, top.label]);
+    const group = top as FormField & { fields?: FormField[]; repeatable?: boolean };
+    if (top.type === 'group' && group.repeatable === false) {
+      for (const sub of group.fields ?? []) {
+        if (numeric(sub.type) && sub.key !== exceptKey) {
+          out.push([`${top.key}.${sub.key}`, `${top.label} → ${sub.label}`]);
+        }
+      }
+    }
+  }
+  return out;
+}
+
 const csv = (a?: string[]) => (a ?? []).join(', ');
 const toCsv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
 
-function FieldEditor({ field, onChange }: { field: FormField; onChange: (next: FormField) => void }) {
+function FieldEditor({ field, onChange, schema }: {
+  field: FormField; onChange: (next: FormField) => void; schema: FormSchema;
+}) {
   const { t } = useTranslation();
   const f = field as any;
   const set = (patch: Record<string, unknown>) => onChange({ ...(field as any), ...patch });
@@ -353,6 +380,20 @@ function FieldEditor({ field, onChange }: { field: FormField; onChange: (next: F
           <Checkbox checked={Boolean(f.required)} onCheckedChange={(v) => set({ required: Boolean(v) })} /> {t('requests.builder.required')}
         </label>
       )}
+      {field.type !== 'static_text' && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox
+              checked={f.filled_by === 'approver'}
+              onCheckedChange={(v) => set({ filled_by: v ? 'approver' : 'initiator' })}
+            />
+            {t('requests.builder.filledByApprover')}
+          </label>
+          <p className="pl-6 text-xs text-muted-foreground">
+            {t('requests.builder.filledByApproverHint')}
+          </p>
+        </div>
+      )}
 
       {field.type === 'paragraph' && (
         <Field label={t('requests.builder.maxLength')}>
@@ -370,6 +411,27 @@ function FieldEditor({ field, onChange }: { field: FormField; onChange: (next: F
         <label className="flex items-center gap-2 text-sm">
           <Checkbox checked={Boolean(f.contributes_to_total)} onCheckedChange={(v) => set({ contributes_to_total: Boolean(v) })} /> {t('requests.builder.countInTotal')}
         </label>
+      )}
+
+      {/* Совпадение сумм: «Сумма по счёту» = «Согласованная сумма». Правило
+          общее, не про закуп, поэтому список — все числовые поля формы,
+          включая поля блоков (`группа.поле`). */}
+      {(field.type === 'money' || field.type === 'number') && (
+        <Field label={t('requests.builder.mustEqual')}>
+          <select
+            value={f.must_equal ?? ''}
+            onChange={(e) => set({ must_equal: e.target.value || null })}
+            className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+          >
+            <option value="">{t('requests.builder.mustEqualNone')}</option>
+            {numericPaths(schema, field.key).map(([path, title]) => (
+              <option key={path} value={path}>{title}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t('requests.builder.mustEqualHint')}
+          </p>
+        </Field>
       )}
 
       {field.type === 'amount' && (
@@ -424,6 +486,34 @@ function FieldEditor({ field, onChange }: { field: FormField; onChange: (next: F
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={Boolean(f.multiple)} onCheckedChange={(v) => set({ multiple: Boolean(v) })} /> {t('requests.builder.multiple')}
           </label>
+        </>
+      )}
+
+      {field.type === 'budget_line_ref' && (
+        <p className="text-xs text-muted-foreground">{t('requests.builder.budgetLineHint')}</p>
+      )}
+
+      {field.type === 'supplier_quotes' && (
+        <>
+          <Field label={t('requests.builder.quotesItemsField')}>
+            <Input
+              value={f.items_field ?? ''}
+              onChange={(e) => set({ items_field: e.target.value })}
+              placeholder="items"
+              className="font-mono"
+            />
+          </Field>
+          <Field label={t('requests.builder.quotesQuantityKey')}>
+            <Input
+              value={f.quantity_key ?? ''}
+              onChange={(e) => set({ quantity_key: e.target.value })}
+              placeholder="quantity"
+              className="font-mono"
+            />
+          </Field>
+          <p className="text-xs text-muted-foreground">
+            {t('requests.builder.quotesHint')}
+          </p>
         </>
       )}
 
