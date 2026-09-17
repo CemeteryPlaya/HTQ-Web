@@ -321,6 +321,7 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/hr/v1/pmo/`                         | GET, POST | Project management office   |
 | `/api/hr/v1/share-links/`                 | GET, POST |                              |
 | `/api/hr/v1/public/org/{token}`           | GET    | Public org-chart by share link — nginx `api_public` rate limit |
+| `/api/hr/v1/holding/headcount`            | GET    | Сводка по группе: люди/структура/штат по каждой действующей компании (блок H, `holding.*` через `apps/hr/holding_models.py`). JWT + обычный HR-доступ, ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/hr/urls.py` (170 registered patterns, counting both
 slash spellings — see [STRUCTURE.md §4.2](STRUCTURE.md) for HR-adjacent
@@ -387,6 +388,7 @@ business logic).
 | `/api/tasks/v1/production-calendar/`              | GET, PATCH | Production days, Kazakhstan holidays |
 | `/api/tasks/v1/sequences/`                        | GET    | Jira-style key generators     |
 | `/api/tasks/v1/notifications/`                    | GET    |                              |
+| `/api/tasks/v1/holding/projects`                  | GET    | Сводка по группе: проекты/объекты/задачи/отчётность по каждой действующей компании (блок H, `holding.*` через `apps/tasks/holding_models.py`). JWT + `is_elevated` (staff/superuser), ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/tasks/urls.py`. FSM transitions and the role model
 (reporter/supervisor/assignee/delegate/watcher) are unchanged from the
