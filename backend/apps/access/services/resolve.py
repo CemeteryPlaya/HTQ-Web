@@ -63,6 +63,13 @@ def _position_role_ids(
     Пусто, если карточки нет: без неё неизвестен ни ``position_id``, ни
     отдел держателя, и назначать роли этой должности вслепую значило бы
     выдать их тому, у кого нет даже основания их получить.
+
+    ``scope_kind`` вне ``PositionRole.POSITION_ROLE_SCOPE_KINDS`` (порча
+    данных — модель и штатный API его не допускают, см. докстринг модели) —
+    роль этой строки не попадает в результат и об этом ГРОМКО сообщается
+    через ``fallback(..., expected=False)`` (раунд правок 1 ревью задачи 1b):
+    тишина здесь означала бы, что человек тихо остался без доступа, а причину
+    искали бы в правах, а не в данных.
     """
     try:
         from apps.hr import interface as hr
@@ -98,10 +105,28 @@ def _position_role_ids(
                 continue
             result.append((role_id, ScopeKind.DEPARTMENT, department_id))
         else:
-            # ScopeKind.SITE и любые будущие значения: сегодняшняя карточка
-            # держателя не несёт site_id, посчитать «свой объект» нечем.
-            # Пропускаем роль (fail closed), а не расширяем её до COMPANY —
-            # ровно то расширение, ради устранения которого заведено поле.
+            # ScopeKind.SITE и любые другие значения вне
+            # PositionRole.POSITION_ROLE_SCOPE_KINDS. Штатный API
+            # (assignment.set_position_roles) scope_kind не принимает вовсе,
+            # а choices модели их не допускает — значит строка попала сюда в
+            # обход обоих (прямой SQL, ручная правка через ORM мимо
+            # full_clean, будущее расширение ScopeKind без синхронного
+            # расширения POSITION_ROLE_SCOPE_KINDS). Это порча данных, а не
+            # предусмотренная деградация («у дня нет шаблона — берём
+            # дефолтный»): expected=False — в dev/тестах (strict) роняет
+            # FallbackNotAllowed, чтобы автор увидел причину сразу, а не
+            # тишину на месте роли; на проде (log) уходит WARNING и отдельная
+            # серия счётчика вместо того, чтобы человек тихо остался без
+            # доступа. Тот же приём, что у access.resolve.hr_unavailable
+            # выше — разница только в expected: там штатная деградация
+            # (кадровый модуль выключен), здесь — нет.
+            fallback(
+                "access.resolve.position_role_scope_kind_invalid", None,
+                reason="область роли должности вне поддерживаемого набора "
+                       "(COMPANY/DEPARTMENT) — резолвер не может её "
+                       "посчитать", expected=False, user_id=user_id,
+                company=company, role_id=role_id, scope_kind=scope_kind,
+            )
             continue
     return result
 

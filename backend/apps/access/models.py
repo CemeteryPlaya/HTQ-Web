@@ -39,6 +39,18 @@ class ScopeKind(models.TextChoices):
     SITE = "site", "Объект"
 
 
+#: Области, которые роль ДОЛЖНОСТИ (``PositionRole.scope_kind``) вправе
+#: нести сегодня — подмножество ``ScopeKind``, а не весь набор (раунд правок
+#: 1 ревью задачи 1b). ``SITE`` исключён: резолвер (``apps.access.services.
+#: resolve``) умеет вычислять по держателю только «свой отдел», а «свой
+#: объект» — нет (кадровая карточка не несёт ``site_id``). Расширять список
+#: — осознанное решение вместе с резолвером, а не побочный эффект того, что
+#: ``ScopeKind`` — общий enum с ``RoleAssignment``, которому нужны все три.
+POSITION_ROLE_SCOPE_KINDS = tuple(
+    (kind, label) for kind, label in ScopeKind.choices if kind != ScopeKind.SITE
+)
+
+
 class Role(models.Model):
     """Набор прав, действующий во всех компаниях группы (правила 1 и 3).
 
@@ -143,11 +155,23 @@ class PositionRole(models.Model):
     кадровой карточки (следовательно, без известного отдела) роль этой
     должности у пользователя просто не действует — молча выдать ``COMPANY``
     в этом случае было бы ровно тем расширением доступа, ради устранения
-    которого поле и заведено. ``SITE`` в перечне ``ScopeKind`` есть (та же
-    общая шкала областей, что и у ``RoleAssignment``), но резолвер сегодня не
-    умеет вычислять «свой объект» держателя — сама кадровая карточка не
-    несёт site_id, — так что фактический контракт задачи 1b — ``COMPANY``
-    либо ``DEPARTMENT``.
+    которого поле и заведено.
+
+    ⚠️ ``choices`` — ``POSITION_ROLE_SCOPE_KINDS`` НИЖЕ, а не полный
+    ``ScopeKind.choices`` (раунд правок 1 ревью задачи 1b). ``SITE``
+    намеренно исключён: резолвер сегодня не умеет вычислять «свой объект»
+    держателя — кадровая карточка не несёт ``site_id`` (см. ``resolve.py::
+    _position_role_ids``), — а полный ``ScopeKind`` без сужения ``choices``
+    позволял бы выставить его через ``/django-admin/``: ``PositionRoleAdmin``
+    не задаёт ``fields``/``fieldsets`` и рендерит форму по всем полям модели,
+    а штатный API (``apps.access.services.assignment.set_position_roles``)
+    ``scope_kind`` вообще не принимает — админка была ЕДИНСТВЕННЫМ живым
+    путём выставить недоступное резолверу значение, и делала это молча
+    (запрос просто терял роль без единой записи в логе). Если значение вне
+    ``POSITION_ROLE_SCOPE_KINDS`` всё же окажется в таблице в обход
+    ``choices`` (прямой SQL, будущее расширение ``ScopeKind`` без синхронного
+    расширения этого списка) — резолвер об этом кричит через
+    ``fallback(..., expected=False)``, а не молчит (``resolve.py``).
     """
 
     company_slug = models.CharField(max_length=32, db_index=True)
@@ -158,7 +182,7 @@ class PositionRole(models.Model):
     position_id = models.IntegerField()
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="position_links")
     scope_kind = models.CharField(
-        max_length=16, choices=ScopeKind.choices,
+        max_length=16, choices=POSITION_ROLE_SCOPE_KINDS,
         default=ScopeKind.COMPANY, db_default=ScopeKind.COMPANY.value,
     )
     created_at = models.DateTimeField(auto_now_add=True)

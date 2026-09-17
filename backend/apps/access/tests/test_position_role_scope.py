@@ -14,6 +14,17 @@ junior/middle (``apps/hr/views.py`` — ``if not access.can_read_all``). В но
 при выдаче» — второго у ``PositionRole`` нет и не должно быть вовсе (см.
 докстринг модели): будь область записана при выдаче, оба сотрудника получили
 бы отдел ДОЛЖНОСТИ (тот, что был при её создании), а не свой собственный.
+
+Раунд правок 1 (ревью): ``ScopeKind.SITE`` был формально достижим через
+``/django-admin/`` (``PositionRoleAdmin`` рендерит форму по всем полям
+модели, а штатный API ``scope_kind`` не принимает вовсе) и резолвером тихо
+пропускался — человек терял доступ без единой записи в логе. Два теста ниже
+проверяют оба закрытых конца: ``site`` больше не проходит валидацию модели
+(``full_clean``), а значение, которое всё же обошло эту защиту (прямой SQL —
+здесь имитируется ``.objects.create()`` мимо ``full_clean``, как и было бы
+доступно раньше через админку), резолвер отдаёт не молча, а через
+``fallback(..., expected=False)`` — в тестовой среде (``FALLBACK_MODE=strict``)
+это ``FallbackNotAllowed``, а не тихая пустая карта прав.
 """
 
 from __future__ import annotations
@@ -22,12 +33,14 @@ import datetime
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
 from apps.access.models import Level, PositionRole, Role, RoleAssignment, ScopeKind
 from apps.access.services import resolve
 from apps.access.tests.helpers import grant
+from htqweb.fallback import FallbackNotAllowed
 
 COMPANY = "htq-kz"
 
@@ -230,3 +243,40 @@ def test_department_scope_adds_no_extra_queries(two_holders_same_position):
     assert len(position_role_queries) == 1, (
         f"ожидали ровно один запрос к access_positionrole: {position_role_queries}"
     )
+
+
+# ── Раунд правок 1: SITE закрыт с обоих концов ──────────────────────────────
+
+
+@pytest.mark.django_db
+def test_site_scope_kind_rejected_by_model_validation():
+    """Сужение choices (0007): ``site`` больше не проходит валидацию модели —
+    ни формы (django-admin), ни явный ``full_clean()``."""
+    role = Role.objects.create(code="r-site", title="r-site")
+    row = PositionRole(company_slug=COMPANY, position_id=1, role=role,
+                       scope_kind=ScopeKind.SITE)
+    with pytest.raises(ValidationError) as excinfo:
+        row.full_clean()
+    assert "scope_kind" in excinfo.value.message_dict
+
+
+@pytest.mark.django_db
+def test_unsupported_scope_kind_is_loud_not_silent(two_holders_same_position):
+    """Значение вне ``POSITION_ROLE_SCOPE_KINDS``, попавшее в таблицу в обход
+    ``choices`` (здесь — ``.objects.create()`` мимо ``full_clean()``, тем же
+    путём, каким раньше это делала форма ``/django-admin/``), не должно
+    молча терять роль. Тестовая среда — ``FALLBACK_MODE=strict``
+    (``htqweb/settings/test.py``), поэтому ``fallback(expected=False)``
+    поднимает ``FallbackNotAllowed`` вместо тихого лога — ровно то падение,
+    которого strict-режим и добивается: автор видит причину сразу, а не
+    пустую карту прав."""
+    h = two_holders_same_position
+    role = _role("bad-scope-role", "hr")
+    PositionRole.objects.create(
+        company_slug=COMPANY, position_id=h["position"].id, role=role,
+        scope_kind=ScopeKind.SITE,
+    )
+
+    with pytest.raises(FallbackNotAllowed) as excinfo:
+        resolve.permissions_for(h["user_a"], COMPANY)
+    assert "access.resolve.position_role_scope_kind_invalid" in str(excinfo.value)
