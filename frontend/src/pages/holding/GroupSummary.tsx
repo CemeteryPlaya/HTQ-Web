@@ -23,7 +23,9 @@
 import type { ReactNode } from 'react';
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, Building2, CheckSquare, Clock3, ShieldAlert, Users, Wallet } from 'lucide-react';
+import {
+  AlertTriangle, Building2, CheckSquare, ClipboardCheck, Clock3, ShieldAlert, Users, Wallet,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { holdingApi } from '@/api/holding';
@@ -94,11 +96,14 @@ function Tile({ icon: Icon, title, children }: TileProps) {
   );
 }
 
-function StubTile({ title, stubText }: { title: string; stubText: string }) {
+function StubTile({ icon: Icon, title, stubText }: { icon: typeof Users; title: string; stubText: string }) {
   return (
     <Card className="border-dashed">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base font-medium text-muted-foreground">{title}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-base font-medium text-muted-foreground">
+          <Icon className="h-4 w-4" />
+          {title}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <p className="text-sm text-muted-foreground">{stubText}</p>
@@ -218,10 +223,12 @@ const GroupSummary = () => {
                 </p>
               </Tile>
               <StubTile
+                icon={Wallet}
                 title={t('holding.tiles.budgets', 'Бюджеты')}
                 stubText={t('holding.tiles.stub', 'Данные подключит второй разработчик')}
               />
               <StubTile
+                icon={ClipboardCheck}
                 title={t('holding.tiles.approvals', 'Согласования')}
                 stubText={t('holding.tiles.stub', 'Данные подключит второй разработчик')}
               />

@@ -139,9 +139,18 @@ describe('GroupSummary', () => {
   });
 
   it('503 рисует «пересобираются» отдельным состоянием, не тем же, что 403', async () => {
-    headcount.mockRejectedValue({
-      response: { status: 503, data: { detail: 'Сводные представления холдинга сейчас пересобираются' } },
-    });
+    // Форма реальной ошибки, а НЕ сырой axios-ответ: `api/client.ts` (~строки
+    // 202-211) сворачивает ЛЮБОЙ ответ со status >= 500 в
+    // `Object.assign(new Error(serverMsg), { status, isServerError: true })` —
+    // у настоящего 503 поля `response` нет вовсе (см. шапку `lib/apiError.ts`).
+    // Мок с `{ response: { status: 503, ... } }` не заметил бы поломку ветки
+    // `isServerError` в `explainedDetail`/`errorStatus` — только эта форма её ловит.
+    headcount.mockRejectedValue(
+      Object.assign(new Error('Сводные представления холдинга сейчас пересобираются'), {
+        status: 503,
+        isServerError: true,
+      }),
+    );
     projects.mockResolvedValue({ data: PROJECTS_OK });
     renderWithProviders(<GroupSummary />);
 
@@ -150,5 +159,57 @@ describe('GroupSummary', () => {
     // Не то же состояние, что 403.
     expect(screen.queryByTestId('holding-summary-forbidden')).not.toBeInTheDocument();
     expect(screen.getByTestId('holding-summary-unavailable')).toBeInTheDocument();
+  });
+
+  it('несовпадающие списки компаний: обе строки в таблице, «чужие» колонки — прочерк', async () => {
+    // Бриф: компания без единой строки в домене в его сводку не попадает —
+    // hr- и tasks-ответы могут нести РАЗНЫЕ наборы company_slug. Слияние по
+    // индексу массива вместо Map по company_slug молча перепутало бы строки;
+    // этот тест ловит именно такой регресс.
+    headcount.mockResolvedValue({
+      data: {
+        companies: [{
+          company_slug: 'hi-tech-group', company_name: 'Hi-Tech Group LTD',
+          employees_active: 12, employees_total: 13, departments_active: 5,
+          positions_active: 14, staffing_headcount: 14.0, staffing_payroll: 7000000.0,
+        }],
+        totals: { employees_active: 12, employees_total: 13, staffing_headcount: 14.0, staffing_payroll: 7000000.0 },
+      },
+    });
+    projects.mockResolvedValue({
+      data: {
+        companies: [{
+          company_slug: 'hi-tech-qazaqstan', company_name: 'Hi-Tech Qazaqstan',
+          projects_active: 3, sites_active: 2, tasks_open: 17, tasks_overdue: 4,
+          reports_last_date: '2026-09-16',
+        }],
+        totals: { projects_active: 3, sites_active: 2, tasks_open: 17, tasks_overdue: 4 },
+      },
+    });
+    renderWithProviders(<GroupSummary />);
+
+    const table = await screen.findByTestId('holding-summary-table');
+    // Обе строки присутствуют — компании из разных ручек не потеряны и не слиты в одну.
+    const hrOnlyRow = within(table).getByText('Hi-Tech Group LTD').closest('tr');
+    const tasksOnlyRow = within(table).getByText('Hi-Tech Qazaqstan').closest('tr');
+    expect(hrOnlyRow).not.toBeNull();
+    expect(tasksOnlyRow).not.toBeNull();
+
+    // Порядок колонок: компания, сотрудники, штат, ФОТ, проекты, объекты, задачи, просрочка, отчёт.
+    const hrCells = hrOnlyRow!.querySelectorAll('td');
+    const tasksCells = tasksOnlyRow!.querySelectorAll('td');
+
+    // Компания есть только в hr-ответе: домен tasks для неё — прочерк, не ноль.
+    expect(hrCells[1].textContent).toBe('12 / 13');
+    expect(hrCells[4].textContent).toBe('—'); // projects_active
+    expect(hrCells[6].textContent).toBe('—'); // tasks_open
+    expect(hrCells[7].textContent).toBe('—'); // tasks_overdue
+    expect(hrCells[8].textContent).toBe('—'); // reports_last_date
+
+    // Компания есть только в tasks-ответе: домен hr для неё — прочерк, не ноль.
+    expect(tasksCells[1].textContent).toBe('— / —'); // employees active/total
+    expect(tasksCells[2].textContent).toBe('—'); // staffing_headcount
+    expect(tasksCells[3].textContent).toBe('—'); // staffing_payroll
+    expect(tasksCells[4].textContent).toBe('3'); // projects_active — своё, настоящее
   });
 });
