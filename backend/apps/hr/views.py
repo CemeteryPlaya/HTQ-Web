@@ -3303,6 +3303,20 @@ def _deny_unless_holding(request):
     return json_error("Сводка по группе доступна только на поддомене холдинга", 403)
 
 
+def _company_display_name(slug: str) -> str:
+    """Имя компании из реестра, а сам слаг — если строки реестра уже нет.
+
+    ``get_company`` документированно возвращает ``None`` на неизвестном
+    слаге (осиротевшая строка после неудачного отката ``company_create``,
+    см. CLAUDE.md, плюс обычный 5-секундный TTL его кэша) — сумма по
+    компании в сводке при этом настоящая (представления зафиксированы до
+    следующей пересборки), и терять всю строку сводки ради одной вывески
+    было бы хуже, чем показать слаг вместо имени.
+    """
+    company = companies.get_company(slug)
+    return company["name"] if company else slug
+
+
 @api_view(methods=("GET",), auth="jwt")
 def holding_headcount(request):
     """Люди, структура и штат по каждой действующей компании группы.
@@ -3322,6 +3336,12 @@ def holding_headcount(request):
     Имена компаний добавляются к строкам сервиса из реестра
     (``apps.companies.interface.get_company``) — сам сервис отдаёт только
     слаг, у него нет и не должно быть доступа к таблице ``Company``.
+    ``get_company`` документированно отдаёт ``None``, если строки реестра уже
+    нет (окно между сносом строки и следующей пересборкой представлений,
+    плюс 5-секундный TTL его кэша — см. CLAUDE.md про осиротевшую строку
+    после неудачного отката ``company_create``): в этом случае вывеска
+    падает на сам слаг, а не роняет всю сводку 500-й — цифры по компании
+    настоящие, отсутствует только имя.
     """
     try:
         hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -3340,7 +3360,7 @@ def holding_headcount(request):
     company_rows = [
         schemas.HoldingCompanyRow(
             company_slug=row["company_slug"],
-            company_name=companies.get_company(row["company_slug"])["name"],
+            company_name=_company_display_name(row["company_slug"]),
             employees_active=row["employees_active"],
             employees_total=row["employees_total"],
             departments_active=row["departments_active"],

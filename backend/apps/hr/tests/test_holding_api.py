@@ -246,6 +246,32 @@ def test_company_name_comes_from_the_registry(client, two_companies):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_missing_registry_row_falls_back_to_slug_instead_of_500(client, two_companies, monkeypatch):
+    """``get_company`` документированно отдаёт ``None``, если строки реестра
+    уже нет — окно реальное: представления холдинга зафиксированы до
+    следующей пересборки, а строка ``Company`` может исчезнуть раньше
+    (осиротевшая строка после неудачного отката ``company_create``, см.
+    CLAUDE.md), плюс 5-секундный TTL его кэша. Слепое индексирование
+    ``get_company(slug)["name"]`` дало бы ``TypeError`` мимо единственного
+    ``except`` — голый 500 без конверта ``{"detail": ...}``. Ручка обязана
+    остаться 200: цифры по компании настоящие, отсутствует только вывеска."""
+    from apps.companies import interface as companies_interface
+
+    real_get_company = companies_interface.get_company
+
+    def fake_get_company(slug):
+        return None if slug == CHILD_SLUG else real_get_company(slug)
+
+    monkeypatch.setattr(companies_interface, "get_company", fake_get_company)
+
+    resp = client.get(BASE, **headers(HOLDING_SLUG, hr_token(company=HOLDING_SLUG)))
+    assert resp.status_code == 200
+    names = {row["company_slug"]: row["company_name"] for row in resp.json()["companies"]}
+    assert names[CHILD_SLUG] == CHILD_SLUG       # вывеска пропала — остался слаг
+    assert names[HOLDING_SLUG] == "Holding QA"   # у остальных строк имя как обычно
+
+
+@pytest.mark.django_db(transaction=True)
 def test_totals_equal_the_sum_of_the_rows(client, two_companies):
     """Числа посчитаны вручную по фикстуре, а не тем же выражением, что в
     сервисе: holding — 1 активный/1.0 штат/200000.00 ФОТ, child — 2

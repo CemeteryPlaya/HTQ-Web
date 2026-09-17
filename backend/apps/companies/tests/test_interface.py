@@ -117,3 +117,28 @@ def test_get_company_exposes_is_active_predicate(kz):
         status=CompanyStatus.ARCHIVED,
     )
     assert interface.get_company("dead")["is_active"] is False
+
+
+@pytest.mark.django_db
+def test_is_holding_true_for_a_holding_company(kz):
+    """Предикат, а не сырой ``kind`` — потребитель (``apps.hr``, блок H) не
+    должен импортировать ``CompanyKind`` из apps.companies.models."""
+    holding = Company.objects.create(
+        slug="hi-tech-group", name="Group", kind=CompanyKind.HOLDING,
+    )
+    assert interface.is_holding(holding.slug) is True
+
+
+@pytest.mark.django_db
+def test_is_holding_false_for_a_non_holding_company(kz):
+    """``kz`` заведена с ``CompanyKind.REGIONAL`` — обычная дочерняя компания
+    группы, не холдинг."""
+    assert interface.is_holding("htq-kz") is False
+
+
+@pytest.mark.django_db
+def test_is_holding_unknown_slug_is_false_not_an_exception():
+    """Докстринг ``is_holding`` объявляет это осознанным решением:
+    спрашивающий уже получил компанию из контекста запроса, и «такой
+    компании нет» значит для него ровно «не холдинг» — не повод падать."""
+    assert interface.is_holding("нет-такой-компании") is False
