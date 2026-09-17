@@ -99,13 +99,13 @@ def use_holding():
     """
     previous = current_company_or_none()
     token = _holding.set(True)
-    with connection.cursor() as cur:
-        cur.execute(
-            sql.SQL("SET search_path TO {}, public").format(
-                sql.Identifier(HOLDING_SCHEMA),
-            )
-        )
     try:
+        with connection.cursor() as cur:
+            cur.execute(
+                sql.SQL("SET search_path TO {}, public").format(
+                    sql.Identifier(HOLDING_SCHEMA),
+                )
+            )
         yield
     finally:
         _holding.reset(token)
