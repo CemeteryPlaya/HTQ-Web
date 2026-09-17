@@ -15,6 +15,16 @@
 групповые, без ошибки и без следа. Поэтому у читателей свой менеджер,
 который требует контекста.
 
+⚠️ ``base_manager_name = "objects"`` обязателен. Без него Django заводит
+``Model._base_manager`` как голый ``models.Manager()`` (см.
+``django.db.models.options.Options.base_manager`` — дефолт применяется,
+когда ``Meta.base_manager_name`` не задан), а этим менеджером пользуются
+``refresh_from_db()`` и related-дескрипторы — то есть сторож
+``HoldingManager.get_queryset()`` можно было бы обойти этим путём, не трогая
+``objects`` вовсе. ``Manager.raw()`` через ``get_queryset()`` не идёт ни при
+каком ``base_manager_name`` — это свойство самого паттерна, а не дыра
+конкретно этого сторожа, и никакой `base_manager_name` его не закрывает.
+
 Поля объявлены НЕ все, а только нужные сводке: незаявленное поле Django
 просто не выбирает, а короткий список честнее показывает, что читателю
 нужно. Добавлять поле сюда можно свободно — представление содержит все
@@ -53,6 +63,7 @@ class HoldingRow(models.Model):
     class Meta:
         abstract = True
         managed = False
+        base_manager_name = "objects"
 
     def save(self, *args, **kwargs):
         raise NotImplementedError("Сводка холдинга — чтение: представление не пишется")

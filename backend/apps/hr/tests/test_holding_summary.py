@@ -13,11 +13,12 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from django.db import connection
+from django.db import ProgrammingError, connection
 
 from apps.companies.models import Company, CompanyKind, CompanyStatus
 from apps.companies.services import holding_views, migration_service, schema_service
 from apps.hr.holding_models import HoldingContextRequired, HoldingEmployee
+from apps.hr.services import holding_service
 from apps.hr.services.holding_service import (
     HoldingViewsUnavailable, headcount_by_company,
 )
@@ -245,6 +246,17 @@ def test_a_company_without_people_still_appears_with_zeros(two_companies):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_headcount_excludes_inactive_departments_and_positions(two_companies):
+    """Неактивные отдел/должность заведены в _seed_alpha именно для этого:
+    фильтр ``is_active=True`` в сервисе обязан их не считать. Числа посчитаны
+    вручную по фикстуре (2 отдела/2 должности заведено, по одному активно),
+    а не тем же выражением, что в сервисе."""
+    alpha = _row(headcount_by_company(), "h-alpha")
+    assert alpha["departments_active"] == 1   # "Engineering", НЕ "Legacy"
+    assert alpha["positions_active"] == 1     # "Developer", НЕ "Retired role"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_an_archived_company_disappears_from_the_summary(two_companies):
     """Архивную компанию rebuild_holding_views исключает из представлений —
     цифры группы обязаны это отражать."""
@@ -266,6 +278,20 @@ def test_reader_refuses_to_work_outside_the_holding_context():
         HoldingEmployee.objects.exists()
 
 
+def test_base_manager_also_refuses_to_work_outside_the_holding_context():
+    """``_base_manager`` — то, чем пользуются refresh_from_db() и
+    related-дескрипторы — обязан идти через тот же сторож, что и ``objects``.
+
+    Без ``base_manager_name = "objects"`` в ``HoldingRow.Meta`` Django
+    заводит ``_base_manager`` как голый ``models.Manager()`` (дефолт
+    ``Options.base_manager``, если имя не задано явно), и он читал бы схему
+    company-контекста мимо ``HoldingManager.get_queryset()`` — то есть мимо
+    всей проверки, ради которой заведена эта задача.
+    """
+    with pytest.raises(HoldingContextRequired):
+        HoldingEmployee._base_manager.exists()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_summary_says_so_when_the_views_are_gone(two_companies):
     """Во время выкатки migrate_companies сносит представления. Читатель
@@ -273,4 +299,25 @@ def test_summary_says_so_when_the_views_are_gone(two_companies):
     чем попало."""
     holding_views.drop_holding_views()
     with pytest.raises(HoldingViewsUnavailable):
+        headcount_by_company()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_headcount_reraises_programming_errors_unrelated_to_missing_views(
+    two_companies, monkeypatch,
+):
+    """``_views_are_gone()`` уточняет причину ``ProgrammingError`` НАРОЧНО:
+    докстринг сервиса обещает, что настоящая ошибка запроса не замаскируется
+    под «идёт выкатка». Представления здесь на месте (rebuild уже отработал
+    в фикстуре) — только это и делает проверку честной: если бы вьюх не
+    было, любой ``ProgrammingError`` требовалось бы перехватывать как
+    ``HoldingViewsUnavailable``, и тест был бы неотличим от подмены
+    исключения."""
+
+    def boom(queryset, **aggregates):
+        raise ProgrammingError("syntax error at or near \"oops\"")
+
+    monkeypatch.setattr(holding_service, "_by_company", boom)
+
+    with pytest.raises(ProgrammingError, match="oops"):
         headcount_by_company()
