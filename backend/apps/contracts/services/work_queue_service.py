@@ -19,6 +19,7 @@ from apps.contracts.models import (
     AgreementStatus,
     CompletionAct,
     ContractPayment,
+    GoodsInvoice,
     Invoice,
     InvoiceStatus,
 )
@@ -137,6 +138,18 @@ def _own_drafts(user_id: int) -> list[dict]:
             currency=act.agreement.currency, created_at=act.updated_at,
         ))
 
+    for invoice in GoodsInvoice.objects.select_related("agreement").filter(
+        created_by=user_id, status=AdvancePaymentStatus.DRAFT,
+        approval_state__in=(signoff.ApprovalState.DRAFT, signoff.ApprovalState.REWORK),
+    ):
+        action, label = _submission_action(invoice.approval_state)
+        items.append(_item(
+            document_type="goods_invoice", action=action, action_label=label,
+            title=f"Товарная накладная по договору {invoice.agreement.number}",
+            url=f"/contracts/goods-invoices/{invoice.pk}", amount=invoice.amount,
+            currency=invoice.agreement.currency, created_at=invoice.updated_at,
+        ))
+
     for report in AdvanceReport.objects.select_related("accountable_funds_request").filter(
         created_by=user_id, approval_state__in=(signoff.ApprovalState.DRAFT, signoff.ApprovalState.REWORK),
     ):
@@ -192,6 +205,16 @@ def _accounting_tasks(user_id: int, *, is_elevated: bool) -> list[dict]:
                 title=f"Акт выполненных работ по договору {act.agreement.number}",
                 url=f"/contracts/completion-acts/{act.pk}", amount=act.amount,
                 currency=act.agreement.currency, created_at=act.updated_at,
+            ))
+        for invoice in GoodsInvoice.objects.select_related("agreement").filter(
+            status=AdvancePaymentStatus.AWAITING_ACCOUNTING,
+        ):
+            items.append(_item(
+                document_type="goods_invoice", action="record_payment",
+                action_label="Оформить оплату",
+                title=f"Товарная накладная по договору {invoice.agreement.number}",
+                url=f"/contracts/goods-invoices/{invoice.pk}", amount=invoice.amount,
+                currency=invoice.agreement.currency, created_at=invoice.updated_at,
             ))
 
     if can_mark_request_paid:

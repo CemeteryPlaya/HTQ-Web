@@ -27,6 +27,7 @@ import type {
   AccountableFundsRequest,
   AdvanceReport,
   CompletionAct,
+  GoodsInvoice,
   ContractsWorkItem,
   ContractPayment,
   Program,
@@ -355,4 +356,23 @@ export const contractsApi = {
   },
   getCompletionActUrl: (id: number) => api.get<{ url: string }>(path(`completion-acts/${id}/act-url`)),
   getCompletionActOrderUrl: (id: number) => api.get<{ url: string }>(path(`completion-acts/${id}/payment-order-url`)),
+
+  listGoodsInvoices: (params?: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean }) =>
+    api.get<GoodsInvoice[]>(path('goods-invoices'), { params }),
+  listGoodsInvoicesPage: (params: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean } & PaginationParams) =>
+    api.get<PaginatedResponse<GoodsInvoice>>(path('goods-invoices'), { params }),
+  getGoodsInvoice: (id: number) => api.get<GoodsInvoice>(path(`goods-invoices/${id}`)),
+  createGoodsInvoice: (administratorId: number, agreementId: number, amount: string, waybill: File) => {
+    const form = new FormData();
+    form.append('administrator_id', String(administratorId)); form.append('agreement_id', String(agreementId));
+    form.append('amount', amount); form.append('waybill', waybill);
+    return api.post<GoodsInvoice>(path('goods-invoices'), form);
+  },
+  submitGoodsInvoice: (id: number) => api.post<ApprovalProcess>(path(`goods-invoices/${id}/submit`)),
+  recordGoodsInvoice: (id: number, postingNumber: string, file: File) => {
+    const form = new FormData(); form.append('posting_number', postingNumber); form.append('file', file);
+    return api.post<GoodsInvoice>(path(`goods-invoices/${id}/payment-order`), form);
+  },
+  getGoodsInvoiceWaybillUrl: (id: number) => api.get<{ url: string }>(path(`goods-invoices/${id}/waybill-url`)),
+  getGoodsInvoiceOrderUrl: (id: number) => api.get<{ url: string }>(path(`goods-invoices/${id}/payment-order-url`)),
 };

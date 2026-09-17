@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Building2, CheckSquare, FileText, LayoutDashboard, Receipt, Wallet } from 'lucide-react';
+import { Building2, CheckSquare, FileText, LayoutDashboard, Package, Receipt, Wallet } from 'lucide-react';
 
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
@@ -52,6 +52,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/contracts/advance-payments', label: 'Предоплаты', icon: Wallet, matchPrefix: '/contracts/advance-payments' },
       { to: '/contracts/contract-payments', label: 'Оплаты по договорам', icon: Wallet, matchPrefix: '/contracts/contract-payments' },
       { to: '/contracts/completion-acts', label: 'Акты выполненных работ', icon: FileText, matchPrefix: '/contracts/completion-acts' },
+      { to: '/contracts/goods-invoices', label: 'Товарные накладные', icon: Package, matchPrefix: '/contracts/goods-invoices' },
     ],
   },
   {
