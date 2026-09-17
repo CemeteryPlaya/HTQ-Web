@@ -37,6 +37,7 @@ from apps.contracts.models import (
 from apps.contracts.services import budget_calc
 from apps.contracts.services.counterparty_service import get_counterparty_or_404
 from apps.contracts.services.reference_service import ReferenceConflict, conflict_as
+from apps.contracts.services.request_link import check_request_link, log_link
 # Единственные соседи, и только через interface — прямой импорт их
 # models/services запрещён (apps/core/tests/test_app_isolation.py).
 from apps.media_files import interface as media
@@ -177,7 +178,8 @@ def _lock_line(line_id: int) -> BudgetLine:
 def list_invoices(*, budget_id: int | None = None, budget_line_id: int | None = None,
                   counterparty_id: int | None = None,
                   administrator_id: int | None = None, program_id: int | None = None,
-                  status: str | None = None, period_year: int | None = None):
+                  status: str | None = None, period_year: int | None = None,
+                  request_id: int | None = None):
     """``budget_id`` фильтрует по бюджету целиком, ``budget_line_id`` — по
     одной программе (как в ``list_agreements``)."""
     query = Invoice.objects.select_related(*_RELATED)
@@ -195,6 +197,8 @@ def list_invoices(*, budget_id: int | None = None, budget_line_id: int | None = 
         query = query.filter(status=status)
     if period_year is not None:
         query = query.filter(budget_line__budget__period_year=period_year)
+    if request_id is not None:
+        query = query.filter(request_id=request_id)
     return list(query)
 
 
@@ -232,6 +236,7 @@ def serialize_invoice(invoice: Invoice) -> dict:
         "file_id": invoice.file_id,
         "status": invoice.status,
         "approval_state": invoice.approval_state,
+        "request_id": invoice.request_id,
         "created_by": invoice.created_by,
         "created_at": invoice.created_at,
         "updated_at": invoice.updated_at,
@@ -240,11 +245,14 @@ def serialize_invoice(invoice: Invoice) -> dict:
 
 @transaction.atomic
 def create_invoice(*, name: str, budget_line_id: int, counterparty_id: int,
-                   amount, note: str = "", created_by: int | None = None) -> Invoice:
+                   amount, note: str = "", request_id: int | None = None,
+                   created_by: int | None = None) -> Invoice:
     line = _lock_line(budget_line_id)
     counterparty = get_counterparty_or_404(counterparty_id)
     _validate_context(line, counterparty)
     _assert_no_active_agreement(line)
+    # Заявка, по которой выставляется счёт, — те же правила, что у договора.
+    check_request_link(request_id, budget_line_id=line.pk)
 
     # Создаётся только черновик. ``status`` меняется через change_status(),
     # иначе POST позволил бы выдать оплаченный счёт без скана и согласования.
@@ -254,11 +262,15 @@ def create_invoice(*, name: str, budget_line_id: int, counterparty_id: int,
 
     # Валюта — со строки бюджета, а не из тела запроса: счёт выписывается в
     # валюте того бюджета, из которого его оплачивают (см. докстринг модели).
-    return Invoice.objects.create(
+    invoice = Invoice.objects.create(
         name=name, note=note, budget_line=line, counterparty=counterparty,
         amount=amount, currency=line.budget.currency,
-        status=InvoiceStatus.DRAFT, created_by=created_by,
+        status=InvoiceStatus.DRAFT, request_id=request_id, created_by=created_by,
     )
+    log_link(request_id, kind="invoice", document_id=invoice.pk,
+             title=f"Счёт: {invoice.name} ({invoice.amount} {invoice.currency})",
+             url=f"/contracts/invoices/{invoice.pk}", actor_id=created_by)
+    return invoice
 
 
 @transaction.atomic
@@ -287,6 +299,13 @@ def update_invoice(invoice_id: int, **fields) -> Invoice:
                       check_counterparty_status=counterparty_changed)
     if budget_changed:
         _assert_no_active_agreement(line)
+    # Связь с заявкой — как у договора: и новая ссылка, и смена строки под
+    # существующей ссылкой проходят через ту же проверку.
+    request_id = fields.get("request_id")
+    request_changed = request_id is not None and request_id != invoice.request_id
+    if request_changed or (budget_changed and invoice.request_id is not None):
+        check_request_link(request_id if request_changed else invoice.request_id,
+                           budget_line_id=line.pk)
 
     amount = fields.get("amount") if fields.get("amount") is not None else invoice.amount
     if budget_changed or amount != invoice.amount:
@@ -303,6 +322,10 @@ def update_invoice(invoice_id: int, **fields) -> Invoice:
         invoice.currency = line.budget.currency
     if changed or budget_changed:
         invoice.save()
+    if request_changed:
+        log_link(request_id, kind="invoice", document_id=invoice.pk,
+                 title=f"Счёт: {invoice.name} ({invoice.amount} {invoice.currency})",
+                 url=f"/contracts/invoices/{invoice.pk}", actor_id=None)
     return get_invoice_or_404(invoice.pk)
 
 

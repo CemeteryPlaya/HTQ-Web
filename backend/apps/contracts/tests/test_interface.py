@@ -11,9 +11,9 @@ import pytest
 from django.db.models import Model
 
 from apps.contracts import interface
-from apps.contracts.models import AgreementStatus
+from apps.contracts.models import AgreementStatus, BudgetStatus
 
-from .helpers import make_agreement, make_line, make_program
+from .helpers import make_administrator, make_agreement, make_line, make_program
 
 
 @pytest.mark.django_db
@@ -68,3 +68,50 @@ def test_agreement_brief_is_a_plain_dict():
     assert brief["number"] == agreement.number
     assert brief["counterparty_bin_iin"] == agreement.counterparty.bin_iin
     assert "file_id" not in brief  # служебное наружу не отдаём
+
+
+@pytest.mark.django_db
+def test_budget_lines_brief_is_a_flat_batch():
+    """Батч плоских словарей: администратор, программа, год и валюта
+    развёрнуты, чтобы сосед не собирал их по трём таблицам, которых он
+    не видит; несуществующий id просто отсутствует в ответе."""
+    line = make_line()
+    other = make_line(budget=line.budget, program=make_program(name="Медицина"))
+
+    rows = interface.get_budget_lines_brief([line.pk, other.pk, 9999, line.pk])
+    assert all(not isinstance(row, Model) for row in rows)
+    by_id = {row["id"]: row for row in rows}
+    assert set(by_id) == {line.pk, other.pk}
+
+    brief = by_id[line.pk]
+    assert brief["administrator_id"] == line.budget.administrator_id
+    assert brief["administrator_name"] == line.budget.administrator.display_name
+    assert brief["administrator_is_active"] is True
+    assert brief["program_name"] == line.program.display_name
+    assert brief["period_year"] == line.budget.period_year
+    assert brief["currency"] == line.budget.currency
+    assert brief["budget_status"] == BudgetStatus.ACTIVE
+
+
+@pytest.mark.django_db
+def test_budget_lines_brief_reports_closed_budget_and_inactive_admin():
+    """Сосед отбивает закрытый бюджет и снятого администратора по этим
+    двум флагам — сам он до ``status``/``is_active`` дотянуться не может."""
+    closed = make_line()
+    closed.budget.status = BudgetStatus.CLOSED
+    closed.budget.save(update_fields=["status"])
+    retired = make_line(administrator=make_administrator(project_name="Проект Б"),
+                        program=make_program(name="Медицина"))
+    retired.budget.administrator.is_active = False
+    retired.budget.administrator.save(update_fields=["is_active"])
+
+    by_id = {row["id"]: row
+             for row in interface.get_budget_lines_brief([closed.pk, retired.pk])}
+    assert by_id[closed.pk]["budget_status"] == BudgetStatus.CLOSED
+    assert by_id[retired.pk]["administrator_is_active"] is False
+
+
+@pytest.mark.django_db
+def test_budget_lines_brief_empty_input_is_empty_list():
+    assert interface.get_budget_lines_brief([]) == []
+    assert interface.get_budget_lines_brief([None]) == []

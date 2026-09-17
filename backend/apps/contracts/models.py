@@ -638,6 +638,16 @@ class Agreement(signoff.Approvable, models.Model):
     status = models.CharField(max_length=20, choices=AgreementStatus.choices,
                               default=AgreementStatus.DRAFT,
                               db_default=AgreementStatus.DRAFT)
+    # Заявка конструктора «Запросы» (``apps.approvals.RequestInstance``), по
+    # которой заключён договор. Голый id, не FK — межаппный ключ запрещён
+    # (тот же приём, что ``Administrator.project_id``). Владелец связи —
+    # договор: он ссылается на заявку так же, как на строку бюджета, и
+    # обязан ссылаться на ТУ ЖЕ строку, под которую заявку одобрили
+    # (``services/request_link.py``).
+    request_id = models.IntegerField(
+        null=True, blank=True, db_index=True,
+        verbose_name="Заявка на закуп",
+    )
     created_by = models.IntegerField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
@@ -719,6 +729,12 @@ class Invoice(signoff.Approvable, models.Model):
     status = models.CharField(max_length=20, choices=InvoiceStatus.choices,
                               default=InvoiceStatus.DRAFT,
                               db_default=InvoiceStatus.DRAFT)
+    # Та же связь с заявкой, что у договора (см. ``Agreement.request_id``):
+    # прямая закупка по счёту — второй способ исполнить одобренную заявку.
+    request_id = models.IntegerField(
+        null=True, blank=True, db_index=True,
+        verbose_name="Заявка на закуп",
+    )
     created_by = models.IntegerField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
