@@ -286,6 +286,53 @@ def test_a_company_without_tasks_still_appears_with_zeros(two_companies):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_a_company_whose_rows_all_fail_the_filters_stays_with_zeros(two_companies):
+    """Строки ЕСТЬ, но ни одна не проходит статусный фильтр — компания
+    обязана остаться в сводке с нулями.
+
+    Это не тот же случай, что ``t-beta`` (там строк нет вовсе), и держит он
+    ровно одно решение сервиса: условия по статусу стоят внутри
+    ``Count(filter=...)``, а НЕ в ``filter()`` выборки. Перенеси их в
+    ``filter()`` — и у этой компании все четыре выборки станут пустыми,
+    слаг не попадёт в объединение, и завод, где законсервированы все
+    объекты, ТИХО исчезнет со сводного экрана вместо того, чтобы показать
+    там четыре нуля. Разница между «ноль» и «нет строки» — это разница
+    между «работы встали» и «компании нет».
+
+    Отчёты гасятся здесь вместе с остальным намеренно: они фильтруются по
+    ``is_deleted`` в самой выборке (мягко удалённых как бы нет), поэтому
+    живой отчёт удержал бы слаг в объединении сам по себе и сделал бы
+    проверку нечувствительной к переносу статусных условий.
+    """
+    from apps.tasks.models import (
+        DailyReport, Project, ProjectStatus, Site, SiteStatus, Status, Task,
+    )
+
+    with use_company("t-alpha"):
+        Project.objects.update(status=ProjectStatus.ARCHIVED)
+        Site.objects.update(status=SiteStatus.CLOSED)
+        Task.objects.update(status=Status.DONE)
+        DailyReport.objects.update(is_deleted=True)
+        # Строки на месте — исчезать в сводке нечему.
+        assert Project.objects.count() == 4
+        assert Site.objects.count() == 3
+        assert Task.objects.count() == 7
+        assert DailyReport.objects.count() == 3
+
+    rows = projects_by_company()
+    assert "t-alpha" in {r["company_slug"] for r in rows}, (
+        "компания со строками, но без активных, ПРОПАЛА из сводки — "
+        "статусное условие уехало из Count(filter=...) в filter() выборки"
+    )
+    alpha = _row(rows, "t-alpha")
+    assert alpha["projects_active"] == 0
+    assert alpha["sites_active"] == 0
+    assert alpha["tasks_open"] == 0
+    assert alpha["tasks_overdue"] == 0
+    assert alpha["reports_last_date"] is None
+
+
+@pytest.mark.django_db(transaction=True)
 def test_keys_are_exactly_the_agreed_set(two_companies):
     """Точное сравнение множества ключей — контракт со схемой ручки."""
     for row in projects_by_company():
