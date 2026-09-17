@@ -48,14 +48,23 @@ def test_empty_role_is_counted():
 
 @pytest.mark.django_db
 def test_roles_with_delete_are_counted():
-    """Удаление — разрушающее право, и рост числа таких ролей стоит видеть."""
+    """Удаление — разрушающее право, и рост числа таких ролей стоит видеть.
+
+    Счёт ведётся от засеянного состояния, как и в ``test_empty_role_is_
+    counted`` выше: ``platform-admin`` (0002) даёт удаление на каждом
+    модуле, а с блока I («Свернуть параллельный RBAC», задача 1, миграция
+    ``access/0005_seed_hr_level_roles``) к нему добавились ``hr-senior`` и
+    ``hr-lead`` — обе несут ``can_delete`` на части узлов ``hr.*``
+    (см. ``apps/hr/legacy_roles.py``). Абсолютное число поэтому не
+    заморожено — фиксируем только ПРИРОСТ от тестовых фикстур.
+    """
+    before = metrics.collect()["access_roles_with_delete"]["values"][0][1]
     destructive = Role.objects.create(code="god", title="Всё")
     grant(destructive, "hr", "full")
     harmless = Role.objects.create(code="mixed", title="Смешанная")
     grant(harmless, "hr", "edit")
 
-    # Засеянная platform-admin тоже даёт удаление — считаем вместе с ней.
-    assert metrics.collect()["access_roles_with_delete"]["values"] == [((), 2)]
+    assert metrics.collect()["access_roles_with_delete"]["values"] == [((), before + 1)]
 
 
 @pytest.mark.django_db
