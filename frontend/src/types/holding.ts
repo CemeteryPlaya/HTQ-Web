@@ -21,14 +21,17 @@ export interface HoldingHeadcountRow {
   departments_active: number;
   positions_active: number;
   staffing_headcount: number;
-  staffing_payroll: number;
+  /** ФОНД оплаты труда — `Sum(headcount * salary)` по строкам штатного
+   * расписания, а НЕ сумма окладов. Название несёт это специально (см.
+   * докстринг `apps.hr.services.holding_service.headcount_by_company`). */
+  staffing_payroll_fund: number;
 }
 
 export interface HoldingHeadcountTotals {
   employees_active: number;
   employees_total: number;
   staffing_headcount: number;
-  staffing_payroll: number;
+  staffing_payroll_fund: number;
 }
 
 export interface HoldingHeadcount {

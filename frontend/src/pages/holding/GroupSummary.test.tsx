@@ -36,11 +36,11 @@ const HEADCOUNT_OK = {
   companies: [{
     company_slug: 'hi-tech-group', company_name: 'Hi-Tech Group LTD',
     employees_active: 12, employees_total: 13, departments_active: 5,
-    positions_active: 14, staffing_headcount: 14.0, staffing_payroll: 7000000.0,
+    positions_active: 14, staffing_headcount: 14.0, staffing_payroll_fund: 7000000.0,
   }],
   totals: {
     employees_active: 12, employees_total: 13,
-    staffing_headcount: 14.0, staffing_payroll: 7000000.0,
+    staffing_headcount: 14.0, staffing_payroll_fund: 7000000.0,
   },
 };
 
@@ -171,9 +171,9 @@ describe('GroupSummary', () => {
         companies: [{
           company_slug: 'hi-tech-group', company_name: 'Hi-Tech Group LTD',
           employees_active: 12, employees_total: 13, departments_active: 5,
-          positions_active: 14, staffing_headcount: 14.0, staffing_payroll: 7000000.0,
+          positions_active: 14, staffing_headcount: 14.0, staffing_payroll_fund: 7000000.0,
         }],
-        totals: { employees_active: 12, employees_total: 13, staffing_headcount: 14.0, staffing_payroll: 7000000.0 },
+        totals: { employees_active: 12, employees_total: 13, staffing_headcount: 14.0, staffing_payroll_fund: 7000000.0 },
       },
     });
     projects.mockResolvedValue({
@@ -209,7 +209,7 @@ describe('GroupSummary', () => {
     // Компания есть только в tasks-ответе: домен hr для неё — прочерк, не ноль.
     expect(tasksCells[1].textContent).toBe('— / —'); // employees active/total
     expect(tasksCells[2].textContent).toBe('—'); // staffing_headcount
-    expect(tasksCells[3].textContent).toBe('—'); // staffing_payroll
+    expect(tasksCells[3].textContent).toBe('—'); // staffing_payroll_fund
     expect(tasksCells[4].textContent).toBe('3'); // projects_active — своё, настоящее
   });
 });

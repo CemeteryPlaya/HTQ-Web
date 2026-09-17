@@ -60,7 +60,7 @@ interface MergedRow {
   employeesActive: number | null;
   employeesTotal: number | null;
   staffingHeadcount: number | null;
-  staffingPayroll: number | null;
+  staffingPayrollFund: number | null;
   projectsActive: number | null;
   sitesActive: number | null;
   tasksOpen: number | null;
@@ -71,7 +71,7 @@ interface MergedRow {
 function emptyRow(slug: string, name: string): MergedRow {
   return {
     slug, name,
-    employeesActive: null, employeesTotal: null, staffingHeadcount: null, staffingPayroll: null,
+    employeesActive: null, employeesTotal: null, staffingHeadcount: null, staffingPayrollFund: null,
     projectsActive: null, sitesActive: null, tasksOpen: null, tasksOverdue: null, reportsLastDate: null,
   };
 }
@@ -118,10 +118,16 @@ const GroupSummary = () => {
   const headcountQuery = useQuery({
     queryKey: ['holding', 'headcount'],
     queryFn: async () => (await holdingApi.headcount()).data,
+    // 403 (не с поддомена холдинга) и 503 (сводки пересобираются) —
+    // детерминированные ответы, три повтора с задержкой их не лечат и
+    // только держат пользователя на скелете дольше, чем нужно (см. тот же
+    // приём в usePermissions.ts/RequireAuth.tsx/ProfileSidebar.tsx).
+    retry: false,
   });
   const projectsQuery = useQuery({
     queryKey: ['holding', 'projects'],
     queryFn: async () => (await holdingApi.projects()).data,
+    retry: false,
   });
 
   const isLoading = headcountQuery.isLoading || projectsQuery.isLoading;
@@ -140,7 +146,7 @@ const GroupSummary = () => {
       merged.employeesActive = row.employees_active;
       merged.employeesTotal = row.employees_total;
       merged.staffingHeadcount = row.staffing_headcount;
-      merged.staffingPayroll = row.staffing_payroll;
+      merged.staffingPayrollFund = row.staffing_payroll_fund;
       bySlug.set(row.company_slug, merged);
     }
     for (const row of projectsQuery.data?.companies ?? []) {
@@ -270,7 +276,7 @@ const GroupSummary = () => {
                         {formatNumber(row.employeesActive)} / {formatNumber(row.employeesTotal)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{formatNumber(row.staffingHeadcount)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatNumber(row.staffingPayroll)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatNumber(row.staffingPayrollFund)}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatNumber(row.projectsActive)}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatNumber(row.sitesActive)}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatNumber(row.tasksOpen)}</TableCell>
@@ -303,7 +309,7 @@ const GroupSummary = () => {
                         {formatNumber(headcountTotals?.staffing_headcount ?? null)}
                       </TableCell>
                       <TableCell className="text-right font-semibold tabular-nums">
-                        {formatNumber(headcountTotals?.staffing_payroll ?? null)}
+                        {formatNumber(headcountTotals?.staffing_payroll_fund ?? null)}
                       </TableCell>
                       <TableCell className="text-right font-semibold tabular-nums">
                         {formatNumber(projectsTotals?.projects_active ?? null)}

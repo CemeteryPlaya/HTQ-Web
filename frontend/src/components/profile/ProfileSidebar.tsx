@@ -338,11 +338,27 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     }, [t, hrManager, hasHrAccess, admin, level]);
 
     const adminItems: ItemConfig[] = useMemo(() => {
-        if (!admin) return [];
-        return [
-            { id: 'admin-users', to: '/admin/users', icon: UserCog, label: t('profile.sidebar.manageUsers', 'Управление пользователями') },
-            { id: 'companies', to: '/companies', icon: Building2, label: t('profile.sidebar.companies', 'Компании группы') },
-            { id: 'holding', to: '/holding', icon: LayoutDashboard, label: t('profile.sidebar.holding', 'Сводка группы') },
+        // «Сводка группы» держит СВОЙ гейт, отдельный от остального списка:
+        // маршрут /holding и обе ручки-читателя требуют только `hr:read`
+        // (routeDefinitions.ts: `requires: { module: 'hr', level: 'read' }`),
+        // а не уровень платформенного администратора — тот же уровень, что
+        // уже открывает кадровые пункты в hrItems выше (`hrManager`). Держать
+        // ссылку видимой только для `admin` пряталo бы её от кадрового
+        // руководителя холдинга, которому сервер отвечает 200. Место пункта
+        // в списке — то же, что и раньше (внутри adminItems, между
+        // «Компании группы» и «Роли и права»): меняется условие показа, а не
+        // местоположение.
+        if (!admin && !hrManager) return [];
+        const items: ItemConfig[] = [];
+        if (admin) {
+            items.push(
+                { id: 'admin-users', to: '/admin/users', icon: UserCog, label: t('profile.sidebar.manageUsers', 'Управление пользователями') },
+                { id: 'companies', to: '/companies', icon: Building2, label: t('profile.sidebar.companies', 'Компании группы') },
+            );
+        }
+        items.push({ id: 'holding', to: '/holding', icon: LayoutDashboard, label: t('profile.sidebar.holding', 'Сводка группы') });
+        if (!admin) return items;
+        items.push(
             // Каталог ролей. Страница существовала с самой стадии 2, но ссылки
             // на неё не было нигде — до неё можно было добраться только набрав
             // адрес руками, то есть для всех, кроме автора, её не существовало.
@@ -359,8 +375,9 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
                 badge: <ExternalLink className="h-3 w-3 text-muted-foreground" />,
                 external: true,
             },
-        ];
-    }, [t, admin]);
+        );
+        return items;
+    }, [t, admin, hrManager]);
 
     const monitoringItems: ItemConfig[] = useMemo(() => {
         if (!admin) return [];
