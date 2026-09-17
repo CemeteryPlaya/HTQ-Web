@@ -104,6 +104,21 @@ Two conventions every `interface.py` function follows:
 - **Return plain `dict`/`str`/`bool`/`list`, never ORM model instances.** A neighbour must not be
   able to mutate another app's rows just because it happened to get a live object back.
 
+`apps/<domain>/approval_hooks.py` registers the app's rows with the single
+approval engine (`signoff.register_subject` from `AppConfig.ready()`). Two
+apps have one: `contracts` (9 document types) and `approvals` (the form
+builder's `RequestInstance`). Copy whichever is closer — `approvals` if your
+rows need a route **per subject group** (`Subject.scope_of` → one route per
+form template) or approvers named by the object itself.
+
+A third convention shows up wherever a caller has *many* ids to resolve: **batch, not loop**
+(`users.get_users_brief(ids)`, `contracts.get_budget_lines_brief(ids)`). The caller collects
+ids from the whole request first and asks once — a per-row interface call is an N+1 across an
+app boundary. Whether the caller may *degrade* when the neighbour is off is the caller's call,
+not the interface's: `apps.approvals` swallows `ServiceDisabled` for display names
+(`services/hydration.py`) but lets it through when the answer decides whether a request may be
+submitted at all (`services/budget_line_refs.py`, the `budget_line_ref` form widget).
+
 ### 2. API layer is `htqweb.http.api_view`, not Django REST Framework
 
 ```python
@@ -267,6 +282,16 @@ signoff.register_subject(
 ```
 Then `makemigrations <domain>` for the `approval_state` column the mixin contributes — it lands
 in **your** table, so no cross-domain FK is created.
+
+The optional callbacks come in **pairs**, and `register_subject` refuses one without the other:
+`fact_fields`/`facts` (what the editor may branch on / the values at start),
+`approver_fields`/`approvers` (keys the editor may pick for a "subject" stage / who they resolve
+to), `scopes`/`scope_of`, and `requirement_fields`/`check_requirement` — what a stage may
+*require of the object* before it closes, and whether it is done (`None`) or why not (a human
+sentence that becomes the 409). The last pair is how a stage becomes a **working step** rather
+than a checkbox: `approvals` answers with its `filled_by: "approver"` fields, so «Поиск
+поставщика» cannot be approved until «Поставщик» is filled in. Reference:
+`apps/approvals/approval_hooks.py`.
 
 Three things that trip people up:
 

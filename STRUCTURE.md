@@ -70,13 +70,13 @@ HTQWeb1/
 | **users** | `api/users/v1/` | `users` | Identity, JWT issuer+validator, профиль, регистрация, админ-юзеры, items |
 | **hr** | `api/hr/v1/` | `hr` | Сотрудники, отделы, должности, вакансии, табель, документы, аудит, оргдерево, PMO |
 | **tasks** | `api/tasks/v1/` | `tasks` | Workflow-движок Jira+SharePoint (см. §4.2) |
-| **approvals** | `api/requests/v1/` | `approvals` | ⭐ Lark-style конструктор форм + workflow согласований (см. §3.4). Префикс URL (`requests`) и app_label (`approvals`) сознательно расходятся — см. `apps/approvals/urls.py` докстринг |
+| **approvals** | `api/requests/v1/` | `approvals` | ⭐ Lark-style конструктор форм и реестр заявок (см. §3.4); согласует их `signoff`. Префикс URL (`requests`) и app_label (`approvals`) сознательно расходятся — см. `apps/approvals/urls.py` докстринг |
 | **cms** | `api/cms/v1/` | `cms` | Новости, категории/теги, contact-requests, ConferenceConfig |
 | **media_files** | `api/media/v1/` | `media` | ⭐ Общее файловое хранилище — единая точка входа для аватарок, HR-документов, вложений мессенджера и почты (см. §7.1). `AppConfig.label = "media_files"`, но реестр знает его как `media` |
 | **mail** | `api/email/v1/` | `mail` | Дуальная почта: Mailcow + OAuth Gmail/Outlook (см. §4.1) |
 | **messenger** | `api/messenger/v1/` | `messenger` | Чат, Socket.IO (ASGI), presence, E2EE-ключи |
 | **contracts** | `api/contracts/v1/` | `contracts` | Бюджеты (программа × статья расходов × администратор), реестр контрагентов, договоры с контролем остатка бюджета (см. §3.5). Единственная аппка, появившаяся уже после обратной миграции — FastAPI-предка у неё нет |
-| **signoff** | `api/signoff/v1/` | `signoff` | ⭐ Универсальное многоэтапное согласование ЧУЖИХ объектов (см. §3.6). **Не путать с `approvals`**: та согласует собственные `RequestInstance` из своего конструктора форм, эта — строки в таблицах предметных аппок |
+| **signoff** | `api/signoff/v1/` | `signoff` | ⭐ **Единственный движок согласования** платформы: многоэтапное согласование ЧУЖИХ строк — документов `contracts` и заявок `approvals` (см. §3.6) |
 | **conference** | `api/conference/v1/` | `conference` | ⭐ История видеоконференций, записи и протокол (см. §5). Данные заводит SFU через `internal/*`, а не пользователь |
 
 Полный список канонических имён сервисов — `apps.core.models.KNOWN_SERVICES`. Имя `conference` долго стояло там «про запас», под SFU-стек без своей Django-аппки; теперь аппка есть (`apps.conference`, §5), и флаг гейтит уже её маршруты.
@@ -125,14 +125,20 @@ cd backend
 ```
 Подробный чек-лист и объяснение каждого шага — [backend/README.md](./backend/README.md).
 
-### 3.4 Approvals — Lark-style approval-движок
+### 3.4 Approvals — конструктор форм и реестр заявок
 
-`apps.approvals` (URL-префикс `api/requests/v1/`, app_label `approvals`) — конструктор **форм + цепочек согласования** (no-code), вдохновлён Lark Approvals. Самый большой перенесённый домен Потока B.
+`apps.approvals` (URL-префикс `api/requests/v1/`, app_label `approvals`) — no-code конструктор **форм**, вдохновлён Lark Approvals, и реестр поданных по ним заявок. Самый большой перенесённый домен Потока B.
 
-- **Сервисы (`apps/approvals/services/`):** `workflow_engine.py` + `workflow_schema.py` (исполнение цепочки), `form_schema.py`/`template_validation.py`/`value_validation.py`/`template_data_table.py`/`template_settings.py` (формы и справочники), `condition_eval.py` (ветвления), `assignee_resolver.py` (кто согласует), `dispatch.py` (рассылка уведомлений), `instance_service.py`/`request_runtime.py`, `hydration.py`, `permissions.py`, `stats_rollup.py`, `audit.py`, `sse.py` (поток `/stream`).
-- **Роуты:** `instances/` (+ `batch-approve`, `<id>/submit|resubmit|approve|reject|request-changes|cancel|recall`), `templates/` (+ `versions`, `preview`, `activate`/`deactivate`), `projects/` (+ `members`), `stats/{overview,by-project,by-template,by-actor,heatmap}`, `reference-sources/` (Lark-Base-style справочники, + `rows/`, `access`, `my-data-tables`, `by-slug/<slug>/options`), `stream` (SSE).
+**Собственного движка согласования у неё больше нет.** Заявку (`RequestInstance`) согласует `apps.signoff` — тот же движок, что согласует договоры: модель наследует `signoff.Approvable`, регистрируется в `apps/approvals/approval_hooks.py` из `ApprovalsConfig.ready()` и получает результат колбэками, которые двигают её `status`. Маршрут живёт в signoff **в области шаблона** (`scope = template:<id>`): у отпуска и у закупа согласующие разные, хотя тип объекта один. Отсюда:
+
+- **`status` и `approval_state` — две оси**, как у договора: первая про жизненный цикл заявки, вторая про место в согласовании (и она же запирает правку — `assert_editable`);
+- **`workflow_json` больше не исполняется.** Он остаётся в старых версиях шаблонов ради истории и конвертера `manage.py migrate_workflows_to_signoff`, который переводит графы в маршруты signoff и перезапускает заявки, застигнутые «на согласовании»;
+- **факты для ветвления — поля формы**, а у виджета `budget_line_ref` ещё и администратор/программа/страна бюджета (через `contracts.interface`), так что маршрут закупа ветвится «по администратору бюджета», не зная про contracts ничего.
+
+- **Сервисы (`apps/approvals/services/`):** `form_schema.py`/`template_validation.py`/`value_validation.py`/`template_data_table.py`/`template_settings.py` (формы и справочники), `budget_line_refs.py` (виджет строки бюджета — единственная дверь в contracts), `instance_service.py`/`request_runtime.py` (черновик и отправка в signoff), `hydration.py`, `permissions.py`, `stats_rollup.py`, `audit.py`, `sse.py` (поток `/stream`, публикация — из колбэка `on_event`). Наследие старого движка: `workflow_engine.py`/`workflow_schema.py`/`condition_eval.py`/`assignee_resolver.py` — их читает только конвертер `workflow_convert.py`.
+- **Роуты:** `instances/` (+ `<id>/submit|resubmit` — отдают карточку процесса signoff; решения принимаются в `/api/signoff/v1/tasks/*`), `templates/` (+ `versions`, `preview`, `activate`/`deactivate`), `projects/` (+ `members`), `stats/{overview,by-project,by-template,by-actor,heatmap}`, `reference-sources/` (Lark-Base-style справочники, + `rows/`, `access`, `my-data-tables`, `by-slug/<slug>/options`), `stream` (SSE).
 - **SSE:** `/api/requests/v1/stream` обслуживается **ASGI-процессом** (`backend-asgi`) через обычную async-вьюху (`StreamingHttpResponse`), не через `asgi.py`-обёртку — см. `apps/approvals/urls.py`.
-- **Frontend:** [frontend/src/features/requests/](frontend/src/features/requests/) + [frontend/src/api/requests.ts](frontend/src/api/requests.ts) — без изменений.
+- **Frontend:** [frontend/src/features/requests/](frontend/src/features/requests/) + [frontend/src/api/requests.ts](frontend/src/api/requests.ts). Шаг «Маршрут» конструктора шаблона — тот же `RouteEditorPanel`, что и на `/signoff/routes/:id` (`TemplateRoutePanel`); карточка заявки использует общие с договорами `SubmitForApproval` и `SubjectProcesses`.
 
 ### 3.5 Contracts — бюджеты, контрагенты, договоры
 
@@ -161,7 +167,28 @@ cd backend
 
 `apps.signoff` (URL-префикс `api/signoff/v1/`) — движок согласования, который ничего не знает о предметных аппках. Frontend — [frontend/src/pages/signoff/](frontend/src/pages/signoff/) (инбокс, список и карточка процесса, редактор маршрутов) + [frontend/src/api/signoff.ts](frontend/src/api/signoff.ts).
 
-**Чем отличается от `apps.approvals`.** У `approvals` единица согласования — `RequestInstance`, строка с JSON-значениями формы, которую она же и спроектировала; указать ею на существующий `Budget` невозможно. `signoff` согласует строку в ЧУЖОЙ таблице, адресуя её парой `(subject_type, subject_id)` — `"contracts.budget"` + pk. Ни `ContentType`, ни междоменного FK: `ContentType` дал бы обходной путь к чужим моделям через `content_type.model_class()`.
+**Единственный движок согласования платформы.** Согласует и документы
+`contracts`, и заявки конструктора `apps.approvals` — она осталась
+конструктором форм и реестром заявок, своего движка у неё больше нет
+(её `RequestInstance` наследует `signoff.Approvable`, регистрируется в
+`apps/approvals/approval_hooks.py` и получает результат колбэками). Единица
+согласования у signoff — строка в ЧУЖОЙ таблице, адресуемая парой
+`(subject_type, subject_id)`: `"contracts.budget"` + pk, `"approvals.request"`
++ pk. Ни `ContentType`, ни междоменного FK: `ContentType` дал бы обходной
+путь к чужим моделям через `content_type.model_class()`.
+
+**Область маршрута (`scope`).** Активный маршрут — один на пару
+`(subject_type, scope)`. Пустая область значит «весь тип» (так живут
+договоры); непустую называет сама аппка (`Subject.scope_of`) — у заявок это
+`template:<id>`, по маршруту на шаблон формы. Схема фактов и ключи
+«назначает объект» спрашиваются ПО области: у каждой формы свои поля.
+
+**Четыре вида согласующих** (`ApproverKind`): `position` — HR-должности
+(разворачиваются в активных сотрудников на запуске), `initiator` — тот, кто
+отправил, `users` — люди, названные поимённо в маршруте, `subject` —
+согласующих называет сам объект по ключу из `Subject.approver_fields`
+(«администраторы проекта», «из поля формы „Руководитель“»). У этапа
+заполнена настройка ровно своего вида — чужая отбивается 409 на сохранении.
 
 **Как перевёрнута зависимость.** Движок не имеет права импортировать `apps.contracts.models`, но обязан уметь две вещи с чужим объектом: сообщить ему результат и показать его человеку. Поэтому предметная аппка сама приходит из `AppConfig.ready()` и отдаёт `signoff.register_subject(...)` три вещи: **класс модели** (signoff ведёт на нём свою колонку `approval_state`), **колбэки** доменных последствий и **`describe`** — способ построить заголовок и ссылку. Импорт идёт только в сторону `contracts → signoff.interface`.
 
