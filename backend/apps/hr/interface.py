@@ -175,6 +175,71 @@ def get_positions_brief(position_ids: list[int]) -> list[dict]:
     ]
 
 
+def list_positions_hr_levels(limit: int = 5000) -> list[dict]:
+    """Должности текущей компании плюс их HR-уровень — для переноса ролей.
+
+    Единственный потребитель — ``apps.access`` (команда переноса кадровых
+    уровней в роли должностей, ``access_backfill_positions``, блок I задача
+    2): сама эвристика уровня (``apps.hr.access.classify_hr_level``) — это
+    HR-домен, и соседняя аппка не вправе ни импортировать её напрямую
+    (``apps/core/tests/test_app_isolation.py``), ни повторить у себя — риск
+    задачи явно требует не изобретать свою эвристику.
+
+    ``hr_level`` каждой должности посчитан ТЕМ ЖЕ порядком, что
+    ``resolve_hr_access`` резолвит его для живого токена:
+
+    1. Явный ``Position.permissions["hr_level"]`` — действует и без
+       держателя вовсе (должность ещё не занята, но уровень уже назначен).
+    2. Иначе — один из держателей должности (действующая, не мягко
+       удалённая запись ``Employee``; при нескольких — первый по ``id``,
+       детерминированно) и по НЕЙ ``classify_hr_level``, которая сама
+       повторяет п.1 для карточки держателя и только потом падает на
+       эвристику по названию должности/отдела — тот же порядок, что видит
+       обычный запрос.
+
+    ``None``, если ни explicit-переопределения, ни держателя, по которому
+    угадать, нет — перенос не должен выдумывать доступ там, где сегодня его
+    ни у кого нет.
+
+    Действует в контексте ТЕКУЩЕЙ компании, как ``substitutes_for``/
+    ``participant_position``: вызывающий сам входит в схему нужной компании
+    через ``htqweb.tenancy.db.use_company``.
+    """
+    require_service("hr")
+    from apps.hr.access import _level_from_permissions, classify_hr_level
+
+    positions = list(Position.objects.all().order_by("id")[:limit])
+    if not positions:
+        return []
+
+    holder_by_position: dict[int, Employee] = {}
+    holders = (
+        Employee.objects.filter(
+            is_deleted=False, position_id__in=[p.id for p in positions],
+        )
+        .select_related("department", "position")
+        .order_by("position_id", "id")
+    )
+    for employee in holders:
+        holder_by_position.setdefault(employee.position_id, employee)
+
+    result = []
+    for position in positions:
+        holder = holder_by_position.get(position.id)
+        level = (
+            classify_hr_level(holder)
+            if holder is not None
+            else _level_from_permissions(position)
+        )
+        result.append({
+            "id": position.id,
+            "title": position.title,
+            "is_active": position.is_active,
+            "hr_level": level,
+        })
+    return result
+
+
 def resolve_position_users(position_ids: list[int]) -> dict[int, list[int]]:
     """Resolve HR positions to their current, usable platform accounts.
 
