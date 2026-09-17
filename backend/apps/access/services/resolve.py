@@ -42,8 +42,28 @@ def _known_modules() -> list[str]:
     return list(KNOWN_SERVICES)
 
 
-def _position_role_ids(user_id: int, company: str) -> list[int]:
-    """Роли штатной должности пользователя. Пусто, если карточки нет."""
+def _position_role_ids(
+    user_id: int, company: str
+) -> list[tuple[int, str, int | None]]:
+    """Роли штатной должности пользователя, уже с готовой областью.
+
+    До задачи 1b возвращала только ``role_id`` — область должностной роли
+    была безусловной константой (``COMPANY``), считать её было нечего.
+    Теперь у ``PositionRole`` есть ``scope_kind``, а ``DEPARTMENT``
+    резолвится по ДЕРЖАТЕЛЮ (докстринг ``PositionRole.scope_kind``) — то есть
+    нужен ``department_id`` из ТОЙ ЖЕ карточки ``brief``, которая здесь уже
+    читается ради ``position_id``. Отдавать наружу только id и вычислять
+    область вторым проходом значило бы либо второй запрос карточки, либо
+    протаскивать ``brief`` как отдельный параметр в ``_role_scopes`` — оба
+    варианта хуже, чем вернуть готовую тройку (id, kind, scope_id) один раз,
+    здесь же, где карточка и так под рукой. Имя оставлено прежним — вызывающая
+    сторона (``_role_scopes``) всё ещё про роли ЭТОЙ должности, просто с
+    результатом разбора, а не голыми id.
+
+    Пусто, если карточки нет: без неё неизвестен ни ``position_id``, ни
+    отдел держателя, и назначать роли этой должности вслепую значило бы
+    выдать их тому, у кого нет даже основания их получить.
+    """
     try:
         from apps.hr import interface as hr
 
@@ -59,11 +79,31 @@ def _position_role_ids(user_id: int, company: str) -> list[int]:
         return []
     if brief is None or brief.get("position_id") is None:
         return []
-    return list(
+
+    department_id = brief.get("department_id")
+    result: list[tuple[int, str, int | None]] = []
+    for role_id, scope_kind in (
         PositionRole.objects
         .filter(company_slug=company, position_id=brief["position_id"])
-        .values_list("role_id", flat=True)
-    )
+        .values_list("role_id", "scope_kind")
+    ):
+        if scope_kind == ScopeKind.COMPANY:
+            result.append((role_id, ScopeKind.COMPANY, None))
+        elif scope_kind == ScopeKind.DEPARTMENT:
+            if department_id is None:
+                # Держатель без отдела — не должно случаться (``hr.Employee.
+                # department`` обязательное поле), но резолвер прав не должен
+                # доверять этому вслепую: честно ничего не выдаём этой роли,
+                # а не молча подставляем COMPANY-призрак.
+                continue
+            result.append((role_id, ScopeKind.DEPARTMENT, department_id))
+        else:
+            # ScopeKind.SITE и любые будущие значения: сегодняшняя карточка
+            # держателя не несёт site_id, посчитать «свой объект» нечем.
+            # Пропускаем роль (fail closed), а не расширяем её до COMPANY —
+            # ровно то расширение, ради устранения которого заведено поле.
+            continue
+    return result
 
 
 def _role_scopes(
@@ -71,15 +111,26 @@ def _role_scopes(
 ) -> tuple[dict[int, tuple[str, int | None]], tuple[str, ...]]:
     """``role_id`` → область, с которой роль досталась пользователю, + источники.
 
-    Должностная роль действует на всю компанию: область сужается только личным
-    назначением.
+    Область должностной роли задаёт ``PositionRole.scope_kind`` (задача 1b):
+    ``COMPANY`` по умолчанию — область не сужается вовсе, ``DEPARTMENT`` —
+    отдел ДЕРЖАТЕЛЯ, а не должности (докстринг модели). ``_position_role_ids``
+    уже отдаёт готовую пару область/id — здесь она только раскладывается в
+    карту по ``role_id``.
 
     Наследованные роли (``apps.access.services.inheritance`` — должность
-    вышестоящей компании, помеченная обслуживающей) добавляются в карту ДО
-    личных назначений: обе они дают область ``company`` — самую широкую из
-    возможных, — поэтому личное назначение способно эту область только
-    сохранить, но не сузить (``_SCOPE_WIDTH`` сравнивает `` > ``, а не `` >= ``,
-    и не даёт более узкой области переписать уже найденную широкую).
+    вышестоящей компании, помеченная обслуживающей) добавляются в карту ПОСЛЕ
+    должностных ролей БЕЗУСЛОВНОЙ перезаписью (``scopes.update``, а не через
+    ``_SCOPE_WIDTH``): наследование всегда даёт ``company`` — самую широкую из
+    возможных областей (``inheritance.inherit`` — «сузить нельзя, у человека
+    нет отдела в чужой компании»), — поэтому безусловная перезапись и есть
+    «шире побеждает» даже тогда, когда должностная роль того же ``role_id``
+    была ``DEPARTMENT``: более узкой области пережить объединение с самой
+    широкой неоткуда.
+
+    Личные назначения (``RoleAssignment``) идут ПОСЛЕДНИМИ и уже сравниваются
+    через ``_SCOPE_WIDTH`` (сравнивает `` > ``, а не `` >= ``): более узкое
+    назначение не переписывает то, что должность или наследование уже дали
+    шире.
 
     Второй элемент — слаги предков, чья обслуживающая должность фактически
     дала хоть одну роль (``inheritance.Inherited.sources``, задача 6 блока C):
@@ -93,8 +144,8 @@ def _role_scopes(
 
     user_id, _ = identity(user)
     scopes: dict[int, tuple[str, int | None]] = {
-        role_id: (ScopeKind.COMPANY, None)
-        for role_id in _position_role_ids(user_id, company)
+        role_id: (kind, scope_id)
+        for role_id, kind, scope_id in _position_role_ids(user_id, company)
     }
     inherited = inheritance.inherit(user_id, company)
     scopes.update(inherited.scopes)

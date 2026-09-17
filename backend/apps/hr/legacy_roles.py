@@ -74,23 +74,32 @@ KEY_TO_NODE: dict[str, tuple[str, tuple[str, ...]]] = {
     # (``ScopeKind.DEPARTMENT``/``COMPANY``), а не признак: у ``Role``/
     # ``RolePermission`` (``apps/access/models.py``) области нет вовсе, она
     # появляется только там, где роль ВЫДАЮТ — ``PositionRole``/
-    # ``RoleAssignment``. Причём штатная выдача (``PositionRole``) всегда
-    # резолвится в ``ScopeKind.COMPANY`` целиком, независимо от роли
-    # (``apps/access/services/resolve.py::_role_scopes`` — «Должностная роль
-    # действует на всю компанию: область сужается только личным
-    # назначением»); у`же` область меньше компании получают только через
-    # ``RoleAssignment`` со своим ``scope_kind``. Это ЗА ПРЕДЕЛАМИ задачи 1
-    # (она сеет только ``Role``/``RolePermission``, без единой выдачи) —
-    # поэтому решение здесь: обе клавиши ведут на один и тот же узел с одним
-    # и тем же признаком VIEW (агрегат по узлу от этого не меняется — VIEW
-    # уже даёт EMPLOYEES_VIEW на junior, EMPLOYEES_VIEW_ALL на senior ничего
-    # нового к признакам не добавляет), а РЕКОМЕНДАЦИЯ по выдаче — в докстринге
-    # ниже и в отчёте: ``hr-junior``/``hr-middle`` выдавать
-    # ``RoleAssignment(scope_kind=ScopeKind.DEPARTMENT)``, ``hr-senior``/
+    # ``RoleAssignment``. Задача 1b того же блока дала штатной выдаче
+    # (``PositionRole``) собственное поле ``scope_kind`` именно ради этой
+    # пары уровней: «свой отдел» резолвится по ДЕРЖАТЕЛЮ должности
+    # (``apps/access/services/resolve.py::_position_role_ids`` — из его же
+    # кадровой карточки на каждый запрос), а не записывается конкретным id
+    # при выдаче. Выразить «свой отдел» через ``RoleAssignment`` с пустым
+    # ``scope_id`` НЕЛЬЗЯ — это запрещает ``CheckConstraint
+    # assignment_scope_id_matches_kind`` (``apps/access/models.py``):
+    # ``DEPARTMENT`` там обязан нести конкретный ``scope_id``, а «свой» — это
+    # как раз ОТСУТСТВИЕ заранее известного id, поэтому личное назначение для
+    # этого не подходит ни по конструкции. Само значение ``scope_kind`` для
+    # каждой роли — ЗА ПРЕДЕЛАМИ задачи 1 (она сеет только ``Role``/
+    # ``RolePermission``, без единой выдачи) — поэтому решение здесь: обе
+    # клавиши ведут на один и тот же узел с одним и тем же признаком VIEW
+    # (агрегат по узлу от этого не меняется — VIEW уже даёт EMPLOYEES_VIEW на
+    # junior, EMPLOYEES_VIEW_ALL на senior ничего нового к признакам не
+    # добавляет), а РЕКОМЕНДАЦИЯ по выдаче — задаче 2 того же блока:
+    # ``hr-junior``/``hr-middle`` заводить
+    # ``PositionRole(scope_kind=ScopeKind.DEPARTMENT)``, ``hr-senior``/
     # ``hr-lead`` — обычным ``PositionRole`` (область ``COMPANY`` по
-    # умолчанию). Проверяется тем, что подмена не меняет посчитанный по узлу
-    # набор признаков ни на одном уровне (см. ``test_each_role_reproduces_
-    # the_level_it_replaces`` и ``test_roles_grow_monotonically``).
+    # умолчанию, как и раньше). Проверяется тем, что подмена не меняет
+    # посчитанный по узлу набор признаков ни на одном уровне (см.
+    # ``test_each_role_reproduces_the_level_it_replaces`` — сверяет
+    # ГЕЙТ-УРОВЕНЬ, не область; область при ``scope_kind=DEPARTMENT``
+    # проверяет отдельно ``apps/access/tests/test_position_role_scope.py`` —
+    # и ``test_roles_grow_monotonically``).
     legacy.EMPLOYEES_VIEW_ALL: ("hr.employees", VIEW),
     legacy.EMPLOYEES_CREATE: ("hr.employees", CREATE),
     legacy.EMPLOYEES_EDIT: ("hr.employees", EDIT),

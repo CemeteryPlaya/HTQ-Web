@@ -145,7 +145,15 @@ def test_each_role_reproduces_the_level_it_replaces():
     роли, посчитать по ним модульный уровень (``depth.legacy_level`` по
     поддереву узлов модуля ``hr``) и сверить с EXPECTED_LEGACY_LEVEL,
     выписанным вручную выше. Роль, дающая МЕНЬШЕ прежнего, запрёт людей;
-    дающая БОЛЬШЕ — откроет лишнее."""
+    дающая БОЛЬШЕ — откроет лишнее.
+
+    Сверяет только ГЕЙТ-УРОВЕНЬ (набор признаков по узлам, спроецированный в
+    read/write/admin) — область («свой отдел» у junior/middle против «вся
+    компания» у senior/lead, ``PositionRole.scope_kind`` из задачи 1b) этот
+    тест не трогает вовсе: она не входит ни в ``Role``, ни в
+    ``RolePermission``, которые сеет задача 1, а появляется только там, где
+    роль ВЫДАЮТ. Проверка области — отдельным файлом,
+    ``apps/access/tests/test_position_role_scope.py``."""
     _seed()
     for level, role_code in legacy_roles.ROLE_CODES.items():
         subtree: frozenset[str] = frozenset()
