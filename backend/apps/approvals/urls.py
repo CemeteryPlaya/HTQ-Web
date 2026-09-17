@@ -18,21 +18,16 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # Instances. ``batch-approve`` is registered BEFORE the
-    # ``<int:instance_id>`` routes so a later converter change can never let
-    # the id pattern swallow it.
+    # Instances.
+    # Решения (approve/reject/request-changes/cancel/recall/batch-approve)
+    # отсюда убраны: согласует apps.signoff (/api/signoff/v1/tasks/*).
     path("instances/", views.instances_collection),
-    path("instances/batch-approve", views.batch_approve),
-    path("instances/batch-approve/", views.batch_approve),
     path("instances/<int:instance_id>", views.instance_detail),
     path("instances/<int:instance_id>/", views.instance_detail),
+    path("instances/<int:instance_id>/stage-values/", views.stage_values),
+    path("instances/<int:instance_id>/stage-values", views.stage_values),
     path("instances/<int:instance_id>/submit/", views.submit_instance),
     path("instances/<int:instance_id>/resubmit/", views.resubmit_instance),
-    path("instances/<int:instance_id>/approve/", views.approve),
-    path("instances/<int:instance_id>/reject/", views.reject),
-    path("instances/<int:instance_id>/request-changes/", views.request_changes),
-    path("instances/<int:instance_id>/cancel/", views.cancel),
-    path("instances/<int:instance_id>/recall/", views.recall),
 
     # SSE. The frontend's EventSource hits ``stream?token=…`` with no
     # trailing slash; the slashed alias is registered per this repo's
@@ -68,6 +63,10 @@ urlpatterns = [
     # Statistics. Registered without a trailing slash first (the frontend's
     # own client calls these bare, per the FastAPI original's router), plus
     # the slashed alias per this repo's "register both spellings" rule.
+    # Личная сводка — до общих разрезов: она для всех, остальные под
+    # ``admin=True``.
+    path("stats/mine", views.stats_mine),
+    path("stats/mine/", views.stats_mine),
     path("stats/overview", views.stats_overview),
     path("stats/overview/", views.stats_overview),
     path("stats/by-project", views.stats_by_project),

@@ -35,8 +35,7 @@ from htqweb import date_rules
 from htqweb.http import api_view, json_error
 
 from . import schemas
-from .services import dispatch, instance_service, permissions, sse
-from .services import request_runtime as rr
+from .services import instance_service, personal_stats, permissions, sse
 from .services import template_data_table
 from .services.request_runtime import Forbidden, RuntimeConflict, RuntimeRejected
 from .services.template_validation import validate_template_version
@@ -115,7 +114,8 @@ def instances_collection(request):
 
 @api_view(methods=("GET",))
 def _get_instance(request, instance_id: int):
-    return _instance(instance_service.get_or_404(instance_id))
+    return _instance(instance_service.get_visible_or_404(instance_id,
+                                                         token=request.token))
 
 
 @api_view(methods=("PATCH",), body=schemas.InstanceUpdate)
@@ -133,98 +133,55 @@ def instance_detail(request, instance_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("POST",))
+# Поля согласующего — заполняются НА СОГЛАСОВАНИИ тем, чей рабочий шаг идёт
+# (закупщик: поставщик, сумма). Отдельный ресурс, а не PATCH заявки: тот —
+# для инициатора и заперт замком согласования, здесь же замок и есть
+# условие доступа.
+
+@api_view(methods=("GET",))
+@runtime_errors
+def _stage_values_get(request, instance_id: int):
+    return schemas.StageValuesRead.model_validate(
+        instance_service.stage_fillable(instance_id, token=request.token))
+
+
+@api_view(methods=("PATCH",), body=schemas.StageValuesUpdate)
+@runtime_errors
+def _stage_values_patch(request, instance_id: int, data: schemas.StageValuesUpdate):
+    return _instance(instance_service.fill_stage_values(
+        instance_id, data.values, token=request.token))
+
+
+def stage_values(request, instance_id: int):
+    if request.method == "GET":
+        return _stage_values_get(request, instance_id=instance_id)
+    if request.method == "PATCH":
+        return _stage_values_patch(request, instance_id=instance_id)
+    return _method_not_allowed(request)
+
+
+# Отправка отдаёт КАРТОЧКУ ПРОЦЕССА signoff, а не заявку: отправка — это
+# запуск согласования, и её результат — процесс (тот же контракт, что у
+# ``/submit`` в contracts). Обновлённую заявку клиент перечитывает: её
+# статус изменил колбэк движка, а не эта вьюха.
+
+@api_view(methods=("POST",), status=201)
 @runtime_errors
 def submit_instance(request, instance_id: int):
-    return _instance(instance_service.submit(instance_id, token=request.token))
+    return instance_service.submit(instance_id, token=request.token)
 
 
-@api_view(methods=("POST",))
+@api_view(methods=("POST",), status=201)
 @runtime_errors
 def resubmit_instance(request, instance_id: int):
-    return _instance(instance_service.submit(instance_id, token=request.token,
-                                             resubmit=True))
+    return instance_service.submit(instance_id, token=request.token,
+                                   resubmit=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# Approver actions — /instances/{id}/{approve,reject,...}/
-# ─────────────────────────────────────────────────────────────────────────
-
-def _act(request, instance_id: int, action: str, comment: str):
-    instance = instance_service.get_or_404(instance_id)
-    rr.act(instance, approver_id=request.token.user_id, action=action,
-           comment=comment)
-    instance.refresh_from_db()
-    return _instance(instance)
-
-
-@api_view(methods=("POST",), body=schemas.ActionRequest)
-@runtime_errors
-def approve(request, instance_id: int, data: schemas.ActionRequest):
-    return _act(request, instance_id, "approve", data.comment)
-
-
-@api_view(methods=("POST",), body=schemas.ActionRequest)
-@runtime_errors
-def reject(request, instance_id: int, data: schemas.ActionRequest):
-    return _act(request, instance_id, "reject", data.comment)
-
-
-@api_view(methods=("POST",), body=schemas.ActionRequest)
-@runtime_errors
-def request_changes(request, instance_id: int, data: schemas.ActionRequest):
-    return _act(request, instance_id, "request_changes", data.comment)
-
-
-@api_view(methods=("POST",), body=schemas.ActionRequest)
-@runtime_errors
-def cancel(request, instance_id: int, data: schemas.ActionRequest):
-    instance = instance_service.get_or_404(instance_id)
-    rr.cancel(instance, actor_id=request.token.user_id,
-              is_elevated=request.token.is_elevated)
-    instance.refresh_from_db()
-    return _instance(instance)
-
-
-@api_view(methods=("POST",), body=schemas.ActionRequest)
-@runtime_errors
-def recall(request, instance_id: int, data: schemas.ActionRequest):
-    instance = instance_service.get_or_404(instance_id)
-    rr.recall(instance, approver_id=request.token.user_id)
-    instance.refresh_from_db()
-    return _instance(instance)
-
-
-@api_view(methods=("POST",), body=schemas.BatchActionRequest)
-def batch_approve(request, data: schemas.BatchActionRequest):
-    """Approve many requests in one call.
-
-    Per-item error handling, not all-or-nothing: the original returns a
-    result row per id so the UI can show which ones went through. Each item
-    is attempted independently and its failure reported, never raised.
-    """
-    from .models import RequestInstance
-    from .services.template_settings import settings_for_instance
-
-    results = []
-    for instance_id in data.ids:
-        instance = RequestInstance.objects.filter(pk=instance_id).first()
-        if instance is None:
-            results.append({"id": instance_id, "ok": False,
-                            "error": "not found"})
-            continue
-        if not settings_for_instance(instance)["allow_batch"]:
-            results.append({"id": instance_id, "ok": False,
-                            "error": "batch disabled"})
-            continue
-        try:
-            rr.act(instance, approver_id=request.token.user_id,
-                   action="approve", comment=data.comment)
-            results.append({"id": instance_id, "ok": True})
-        except (Forbidden, RuntimeConflict, RuntimeRejected) as exc:
-            results.append({"id": instance_id, "ok": False,
-                            "error": str(exc)})
-    return {"results": results}
+# Решения по заявке (одобрить / отклонить / вернуть / отозвать / batch)
+# больше не живут здесь: согласование ведёт ``apps.signoff``, и фронтенд ходит
+# в ``/api/signoff/v1/tasks/*`` и ``/processes/*`` — так же, как по договорам.
+# Заявка получает результат колбэками ``approval_hooks``.
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -562,7 +519,30 @@ def _date_param(request, name: str):
         return None, json_error(f"Invalid date for '{name}': {raw!r}", 422)
 
 
+# ── Статистика ────────────────────────────────────────────────────────
+#
+# ЛИЧНАЯ сводка доступна каждому и всегда про самого себя; ОБЩИЕ разрезы —
+# только администратору (``admin=True``). Раньше общие вьюхи гейта не имели
+# вовсе: страница /requests/stats пряталась ролью на фронте, но эндпоинты
+# отвечали любому — включая ``stats/by-actor``, то есть «кто сколько подал»
+# по всей компании. Фронт зовёт их ровно с той админской страницы, так что
+# гейт ничего законного не ломает.
+
 @api_view(methods=("GET",))
+def stats_mine(request):
+    """Личная аналитика: только заявки вызывающего.
+
+    Пользователь берётся из токена и ниоткуда больше — параметра «чья
+    статистика» у этой ручки нет по замыслу.
+    """
+    since, err = _date_param(request, "since")
+    if err is not None:
+        return err
+    return schemas.MyStatsRead.model_validate(
+        personal_stats.for_user(request.token.user_id, since=since))
+
+
+@api_view(methods=("GET",), admin=True)
 def stats_overview(request):
     from .models import RequestInstance
 
@@ -586,7 +566,7 @@ def stats_overview(request):
     return {"from": frm.isoformat(), "to": end.isoformat(), "by_status": by_status}
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), admin=True)
 def stats_by_project(request):
     from .models import RequestInstance, RequestProject, RequestStatus
 
@@ -626,7 +606,7 @@ def stats_by_project(request):
     }
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), admin=True)
 def stats_by_template(request):
     from .models import RequestInstance
 
@@ -671,7 +651,7 @@ def stats_by_template(request):
     ]
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), admin=True)
 def stats_by_actor(request):
     from .models import ApprovalAction, RequestInstance
 
@@ -700,12 +680,32 @@ def stats_by_actor(request):
                 .order_by("-count")[:limit])
         id_field = "initiator_id"
     else:
-        rows = (ApprovalAction.objects.filter(acted_at__isnull=False)
-                .values("approver_id")
-                .annotate(count=Count("id"),
-                         approved=Coalesce(Sum(Case(
-                             When(action="approve", then=Value(1)), default=Value(0))), 0))
-                .order_by("-count")[:limit])
+        # Решения по заявкам ведёт signoff; строки ``ApprovalAction`` — история
+        # старого движка, и она суммируется с новыми, чтобы статистика не
+        # обнулилась в день переезда.
+        from apps.core.services import ServiceDisabled
+        from apps.signoff import interface as signoff
+
+        merged: dict[int, dict] = {}
+        try:
+            fresh = signoff.decision_stats(RequestInstance.SIGNOFF_SUBJECT_TYPE,
+                                           limit=limit)
+        except ServiceDisabled:
+            fresh = []
+        for row in fresh:
+            merged[row["user_id"]] = {"count": row["count"], "approved": row["approved"]}
+        legacy = (ApprovalAction.objects.filter(acted_at__isnull=False)
+                  .values("approver_id")
+                  .annotate(count=Count("id"),
+                            approved=Coalesce(Sum(Case(
+                                When(action="approve", then=Value(1)), default=Value(0))), 0)))
+        for row in legacy:
+            bucket = merged.setdefault(int(row["approver_id"]), {"count": 0, "approved": 0})
+            bucket["count"] += int(row["count"])
+            bucket["approved"] += int(row["approved"])
+        rows = sorted(({"approver_id": user_id, **bucket}
+                       for user_id, bucket in merged.items()),
+                      key=lambda row: -row["count"])[:limit]
         id_field = "approver_id"
 
     return [
@@ -720,7 +720,7 @@ def stats_by_actor(request):
     ]
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), admin=True)
 def stats_heatmap(request):
     from .models import RequestStatsDaily
 
@@ -782,7 +782,7 @@ async def stream(request):
         return json_error(str(exc), 401)
 
     response = StreamingHttpResponse(
-        sse.event_stream(dispatch.sse_channel(user_id)),
+        sse.event_stream(sse.sse_channel(user_id)),
         content_type="text/event-stream",
     )
     response["Cache-Control"] = "no-cache"
