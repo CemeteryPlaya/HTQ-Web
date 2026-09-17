@@ -58,6 +58,15 @@ resolve._position_role_ids`` читает ``PositionRole`` на каждом б�
 переноса. Должность без какого-либо сигнала об уровне (нет ни явного
 ``hr_level``, ни держателя, по которому угадать) роли не получает: перенос
 не выдумывает прав.
+
+⚠️ Раунд правок 1: должность с НЕСКОЛЬКИМИ держателями может сегодня давать
+им РАЗНЫЙ уровень (``Employee.department`` — независимый FK, эвристика
+``classify_hr_level`` смотрит в т.ч. на отдел держателя). Правило выбора роли
+для такой должности не меняется (по-прежнему первый держатель по ``id`` —
+``apps.hr.interface.list_positions_hr_levels``), но расхождение печатается
+ОТДЕЛЬНОЙ категорией сводки, рядом с конфликтом: человек на бою обязан
+увидеть, что для этой должности перенос выбирал МЕЖДУ уровнями, а не
+подтверждённое согласие всех держателей. Разбор — руками, не автоматикой.
 """
 
 from __future__ import annotations
@@ -104,6 +113,14 @@ class _Conflict:
 
 
 @dataclass
+class _Divergence:
+    position_id: int
+    title: str
+    holder_levels: tuple[str | None, ...]
+    chosen_level: str | None
+
+
+@dataclass
 class _CompanyStats:
     slug: str
     total: int = 0
@@ -111,6 +128,7 @@ class _CompanyStats:
     already_correct: int = 0
     skipped_no_level: int = 0
     conflicts: list[_Conflict] = field(default_factory=list)
+    divergent: list[_Divergence] = field(default_factory=list)
 
     @property
     def granted(self) -> int:
@@ -201,6 +219,19 @@ class Command(BaseCommand):
 
             for position in positions:
                 level = position["hr_level"]
+
+                # Расхождение печатается НЕЗАВИСИМО от того, что случится с
+                # ролью дальше (создана/уже верна/конфликт/пропуск): если
+                # первый держатель не даёт уровня (level is None), а другой
+                # держатель этой же должности его даёт, должность будет
+                # пропущена ниже — и это ЕЩЁ важнее увидеть в сводке, не
+                # только сам факт разногласия.
+                if position["divergent"]:
+                    stats.divergent.append(_Divergence(
+                        position_id=position["id"], title=position["title"],
+                        holder_levels=position["holder_levels"], chosen_level=level,
+                    ))
+
                 if level is None:
                     stats.skipped_no_level += 1
                     continue
@@ -235,10 +266,15 @@ class Command(BaseCommand):
 
     def _print_company_summary(self, stats: _CompanyStats, dry_run: bool) -> None:
         prefix = "[dry-run] " if dry_run else ""
+        divergent_note = (
+            f", расхождений по держателям {len(stats.divergent)}"
+            if stats.divergent else ""
+        )
         self.stdout.write(self.style.SUCCESS(
             f"{prefix}Компания {stats.slug}: должностей всего {stats.total}, "
             f"роль назначена {stats.granted} (создано сейчас {stats.created}, "
-            f"уже было верно {stats.already_correct}), пропущено {stats.skipped}."
+            f"уже было верно {stats.already_correct}), пропущено {stats.skipped}"
+            f"{divergent_note}."
         ))
         if stats.skipped_no_level:
             self.stdout.write(
@@ -251,13 +287,23 @@ class Command(BaseCommand):
                 f"«{conflict.title}» уже несёт {', '.join(conflict.existing_codes)}, "
                 f"перенос вычислил {conflict.target_code} — не тронуто, решите вручную."
             ))
+        for divergence in stats.divergent:
+            levels = ", ".join(level or "нет уровня" for level in divergence.holder_levels)
+            chosen = divergence.chosen_level or "нет уровня (должность пропущена)"
+            self.stdout.write(self.style.WARNING(
+                f"  - расхождение по держателям: должность #{divergence.position_id} "
+                f"«{divergence.title}» — держатели дают разные уровни: {levels}; "
+                f"для роли взят {chosen} (первый держатель по id) — проверьте вручную."
+            ))
 
     def _print_grand_summary(self, all_stats: list[_CompanyStats], dry_run: bool) -> None:
         prefix = "[dry-run] " if dry_run else ""
         total = sum(s.total for s in all_stats)
         granted = sum(s.granted for s in all_stats)
         skipped = sum(s.skipped for s in all_stats)
+        divergent = sum(len(s.divergent) for s in all_stats)
+        divergent_note = f", расхождений по держателям {divergent}" if divergent else ""
         self.stdout.write(self.style.SUCCESS(
             f"{prefix}ИТОГО по {len(all_stats)} компаниям: должностей {total}, "
-            f"роль назначена {granted}, пропущено {skipped}."
+            f"роль назначена {granted}, пропущено {skipped}{divergent_note}."
         ))

@@ -175,7 +175,7 @@ def get_positions_brief(position_ids: list[int]) -> list[dict]:
     ]
 
 
-def list_positions_hr_levels(limit: int = 5000) -> list[dict]:
+def list_positions_hr_levels() -> list[dict]:
     """Должности текущей компании плюс их HR-уровень — для переноса ролей.
 
     Единственный потребитель — ``apps.access`` (команда переноса кадровых
@@ -184,6 +184,14 @@ def list_positions_hr_levels(limit: int = 5000) -> list[dict]:
     HR-домен, и соседняя аппка не вправе ни импортировать её напрямую
     (``apps/core/tests/test_app_isolation.py``), ни повторить у себя — риск
     задачи явно требует не изобретать свою эвристику.
+
+    Без лимита/пагинации НАМЕРЕННО (раунд правок 1 задачи 2): единственный
+    вызывающий — одноразовый перенос данных, и для него полнота — это
+    единственная гарантия, ради которой он написан. Обрезанный молча список
+    напечатал бы честную на вид сводку по НЕПОЛНОМУ множеству должностей —
+    перенос выглядел бы завершённым, не будучи им. Функция внутренняя
+    (``apps.hr.interface``, не публичный HTTP-путь), зовётся один раз за
+    прогон команды на одну компанию — постранично тут нечего разбивать.
 
     ``hr_level`` каждой должности посчитан ТЕМ ЖЕ порядком, что
     ``resolve_hr_access`` резолвит его для живого токена:
@@ -201,6 +209,20 @@ def list_positions_hr_levels(limit: int = 5000) -> list[dict]:
     угадать, нет — перенос не должен выдумывать доступ там, где сегодня его
     ни у кого нет.
 
+    ``divergent``/``holder_levels`` (раунд правок 1 задачи 2): ``Employee.
+    department`` — независимый FK, не связанный с ``Position.department``, а
+    ``classify_hr_level`` смотрит в том числе на отдел ДЕРЖАТЕЛЯ — то есть
+    сегодня, при живом резолве, два держателя ОДНОЙ должности МОГУТ иметь
+    разные уровни, каждый по своей карточке. Перенос ставит должности ОДНУ
+    роль (по правилу «первый держатель по id» — правило не меняется), но обязан
+    сделать расхождение ВИДИМЫМ, а не проглотить его: ``divergent=True`` и
+    ``holder_levels`` (отсортированный кортеж всех различных уровней,
+    встретившихся среди держателей этой должности, включая ``None``) — если
+    и только если у должности больше одного держателя и они дают больше
+    одного различного уровня. Пусто/``False`` иначе — в т.ч. всегда при
+    explicit-переопределении: оно не зависит от держателя, поэтому все
+    держатели такой должности неизбежно дают один и тот же уровень.
+
     Действует в контексте ТЕКУЩЕЙ компании, как ``substitutes_for``/
     ``participant_position``: вызывающий сам входит в схему нужной компании
     через ``htqweb.tenancy.db.use_company``.
@@ -208,11 +230,11 @@ def list_positions_hr_levels(limit: int = 5000) -> list[dict]:
     require_service("hr")
     from apps.hr.access import _level_from_permissions, classify_hr_level
 
-    positions = list(Position.objects.all().order_by("id")[:limit])
+    positions = list(Position.objects.all().order_by("id"))
     if not positions:
         return []
 
-    holder_by_position: dict[int, Employee] = {}
+    holders_by_position: dict[int, list[Employee]] = {}
     holders = (
         Employee.objects.filter(
             is_deleted=False, position_id__in=[p.id for p in positions],
@@ -221,21 +243,29 @@ def list_positions_hr_levels(limit: int = 5000) -> list[dict]:
         .order_by("position_id", "id")
     )
     for employee in holders:
-        holder_by_position.setdefault(employee.position_id, employee)
+        holders_by_position.setdefault(employee.position_id, []).append(employee)
 
     result = []
     for position in positions:
-        holder = holder_by_position.get(position.id)
-        level = (
-            classify_hr_level(holder)
-            if holder is not None
-            else _level_from_permissions(position)
-        )
+        position_holders = holders_by_position.get(position.id, [])
+        if position_holders:
+            level = classify_hr_level(position_holders[0])
+            holder_levels = tuple(sorted(
+                {classify_hr_level(holder) for holder in position_holders},
+                key=lambda value: (value is None, value),
+            ))
+        else:
+            level = _level_from_permissions(position)
+            holder_levels = ()
+
+        divergent = len(holder_levels) > 1
         result.append({
             "id": position.id,
             "title": position.title,
             "is_active": position.is_active,
             "hr_level": level,
+            "divergent": divergent,
+            "holder_levels": holder_levels if divergent else (),
         })
     return result
 

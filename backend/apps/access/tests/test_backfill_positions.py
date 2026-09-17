@@ -90,6 +90,19 @@ def test_scope_kind_matches_controller_decision():
     assert SCOPE_KIND_BY_LEVEL["lead"] == ScopeKind.COMPANY
 
 
+def test_list_positions_hr_levels_has_no_silent_truncation_limit():
+    """Раунд правок 1 (Important 2): функция раньше резала список должностей
+    ``[:limit]`` (умолчание 5000) — компания с большим числом должностей
+    получила бы честную на вид, но неполную сводку. Параметр убран вовсе, а
+    не просто увеличен: любой лимит здесь снова мог бы стать молчаливым."""
+    import inspect
+
+    from apps.hr import interface as hr
+
+    params = inspect.signature(hr.list_positions_hr_levels).parameters
+    assert "limit" not in params
+
+
 # ── Step 1: обязательные проверки брифа ─────────────────────────────────────
 
 
@@ -126,6 +139,41 @@ def test_heuristic_level_gets_role_with_department_scope(company_schema, capsys)
     # "специалист" -> middle marker в classify_hr_level.
     assert role.role.code == "hr-middle"
     assert role.scope_kind == ScopeKind.DEPARTMENT
+
+
+def test_divergent_holder_levels_are_flagged_but_do_not_change_the_rule(
+        company_schema, capsys):
+    """Раунд правок 1 (Important 1): два держателя ОДНОЙ должности дают
+    РАЗНЫЙ уровень (``Employee.department`` независим от ``Position.
+    department``, а эвристика смотрит на отдел держателя) — расхождение
+    обязано попасть в сводку отдельной категорией, а роль ставится по
+    прежнему правилу (первый держатель по id), которое НЕ меняется."""
+    _seed_roles()
+    slug = company_schema["slug"]
+    with use_company(slug):
+        # Заголовок должности НЕ несёт HR-маркеров сам по себе — только
+        # "специалист" (middle-маркер), поэтому is_hr решает ИМЕННО отдел
+        # держателя, а не название должности.
+        dep_hr = _department("Отдел кадров", "hr-div")       # "кадр" -> is_hr
+        dep_sales = _department("Продажи", "sales-div")       # без HR-маркеров
+        position = _position("Специалист", dep_hr, weight=25)
+        # Первый по id — держатель из HR-отдела -> classify_hr_level="middle".
+        _employee(position, dep_hr, "holder1@htq.test", first="А", last="Первый")
+        # Второй по id — держатель из отдела без HR-маркеров -> level=None.
+        _employee(position, dep_sales, "holder2@htq.test", first="Б", last="Второй")
+
+    _run(company=slug)
+
+    # Правило выбора роли не изменилось: взят первый держатель по id -> middle.
+    role = PositionRole.objects.get(company_slug=slug, position_id=position.id)
+    assert role.role.code == "hr-middle"
+
+    out = capsys.readouterr().out
+    assert "расхождение по держателям" in out
+    assert f"#{position.id}" in out
+    assert "middle" in out
+    assert "нет уровня" in out
+    assert "расхождений по держателям 1" in out
 
 
 def test_position_with_no_signal_gets_no_role(company_schema, capsys):
