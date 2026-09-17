@@ -26,6 +26,7 @@ from apps.signoff.models import (
     StageState,
     TaskState,
 )
+from apps.signoff import interface as signoff
 from apps.signoff.services import attachments, engine
 from apps.signoff.services import route_service as routes
 from apps.signoff.tests.helpers import (
@@ -493,3 +494,43 @@ def test_a_broken_media_does_not_break_the_process_card(monkeypatch):
 
     monkeypatch.setattr("apps.signoff.services.attachments.media.get_file_url", boom)
     assert attachments.file_url("stored-1") is None
+
+
+def test_the_brief_shows_what_is_attached_so_a_wrong_file_can_be_spotted(
+        client, stub_storage, monkeypatch):
+    """«Документ приложен» без имени и ссылки не даёт заметить, что ушёл не
+    тот счёт. Паспорт файла отвечает на «что именно», а не «есть ли»."""
+    monkeypatch.setattr("apps.signoff.services.attachments.media.get_file_meta",
+                        lambda file_id: {"filename": "schet-0187.pdf"})
+    author = make_user("author")
+    doc = make_doc()
+    make_route([(1, "Подпись", Quorum.ALL, [], SIGNATURE)])
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk,
+                           initiator_id=author.pk)
+    task = task_for(process, author.pk)
+    _attach(client, task.pk, user_token(author), name="schet-0187.pdf")
+    task.refresh_from_db()
+
+    brief = attachments.file_brief(task.file_id)
+    assert brief["filename"] == "schet-0187.pdf"
+    assert brief["url"] == f"https://files.test/{task.file_id}"
+
+    # Шаг отдаёт его же — тем, кто рисует панель «Ваш шаг».
+    step = signoff.pending_step(user_id=author.pk, subject_type=SUBJECT,
+                                subject_id=doc.pk)
+    assert step["file"]["filename"] == "schet-0187.pdf"
+
+
+def test_no_attachment_means_no_brief():
+    assert attachments.file_brief(None) is None
+    assert attachments.file_brief("") is None
+
+
+def test_a_nameless_file_still_gets_a_link(stub_storage, monkeypatch):
+    """Имя — оформление: media без паспорта не повод спрятать ссылку, по
+    которой документ можно открыть и проверить."""
+    monkeypatch.setattr("apps.signoff.services.attachments.media.get_file_meta",
+                        lambda file_id: None)
+    brief = attachments.file_brief("stored-9")
+    assert brief == {"file_id": "stored-9", "url": "https://files.test/stored-9",
+                     "filename": ""}

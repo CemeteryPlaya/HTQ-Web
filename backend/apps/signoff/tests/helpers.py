@@ -98,14 +98,15 @@ def make_doc(title: str = "Пробный документ", **fields) -> ProbeD
 
 
 def make_route(stages, *, subject_type: str = SUBJECT,
-               name: str = "Тестовый маршрут") -> ApprovalRoute:
+               name: str = "Тестовый маршрут", scope: str = "") -> ApprovalRoute:
     """Маршрут из описания ``[(order, name, quorum, [user_ids]), ...]``.
 
     Пятым элементом кортежа можно передать словарь остальных полей этапа
     (``condition``, ``is_fallback``) — необязательным, чтобы безусловные
     маршруты в тестах остались однострочными.
     """
-    route = ApprovalRoute.objects.create(subject_type=subject_type, name=name)
+    route = ApprovalRoute.objects.create(subject_type=subject_type, name=name,
+                                         scope=scope)
     for spec in stages:
         order, stage_name, quorum, user_ids = spec[:4]
         extra = spec[4] if len(spec) > 4 else {}
