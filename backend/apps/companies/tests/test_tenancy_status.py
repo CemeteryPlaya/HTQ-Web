@@ -51,3 +51,20 @@ def test_exact_mode_counts_rows(company_schema):
     schema = schema_for(company_schema["slug"])
     assert data["exact"] is True
     assert data["schemas"][schema]["tables"]["signoff_approvalroute"] == 0
+
+
+def test_tenant_tables_skip_holding_readers_but_keep_the_real_tables():
+    """Тот же сторож, что и у ``tenancy_bootstrap``: читатели холдинга
+    (``managed=False``, ``db_table`` совпадает с таблицей компании) не
+    таблицы и в слепке считаться не должны — иначе ``hr_employee`` и
+    ``tasks_task`` перечислялись бы в аппке дважды. Вторая проверка
+    обязательна: одно «нет дублей» прошло бы и на пустом списке."""
+    from apps.companies.management.commands.tenancy_status import tenant_tables
+
+    listed = tenant_tables()
+    for label, tables in listed.items():
+        assert len(tables) == len(set(tables)), (label, tables)
+    assert "hr_employee" in listed["hr"]
+    assert "tasks_task" in listed["tasks"]
+    assert "tasks_task_labels" in listed["tasks"]
+    assert "contracts_budget" in listed["contracts"]

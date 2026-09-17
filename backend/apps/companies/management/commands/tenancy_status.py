@@ -32,6 +32,15 @@ def tenant_tables() -> dict[str, list[str]]:
 
     ``include_auto_created=True`` — m2m-таблицы такие же носители данных, и
     забыть их значило бы не заметить их пропажу.
+
+    ``managed=False`` пропускается, как и proxy: модель без таблицы не
+    владеет ничем, считать у неё нечего. Единственные такие в проекте —
+    читатели холдинга (``apps/hr/holding_models.py``,
+    ``apps/tasks/holding_models.py``), чей ``db_table`` намеренно совпадает
+    с таблицей компании; без фильтра ``hr_employee`` перечислялась бы в
+    аппке дважды. Именно фильтр, а не ``set()``: дедупликация спрятала бы и
+    будущий случай двух managed-моделей на одной таблице, который сам по
+    себе баг и обязан быть виден.
     """
     out: dict[str, list[str]] = {}
     for label in settings.TENANT_APPS:
@@ -39,7 +48,7 @@ def tenant_tables() -> dict[str, list[str]]:
         out[label] = sorted(
             model._meta.db_table
             for model in config.get_models(include_auto_created=True)
-            if not model._meta.proxy
+            if not model._meta.proxy and model._meta.managed is not False
         )
     return out
 
