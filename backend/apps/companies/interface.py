@@ -33,7 +33,7 @@ import logging
 
 from django.core.cache import cache
 
-from .models import Company, CompanyMembership, CompanyModule, CompanyStatus
+from .models import Company, CompanyKind, CompanyMembership, CompanyModule, CompanyStatus
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,22 @@ def get_company(slug: str) -> dict | None:
 
     found = _cached(f"company:slug:{slug}", produce)
     return found or None
+
+
+def is_holding(slug: str) -> bool:
+    """Компания этого слага — холдинг (владеет долями остальных).
+
+    Предикат, а не выдача ``kind`` наружу: ``CompanyKind`` — деталь модели, и
+    её протечка за границу аппки ломает то же правило, что прямой импорт
+    чужих моделей. Ровно та же причина, по которой рядом отдаётся готовый
+    ``is_active``, а не сырой ``status``.
+
+    Неизвестный слаг — False, а не исключение: спрашивающий уже получил
+    компанию из контекста запроса, и «такой компании нет» значит для него
+    ровно «не холдинг».
+    """
+    company = get_company(slug)
+    return bool(company and company["kind"] == CompanyKind.HOLDING)
 
 
 def active_company_slugs(*, fresh: bool = False) -> list[str]:

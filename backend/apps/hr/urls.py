@@ -421,4 +421,8 @@ urlpatterns = [
     # реестр signoff.
     path("approvals/<str:subject_type>/<int:subject_id>/submit", views.submit_subject),
     path("approvals/<str:subject_type>/<int:subject_id>/submit/", views.submit_subject),
+
+    # ── holding — сводка по группе (блок H) ──────────────────────────────────
+    path("holding/headcount", views.holding_headcount),
+    path("holding/headcount/", views.holding_headcount),
 ]

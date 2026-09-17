@@ -28,7 +28,9 @@ from pydantic import ValidationError
 from htqweb import date_rules
 from htqweb.authn.rbac import require_admin
 from htqweb.http import api_view, json_error
+from htqweb.tenancy.context import current_company_or_none
 
+from apps.companies import interface as companies
 from apps.mail import interface as mail_interface
 from apps.signoff import interface as signoff
 from apps.users import interface as users_interface
@@ -59,6 +61,7 @@ from .services import employee_card_t2_service as card_t2_svc
 from .services import employee_groups_service as groups_svc
 from .services import employee_prefill_service as prefill_svc
 from .services import employee_service as emp_svc
+from .services import holding_service as holding_svc
 from .services import org_service
 from .services import personnel_history_service as ph_svc
 from .services import pmo_service as pmo_svc
@@ -3276,3 +3279,81 @@ def submit_subject(request, subject_type: str, subject_id: int):
         # Ни у одного из трёх нет .detail (см. apps/signoff/services/engine.py) —
         # str(exc) несёт текст, который движок сформировал для человека.
         return json_error(str(exc), 409)
+
+
+# ── /holding/headcount — сводка по группе (блок H) ───────────────────────────
+
+def _deny_unless_holding(request):
+    """Сводка по всей группе доступна только с поддомена холдинга.
+
+    Обычная кадровая проверка (``hr_access.require_hr_access``) знает только
+    уровень доступа ВЫЗЫВАЮЩЕГО в его собственной компании и ничего не знает
+    про ВИД этой компании: без этой сверки директор дочернего общества с
+    обычным HR-доступом читал бы численность и ФОТ соседних компаний группы.
+
+    Платформенный администратор проходит всегда — у него и так есть доступ к
+    любой схеме через django-admin, и запрет здесь создал бы лишь
+    впечатление защиты.
+    """
+    if request.token.is_superuser:
+        return None
+    slug = current_company_or_none()
+    if slug and companies.is_holding(slug):
+        return None
+    return json_error("Сводка по группе доступна только на поддомене холдинга", 403)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def holding_headcount(request):
+    """Люди, структура и штат по каждой действующей компании группы.
+
+    Авторизация НЕ ретрофитит новый ``apps.access`` гейт на HR (тест
+    ``apps.access.tests.test_gate::test_gate_is_declared_but_not_hung_anywhere``
+    держит его не навешенным ни на одну существующую ручку этой аппки до
+    отдельной переделки HR) — здесь тот же ``hr_access.require_hr_access``,
+    что и у соседних ручек домена. Поверх него — свой гейт по виду компании
+    (``_deny_unless_holding``): тонкая вьюха, гейт → гейт → сервис → форма
+    ответа.
+
+    ``HoldingViewsUnavailable`` (``migrate_companies`` временно сносит
+    представления) — 503, а не 500 и не 200 с нулями: директор обязан понять,
+    что это «сводки пересобираются», а не «в группе никого нет».
+
+    Имена компаний добавляются к строкам сервиса из реестра
+    (``apps.companies.interface.get_company``) — сам сервис отдаёт только
+    слаг, у него нет и не должно быть доступа к таблице ``Company``.
+    """
+    try:
+        hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+
+    denied = _deny_unless_holding(request)
+    if denied is not None:
+        return denied
+
+    try:
+        rows = holding_svc.headcount_by_company()
+    except holding_svc.HoldingViewsUnavailable as exc:
+        return json_error(str(exc), 503)
+
+    company_rows = [
+        schemas.HoldingCompanyRow(
+            company_slug=row["company_slug"],
+            company_name=companies.get_company(row["company_slug"])["name"],
+            employees_active=row["employees_active"],
+            employees_total=row["employees_total"],
+            departments_active=row["departments_active"],
+            positions_active=row["positions_active"],
+            staffing_headcount=row["staffing_headcount"],
+            staffing_payroll=row["staffing_payroll"],
+        )
+        for row in rows
+    ]
+    totals = schemas.HoldingTotals(
+        employees_active=sum(r.employees_active for r in company_rows),
+        employees_total=sum(r.employees_total for r in company_rows),
+        staffing_headcount=sum(r.staffing_headcount for r in company_rows),
+        staffing_payroll=sum(r.staffing_payroll for r in company_rows),
+    )
+    return schemas.HoldingHeadcountOut(companies=company_rows, totals=totals)

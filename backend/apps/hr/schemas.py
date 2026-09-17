@@ -1028,3 +1028,38 @@ class IdentityApproverRequest(BaseModel):
     руководителю отдела (спека §6.2)."""
 
     user_id: int | None = None
+
+
+# ── сводка по группе (блок H) — GET /holding/headcount ──────────────────────
+
+class HoldingCompanyRow(BaseModel):
+    """Одна строка сводки — действующая компания группы.
+
+    Форма — 1:1 с ``apps.hr.services.holding_service.headcount_by_company()``
+    плюс ``company_name`` из реестра (сервис отдаёт только слаг, имена не его
+    забота)."""
+
+    company_slug: str
+    company_name: str
+    employees_active: int
+    employees_total: int
+    departments_active: int
+    positions_active: int
+    staffing_headcount: float
+    staffing_payroll: float
+
+
+class HoldingTotals(BaseModel):
+    """Сумма строк сводки. Только те поля, что осмысленно складывать —
+    ``departments_active``/``positions_active`` каждой компании про свою
+    структуру, а не про группу, поэтому в totals их нет."""
+
+    employees_active: int
+    employees_total: int
+    staffing_headcount: float
+    staffing_payroll: float
+
+
+class HoldingHeadcountOut(BaseModel):
+    companies: list[HoldingCompanyRow]
+    totals: HoldingTotals

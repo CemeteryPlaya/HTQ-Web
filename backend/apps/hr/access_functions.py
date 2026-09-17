@@ -38,4 +38,6 @@ FUNCTIONS = (
     ("hr.share_links", "Публичные ссылки"),
     ("hr.pmo", "PMO"),
     ("hr.archive", "Архив сотрудников"),
+
+    ("hr.holding", "Кадры: сводка по группе", ("view",)),
 )
