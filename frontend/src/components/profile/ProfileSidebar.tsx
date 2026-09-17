@@ -42,6 +42,7 @@ import {
     X,
     ChevronRight,
     Volume2,
+    LayoutDashboard,
     type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -341,6 +342,7 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
         return [
             { id: 'admin-users', to: '/admin/users', icon: UserCog, label: t('profile.sidebar.manageUsers', 'Управление пользователями') },
             { id: 'companies', to: '/companies', icon: Building2, label: t('profile.sidebar.companies', 'Компании группы') },
+            { id: 'holding', to: '/holding', icon: LayoutDashboard, label: t('profile.sidebar.holding', 'Сводка группы') },
             // Каталог ролей. Страница существовала с самой стадии 2, но ссылки
             // на неё не было нигде — до неё можно было добраться только набрав
             // адрес руками, то есть для всех, кроме автора, её не существовало.

@@ -99,6 +99,8 @@ export const lazyPages = {
   // иерархию несёт должность, а не роль.
   AccessRoleCatalog: React.lazy(() => import('@/pages/access/RoleCatalog')),
   CompanyRegistry: React.lazy(() => import('@/pages/companies/CompanyRegistry')),
+  // Сводка по группе (блок H): headcount + работы по всем компаниям холдинга.
+  GroupSummary: React.lazy(() => import('@/pages/holding/GroupSummary')),
   // Standalone-обёртки (HRLayout вокруг голого фрагмента-вкладки) — по
   // прямому URL эти страницы раньше открывались без шапки и навигации,
   // см. src/pages/hr/recruitmentStandalone.tsx.
