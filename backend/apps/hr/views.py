@@ -3366,7 +3366,7 @@ def holding_headcount(request):
             departments_active=row["departments_active"],
             positions_active=row["positions_active"],
             staffing_headcount=row["staffing_headcount"],
-            staffing_payroll=row["staffing_payroll"],
+            staffing_payroll_fund=row["staffing_payroll_fund"],
         )
         for row in rows
     ]
@@ -3374,6 +3374,6 @@ def holding_headcount(request):
         employees_active=sum(r.employees_active for r in company_rows),
         employees_total=sum(r.employees_total for r in company_rows),
         staffing_headcount=sum(r.staffing_headcount for r in company_rows),
-        staffing_payroll=sum(r.staffing_payroll for r in company_rows),
+        staffing_payroll_fund=sum(r.staffing_payroll_fund for r in company_rows),
     )
     return schemas.HoldingHeadcountOut(companies=company_rows, totals=totals)

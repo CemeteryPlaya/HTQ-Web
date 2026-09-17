@@ -1046,7 +1046,7 @@ class HoldingCompanyRow(BaseModel):
     departments_active: int
     positions_active: int
     staffing_headcount: float
-    staffing_payroll: float
+    staffing_payroll_fund: float
 
 
 class HoldingTotals(BaseModel):
@@ -1057,7 +1057,7 @@ class HoldingTotals(BaseModel):
     employees_active: int
     employees_total: int
     staffing_headcount: float
-    staffing_payroll: float
+    staffing_payroll_fund: float
 
 
 class HoldingHeadcountOut(BaseModel):

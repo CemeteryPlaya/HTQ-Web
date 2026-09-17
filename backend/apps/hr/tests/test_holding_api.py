@@ -274,8 +274,14 @@ def test_missing_registry_row_falls_back_to_slug_instead_of_500(client, two_comp
 @pytest.mark.django_db(transaction=True)
 def test_totals_equal_the_sum_of_the_rows(client, two_companies):
     """Числа посчитаны вручную по фикстуре, а не тем же выражением, что в
-    сервисе: holding — 1 активный/1.0 штат/200000.00 ФОТ, child — 2
-    активных/3.0 штат/90000.00 ФОТ."""
+    сервисе: ``staffing_payroll_fund`` — ФОНД (``headcount * salary`` по
+    строке), а не сумма окладов. holding — 1 активный/1.0 штат/
+    1.0×200000.00=200000.00 ФОТ, child — 2 активных/3.0 штат/
+    3.0×90000.00=270000.00 ФОТ. Совпадение holding-строки со старой формулой
+    (``sum(salary)``) — совпадение именно ЭТОЙ строки (её headcount и есть
+    1.0); child-строка (headcount=3.0) отличает формулы: 90000.00 против
+    270000.00, поэтому итог по группе (470000.0) отличается от того, что
+    дала бы старая формула (290000.0) — фикстура не вырождена."""
     resp = client.get(BASE, **headers(HOLDING_SLUG, hr_token(company=HOLDING_SLUG)))
     body = resp.json()
 
@@ -284,13 +290,13 @@ def test_totals_equal_the_sum_of_the_rows(client, two_companies):
         "employees_active": sum(r["employees_active"] for r in rows),
         "employees_total": sum(r["employees_total"] for r in rows),
         "staffing_headcount": sum(r["staffing_headcount"] for r in rows),
-        "staffing_payroll": sum(r["staffing_payroll"] for r in rows),
+        "staffing_payroll_fund": sum(r["staffing_payroll_fund"] for r in rows),
     }
     assert body["totals"] == manual_totals
     # Фикстура содержательна: не всё нулями.
     assert manual_totals["employees_active"] == 3
     assert manual_totals["staffing_headcount"] == 4.0
-    assert manual_totals["staffing_payroll"] == 290000.0
+    assert manual_totals["staffing_payroll_fund"] == 470000.0
 
 
 # ── представления снесены ────────────────────────────────────────────────

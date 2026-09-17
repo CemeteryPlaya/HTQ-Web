@@ -1192,10 +1192,26 @@ class Command(BaseCommand):
         )
 
     def _tasks_tables(self) -> list[str]:
-        """Таблицы аппки ``tasks``, включая автосозданную M2M меток."""
+        """Таблицы аппки ``tasks``, включая автосозданную M2M меток.
+
+        ``managed=False`` отфильтрован тем же приёмом, что в
+        ``tenancy_bootstrap._tenant_tables``/``tenancy_status`` — модель без
+        таблицы не владеет ничем, а у ``tasks`` есть ровно такие:
+        ``managed=False``-читатели холдинга (``apps/tasks/holding_models.py``
+        — ``HoldingProject``/``HoldingSite``/``HoldingTask``/
+        ``HoldingDailyReport``), чей ``db_table`` НАМЕРЕННО совпадает с
+        настоящей таблицей аппки (представление называется по таблице
+        компании). Без фильтра ``config.get_models()`` отдал бы, например,
+        ``tasks_task`` дважды под разными моделями — сюда, в ``TRUNCATE``,
+        это сегодня приходит безвредно (результат уходит в ``set()``,
+        повтор схлопывается сам), но источник отказа — тот же самый, что
+        уронил ``tenancy_bootstrap`` без этого фильтра, и держать приём
+        разным по факту «пока не аукнулось» — не повод.
+        """
         config = django_apps.get_app_config("tasks")
         return sorted({model._meta.db_table for model
-                       in config.get_models(include_auto_created=True)})
+                       in config.get_models(include_auto_created=True)
+                       if model._meta.managed is not False})
 
     def _assert_no_external_references(self, tables: list[str]) -> None:
         """Отказ, если в домен задач ссылается кто-то извне.

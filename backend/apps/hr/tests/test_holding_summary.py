@@ -29,7 +29,7 @@ SLUGS = ("h-alpha", "h-beta")
 REQUIRED_KEYS = {
     "company_slug", "employees_active", "employees_total",
     "departments_active", "positions_active",
-    "staffing_headcount", "staffing_payroll",
+    "staffing_headcount", "staffing_payroll_fund",
 }
 
 
@@ -200,14 +200,23 @@ def test_headcount_ignores_soft_deleted_employees(two_companies):
 @pytest.mark.django_db(transaction=True)
 def test_staffing_is_reported_next_to_the_headcount(two_companies):
     """Штат против факта — первая цифра, которую спрашивает директор.
-    Числа посчитаны вручную, а не тем же выражением, что в сервисе."""
+
+    ``staffing_payroll_fund`` — ФОНД оплаты труда: ``headcount * salary`` по
+    КАЖДОЙ строке штатного расписания, просуммированный, а НЕ сумма
+    окладов. Числа посчитаны вручную по фикстуре, а не тем же выражением,
+    что в сервисе, и намеренно НЕ равны сумме окладов — иначе проверка не
+    отличала бы верную формулу от `Sum("salary")`:
+      * alpha: 2.5×100000.00 + 1.0×50000.50 = 250000.00 + 50000.50 =
+        300000.50 (сумма окладов дала бы 150000.50 — другое число);
+      * beta: 2×60000 = 120000.0 (сумма окладов дала бы 60000.0).
+    """
     rows = headcount_by_company()
     alpha = _row(rows, "h-alpha")
     beta = _row(rows, "h-beta")
-    assert alpha["staffing_headcount"] == 3.5          # 2.5 + 1.0
-    assert alpha["staffing_payroll"] == 150000.50       # 100000.00 + 50000.50
+    assert alpha["staffing_headcount"] == 3.5                # 2.5 + 1.0
+    assert alpha["staffing_payroll_fund"] == 300000.50        # 250000.00 + 50000.50
     assert beta["staffing_headcount"] == 2.0
-    assert beta["staffing_payroll"] == 60000.0
+    assert beta["staffing_payroll_fund"] == 120000.0          # 2 × 60000
 
 
 @pytest.mark.django_db(transaction=True)
@@ -227,7 +236,7 @@ def test_numbers_are_plain_scalars(two_companies):
                    "departments_active", "positions_active"):
             assert isinstance(row[key], int)
             assert not isinstance(row[key], bool)
-        for key in ("staffing_headcount", "staffing_payroll"):
+        for key in ("staffing_headcount", "staffing_payroll_fund"):
             assert isinstance(row[key], float)
             assert not isinstance(row[key], Decimal)
 
@@ -254,6 +263,57 @@ def test_headcount_excludes_inactive_departments_and_positions(two_companies):
     alpha = _row(headcount_by_company(), "h-alpha")
     assert alpha["departments_active"] == 1   # "Engineering", НЕ "Legacy"
     assert alpha["positions_active"] == 1     # "Developer", НЕ "Retired role"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_company_whose_rows_all_fail_the_filters_stays_with_zeros(two_companies):
+    """Строки ЕСТЬ, но ни одна не проходит фильтр активности — компания
+    обязана остаться в сводке с нулями (приём — как
+    ``apps.tasks.services.holding_service.projects_by_company``, см. тест
+    ``apps.tasks.tests.test_holding_summary::test_a_company_whose_rows_all_fail_the_filters_stays_with_zeros``).
+
+    Это не тот же случай, что ``h-beta`` (там сотрудников нет вовсе — план
+    без факта), и держит он ровно одно решение сервиса: условия по
+    ``is_active`` для отделов и должностей стоят внутри
+    ``Count(filter=...)``, а НЕ в ``filter()`` выборки. Перенеси их обратно
+    в ``filter()`` — и у h-alpha выборки отделов и должностей станут
+    пустыми; сотрудники здесь намеренно тоже гашены ``is_deleted=True``
+    (мягкое удаление отсекается выборкой САМОЙ по себе — это отдельное,
+    верное поведение, не имеющее отношения к находке), а штатных строк нет
+    вовсе — так ни одна из четырёх выборок не удержит слаг в объединении
+    сама по себе, и проверка бьёт именно по фильтру департаментов/должностей,
+    а не маскируется чужим источником слага. Если условие уедет в
+    ``filter()``, компания, где законсервирована вся структура, ТИХО
+    исчезнет со сводного экрана вместо того, чтобы показать там нули.
+    Разница между «ноль» и «нет строки» — это разница между «всё
+    заморожено» и «компании нет».
+    """
+    from apps.hr.models import Department, Employee, EmployeeStatus, Position, StaffingPosition
+
+    with use_company("h-alpha"):
+        Department.objects.update(is_active=False)
+        Position.objects.update(is_active=False)
+        Employee.objects.update(status=EmployeeStatus.TERMINATED, is_deleted=True)
+        StaffingPosition.objects.all().delete()
+        # Строки на месте (кроме штата, снесённого нарочно) — исчезать в
+        # сводке нечему.
+        assert Department.objects.count() == 2
+        assert Position.objects.count() == 2
+        assert Employee.objects.count() == 4
+        assert StaffingPosition.objects.count() == 0
+
+    rows = headcount_by_company()
+    assert "h-alpha" in {r["company_slug"] for r in rows}, (
+        "компания со строками, но без активных, ПРОПАЛА из сводки — "
+        "статусное условие уехало из Count(filter=...) в filter() выборки"
+    )
+    alpha = _row(rows, "h-alpha")
+    assert alpha["employees_active"] == 0
+    assert alpha["employees_total"] == 0
+    assert alpha["departments_active"] == 0
+    assert alpha["positions_active"] == 0
+    assert alpha["staffing_headcount"] == 0.0
+    assert alpha["staffing_payroll_fund"] == 0.0
 
 
 @pytest.mark.django_db(transaction=True)
