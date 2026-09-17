@@ -28,6 +28,9 @@ from django.utils import timezone
 
 from htqweb import date_rules
 from htqweb.http import api_view, json_error
+from htqweb.tenancy.context import current_company_or_none
+
+from apps.companies import interface as companies
 
 from . import schemas
 from .services import block_service
@@ -36,6 +39,7 @@ from .services import contractor_service
 from .services import daily_report_service
 from .services import equipment_usage_service
 from .services import gantt_service
+from .services import holding_service
 from .services import link_service
 from .services import notification_service
 from .services import plan_fact_service
@@ -2289,3 +2293,99 @@ def production_day_detail(request, target_date: str,
     return schemas.ProductionDayResponse.model_validate(
         calendar_service.update_production_day(parsed, day_type=data.day_type,
                                                note=data.note))
+
+
+# ── /holding/projects — сводка по группе (блок H) ────────────────────────────
+
+def _deny_unless_holding(request):
+    """Сводка по всей группе доступна только с поддомена холдинга.
+
+    Обычная проверка домена (``request.token.is_elevated``) знает только
+    флаги ВЫЗЫВАЮЩЕГО и ничего не знает про ВИД его компании: без этой
+    сверки руководитель дочернего общества с обычным управленческим доступом
+    читал бы проекты, просрочку и отчётность соседних компаний группы.
+
+    Платформенный администратор проходит всегда — у него и так есть доступ к
+    любой схеме через django-admin, и запрет здесь создал бы лишь
+    впечатление защиты.
+    """
+    if request.token.is_superuser:
+        return None
+    slug = current_company_or_none()
+    if slug and companies.is_holding(slug):
+        return None
+    return json_error("Сводка по группе доступна только на поддомене холдинга", 403)
+
+
+def _company_display_name(slug: str) -> str:
+    """Имя компании из реестра, а сам слаг — если строки реестра уже нет.
+
+    ``get_company`` документированно возвращает ``None`` на неизвестном
+    слаге (осиротевшая строка после неудачного отката ``company_create``,
+    см. CLAUDE.md, плюс обычный 5-секундный TTL его кэша) — сумма по
+    компании в сводке при этом настоящая (представления зафиксированы до
+    следующей пересборки), и терять всю строку сводки ради одной вывески
+    было бы хуже, чем показать слаг вместо имени.
+    """
+    company = companies.get_company(slug)
+    return company["name"] if company else slug
+
+
+@api_view(methods=("GET",))
+def holding_projects(request):
+    """Проекты, объекты, задачи и отчётность по каждой действующей компании
+    группы.
+
+    Авторизация — та же, что у управленческих данных этого домена (отчёты
+    по персоналу, ``_staff_project``): ``request.token.is_elevated``, иначе
+    ``PermissionDenied`` → 403 «Forbidden». Прикладной гейт ``apps.access``
+    на ручки ``tasks`` не навешивается (сторож
+    ``apps.access.tests.test_gate::test_gate_is_declared_but_not_hung_anywhere``).
+    Поверх — свой гейт по виду компании (``_deny_unless_holding``): тонкая
+    вьюха, гейт → гейт → сервис → форма ответа.
+
+    ``HoldingViewsUnavailable`` (``migrate_companies`` временно сносит
+    представления) — 503, а не 500 и не 200 с нулями: директор обязан понять,
+    что это «сводки пересобираются», а не «в группе нет работ». Вызов
+    сервиса НЕ в ``transaction.atomic()`` намеренно: на ветке ошибки сервис
+    делает второй запрос, и в явной транзакции это был бы
+    ``TransactionManagementError`` вместо внятного 503.
+
+    Имена компаний добавляются к строкам сервиса из реестра
+    (``apps.companies.interface.get_company``) — сам сервис отдаёт только
+    слаг, у него нет и не должно быть доступа к таблице ``Company``; если
+    строки реестра уже нет, вывеска падает на сам слаг
+    (``_company_display_name``), а не роняет всю сводку 500-й.
+    """
+    if not request.token.is_elevated:
+        raise PermissionDenied(
+            "Only management (is_staff/is_superuser) can read the group summary")
+
+    denied = _deny_unless_holding(request)
+    if denied is not None:
+        return denied
+
+    try:
+        rows = holding_service.projects_by_company()
+    except holding_service.HoldingViewsUnavailable as exc:
+        return json_error(str(exc), 503)
+
+    company_rows = [
+        schemas.HoldingCompanyRow(
+            company_slug=row["company_slug"],
+            company_name=_company_display_name(row["company_slug"]),
+            projects_active=row["projects_active"],
+            sites_active=row["sites_active"],
+            tasks_open=row["tasks_open"],
+            tasks_overdue=row["tasks_overdue"],
+            reports_last_date=row["reports_last_date"],
+        )
+        for row in rows
+    ]
+    totals = schemas.HoldingTotals(
+        projects_active=sum(r.projects_active for r in company_rows),
+        sites_active=sum(r.sites_active for r in company_rows),
+        tasks_open=sum(r.tasks_open for r in company_rows),
+        tasks_overdue=sum(r.tasks_overdue for r in company_rows),
+    )
+    return schemas.HoldingProjectsOut(companies=company_rows, totals=totals)

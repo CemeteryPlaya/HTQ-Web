@@ -12,4 +12,6 @@ FUNCTIONS = (
     ("tasks.staff_reports", "Отчёты по персоналу"),
     ("tasks.reports", "Отчётность"),
     ("tasks.calendar", "Календарь и события"),
+
+    ("tasks.holding", "Задачи: сводка по группе"),
 )
