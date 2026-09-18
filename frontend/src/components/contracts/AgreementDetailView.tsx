@@ -33,6 +33,7 @@ import {
   remainingTone,
 } from '@/components/contracts/format';
 import { reportApiError } from '@/lib/apiError';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
@@ -40,6 +41,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import AgreementDocumentViewer from '@/components/contracts/AgreementDocumentViewer';
 import ProjectLinkBadge from '@/components/contracts/ProjectLinkBadge';
+import { LinkedRequestBadge } from '@/components/contracts/LinkedRequestPicker';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -258,6 +260,11 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               subjectId={agreement.id}
               state={agreement.approval_state}
               submit={contractsApi.submitAgreement}
+              blockedReason={draftOnlySubmitBlock(
+                agreement.status,
+                statusLabel(agreement.status),
+                'договор',
+              )}
               invalidate={[
                 ['contracts', 'agreements'],
                 ['contracts', 'agreement', agreementId],
@@ -474,6 +481,11 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
               <Field label="Статья бюджета / расходов">
                 <span className="font-medium">{agreement.expense_item}</span>
               </Field>
+              {agreement.request_id != null && (
+                <Field label="По заявке на закуп" className="sm:col-span-2">
+                  <LinkedRequestBadge requestId={agreement.request_id} />
+                </Field>
+              )}
             </dl>
 
             {line && (

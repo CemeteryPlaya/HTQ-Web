@@ -525,6 +525,10 @@ class AgreementCreate(OrderedDates):
     currency: str = Field("KZT", min_length=3, max_length=3)
     signed_date: Optional[date] = None
     status: Optional[AgreementStatus] = None
+    # Заявка конструктора «Запросы», по которой заключается договор.
+    # Проверяется на сервере: одобрена и под ту же строку бюджета
+    # (``services/request_link.py``).
+    request_id: Optional[int] = None
 
 
 class AgreementUpdate(OrderedDates):
@@ -561,6 +565,7 @@ class AgreementUpdate(OrderedDates):
     term_comment: Optional[str] = Field(None, max_length=255)
     currency: Optional[str] = Field(None, min_length=3, max_length=3)
     signed_date: Optional[date] = None
+    request_id: Optional[int] = None
 
 
 class AgreementStatusChange(BaseModel):
@@ -623,6 +628,11 @@ class AgreementRead(BaseModel):
     signed_date: Optional[date]
     status: str
     approval_state: str
+    # Заявка конструктора, по которой заключён договор; ``None`` — договор
+    # заведён без заявки. Карточку заявки фронтенд берёт отдельно
+    # (``GET /contracts/requests/{id}``), чтобы список не ходил в approvals
+    # на каждую строку.
+    request_id: Optional[int] = None
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
@@ -640,6 +650,8 @@ class InvoiceCreate(BaseModel):
     budget_line_id: int
     counterparty_id: int
     amount: Decimal = Field(..., gt=0)
+    # Заявка конструктора, по которой выставляется счёт (как у договора).
+    request_id: Optional[int] = None
     # Дата самого счёта (не записи в платформу) — нужна отчёту о движении
     # денег. Необязательна, как и в книге заказчика.
     document_date: Optional[date] = None
@@ -655,11 +667,33 @@ class InvoiceUpdate(BaseModel):
     budget_line_id: Optional[int] = None
     counterparty_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
+    request_id: Optional[int] = None
     document_date: Optional[date] = None
 
 
 class InvoiceStatusChange(BaseModel):
     status: InvoiceStatus
+
+
+class LinkedRequestRead(BaseModel):
+    """Карточка заявки конструктора «Запросы» — ровно то, что отдаёт
+    ``apps.approvals.interface.get_request_brief``."""
+
+    id: int
+    code: str
+    title: str
+    status: str
+    initiator_id: int
+    template_id: int
+    template_name: str
+    budget_line_id: Optional[int]
+    submitted_at: Optional[datetime]
+    finalized_at: Optional[datetime]
+
+
+class LinkedRequestDocumentsRead(BaseModel):
+    agreements: list["AgreementRead"]
+    invoices: list["InvoiceRead"]
 
 
 class InvoiceRead(BaseModel):
@@ -686,6 +720,7 @@ class InvoiceRead(BaseModel):
     file_id: Optional[str]
     status: str
     approval_state: str
+    request_id: Optional[int] = None
     document_date: Optional[date]
     created_by: Optional[int]
     created_at: datetime

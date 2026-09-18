@@ -17,6 +17,7 @@ import { Building2, Pencil } from 'lucide-react';
 
 import { DetailSkeleton, Field } from '@/components/contracts/detail';
 import { formatAmount, formatMoment } from '@/components/contracts/format';
+import { counterpartySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
@@ -144,6 +145,7 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
               subjectId={counterparty.id}
               state={counterparty.approval_state}
               submit={contractsApi.submitCounterparty}
+              blockedReason={counterpartySubmitBlock(counterparty.status)}
               invalidate={[
                 ['contracts', 'counterparties'],
                 ['contracts', 'counterparty', counterpartyId],

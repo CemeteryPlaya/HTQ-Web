@@ -11,17 +11,16 @@ import pytest
 from django.test import Client
 
 from apps.approvals.models import (
-    ApprovalAction, RequestActivity, RequestInstance, RequestStatus,
+    RequestActivity, RequestInstance, RequestStatus,
     RequestWatcher,
 )
 
 from .helpers import (
-    BASE, admin_token, auth, make_instance, make_template, patch_json,
-    post_json, simple_workflow, token,
+    APPROVER, BASE, admin_token, auth, decide, make_instance, make_template,
+    patch_json, pending_task, post_json, token,
 )
 
 USER = 7
-APPROVER = 11
 OTHER = 42
 
 
@@ -111,6 +110,11 @@ def test_delegated_submission_needs_both_the_setting_and_elevation():
         event_type="created_on_behalf").exists()
 
 
+def _submit(client, instance_id, tok=None):
+    return client.post(f"{BASE}/instances/{instance_id}/submit/",
+                       **auth(tok))
+
+
 # ── mailboxes ───────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
@@ -124,19 +128,20 @@ def test_sent_box_lists_own_requests():
 
 @pytest.mark.django_db
 def test_inbox_lists_requests_awaiting_my_action():
-    template = make_template()
-    waiting = make_instance(template, status=RequestStatus.PENDING)
-    ApprovalAction.objects.create(request=waiting, node_id="a1",
-                                  approver_id=USER)
-    acted_on = make_instance(template, status=RequestStatus.PENDING)
-    ApprovalAction.objects.create(request=acted_on, node_id="a1",
-                                  approver_id=USER, action="approve",
-                                  acted_at="2026-01-01T00:00:00Z")
+    """«Список дел» и «Готово» отвечает движок signoff: кто должен решить и
+    кто уже решал — вопросы к нему, а не к таблицам заявок."""
+    template = make_template(approvers=(USER,))
+    client = Client()
+    waiting = make_instance(template)
+    acted_on = make_instance(template)
+    _submit(client, waiting.id)
+    _submit(client, acted_on.id)
+    decide(client, acted_on, USER)
 
-    inbox = Client().get(f"{BASE}/instances/?box=inbox", **auth()).json()
+    inbox = client.get(f"{BASE}/instances/?box=inbox", **auth()).json()
     assert [row["id"] for row in inbox] == [waiting.id]
 
-    done = Client().get(f"{BASE}/instances/?box=done", **auth()).json()
+    done = client.get(f"{BASE}/instances/?box=done", **auth()).json()
     assert [row["id"] for row in done] == [acted_on.id]
 
 
@@ -178,36 +183,38 @@ def test_edit_draft_updates_title_and_values():
     assert resp.json()["form_values_json"] == {"amount": 42}
 
 
-@pytest.mark.django_db
-def test_pending_request_is_not_editable():
-    template = make_template()
-    instance = make_instance(template, status=RequestStatus.PENDING)
-    resp = patch_json(Client(), f"{BASE}/instances/{instance.id}/",
-                      {"title": "нельзя"}, **auth())
-    assert resp.status_code == 409
-
-
 # ── the lifecycle ───────────────────────────────────────────────────────
 
-def _submit(client, instance_id, tok=None):
-    return client.post(f"{BASE}/instances/{instance_id}/submit/",
-                       **auth(tok))
-
 
 @pytest.mark.django_db
-def test_submit_moves_to_pending_and_assigns_the_approver():
+def test_submit_moves_to_pending_and_opens_a_signoff_process():
     template = make_template()
     instance = make_instance(template)
     resp = _submit(Client(), instance.id)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == RequestStatus.PENDING
-    assert body["current_node_id"] == "a1"
-    assert body["submitted_at"] is not None
+    # Отдаётся карточка ПРОЦЕССА — как у submit в contracts.
+    assert resp.status_code == 201, resp.content
+    card = resp.json()
+    assert card["state"] == "pending"
+    assert card["scope"] == f"template:{template.id}"
+    assert card["stages"][0]["tasks"][0]["user_id"] == APPROVER
+    assert card["subject_title"].startswith(instance.code)
 
-    action = ApprovalAction.objects.get(request_id=instance.id)
-    assert action.approver_id == APPROVER
-    assert action.acted_at is None
+    body = Client().get(f"{BASE}/instances/{instance.id}/", **auth()).json()
+    assert body["status"] == RequestStatus.PENDING
+    assert body["approval_state"] == "pending"
+    assert body["submitted_at"] is not None
+    assert body["current_node_id"] is None  # наследие старого движка
+
+
+@pytest.mark.django_db
+def test_submit_without_a_route_is_409_with_the_engines_reason():
+    template = make_template(route=False)
+    instance = make_instance(template)
+    resp = _submit(Client(), instance.id)
+    assert resp.status_code == 409
+    assert "не настроен маршрут" in resp.json()["detail"]
+    instance.refresh_from_db()
+    assert instance.status == RequestStatus.DRAFT
 
 
 @pytest.mark.django_db
@@ -227,54 +234,63 @@ def test_submitting_twice_is_409():
 
 
 @pytest.mark.django_db
-def test_approve_finalizes_a_single_step_workflow():
+def test_approve_finalizes_a_single_stage_route():
     template = make_template()
     instance = make_instance(template)
-    _submit(Client(), instance.id)
+    client = Client()
+    _submit(client, instance.id)
 
-    resp = post_json(Client(), f"{BASE}/instances/{instance.id}/approve/",
-                     {"comment": "ок"}, **auth(token(user_id=APPROVER,
-                                                     sub=str(APPROVER))))
-    assert resp.status_code == 200
-    body = resp.json()
+    resp = decide(client, instance, APPROVER, comment="ок")
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["state"] == "approved"
+
+    body = client.get(f"{BASE}/instances/{instance.id}/", **auth()).json()
     assert body["status"] == RequestStatus.APPROVED
-    assert body["current_node_id"] is None
+    assert body["approval_state"] == "approved"
     assert body["finalized_at"] is not None
+    assert RequestActivity.objects.filter(request=instance, event_type="finalized").exists()
 
 
 @pytest.mark.django_db
 def test_reject_finalizes_as_rejected():
     template = make_template()
     instance = make_instance(template)
-    _submit(Client(), instance.id)
-    resp = post_json(Client(), f"{BASE}/instances/{instance.id}/reject/",
-                     {"comment": "нет"},
-                     **auth(token(user_id=APPROVER, sub=str(APPROVER))))
-    assert resp.json()["status"] == RequestStatus.REJECTED
+    client = Client()
+    _submit(client, instance.id)
+    decide(client, instance, APPROVER, decision="reject", comment="нет")
+    body = client.get(f"{BASE}/instances/{instance.id}/", **auth()).json()
+    assert body["status"] == RequestStatus.REJECTED
+    assert body["approval_state"] == "rejected"
 
 
 @pytest.mark.django_db
 def test_a_non_approver_cannot_act():
+    """Чужой запрос: движок отвечает 409 «адресован другому» — состояние
+    данных, а не нехватка прав (см. signoff.engine.act)."""
     template = make_template()
     instance = make_instance(template)
-    _submit(Client(), instance.id)
-    resp = post_json(Client(), f"{BASE}/instances/{instance.id}/approve/",
-                     {}, **auth(token(user_id=OTHER, sub=str(OTHER))))
-    assert resp.status_code == 403
+    client = Client()
+    _submit(client, instance.id)
+    task = pending_task(instance, APPROVER)
+    resp = post_json(client, f"/api/signoff/v1/tasks/{task.pk}/decision",
+                     {"decision": "approve"},
+                     **auth(token(user_id=OTHER, sub=str(OTHER))))
+    assert resp.status_code == 409
 
 
 @pytest.mark.django_db
-def test_request_changes_returns_the_request_to_its_author():
+def test_rework_returns_the_request_to_its_author():
     template = make_template()
     instance = make_instance(template)
-    _submit(Client(), instance.id)
-    resp = post_json(Client(),
-                     f"{BASE}/instances/{instance.id}/request-changes/",
-                     {"comment": "поправьте сумму"},
-                     **auth(token(user_id=APPROVER, sub=str(APPROVER))))
-    assert resp.status_code == 200
-    assert resp.json()["status"] == RequestStatus.RETURNED
-    assert resp.json()["current_node_id"] is None
+    client = Client()
+    _submit(client, instance.id)
+    resp = decide(client, instance, APPROVER, decision="rework", comment="поправьте сумму")
+    assert resp.status_code == 200, resp.content
+    body = client.get(f"{BASE}/instances/{instance.id}/", **auth()).json()
+    assert body["status"] == RequestStatus.RETURNED
+    assert body["approval_state"] == "rework"
+    assert RequestActivity.objects.filter(request=instance,
+                                          event_type="request_changes").exists()
 
 
 @pytest.mark.django_db
@@ -283,14 +299,32 @@ def test_returned_request_is_editable_and_resubmittable():
     instance = make_instance(template)
     client = Client()
     _submit(client, instance.id)
-    post_json(client, f"{BASE}/instances/{instance.id}/request-changes/", {},
-              **auth(token(user_id=APPROVER, sub=str(APPROVER))))
+    decide(client, instance, APPROVER, decision="rework")
 
     assert patch_json(client, f"{BASE}/instances/{instance.id}/",
                       {"form_values": {"amount": 1}}, **auth()).status_code == 200
     resp = client.post(f"{BASE}/instances/{instance.id}/resubmit/", **auth())
-    assert resp.status_code == 200
-    assert resp.json()["status"] == RequestStatus.PENDING
+    assert resp.status_code == 201, resp.content
+    assert resp.json()["state"] == "pending"
+    assert client.get(f"{BASE}/instances/{instance.id}/",
+                      **auth()).json()["status"] == RequestStatus.PENDING
+    # Новый круг — новый процесс, старый остался историей.
+    processes = client.get(
+        f"/api/signoff/v1/processes?subject_type=approvals.request&subject_id={instance.id}",
+        **auth(admin_token())).json()
+    assert sorted(row["state"] for row in processes) == ["pending", "rework"]
+
+
+@pytest.mark.django_db
+def test_pending_request_is_locked_by_signoff_with_the_engines_reason():
+    template = make_template()
+    instance = make_instance(template)
+    client = Client()
+    _submit(client, instance.id)
+    resp = patch_json(client, f"{BASE}/instances/{instance.id}/",
+                      {"title": "нельзя"}, **auth())
+    assert resp.status_code == 409
+    assert "на согласовании" in resp.json()["detail"]
 
 
 @pytest.mark.django_db
@@ -302,79 +336,76 @@ def test_resubmitting_a_draft_is_409():
 
 
 @pytest.mark.django_db
-def test_all_mode_needs_every_approver():
-    template = make_template(
-        workflow={
-            "nodes": [
-                {"id": "start", "type": "start"},
-                {"id": "a1", "type": "approval", "mode": "all",
-                 "assignee": {"kind": "users", "ids": [11, 12]}},
-                {"id": "ok", "type": "end_approved"},
-                {"id": "no", "type": "end_rejected"},
-            ],
-            "edges": [
-                {"from": "start", "to": "a1"},
-                {"from": "a1", "to": "ok", "on": "approve"},
-                {"from": "a1", "to": "no", "on": "reject"},
-            ],
-        })
+def test_all_quorum_needs_every_approver():
+    template = make_template(approvers=(11, 12))
     instance = make_instance(template)
-    _submit(Client(), instance.id)
+    client = Client()
+    _submit(client, instance.id)
 
-    first = post_json(Client(), f"{BASE}/instances/{instance.id}/approve/", {},
-                      **auth(token(user_id=11, sub="11")))
-    assert first.json()["status"] == RequestStatus.PENDING   # still waiting
+    first = decide(client, instance, 11)
+    assert first.json()["state"] == "pending"   # still waiting
+    assert client.get(f"{BASE}/instances/{instance.id}/", **auth()).json()["status"] == RequestStatus.PENDING
 
-    second = post_json(Client(), f"{BASE}/instances/{instance.id}/approve/", {},
-                       **auth(token(user_id=12, sub="12")))
-    assert second.json()["status"] == RequestStatus.APPROVED
+    second = decide(client, instance, 12)
+    assert second.json()["state"] == "approved"
+    assert client.get(f"{BASE}/instances/{instance.id}/", **auth()).json()["status"] == RequestStatus.APPROVED
 
 
-# ── cancel ──────────────────────────────────────────────────────────────
+# ── cancel (через signoff) ──────────────────────────────────────────────
+
+def _process_id(client, instance) -> int:
+    rows = client.get(
+        f"/api/signoff/v1/processes?subject_type=approvals.request&subject_id={instance.id}&state=pending",
+        **auth(admin_token())).json()
+    return rows[0]["id"]
+
 
 @pytest.mark.django_db
 def test_initiator_can_cancel_a_pending_request():
     template = make_template()
     instance = make_instance(template)
-    _submit(Client(), instance.id)
-    resp = post_json(Client(), f"{BASE}/instances/{instance.id}/cancel/", {},
-                     **auth())
-    assert resp.status_code == 200
-    assert resp.json()["status"] == RequestStatus.CANCELLED
+    client = Client()
+    _submit(client, instance.id)
+    resp = client.post(f"/api/signoff/v1/processes/{_process_id(client, instance)}/cancel",
+                       **auth())
+    assert resp.status_code == 200, resp.content
+    body = client.get(f"{BASE}/instances/{instance.id}/", **auth()).json()
+    assert body["status"] == RequestStatus.CANCELLED
+    assert body["approval_state"] == "draft"
 
 
 @pytest.mark.django_db
 def test_a_stranger_cannot_cancel():
     template = make_template()
     instance = make_instance(template)
-    _submit(Client(), instance.id)
-    resp = post_json(Client(), f"{BASE}/instances/{instance.id}/cancel/", {},
-                     **auth(token(user_id=OTHER, sub=str(OTHER))))
-    assert resp.status_code == 403
+    client = Client()
+    _submit(client, instance.id)
+    process_id = _process_id(client, instance)
+    resp = client.post(f"/api/signoff/v1/processes/{process_id}/cancel",
+                       **auth(token(user_id=OTHER, sub=str(OTHER))))
+    assert resp.status_code in (403, 404)
 
 
-# ── batch approve ───────────────────────────────────────────────────────
+# ── batch (через signoff) ───────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_batch_approve_reports_per_item_results():
+def test_batch_decision_reports_per_item_results():
     """Not all-or-nothing: the UI needs to know which ones went through."""
-    allowed = make_template(slug="batch",
-                            config={"settings": {"allow_batch": True}})
-    plain = make_template(slug="nobatch")
-    ok_instance = make_instance(allowed)
-    blocked = make_instance(plain)
+    template = make_template()
+    first, second = make_instance(template), make_instance(template)
     client = Client()
-    _submit(client, ok_instance.id)
-    _submit(client, blocked.id)
+    _submit(client, first.id)
+    _submit(client, second.id)
+    tasks = [pending_task(first, APPROVER).pk, pending_task(second, APPROVER).pk]
 
-    resp = post_json(client, f"{BASE}/instances/batch-approve",
-                     {"ids": [ok_instance.id, blocked.id, 999]},
+    resp = post_json(client, "/api/signoff/v1/tasks/batch-decision",
+                     {"task_ids": [*tasks, 999999], "decision": "approve"},
                      **auth(token(user_id=APPROVER, sub=str(APPROVER))))
-    assert resp.status_code == 200
-    results = {row["id"]: row for row in resp.json()["results"]}
-    assert results[ok_instance.id]["ok"] is True
-    assert results[blocked.id]["error"] == "batch disabled"
-    assert results[999]["error"] == "not found"
+    assert resp.status_code == 200, resp.content
+    results = {row["task_id"]: row for row in resp.json()}
+    assert all(results[t]["ok"] for t in tasks)
+    assert results[999999]["ok"] is False
+    assert RequestInstance.objects.filter(status=RequestStatus.APPROVED).count() == 2
 
 
 # ── detail ──────────────────────────────────────────────────────────────

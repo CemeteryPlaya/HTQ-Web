@@ -259,14 +259,26 @@ const ProcessDetail = () => {
       ) : (
         <>
           <div className="mb-6 min-w-0">
+            {/* В заголовке — НАЗВАНИЕ ДОКУМЕНТА: человек пришёл сюда решать
+                судьбу договора или заявки, и узнаёт их по названию, а не по
+                номеру круга. Номер остаётся строкой ниже — он идентификатор
+                процесса, по нему ссылаются и ищут. Если предметная аппка
+                названия не дала (объект удалён, её колбэк упал), заголовком
+                снова становится номер: пустая строка вместо заголовка
+                выглядела бы поломкой. */}
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-3xl font-bold">{t('signoff.history.processNumber', { id: process.id })}</h1>
+              <h1 className="text-3xl font-bold break-words">
+                {process.subject_title
+                  ?? t('signoff.history.processNumber', { id: process.id })}
+              </h1>
               <ProcessStateBadge
                 state={process.state}
                 label={labelMap(enums?.process_state)[process.state]}
               />
             </div>
             <p className="text-sm text-muted-foreground mt-1">
+              {process.subject_title
+                && `${t('signoff.history.processNumber', { id: process.id })} · `}
               {t('signoff.detail.startedAt', { stamp: formatMoment(process.created_at) })}
               {process.finished_at
                 && t('signoff.history.finishedAt', { stamp: formatMoment(process.finished_at) })}
@@ -332,6 +344,8 @@ const ProcessDetail = () => {
                                 requiresComment:
                                   myPending.stage.requires_comment,
                                 attachedFileId: myPending.task.file_id,
+                                stageName: myPending.stage.name,
+                                requirementLabel: myPending.stage.requirement_label,
                               })
                             }
                           >
@@ -482,11 +496,12 @@ const ProcessDetail = () => {
                     </p>
                   )}
 
+                  {/* Снимок фактов объекта на момент отправки — по ним
+                      выбирались этапы. Без пояснительного абзаца: значения
+                      подписаны сами, а абзац занимал больше места, чем
+                      объяснял. */}
                   {readableFacts.length > 0 && (
                     <div className="pt-2">
-                      <p className="text-xs text-muted-foreground mb-1.5">
-                        {t('signoff.detail.snapshotHint')}
-                      </p>
                       <dl className="flex flex-wrap gap-x-4 gap-y-1">
                         {readableFacts.map((fact) => (
                           <div key={fact.key} className="flex items-baseline gap-1.5">
@@ -501,17 +516,6 @@ const ProcessDetail = () => {
                   )}
                 </CardContent>
               </Card>
-
-              <div>
-                <h2 className="text-lg font-semibold mb-3">{t('signoff.detail.progress')}</h2>
-                <ProcessTimeline
-                  process={process}
-                  stageStateLabels={labelMap(enums?.stage_state)}
-                  taskStateLabels={labelMap(enums?.task_state)}
-                  fields={fields}
-                  compact
-                />
-              </div>
             </aside>
 
             <section className="min-w-0 lg:order-1">
@@ -542,6 +546,21 @@ const ProcessDetail = () => {
                   {t('signoff.detail.previewUnsupported')}
                 </p>
               )}
+
+              {/* Ход согласования — ПОД документом, а не сбоку: сначала
+                  читают, что согласуют, и только потом смотрят, кто уже
+                  решил. В узкой панели этот блок занимал половину экрана
+                  и оттеснял сам документ. */}
+              <div className="mt-6">
+                <h2 className="text-lg font-semibold mb-3">{t('signoff.detail.progress')}</h2>
+                <ProcessTimeline
+                  process={process}
+                  stageStateLabels={labelMap(enums?.stage_state)}
+                  taskStateLabels={labelMap(enums?.task_state)}
+                  fields={fields}
+                  compact
+                />
+              </div>
             </section>
           </div>
 
@@ -549,8 +568,14 @@ const ProcessDetail = () => {
             target={target}
             onOpenChange={(open) => !open && setTarget(null)}
             onDecided={() => {
-              queryClient.invalidateQueries({ queryKey: ['signoff'] });
-              queryClient.invalidateQueries({ queryKey: ['contracts'] });
+              // Решение меняет не только процесс: у предметного объекта
+              // сдвигается активный шаг, а с ним — что согласующий может
+              // заполнить дальше (панель «Ваш шаг» у заявки). Страница
+              // signoff не знает ключей чужих запросов, поэтому сбрасывает
+              // всё: цена — несколько перечитываний на одной странице,
+              // цена ошибки — панель, которая после шага 1 всё ещё просит
+              // поставщика, когда шаг уже второй и нужна сумма.
+              queryClient.invalidateQueries();
             }}
           />
         </>

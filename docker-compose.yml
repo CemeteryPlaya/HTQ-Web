@@ -39,7 +39,9 @@ x-django-env: &django-env
   DJANGO_SETTINGS_MODULE: htqweb.settings.base
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
   JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-  # Доверенные origin'ы для CSRF в django-admin: адреса стенда через запятую.
+  # Домены, с которых принимается форма входа в /django-admin/ (со схемой,
+  # через запятую). За Cloudflare/nginx запрос доезжает до Django по http, а
+  # Origin у браузера https — без этого списка админка отдаёт 403 CSRF.
   # Второй источник — PUBLIC_BASE_URL, он объявлен ниже, в своей секции (сюда
   # его дубликатом не возвращать: YAML запрещает повторный ключ, и compose
   # падает на парсинге всего файла). См. «CSRF за прокси» в

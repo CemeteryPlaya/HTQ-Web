@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { formatAmount } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
@@ -167,6 +168,11 @@ const AgreementList = () => {
                       subjectId={row.id}
                       state={row.approval_state}
                       submit={contractsApi.submitAgreement}
+                      blockedReason={draftOnlySubmitBlock(
+                        row.status,
+                        statusLabel(row.status),
+                        'договор',
+                      )}
                       // Отправка переводит договор в on_review, а он уже
                       // занимает бюджет — остаток бюджетных строк меняется
                       // тем же действием.

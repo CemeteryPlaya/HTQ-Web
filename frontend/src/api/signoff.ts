@@ -15,6 +15,7 @@
 import api from './client';
 import { apiPath } from './endpoints';
 import type {
+  BatchDecisionResult,
   ApprovalProcess,
   ApprovalRoute,
   DecisionInput,
@@ -47,10 +48,10 @@ export const signoffApi = {
   listSubjects: () => api.get<Subject[]>(path('subjects')),
 
   // ─── Маршруты ──────────────────────────────────────────────────────────
-  listRoutes: (params?: { subject_type?: string; is_active?: boolean }) =>
+  listRoutes: (params?: { subject_type?: string; is_active?: boolean; scope?: string }) =>
     api.get<ApprovalRoute[]>(path('routes'), { params }),
   getRoute: (id: number) => api.get<ApprovalRoute>(path(`routes/${id}`)),
-  createRoute: (data: { subject_type: string; name: string; is_active?: boolean }) =>
+  createRoute: (data: { subject_type: string; name: string; is_active?: boolean; scope?: string }) =>
     api.post<ApprovalRoute>(path('routes'), data),
   updateRoute: (id: number, data: { name?: string; is_active?: boolean }) =>
     api.patch<ApprovalRoute>(path(`routes/${id}`), data),
@@ -97,6 +98,10 @@ export const signoffApi = {
    *  флаг: админский токен на чужой задаче получит 409. */
   decide: (taskId: number, data: DecisionInput) =>
     api.post<ApprovalProcess>(path(`tasks/${taskId}/decision`), data),
+  /** Одно решение по пачке запросов; ответ поштучный — отказ по одному не
+   *  откатывает остальные. */
+  decideBatch: (data: { task_ids: number[] } & DecisionInput) =>
+    api.post<BatchDecisionResult[]>(path('tasks/batch-decision'), data),
   /**
    * Приложить документ к своему запросу — ДО решения, отдельным запросом.
    *

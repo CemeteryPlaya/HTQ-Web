@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { counterpartySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { contractsApi } from '@/api/contracts';
 import type { CounterpartyStatus } from '@/types/contracts';
@@ -159,6 +160,7 @@ const CounterpartyList = () => {
                         subjectId={row.id}
                         state={row.approval_state}
                         submit={contractsApi.submitCounterparty}
+                        blockedReason={counterpartySubmitBlock(row.status)}
                         invalidate={[['contracts', 'counterparties']]}
                       />
                     </TableCell>

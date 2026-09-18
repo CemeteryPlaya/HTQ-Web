@@ -19,7 +19,35 @@ import { BodyPointerEventsGuard } from '@/components/BodyPointerEventsGuard';
 
 registerRoutePrefetch();
 
-const queryClient = new QueryClient();
+/**
+ * Ответ 4xx не повторяется.
+ *
+ * По умолчанию react-query повторяет неудачный запрос трижды. Для 5xx и обрыва
+ * связи это правильно, для 4xx — нет: 403 «нет прав» и 404 «не найдено» от
+ * повтора не меняются. Хуже того, перехватчик в `api/client.ts` на каждый 401
+ * и 403 обновляет токен, поэтому ОДИН запрещённый запрос превращался в восемь
+ * обращений к серверу и столько же обновлений токена. Именно так карточка
+ * согласования расшатывала сессию согласующему без прав на HR.
+ *
+ * 408 и 429 — исключения: это «попробуй ещё раз», а не отказ.
+ */
+const RETRYABLE_4XX = new Set([408, 429]);
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        const status = (error as { status?: number; response?: { status?: number } })
+          ?.status ?? (error as { response?: { status?: number } })?.response?.status;
+        if (status !== undefined && status >= 400 && status < 500
+            && !RETRYABLE_4XX.has(status)) {
+          return false;
+        }
+        return failureCount < 3;
+      },
+    },
+  },
+});
 const MailboxPasswordPrompt = lazy(() =>
   import('@/components/mail/MailboxPasswordPrompt')
     .then((m) => ({ default: m.MailboxPasswordPrompt })),

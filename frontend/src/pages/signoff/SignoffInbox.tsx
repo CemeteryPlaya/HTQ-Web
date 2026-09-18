@@ -15,25 +15,18 @@
  * токен от этого не спасает.
  */
 
-import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import {
-  Check,
-  ChevronDown,
+  ArrowRight,
+  ClipboardCheck,
   Inbox as InboxIcon,
   MessageSquare,
   Paperclip,
-  Undo2,
-  X,
 } from 'lucide-react';
 
 import { SignoffShell } from '@/components/signoff/SignoffShell';
 import { SubjectLink } from '@/components/signoff/SubjectLink';
-import {
-  DecisionDialog,
-  type DecisionKind,
-  type DecisionTarget,
-} from '@/components/signoff/DecisionDialog';
 import { formatMoment } from '@/components/signoff/format';
 import { QUORUM_LABELS } from '@/components/signoff/labels';
 import { Button } from '@/components/ui/button';
@@ -54,13 +47,10 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { signoffApi } from '@/api/signoff';
-import type { InboxItem } from '@/types/signoff';
 import { useTranslation } from 'react-i18next';
 
 const SignoffInbox = () => {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const [target, setTarget] = useState<DecisionTarget | null>(null);
 
   const {
     data: items = [],
@@ -70,17 +60,6 @@ const SignoffInbox = () => {
     queryKey: ['signoff', 'inbox'],
     queryFn: () => signoffApi.inbox().then((r) => r.data),
   });
-
-  const openDecision = (item: InboxItem, kind: DecisionKind) =>
-    setTarget({
-      taskId: item.task_id,
-      kind,
-      subjectLabel:
-        item.subject_title ?? `${item.subject_type} #${item.subject_id}`,
-      requiresAttachment: item.requires_attachment,
-      requiresComment: item.requires_comment,
-      attachedFileId: item.file_id,
-    });
 
   return (
     <SignoffShell>
@@ -142,6 +121,16 @@ const SignoffInbox = () => {
                   <TableCell>
                     <div>{item.stage_name}</div>
                     <div className="text-xs text-muted-foreground">
+                      {/* «Этап 2 из 4» — только когда этапов больше одного:
+                          у одноэтапного маршрута это шум. Нужно тому, кто
+                          идёт по маршруту несколько шагов подряд — иначе три
+                          его задачи по одной заявке неотличимы. */}
+                      {item.stage_count > 1 && (
+                        <>
+                          {t('signoff.inbox.stepOf', { n: item.stage_order, total: item.stage_count })}
+                          {' · '}
+                        </>
+                      )}
                       {QUORUM_LABELS[item.quorum] ?? item.quorum}
                     </div>
                     {/* Про документ человек должен узнать здесь, а не упереться
@@ -158,50 +147,33 @@ const SignoffInbox = () => {
                         нужно пояснение
                       </div>
                     )}
+                    {/* Требование к объекту — то, что человек делает на
+                        карточке до решения: «нужно: заполнить поставщика». */}
+                    {item.requirement_label && (
+                      <div className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+                        <ClipboardCheck className="h-3 w-3" />
+                        {t('signoff.inbox.needs', { what: item.requirement_label })}
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                     {formatMoment(item.created_at)}
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end">
-                      {/* Три решения собраны в одно меню «Действия» — тот же
-                          набор и порядок, что в карточке процесса. «На
-                          доработку» — не мягкий отказ, а другое последствие:
-                          объект открывается автору для правки, тогда как
-                          отклонённый остаётся запертым. */}
-                      {/* modal={false}: модальное меню держит на body scroll-lock
-                          с `pointer-events: none`; открытый из его пункта диалог
-                          добавляет свой, и при закрытии диалога блокировка body
-                          остаётся — страница перестаёт кликаться. */}
-                      <DropdownMenu modal={false}>
-                        <DropdownMenuTrigger asChild>
-                          <Button size="sm">
-                            {t('common.actions')}
-                            <ChevronDown className="ml-1.5 h-4 w-4 opacity-70" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-48">
-                          <DropdownMenuItem
-                            onClick={() => openDecision(item, 'approve')}
-                          >
-                            <Check className="mr-2 h-4 w-4" />
-                            {t('signoff.decision.approve.action')}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => openDecision(item, 'rework')}
-                          >
-                            <Undo2 className="mr-2 h-4 w-4" />
-                            {t('signoff.decision.rework.action')}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="text-destructive focus:text-destructive"
-                            onClick={() => openDecision(item, 'reject')}
-                          >
-                            <X className="mr-2 h-4 w-4" />
-                            {t('signoff.decision.reject.action')}
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      {/* Только «Открыть» — решение принимается в карточке
+                          процесса, где видно, ЧТО согласуют. Раньше здесь
+                          висело меню с «Согласовать» / «Отклонить»: три
+                          необратимых решения в одном клике из списка, не
+                          открыв документа. Цена промаха слишком велика —
+                          отклонённый объект запирается, и вернуть его может
+                          только отдельный возврат на доработку. */}
+                      <Button asChild size="sm" variant="outline">
+                        <Link to={`/signoff/processes/${item.process_id}`}>
+                          {t('signoff.inbox.open')}
+                          <ArrowRight className="ml-1.5 h-4 w-4 opacity-70" />
+                        </Link>
+                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -211,18 +183,6 @@ const SignoffInbox = () => {
         )}
       </div>
 
-      <DecisionDialog
-        target={target}
-        onOpenChange={(open) => !open && setTarget(null)}
-        onDecided={() => {
-          // Решение могло закрыть этап, открыть следующий и завершить весь
-          // процесс — а вместе с ним сдвинуть approval_state предметного
-          // объекта. Дешевле сбросить оба домена целиком, чем гадать, что
-          // именно изменилось.
-          queryClient.invalidateQueries({ queryKey: ['signoff'] });
-          queryClient.invalidateQueries({ queryKey: ['contracts'] });
-        }}
-      />
     </SignoffShell>
   );
 };
