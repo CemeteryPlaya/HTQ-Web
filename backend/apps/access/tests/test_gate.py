@@ -332,7 +332,7 @@ def test_gate_covers_every_handle_of_translated_apps():
                 stale.append(location)
             elif not is_exempt and not has_gate:
                 missing.append(location)
-        for name in sorted(exempt - seen):
+        for name in sorted(set(exempt) - seen):
             unknown_exempt.append(f"apps/{app}/views.py: {name}")
 
     assert not missing, f"ручкам не хватает гейта модуля: {missing}"
@@ -341,6 +341,27 @@ def test_gate_covers_every_handle_of_translated_apps():
         "self_service ссылается на несуществующую ручку (переименовали "
         f"функцию, либо не выделили её в отдельный api_view(...)): {unknown_exempt}"
     )
+
+
+def test_self_service_reasons_are_declared():
+    """Каждая запись ``SELF_SERVICE`` обязана нести причину из ``REASONS``.
+
+    Раунд правок 1 задачи 3: ревью показало, что запись ``hr.org_tree`` была
+    ВЕРНОЙ (гейт ей правда не положен — см. докстринг ``self_service``), а
+    ярлык «самообслуживание» на ней — ложью (ручка отдаёт заведомо чужие
+    данные, просто сегодня БЕЗ единой проверки прав). Ложь в реестре
+    исключений дороже всего: это единственное место, где дыру можно
+    объявить легальной, не объяснившись. Закрытый список причин
+    (``self``/``open``) не даёт добавить исключение молча — сторож требует
+    ОДНУ из них у каждой записи, а не любую строку.
+    """
+    bad = [
+        f"{app}.{name} = {reason!r}"
+        for app, exempt in self_service.SELF_SERVICE.items()
+        for name, reason in exempt.items()
+        if reason not in self_service.REASONS
+    ]
+    assert not bad, f"недопустимая причина исключения (не self/open): {bad}"
 
 
 def test_access_is_not_imported_at_module_level():
