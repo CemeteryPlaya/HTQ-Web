@@ -84,7 +84,22 @@ def _list_departments(request):
     return svc.list_departments()
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.DepartmentCreate, status=201)
+# ⚠️ ЗАПИСЬ отделов под гейтом — осознанное ИСКЛЮЧЕНИЕ из правила задачи 5
+# «ручка без проверки → не сужать, а записать в реестр как open» (раунд
+# правок 1 задачи 5 блока I). До блока create/update/delete отделов стояли
+# голым auth="jwt": в department_service нет ни одной проверки прав, и любой
+# вошедший — хоть employee-basic — мог завести, переименовать или удалить
+# отдел, причём DELETE ?cascade=true ФИЗИЧЕСКИ стирает сотрудников поддерева,
+# должности, связи подчинения и PMO-членства. Это не «справочник, открытый
+# всем намеренно» (как чтение — оно open и остаётся), а пробел, унаследованный
+# при переносе из FastAPI. Гейт здесь не отбирает ничего, чем кто-то
+# пользовался: единственный путь к записи отделов из интерфейса — диалог
+# создания сотрудника на кадровом экране /hr/employees
+# (frontend/src/components/hr/EmployeeFormDialog.tsx), который и так под
+# hr:read, а создание сотрудника требует старшего кадрового уровня;
+# update/delete отделов интерфейс не зовёт вовсе. Уровни — по общему правилу:
+# create/update → write, delete → admin (каскад необратим).
+@api_view(methods=("POST",), auth="jwt", body=schemas.DepartmentCreate, status=201, module="hr", level="write")
 def _create_department(request, data: schemas.DepartmentCreate):
     try:
         dep = svc.create_department(data)
@@ -119,7 +134,8 @@ def _get_department(request, department_id: int):
         return json_error("Department not found", 404)
 
 
-@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.DepartmentUpdate)
+# Гейт — см. комментарий над _create_department (осознанное исключение).
+@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.DepartmentUpdate, module="hr", level="write")
 def _update_department(request, department_id: int, data: schemas.DepartmentUpdate):
     try:
         return svc.serialize(svc.update_department(department_id, data))
@@ -127,7 +143,9 @@ def _update_department(request, department_id: int, data: schemas.DepartmentUpda
         return json_error("Department not found", 404)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+# Гейт — см. комментарий над _create_department; здесь admin, потому что
+# ?cascade=true необратимо стирает сотрудников/должности/связи поддерева.
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_department(request, department_id: int):
     try:
         svc.delete_department(department_id, cascade=_wants_cascade(request))

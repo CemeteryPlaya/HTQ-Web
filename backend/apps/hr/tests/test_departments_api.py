@@ -30,12 +30,47 @@ BASE = "/api/hr/v1/departments"
 
 @pytest.fixture
 def auth(db):
+    """Вошедший БЕЗ единой роли и без контекста компании.
+
+    Годится только для ЧТЕНИЯ: читающие ручки ``/departments/*`` объявлены
+    ``open`` в ``apps.access.self_service`` (справочник компании), и этот
+    файл заодно закрепляет, что они таковыми остаются. Записи под этим
+    вызывающим НЕТ с раунда правок 1 задачи 5 блока I — см. ``lead_auth``.
+    """
     user = User.objects.create(
         username="hr-user", email="hr@htq.test", password="x", status=UserStatus.ACTIVE,
     )
     user.set_password("S3cret!")
     user.save()
     return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+
+
+@pytest.fixture
+def lead_auth(db, company_row):
+    """Кадровый руководитель: засеянная роль ``hr-lead`` + компания запроса.
+
+    Раунд правок 1 задачи 5 блока I поставил ЗАПИСЬ отделов под гейт
+    ``module="hr"`` (create/update → ``write``, delete → ``admin``) —
+    осознанное исключение из «как есть», см. комментарий над
+    ``_create_department`` в ``apps/hr/views.py``. Контракт самих ручек
+    (генерация path, каскад, 409-detail) от уровня не зависит, поэтому все
+    писательские тесты ниже ходят одним ``hr-lead`` (агрегат модуля —
+    ``admin``, проходит и write, и admin); границы уровней — в
+    ``test_module_gate.py``.
+    """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    user = User.objects.create(
+        username="hr-lead-user", email="hr-lead@htq.test", password="x", status=UserStatus.ACTIVE,
+    )
+    user.set_password("S3cret!")
+    user.save()
+    RoleAssignment.objects.create(
+        company_slug=company_row, user_id=user.id, role=Role.objects.get(code="hr-lead"),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 def _dep(name, path, **kw):
@@ -104,35 +139,35 @@ def test_tree_nests_by_path_prefix(auth):
 # ── POST / ──────────────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_create_autogenerates_path_by_transliteration(auth):
+def test_create_autogenerates_path_by_transliteration(lead_auth):
     resp = Client().post(f"{BASE}/", data={"name": "Отдел Кадров"},
-                         content_type="application/json", **auth)
+                         content_type="application/json", **lead_auth)
     assert resp.status_code == 201
     assert resp.json()["path"] == "otdel_kadrov"
 
 
 @pytest.mark.django_db
-def test_create_nests_path_under_parent(auth):
+def test_create_nests_path_under_parent(lead_auth):
     parent = _dep("ИТ", "it")
     resp = Client().post(f"{BASE}/", data={"name": "Разработка", "parent_id": parent.id},
-                         content_type="application/json", **auth)
+                         content_type="application/json", **lead_auth)
     assert resp.status_code == 201
     assert resp.json()["path"] == "it.razrabotka"
 
 
 @pytest.mark.django_db
-def test_create_honours_explicit_path(auth):
+def test_create_honours_explicit_path(lead_auth):
     resp = Client().post(f"{BASE}/", data={"name": "ИТ", "path": "custom.path"},
-                         content_type="application/json", **auth)
+                         content_type="application/json", **lead_auth)
     assert resp.status_code == 201
     assert resp.json()["path"] == "custom.path"
 
 
 @pytest.mark.django_db
-def test_create_deduplicates_colliding_path(auth):
+def test_create_deduplicates_colliding_path(lead_auth):
     _dep("Старый", "otdel")
     resp = Client().post(f"{BASE}/", data={"name": "Отдел"},
-                         content_type="application/json", **auth)
+                         content_type="application/json", **lead_auth)
     assert resp.status_code == 201
     # исходник добавляет суффикс времени, лишь бы не совпало
     assert resp.json()["path"].startswith("otdel_")
@@ -153,14 +188,14 @@ def test_detail_and_404(auth):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("method", ["put", "patch"])
-def test_update_accepts_both_put_and_patch(auth, method):
+def test_update_accepts_both_put_and_patch(lead_auth, method):
     """PUT — задокументированный контракт исходника; PATCH — то, что реально
     шлёт фронт (frontend/src/api/hr.ts::updateDepartment), из-за чего сейчас
     получает 405. Регистрируем оба: строго аддитивно."""
     dep = _dep("ИТ", "it")
     resp = getattr(Client(), method)(
         f"{BASE}/{dep.id}/", data={"name": "ИТ и связь"},
-        content_type="application/json", **auth,
+        content_type="application/json", **lead_auth,
     )
     assert resp.status_code == 200
     assert resp.json()["name"] == "ИТ и связь"
@@ -169,10 +204,10 @@ def test_update_accepts_both_put_and_patch(auth, method):
 
 
 @pytest.mark.django_db
-def test_update_ignores_none_fields(auth):
+def test_update_ignores_none_fields(lead_auth):
     dep = _dep("ИТ", "it", description="исходное")
     Client().patch(f"{BASE}/{dep.id}/", data={"name": "ИТ-2", "description": None},
-                   content_type="application/json", **auth)
+                   content_type="application/json", **lead_auth)
     dep.refresh_from_db()
     assert dep.name == "ИТ-2"
     assert dep.description == "исходное"  # exclude_none в исходнике
@@ -181,20 +216,20 @@ def test_update_ignores_none_fields(auth):
 # ── DELETE /{id}/ ───────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_delete_clean_department_returns_204(auth):
+def test_delete_clean_department_returns_204(lead_auth):
     dep = _dep("Пустой", "empty")
-    assert Client().delete(f"{BASE}/{dep.id}/", **auth).status_code == 204
+    assert Client().delete(f"{BASE}/{dep.id}/", **lead_auth).status_code == 204
     assert not Department.objects.filter(id=dep.id).exists()
 
 
 @pytest.mark.django_db
-def test_delete_with_dependents_returns_409_structured_detail(auth):
+def test_delete_with_dependents_returns_409_structured_detail(lead_auth):
     dep = _dep("ИТ", "it")
     _dep("Разработка", "it.dev")
     pos = _pos("Инженер", dep, weight=50)
     _emp(dep, pos, "a@htq.test")
 
-    resp = Client().delete(f"{BASE}/{dep.id}/", **auth)
+    resp = Client().delete(f"{BASE}/{dep.id}/", **lead_auth)
     assert resp.status_code == 409
     detail = resp.json()["detail"]
     assert detail["code"] == "department_has_dependents"
@@ -204,23 +239,23 @@ def test_delete_with_dependents_returns_409_structured_detail(auth):
 
 
 @pytest.mark.django_db
-def test_delete_soft_deleted_employees_not_counted_as_blockers(auth):
+def test_delete_soft_deleted_employees_not_counted_as_blockers(lead_auth):
     dep = _dep("ИТ", "it")
     pos = _pos("Инженер", dep, weight=50)
     _emp(dep, pos, "a@htq.test", is_deleted=True)
 
-    resp = Client().delete(f"{BASE}/{dep.id}/", **auth)
+    resp = Client().delete(f"{BASE}/{dep.id}/", **lead_auth)
     assert resp.json()["detail"]["blockers"]["employees"] == 0
 
 
 @pytest.mark.django_db
-def test_delete_cascade_removes_subtree(auth):
+def test_delete_cascade_removes_subtree(lead_auth):
     dep = _dep("ИТ", "it")
     child = _dep("Разработка", "it.dev")
     pos = _pos("Инженер", dep, weight=50)
     emp = _emp(dep, pos, "a@htq.test")
 
-    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **auth)
+    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **lead_auth)
     assert resp.status_code == 204
     assert not Department.objects.filter(id__in=[dep.id, child.id]).exists()
     assert not Position.objects.filter(id=pos.id).exists()
@@ -228,7 +263,7 @@ def test_delete_cascade_removes_subtree(auth):
 
 
 @pytest.mark.django_db
-def test_delete_cascade_clears_manager_pointing_at_deleted_employee(auth):
+def test_delete_cascade_clears_manager_pointing_at_deleted_employee(lead_auth):
     dep = _dep("ИТ", "it")
     other = _dep("Финансы", "fin")
     pos = _pos("Инженер", dep, weight=50)
@@ -236,13 +271,13 @@ def test_delete_cascade_clears_manager_pointing_at_deleted_employee(auth):
     other.manager = emp
     other.save(update_fields=["manager"])
 
-    assert Client().delete(f"{BASE}/{dep.id}/?cascade=true", **auth).status_code == 204
+    assert Client().delete(f"{BASE}/{dep.id}/?cascade=true", **lead_auth).status_code == 204
     other.refresh_from_db()
     assert other.manager_id is None
 
 
 @pytest.mark.django_db
-def test_delete_cascade_drops_reporting_relations_touching_subtree_positions(auth):
+def test_delete_cascade_drops_reporting_relations_touching_subtree_positions(lead_auth):
     """Закрывает TODO исходника (department_service.py, шаг «1. Drop reporting
     relations»): каскадное удаление отдела должно чистить ReportingRelation, где
     ЛЮБАЯ сторона (superior ИЛИ subordinate) указывает на позицию из удаляемого
@@ -257,7 +292,7 @@ def test_delete_cascade_drops_reporting_relations_touching_subtree_positions(aut
         effective_from=datetime.date(2024, 1, 1),
     )
 
-    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **auth)
+    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **lead_auth)
     assert resp.status_code == 204
     assert not ReportingRelation.objects.filter(id=rel.id).exists()
     # "fin" и её позиция вне поддерева — не должны быть тронуты.
@@ -299,7 +334,7 @@ def test_employees_404_for_missing_department(auth):
 # ── cascade: PMOMember (под-модуль pmo) ─────────────────────────────────────
 
 @pytest.mark.django_db
-def test_delete_cascade_drops_pmo_memberships_of_subtree_employees(auth):
+def test_delete_cascade_drops_pmo_memberships_of_subtree_employees(lead_auth):
     """Закрывает TODO исходника (department_service.py, шаг «2. Drop PMO
     memberships»): каскадное удаление отдела должно чистить PMOMember по
     СОТРУДНИКАМ удаляемого поддерева ПЕРЕД удалением самих сотрудников — даже
@@ -316,7 +351,7 @@ def test_delete_cascade_drops_pmo_memberships_of_subtree_employees(auth):
         pmo=pmo, employee=emp, from_date=datetime.date(2024, 1, 1),
     )
 
-    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **auth)
+    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **lead_auth)
     assert resp.status_code == 204
     assert not PMOMember.objects.filter(id=member.id).exists()
     assert not Employee.objects.filter(id=emp.id).exists()
@@ -327,7 +362,7 @@ def test_delete_cascade_drops_pmo_memberships_of_subtree_employees(auth):
 # ── система защиты (блок F) ──────────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_delete_with_system_positions_returns_409_refuses_cascade(auth):
+def test_delete_with_system_positions_returns_409_refuses_cascade(lead_auth):
     """Системные должности защищены от удаления всегда, даже с cascade=true,
     потому что на них могут ссылаться маршруты согласования."""
     from apps.hr.services import participant_service
@@ -337,7 +372,7 @@ def test_delete_with_system_positions_returns_409_refuses_cascade(auth):
     assert position.is_system is True
 
     # Попытка удалить БЕЗ cascade.
-    resp = Client().delete(f"{BASE}/{dep.id}/", **auth)
+    resp = Client().delete(f"{BASE}/{dep.id}/", **lead_auth)
     assert resp.status_code == 409
     detail = resp.json()["detail"]
     assert detail["code"] == "department_has_system_positions"
@@ -346,7 +381,7 @@ def test_delete_with_system_positions_returns_409_refuses_cascade(auth):
     assert Position.objects.filter(id=position.id).exists()
 
     # Попытка с cascade=true — тоже отказывает.
-    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **auth)
+    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **lead_auth)
     assert resp.status_code == 409
     detail = resp.json()["detail"]
     assert detail["code"] == "department_has_system_positions"
@@ -355,7 +390,7 @@ def test_delete_with_system_positions_returns_409_refuses_cascade(auth):
 
 
 @pytest.mark.django_db
-def test_delete_cascade_normal_department_still_works(auth):
+def test_delete_cascade_normal_department_still_works(lead_auth):
     """Проверка регрессии: каскадное удаление обычного подразделения
     по-прежнему работает без системных должностей."""
     dep = _dep("ИТ", "it")
@@ -363,7 +398,7 @@ def test_delete_cascade_normal_department_still_works(auth):
     pos = _pos("Инженер", dep, weight=50)
     emp = _emp(dep, pos, "a@htq.test")
 
-    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **auth)
+    resp = Client().delete(f"{BASE}/{dep.id}/?cascade=true", **lead_auth)
     assert resp.status_code == 204
     assert not Department.objects.filter(id__in=[dep.id, child.id]).exists()
     assert not Position.objects.filter(id=pos.id).exists()

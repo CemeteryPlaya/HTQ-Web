@@ -193,25 +193,26 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         # ``_require_permission``, ни ``require_hr_access``, ни ``admin=True``
         # — подтверждено и кодом, и существующими тестами (``test_departments_
         # api.py``/``test_positions_api.py``::``auth`` — обычный, без единого
-        # HR-признака пользователь — успешно читает И пишет department-ручки,
-        # успешно ЧИТАЕТ position-ручки). Первый же ``module="hr"`` был бы
+        # HR-признака пользователь — успешно ЧИТАЕТ department- и
+        # position-ручки). Первый же ``module="hr"`` был бы
         # СУЖЕНИЕМ уже сегодняшнего поведения, а задача 5 обязана только
         # добавлять гейт, не отбирать то, что есть. Причина у каждой записи —
         # ``open`` (не ``self``: возвращаются заведомо чужие/общие данные —
         # чужие отделы, чужие должности, оргструктура компании).
         #
-        # ⚠️ departments — ЧТЕНИЕ И ЗАПИСЬ (create/update/delete) открыты
-        # ЛЮБОМУ вошедшему уже сегодня: в ``department_service.py`` нет ни
-        # одной строки про права, и ``test_departments_api.py`` намеренно
-        # гоняет create/update/delete на простом ``auth`` без роли. Это
-        # предшествующий этой задаче пробел (не решение задачи 5), сохранён
-        # как есть по ГЛАВНОМУ ПРАВИЛУ брифа — см. отчёт задачи 5.
+        # departments — только ЧТЕНИЕ открыто: это справочник (тот же
+        # телефонный справочник, что и org_tree). ЗАПИСЬ (``_create_department``/
+        # ``_update_department``/``_delete_department``) в реестре НЕТ
+        # намеренно — раунд правок 1 задачи 5 поставил её под ``module="hr"``
+        # (write/write/admin) как осознанное исключение из правила «как есть»:
+        # до блока она стояла голым ``auth="jwt"`` без единой проверки прав, а
+        # DELETE ``?cascade=true`` физически стирает сотрудников поддерева —
+        # это унаследованный из FastAPI пробел, а не спроектированная
+        # открытость. Обоснование — комментарий над ``_create_department`` в
+        # ``apps/hr/views.py`` и отчёт задачи 5, раздел «Раунд правок 1».
         "_list_departments": "open",
-        "_create_department": "open",
         "department_tree": "open",
         "_get_department": "open",
-        "_update_department": "open",
-        "_delete_department": "open",
         "department_children": "open",
         "department_employees": "open",
         # positions — ЧТЕНИЕ открыто любому вошедшему уже сегодня (запись

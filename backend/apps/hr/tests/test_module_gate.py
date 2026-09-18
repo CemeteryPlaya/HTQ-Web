@@ -26,11 +26,27 @@ test_module_gate`` (те же приёмы: ``Client()``, засеянные р�
    заводят Employee/Position нужного уровня И назначают ту же по смыслу
    засеянную роль (тот же приём, что в ``test_employees_api.py::
    _grant_seeded_role`` — см. его докстринг про две независимые модели).
-3. Справочники ``departments``/``positions`` (чтение и, для ``departments``,
-   ЗАПИСЬ) сегодня открыты любому вошедшему без единой роли (см. отчёт
-   задачи 5 и ``apps.access.self_service`` — записи с причиной ``open``) —
-   задача 5 это НЕ сузила, что здесь и проверяется regression-тестом на
-   ``employee-basic``.
+3. ЧТЕНИЕ справочников ``departments``/``positions`` открыто любому
+   вошедшему без единой роли (см. ``apps.access.self_service`` — записи с
+   причиной ``open``) — задача 5 это НЕ сузила, что здесь и проверяется
+   regression-тестом на ``employee-basic``. ЗАПИСЬ отделов — наоборот, под
+   гейтом (раунд правок 1: create/update → ``write``, delete → ``admin``,
+   осознанное исключение из «как есть» — см. комментарий над
+   ``_create_department`` в ``apps/hr/views.py``): рядовой получает 403,
+   ``hr-middle`` создаёт, ``hr-lead`` удаляет, ``hr-middle`` на удалении —
+   403.
+4. **Чувствительность к самому гейту** (раунд правок 1). Все тесты пунктов
+   1–3 с отказом используют вызывающего, которого СТАРАЯ модель
+   (``resolve_hr_access``) тоже отвергает — они прошли бы и без единого
+   ``module=``. После задачи 9 старая модель исчезнет, и гейт останется
+   единственной защитой, поэтому нужен вызывающий, которого старая модель
+   ПУСКАЕТ, а гейт — нет: ``is_staff=True`` БЕЗ единой роли.
+   ``resolve_hr_access`` по ``token.is_elevated`` даёт ему ``HRAccess(
+   level="lead", permissions={"*"})`` — старая модель открывает ему всё, —
+   а ``permissions_for`` без назначений (и без ``is_superuser``) отдаёт
+   ``{}``, уровень ``none``, и гейт обязан ответить 403. Эти тесты падают,
+   стоит снять ``module=`` с ручки, — проверено вживую при раунде правок 1
+   (см. отчёт задачи 5).
 """
 
 from __future__ import annotations
@@ -41,7 +57,7 @@ import pytest
 from django.test import Client
 
 from apps.access.models import Role, RoleAssignment, ScopeKind
-from apps.hr.models import Department, Employee, Position
+from apps.hr.models import Department, Employee, Position, ReportingRelation
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -141,6 +157,34 @@ def lead_employee(company_row, hr_dep):
     return emp, headers(user, company_row)
 
 
+@pytest.fixture
+def staff_without_roles(company_row):
+    """``is_staff=True`` БЕЗ единой роли и без Employee-профиля.
+
+    Старая модель его ПУСКАЕТ везде: ``resolve_hr_access`` первой строкой
+    смотрит ``token.is_elevated`` (``is_admin or is_staff or is_superuser``)
+    и отдаёт ``HRAccess(level="lead", permissions={"*"})``, не заглядывая ни
+    в Employee, ни в Position; ``admin=True`` на ручках должностей —
+    тот же предикат (``require_admin``). Новый гейт его НЕ пускает:
+    ``permissions_for`` короткое замыкание делает только для
+    ``is_superuser``, а дальше считает по назначениям ролей — их нет,
+    карта пустая, уровень модуля ``none``. Единственный вызывающий, на
+    котором 403 доказывает именно гейт, а не старую модель.
+    """
+    user = _mk("staff-no-roles", is_staff=True)
+    return headers(user, company_row)
+
+
+@pytest.fixture
+def target_employee(eng_dep):
+    """Чужой сотрудник — мишень для PATCH/DELETE."""
+    pos = Position.objects.create(title="Инженер", department=eng_dep, weight=11)
+    return Employee.objects.create(
+        email="target-staff@htq.test", department=eng_dep, position=pos,
+        hire_date=datetime.date(2024, 1, 9), first_name="Т", last_name="Т",
+    )
+
+
 # ── employee-basic: self-service остаётся открытым, список — нет ──────────
 
 
@@ -191,19 +235,54 @@ def test_employee_basic_keeps_reading_the_open_department_directory(client, plai
 
 
 @pytest.mark.django_db
-def test_employee_basic_can_still_create_a_department(client, plain_employee):
-    """Та же регрессия, но для ЗАПИСИ: ``/departments/`` сегодня открыты на
-    запись любому вошедшему (``department_service.py`` не содержит ни одной
-    проверки прав, ``test_departments_api.py`` гоняет create/update/delete
-    на простом ``auth`` без роли) — задача 5 ОБЯЗАНА не сужать это (см.
-    ГЛАВНОЕ ПРАВИЛО брифа задачи 5 и отчёт), хотя сам факт и выглядит как
-    предшествующий пробел, а не решение этой задачи."""
+def test_employee_basic_cannot_create_a_department(client, plain_employee):
+    """ЗАПИСЬ отделов — под гейтом (раунд правок 1 задачи 5). До блока
+    ``POST /departments/`` стоял голым ``auth="jwt"`` и рядовой сотрудник
+    заводил отделы (``department_service.py`` не содержит ни одной проверки
+    прав) — это унаследованный пробел, а не спроектированная открытость,
+    и он закрыт сознательно, в отступление от правила «как есть»: см.
+    комментарий над ``_create_department`` в ``apps/hr/views.py``."""
     _emp, head = plain_employee
     resp = client.post(
         f"{BASE}/departments/", data={"name": "Новый отдел", "path": "new-dep"},
         content_type="application/json", **head,
     )
+    assert resp.status_code == 403
+    assert not Department.objects.filter(path="new-dep").exists()
+
+
+@pytest.mark.django_db
+def test_hr_middle_creates_a_department(client, middle_employee):
+    """``_create_department`` — ``level="write"``; агрегат ``hr-middle`` —
+    ``write``, проходит."""
+    _actor, head = middle_employee
+    resp = client.post(
+        f"{BASE}/departments/", data={"name": "Новый отдел", "path": "new-dep"},
+        content_type="application/json", **head,
+    )
     assert resp.status_code == 201
+    assert Department.objects.filter(path="new-dep").exists()
+
+
+@pytest.mark.django_db
+def test_hr_middle_cannot_delete_a_department(client, middle_employee):
+    """``_delete_department`` — ``level="admin"`` (``?cascade=true``
+    необратимо стирает сотрудников поддерева); агрегат ``hr-middle`` —
+    ``write``, до ``admin`` не дотягивает."""
+    _actor, head = middle_employee
+    dep = Department.objects.create(name="Пустой", path="empty")
+    resp = client.delete(f"{BASE}/departments/{dep.id}/", **head)
+    assert resp.status_code == 403
+    assert Department.objects.filter(id=dep.id).exists()
+
+
+@pytest.mark.django_db
+def test_hr_lead_deletes_a_department(client, lead_employee):
+    _actor, head = lead_employee
+    dep = Department.objects.create(name="Пустой", path="empty")
+    resp = client.delete(f"{BASE}/departments/{dep.id}/", **head)
+    assert resp.status_code == 204
+    assert not Department.objects.filter(id=dep.id).exists()
 
 
 # ── hr-junior/middle/lead: реальные засеянные роли, реальные уровни ───────
@@ -281,6 +360,98 @@ def test_hr_lead_can_delete_an_employee(client, lead_employee, hr_dep):
     assert resp.status_code == 204
     target.refresh_from_db()
     assert target.is_deleted is True
+
+
+# ── чувствительность к гейту: is_staff без ролей — старая модель пускает ──
+#
+# Каждый тест ниже прошёл бы со статусом 2xx, не будь на ручке module=/level=:
+# старая модель (resolve_hr_access → is_elevated → level="lead", {"*"};
+# admin=True → require_admin → is_elevated) даёт этому вызывающему всё.
+# Отказать может ТОЛЬКО гейт. Убери module= с ручки — соответствующий тест
+# упадёт (проверено вживую при раунде правок 1, см. отчёт задачи 5).
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_still_reads_the_open_department_directory(client, staff_without_roles):
+    """Контроль: токен и заголовок компании у этого вызывающего в порядке —
+    открытая (``open``) ручка отвечает 200. Значит, 403 в тестах ниже даёт
+    именно гейт модуля, а не несовпадение компании или битый токен."""
+    Department.objects.create(name="Финансы", path="fin")
+    resp = client.get(f"{BASE}/departments/", **staff_without_roles)
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_is_denied_the_employee_list(client, staff_without_roles):
+    resp = client.get(f"{BASE}/employees/", **staff_without_roles)
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_edit_an_employee(client, staff_without_roles, target_employee):
+    resp = client.patch(
+        f"{BASE}/employees/{target_employee.id}/", data={"first_name": "Изменено"},
+        content_type="application/json", **staff_without_roles,
+    )
+    assert resp.status_code == 403
+    target_employee.refresh_from_db()
+    assert target_employee.first_name == "Т"
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_delete_an_employee(client, staff_without_roles, target_employee):
+    resp = client.delete(f"{BASE}/employees/{target_employee.id}/", **staff_without_roles)
+    assert resp.status_code == 403
+    target_employee.refresh_from_db()
+    assert target_employee.is_deleted is False
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_create_a_position(client, staff_without_roles, eng_dep):
+    """``_create_position`` — ``admin=True`` (is_staff ПРОХОДИТ) +
+    ``module="hr", level="admin"``: отказывает ровно вторая дверь."""
+    resp = client.post(
+        f"{BASE}/positions/", data={"title": "Новая", "department_id": eng_dep.id},
+        content_type="application/json", **staff_without_roles,
+    )
+    assert resp.status_code == 403
+    assert not Position.objects.filter(title="Новая").exists()
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_remove_a_reporting_relation(client, staff_without_roles, eng_dep):
+    """``remove_reporting_relation`` — в теле ``_require_permission(ORG_EDIT)``,
+    который ``{"*"}`` проходит; 403 — только от ``level="admin"``."""
+    boss = Position.objects.create(title="Начальник", department=eng_dep, weight=1)
+    sub = Position.objects.create(title="Подчинённый", department=eng_dep, weight=2)
+    rel = ReportingRelation.objects.create(
+        superior_position=boss, subordinate_position=sub,
+        effective_from=datetime.date(2024, 1, 1),
+    )
+    resp = client.delete(f"{BASE}/org/relations/{rel.id}", **staff_without_roles)
+    assert resp.status_code == 403
+    assert ReportingRelation.objects.filter(id=rel.id).exists()
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_create_a_department(client, staff_without_roles):
+    """У записи отделов НЕТ старой проверки вовсе (``department_service`` не
+    знает о правах) — без гейта этот вызывающий, как и любой другой,
+    создал бы отдел."""
+    resp = client.post(
+        f"{BASE}/departments/", data={"name": "Новый отдел", "path": "new-dep"},
+        content_type="application/json", **staff_without_roles,
+    )
+    assert resp.status_code == 403
+    assert not Department.objects.filter(path="new-dep").exists()
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_delete_a_department(client, staff_without_roles):
+    dep = Department.objects.create(name="Пустой", path="empty")
+    resp = client.delete(f"{BASE}/departments/{dep.id}/?cascade=true", **staff_without_roles)
+    assert resp.status_code == 403
+    assert Department.objects.filter(id=dep.id).exists()
 
 
 # ── регресс: производственный календарь этой задачей НЕ тронут ────────────
