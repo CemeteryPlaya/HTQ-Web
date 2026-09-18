@@ -2454,8 +2454,23 @@ def _list_documents(request):
     )
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.DocumentCreate, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.DocumentCreate, status=201,
+          module="hr", level="write")
 def _upload_document(request, data: schemas.DocumentCreate):
+    """JSON-ветка ``POST /documents/`` — раунд правок 1 задачи 6: гейт стоит
+    ЗДЕСЬ тоже, а не только на multipart-ветке ниже.
+
+    Обе ветки — ОДНА ручка ``POST /documents/``, диспетчеризуемая по
+    ``Content-Type`` (``documents_collection`` ниже) — защита ручки не
+    может зависеть от заголовка запроса: не гейтируя эту ветку, задача 6
+    отдавала бы обход гейта простой сменой Content-Type на JSON, а гейт,
+    который так обходится, хуже отсутствующего (он лжёт следующему
+    читателю, что ручка защищена). Сознательное отступление от исходного
+    ``auth="jwt"`` без проверки прав, в духе записи отделов задачи 5: из
+    интерфейса эта ветка не зовётся вовсе (фронт «Документов» шлёт
+    multipart, ради чего и заведена ветка ниже) — она существует для
+    прямых клиентов-скриптов, которым можно выдать HR-роль отдельно.
+    """
     return doc_svc.serialize(doc_svc.create_document(data))
 
 

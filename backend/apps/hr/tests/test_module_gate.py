@@ -658,7 +658,14 @@ def test_staff_without_roles_cannot_read_employee_calendar(client, staff_without
     assert resp.status_code == 403
 
 
-# ── /documents/* — только гейтированные task-6 ручки (multipart/patch) ────
+# ── /documents/* — только гейтированные ручки (multipart/JSON/patch) ──────
+#
+# Раунд правок 1: ``POST /documents/`` — ОДНА ручка (``documents_
+# collection``), диспетчеризуемая по ``Content-Type`` на две функции
+# (``_upload_document_multipart``/``_upload_document``). Обе теперь несут
+# ``module="hr", level="write"`` — гейт не должен сниматься сменой
+# заголовка запроса, поэтому обе ветки проверяются отдельно ниже, ОДНИМ
+# и тем же ``staff_without_roles``.
 
 
 @pytest.mark.django_db
@@ -666,6 +673,24 @@ def test_staff_without_roles_cannot_upload_a_document_multipart(client, staff_wi
     resp = client.post(
         f"{BASE}/documents/",
         data={"employee": str(target_employee.id), "title": "Т", "doc_type": "other"},
+        **staff_without_roles,
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_upload_a_document_json(client, staff_without_roles, target_employee):
+    """Зеркало ``..._multipart`` выше для JSON-ветки той же ручки — гейт
+    обязан отказывать одинаково независимо от ``Content-Type``, иначе он
+    хуже отсутствующего (сообщает, что ручка защищена, а сам обходится
+    сменой заголовка)."""
+    resp = client.post(
+        f"{BASE}/documents/",
+        data={
+            "employee_id": target_employee.id, "title": "Т", "doc_type": "other",
+            "file_path": "/files/x.pdf", "file_size": 1, "uploaded_by": target_employee.id,
+        },
+        content_type="application/json",
         **staff_without_roles,
     )
     assert resp.status_code == 403

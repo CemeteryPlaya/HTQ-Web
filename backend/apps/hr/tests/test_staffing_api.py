@@ -233,7 +233,6 @@ def test_view_permission_insufficient_for_manage(company_row):
     )
     assert resp.status_code == 403
     assert resp.json()["detail"] == "Missing permission: hr.staffing.manage"
-    assert resp.json()["detail"] == "Missing permission: hr.staffing.manage"
 
 
 # ── GET /staffing/ — список (headcount/salary/fot строками) ─────────────────
