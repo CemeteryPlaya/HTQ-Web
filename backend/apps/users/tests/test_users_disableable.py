@@ -216,8 +216,15 @@ def test_options_endpoint_actually_succeeds_when_users_enabled():
     from htqweb.authn.jwt import issue_token_pair
 
     _enable_users()
+    # is_superuser — не про этот файл, а плата за гейт модуля: с задачи 4
+    # блока I подбор требует чтения модуля ``users`` в компании запроса
+    # (apps/users/views.py::list_user_options). Файл проверяет РУБИЛЬНИК, а не
+    # права, и заводить здесь компанию с ролью значило бы проверять чужое;
+    # суперпользователь проходит гейт по определению и оставляет проверку об
+    # одном.
     user = User.objects.create(username="sweep", email="sweep@htq.test",
-                                status=UserStatus.ACTIVE, first_name="Sweep", last_name="Er")
+                                status=UserStatus.ACTIVE, first_name="Sweep",
+                                last_name="Er", is_staff=True, is_superuser=True)
     user.set_password("S3cret!")
     user.save()
     token = issue_token_pair(user)["access"]

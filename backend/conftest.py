@@ -99,6 +99,38 @@ def fallback_log_mode(settings):
 _SOLO_SLUG = "t-fixture-solo"
 _PAIR_SLUGS = ("t-fixture-alpha", "t-fixture-beta")
 
+#: Слаг компании БЕЗ физической схемы (см. фикстуру company_row).
+_ROW_SLUG = "t-fixture-row"
+
+
+@pytest.fixture
+def company_row(db):
+    """Компания одной строкой реестра, БЕЗ схемы и без миграций.
+
+    Дешёвая половина ``company_schema``: ``CompanyContextMiddleware`` требует
+    ровно строку реестра — по ней он решает, ставить ли контекст или ответить
+    404, — а ``CREATE SCHEMA`` + прогон миграций четырёх тенантных аппок
+    (минута на модуль) нужны только тем, кто реально пишет в таблицы компании.
+
+    Для чего она появилась (задача 4 блока I «Единая модель прав»): ручки под
+    ``api_view(module=…, level=…)`` требуют КОМПАНИЮ запроса, потому что прав
+    вне компании не бывает. Тестам аппок, живущих в ``public`` (``users``,
+    ``access``), из-за этого понадобился контекст компании — но не её схема.
+    ``search_path`` вида ``co_t_fixture_row, public`` в несуществующую схему
+    просто проваливается в ``public``, где в тестовой базе и лежат все
+    таблицы, поэтому чтение и запись работают как обычно.
+
+    ⚠️ Не годится тесту, который проверяет ИЗОЛЯЦИЮ схем или пишет в таблицы
+    тенантной аппки как в «свои»: без ``co_``-схемы всё уходит в ``public``, и
+    разные «компании» на этой фикстуре видели бы одни и те же строки. Для
+    этого есть ``company_schema``/``two_company_schemas``.
+    """
+    from apps.companies.models import Company, CompanyKind
+
+    Company.objects.create(slug=_ROW_SLUG, name="Компания без схемы",
+                           kind=CompanyKind.SERVICE)
+    return _ROW_SLUG
+
 
 def _setup_schema_pool(slugs):
     """CREATE SCHEMA + полный прогон миграций тенантных аппок по каждому слагу.

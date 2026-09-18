@@ -6,6 +6,25 @@ auth, and status codes only — domain logic lives in
 
 ``token/`` and ``token/refresh/`` are plain JSON bodies and go through
 ``htqweb.http.api_view``'s ``body=`` machinery like every other app.
+
+**Гейт модуля** (блок I «Единая модель прав», задача 4) — ``api_view(
+module=MODULE, level=…)`` на каждой ручке, кроме двух групп:
+
+* ``auth=None`` (вход, обмен токена, регистрация, телеметрия) — гейт там не
+  может сработать в принципе: уровень считается по ``request.token``,
+  которого у такой ручки нет (см. ``htqweb/http.py`` — проверка стоит внутри
+  ``if auth is not None``);
+* самообслуживание — свой профиль, свой аватар, свой пароль (реестр
+  ``apps.access.self_service``, причина ``self``): все три резолвят запись
+  строго по ``request.token.user_id``, параметра-подмены у них нет, и
+  закрывать нечего. Держатель системной роли ``employee-basic`` иначе не
+  открыл бы собственный профиль.
+
+Уровень — по операции: чтение — ``read``, создание и правка — ``write``,
+удаление и администрирование — ``admin`` (правило ``depth.legacy_level``).
+Ручки администрирования учёток СОХРАНЯЮТ ``admin=True``: платформенный
+админ-гейт отвечает на другой вопрос, чем права на модуль в компании, и
+снять его значило бы расширить доступ.
 """
 
 from __future__ import annotations
@@ -36,6 +55,10 @@ from .services import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Модуль реестра прав, к которому относятся ручки этой аппки
+#: (``apps/users/access_functions.py``, узлы ``users.*``).
+MODULE = "users"
 
 
 # ── Компания запроса для выдачи токена — общий шаг login и refresh ─────────
@@ -354,7 +377,7 @@ def register(request, data: schemas.RegisterRequest):
     return schemas.RegisterResponse(id=user.id, email=user.email)
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", admin=True, module=MODULE, level="admin")
 def pending_registrations(request):
     users = registration_service.list_pending()
     return [
@@ -369,7 +392,7 @@ def pending_registrations(request):
     ]
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True)
+@api_view(methods=("POST",), auth="jwt", admin=True, module=MODULE, level="admin")
 def approve_registration(request, user_id: int):
     try:
         registration_service.approve(user_id)
@@ -387,7 +410,7 @@ def approve_registration(request, user_id: int):
     return HttpResponse(status=204)
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True)
+@api_view(methods=("POST",), auth="jwt", admin=True, module=MODULE, level="admin")
 def reject_registration(request, user_id: int):
     try:
         registration_service.reject(user_id)
@@ -414,13 +437,14 @@ def reject_registration(request, user_id: int):
 # provisioning in create.
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", admin=True, module=MODULE, level="admin")
 def _admin_list_users(request):
     users = admin_service.list_users()
     return [schemas.AdminUserResponse(**admin_service.serialize_admin_user(u)) for u in users]
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.AdminUserCreateRequest, status=201, admin=True)
+@api_view(methods=("POST",), auth="jwt", body=schemas.AdminUserCreateRequest, status=201,
+          admin=True, module=MODULE, level="admin")
 def _admin_create_user(request, data: schemas.AdminUserCreateRequest):
     payload = data.model_dump()
     create_mailbox = payload.pop("create_mailbox")
@@ -491,7 +515,8 @@ def admin_users_collection(request, *args, **kwargs):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.AdminUserUpdateRequest, admin=True)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.AdminUserUpdateRequest,
+          admin=True, module=MODULE, level="admin")
 def _admin_update_user(request, user_id: int, data: schemas.AdminUserUpdateRequest):
     try:
         user = admin_service.get_user_or_404(user_id)
@@ -535,7 +560,7 @@ def _admin_update_user(request, user_id: int, data: schemas.AdminUserUpdateReque
     return schemas.AdminUserResponse(**admin_service.serialize_admin_user(user))
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", admin=True, module=MODULE, level="admin")
 def _admin_delete_user(request, user_id: int):
     if request.token.user_id == user_id:
         return json_error("Cannot delete yourself", 400)
@@ -566,7 +591,8 @@ def admin_user_detail(request, user_id: int, *args, **kwargs):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.AdminSetPasswordRequest, admin=True)
+@api_view(methods=("POST",), auth="jwt", body=schemas.AdminSetPasswordRequest,
+          admin=True, module=MODULE, level="admin")
 def admin_set_password(request, user_id: int, data: schemas.AdminSetPasswordRequest):
     try:
         user = admin_service.get_user_or_404(user_id)
@@ -647,11 +673,16 @@ def ingest_user_action(request, data: schemas.UserActionEvent):
 
 # ── GET users/options/ — active-user picker (Task 2.5) ─────────────────────
 #
-# Ported from ``services/user/app/api/v1/users.py``. Any authenticated user
-# may call this (no admin gate) — see ``apps.users.services.options_service``.
+# Ported from ``services/user/app/api/v1/users.py``. Админского гейта у ручки
+# нет и не было (см. ``apps.users.services.options_service``), но с задачи 4
+# блока I она требует ЧТЕНИЯ модуля ``users`` в компании запроса: подбор
+# отдаёт чужие имена, то есть это справочник учёток, а не самообслуживание.
+# Рядового сотрудника это не задевает — системная роль ``employee-basic``
+# несёт ``users.profile``, а уровень модуля считается по всему поддереву
+# (``apps.access.services.resolve.permissions_for``).
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module=MODULE, level="read")
 def list_user_options(request):
     try:
         q = schemas.UserOptionsQuery.model_validate(dict(request.GET.items()))

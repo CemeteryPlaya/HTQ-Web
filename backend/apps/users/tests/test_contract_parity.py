@@ -231,8 +231,14 @@ def test_user_option_matches_fastapi_schema_shape():
     """Shape derived from services/user/app/api/v1/users.py::UserOption —
     NOT a live FastAPI capture (see module docstring)."""
     contract = _load("user_option.json")
+    # Суперпользователь — не часть контракта, а обход гейта модуля: с задачи 4
+    # блока I подбор требует чтения модуля ``users`` в компании запроса. Файл
+    # ловит ДРЕЙФ ФОРМЫ ответа, а форма от уровня вызывающего не зависит
+    # (``email`` остаётся строкой: у неэлевированного — пустой, см.
+    # test_user_options_api.py::test_email_is_hidden_from_regular_callers).
     caller = _make_user(username="optioncaller", email="optioncaller@htq.test",
-                        first_name="Opt", last_name="Ion")
+                        first_name="Opt", last_name="Ion",
+                        is_staff=True, is_superuser=True)
     # ``query`` is required now (min 2 chars); the response SHAPE is what
     # this test pins, and that is unchanged — see test_user_options_api.py.
     resp = Client().get(f"{BASE}/users/options/?query=optioncaller",

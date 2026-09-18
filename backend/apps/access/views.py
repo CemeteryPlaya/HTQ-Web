@@ -12,6 +12,17 @@
 (спека §4.1, риск 2). Привязки же — ролей к должности и личных назначений —
 операции внутри одной компании и гейтятся обычным ``admin=True``.
 
+**Гейт модуля** (блок I «Единая модель прав», задача 4) — ``api_view(
+module="access", level=…)`` на КАЖДОЙ ручке, кроме ``MeView.get``
+(самообслуживание, реестр ``apps.access.self_service``). Уровень выбирается по
+операции: чтение — ``read``, создание и правка — ``write``, удаление и
+администрирование — ``admin`` (то же правило, что в ``depth.legacy_level``).
+Ручки, уже стоявшие под ``admin=True``, флаг СОХРАНЯЮТ: платформенный
+админ-гейт и гейт модуля отвечают на разные вопросы («пускают ли его в
+администрирование платформы» и «есть ли у него права на этот модуль в этой
+компании»), и снятие первого расширило бы доступ, чего задача делать не
+должна. Обе двери проверяются подряд, в этом порядке (``htqweb/http.py``).
+
 **Компания берётся из контекста запроса**, а не из тела и не из query-параметра:
 иначе слаг компании становится значением, которое можно подставить, и изоляция
 превращается в вежливую просьбу.
@@ -47,12 +58,27 @@ from .services.errors import (
 INVALID = (RoleConflict, UnknownModule, UnknownRole, ScopeInvalid,
            DepthNotApplicable)
 
-read = method_decorator(api_view(methods=("GET",), auth="jwt"))
+#: Модуль реестра прав, к которому относятся ручки этой аппки
+#: (``apps/access/access_functions.py``, узлы ``access.*``).
+MODULE = "access"
+
+read = method_decorator(api_view(methods=("GET",), auth="jwt",
+                                 module=MODULE, level="read"))
 
 
-def write(method: str, body=None, status: int = 200, admin: bool = True):
+def write(method: str, body=None, status: int = 200, admin: bool = True,
+          level: str = "write"):
+    """Изменяющая ручка домена прав.
+
+    ``level`` объявляется КАЖДЫМ вызовом явно там, где он не ``write``, а не
+    выводится из ``admin``: правило «удаление и администрирование — ``admin``»
+    решает операция ручки, и связывать его с платформенным флагом значило бы
+    сделать один гейт молчаливой функцией другого — два разных вопроса
+    (см. докстринг модуля) снова слиплись бы в один.
+    """
     return method_decorator(api_view(methods=(method,), auth="jwt",
-                                     body=body, status=status, admin=admin))
+                                     body=body, status=status, admin=admin,
+                                     module=MODULE, level=level))
 
 
 class AccessView(ApiView):
@@ -89,8 +115,13 @@ class AccessView(ApiView):
 class FunctionsView(AccessView):
     """``GET functions`` — реестр функций деревом.
 
-    Читать может любой вошедший: это справочник экранов платформы, а не данные.
-    Без него редактор ролей нечем нарисовать — матрица прав строится по нему.
+    Справочник экранов платформы, а не данные: без него редактор ролей нечем
+    нарисовать — матрица прав строится по нему. Читатель поэтому тот же, что у
+    самого редактора: ``module="access", level="read"`` (задача 4 блока I). До
+    неё ручку читал любой вошедший; в реестр исключений
+    (``apps.access.self_service``) она не внесена намеренно — это материал
+    редактора ролей, а не общий справочник вроде оргдерева, и человеку без
+    единого права на модуль доступа он ничего не даёт.
     """
 
     @read
@@ -145,7 +176,8 @@ class RoleItemView(AccessView):
             return json_error(str(exc) or "invalid", 422)
         return schemas.RoleRead.model_validate(role)
 
-    @write("DELETE", admin=False)
+    # Удаление — ``admin``: разрушающая операция (``depth.legacy_level``).
+    @write("DELETE", admin=False, level="admin")
     def delete(self, request, role_id: int):
         if (denied := self.deny_unless_platform_admin()):
             return denied
@@ -238,7 +270,7 @@ class PositionRolesView(AccessView):
         self.position_or_404(position_id)
         return assignment.position_roles(company, position_id)
 
-    @write("PUT", body=schemas.PositionRolesIn)
+    @write("PUT", body=schemas.PositionRolesIn, level="admin")
     def put(self, request, position_id: int, data: schemas.PositionRolesIn):
         company = self.company_or_404()
         self.position_or_404(position_id)
@@ -256,7 +288,7 @@ class UserAssignmentsView(AccessView):
     def get(self, request, user_id: int):
         return assignment.user_assignments(self.company_or_404(), user_id)
 
-    @write("PUT", body=schemas.AssignmentsIn)
+    @write("PUT", body=schemas.AssignmentsIn, level="admin")
     def put(self, request, user_id: int, data: schemas.AssignmentsIn):
         company = self.company_or_404()
         try:
@@ -280,9 +312,20 @@ class MeView(AccessView):
     Суперпользователю контекст не строится вовсе: у него ответ уже не стоит
     ни одного запроса, и вызов ``resolve_for`` тут же вернул бы в горячий
     путь ровно те запросы, которые эта оптимизация убирает.
+
+    **Без гейта модуля** — единственная такая ручка аппки (реестр
+    ``apps.access.self_service``, причина ``self``): отдаёт РОВНО права
+    предъявителя токена, параметра, которым можно указать на чужого
+    пользователя, у неё нет. Нужна КАЖДОМУ вошедшему, включая держателя
+    ``employee-basic``, у которой нет ни одного узла ``access.*``, — под
+    ``@read`` (``module="access"``) он не узнал бы даже, что ему доступно.
+    Декоратор поэтому объявлен здесь ЛИТЕРАЛЬНО, а не взят общий: ручка без
+    гейта обязана быть видна отдельным вызовом ``api_view(...)`` — и человеку,
+    и сторожу ``apps/access/tests/test_gate.py``, который разбирает файл
+    текстом (тот же приём, что у ``MyCompaniesView.get`` в ``apps.companies``).
     """
 
-    @read
+    @method_decorator(api_view(methods=("GET",), auth="jwt"))
     def get(self, request):
         company = self.company
         resolution = (None if request.token.is_superuser
