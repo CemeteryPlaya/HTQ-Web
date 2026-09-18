@@ -93,6 +93,31 @@ def test_gate_lets_superuser_through(company_context):
 
 
 @pytest.mark.django_db
+def test_gate_failure_answers_with_the_error_envelope(company_context, service_off):
+    """Выключенный домен ``access`` — 503 в конверте, а не голый 500.
+
+    Раунд правок 1 задачи 4 блока I. Гейт ходит в базу через
+    ``apps.access.interface``, а тот первой строкой зовёт
+    ``require_service("access")``. Пока ``try`` в ``api_view`` начинался ПОСЛЕ
+    гейта, ``ServiceDisabled`` уходил из вьюхи наружу целиком: клиент получал
+    500 без конверта ``{"detail": …}``, одинаковый для «домен прав выключен» и
+    «вьюха упала», и даже без строки лога. Проверяется на гейтированной ручке
+    ЧУЖОГО модуля (``hr``): у ручек самой ``access`` 503 отдал бы
+    ``ServiceGateMiddleware`` по префиксу URL, то есть эта дыра там не видна.
+    """
+    import json
+
+    slug = company_context["slug"]
+    with service_off("access"):
+        resp = _view(module="hr", level="read")(_request(token(company=slug), slug))
+    assert resp.status_code == 503
+    body = json.loads(resp.content)
+    assert body["code"] == "service_disabled"
+    assert body["service"] == "access"
+    assert "detail" in body
+
+
+@pytest.mark.django_db
 def test_gate_without_company_context_rejects():
     """Прав вне компании не бывает — подставлять «по умолчанию» запрещено."""
     resp = _view(module="hr", level="read")(_request(token()))

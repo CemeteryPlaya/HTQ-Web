@@ -87,49 +87,60 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
         def view(request, *args, **kwargs):
             if request.method not in methods:
                 return json_error("Method Not Allowed", 405)
-            if auth is not None:
-                payload = _AUTHENTICATORS[auth](request)
-                if payload is None:
-                    return json_error("Not authenticated", 401)
-                request.token = payload
-                # Поддомен подменяется тривиально, подпись токена — нет.
-                # Токен, выпущенный для одной компании, не должен работать
-                # в другой, даже если у пользователя есть членство в обеих:
-                # переключение обязано пройти через выдачу нового токена.
-                current = getattr(request, "company", None)
-                if current is not None and payload.company != current["slug"]:
-                    return json_error("Forbidden", 403)
-                # Single platform admin-gate seam (R1): every admin route
-                # goes through this one predicate — htqweb.authn.rbac.
-                # require_admin — instead of each app keeping its own
-                # private _require_admin copy.
-                if admin and not require_admin(request.token):
-                    return json_error("Forbidden", 403)
-                # Прикладной гейт «модуль × уровень» (стадия 2 «Доступ и роли»).
-                # Стоит ПОСЛЕ сверки компании: уровень считается в её контексте,
-                # и проверять права по токену чужой компании бессмысленно.
-                #
-                # Импорт ленивый, внутри функции, и это не стилистика: вьюхи
-                # самой apps.access декорированы этим же api_view, поэтому
-                # импорт на уровне модуля даёт циклический импорт на старте.
-                if module is not None:
-                    from apps.access import interface as access
-                    from apps.access.models import LEVEL_ORDER
-                    from htqweb.tenancy.context import current_company_or_none
-
-                    have = access.permission_level(
-                        request.token, module, current_company_or_none())
-                    if LEVEL_ORDER[have] < LEVEL_ORDER[level]:
-                        return json_error("Forbidden", 403)
-            else:
-                request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
-            if body is not None:
-                try:
-                    kwargs["data"] = body.model_validate_json(request.body or b"{}")
-                except ValidationError as exc:
-                    return JsonResponse({"detail": validation_detail(exc)},
-                                        status=422)
+            # try открыт ДО авторизации, а не только вокруг вызова вьюхи, и
+            # это несёт нагрузку: гейт модуля ниже ходит в базу (реестр
+            # ServiceStatus, роли, назначения) через apps.access.interface, а
+            # тот первой строкой зовёт require_service("access"). Пока try
+            # начинался после гейта, ServiceDisabled от выключенного домена
+            # доступа — и любая другая ошибка гейта, вплоть до обрыва
+            # соединения с БД, — уходила из api_view наружу целиком: не 503,
+            # не конверт {"detail": …}, даже не строка лога. Клиент получал
+            # голый 500 Django, одинаковый для «домен прав выключен» и «вьюха
+            # упала». Раунд правок 1 задачи 4 блока I: гейт стоит ВНУТРИ того
+            # же конверта, что и вьюха, и отвечает теми же кодами.
             try:
+                if auth is not None:
+                    payload = _AUTHENTICATORS[auth](request)
+                    if payload is None:
+                        return json_error("Not authenticated", 401)
+                    request.token = payload
+                    # Поддомен подменяется тривиально, подпись токена — нет.
+                    # Токен, выпущенный для одной компании, не должен работать
+                    # в другой, даже если у пользователя есть членство в обеих:
+                    # переключение обязано пройти через выдачу нового токена.
+                    current = getattr(request, "company", None)
+                    if current is not None and payload.company != current["slug"]:
+                        return json_error("Forbidden", 403)
+                    # Single platform admin-gate seam (R1): every admin route
+                    # goes through this one predicate — htqweb.authn.rbac.
+                    # require_admin — instead of each app keeping its own
+                    # private _require_admin copy.
+                    if admin and not require_admin(request.token):
+                        return json_error("Forbidden", 403)
+                    # Прикладной гейт «модуль × уровень» (стадия 2 «Доступ и роли»).
+                    # Стоит ПОСЛЕ сверки компании: уровень считается в её контексте,
+                    # и проверять права по токену чужой компании бессмысленно.
+                    #
+                    # Импорт ленивый, внутри функции, и это не стилистика: вьюхи
+                    # самой apps.access декорированы этим же api_view, поэтому
+                    # импорт на уровне модуля даёт циклический импорт на старте.
+                    if module is not None:
+                        from apps.access import interface as access
+                        from apps.access.models import LEVEL_ORDER
+                        from htqweb.tenancy.context import current_company_or_none
+
+                        have = access.permission_level(
+                            request.token, module, current_company_or_none())
+                        if LEVEL_ORDER[have] < LEVEL_ORDER[level]:
+                            return json_error("Forbidden", 403)
+                else:
+                    request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
+                if body is not None:
+                    try:
+                        kwargs["data"] = body.model_validate_json(request.body or b"{}")
+                    except ValidationError as exc:
+                        return JsonResponse({"detail": validation_detail(exc)},
+                                            status=422)
                 result = fn(request, *args, **kwargs)
                 if isinstance(result, BaseModel):
                     return JsonResponse(result.model_dump(mode="json"), status=status)
