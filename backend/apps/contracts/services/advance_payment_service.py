@@ -17,6 +17,7 @@ from django.utils import timezone
 
 from apps.contracts.models import (
     AdvancePayment, AdvancePaymentStatus, Agreement, AgreementStatus, CompletionAct, ContractPayment,
+    GoodsInvoice,
 )
 from apps.contracts.services import budget_calc
 from apps.contracts.services.reference_service import conflict_as
@@ -86,7 +87,10 @@ def total_paid_amount_for_agreement(agreement_id: int) -> Decimal:
     acts = (CompletionAct.objects
             .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
             .aggregate(total=Sum("amount"))["total"] or ZERO)
-    return advance + payments + acts
+    invoices = (GoodsInvoice.objects
+               .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
+               .aggregate(total=Sum("amount"))["total"] or ZERO)
+    return advance + payments + acts + invoices
 
 
 def check_agreement_capacity(agreement: Agreement, amount) -> None:

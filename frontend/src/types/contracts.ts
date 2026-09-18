@@ -429,6 +429,30 @@ export interface CompletionAct {
   budget_overrun?: string | null;
 }
 
+export interface GoodsInvoice {
+  id: number;
+  administrator_id: number;
+  administrator_name: string;
+  agreement_id: number;
+  agreement_number: string;
+  agreement_name: string;
+  counterparty_name: string;
+  amount: string;
+  currency: string;
+  waybill_file_id: string | null;
+  status: 'draft' | 'on_review' | 'awaiting_accounting' | 'closed';
+  approval_state: ApprovalState;
+  payment_order_file_id: string | null;
+  posting_number: string;
+  paid_by: number | null;
+  paid_at: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+  /** См. `AdvancePayment.budget_overrun`. */
+  budget_overrun?: string | null;
+}
+
 /** A current action in the contracts-only personal queue. */
 export interface ContractsWorkItem {
   document_type: string;

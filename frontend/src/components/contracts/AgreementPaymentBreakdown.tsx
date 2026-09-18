@@ -79,10 +79,20 @@ export function AgreementPaymentBreakdown({ agreementId }: Props) {
       contractsApi.listCompletionActs({ agreement_id: agreementId }).then((response) => response.data),
     enabled,
   });
+  const {
+    data: goodsInvoices = [],
+    isLoading: goodsInvoicesLoading,
+    isError: goodsInvoicesError,
+  } = useQuery({
+    queryKey: ['contracts', 'goods-invoices', { agreementId }],
+    queryFn: () =>
+      contractsApi.listGoodsInvoices({ agreement_id: agreementId }).then((response) => response.data),
+    enabled,
+  });
 
-  const isLoading = advancePaymentsLoading || contractPaymentsLoading || completionActsLoading;
-  const isError = advancePaymentsError || contractPaymentsError || completionActsError;
-  const count = advancePayments.length + contractPayments.length + completionActs.length;
+  const isLoading = advancePaymentsLoading || contractPaymentsLoading || completionActsLoading || goodsInvoicesLoading;
+  const isError = advancePaymentsError || contractPaymentsError || completionActsError || goodsInvoicesError;
+  const count = advancePayments.length + contractPayments.length + completionActs.length + goodsInvoices.length;
 
   return (
     <Accordion type="single" collapsible className="mt-5 border-t">
@@ -161,6 +171,25 @@ export function AgreementPaymentBreakdown({ agreementId }: Props) {
                         amount={act.amount}
                         currency={act.currency}
                         status={act.status}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+              {goodsInvoices.length > 0 && (
+                <section>
+                  <p className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Товарные накладные
+                  </p>
+                  <div className="space-y-1">
+                    {goodsInvoices.map((invoice) => (
+                      <PaymentRow
+                        key={invoice.id}
+                        to={`/contracts/goods-invoices/${invoice.id}`}
+                        title={`Накладная #${invoice.id}`}
+                        amount={invoice.amount}
+                        currency={invoice.currency}
+                        status={invoice.status}
                       />
                     ))}
                   </div>

@@ -60,6 +60,7 @@ from apps.contracts.models import (
     BudgetLine,
     CompletionAct,
     ContractPayment,
+    GoodsInvoice,
     Invoice,
     InvoiceStatus,
 )
@@ -115,8 +116,9 @@ OPEN_AGREEMENT_SPENDING_STATUSES = frozenset({
 
 # Через что уходят деньги по договору. Тот же набор, что складывает
 # ``contract_payment_service.paid_amount_for_agreement``: предоплата, оплата
-# по счёту и оплата по акту — три отдельных платёжных документа.
-_OPEN_AGREEMENT_SPENDING_MODELS = (AdvancePayment, ContractPayment, CompletionAct)
+# по счёту, оплата по акту и оплата по накладной — четыре отдельных
+# платёжных документа.
+_OPEN_AGREEMENT_SPENDING_MODELS = (AdvancePayment, ContractPayment, CompletionAct, GoodsInvoice)
 
 ZERO = Decimal("0.00")
 
@@ -217,8 +219,8 @@ def open_payment_overrun(payment) -> Decimal | None:
     """На сколько строка бюджета выходит за лимит с учётом ЭТОЙ оплаты по
     открытому договору. ``None`` — не выходит, или договор не открытый.
 
-    ``payment`` — предоплата, оплата по договору или акт: у всех трёх есть
-    ``agreement``, ``amount`` и ``status`` из одной машины статусов.
+    ``payment`` — предоплата, оплата по договору, акт или накладная: у всех
+    четырёх есть ``agreement``, ``amount`` и ``status`` из одной машины статусов.
 
     Лимит здесь только ПРЕДУПРЕЖДАЕТ, а не запрещает (так решил заказчик):
     у стандартного договора бюджет охраняет цепочка «оплата ≤ остаток

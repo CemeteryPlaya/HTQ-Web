@@ -8,6 +8,7 @@ FUNCTIONS = (
     ("contracts.invoices", "Счета"),
     ("contracts.payments", "Платежи и предоплаты"),
     ("contracts.completion_acts", "Акты выполненных работ"),
+    ("contracts.goods_invoices", "Товарные накладные"),
     ("contracts.accountable_funds", "Подотчётные средства"),
     ("contracts.reference", "Справочники: страны, программы, администраторы"),
 )
