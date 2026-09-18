@@ -287,14 +287,23 @@ def fake_media_storage(monkeypatch):
 
 
 @pytest.fixture
-def hr_uploader_auth(db, dep, pos):
+def hr_uploader_auth(db, dep, pos, company_row):
     """HR-сотрудник с правом записи (is_staff) И карточкой Employee.
 
     Оба условия обязательны: скоуп ``hr_doc`` в media — restricted, поэтому
     вьюха сначала проверяет HR-доступ, а ``Document.uploaded_by`` — NOT NULL
     FK на Employee, поэтому загрузить документ от лица пользователя без
     карточки некуда.
+
+    Блок I, задача 6: ``_upload_document_multipart`` теперь ещё и под
+    ``module="hr", level="write"`` (поверх ``require_can_write_basic``,
+    который эта фикстура уже проходила через ``is_staff``) — без
+    ``X-HTQ-Company`` + засеянной роли новый гейт отвечал бы 403 раньше
+    старой проверки. ``hr-lead`` выбран как "full access", соответствующий
+    имени и духу фикстуры (та же роль, что ``admin_auth`` в этом файле).
     """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
     user = User.objects.create(
         username="doc-uploader", email="doc-uploader@htq.test", password="x",
         status=UserStatus.ACTIVE, is_staff=True,
@@ -305,7 +314,12 @@ def hr_uploader_auth(db, dep, pos):
         first_name="Загрузчик", last_name="Кадровик", email="doc-uploader@htq.test",
         department=dep, position=pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
     )
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    RoleAssignment.objects.create(
+        company_slug=company_row, user_id=user.id, role=Role.objects.get(code="hr-lead"),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 @pytest.mark.django_db

@@ -89,10 +89,11 @@ from __future__ import annotations
 
 #: Аппки, чьи ``api_view(...)`` ручки сторож уже требует держать под
 #: ``module=``. Задача 4 добавила сюда "access" и "users" (две самые
-#: маленькие — на них проверялся приём); впереди задача 6 (добавит "hr" —
-#: задача 5 гейтирует часть его ручек РАНЬШЕ, чем эта запись появляется, см.
-#: докстринг модуля) и задача 7 (добавит "tasks").
-TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users"})
+#: маленькие — на них проверялся приём); задача 6 добавила "hr" (задача 5
+#: гейтировала справочники РАНЬШЕ, чем эта запись появилась — см. докстринг
+#: модуля; задача 6 добила остальные экраны и только тогда включила
+#: сторож); впереди задача 7 (добавит "tasks").
+TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -229,6 +230,123 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         "org_subordination_matrix": "open",
         "_list_employee_relations": "open",
         "_get_deletion_strategy": "open",
+        #
+        # ── Задача 6: остальные экраны hr — case 3 брифа, буквально ──
+        #
+        # /vacancies/*, /applications/* (recruiting) — ВСЕ 13 ручек стоят
+        # голым ``auth="jwt"``, ``recruiting_service`` не содержит ни одной
+        # проверки прав (комментарий над секцией в ``apps/hr/views.py``:
+        # "любой залогиненный пользователь может создавать/менять/удалять
+        # чужие вакансии/отклики" — странность исходника, не баг порта).
+        # Первый же ``module="hr"`` был бы сужением.
+        "_list_vacancies": "open",
+        "_create_vacancy": "open",
+        "_get_vacancy": "open",
+        "_update_vacancy": "open",
+        "_close_vacancy": "open",
+        "vacancy_applications": "open",
+        "_list_applications": "open",
+        "_create_application": "open",
+        "applications_archive": "open",
+        "_get_application": "open",
+        "_update_application": "open",
+        "_delete_application": "open",
+        "change_application_status": "open",
+        # /time-tracking/* — та же странность исходника, тот же комментарий:
+        # ВСЕ 8 ручек, включая POST/PUT/DELETE, используют только обычный
+        # ``auth="jwt"``, ни одна не проверяет HR-права.
+        "_list_time_entries": "open",
+        "_create_time_entry": "open",
+        "_update_time_entry": "open",
+        "_delete_time_entry": "open",
+        "time_daily_report": "open",
+        "time_weekly_report": "open",
+        "time_monthly_report": "open",
+        # /personnel-history/ — список ЧИТАЕТСЯ голым ``auth="jwt"`` (ни
+        # единой проверки в ``_list_personnel_history``); ЗАПИСЬ — наоборот,
+        # ``admin=True`` (case 2 брифа) и получает ``module="hr",
+        # level="admin"`` ПРЯМО в декораторе — в реестре не значится.
+        "_list_personnel_history": "open",
+        # /documents/* — комментарий над секцией в ``apps/hr/views.py``:
+        # исходник НЕ зовёт ``require_hr_write`` нигде в documents.py.
+        # Список/JSON-загрузка/чтение/удаление — буквально без проверки;
+        # multipart-загрузка и PATCH карточки — СВЕРХ контракта порта, уже
+        # стоят под ``require_can_write_basic`` (case 1) и получают
+        # ``module="hr", level="write"`` в декораторе.
+        "_list_documents": "open",
+        "_upload_document": "open",
+        "_get_document": "open",
+        "_delete_document": "open",
+        # /pmo/* — та же пара, что у departments/positions/org в задаче 5:
+        # reads голым ``auth="jwt"``, writes под ``admin=True`` (получают
+        # ``module="hr", level="admin"`` в декораторе, в реестре не значатся).
+        "_list_pmos": "open",
+        "_get_pmo": "open",
+        "_list_pmo_members": "open",
+        "pmo_org_chart": "open",
+        # /department-folders/, /department-file-folders/, /department-files/
+        # — НЕ "нет проверки вовсе" в буквальном смысле (case 3), а другая,
+        # НЕ-HR-based модель доступа: ``department_file_service.
+        # assert_department_access`` (свой отдел ИЛИ ``is_elevated``) —
+        # общий инструмент "файлы моего отдела", доступный КАЖДОМУ
+        # сотруднику для СВОЕГО отдела (frontend/src/pages/DepartmentFiles.tsx,
+        # пункт профильного сайдбара "Файлы отдела", ``requiresAuth: true``,
+        # НЕ спрятан за кадровым экраном). ``employee-basic`` не несёт ни
+        # одного узла ``hr.*`` — гейт ``module="hr"`` отобрал бы этот
+        # общедоступный инструмент у всех, кроме кадровиков, что было бы
+        # сужением так же, как и с departments/org_tree выше.
+        "department_folders_list": "open",
+        "department_files_search": "open",
+        "_list_department_file_folders": "open",
+        "_create_department_file_folder": "open",
+        "_list_department_files": "open",
+        "_upload_department_file": "open",
+        "department_file_detail": "open",
+        # /logs/ (audit) — комментарий над секцией: "любой залогиненный
+        # видит весь журнал (буквальный порт, странность исходника, не баг)".
+        "audit_logs": "open",
+        # /identity-requests/*, GET /identity-approver — ``_identity_access``
+        # (``apps/hr/views.py``) намеренно НЕ зовёт ``require_hr_access``:
+        # право РЕШАТЬ заявку принадлежит подтверждающему (руководителю
+        # отдела), который в общем случае НЕ кадровик и не несёт ни одного
+        # узла ``hr.*`` — гейт module="hr" отсёк бы его от собственной
+        # задачи (см. докстринг ``_identity_access``). Внешняя граница
+        # ручек НИКОГДА не отказывает по роли — видимость строк и право
+        # решать считает сама ``identity_request_service`` (``may_decide``/
+        # ``NotApprover``, независимо от гейта модуля), поэтому это ``open``,
+        # а не дыра: сужать нечего, ручка и так не отдаёт ничего, на что у
+        # вызывающего нет предметного права. GET identity-approver вообще
+        # без единой проверки — та же категория, что и org_tree (кто
+        # подтверждающий — не секрет). ``PUT`` (назначение подтверждающего)
+        # — ОТДЕЛЬНАЯ функция ``_set_identity_approver`` (см. докстринг
+        # ``identity_approver`` в ``apps/hr/views.py`` про расщепление
+        # одного URL на пару) и стоит под ``module="hr", level="admin"`` в
+        # декораторе — у неё, в отличие от read/decide, нет approver-
+        # escape-хода, это чистая кадровая администрация.
+        "identity_requests_collection": "open",
+        "identity_request_detail": "open",
+        "identity_request_decide": "open",
+        "_get_identity_approver": "open",
+        # /approvals/{subject_type}/{id}/submit — докстринг
+        # ``approval_service.submit_for_approval``: "Предметных проверок
+        # 'можно ли отправлять' здесь нет намеренно" — отправить кадровый
+        # предмет на согласование может любой сотрудник или кадровик,
+        # решает не эта ручка, а маршрут согласования (кто утвердит).
+        "submit_subject": "open",
+        #
+        # ── Задача 6: share-links — self, не open ──
+        #
+        # В отличие от department-ручек, каждая из четырёх привязана СТРОГО
+        # к ``request.token.user_id`` (комментарий над секцией: "любой
+        # залогиненный может создать/отозвать СВОЮ ссылку, get_link/
+        # list_audit сами гейтят по created_by_user_id") — ни один параметр
+        # не подменяет владельца, поэтому это ``self``, а не ``open``
+        # (``open`` — про ЧУЖИЕ/общие данные без единой проверки; здесь
+        # чужого нет ни при каком запросе).
+        "_create_share_link": "self",
+        "_list_share_links": "self",
+        "share_link_detail": "self",
+        "share_link_audit": "self",
     },
     # tasks: самообслуживания НЕТ. "Свои" задачи и ежедневка обеспечены
     # ролью employee-basic (tasks.tasks/tasks.daily_reports —

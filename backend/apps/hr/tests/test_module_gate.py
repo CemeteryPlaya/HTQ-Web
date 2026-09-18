@@ -1,14 +1,16 @@
-"""Блок I, задача 5: справочники ``hr`` (сотрудники/отделы/должности/
-оргструктура) под гейтом ``module="hr", level=…``.
+"""Блок I, задачи 5+6: ``hr`` под гейтом ``module="hr", level=…``.
 
 Продолжает ``apps.access.tests.test_module_gate``/``apps.users.tests.
 test_module_gate`` (те же приёмы: ``Client()``, засеянные роли, заголовок
-компании) для той половины ``hr``, которую гейтирует задача 5. ``hr`` ещё
-не в ``apps.access.self_service.TRANSLATED_APPS`` (это делает задача 6,
-когда добьёт остальные экраны) — сторож ``apps/access/tests/test_gate.py``
-поэтому не проверяет ПОЛНОТУ покрытия ``hr`` автоматически, и этот файл
-закрывает её вручную, ручка за ручкой, для того, что задача 5 действительно
-изменила.
+компании). Задача 5 закрыла справочники (сотрудники/отделы/должности/
+оргструктура) — секции 1–4 ниже. Задача 6 добила ОСТАЛЬНЫЕ экраны
+(штатное расписание, календарь, документы, карточка Т2/groups, PMO,
+назначение подтверждающего идентичности) И включила ``hr`` в
+``apps.access.self_service.TRANSLATED_APPS`` — секция 5. С этого коммита
+сторож ``apps/access/tests/test_gate.py::
+test_gate_covers_every_handle_of_translated_apps`` уже проверяет ПОЛНОТУ
+покрытия ``hr`` автоматически (раньше — как задача 5 оставила, до включения
+в реестр — этот файл был единственной проверкой полноты вручную).
 
 Что здесь закрыто:
 
@@ -57,11 +59,22 @@ import pytest
 from django.test import Client
 
 from apps.access.models import Role, RoleAssignment, ScopeKind
-from apps.hr.models import Department, Employee, Position, ReportingRelation
+from apps.hr.models import (
+    Department,
+    Employee,
+    PersonnelHistory,
+    Position,
+    ReportingRelation,
+    StaffingPosition,
+    WeekTemplate,
+)
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/hr/v1"
+
+_FIVE_TWO = {str(i): {"type": "working", "hours": 8} for i in range(5)}
+_FIVE_TWO.update({"5": {"type": "weekend", "hours": 0}, "6": {"type": "weekend", "hours": 0}})
 
 
 @pytest.fixture
@@ -155,6 +168,40 @@ def lead_employee(company_row, hr_dep):
     )
     give_seeded_role(user, company_row, "hr-lead")
     return emp, headers(user, company_row)
+
+
+@pytest.fixture
+def senior_employee(company_row, hr_dep):
+    """Задача 6: старший кадровик — старая модель ``senior`` (несёт
+    ``STAFFING_VIEW``/``STAFFING_MANAGE``/``CALENDAR_MANAGE``/``EMPLOYEES_
+    VIEW_ALL`` — см. ``apps/hr/permissions.py::_SENIOR``), новая роль
+    ``hr-senior`` (агрегат модуля ``hr`` — ``admin``, факт блока I). Нужен
+    там, где ``middle``/``junior`` не несут нужного старого ключа
+    (``hr.staffing.*``/``hr.calendar.manage`` появляются только с senior) —
+    в отличие от employees/org (задача 5), где middle/lead уже достаточно."""
+    pos = Position.objects.create(title="Senior HR Manager", department=hr_dep, weight=30)
+    user = _mk("senior-gate")
+    emp = Employee.objects.create(
+        email="senior-gate@htq.test", department=hr_dep, position=pos,
+        hire_date=datetime.date(2024, 1, 9), user_id=user.id,
+        first_name="Синьор", last_name="Кадровый",
+    )
+    give_seeded_role(user, company_row, "hr-senior")
+    return emp, headers(user, company_row)
+
+
+@pytest.fixture
+def staff_admin(company_row):
+    """Задача 6: ``is_staff=True`` (проходит ``admin=True``/``require_admin``
+    в теле — тот предикат смотрит ТОЛЬКО на флаги токена, не на Employee/
+    Position) + роль ``hr-lead`` (агрегат модуля ``hr`` — ``admin``). Нужна
+    там, где старая проверка ручки — буквальный ``admin=True`` (PMO,
+    personnel-history): ``lead_employee`` (Employee-based ``resolve_hr_
+    access`` без ``is_staff``) ЭТУ старую дверь не проходит вовсе — она не
+    смотрит на Employee, только на токен."""
+    user = _mk("staff-admin", is_staff=True)
+    give_seeded_role(user, company_row, "hr-lead")
+    return headers(user, company_row)
 
 
 @pytest.fixture
@@ -454,7 +501,7 @@ def test_staff_without_roles_cannot_delete_a_department(client, staff_without_ro
     assert Department.objects.filter(id=dep.id).exists()
 
 
-# ── регресс: производственный календарь этой задачей НЕ тронут ────────────
+# ── регресс: производственный календарь этой задачей (5) НЕ тронут ────────
 
 
 @pytest.mark.django_db
@@ -463,11 +510,367 @@ def test_production_calendar_is_untouched_by_this_task(client, plain_employee):
     сотрудников/отделов/должностей/оргструктуры, не календарь — брифом
     отдано задаче 6, см. ``apps.access.self_service`` примечание к
     ``calendar_year``/``calendar_working_days``). Поведение для
-    ``employee-basic`` не менялось этой задачей: ``_require_permission(
-    CALENDAR_VIEW)`` уже сегодня требует кадровый уровень (``_JUNIOR`` и
+    ``employee-basic`` НЕ менялось задачей 5: ``_require_permission(
+    CALENDAR_VIEW)`` уже тогда требовала кадровый уровень (``_JUNIOR`` и
     выше), которого у employee-basic нет ни по старой, ни по новой модели —
-    поэтому 403 ДО и ПОСЛЕ этой задачи, без единой строки гейта на
-    ``calendar_year``."""
+    403 ДО задачи 5. ⚠️ Обновлено задачей 6: ``calendar_year`` теперь
+    ДЕЙСТВИТЕЛЬНО несёт ``module="hr", level="read"`` (секция 5 ниже) — но
+    для employee-basic результат тот же самый 403 (ни одного узла ``hr.*``,
+    гейт отказывает даже раньше, чем добрался бы до ``_require_permission``),
+    поэтому regression держится и после задачи 6, просто по другой причине."""
     _emp, head = plain_employee
     resp = client.get(f"{BASE}/calendar/", **head)
     assert resp.status_code == 403
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Задача 6: остальные экраны hr — штатное расписание, календарь, документы,
+#  карточка Т2/groups, PMO, назначение подтверждающего идентичности + hr в
+#  TRANSLATED_APPS.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Тот же формат, что у секций 1–4: держатель настоящей роли проходит гейт
+# ровно на своём уровне (решение по-прежнему у СТАРОЙ модели), а
+# ``staff_without_roles`` (старая модель пускает через ``is_elevated``/
+# ``admin=True``, новая — нет) доказывает, что 403 даёт ИМЕННО гейт, а не
+# что-то ещё. ``senior_employee`` — новая фикстура этой секции: часть старых
+# ключей (``hr.staffing.*``, ``hr.calendar.manage``) появляется только с
+# senior, не с middle (``apps/hr/permissions.py::_MIDDLE``/``_SENIOR``).
+
+
+@pytest.fixture
+def staffing_line(eng_dep):
+    pos = Position.objects.create(title="Инженер", department=eng_dep, weight=50)
+    return StaffingPosition.objects.create(position=pos, department=eng_dep)
+
+
+# ── /staffing/* ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_hr_senior_reads_staffing_occupancy(client, senior_employee):
+    _emp, head = senior_employee
+    resp = client.get(f"{BASE}/staffing/occupancy", **head)
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_read_staffing_occupancy(client, staff_without_roles):
+    """``staffing_occupancy`` — ``level="read"``; ``_require_permission(
+    STAFFING_VIEW)`` в теле пропустил бы ``{"*"}`` — отказывает только гейт."""
+    resp = client.get(f"{BASE}/staffing/occupancy", **staff_without_roles)
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_hr_senior_creates_a_staffing_line(client, senior_employee, eng_dep):
+    _emp, head = senior_employee
+    pos = Position.objects.create(title="Прораб", department=eng_dep, weight=51)
+    resp = client.post(
+        f"{BASE}/staffing/", data={"position_id": pos.id, "department_id": eng_dep.id},
+        content_type="application/json", **head,
+    )
+    assert resp.status_code == 201
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_create_a_staffing_line(client, staff_without_roles, eng_dep):
+    pos = Position.objects.create(title="Прораб", department=eng_dep, weight=52)
+    resp = client.post(
+        f"{BASE}/staffing/", data={"position_id": pos.id, "department_id": eng_dep.id},
+        content_type="application/json", **staff_without_roles,
+    )
+    assert resp.status_code == 403
+    assert not StaffingPosition.objects.filter(position=pos).exists()
+
+
+@pytest.mark.django_db
+def test_hr_senior_deletes_a_staffing_line(client, senior_employee, staffing_line):
+    _emp, head = senior_employee
+    resp = client.delete(f"{BASE}/staffing/{staffing_line.id}", **head)
+    assert resp.status_code == 204
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_delete_a_staffing_line(client, staff_without_roles, staffing_line):
+    """``_delete_staffing_line`` — ``level="admin"`` (delete-правило), хотя
+    старая проверка внутри та же ``STAFFING_MANAGE``, что и у create/update —
+    ``{"*"}`` её тоже проходит, отказывает только гейт."""
+    resp = client.delete(f"{BASE}/staffing/{staffing_line.id}", **staff_without_roles)
+    assert resp.status_code == 403
+    assert StaffingPosition.objects.filter(id=staffing_line.id).exists()
+
+
+# ── /calendar/* (модульный) ──────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_hr_senior_reads_calendar_year(client, senior_employee):
+    _emp, head = senior_employee
+    resp = client.get(f"{BASE}/calendar/?year=2026", **head)
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_read_calendar_year(client, staff_without_roles):
+    resp = client.get(f"{BASE}/calendar/?year=2026", **staff_without_roles)
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_hr_senior_creates_a_calendar_template(client, senior_employee):
+    _emp, head = senior_employee
+    resp = client.post(
+        f"{BASE}/calendar/templates/", data={"name": "5/2 сеньор", "days": _FIVE_TWO},
+        content_type="application/json", **head,
+    )
+    assert resp.status_code == 201
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_create_a_calendar_template(client, staff_without_roles):
+    resp = client.post(
+        f"{BASE}/calendar/templates/", data={"name": "Чужой", "days": _FIVE_TWO},
+        content_type="application/json", **staff_without_roles,
+    )
+    assert resp.status_code == 403
+    assert not WeekTemplate.objects.filter(name="Чужой").exists()
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_delete_a_calendar_template(client, staff_without_roles):
+    tmpl = WeekTemplate.objects.create(name="Держится", days=_FIVE_TWO)
+    resp = client.delete(f"{BASE}/calendar/templates/{tmpl.id}", **staff_without_roles)
+    assert resp.status_code == 403
+    assert WeekTemplate.objects.filter(id=tmpl.id).exists()
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_read_employee_calendar(client, staff_without_roles, target_employee):
+    """``employee_calendar`` — ``level="read"`` ПОВЕРХ ``_visible_access``
+    (``require_hr_access``-эквивалент); ``{"*"}`` прошёл бы обе старые
+    проверки (доступ + видимость отдела), отказывает только гейт."""
+    resp = client.get(
+        f"{BASE}/employees/{target_employee.id}/calendar"
+        "?start=2026-06-01&end=2026-06-01",
+        **staff_without_roles,
+    )
+    assert resp.status_code == 403
+
+
+# ── /documents/* — только гейтированные task-6 ручки (multipart/patch) ────
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_upload_a_document_multipart(client, staff_without_roles, target_employee):
+    resp = client.post(
+        f"{BASE}/documents/",
+        data={"employee": str(target_employee.id), "title": "Т", "doc_type": "other"},
+        **staff_without_roles,
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_patch_a_document(client, staff_without_roles, target_employee):
+    from apps.hr.models import Document
+
+    doc = Document.objects.create(
+        employee=target_employee, title="Т", doc_type="other",
+        file_path="/files/a.pdf", file_size=1,
+    )
+    resp = client.patch(
+        f"{BASE}/documents/{doc.id}/", data={"title": "Новое"},
+        content_type="application/json", **staff_without_roles,
+    )
+    assert resp.status_code == 403
+    doc.refresh_from_db()
+    assert doc.title == "Т"
+
+
+# ── /employees/{id}/card/t2, /card/groups ──────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_hr_senior_reads_card_t2(client, senior_employee, target_employee):
+    """senior несёт ``EMPLOYEES_VIEW_ALL`` — видит карточку сотрудника ЧУЖОГО
+    отдела (``target_employee`` в ``eng_dep``, senior — в ``hr_dep``)."""
+    _emp, head = senior_employee
+    resp = client.get(f"{BASE}/employees/{target_employee.id}/card/t2", **head)
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_read_card_t2(client, staff_without_roles, target_employee):
+    resp = client.get(f"{BASE}/employees/{target_employee.id}/card/t2", **staff_without_roles)
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_edit_card_groups(client, staff_without_roles, target_employee):
+    resp = client.put(
+        f"{BASE}/employees/{target_employee.id}/card/groups", data={"education": []},
+        content_type="application/json", **staff_without_roles,
+    )
+    assert resp.status_code == 403
+
+
+# ── /pmo/* — только гейтированные (admin=True) task-6 ручки ────────────────
+
+
+@pytest.mark.django_db
+def test_staff_admin_creates_a_pmo(client, staff_admin):
+    """``_create_pmo`` — старая дверь ``admin=True`` смотрит ТОЛЬКО на
+    ``token.is_elevated`` (не на Employee) — ``staff_admin`` несёт и её, и
+    новую роль ``hr-lead``."""
+    resp = client.post(
+        f"{BASE}/pmo/", data={"name": "Проект А", "code": "P-A"},
+        content_type="application/json", **staff_admin,
+    )
+    assert resp.status_code == 201
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_create_a_pmo(client, staff_without_roles):
+    """``_create_pmo`` — ``admin=True`` (``is_staff`` ПРОХОДИТ, как и у
+    ``_create_position`` в секции 4) + ``module="hr", level="admin"``:
+    отказывает ровно вторая дверь."""
+    from apps.hr.models import PMO
+
+    resp = client.post(
+        f"{BASE}/pmo/", data={"name": "Чужой проект", "code": "P-X"},
+        content_type="application/json", **staff_without_roles,
+    )
+    assert resp.status_code == 403
+    assert not PMO.objects.filter(code="P-X").exists()
+
+
+# ── /identity-approver — PUT (назначение) под гейтом, GET — открыт ────────
+
+
+@pytest.mark.django_db
+def test_hr_lead_sets_identity_approver(client, lead_employee):
+    """``_set_identity_approver`` — ``module="hr", level="admin"`` ПОВЕРХ
+    ``hr.identity.manage``; ``hr-lead`` несёт оба (``_LEAD`` — единственный
+    пресет с ``IDENTITY_MANAGE``, см. ``apps/hr/permissions.py``)."""
+    emp, head = lead_employee
+    resp = client.put(
+        f"{BASE}/identity-approver/", data={"user_id": None},
+        content_type="application/json", **head,
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_set_identity_approver(client, staff_without_roles):
+    """``is_staff`` даёт ``is_admin``-эквивалент в СТАРОЙ проверке
+    (``_identity_access`` -> ``is_admin=require_admin(token)`` — тоже
+    ``is_elevated``-based, ПРОХОДИТ), отказывает только новый гейт."""
+    resp = client.put(
+        f"{BASE}/identity-approver/", data={"user_id": None},
+        content_type="application/json", **staff_without_roles,
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_employee_basic_still_reads_identity_approver(client, plain_employee):
+    """GET ``/identity-approver/`` — ``open`` (реестр self_service): не
+    гейтируется, потому что кто подтверждающий — не секрет, а approver-
+    escape-ход (право РЕШАТЬ у назначенного, не у кадровика) не должен
+    упираться в гейт модуля на этой ручке. employee-basic по-прежнему
+    читает без единого узла ``hr.*`` — задача 6 это не сузила."""
+    _emp, head = plain_employee
+    resp = client.get(f"{BASE}/identity-approver/", **head)
+    assert resp.status_code == 200
+
+
+# ── /personnel-history/ — writes admin=True, reads open ────────────────────
+
+
+@pytest.mark.django_db
+def test_staff_admin_creates_personnel_history(client, staff_admin, target_employee):
+    """``_create_personnel_history`` — та же ``admin=True``-дверь, что у
+    PMO: смотрит на токен, не на Employee, поэтому ``staff_admin``, не
+    ``lead_employee``."""
+    resp = client.post(
+        f"{BASE}/personnel-history/",
+        data={"employee": target_employee.id, "event_type": "hired", "event_date": "2026-01-01"},
+        content_type="application/json", **staff_admin,
+    )
+    assert resp.status_code == 201
+
+
+@pytest.mark.django_db
+def test_staff_without_roles_cannot_create_personnel_history(client, staff_without_roles, target_employee):
+    """``_create_personnel_history`` — ``admin=True`` (проходит) +
+    ``module="hr", level="admin"``: отказывает вторая дверь."""
+    resp = client.post(
+        f"{BASE}/personnel-history/",
+        data={"employee": target_employee.id, "event_type": "hired", "event_date": "2026-01-01"},
+        content_type="application/json", **staff_without_roles,
+    )
+    assert resp.status_code == 403
+    assert not PersonnelHistory.objects.filter(employee=target_employee).exists()
+
+
+@pytest.mark.django_db
+def test_employee_basic_still_reads_personnel_history(client, plain_employee):
+    _emp, head = plain_employee
+    resp = client.get(f"{BASE}/personnel-history/", **head)
+    assert resp.status_code == 200
+
+
+# ── regression: секции ``open``/``self`` реестра — не сужены задачей 6 ────
+
+
+@pytest.mark.django_db
+def test_employee_basic_still_reads_the_open_vacancy_list(client, plain_employee):
+    _emp, head = plain_employee
+    resp = client.get(f"{BASE}/vacancies/", **head)
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_employee_basic_still_reads_the_open_pmo_list(client, plain_employee):
+    _emp, head = plain_employee
+    resp = client.get(f"{BASE}/pmo/", **head)
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_employee_basic_still_reads_audit_logs(client, plain_employee):
+    _emp, head = plain_employee
+    resp = client.get(f"{BASE}/logs/", **head)
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_employee_basic_can_still_create_and_list_own_share_link(client, plain_employee):
+    """``self`` (реестр self_service): привязано к ``request.token.user_id``,
+    не к роли — доступно employee-basic без единого узла ``hr.*``."""
+    emp, head = plain_employee
+    resp = client.post(
+        f"{BASE}/share-links/", data={"target_type": "org"},
+        content_type="application/json", **head,
+    )
+    assert resp.status_code == 201
+    assert "token" in resp.json()
+
+    listed = client.get(f"{BASE}/share-links/", **head)
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+
+
+# ── hr в TRANSLATED_APPS (финальный шаг задачи 6) ──────────────────────────
+
+
+def test_hr_is_in_translated_apps():
+    """Последний шаг задачи 6: как только ``hr`` попадает в ``TRANSLATED_
+    APPS``, сторож ``apps.access.tests.test_gate`` начинает требовать
+    ``module=`` у КАЖДОЙ ручки этой аппки, кроме перечисленных в
+    ``SELF_SERVICE``, — это и есть главная проверка «ничего не забыто»,
+    её прогон см. в отчёте задачи."""
+    from apps.access.self_service import TRANSLATED_APPS
+
+    assert "hr" in TRANSLATED_APPS

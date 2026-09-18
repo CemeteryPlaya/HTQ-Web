@@ -1900,7 +1900,7 @@ def _require_permission(request, key: str):
     return access, None
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def staffing_occupancy(request):
     _, err = _require_permission(request, STAFFING_VIEW)
     if err:
@@ -1908,7 +1908,7 @@ def staffing_occupancy(request):
     return staffing_svc.occupancy()
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def staffing_summary(request):
     _, err = _require_permission(request, STAFFING_VIEW)
     if err:
@@ -1916,7 +1916,7 @@ def staffing_summary(request):
     return staffing_svc.payroll_summary()
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def _list_staffing_lines(request):
     _, err = _require_permission(request, STAFFING_VIEW)
     if err:
@@ -1928,7 +1928,7 @@ def _list_staffing_lines(request):
     return [staffing_svc.line_out(line) for line in staffing_svc.list_lines(query.department_id)]
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.StaffingLineIn, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.StaffingLineIn, status=201, module="hr", level="write")
 def _create_staffing_line(request, data: schemas.StaffingLineIn):
     _, err = _require_permission(request, STAFFING_MANAGE)
     if err:
@@ -1948,7 +1948,7 @@ def staffing_lines_collection(request):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.StaffingLineIn)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.StaffingLineIn, module="hr", level="write")
 def _update_staffing_line(request, line_id: int, data: schemas.StaffingLineIn):
     # Исходник регистрирует ТОЛЬКО PUT здесь (нет отдельной Update-схемы —
     # StaffingLineIn используется и для create, и для update, тело всегда
@@ -1969,7 +1969,7 @@ def _update_staffing_line(request, line_id: int, data: schemas.StaffingLineIn):
     return staffing_svc.line_out(line)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_staffing_line(request, line_id: int):
     _, err = _require_permission(request, STAFFING_MANAGE)
     if err:
@@ -2007,7 +2007,8 @@ def _list_personnel_history(request):
     return [ph_svc.serialize(ph) for ph in ph_svc.list_history()]
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PersonnelHistoryIn, status=201)
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PersonnelHistoryIn, status=201,
+          module="hr", level="admin")
 def _create_personnel_history(request, data: schemas.PersonnelHistoryIn):
     try:
         ph = ph_svc.create_history(data, created_by=request.token.user_id)
@@ -2026,7 +2027,8 @@ def personnel_history_collection(request):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("PUT",), auth="jwt", admin=True, body=schemas.PersonnelHistoryIn)
+@api_view(methods=("PUT",), auth="jwt", admin=True, body=schemas.PersonnelHistoryIn,
+          module="hr", level="admin")
 def _update_personnel_history(request, id: int, data: schemas.PersonnelHistoryIn):
     try:
         ph = ph_svc.update_history(id, data)
@@ -2037,7 +2039,7 @@ def _update_personnel_history(request, id: int, data: schemas.PersonnelHistoryIn
     return ph_svc.serialize(ph)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", admin=True, module="hr", level="admin")
 def _delete_personnel_history(request, id: int):
     try:
         ph_svc.delete_history(id)
@@ -2111,7 +2113,7 @@ def _visible_access(request, employee_id: int):
 
 # ── /calendar/templates/ (литеральный сегмент — ДО /calendar/<str:day>) ────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def _list_calendar_templates(request):
     _, err = _require_permission(request, CALENDAR_VIEW)
     if err:
@@ -2119,7 +2121,7 @@ def _list_calendar_templates(request):
     return [cal_svc.template_out(t) for t in cal_svc.list_templates()]
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.WeekTemplateIn, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.WeekTemplateIn, status=201, module="hr", level="write")
 def _create_calendar_template(request, data: schemas.WeekTemplateIn):
     _, err = _require_permission(request, CALENDAR_MANAGE)
     if err:
@@ -2138,7 +2140,7 @@ def calendar_templates_collection(request):
 
 # ── /calendar/templates/{id} ────────────────────────────────────────────────
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.WeekTemplateIn)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.WeekTemplateIn, module="hr", level="write")
 def _update_calendar_template(request, template_id: int, data: schemas.WeekTemplateIn):
     _, err = _require_permission(request, CALENDAR_MANAGE)
     if err:
@@ -2150,7 +2152,7 @@ def _update_calendar_template(request, template_id: int, data: schemas.WeekTempl
     return cal_svc.template_out(tmpl)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_calendar_template(request, template_id: int):
     _, err = _require_permission(request, CALENDAR_MANAGE)
     if err:
@@ -2174,7 +2176,7 @@ def calendar_template_detail(request, template_id: int):
 
 # ── /calendar/templates/{id}/default ────────────────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt")
+@api_view(methods=("POST",), auth="jwt", module="hr", level="write")
 def calendar_template_set_default(request, template_id: int):
     _, err = _require_permission(request, CALENDAR_MANAGE)
     if err:
@@ -2188,7 +2190,7 @@ def calendar_template_set_default(request, template_id: int):
 
 # ── /calendar/working-days ───────────────────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def calendar_working_days(request):
     _, err = _require_permission(request, CALENDAR_VIEW)
     if err:
@@ -2202,7 +2204,7 @@ def calendar_working_days(request):
 
 # ── /calendar/import ─────────────────────────────────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.CalendarImportBody)
+@api_view(methods=("POST",), auth="jwt", body=schemas.CalendarImportBody, module="hr", level="write")
 def calendar_import_year(request, data: schemas.CalendarImportBody):
     _, err = _require_permission(request, CALENDAR_MANAGE)
     if err:
@@ -2216,7 +2218,7 @@ def calendar_import_year(request, data: schemas.CalendarImportBody):
 
 # ── GET /calendar/ (год целиком) ─────────────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def calendar_year(request):
     _, err = _require_permission(request, CALENDAR_VIEW)
     if err:
@@ -2230,7 +2232,7 @@ def calendar_year(request):
 
 # ── /calendar/shift-patterns/ ────────────────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def _list_shift_patterns(request):
     _, err = _require_permission(request, CALENDAR_VIEW)
     if err:
@@ -2238,7 +2240,7 @@ def _list_shift_patterns(request):
     return [cal_svc.shift_pattern_out(p) for p in cal_svc.list_shift_patterns()]
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.ShiftPatternIn, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.ShiftPatternIn, status=201, module="hr", level="write")
 def _create_shift_pattern(request, data: schemas.ShiftPatternIn):
     _, err = _require_permission(request, CALENDAR_MANAGE)
     if err:
@@ -2258,7 +2260,7 @@ def shift_patterns_collection(request):
 
 # ── /calendar/shift-patterns/{id} ────────────────────────────────────────────
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.ShiftPatternIn)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.ShiftPatternIn, module="hr", level="write")
 def _update_shift_pattern(request, pattern_id: int, data: schemas.ShiftPatternIn):
     _, err = _require_permission(request, CALENDAR_MANAGE)
     if err:
@@ -2271,7 +2273,7 @@ def _update_shift_pattern(request, pattern_id: int, data: schemas.ShiftPatternIn
     return cal_svc.shift_pattern_out(pat)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_shift_pattern(request, pattern_id: int):
     _, err = _require_permission(request, CALENDAR_MANAGE)
     if err:
@@ -2294,7 +2296,7 @@ def shift_pattern_detail(request, pattern_id: int):
 # ── /calendar/{day} — национальный оверрайд (все литералы выше уже
 #    объявлены — см. urls.py — поэтому generic <str:day> их не перехватит) ──
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.CalendarDayIn)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.CalendarDayIn, module="hr", level="write")
 def _put_calendar_override(request, day: str, data: schemas.CalendarDayIn):
     _, err = _require_permission(request, CALENDAR_MANAGE)
     if err:
@@ -2306,7 +2308,7 @@ def _put_calendar_override(request, day: str, data: schemas.CalendarDayIn):
     return cal_svc.day_override_out(o)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_calendar_override(request, day: str):
     _, err = _require_permission(request, CALENDAR_MANAGE)
     if err:
@@ -2328,7 +2330,7 @@ def calendar_day_override_detail(request, day: str):
 
 # ── /employees/{id}/calendar — employee_calendar_router исходника (6) ──────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_calendar(request, employee_id: int):
     access, err = _visible_access(request, employee_id)
     if err:
@@ -2342,7 +2344,7 @@ def employee_calendar(request, employee_id: int):
     return cal_svc.employee_calendar(employee_id, query.start, query.end)
 
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.AssignTemplateIn)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.AssignTemplateIn, module="hr", level="write")
 def employee_calendar_template(request, employee_id: int, data: schemas.AssignTemplateIn):
     access, err = _visible_access(request, employee_id)
     if err:
@@ -2356,7 +2358,7 @@ def employee_calendar_template(request, employee_id: int, data: schemas.AssignTe
     return {"employee_id": employee_id, "week_template_id": data.week_template_id}
 
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.AssignShiftIn)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.AssignShiftIn, module="hr", level="write")
 def _assign_employee_shift(request, employee_id: int, data: schemas.AssignShiftIn):
     access, err = _visible_access(request, employee_id)
     if err:
@@ -2374,7 +2376,7 @@ def _assign_employee_shift(request, employee_id: int, data: schemas.AssignShiftI
     }
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _unassign_employee_shift(request, employee_id: int):
     access, err = _visible_access(request, employee_id)
     if err:
@@ -2393,7 +2395,7 @@ def employee_shift_detail(request, employee_id: int):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.EmployeeDayOverrideIn)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.EmployeeDayOverrideIn, module="hr", level="write")
 def _put_employee_day_override(request, employee_id: int, day: str, data: schemas.EmployeeDayOverrideIn):
     access, err = _visible_access(request, employee_id)
     if err:
@@ -2407,7 +2409,7 @@ def _put_employee_day_override(request, employee_id: int, day: str, data: schema
     return cal_svc.day_override_out(o)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_employee_day_override(request, employee_id: int, day: str):
     access, err = _visible_access(request, employee_id)
     if err:
@@ -2457,7 +2459,7 @@ def _upload_document(request, data: schemas.DocumentCreate):
     return doc_svc.serialize(doc_svc.create_document(data))
 
 
-@api_view(methods=("POST",), auth="jwt", status=201)
+@api_view(methods=("POST",), auth="jwt", status=201, module="hr", level="write")
 def _upload_document_multipart(request):
     """multipart-ветка ``POST /documents/`` — файл приходит самим запросом.
 
@@ -2529,7 +2531,7 @@ def _get_document(request, id: int):
         return json_error("Document not found", 404)
 
 
-@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.DocumentPatch)
+@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.DocumentPatch, module="hr", level="write")
 def _patch_document(request, id: int, data: schemas.DocumentPatch):
     """Правка карточки документа — сверх контракта порта (см. схему).
 
@@ -2604,7 +2606,7 @@ def document_detail(request, id: int):
 # ``if not access.has("hr.card.groups.view"/"edit"): raise 403`` роутера.
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def _get_card_t2(request, employee_id: int):
     access, err = _visible_access(request, employee_id)
     if err:
@@ -2612,7 +2614,7 @@ def _get_card_t2(request, employee_id: int):
     return card_t2_svc.read_sections(employee_id, access)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.EmployeeCardT2Patch)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.EmployeeCardT2Patch, module="hr", level="write")
 def _patch_card_t2(request, employee_id: int, data: schemas.EmployeeCardT2Patch):
     access, err = _visible_access(request, employee_id)
     if err:
@@ -2634,7 +2636,7 @@ def card_t2_detail(request, employee_id: int):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def _get_card_groups(request, employee_id: int):
     access, err = _visible_access(request, employee_id)
     if err:
@@ -2644,7 +2646,7 @@ def _get_card_groups(request, employee_id: int):
     return groups_svc.read(employee_id)
 
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.EmployeeGroupsIn)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.EmployeeGroupsIn, module="hr", level="write")
 def _put_card_groups(request, employee_id: int, data: schemas.EmployeeGroupsIn):
     access, err = _visible_access(request, employee_id)
     if err:
@@ -2693,7 +2695,8 @@ def _list_pmos(request):
     return pmo_svc.list_pmos(status_filter=request.GET.get("status") or None)
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PMOCreate, status=201)
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PMOCreate, status=201,
+          module="hr", level="admin")
 def _create_pmo(request, data: schemas.PMOCreate):
     try:
         pmo = pmo_svc.create_pmo(data.model_dump())
@@ -2720,7 +2723,7 @@ def _get_pmo(request, id: int):
         return json_error("PMO not found", 404)
 
 
-@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.PMOUpdate)
+@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.PMOUpdate, module="hr", level="admin")
 def _update_pmo(request, id: int, data: schemas.PMOUpdate):
     try:
         pmo = pmo_svc.update_pmo(id, data.model_dump(exclude_none=True))
@@ -2729,7 +2732,7 @@ def _update_pmo(request, id: int, data: schemas.PMOUpdate):
     return pmo_svc.serialize(pmo)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", admin=True, module="hr", level="admin")
 def _delete_pmo(request, id: int):
     try:
         pmo_svc.delete_pmo(id)
@@ -2758,7 +2761,7 @@ def _list_pmo_members(request, id: int):
         return json_error("PMO not found", 404)
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PMOMemberAdd)
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PMOMemberAdd, module="hr", level="admin")
 def _add_pmo_member(request, id: int, data: schemas.PMOMemberAdd):
     try:
         member, warning_total = pmo_svc.add_member(
@@ -2792,7 +2795,8 @@ def pmo_members_collection(request, id: int):
 
 # ── /pmo/{id}/members/{member_id} ────────────────────────────────────────
 
-@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.PMOMemberUpdate)
+@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.PMOMemberUpdate,
+          module="hr", level="admin")
 def _update_pmo_member(request, id: int, member_id: int, data: schemas.PMOMemberUpdate):
     try:
         member, warning_total = pmo_svc.update_member(
@@ -2814,7 +2818,7 @@ def _update_pmo_member(request, id: int, member_id: int, data: schemas.PMOMember
     return resp
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", admin=True, module="hr", level="admin")
 def _remove_pmo_member(request, id: int, member_id: int):
     try:
         pmo_svc.remove_member(id, member_id)
@@ -3242,17 +3246,30 @@ def identity_request_decide(request, id: int, data: schemas.IdentityDecideReques
     return identity_request_svc.serialize(row)
 
 
-@api_view(methods=("GET", "PUT"), auth="jwt", body=None)
-def identity_approver(request):
-    """Кто подтверждает заявки. GET — читать, PUT — назначать."""
+@api_view(methods=("GET",), auth="jwt")
+def _get_identity_approver(request):
+    """Кто подтверждает заявки сегодня — БЕЗ гейта модуля (см. реестр
+    ``apps.access.self_service``): не hr-секрет, а справочная информация
+    (тот же класс данных, что и org_tree/departments), сегодня доступная
+    любому вошедшему без единой проверки."""
+    row = identity_request_svc.get_approver()
+    user_id = row.user_id if row is not None else None
+    brief = users_interface.get_user_brief(user_id) if user_id else None
+    return {"user_id": user_id, "user": brief}
+
+
+@api_view(methods=("PUT",), auth="jwt", body=None, module="hr", level="admin")
+def _set_identity_approver(request):
+    """Назначить подтверждающего.
+
+    ``module="hr", level="admin"`` ПОВЕРХ уже существующей проверки
+    (``is_admin or access.can_manage_identity_approver``, т.е.
+    ``hr.identity.manage`` — только у ``lead``): в отличие от READ/DECIDE-
+    ручек этого под-модуля, у НАЗНАЧЕНИЯ подтверждающего нет escape-хода
+    «ты и так подтверждающий» — это чистая кадрово-административная
+    операция («раздача права писать в чужие аккаунты», см. комментарий
+    ниже), гейт её не сужает."""
     access, is_admin = _identity_access(request)
-
-    if request.method == "GET":
-        row = identity_request_svc.get_approver()
-        user_id = row.user_id if row is not None else None
-        brief = users_interface.get_user_brief(user_id) if user_id else None
-        return {"user_id": user_id, "user": brief}
-
     if not (is_admin or access.can_manage_identity_approver):
         return json_error("Назначение подтверждающего требует hr.identity.manage", 403)
     try:
@@ -3272,6 +3289,20 @@ def identity_approver(request):
     )
     brief = users_interface.get_user_brief(row.user_id) if row.user_id else None
     return {"user_id": row.user_id, "user": brief}
+
+
+def identity_approver(request):
+    """``GET`` — читать (открыто, без гейта), ``PUT`` — назначать (под
+    гейтом ``module="hr", level="admin"``). Один URL, два метода с РАЗНЫМ
+    гейтингом — не может быть одним ``api_view(...)`` вызовом (гейт
+    применяется ко ВСЕМ объявленным методам разом), поэтому расщеплено на
+    пару, как и остальные ``_x_detail``/``x_collection`` диспетчеры этого
+    файла (см. ``card_t2_detail``, ``department_detail`` и т.д.)."""
+    if request.method == "GET":
+        return _get_identity_approver(request)
+    if request.method == "PUT":
+        return _set_identity_approver(request)
+    return json_error("Method Not Allowed", 405)
 
 
 # ── /approvals/{subject_type}/{id}/submit — отправка на согласование (блок G) ──
@@ -3335,19 +3366,17 @@ def _company_display_name(slug: str) -> str:
     return company["name"] if company else slug
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def holding_headcount(request):
     """Люди, структура и штат по каждой действующей компании группы.
 
-    Авторизация НЕ ретрофитит новый ``apps.access`` гейт на HR (``hr`` ещё
-    не входит в ``apps.access.self_service.TRANSLATED_APPS`` — до задачи 6
-    блока I сторож
-    ``apps.access.tests.test_gate::test_gate_is_not_hung_on_apps_without_a_translation_plan``
-    держит его не навешенным ни на одну существующую ручку этой аппки) —
-    здесь тот же ``hr_access.require_hr_access``,
-    что и у соседних ручек домена. Поверх него — свой гейт по виду компании
-    (``_deny_unless_holding``): тонкая вьюха, гейт → гейт → сервис → форма
-    ответа.
+    Авторизация — тот же ``hr_access.require_hr_access``, что и у соседних
+    ручек домена, теперь ПОВЕРХ него ``module="hr", level="read"`` (задача 6
+    блока I добавила ``hr`` в ``apps.access.self_service.TRANSLATED_APPS`` —
+    сторож ``apps.access.tests.test_gate`` с этого коммита требует гейт и
+    здесь). Поверх обоих — свой гейт по виду компании
+    (``_deny_unless_holding``): гейт модуля → гейт HR-доступа → гейт вида
+    компании → сервис → форма ответа.
 
     ``HoldingViewsUnavailable`` (``migrate_companies`` временно сносит
     представления) — 503, а не 500 и не 200 с нулями: директор обязан понять,

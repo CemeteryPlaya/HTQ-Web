@@ -15,6 +15,27 @@
 поддоменом. Employee-карточками не пользуемся: они добавили бы отделы и
 штат компаниям и испортили бы ручной подсчёт totals ниже.
 
+Блок I, задача 6: ``holding_headcount`` встала под ``module="hr",
+level="read"`` ПОВЕРХ ``hr_access.require_hr_access`` (без замены — обе
+двери должны быть открыты разом). Токены здесь — сырой ``pyjwt.encode``
+(не ``issue_token_pair``, см. ``token()``/``hr_token()``/``superuser_token()``
+ниже), а не настоящие ``User`` строки, поэтому "полный HR-доступ"
+``hr_token()`` больше НЕ покрывает новый гейт сам по себе —
+``_grant_holding_role`` ниже даёт ``user_id`` токена узел ``hr`` через
+``apps.access.tests.helpers.assign`` (НАПРЯМУЮ по ``user_id``, минуя
+настоящую модель ``User`` — ``RoleAssignment.user_id`` обычный
+``IntegerField``, без FK, см. ``apps/access/models.py``). Синтетическая
+роль (не миграционно-засеянная ``hr-lead``) выбрана НАМЕРЕННО: тесты этого
+файла помечены ``django_db(transaction=True)`` (нужны реальные, не
+откатываемые DDL схем), а этот маркер заставляет pytest-django делать
+``flush`` всей БД после КАЖДОГО теста — стирая и миграционно-засеянные
+``access_role`` тоже (см. докстринг ``_grant_holding_role``).
+``superuser_token()`` гейт обходит сам (``permissions_for`` короткое
+замыкание на ``is_superuser``) — для него роль не нужна. ``token()`` (без
+единой привилегии ни там, ни там) теперь получает 403 от ГЕЙТА раньше
+``require_hr_access`` — единственный ассерт с изменённым текстом, см.
+``test_no_hr_access_is_forbidden``.
+
 Фикстура «две компании со схемами» — копия приёма
 ``apps.hr.tests.test_holding_summary::company_schemas`` (тесты соседних
 файлов не делят фикстуры друг с другом), с одной содержательной поправкой:
@@ -78,6 +99,31 @@ def auth(tok: str) -> dict:
 def headers(slug: str, tok: str) -> dict:
     """Как ставит шлюз: слаг компании в заголовке + токен, выпущенный на неё."""
     return {"HTTP_X_HTQ_COMPANY": slug, **auth(tok)}
+
+
+HR_TOKEN_USER_ID = 7  # см. token(): user_id по умолчанию
+
+
+def _grant_holding_role(user_id: int, slug: str) -> None:
+    """Задача 6 блока I: дать ``user_id`` узел ``hr`` (depth ``full``) в
+    компании ``slug``, чтобы новый гейт ``module="hr", level="read"`` на
+    ``holding_headcount`` пропускал ``hr_token()``.
+
+    ``apps.access.tests.helpers.assign`` — НЕ засеянная миграцией роль
+    (``hr-lead`` и т.п.): она заводит СВОЮ синтетическую роль через
+    ``get_or_create`` при каждом вызове. Это принципиально для этого
+    файла — тесты помечены ``django_db(transaction=True)`` (схемы компаний
+    требуют реальных, не откатываемых DDL), а такой маркер заставляет
+    pytest-django делать ``flush`` всей БД после КАЖДОГО теста, что стирает
+    и мигационно-засеянные строки ``access_role`` (включая ``hr-lead``) —
+    полагаться на них здесь нельзя, ссылка на уже несуществующую роль роняет
+    следующий тест ``Role.DoesNotExist`` ещё до входа в тело теста, а его
+    прерванный ``two_companies`` не успевает потом почистить схему,
+    удваивая отказ на ``hr_department`` следующего теста. ``assign``
+    создаёт роль каждый раз заново, поэтому переживает ``flush``."""
+    from apps.access.tests.helpers import assign
+
+    assign(slug, user_id, "hr", "view")
 
 
 # ── фикстура схем ─────────────────────────────────────────────────────────
@@ -169,17 +215,28 @@ def _seed_child() -> None:
 
 @pytest.fixture
 def two_companies(db, company_schemas):
-    """Холдинг + дочерняя компания, наполненные данными, со свежими вьюхами."""
+    """Холдинг + дочерняя компания, наполненные данными, со свежими вьюхами.
+
+    Задача 6 блока I: + узел ``hr`` (``_grant_holding_role``) для
+    ``HR_TOKEN_USER_ID`` в ОБЕИХ компаниях — ``hr_token()`` без него не
+    проходит новый ``module="hr"`` гейт на ``holding_headcount`` ни с
+    одного поддомена (в т.ч. дочернего, где решение всё равно выносит
+    ``_deny_unless_holding`` — доступ нужен ЛИШЬ чтобы запрос дошёл до этой
+    проверки, а не упёрся в гейт раньше)."""
     Company.objects.create(slug=HOLDING_SLUG, name="Holding QA", kind=CompanyKind.HOLDING)
     Company.objects.create(slug=CHILD_SLUG, name="Child QA", kind=CompanyKind.SERVICE)
     _seed_holding()
     _seed_child()
     holding_views.rebuild_holding_views()
+    for slug in SLUGS:
+        _grant_holding_role(HR_TOKEN_USER_ID, slug)
     try:
         yield
     finally:
         _drop_holding_schema()
         _truncate_company_tables()
+        from apps.access.models import RoleAssignment
+        RoleAssignment.objects.filter(company_slug__in=SLUGS, user_id=HR_TOKEN_USER_ID).delete()
 
 
 @pytest.fixture
@@ -214,11 +271,14 @@ def test_child_subdomain_is_forbidden_even_with_hr_access(client, two_companies)
 
 @pytest.mark.django_db(transaction=True)
 def test_no_hr_access_is_forbidden(client, two_companies):
-    """Обычный токен без единого HR-права — 403 ``"HR access required"`` ещё
-    до проверки вида компании, сводка сервиса вообще не вызывается."""
+    """Обычный токен без единого HR-права (и, задача 6, без единой роли
+    ``apps.access``) — 403 ещё до проверки вида компании, сводка сервиса
+    вообще не вызывается. Detail теперь общий "Forbidden" от гейта
+    ``module="hr"`` (который отказывает РАНЬШЕ ``require_hr_access`` —
+    было "HR access required", тот же переход текста, что и в остальных
+    файлах этой задачи)."""
     resp = client.get(BASE, **headers(HOLDING_SLUG, token(company=HOLDING_SLUG)))
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db(transaction=True)
