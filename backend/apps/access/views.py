@@ -13,8 +13,11 @@
 операции внутри одной компании и гейтятся обычным ``admin=True``.
 
 **Гейт модуля** (блок I «Единая модель прав», задача 4) — ``api_view(
-module="access", level=…)`` на КАЖДОЙ ручке, кроме ``MeView.get``
-(самообслуживание, реестр ``apps.access.self_service``). Уровень выбирается по
+module="access", level=…)`` на каждой ручке, кроме трёх, объявленных в реестре
+``apps.access.self_service``: ``MeView.get`` (самообслуживание, ``self``),
+``RoleCollectionView.get`` и ``PositionRolesView.get`` (``open`` — их читает
+кадровый экран должностей, и до перевода их читал любой вошедший; подробности
+и обоснование — в реестре). Уровень выбирается по
 операции: чтение — ``read``, создание и правка — ``write``, удаление и
 администрирование — ``admin`` (то же правило, что в ``depth.legacy_level``).
 Ручки, уже стоявшие под ``admin=True``, флаг СОХРАНЯЮТ: платформенный
@@ -140,9 +143,21 @@ class FunctionsView(AccessView):
 
 
 class RoleCollectionView(AccessView):
-    """``GET|POST roles`` — плоский каталог, общий для всех компаний (§4.1)."""
+    """``GET|POST roles`` — плоский каталог, общий для всех компаний (§4.1).
 
-    @read
+    **Чтение — БЕЗ гейта модуля** (реестр ``apps.access.self_service``,
+    причина ``open``, раунд правок 1 задачи 4 блока I). Список ролей читает
+    любой вошедший, и так было до перевода: его показывает не только редактор
+    ролей, но и кадровый экран должностей (``HRPositions.tsx`` →
+    ``PositionRolesDialog.tsx`` — из чего выбирать роли должности). Гейт
+    ``module="access"`` отобрал бы его у кадровика, а выдать кадровым ролям
+    узел ``access.*`` нельзя: уровень модуля считается по ВСЕМУ поддереву
+    (``resolve.permissions_for``), то есть один узел открыл бы им весь домен
+    прав, включая правку каталога. Сужать это — отдельное решение, его
+    задача 4 не принимает: она переносит как есть.
+    """
+
+    @method_decorator(api_view(methods=("GET",), auth="jwt"))
     def get(self, request):
         return [schemas.RoleRead.model_validate(row)
                 for row in Role.objects.all()]
@@ -264,7 +279,11 @@ class PositionRolesView(AccessView):
         if not hr.get_positions_brief([position_id]):
             raise Http404("Должность не найдена в этой компании")
 
-    @read
+    # БЕЗ гейта модуля (реестр self_service, причина ``open``): роли
+    # должности показывает кадровый экран должностей, а не только редактор
+    # ролей, и до перевода их читал любой вошедший — см. докстринг
+    # RoleCollectionView.
+    @method_decorator(api_view(methods=("GET",), auth="jwt"))
     def get(self, request, position_id: int):
         company = self.company_or_404()
         self.position_or_404(position_id)

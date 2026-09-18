@@ -133,6 +133,37 @@ def user_company_slugs(user_id: int) -> list[str]:
     )
 
 
+def active_member_ids(slug: str) -> list[int]:
+    """Id участников компании, чья УЧЁТКА действует, по возрастанию.
+
+    Обратная сторона ``user_company_slugs``: там «в каких компаниях этот
+    человек», здесь «какие люди в этой компании». Понадобилась переносу
+    базовой роли (``manage.py access_backfill_basic``, блок I задача 4,
+    раунд правок 1): ``apps.access`` обязана спросить состав компании у
+    соседа, а не собирать его запросом к ``CompanyMembership``
+    (``apps/core/tests/test_app_isolation.py``).
+
+    Два условия, а не одно: строка ``CompanyMembership`` И действующая
+    учётка. Членство переживает увольнение — строку никто не снимает
+    автоматически, — и выдавать права по нему одному значило бы раздать их
+    отключённым и неподтверждённым учёткам. Статус считает
+    ``membership_service.list_memberships`` через ``apps.users.interface``:
+    знания об enum статусов пользователя в этой аппке нет и не должно быть.
+
+    БЕЗ кэша, в отличие от соседей выше: список запрашивают команды переноса
+    и администрирования, а не горячий путь запроса, зато устаревший на пять
+    секунд состав компании означал бы «кому-то не выдали права, и никто не
+    заметил».
+    """
+    from apps.companies.services import membership_service
+
+    company = Company.objects.filter(slug=slug).first()
+    if company is None:
+        return []
+    return sorted(row["user_id"] for row in membership_service.list_memberships(company)
+                  if row["is_active"])
+
+
 def user_may_enter_company(user_id: int, slug: str) -> bool:
     """Пускать ли пользователя в компанию ``slug``.
 

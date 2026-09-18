@@ -173,6 +173,31 @@ def test_module_right_does_not_replace_the_platform_admin_gate(client, company_r
 
 
 @pytest.mark.django_db
+def test_moderation_of_registrations_stays_platform_only(client, company_row, plain):
+    """Полная роль на модуль ``users`` не открывает модерацию регистраций.
+
+    Раунд правок 1, пункт 4: гейт модуля отвечает раньше ``require_admin``,
+    поэтому прежние проверки платформенного гейта на этих ручках стали
+    получать 403 от гейта, не доходя до него. Здесь вызывающий проведён
+    СКВОЗЬ гейт (полная роль на модуль) и обязан упереться именно в
+    ``admin=True``: снимите его — и тест покраснеет.
+    """
+    assign(company_row, plain.id, "users", "full")
+    pending = User.objects.create(username="waiting", email="waiting@htq.test",
+                                  password="x", status=UserStatus.PENDING)
+    head = headers(plain, company_row)
+
+    assert client.get(f"{BASE}/pending-registrations/", **head).status_code == 403
+    assert client.post(f"{BASE}/pending-registrations/{pending.id}/approve/",
+                       **head).status_code == 403
+    assert client.post(f"{BASE}/pending-registrations/{pending.id}/reject/",
+                       **head).status_code == 403
+
+    pending.refresh_from_db()
+    assert pending.status == UserStatus.PENDING
+
+
+@pytest.mark.django_db
 def test_own_profile_is_open_without_any_role(client, company_row, plain):
     """Реестр ``self_service`` (причина ``self``): своё — без гейта модуля."""
     resp = client.get(f"{BASE}/profile/me", **headers(plain, company_row))

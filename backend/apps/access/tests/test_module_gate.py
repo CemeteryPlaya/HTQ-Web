@@ -23,10 +23,13 @@
 import pytest
 from django.test import Client
 
+from apps.access.models import Role
 from apps.access.tests.helpers import (
     BASE,
     assign,
     auth,
+    patch_json,
+    post_json,
     put_json,
     staff_token,
     superuser_token,
@@ -48,15 +51,19 @@ def headers(slug: str, tok: str) -> dict:
 
 
 @pytest.mark.django_db
-def test_roles_are_closed_without_the_module(client, company_row):
-    resp = client.get(f"{BASE}/roles", **headers(company_row, token(company=company_row)))
+def test_role_permissions_are_closed_without_the_module(client, company_row):
+    role = Role.objects.create(code="r", title="Роль")
+    resp = client.get(f"{BASE}/roles/{role.id}/permissions",
+                      **headers(company_row, token(company=company_row)))
     assert resp.status_code == 403
 
 
 @pytest.mark.django_db
-def test_roles_open_with_read_level(client, company_row):
+def test_role_permissions_open_with_read_level(client, company_row):
+    role = Role.objects.create(code="r", title="Роль")
     assign(company_row, 7, "access", "view")
-    resp = client.get(f"{BASE}/roles", **headers(company_row, token(company=company_row)))
+    resp = client.get(f"{BASE}/roles/{role.id}/permissions",
+                      **headers(company_row, token(company=company_row)))
     assert resp.status_code == 200
 
 
@@ -142,3 +149,70 @@ def test_superuser_passes_every_handle(client, company_row):
     assert client.get(f"{BASE}/functions", **head).status_code == 200
     assert client.get(f"{BASE}/me", **head).status_code == 200
     assert put_json(client, f"{BASE}/assignments/42", [], **head).status_code == 200
+
+
+# ── Две ручки объявлены ``open``: читает любой вошедший ────────────────────
+#
+# Раунд правок 1: каталог ролей и роли должности до перевода читал ЛЮБОЙ
+# вошедший, и читает их не только редактор ролей, но и кадровый экран
+# должностей (HRPositions.tsx -> PositionRolesDialog.tsx). Гейт там оказался
+# сужением, а выдать кадровым ролям узел access.* нельзя — один узел открыл
+# бы им весь домен прав (уровень модуля считается по всему поддереву).
+# Обоснование целиком — в apps/access/self_service.py.
+
+
+@pytest.mark.django_db
+def test_role_catalog_is_readable_without_any_role(client, company_row):
+    resp = client.get(f"{BASE}/roles", **headers(company_row, token(company=company_row)))
+    assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_position_roles_are_readable_without_any_role(client, company_row):
+    """404 (должности нет), а НЕ 403 — значит ручка дошла до вьюхи.
+
+    Гейт модуля отвечает раньше вьюхи, поэтому «дошло до 404» и есть проверка
+    того, что гейта на ручке нет: с ним человек без единого узла ``access.*``
+    получил бы 403 независимо от того, существует ли должность.
+    """
+    resp = client.get(f"{BASE}/positions/999999/roles",
+                      **headers(company_row, token(company=company_row)))
+    assert resp.status_code == 404
+
+
+# ── Каталог ролей остаётся ПЛАТФОРМЕННОЙ операцией ────────────────────────
+#
+# Раунд правок 1, пункт 4: гейт модуля отвечает раньше, чем
+# ``deny_unless_platform_admin`` внутри метода, поэтому прежние тесты этой
+# проверки (они звали ручки ролью-пустышкой) стали получать 403 от гейта, не
+# доходя до неё — страховки на саму проверку не осталось. Тесты ниже дают
+# вызывающему ПОЛНЫЙ уровень на модуль access, то есть проводят его сквозь
+# гейт, и требуют 403 уже от самой проверки: снимите её — и они покраснеют.
+
+
+@pytest.mark.django_db
+def test_role_catalog_writes_stay_platform_only(client, company_row):
+    """Роль уровня admin на модуль ``access`` не даёт править ОБЩИЙ каталог.
+
+    Каталог один на все компании (§4.1): правка меняет доступ во всех сразу, и
+    обратной силы у ошибки нет — поэтому её делает только платформенный
+    администратор (``is_superuser``), а не держатель роли в одной компании.
+    """
+    assign(company_row, 7, "access", "full")
+    role = Role.objects.create(code="victim", title="Жертва")
+    head = headers(company_row, token(company=company_row))
+
+    assert post_json(client, f"{BASE}/roles", {"code": "x", "title": "X"},
+                     **head).status_code == 403
+    assert patch_json(client, f"{BASE}/roles/{role.id}", {"title": "Новое"},
+                      **head).status_code == 403
+    assert post_json(client, f"{BASE}/roles/{role.id}/copy",
+                     {"code": "c", "title": "C"}, **head).status_code == 403
+    assert put_json(client, f"{BASE}/roles/{role.id}/permissions",
+                    [{"node": "hr", "preset": "view"}], **head).status_code == 403
+    assert client.delete(f"{BASE}/roles/{role.id}", **head).status_code == 403
+
+    # Ни одна из пяти попыток ничего не изменила.
+    assert not Role.objects.filter(code__in=("x", "c")).exists()
+    role.refresh_from_db()
+    assert role.title == "Жертва"
