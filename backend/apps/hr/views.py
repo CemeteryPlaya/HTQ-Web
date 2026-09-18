@@ -3321,10 +3321,12 @@ def _company_display_name(slug: str) -> str:
 def holding_headcount(request):
     """Люди, структура и штат по каждой действующей компании группы.
 
-    Авторизация НЕ ретрофитит новый ``apps.access`` гейт на HR (тест
-    ``apps.access.tests.test_gate::test_gate_is_declared_but_not_hung_anywhere``
-    держит его не навешенным ни на одну существующую ручку этой аппки до
-    отдельной переделки HR) — здесь тот же ``hr_access.require_hr_access``,
+    Авторизация НЕ ретрофитит новый ``apps.access`` гейт на HR (``hr`` ещё
+    не входит в ``apps.access.self_service.TRANSLATED_APPS`` — до задачи 6
+    блока I сторож
+    ``apps.access.tests.test_gate::test_gate_is_not_hung_on_apps_without_a_translation_plan``
+    держит его не навешенным ни на одну существующую ручку этой аппки) —
+    здесь тот же ``hr_access.require_hr_access``,
     что и у соседних ручек домена. Поверх него — свой гейт по виду компании
     (``_deny_unless_holding``): тонкая вьюха, гейт → гейт → сервис → форма
     ответа.

@@ -2339,9 +2339,12 @@ def holding_projects(request):
     Авторизация — та же, что у управленческих данных этого домена (отчёты
     по персоналу, ``_staff_project``): ``request.token.is_elevated``, иначе
     ``PermissionDenied`` → 403 «Forbidden». Прикладной гейт ``apps.access``
-    на ручки ``tasks`` не навешивается (сторож
-    ``apps.access.tests.test_gate::test_gate_is_declared_but_not_hung_anywhere``).
-    Поверх — свой гейт по виду компании (``_deny_unless_holding``): тонкая
+    на ручки ``tasks`` не навешивается (``tasks`` ещё не входит в
+    ``apps.access.self_service.TRANSLATED_APPS`` — до задачи 7 блока I
+    сторож
+    ``apps.access.tests.test_gate::test_gate_is_not_hung_on_apps_without_a_translation_plan``
+    держит его не навешенным). Поверх — свой гейт по виду компании
+    (``_deny_unless_holding``): тонкая
     вьюха, гейт → гейт → сервис → форма ответа.
 
     ``HoldingViewsUnavailable`` (``migrate_companies`` временно сносит
