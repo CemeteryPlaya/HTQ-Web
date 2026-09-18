@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from django.core.exceptions import PermissionDenied
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.http import HttpResponse
 from django.utils import timezone
 
@@ -144,13 +144,13 @@ def _method_not_allowed(request):
 # Task types are deliberately NOT gated the same way — see that section.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_labels(request):
     return [schemas.LabelResponse.model_validate(row)
             for row in ref_svc.list_labels()]
 
 
-@api_view(methods=("POST",), body=schemas.LabelCreate, status=201, admin=True)
+@api_view(methods=("POST",), body=schemas.LabelCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_label(request, data: schemas.LabelCreate):
     return schemas.LabelResponse.model_validate(
         ref_svc.create_label(name=data.name, color=data.color)
@@ -165,14 +165,14 @@ def labels_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("PATCH",), body=schemas.LabelUpdate, admin=True)
+@api_view(methods=("PATCH",), body=schemas.LabelUpdate, admin=True, module="tasks", level="admin")
 def _update_label(request, label_id: int, data: schemas.LabelUpdate):
     return schemas.LabelResponse.model_validate(
         ref_svc.update_label(label_id, data.model_dump(exclude_unset=True))
     )
 
 
-@api_view(methods=("DELETE",), status=204, admin=True)
+@api_view(methods=("DELETE",), status=204, admin=True, module="tasks", level="admin")
 def _delete_label(request, label_id: int):
     ref_svc.delete_label(label_id)
     return _no_content()
@@ -196,13 +196,13 @@ def label_detail(request, label_id: int):
 # for ``is_system`` rows.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_task_types(request):
     return [schemas.TaskTypeResponse.model_validate(row)
             for row in ref_svc.list_task_types()]
 
 
-@api_view(methods=("POST",), body=schemas.TaskTypeCreate, status=201)
+@api_view(methods=("POST",), body=schemas.TaskTypeCreate, status=201, module="tasks", level="write")
 def _create_task_type(request, data: schemas.TaskTypeCreate):
     try:
         row = ref_svc.create_task_type(slug=data.slug, name=data.name,
@@ -221,14 +221,14 @@ def task_types_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("PATCH",), body=schemas.TaskTypeUpdate)
+@api_view(methods=("PATCH",), body=schemas.TaskTypeUpdate, module="tasks", level="write")
 def _update_task_type(request, type_id: int, data: schemas.TaskTypeUpdate):
     return schemas.TaskTypeResponse.model_validate(
         ref_svc.update_task_type(type_id, data.model_dump(exclude_unset=True))
     )
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def _delete_task_type(request, type_id: int):
     # ``PermissionDenied`` for a system row -> api_view renders the 403 the
     # original raised explicitly.
@@ -253,7 +253,7 @@ def task_type_detail(request, type_id: int):
 # resource plan shows.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_equipment(request):
     try:
         active_only = _bool_param(request, "active_only", True)
@@ -268,7 +268,7 @@ def _list_equipment(request):
             contractor_id=contractor_id, category_id=category_id)]
 
 
-@api_view(methods=("POST",), body=schemas.EquipmentCreate, status=201, admin=True)
+@api_view(methods=("POST",), body=schemas.EquipmentCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_equipment(request, data: schemas.EquipmentCreate):
     return schemas.EquipmentResponse.model_validate(
         ref_svc.build_equipment(ref_svc.create_equipment(**data.model_dump()))
@@ -283,7 +283,7 @@ def equipment_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("PATCH",), body=schemas.EquipmentUpdate, admin=True)
+@api_view(methods=("PATCH",), body=schemas.EquipmentUpdate, admin=True, module="tasks", level="admin")
 def _update_equipment(request, equipment_id: int, data: schemas.EquipmentUpdate):
     return schemas.EquipmentResponse.model_validate(
         ref_svc.build_equipment(ref_svc.update_equipment(
@@ -291,7 +291,7 @@ def _update_equipment(request, equipment_id: int, data: schemas.EquipmentUpdate)
     )
 
 
-@api_view(methods=("DELETE",), status=204, admin=True)
+@api_view(methods=("DELETE",), status=204, admin=True, module="tasks", level="admin")
 def _delete_equipment(request, equipment_id: int):
     ref_svc.delete_equipment(equipment_id)
     return _no_content()
@@ -323,7 +323,7 @@ def _reference_endpoints(kind: str, create_schema, update_schema,
     и находит таблицу, так что вьюха модель по-прежнему не знает.
     """
 
-    @api_view(methods=("GET",))
+    @api_view(methods=("GET",), module="tasks", level="read")
     def _list(request):
         try:
             active_only = _bool_param(request, "active_only", True)
@@ -332,7 +332,7 @@ def _reference_endpoints(kind: str, create_schema, update_schema,
         return [response_schema.model_validate(ref_svc.build_reference_row(row))
                 for row in ref_svc.list_reference_rows(kind, active_only)]
 
-    @api_view(methods=("POST",), body=create_schema, status=201, admin=True)
+    @api_view(methods=("POST",), body=create_schema, status=201, admin=True, module="tasks", level="admin")
     def _create(request, data):
         try:
             row = ref_svc.create_reference_row(kind, **data.model_dump())
@@ -341,13 +341,13 @@ def _reference_endpoints(kind: str, create_schema, update_schema,
             return json_error(str(exc), 409)
         return response_schema.model_validate(ref_svc.build_reference_row(row))
 
-    @api_view(methods=("PATCH",), body=update_schema, admin=True)
+    @api_view(methods=("PATCH",), body=update_schema, admin=True, module="tasks", level="admin")
     def _update(request, row_id: int, data):
         return response_schema.model_validate(ref_svc.build_reference_row(
             ref_svc.update_reference_row(
                 kind, row_id, data.model_dump(exclude_unset=True))))
 
-    @api_view(methods=("DELETE",), status=204, admin=True)
+    @api_view(methods=("DELETE",), status=204, admin=True, module="tasks", level="admin")
     def _delete(request, row_id: int):
         ref_svc.delete_reference_row(kind, row_id)
         return _no_content()
@@ -386,7 +386,7 @@ volume_types_collection, volume_type_detail = _reference_endpoints(
 # Sequences — /sequences/{prefix}/next  (admin-only)
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("POST",), admin=True)
+@api_view(methods=("POST",), admin=True, module="tasks", level="admin")
 def next_task_key(request, project_prefix: str):
     """Hand out the next task key for a prefix.
 
@@ -409,7 +409,7 @@ def next_task_key(request, project_prefix: str):
 #   read                                  — visibility filter in the service
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_tasks(request):
     try:
         offset = _int_param(request, "offset", 0, minimum=0)
@@ -448,7 +448,7 @@ def _list_tasks(request):
     return task_response.build_list(tasks)
 
 
-@api_view(methods=("POST",), body=schemas.TaskCreate, status=201)
+@api_view(methods=("POST",), body=schemas.TaskCreate, status=201, module="tasks", level="write")
 def _create_task(request, data: schemas.TaskCreate):
     # ``create_task`` raises ValueError for a site that does not belong to
     # the task's project. Unlike _update_task this view had no except arm at
@@ -470,7 +470,7 @@ def tasks_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def task_stats(request):
     try:
         department_id = _int_param(request, "department_id")
@@ -488,14 +488,14 @@ def task_stats(request):
     ))
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _get_task(request, task_id: int):
     return task_response.build_detail(
         task_service.load_for_action(task_id, request.token)
     )
 
 
-@api_view(methods=("PATCH",), body=schemas.TaskUpdate)
+@api_view(methods=("PATCH",), body=schemas.TaskUpdate, module="tasks", level="write")
 def _update_task(request, task_id: int, data: schemas.TaskUpdate):
     task = task_service.load_for_action(task_id, request.token)
     # Status/progress alone need only the soft-edit role; touching anything
@@ -517,7 +517,7 @@ def _update_task(request, task_id: int, data: schemas.TaskUpdate):
     return task_response.build_detail(task_service.get_task(task_id))
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def _delete_task(request, task_id: int):
     task = task_service.load_for_action(task_id, request.token)
     task_service.require_full_edit(task, request.token)
@@ -535,14 +535,14 @@ def task_detail(request, task_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def task_transitions(request, task_id: int):
     task = task_service.load_for_action(task_id, request.token)
     return [{"status": status}
             for status in task_service.available_transitions(task)]
 
 
-@api_view(methods=("PATCH",), body=schemas.AssigneesUpdate)
+@api_view(methods=("PATCH",), body=schemas.AssigneesUpdate, module="tasks", level="write")
 def update_assignees(request, task_id: int, data: schemas.AssigneesUpdate):
     task = task_service.load_for_action(task_id, request.token)
     task_service.require_full_edit(task, request.token)
@@ -551,7 +551,7 @@ def update_assignees(request, task_id: int, data: schemas.AssigneesUpdate):
     return task_response.build_detail(task_service.get_task(task_id))
 
 
-@api_view(methods=("PATCH",), body=schemas.SupervisorUpdate)
+@api_view(methods=("PATCH",), body=schemas.SupervisorUpdate, module="tasks", level="write")
 def update_supervisor(request, task_id: int, data: schemas.SupervisorUpdate):
     task = task_service.load_for_action(task_id, request.token)
     task_service.require_full_edit(task, request.token)
@@ -560,7 +560,7 @@ def update_supervisor(request, task_id: int, data: schemas.SupervisorUpdate):
     return task_response.build_detail(task_service.get_task(task_id))
 
 
-@api_view(methods=("POST",), body=schemas.DelegateCreate, status=201)
+@api_view(methods=("POST",), body=schemas.DelegateCreate, status=201, module="tasks", level="write")
 def _add_delegate(request, task_id: int, data: schemas.DelegateCreate):
     task = task_service.load_for_action(task_id, request.token)
     # Only the supervisor (or an admin) may delegate. Reporters and existing
@@ -578,7 +578,7 @@ def task_delegates(request, task_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("DELETE",))
+@api_view(methods=("DELETE",), module="tasks", level="write")
 def remove_delegate(request, task_id: int, user_id: int):
     """The supervisor can revoke anyone; a delegate may also give up their
     own seat. Returns the task (200), not 204 — as the original did."""
@@ -592,14 +592,14 @@ def remove_delegate(request, task_id: int, user_id: int):
     return task_response.build_detail(task_service.get_task(task_id))
 
 
-@api_view(methods=("POST",), status=201)
+@api_view(methods=("POST",), status=201, module="tasks", level="write")
 def _watch_task(request, task_id: int):
     task_service.load_for_action(task_id, request.token)
     task_service.add_watcher(task_id, request.token.user_id)
     return task_response.build_detail(task_service.get_task(task_id))
 
 
-@api_view(methods=("DELETE",))
+@api_view(methods=("DELETE",), module="tasks", level="write")
 def _unwatch_task(request, task_id: int):
     task_service.load_for_action(task_id, request.token)
     task_service.remove_watcher(task_id, request.token.user_id)
@@ -615,7 +615,7 @@ def task_watch(request, task_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("PATCH",), body=schemas.ProgressUpdate)
+@api_view(methods=("PATCH",), body=schemas.ProgressUpdate, module="tasks", level="write")
 def update_progress(request, task_id: int, data: schemas.ProgressUpdate):
     task = task_service.load_for_action(task_id, request.token)
     task_service.require_soft_edit(task, request.token)
@@ -635,13 +635,13 @@ def update_progress(request, task_id: int, data: schemas.ProgressUpdate):
 # which task ids exist either.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_comments(request, task_id: int):
     task_service.load_for_action(task_id, request.token)
     return task_content_service.list_comments(task_id)
 
 
-@api_view(methods=("POST",), body=schemas.CommentCreate, status=201)
+@api_view(methods=("POST",), body=schemas.CommentCreate, status=201, module="tasks", level="write")
 def _create_comment(request, task_id: int, data: schemas.CommentCreate):
     # Visibility only, deliberately NOT require_soft_edit: commenting is
     # participation, not editing. Anyone who can see the task — including a
@@ -661,13 +661,13 @@ def task_comments(request, task_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_attachments(request, task_id: int):
     task_service.load_for_action(task_id, request.token)
     return task_content_service.list_attachments(task_id)
 
 
-@api_view(methods=("POST",), status=201)
+@api_view(methods=("POST",), status=201, module="tasks", level="write")
 def _upload_attachment(request, task_id: int):
     """Store an uploaded file and record it against the task.
 
@@ -732,20 +732,20 @@ def task_attachments(request, task_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def task_activity(request, task_id: int):
     task_service.load_for_action(task_id, request.token)
     return task_content_service.list_activity(task_id)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_task_volumes(request, task_id: int):
     task_service.load_for_action(task_id, request.token)
     return [schemas.TaskVolumeResponse.model_validate(row)
             for row in task_content_service.list_task_volumes(task_id)]
 
 
-@api_view(methods=("PUT",), body=schemas.VolumesUpdate)
+@api_view(methods=("PUT",), body=schemas.VolumesUpdate, module="tasks", level="write")
 def _set_task_volumes(request, task_id: int, data: schemas.VolumesUpdate):
     task = task_service.load_for_action(task_id, request.token)
     # Мягкое право, а не полное: «развезли 180 из 250» — это отчёт о ходе
@@ -777,7 +777,7 @@ def task_volumes(request, task_id: int):
 # задачи или админ: чужую отчётность правит только тот, кто за неё отвечает.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_task_reports(request, task_id: int):
     task_service.load_for_action(task_id, request.token)
     return [schemas.DailyReportResponse.model_validate(row)
@@ -785,7 +785,7 @@ def _list_task_reports(request, task_id: int):
                 daily_report_service.list_reports(task_id=task_id))]
 
 
-@api_view(methods=("POST",), body=schemas.DailyReportCreate, status=201)
+@api_view(methods=("POST",), body=schemas.DailyReportCreate, status=201, module="tasks", level="write")
 def _create_task_report(request, task_id: int, data: schemas.DailyReportCreate):
     task = task_service.load_for_action(task_id, request.token)
     # Мягкое право: отчёт о выполненном — то же, что progress, а не
@@ -829,7 +829,7 @@ def _report_for_write(request, report_id: int):
     return report
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _get_report(request, report_id: int):
     report = daily_report_service.get_report(report_id)
     task_service.load_for_action(report.task_id, request.token)
@@ -837,7 +837,7 @@ def _get_report(request, report_id: int):
         daily_report_service.build_report(report))
 
 
-@api_view(methods=("PATCH",), body=schemas.DailyReportUpdate)
+@api_view(methods=("PATCH",), body=schemas.DailyReportUpdate, module="tasks", level="write")
 def _update_report(request, report_id: int, data: schemas.DailyReportUpdate):
     _report_for_write(request, report_id)
     try:
@@ -850,7 +850,7 @@ def _update_report(request, report_id: int, data: schemas.DailyReportUpdate):
         daily_report_service.build_report(report))
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def _delete_report(request, report_id: int):
     _report_for_write(request, report_id)
     daily_report_service.delete_report(report_id)
@@ -867,7 +867,7 @@ def daily_report_detail(request, report_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def daily_report_revisions(request, report_id: int):
     """Лента версий отчёта. Читают все, кто видит задачу."""
     report = daily_report_service.get_report(report_id)
@@ -877,7 +877,7 @@ def daily_report_revisions(request, report_id: int):
                 daily_report_service.list_revisions(report_id))]
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def daily_report_board(request):
     """Сводка ежедневки: что вызывающий может отчитать за дату ``?date=``.
 
@@ -898,7 +898,7 @@ def daily_report_board(request):
     return [schemas.DailyReportBoardRow.model_validate(row) for row in rows]
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def roadmap_daily_reports(request, roadmap_id: int):
     """Отчёты всего пакета работ — лента для карточки роудмапа."""
     try:
@@ -949,7 +949,7 @@ def _staff_project(request, project_id: int):
     return project
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def staff_report_projects(request):
     """Проекты, по которым вызывающий вправе вести численность.
 
@@ -968,7 +968,7 @@ def staff_report_projects(request):
     return project_service.build_responses(projects)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def project_staff_board(request, project_id: int):
     """Доска численности проекта на ``?date=``: блок × (факт, план, ежедневка).
 
@@ -987,7 +987,7 @@ def project_staff_board(request, project_id: int):
         "date": on, **board})
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_project_staff_reports(request, project_id: int):
     project = _staff_project(request, project_id)
     try:
@@ -1002,7 +1002,7 @@ def _list_project_staff_reports(request, project_id: int):
                     date_to=date_to))]
 
 
-@api_view(methods=("POST",), body=schemas.ProjectStaffReportCreate, status=201)
+@api_view(methods=("POST",), body=schemas.ProjectStaffReportCreate, status=201, module="tasks", level="write")
 def _create_project_staff_report(request, project_id: int,
                                  data: schemas.ProjectStaffReportCreate):
     project = _staff_project(request, project_id)
@@ -1030,14 +1030,14 @@ def _staff_report_for_action(request, report_id: int):
     return report
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _get_staff_report(request, report_id: int):
     report = _staff_report_for_action(request, report_id)
     return schemas.ProjectStaffReportResponse.model_validate(
         staff_report_service.build_report(report))
 
 
-@api_view(methods=("PATCH",), body=schemas.ProjectStaffReportUpdate)
+@api_view(methods=("PATCH",), body=schemas.ProjectStaffReportUpdate, module="tasks", level="write")
 def _update_staff_report(request, report_id: int,
                          data: schemas.ProjectStaffReportUpdate):
     _staff_report_for_action(request, report_id)
@@ -1053,7 +1053,7 @@ def _update_staff_report(request, report_id: int,
         staff_report_service.build_report(report))
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def _delete_staff_report(request, report_id: int):
     _staff_report_for_action(request, report_id)
     staff_report_service.delete_report(report_id)
@@ -1070,7 +1070,7 @@ def staff_report_detail(request, report_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def staff_report_revisions(request, report_id: int):
     """Лента версий отчёта по персоналу. Читают те же, кто видит отчёт."""
     _staff_report_for_action(request, report_id)
@@ -1083,7 +1083,7 @@ def staff_report_revisions(request, report_id: int):
 # Task links — /task-links/
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("POST",), body=schemas.LinkCreate, status=201)
+@api_view(methods=("POST",), body=schemas.LinkCreate, status=201, module="tasks", level="write")
 def _create_link(request, data: schemas.LinkCreate):
     # BOTH endpoints are checked for visibility: a link is a two-way fact
     # (create_link writes the mirror row), so linking a visible task to an
@@ -1117,7 +1117,7 @@ def links_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def link_detail(request, link_id: int):
     source = task_service.load_for_action(
         link_service.link_source_task_id(link_id), request.token)
@@ -1138,7 +1138,7 @@ def link_detail(request, link_id: int):
 # contractor — subcontractors have no way into the system on this step.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_contractors(request):
     return [schemas.ContractorResponse.model_validate(
         contractor_service.build_contractor(row))
@@ -1148,7 +1148,7 @@ def _list_contractors(request):
 
 
 @api_view(methods=("POST",), body=schemas.ContractorCreate, status=201,
-          admin=True)
+          admin=True, module="tasks", level="admin")
 def _create_contractor(request, data: schemas.ContractorCreate):
     return schemas.ContractorResponse.model_validate(
         contractor_service.build_contractor(
@@ -1163,14 +1163,14 @@ def contractors_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _get_contractor(request, contractor_id: int):
     return schemas.ContractorResponse.model_validate(
         contractor_service.build_contractor(
             contractor_service.get_contractor(contractor_id)))
 
 
-@api_view(methods=("PATCH",), body=schemas.ContractorUpdate, admin=True)
+@api_view(methods=("PATCH",), body=schemas.ContractorUpdate, admin=True, module="tasks", level="admin")
 def _update_contractor(request, contractor_id: int,
                        data: schemas.ContractorUpdate):
     return schemas.ContractorResponse.model_validate(
@@ -1179,7 +1179,7 @@ def _update_contractor(request, contractor_id: int,
                 contractor_id, data.model_dump(exclude_unset=True))))
 
 
-@api_view(methods=("DELETE",), status=204, admin=True)
+@api_view(methods=("DELETE",), status=204, admin=True, module="tasks", level="admin")
 def _delete_contractor(request, contractor_id: int):
     try:
         contractor_service.delete_contractor(contractor_id)
@@ -1198,7 +1198,7 @@ def contractor_detail(request, contractor_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_contractor_workers(request, contractor_id: int):
     contractor_service.get_contractor(contractor_id)
     return [schemas.ContractorWorkerResponse.model_validate(
@@ -1209,7 +1209,7 @@ def _list_contractor_workers(request, contractor_id: int):
 
 
 @api_view(methods=("POST",), body=schemas.ContractorWorkerCreate, status=201,
-          admin=True)
+          admin=True, module="tasks", level="admin")
 def _create_contractor_worker(request, contractor_id: int,
                               data: schemas.ContractorWorkerCreate):
     return schemas.ContractorWorkerResponse.model_validate(
@@ -1226,7 +1226,7 @@ def contractor_workers(request, contractor_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("PATCH",), body=schemas.ContractorWorkerUpdate, admin=True)
+@api_view(methods=("PATCH",), body=schemas.ContractorWorkerUpdate, admin=True, module="tasks", level="admin")
 def _update_contractor_worker(request, worker_id: int,
                               data: schemas.ContractorWorkerUpdate):
     return schemas.ContractorWorkerResponse.model_validate(
@@ -1235,7 +1235,7 @@ def _update_contractor_worker(request, worker_id: int,
                 worker_id, data.model_dump(exclude_unset=True))))
 
 
-@api_view(methods=("DELETE",), status=204, admin=True)
+@api_view(methods=("DELETE",), status=204, admin=True, module="tasks", level="admin")
 def _delete_contractor_worker(request, worker_id: int):
     contractor_service.delete_worker(worker_id)
     return _no_content()
@@ -1249,7 +1249,7 @@ def contractor_worker_detail(request, worker_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_engagements(request):
     try:
         contractor_id = _int_param(request, "contractor_id")
@@ -1267,10 +1267,16 @@ def _list_engagements(request):
 
 
 @api_view(methods=("POST",), body=schemas.ContractorEngagementCreate,
-          status=201, admin=True)
+          status=201, admin=True, module="tasks", level="admin")
 def _create_engagement(request, data: schemas.ContractorEngagementCreate):
     try:
-        row = contractor_service.create_engagement(data.model_dump())
+        # atomic() — same unguarded uq_contractor_engagement collision as
+        # ``_create_project``'s comment describes; the original left this
+        # one an unhandled 500 too (see ``test_engagement_is_unique_per_
+        # contractor_project_site``), and the savepoint is what keeps that
+        # 500 an actual enveloped response instead of a bare crash.
+        with transaction.atomic():
+            row = contractor_service.create_engagement(data.model_dump())
     except ValueError as exc:
         return json_error(str(exc), 400)
     return schemas.ContractorEngagementResponse.model_validate(
@@ -1286,7 +1292,7 @@ def engagements_collection(request):
 
 
 @api_view(methods=("PATCH",), body=schemas.ContractorEngagementUpdate,
-          admin=True)
+          admin=True, module="tasks", level="admin")
 def _update_engagement(request, engagement_id: int,
                        data: schemas.ContractorEngagementUpdate):
     try:
@@ -1301,7 +1307,7 @@ def _update_engagement(request, engagement_id: int,
         contractor_service.build_engagement(row))
 
 
-@api_view(methods=("DELETE",), status=204, admin=True)
+@api_view(methods=("DELETE",), status=204, admin=True, module="tasks", level="admin")
 def _delete_engagement(request, engagement_id: int):
     contractor_service.delete_engagement(engagement_id)
     return _no_content()
@@ -1324,7 +1330,7 @@ def engagement_detail(request, engagement_id: int):
 # schedule and report shows.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_sites(request):
     return [schemas.SiteResponse.model_validate(row)
             for row in site_service.build_responses(site_service.list_sites(
@@ -1332,11 +1338,14 @@ def _list_sites(request):
                 search=_str_param(request, "search")))]
 
 
-@api_view(methods=("POST",), body=schemas.SiteCreate, status=201, admin=True)
+@api_view(methods=("POST",), body=schemas.SiteCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_site(request, data: schemas.SiteCreate):
-    return schemas.SiteResponse.model_validate(
-        site_service.build_response(site_service.create_site(data.model_dump()))
-    )
+    # See the comment on ``_create_project`` — same unguarded unique-name
+    # collision, same fix.
+    with transaction.atomic():
+        return schemas.SiteResponse.model_validate(
+            site_service.build_response(site_service.create_site(data.model_dump()))
+        )
 
 
 def sites_collection(request):
@@ -1347,13 +1356,13 @@ def sites_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _get_site(request, site_id: int):
     return schemas.SiteResponse.model_validate(
         site_service.build_response(site_service.get_site(site_id)))
 
 
-@api_view(methods=("PATCH",), body=schemas.SiteUpdate, admin=True)
+@api_view(methods=("PATCH",), body=schemas.SiteUpdate, admin=True, module="tasks", level="admin")
 def _update_site(request, site_id: int, data: schemas.SiteUpdate):
     return schemas.SiteResponse.model_validate(
         site_service.build_response(site_service.update_site(
@@ -1361,7 +1370,7 @@ def _update_site(request, site_id: int, data: schemas.SiteUpdate):
     )
 
 
-@api_view(methods=("DELETE",), status=204, admin=True)
+@api_view(methods=("DELETE",), status=204, admin=True, module="tasks", level="admin")
 def _delete_site(request, site_id: int):
     try:
         site_service.delete_site(site_id)
@@ -1383,7 +1392,7 @@ def site_detail(request, site_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def site_tasks(request, site_id: int):
     """Tasks on one object — visibility-scoped like every other task list."""
     site_service.get_site(site_id)          # 404 first for an unknown object
@@ -1405,7 +1414,7 @@ def site_tasks(request, site_id: int):
 # запись: его заводят один раз при разбивке объекта.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_site_blocks(request, site_id: int):
     site_service.get_site(site_id)          # 404 раньше пустого списка
     return [schemas.SiteBlockResponse.model_validate(row)
@@ -1415,11 +1424,19 @@ def _list_site_blocks(request, site_id: int):
 
 
 @api_view(methods=("POST",), body=schemas.SiteBlockCreate, status=201,
-          admin=True)
+          admin=True, module="tasks", level="admin")
 def _create_site_block(request, site_id: int, data: schemas.SiteBlockCreate):
     site_service.get_site(site_id)
     try:
-        block = block_service.create_block(site_id, data.model_dump())
+        # atomic(): a caught IntegrityError still leaves the connection
+        # refusing further statements until something rolls back — see the
+        # comment on ``_create_project``. Here that would surface as the
+        # NEXT query in this request (the 409 response is built and
+        # returned fine, but ``CompanyContextMiddleware``'s ``finally``
+        # resets ``search_path`` afterwards and that query is what actually
+        # blows up) turning this 409 into an un-enveloped 500.
+        with transaction.atomic():
+            block = block_service.create_block(site_id, data.model_dump())
     except IntegrityError:
         # uq_site_block_name / uq_site_block_code: «блок 1» на этой площадке
         # уже есть. 409, а не 500 — запрос корректен, конфликтует состояние.
@@ -1437,14 +1454,14 @@ def site_blocks_collection(request, site_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _get_block(request, block_id: int):
     block = block_service.get_block(block_id)
     return schemas.SiteBlockResponse.model_validate(block_service.build_block(
         block, volumes=block_service.list_block_volumes(block_id)))
 
 
-@api_view(methods=("PATCH",), body=schemas.SiteBlockUpdate, admin=True)
+@api_view(methods=("PATCH",), body=schemas.SiteBlockUpdate, admin=True, module="tasks", level="admin")
 def _update_block(request, block_id: int, data: schemas.SiteBlockUpdate):
     try:
         block = block_service.update_block(
@@ -1461,7 +1478,7 @@ def _update_block(request, block_id: int, data: schemas.SiteBlockUpdate):
         block, volumes=block_service.list_block_volumes(block_id)))
 
 
-@api_view(methods=("DELETE",), status=204, admin=True)
+@api_view(methods=("DELETE",), status=204, admin=True, module="tasks", level="admin")
 def _delete_block(request, block_id: int):
     try:
         block_service.delete_block(block_id)
@@ -1480,14 +1497,14 @@ def block_detail(request, block_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_block_volumes(request, block_id: int):
     block_service.get_block(block_id)
     return [schemas.VolumeResponse.model_validate(block_service.build_volume(row))
             for row in block_service.list_block_volumes(block_id)]
 
 
-@api_view(methods=("PUT",), body=schemas.VolumesUpdate, admin=True)
+@api_view(methods=("PUT",), body=schemas.VolumesUpdate, admin=True, module="tasks", level="admin")
 def _set_block_volumes(request, block_id: int, data: schemas.VolumesUpdate):
     try:
         rows = block_service.set_block_volumes(
@@ -1509,7 +1526,7 @@ def block_volumes(request, block_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def block_progress(request, block_id: int):
     """Выполнение блока в штуках, а не в статусах задач."""
     block_service.get_block(block_id)
@@ -1517,14 +1534,14 @@ def block_progress(request, block_id: int):
         block_service.block_progress(block_id))
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_project_sites(request, project_id: int):
     return [schemas.ProjectSiteRef.model_validate(
         site_service.build_project_site_ref(link))
         for link in site_service.list_project_sites(project_id)]
 
 
-@api_view(methods=("PUT",), body=schemas.ProjectSitesUpdate, admin=True)
+@api_view(methods=("PUT",), body=schemas.ProjectSitesUpdate, admin=True, module="tasks", level="admin")
 def _set_project_sites(request, project_id: int,
                        data: schemas.ProjectSitesUpdate):
     try:
@@ -1548,17 +1565,29 @@ def project_sites(request, project_id: int):
 # Projects — /projects/
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_projects(request):
     employee_scope, department_id = project_service.scope_for(request.token)
     return project_service.build_responses(project_service.list_projects(
         employee_scope=employee_scope, department_id=department_id))
 
 
-@api_view(methods=("POST",), body=schemas.ProjectCreate, status=201, admin=True)
+@api_view(methods=("POST",), body=schemas.ProjectCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_project(request, data: schemas.ProjectCreate):
-    return project_service.build_response(project_service.create_project(
-        data.model_dump(), creator_id=request.token.user_id))
+    # ``transaction.atomic()`` — not for the 500 itself (the original had no
+    # 409 branch for a duplicate name either, see ``test_project_name_must_
+    # be_unique``), but because a raw ``IntegrityError`` surfacing mid-atomic
+    # leaves Postgres refusing every further statement on this connection
+    # until rollback. Outside this savepoint that includes the ``SET
+    # search_path`` ``CompanyContextMiddleware`` issues in its ``finally`` on
+    # the way out — so the intended, enveloped 500 response never left this
+    # process; the middleware's own cleanup query died with
+    # ``TransactionManagementError`` first. A bare ``atomic()`` block turns
+    # the failed insert into a savepoint rollback instead, which leaves the
+    # connection usable again for that cleanup.
+    with transaction.atomic():
+        return project_service.build_response(project_service.create_project(
+            data.model_dump(), creator_id=request.token.user_id))
 
 
 def projects_collection(request):
@@ -1569,7 +1598,7 @@ def projects_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _get_project(request, project_id: int):
     employee_scope, department_id = project_service.scope_for(request.token)
     return project_service.build_response(project_service.get_project(
@@ -1598,7 +1627,7 @@ def _project_for_write(request, project_id: int):
     return project
 
 
-@api_view(methods=("PATCH",), body=schemas.ProjectUpdate)
+@api_view(methods=("PATCH",), body=schemas.ProjectUpdate, module="tasks", level="write")
 def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
     _project_for_write(request, project_id)
     try:
@@ -1613,7 +1642,7 @@ def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
     return project_service.build_response(project)
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def _delete_project(request, project_id: int):
     _project_for_write(request, project_id)
     project_service.delete_project(project_id)
@@ -1638,7 +1667,7 @@ def project_detail(request, project_id: int):
 # переписать чужой пакет — действие того же веса, что переписать проект.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_roadmaps(request):
     try:
         project_id = _int_param(request, "project_id")
@@ -1655,11 +1684,15 @@ def _list_roadmaps(request):
                     status=_str_param(request, "status")))]
 
 
-@api_view(methods=("POST",), body=schemas.RoadmapCreate, status=201, admin=True)
+@api_view(methods=("POST",), body=schemas.RoadmapCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_roadmap(request, data: schemas.RoadmapCreate):
     try:
-        roadmap = roadmap_service.create_roadmap(
-            data.model_dump(), creator_id=request.token.user_id)
+        # atomic() — see the comment on ``_create_site_block``'s try block:
+        # without it, catching the IntegrityError still leaves this
+        # connection unusable for the request's remaining queries.
+        with transaction.atomic():
+            roadmap = roadmap_service.create_roadmap(
+                data.model_dump(), creator_id=request.token.user_id)
     except ValueError as exc:
         # Блок не из проекта / несуществующая ссылка — 400, как у задач.
         return json_error(str(exc), 400)
@@ -1695,7 +1728,7 @@ def _roadmap_for_write(request, roadmap_id: int):
     return roadmap
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _get_roadmap(request, roadmap_id: int):
     employee_scope, department_id = roadmap_service.scope_for(request.token)
     return schemas.RoadmapResponse.model_validate(
@@ -1704,7 +1737,7 @@ def _get_roadmap(request, roadmap_id: int):
             department_id=department_id)))
 
 
-@api_view(methods=("PATCH",), body=schemas.RoadmapUpdate)
+@api_view(methods=("PATCH",), body=schemas.RoadmapUpdate, module="tasks", level="write")
 def _update_roadmap(request, roadmap_id: int, data: schemas.RoadmapUpdate):
     _roadmap_for_write(request, roadmap_id)
     try:
@@ -1722,7 +1755,7 @@ def _update_roadmap(request, roadmap_id: int, data: schemas.RoadmapUpdate):
         roadmap_service.build_response(roadmap))
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def _delete_roadmap(request, roadmap_id: int):
     _roadmap_for_write(request, roadmap_id)
     try:
@@ -1743,7 +1776,7 @@ def roadmap_detail(request, roadmap_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def roadmap_tasks(request, roadmap_id: int):
     """Плоский список задач пакета — дерево строит UI, как и у проектов."""
     employee_scope, department_id = roadmap_service.scope_for(request.token)
@@ -1761,7 +1794,7 @@ def roadmap_tasks(request, roadmap_id: int):
     return task_response.build_list(tasks)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def roadmap_metrics(request, roadmap_id: int):
     """План против факта по трём осям доски: срок, люди, техника."""
     employee_scope, department_id = roadmap_service.scope_for(request.token)
@@ -1771,7 +1804,7 @@ def roadmap_metrics(request, roadmap_id: int):
         roadmap_service.roadmap_metrics(roadmap))
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def project_tasks(request, project_id: int):
     """Flat task list for a project — the UI builds the tree itself."""
     employee_scope, department_id = project_service.scope_for(request.token)
@@ -1822,7 +1855,7 @@ def _read_resource_target(request, task_id: int | None,
                                     department_id=department_id)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_assignments(request):
     try:
         task_id = _int_param(request, "task_id")
@@ -1841,7 +1874,7 @@ def _list_assignments(request):
                 task_id=task_id, roadmap_id=roadmap_id)]
 
 
-@api_view(methods=("POST",), body=schemas.AssignmentCreate, status=201)
+@api_view(methods=("POST",), body=schemas.AssignmentCreate, status=201, module="tasks", level="write")
 def _create_assignment(request, data: schemas.AssignmentCreate):
     _authorise_resource_target(request, data.task_id, data.roadmap_id)
     try:
@@ -1859,7 +1892,7 @@ def assignments_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def assignment_detail(request, assignment_id: int):
     task_id, roadmap_id = resource_service.allocation_target(assignment_id)
     _authorise_resource_target(request, task_id, roadmap_id)
@@ -1867,7 +1900,7 @@ def assignment_detail(request, assignment_id: int):
     return _no_content()
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_requirements(request):
     try:
         task_id = _int_param(request, "task_id")
@@ -1886,7 +1919,7 @@ def _list_requirements(request):
 
 
 @api_view(methods=("POST",), body=schemas.ResourceRequirementCreate,
-          status=201)
+          status=201, module="tasks", level="write")
 def _create_requirement(request, data: schemas.ResourceRequirementCreate):
     _authorise_resource_target(request, data.task_id, data.roadmap_id)
     try:
@@ -1905,7 +1938,7 @@ def requirements_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("PATCH",), body=schemas.ResourceRequirementUpdate)
+@api_view(methods=("PATCH",), body=schemas.ResourceRequirementUpdate, module="tasks", level="write")
 def _update_requirement(request, requirement_id: int,
                         data: schemas.ResourceRequirementUpdate):
     row = resource_service.get_requirement(requirement_id)
@@ -1919,7 +1952,7 @@ def _update_requirement(request, requirement_id: int,
         resource_service.build_requirement(updated))
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def _delete_requirement(request, requirement_id: int):
     row = resource_service.get_requirement(requirement_id)
     _authorise_resource_target(request, row.task_id, row.roadmap_id)
@@ -1942,7 +1975,7 @@ def requirement_detail(request, requirement_id: int):
 # names a recipient, so one user can never read or mutate another's feed.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def notifications_collection(request):
     try:
         limit = _int_param(request, "limit", 50, minimum=1, maximum=200)
@@ -1951,7 +1984,7 @@ def notifications_collection(request):
     return notification_service.latest(request.token.user_id, limit)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def notification_history(request):
     try:
         page = _int_param(request, "page", 1, minimum=1)
@@ -1968,25 +2001,25 @@ def notification_history(request):
     )
 
 
-@api_view(methods=("POST",), status=204)
+@api_view(methods=("POST",), status=204, module="tasks", level="write")
 def notification_mark_read(request, notification_id: int):
     notification_service.mark_read(notification_id, request.token.user_id)
     return _no_content()
 
 
-@api_view(methods=("POST",), status=204)
+@api_view(methods=("POST",), status=204, module="tasks", level="write")
 def notification_mark_unread(request, notification_id: int):
     notification_service.mark_unread(notification_id, request.token.user_id)
     return _no_content()
 
 
-@api_view(methods=("POST",), status=204)
+@api_view(methods=("POST",), status=204, module="tasks", level="write")
 def notifications_mark_all_read(request):
     notification_service.mark_all_read(request.token.user_id)
     return _no_content()
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def notification_detail(request, notification_id: int):
     notification_service.delete(notification_id, request.token.user_id)
     return _no_content()
@@ -2008,7 +2041,7 @@ def _csv(value: str | None) -> list[str] | None:
     return [x.strip() for x in value.split(",") if x.strip()]
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def reports_gantt(request):
     try:
         project_id = _int_param(request, "project_id")
@@ -2025,7 +2058,7 @@ def reports_gantt(request):
     )
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def resource_gantt(request):
     # ``from``/``to`` are required and are reserved words in Python, hence
     # the alias in the original's signature; here they are plain query keys.
@@ -2056,7 +2089,7 @@ def resource_gantt(request):
 # оба должны быть доступны.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def project_plan_fact(request, project_id: int):
     """Дерево проект → площадки → блоки → роудмапы на отчётную дату."""
     try:
@@ -2070,7 +2103,7 @@ def project_plan_fact(request, project_id: int):
         plan_fact_service.project_plan_fact(project, on))
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def roadmap_plan_fact(request, roadmap_id: int):
     """То же для пакета работ + его задачи и серии по дням."""
     try:
@@ -2084,7 +2117,7 @@ def roadmap_plan_fact(request, roadmap_id: int):
         plan_fact_service.roadmap_plan_fact(roadmap, on))
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def equipment_usage(request):
     """Учёт задействования техники: что занято на дату D и история интервалов.
 
@@ -2148,7 +2181,7 @@ def _bounded_range(request, start_key: str, end_key: str):
     return start, end
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def calendar_timeline(request):
     try:
         start, end = _bounded_range(request, "start", "end")
@@ -2157,7 +2190,7 @@ def calendar_timeline(request):
     return calendar_service.timeline(request.token, start, end)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def _list_events(request):
     try:
         department_id = _int_param(request, "department_id")
@@ -2168,7 +2201,7 @@ def _list_events(request):
                 calendar_service.list_events(request.token, department_id))]
 
 
-@api_view(methods=("POST",), body=schemas.CalendarEventCreate, status=201)
+@api_view(methods=("POST",), body=schemas.CalendarEventCreate, status=201, module="tasks", level="write")
 def _create_event(request, data: schemas.CalendarEventCreate):
     try:
         event_id = calendar_service.create_event(data.model_dump(),
@@ -2189,7 +2222,7 @@ def events_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("PATCH",), body=schemas.CalendarEventUpdate)
+@api_view(methods=("PATCH",), body=schemas.CalendarEventUpdate, module="tasks", level="write")
 def _update_event(request, event_id: int, data: schemas.CalendarEventUpdate):
     try:
         calendar_service.update_event(event_id,
@@ -2201,7 +2234,7 @@ def _update_event(request, event_id: int, data: schemas.CalendarEventUpdate):
         calendar_service.reload_payload(event_id))
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def _delete_event(request, event_id: int):
     calendar_service.delete_event(event_id, request.token)
     return _no_content()
@@ -2215,14 +2248,14 @@ def event_detail(request, event_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("POST",), body=schemas.RsvpUpdate)
+@api_view(methods=("POST",), body=schemas.RsvpUpdate, module="tasks", level="write")
 def event_rsvp(request, event_id: int, data: schemas.RsvpUpdate):
     calendar_service.rsvp(event_id, request.token.user_id, data.status)
     return schemas.CalendarEventResponse.model_validate(
         calendar_service.reload_payload(event_id))
 
 
-@api_view(methods=("POST",), body=schemas.EventExceptionBase, status=201)
+@api_view(methods=("POST",), body=schemas.EventExceptionBase, status=201, module="tasks", level="write")
 def event_exceptions(request, event_id: int, data: schemas.EventExceptionBase):
     return schemas.EventExceptionResponse.model_validate(
         calendar_service.create_exception(
@@ -2230,13 +2263,13 @@ def event_exceptions(request, event_id: int, data: schemas.EventExceptionBase):
             is_cancelled=data.is_cancelled))
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def event_exception_detail(request, exception_id: int):
     calendar_service.delete_exception(exception_id)
     return _no_content()
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def calendar_user_options(request):
     """Поиск сотрудников для выбора участников — по имени, логину и почте.
 
@@ -2272,7 +2305,7 @@ def calendar_user_options(request):
     ]
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="read")
 def production_calendar(request):
     try:
         start, end = _bounded_range(request, "date__gte", "date__lte")
@@ -2282,7 +2315,7 @@ def production_calendar(request):
             for row in calendar_service.list_production_days(start, end)]
 
 
-@api_view(methods=("PATCH",), body=schemas.ProductionDayUpdate)
+@api_view(methods=("PATCH",), body=schemas.ProductionDayUpdate, module="tasks", level="write")
 def production_day_detail(request, target_date: str,
                           data: schemas.ProductionDayUpdate):
     try:
@@ -2331,20 +2364,25 @@ def _company_display_name(slug: str) -> str:
     return company["name"] if company else slug
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="tasks", level="admin")
 def holding_projects(request):
     """Проекты, объекты, задачи и отчётность по каждой действующей компании
     группы.
 
-    Авторизация — та же, что у управленческих данных этого домена (отчёты
-    по персоналу, ``_staff_project``): ``request.token.is_elevated``, иначе
-    ``PermissionDenied`` → 403 «Forbidden». Прикладной гейт ``apps.access``
-    на ручки ``tasks`` не навешивается (``tasks`` ещё не входит в
-    ``apps.access.self_service.TRANSLATED_APPS`` — до задачи 7 блока I
-    сторож
-    ``apps.access.tests.test_gate::test_gate_is_not_hung_on_apps_without_a_translation_plan``
-    держит его не навешенным). Поверх — свой гейт по виду компании
-    (``_deny_unless_holding``): тонкая
+    Авторизация (задача 7 блока I) — ``module="tasks", level="admin"`` в
+    декораторе, а не внутренний ``request.token.is_elevated``: держатель
+    роли ``employee-basic`` уже несёт узлы ``tasks.tasks``/``tasks.calendar``/
+    ``tasks.daily_reports`` (``access/migrations/0004_seed_employee_role.py``)
+    без единого ``can_delete``, и ``resolve.permissions_for`` считает уровень
+    МОДУЛЯ по ВСЕМУ его поддереву — то есть у рядового сотрудника уровень
+    ``tasks`` УЖЕ ``write`` (``VIEW|CREATE|EDIT`` без ``DELETE`` →
+    ``legacy_level`` = write, см. ``apps/access/depth.py``). Только
+    ``level="admin"`` реально отсекает его от сводки по группе; более старый
+    ``is_elevated`` (is_staff/is_superuser/is_admin, без единой роли) отсекается
+    тем же гейтом, а не отдельной проверкой — ``TokenPayload.is_admin`` сам по
+    себе больше ничего не открывает (единственный бесплатный обход —
+    ``is_superuser``, см. ``apps.access.services.resolve.permissions_for``).
+    Поверх — свой гейт по виду компании (``_deny_unless_holding``): тонкая
     вьюха, гейт → гейт → сервис → форма ответа.
 
     ``HoldingViewsUnavailable`` (``migrate_companies`` временно сносит
@@ -2360,10 +2398,6 @@ def holding_projects(request):
     строки реестра уже нет, вывеска падает на сам слаг
     (``_company_display_name``), а не роняет всю сводку 500-й.
     """
-    if not request.token.is_elevated:
-        raise PermissionDenied(
-            "Only management (is_staff/is_superuser) can read the group summary")
-
     denied = _deny_unless_holding(request)
     if denied is not None:
         return denied

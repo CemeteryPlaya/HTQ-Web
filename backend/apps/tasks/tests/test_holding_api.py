@@ -61,8 +61,15 @@ def token(**over) -> str:
 
 def elevated_token(**over) -> str:
     """``is_elevated`` (is_staff/is_admin), НЕ superuser — управленческий
-    доступ к домену задач, но без права обойти проверку вида компании."""
-    return token(is_staff=True, is_admin=True, **over)
+    доступ к домену задач, но без права обойти проверку вида компании.
+
+    ``user_id=8``, а не общий ``token()``-овский 7: тот держит
+    ``test_plain_user_is_forbidden`` роль-less нарочно, и, раздай ``two_
+    companies`` роль ``tasks`` семёрке, эта проверка перестала бы что-либо
+    проверять — плоская и управленческая учётки обязаны быть РАЗНЫМИ
+    пользователями, а не одним и тем же id с разными флагами токена.
+    """
+    return token(user_id=8, sub="8", is_staff=True, is_admin=True, **over)
 
 
 def superuser_token(**over) -> str:
@@ -170,9 +177,29 @@ def today() -> datetime.date:
 
 @pytest.fixture
 def two_companies(db, company_schemas, today):
-    """Холдинг + дочерняя компания, наполненные данными, со свежими вьюхами."""
+    """Холдинг + дочерняя компания, наполненные данными, со свежими вьюхами.
+
+    Блок I, задача 7: ``holding_projects`` стоит под ``module="tasks",
+    level="admin"`` (декоратор в ``views.py``), а внутренний
+    ``request.token.is_elevated`` из вьюхи убран — гейт модуля теперь
+    единственная линия обороны ПЕРЕД ``_deny_unless_holding``. ``elevated_
+    token()`` (is_staff/is_admin, БЕЗ единой роли) сам по себе больше
+    ничего не открывает: ``is_admin`` не даёт бесплатного обхода
+    (единственный — ``is_superuser``, см. ``apps.access.services.resolve.
+    permissions_for``), поэтому обеим компаниям явно выдаётся роль на
+    модуль — тем же приёмом, что ``admin_auth`` в ``apps/hr/tests/
+    test_positions_api.py`` (задача 5). Обеим, а не только той, с которой
+    идёт "успешный" сценарий: ``test_child_subdomain_is_forbidden_even_
+    with_elevated_access`` обязана падать на проверке ВИДА компании
+    (``_deny_unless_holding``), а не на гейте модуля раньше неё — иначе
+    тест перестал бы проверять то, что заявлено в его имени.
+    """
     Company.objects.create(slug=HOLDING_SLUG, name="Holding QA", kind=CompanyKind.HOLDING)
     Company.objects.create(slug=CHILD_SLUG, name="Child QA", kind=CompanyKind.SERVICE)
+    from apps.access.tests.helpers import assign
+
+    assign(HOLDING_SLUG, 8, "tasks", "full")
+    assign(CHILD_SLUG, 8, "tasks", "full")
     _seed_holding(today)
     _seed_child(today)
     holding_views.rebuild_holding_views()
