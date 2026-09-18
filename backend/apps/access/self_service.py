@@ -155,6 +155,15 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         "my_employee_card": "self",
         # employees/me/pmos — тот же get_my_employee под капотом.
         "my_pmos": "self",
+        # GET employees/hr-level/ — resolve_hr_access(request.token) без
+        # единого параметра: отдаёт РОВНО собственный HR-скоуп вызывающего
+        # (его level/department_id/can_* флаги), в т.ч. когда он пуст (level
+        # None у рядового сотрудника — законный ответ, а не ошибка). Задача
+        # 5 добавляет эту запись: до неё ручка стояла голым auth="jwt" без
+        # единой проверки (case 3 брифа), и это ровно "self" — узнать СВОЙ
+        # HR-доступ нужно любому, кто решает, показывать ли себе кадровые
+        # экраны (useHRLevel во фронте), включая employee-basic.
+        "employee_hr_level": "self",
         # GET /org/tree — ОТДАЁТ полное оргдерево компании: имена,
         # аватары, должности руководителей — заведомо ЧУЖИЕ данные, не
         # "self". Но сегодня у ручки нет НИ ОДНОЙ проверки прав вовсе
@@ -177,6 +186,48 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         # единой роли) — ровно то, что блок обязан не делать. Задача 6
         # вешает на них обычный module="hr", level="read", как на все
         # остальные справочные ручки.
+        #
+        # ── Задача 5: справочники departments/positions/org — case 3 брифа ──
+        #
+        # Ручки ниже сегодня стоят ГОЛЫМ ``auth="jwt"`` — ни
+        # ``_require_permission``, ни ``require_hr_access``, ни ``admin=True``
+        # — подтверждено и кодом, и существующими тестами (``test_departments_
+        # api.py``/``test_positions_api.py``::``auth`` — обычный, без единого
+        # HR-признака пользователь — успешно читает И пишет department-ручки,
+        # успешно ЧИТАЕТ position-ручки). Первый же ``module="hr"`` был бы
+        # СУЖЕНИЕМ уже сегодняшнего поведения, а задача 5 обязана только
+        # добавлять гейт, не отбирать то, что есть. Причина у каждой записи —
+        # ``open`` (не ``self``: возвращаются заведомо чужие/общие данные —
+        # чужие отделы, чужие должности, оргструктура компании).
+        #
+        # ⚠️ departments — ЧТЕНИЕ И ЗАПИСЬ (create/update/delete) открыты
+        # ЛЮБОМУ вошедшему уже сегодня: в ``department_service.py`` нет ни
+        # одной строки про права, и ``test_departments_api.py`` намеренно
+        # гоняет create/update/delete на простом ``auth`` без роли. Это
+        # предшествующий этой задаче пробел (не решение задачи 5), сохранён
+        # как есть по ГЛАВНОМУ ПРАВИЛУ брифа — см. отчёт задачи 5.
+        "_list_departments": "open",
+        "_create_department": "open",
+        "department_tree": "open",
+        "_get_department": "open",
+        "_update_department": "open",
+        "_delete_department": "open",
+        "department_children": "open",
+        "department_employees": "open",
+        # positions — ЧТЕНИЕ открыто любому вошедшему уже сегодня (запись
+        # стоит под ``admin=True`` — задача 5 добавляет ей ``module="hr",
+        # level="admin"`` ПОВЕРХ него, это не self_service вовсе).
+        "_list_positions": "open",
+        "_list_level_thresholds": "open",
+        "next_weight_for_level": "open",
+        "get_permissions_catalog": "open",
+        "_get_position": "open",
+        "_list_substitutions": "open",
+        # org — то же самое чтение-без-проверки, что у org_tree выше (тот же
+        # справочник оргструктуры, только другая проекция данных).
+        "org_subordination_matrix": "open",
+        "_list_employee_relations": "open",
+        "_get_deletion_strategy": "open",
     },
     # tasks: самообслуживания НЕТ. "Свои" задачи и ежедневка обеспечены
     # ролью employee-basic (tasks.tasks/tasks.daily_reports —

@@ -55,15 +55,28 @@ def auth(db):
 
 
 @pytest.fixture
-def admin_auth(db):
-    """is_staff=True — elevated, требуется для writes (require_hr_write)."""
+def admin_auth(db, company_row):
+    """is_staff=True — elevated, требуется для writes (require_hr_write).
+
+    Блок I задача 5: writes стоят ещё и под ``module="hr", level="admin"``
+    (гейт добавлен ПОВЕРХ ``admin=True``, не вместо — см. докстринг секции
+    ``/positions/*`` в ``apps/hr/views.py``). ``is_staff`` в НОВОЙ модели
+    прав ничего не даёт сам по себе (единственный бесплатный обход —
+    ``is_superuser``, см. ``apps.access.services.resolve.permissions_for``),
+    поэтому фикстура ЯВНО выдаёт роль на модуль ``hr`` — иначе все writes
+    этого файла упёрлись бы в 403 от гейта раньше, чем в саму вьюху.
+    """
+    from apps.access.tests.helpers import assign
+
     user = User.objects.create(
         username="hr-admin", email="hr-admin@htq.test", password="x", status=UserStatus.ACTIVE,
         is_staff=True,
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    assign(company_row, user.id, "hr", "full")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 def _pos(title, dep, weight, **kw):

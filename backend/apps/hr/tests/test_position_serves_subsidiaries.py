@@ -13,8 +13,8 @@ import datetime
 import pytest
 
 from apps.hr.models import Department, Position
-from apps.hr.tests.conftest import auth_headers
 from apps.users.models import User, UserStatus
+from htqweb.authn.jwt import issue_token_pair
 
 
 @pytest.fixture
@@ -23,15 +23,24 @@ def department(db):
 
 
 @pytest.fixture
-def admin_headers(db):
-    """is_staff=True — писать позиции может только elevated (require_hr_write)."""
+def admin_headers(db, company_row):
+    """is_staff=True — писать позиции может только elevated (require_hr_write).
+
+    Блок I задача 5: ``module="hr", level="admin"`` теперь стоит ПОВЕРХ
+    ``admin=True`` на ``/positions/{id}/`` — см. тот же приём в
+    ``test_positions_api.py::admin_auth``.
+    """
+    from apps.access.tests.helpers import assign
+
     user = User.objects.create(
         username="hr-admin", email="hr-admin@htq.test", password="x",
         status=UserStatus.ACTIVE, is_staff=True,
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    return auth_headers(user)
+    assign(company_row, user.id, "hr", "full")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 @pytest.mark.django_db

@@ -62,14 +62,36 @@ def _emp(dep, pos, email, **kw):
     return Employee.objects.create(email=email, department=dep, position=pos, **kw)
 
 
-def _user_auth(email, *, is_staff=False):
+def _user_auth(email, *, is_staff=False, company_slug=None):
     user = User.objects.create(
         username=email.split("@")[0], email=email, password="x", status=UserStatus.ACTIVE,
         is_staff=is_staff,
     )
     user.set_password("S3cret!Pass1")
     user.save()
-    return user, {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    token = issue_token_pair(user, company_slug=company_slug)["access"]
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+    if company_slug is not None:
+        headers["HTTP_X_HTQ_COMPANY"] = company_slug
+    return user, headers
+
+
+def _grant_seeded_role(company_slug: str, user_id: int, code: str) -> None:
+    """Назначить УЖЕ засеянную роль (``access/migrations/0005``) — блок I
+    задача 5. Писавшиеся против СТАРОЙ модели (``hr_access.resolve_hr_access``
+    по Employee/Position-эвристике) фикстуры ``junior``/``middle``/``senior``/
+    ``lead`` этой одной больше не хватает: ``module="hr", level=…`` теперь
+    стоит ПОВЕРХ старых проверок и читает РОЛИ ``apps.access``, не
+    Employee/Position. Используются РЕАЛЬНЫЕ засеянные роли
+    (``hr-junior``/``hr-middle``/``hr-senior``/``hr-lead``), как того требует
+    бриф задачи 5 — не выдуманные пресеты.
+    """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    RoleAssignment.objects.create(
+        company_slug=company_slug, user_id=user_id, role=Role.objects.get(code=code),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
 
 
 @pytest.fixture
@@ -84,47 +106,64 @@ def other_dep(db):
 
 @pytest.fixture
 def auth(db):
-    """Обычный вошедший без Employee-профиля — нет HR-доступа вообще."""
+    """Обычный вошедший без Employee-профиля — нет HR-доступа вообще.
+
+    Намеренно БЕЗ роли на модуль ``hr`` и без компании: employee-basic не
+    несёт ни одного узла ``hr.*`` (докстринг ``apps.access.self_service``),
+    и это ровно тот случай — гейт отказывает ДО того, как запрос доходит до
+    ``require_hr_access`` в теле вьюхи.
+    """
     _user, headers = _user_auth("plain@htq.test")
     return headers
 
 
 @pytest.fixture
-def admin_auth(db):
-    """is_staff=True — elevated -> HRAccess(level='lead', permissions={'*'})."""
-    _user, headers = _user_auth("hr-admin@htq.test", is_staff=True)
+def admin_auth(db, company_row):
+    """is_staff=True — elevated -> HRAccess(level='lead', permissions={'*'}).
+
+    ``is_staff`` НОВЫЙ гейт модуля сам по себе не проходит (единственный
+    бесплатный обход там — ``is_superuser``) — роль ``hr-lead`` выдана явно,
+    чтобы существующие ``admin_auth``-тесты не начали падать на гейте раньше
+    вьюхи.
+    """
+    user, headers = _user_auth("hr-admin@htq.test", is_staff=True, company_slug=company_row)
+    _grant_seeded_role(company_row, user.id, "hr-lead")
     return headers
 
 
 @pytest.fixture
-def junior(db, hr_dep):
+def junior(db, hr_dep, company_row):
     pos = _pos("HR Assistant", hr_dep, weight=10)
-    user, headers = _user_auth("hr-junior@htq.test")
+    user, headers = _user_auth("hr-junior@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "hr-junior@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-junior")
     return emp, headers
 
 
 @pytest.fixture
-def middle(db, hr_dep):
+def middle(db, hr_dep, company_row):
     pos = _pos("HR Manager", hr_dep, weight=20)
-    user, headers = _user_auth("hr-middle@htq.test")
+    user, headers = _user_auth("hr-middle@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "hr-middle@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-middle")
     return emp, headers
 
 
 @pytest.fixture
-def senior(db, hr_dep):
+def senior(db, hr_dep, company_row):
     pos = _pos("Senior HR Manager", hr_dep, weight=30)
-    user, headers = _user_auth("hr-senior@htq.test")
+    user, headers = _user_auth("hr-senior@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "hr-senior@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-senior")
     return emp, headers
 
 
 @pytest.fixture
-def lead(db, hr_dep):
+def lead(db, hr_dep, company_row):
     pos = _pos("HR Director", hr_dep, weight=40)
-    user, headers = _user_auth("hr-lead@htq.test")
+    user, headers = _user_auth("hr-lead@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "hr-lead@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-lead")
     return emp, headers
 
 
@@ -220,7 +259,6 @@ def test_me_includes_soft_deleted_employee(junior):
 def test_list_forbidden_without_any_hr_access(auth):
     resp = Client().get(f"{BASE}/", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -298,7 +336,6 @@ def test_create_forbidden_without_any_hr_access(auth, hr_dep):
         f"{BASE}/", data=_create_payload(hr_dep, pos), content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -378,7 +415,6 @@ def test_get_forbidden_without_any_hr_access(auth, hr_dep):
     target = _emp(hr_dep, pos, "target@htq.test")
     resp = Client().get(f"{BASE}/{target.id}/", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -435,17 +471,21 @@ def test_update_forbidden_without_any_hr_access(auth, hr_dep):
         f"{BASE}/{target.id}/", data={"first_name": "X"}, content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
 def test_update_forbidden_for_junior_write_access(junior):
+    """hr-junior несёт только чтение на модуль ``hr`` (VIEW-узлы —
+    ``access/migrations/0005``), а PATCH стоит под ``level="write"`` — гейт
+    модуля отказывает РАНЬШЕ, чем запрос доходит до ``require_can_write_basic``
+    в теле вьюхи, поэтому detail теперь "Forbidden", а не "HR write access
+    required" (см. ``test_org_api.py::test_add_relation_forbidden_for_
+    non_admin_jwt_user`` про тот же эффект)."""
     emp, headers = junior
     resp = Client().patch(
         f"{BASE}/{emp.id}/", data={"first_name": "X"}, content_type="application/json", **headers,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR write access required"
 
 
 @pytest.mark.django_db
@@ -545,7 +585,6 @@ def test_delete_forbidden_without_any_hr_access(auth, hr_dep):
     target = _emp(hr_dep, _pos("A", hr_dep, weight=150), "d1@htq.test")
     resp = Client().delete(f"{BASE}/{target.id}/", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -593,7 +632,6 @@ def test_transfer_forbidden_without_any_hr_access(auth, hr_dep):
         content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -691,15 +729,17 @@ def test_history_returns_entries_desc_ordered_with_expected_shape(admin_auth, hr
 
 
 @pytest.mark.django_db
-def test_history_404_after_soft_delete():
+def test_history_404_after_soft_delete(company_row):
     """_require_visible_employee идёт через get_employee (is_deleted=False) —
     после мягкого удаления история тоже 404, ровно как GET /{id}/ (тот же
     гейт видимости, буквальное поведение исходника)."""
     dep = _dep("HR2", "hr2")
     pos = _pos("A", dep, weight=172)
     target = _emp(dep, pos, "hist2@htq.test")
-    _user, headers = _user_auth("hist-admin@htq.test", is_staff=True)
-    Client().delete(f"{BASE}/{target.id}/", **headers)
+    user, headers = _user_auth("hist-admin@htq.test", is_staff=True, company_slug=company_row)
+    _grant_seeded_role(company_row, user.id, "hr-lead")
+    del_resp = Client().delete(f"{BASE}/{target.id}/", **headers)
+    assert del_resp.status_code == 204
     resp = Client().get(f"{BASE}/{target.id}/history", **headers)
     assert resp.status_code == 404
 
@@ -820,7 +860,6 @@ def test_users_get_requires_jwt():
 def test_users_get_403_without_hr_access(auth):
     resp = Client().get(f"{BASE}/users/", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -883,7 +922,6 @@ def test_users_post_403_without_hr_access(auth):
         f"{BASE}/users/", data='{"email": "x@htq.test"}', content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -1074,7 +1112,6 @@ def test_id_card_forbidden_without_any_hr_access(auth, hr_dep):
     target = _emp(hr_dep, _pos("C1", hr_dep, weight=290), "card-target1@htq.test")
     resp = Client().get(f"{BASE}/{target.id}/card", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -1115,10 +1152,17 @@ def test_id_card_trailing_slash_variant(admin_auth, hr_dep):
 # ── card_t2 в теле создания/обновления (единый атомарный запрос) ────────────
 
 @pytest.fixture
-def creator_no_financial(db, hr_dep):
+def creator_no_financial(db, hr_dep, company_row):
     """Явная матрица прав: МОЖЕТ создавать/править сотрудников и править
     certs, НО НЕ имеет hr.card.financial.edit. Нужна, чтобы доказать, что
-    отказ на секции Т-2 откатывает и само создание сотрудника."""
+    отказ на секции Т-2 откатывает и само создание сотрудника.
+
+    Блок I задача 5: ``module="hr", level="write"`` стоит ПОВЕРХ этой
+    матрицы — роль ``hr-middle`` (агрегированный уровень модуля ``hr`` —
+    ``write``, см. ``access/migrations/0005``) пропускает через гейт,
+    оставляя финальное решение за explicit-списком ``Position.permissions``
+    ниже, который тест и проверяет.
+    """
     pos = _pos(
         "Custom Recruiter", hr_dep, weight=250,
         permissions={"permissions": [
@@ -1126,8 +1170,9 @@ def creator_no_financial(db, hr_dep):
             "hr.employees.edit", "hr.card.certs.view", "hr.card.certs.edit",
         ]},
     )
-    user, headers = _user_auth("create-no-fin@htq.test")
+    user, headers = _user_auth("create-no-fin@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "create-no-fin@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-middle")
     return emp, headers
 
 

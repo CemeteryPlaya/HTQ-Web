@@ -33,15 +33,26 @@ def auth(db):
 
 
 @pytest.fixture
-def admin_auth(db):
-    """is_staff=True — elevated, требуется для writes (require_hr_write)."""
+def admin_auth(db, company_row):
+    """is_staff=True — elevated, требуется для writes (require_hr_write).
+
+    Блок I задача 5: ``module="hr", level="admin"`` теперь стоит ПОВЕРХ
+    ``admin=True`` на ``/positions/{id}/substitutions``/``/substitutions/{id}``
+    — ``is_staff`` сам по себе НОВЫЙ гейт не проходит (единственный
+    бесплатный обход там — ``is_superuser``), роль ``hr-lead`` выдана явно,
+    как в ``test_positions_api.py::admin_auth``.
+    """
+    from apps.access.tests.helpers import assign
+
     user = User.objects.create(
         username="hr-admin", email="hr-admin@htq.test", password="x", status=UserStatus.ACTIVE,
         is_staff=True,
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    assign(company_row, user.id, "hr", "full")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 @pytest.fixture

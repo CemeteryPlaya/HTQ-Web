@@ -252,7 +252,7 @@ def _list_positions(request):
     )
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PositionCreate, status=201)
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PositionCreate, status=201, module="hr", level="admin")
 def _create_position(request, data: schemas.PositionCreate):
     try:
         pos = pos_svc.create_position(data)
@@ -278,7 +278,7 @@ def _list_level_thresholds(request):
     return [pos_svc.serialize_threshold(t) for t in pos_svc.list_thresholds()]
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.LevelThresholdCreate, status=201)
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.LevelThresholdCreate, status=201, module="hr", level="admin")
 def _create_level_threshold(request, data: schemas.LevelThresholdCreate):
     try:
         threshold = pos_svc.create_threshold(data, actor_user_id=request.token.user_id)
@@ -301,7 +301,7 @@ def level_thresholds_collection(request):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("PUT",), auth="jwt", admin=True, body=schemas.LevelThresholdUpdate)
+@api_view(methods=("PUT",), auth="jwt", admin=True, body=schemas.LevelThresholdUpdate, module="hr", level="admin")
 def _update_level_threshold(request, level_number: int, data: schemas.LevelThresholdUpdate):
     try:
         threshold = pos_svc.update_threshold(level_number, data, actor_user_id=request.token.user_id)
@@ -312,7 +312,7 @@ def _update_level_threshold(request, level_number: int, data: schemas.LevelThres
     return pos_svc.serialize_threshold(threshold)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", admin=True, module="hr", level="admin")
 def _delete_level_threshold(request, level_number: int):
     pos_svc.delete_threshold(level_number, actor_user_id=request.token.user_id)
     return HttpResponse(status=204)
@@ -349,7 +349,7 @@ def get_permissions_catalog(request):
 
 # ── /positions/rebalance ──────────────────────────────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PositionRebalanceRequest)
+@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.PositionRebalanceRequest, module="hr", level="admin")
 def rebalance_positions(request, data: schemas.PositionRebalanceRequest):
     # Http404 из rebalance_level (порог не найден) не ловим здесь нарочно —
     # api_view сам превращает его в {"detail": ...} 404 (см. htqweb/http.py).
@@ -374,7 +374,7 @@ def _get_position(request, id: int):
     return pos_svc.serialize(pos_svc.get_position(id))
 
 
-@api_view(methods=("PUT", "PATCH"), auth="jwt", admin=True, body=schemas.PositionUpdate)
+@api_view(methods=("PUT", "PATCH"), auth="jwt", admin=True, body=schemas.PositionUpdate, module="hr", level="admin")
 def _update_position(request, id: int, data: schemas.PositionUpdate):
     # PUT — задокументированный контракт исходника; PATCH — то, что реально
     # шлёт фронт (frontend/src/api/hr.ts::updatePosition) — тот же живой
@@ -390,7 +390,7 @@ def _update_position(request, id: int, data: schemas.PositionUpdate):
     return pos_svc.serialize(pos)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", admin=True, module="hr", level="admin")
 def _delete_position(request, id: int):
     try:
         pos_svc.delete_position(id)
@@ -424,7 +424,7 @@ def _list_substitutions(request, id: int):
 
 
 @api_view(methods=("POST",), auth="jwt", admin=True,
-          body=schemas.SubstitutionCreate, status=201)
+          body=schemas.SubstitutionCreate, status=201, module="hr", level="admin")
 def _create_substitution(request, id: int, data: schemas.SubstitutionCreate):
     try:
         row = sub_svc.create(
@@ -448,7 +448,7 @@ def position_substitutions(request, id: int):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.SubstitutionUpdate)
+@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.SubstitutionUpdate, module="hr", level="admin")
 def _update_substitution(request, sub_id: int, data: schemas.SubstitutionUpdate):
     fields = data.model_dump(exclude_unset=True)
     try:
@@ -462,7 +462,7 @@ def _update_substitution(request, sub_id: int, data: schemas.SubstitutionUpdate)
     return sub_svc.serialize(row)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", admin=True, module="hr", level="admin")
 def _delete_substitution(request, sub_id: int):
     try:
         sub_svc.delete(sub_id)
@@ -481,7 +481,7 @@ def substitution_detail(request, sub_id: int):
 
 # ── /positions/{id}/weight ─────────────────────────────────────────────────
 
-@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.PositionWeightUpdate)
+@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.PositionWeightUpdate, module="hr", level="admin")
 def update_position_weight(request, id: int, data: schemas.PositionWeightUpdate):
     try:
         pos = pos_svc.update_weight(id, data.weight, actor_user_id=request.token.user_id)
@@ -494,7 +494,7 @@ def update_position_weight(request, id: int, data: schemas.PositionWeightUpdate)
 
 # ── /positions/{id}/move ────────────────────────────────────────────────────
 
-@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.PositionMoveRequest)
+@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.PositionMoveRequest, module="hr", level="admin")
 def move_position(request, id: int, data: schemas.PositionMoveRequest):
     try:
         pos = pos_svc.move_position(
@@ -615,7 +615,7 @@ def _serialize_user_option(user: dict) -> dict:
     }
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def _list_user_options(request):
     """Учётки для пикера «создать сотрудника из пользователя».
 
@@ -643,7 +643,7 @@ def _list_user_options(request):
     return [_serialize_user_option(u) for u in users]
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.HRUserCreateRequest, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.HRUserCreateRequest, status=201, module="hr", level="write")
 def _create_user_option(request, data: schemas.HRUserCreateRequest):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -690,7 +690,7 @@ def employees_users_collection(request):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def user_prefill(request, user_id: int):
     """Данные аккаунта для посева формы создания сотрудника.
 
@@ -716,7 +716,7 @@ def user_prefill(request, user_id: int):
 
 # ── /employees/sources/mailboxes — корпоративные ящики как источник ──────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_mailbox_sources(request):
     """Ящики, из которых можно взять рабочий адрес (и имя, если оно там есть).
 
@@ -789,7 +789,7 @@ _PREFILL_ERRORS = (
 )
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.PrefillPreviewRequest)
+@api_view(methods=("POST",), auth="jwt", body=schemas.PrefillPreviewRequest, module="hr", level="write")
 def employee_prefill_preview(request, data: schemas.PrefillPreviewRequest):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -824,7 +824,7 @@ def employee_prefill_preview(request, data: schemas.PrefillPreviewRequest):
 
 # ── /employees/{id}/prefill/apply — применение отмеченного ───────────────────
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.PrefillApplyRequest)
+@api_view(methods=("POST",), auth="jwt", body=schemas.PrefillApplyRequest, module="hr", level="write")
 def employee_prefill_apply(request, id: int, data: schemas.PrefillApplyRequest):
     try:
         access = hr_access.require_can_write_basic(hr_access.resolve_hr_access(request.token))
@@ -863,7 +863,7 @@ def employee_prefill_apply(request, id: int, data: schemas.PrefillApplyRequest):
 
 # ── /employees/match-suggestions — «кажется, этот человек уже есть» ──────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_match_suggestions(request):
     """Подсказка по мере заполнения формы: похожие учётки и похожие карточки.
 
@@ -892,7 +892,7 @@ def employee_match_suggestions(request):
 
 # ── /employees/import-candidates — учётки без карточки ──────────────────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_import_candidates(request):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -911,7 +911,7 @@ def employee_import_candidates(request):
 
 # ── /employees/bulk-import — карточки пачкой ────────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.BulkImportRequest)
+@api_view(methods=("POST",), auth="jwt", body=schemas.BulkImportRequest, module="hr", level="write")
 def employee_bulk_import(request, data: schemas.BulkImportRequest):
     """Ответ — 200 с отчётом, а не 201: пачка почти всегда частично успешна,
     и «создано 38, пропущено 2 с причинами» — это результат, а не ошибка."""
@@ -946,7 +946,7 @@ def employee_bulk_import(request, data: schemas.BulkImportRequest):
 
 # ── /employees/ — коллекция ───────────────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def _list_employees(request):
     try:
         query = schemas.EmployeeListQuery.model_validate(dict(request.GET.items()))
@@ -999,7 +999,7 @@ def _apply_card_t2(employee_id: int, patch_model, access) -> None:
         card_t2_svc.upsert(employee_id, patch, access)
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeCreateRequest, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeCreateRequest, status=201, module="hr", level="write")
 def _create_employee(request, data: schemas.EmployeeCreateRequest):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -1045,7 +1045,7 @@ def employees_collection(request):
 
 # ── /employees/{id}/ — детальный ресурс ────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def _get_employee(request, id: int):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -1058,7 +1058,7 @@ def _get_employee(request, id: int):
     return svc.serialize_employee(employee)
 
 
-@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.EmployeeUpdateRequest)
+@api_view(methods=("PUT", "PATCH"), auth="jwt", body=schemas.EmployeeUpdateRequest, module="hr", level="write")
 def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
     # PUT — задокументированный контракт исходника; PATCH регистрируем тоже
     # (аддитивно), как и в departments/positions.
@@ -1115,7 +1115,7 @@ def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
     return payload
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_employee(request, id: int):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -1143,7 +1143,7 @@ def employee_detail(request, id: int):
 
 # ── /employees/{id}/transfer ────────────────────────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeTransfer)
+@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeTransfer, module="hr", level="write")
 def transfer_employee(request, id: int, data: schemas.EmployeeTransfer):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -1167,7 +1167,7 @@ def transfer_employee(request, id: int, data: schemas.EmployeeTransfer):
 
 # ── /employees/{id}/history ─────────────────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_history(request, id: int):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -1190,7 +1190,7 @@ def employee_history(request, id: int):
 # — растяжка test_documents_endpoint_todo_is_tracked в test_employees_api.py
 # снята.
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_documents(request, id: int):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -1222,7 +1222,7 @@ def my_pmos(request):
     return pmo_svc.get_employee_pmos(employee.id)
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_pmos(request, id: int):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -1260,7 +1260,7 @@ def my_employee_card(request):
     return card_svc.build_card(employee.id, mode="full", access=access)
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_card(request, id: int):
     try:
         access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
@@ -1321,7 +1321,7 @@ def org_subordination_matrix(request):
 
 # ── /org/relations — CRUD (позиции) ───────────────────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.RelationCreate, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.RelationCreate, status=201, module="hr", level="write")
 def add_reporting_relation(request, data: schemas.RelationCreate):
     _, err = _require_permission(request, ORG_EDIT)
     if err:
@@ -1345,7 +1345,7 @@ def add_reporting_relation(request, data: schemas.RelationCreate):
     return org_service.serialize_relation(rel)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def remove_reporting_relation(request, relation_id: int):
     _, err = _require_permission(request, ORG_EDIT)
     if err:
@@ -1357,7 +1357,7 @@ def remove_reporting_relation(request, relation_id: int):
     return HttpResponse(status=204)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.RelationTypeUpdate)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.RelationTypeUpdate, module="hr", level="write")
 def _change_relation_type(request, relation_id: int, data: schemas.RelationTypeUpdate):
     _, err = _require_permission(request, ORG_EDIT)
     if err:
@@ -1379,7 +1379,7 @@ def org_relation_detail(request, relation_id: int):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.SuperiorSet)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.SuperiorSet, module="hr", level="write")
 def org_relation_superior(request, data: schemas.SuperiorSet):
     """Атомарно: у должности ровно один руководитель данного типа.
 
@@ -1418,7 +1418,7 @@ def _list_employee_relations(request):
     )
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeRelationCreate, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeRelationCreate, status=201, module="hr", level="write")
 def _create_employee_relation(request, data: schemas.EmployeeRelationCreate):
     _, err = _require_permission(request, ORG_EDIT)
     if err:
@@ -1454,7 +1454,7 @@ def org_employee_relations_collection(request):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def remove_employee_relation(request, relation_id: int):
     _, err = _require_permission(request, ORG_EDIT)
     if err:
@@ -1466,7 +1466,7 @@ def remove_employee_relation(request, relation_id: int):
     return HttpResponse(status=204)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.RelationTypeUpdate)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.RelationTypeUpdate, module="hr", level="write")
 def _change_employee_relation_type(request, relation_id: int, data: schemas.RelationTypeUpdate):
     _, err = _require_permission(request, ORG_EDIT)
     if err:
@@ -1494,7 +1494,7 @@ def org_employee_relation_detail(request, relation_id: int):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.SuperiorSet)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.SuperiorSet, module="hr", level="write")
 def org_employee_relation_superior(request, data: schemas.SuperiorSet):
     """Персональный аналог ``org_relation_superior``.
 
@@ -1527,7 +1527,7 @@ def org_employee_relation_superior(request, data: schemas.SuperiorSet):
 # DepartmentUpdate.manager_id нельзя сбросить в null из-за exclude_none-
 # семантики PATCH (см. schemas.DepartmentManagerSet).
 
-@api_view(methods=("PUT",), auth="jwt", body=schemas.DepartmentManagerSet)
+@api_view(methods=("PUT",), auth="jwt", body=schemas.DepartmentManagerSet, module="hr", level="write")
 def org_department_manager(request, department_id: int, data: schemas.DepartmentManagerSet):
     _, err = _require_permission(request, ORG_EDIT)
     if err:
@@ -1551,7 +1551,7 @@ def _get_deletion_strategy(request):
     return {"deletion_strategy": org_service.get_deletion_strategy()}
 
 
-@api_view(methods=("PUT",), auth="jwt", admin=True, body=schemas.OrgSettingUpdate)
+@api_view(methods=("PUT",), auth="jwt", admin=True, body=schemas.OrgSettingUpdate, module="hr", level="admin")
 def _set_deletion_strategy(request, data: schemas.OrgSettingUpdate):
     org_service.set_deletion_strategy(data.deletion_strategy)
     return {"deletion_strategy": data.deletion_strategy}

@@ -20,8 +20,26 @@ BASE = "/api/hr/v1/identity-requests"
 APPROVER = "/api/hr/v1/identity-approver/"
 
 
-def _hr_auth(title: str, weight: int, email: str):
-    """HR-сотрудник нужного уровня: уровень считается из должности."""
+def _grant_seeded_role(company_slug: str, user_id: int, code: str) -> None:
+    """Блок I задача 5 — ``module="hr", level=…`` стоит ПОВЕРХ старой
+    Employee/Position-эвристики (тот же приём, что в
+    ``test_employees_api.py::_grant_seeded_role``)."""
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    RoleAssignment.objects.create(
+        company_slug=company_slug, user_id=user_id, role=Role.objects.get(code=code),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+
+
+def _hr_auth(title: str, weight: int, email: str, *, company_slug=None, role_code=None):
+    """HR-сотрудник нужного уровня: уровень считается из должности.
+
+    ``role_code`` — засеянная роль (``access/migrations/0005``) на модуль
+    ``hr``, добавленная блоком I задачей 5 поверх старой эвристики.
+    """
+    from htqweb.authn.jwt import issue_token_pair
+
     dep = Department.objects.create(name=f"HR-{weight}", path=f"hr{weight}")
     pos = Position.objects.create(title=title, department=dep, weight=weight)
     user = make_user(email)
@@ -29,17 +47,25 @@ def _hr_auth(title: str, weight: int, email: str):
         email=email, department=dep, position=pos, user_id=user.id,
         hire_date=datetime.date(2024, 1, 9), first_name="Х", last_name="Р",
     )
+    if company_slug is not None:
+        if role_code is not None:
+            _grant_seeded_role(company_slug, user.id, role_code)
+        token = issue_token_pair(user, company_slug=company_slug)["access"]
+        headers = {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_slug}
+        return user, headers
     return user, auth_headers(user)
 
 
 @pytest.fixture
-def senior_auth(db):
-    return _hr_auth("Senior HR Manager", 30, "hr-senior-api@htq.test")[1]
+def senior_auth(db, company_row):
+    return _hr_auth("Senior HR Manager", 30, "hr-senior-api@htq.test",
+                    company_slug=company_row, role_code="hr-senior")[1]
 
 
 @pytest.fixture
-def lead_auth(db):
-    return _hr_auth("HR Director", 40, "hr-lead-api@htq.test")[1]
+def lead_auth(db, company_row):
+    return _hr_auth("HR Director", 40, "hr-lead-api@htq.test",
+                    company_slug=company_row, role_code="hr-lead")[1]
 
 
 @pytest.fixture
@@ -272,8 +298,14 @@ def test_update_of_non_identity_field_has_no_request_key(
 
 # ── право менять напрямую (hr.identity.force) ───────────────────────────────
 
-def _force_auth(email: str = "hr-force@htq.test"):
-    """HR-должность с явно выданным правом обхода подтверждения."""
+def _force_auth(company_slug: str, email: str = "hr-force@htq.test"):
+    """HR-должность с явно выданным правом обхода подтверждения.
+
+    Блок I задача 5: PUT ``/employees/{id}/`` стоит под ``module="hr",
+    level="write"`` — роль ``hr-middle`` (агрегированный уровень модуля —
+    ``write``) выдана явно, чтобы гейт пропускал запрос к СТАРОЙ, explicit-
+    списочной матрице прав должности ниже, которую и проверяет тест.
+    """
     dep = Department.objects.create(name="HR-force", path="hrforce")
     pos = Position.objects.create(
         title="Кадровик с правом обхода", department=dep, weight=35,
@@ -289,16 +321,20 @@ def _force_auth(email: str = "hr-force@htq.test"):
         email=email, department=dep, position=pos, user_id=user.id,
         hire_date=datetime.date(2024, 1, 9), first_name="Ф", last_name="О",
     )
-    return auth_headers(user)
+    from htqweb.authn.jwt import issue_token_pair
+
+    _grant_seeded_role(company_slug, user.id, "hr-middle")
+    token = issue_token_pair(user, company_slug=company_slug)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_slug}
 
 
 @pytest.mark.django_db
 def test_force_permission_writes_identity_straight_to_the_card(
-        employee, approver_auth, fallback_log_mode):
+        employee, approver_auth, fallback_log_mode, company_row):
     res = Client().put(
         f"/api/hr/v1/employees/{employee.id}/",
         data=json.dumps({"phone": "+7 777 000-11-22"}),
-        content_type="application/json", **_force_auth(),
+        content_type="application/json", **_force_auth(company_row),
     )
 
     assert res.status_code == 200
@@ -311,14 +347,14 @@ def test_force_permission_writes_identity_straight_to_the_card(
 
 @pytest.mark.django_db
 def test_force_edit_supersedes_a_pending_request(
-        employee, approver_auth, fallback_log_mode):
+        employee, approver_auth, fallback_log_mode, company_row):
     """Иначе подтверждение старой заявки вернуло бы прежнее значение поверх нового."""
     svc.capture(employee, {"phone": "+7 700 111-11-11"}, actor_id=1)
 
     Client().put(
         f"/api/hr/v1/employees/{employee.id}/",
         data=json.dumps({"phone": "+7 777 000-11-22"}),
-        content_type="application/json", **_force_auth(),
+        content_type="application/json", **_force_auth(company_row),
     )
 
     request = IdentityChangeRequest.objects.get(employee=employee)
@@ -328,14 +364,14 @@ def test_force_edit_supersedes_a_pending_request(
 
 @pytest.mark.django_db
 def test_force_edit_leaves_other_pending_fields_alone(
-        employee, approver_auth, fallback_log_mode):
+        employee, approver_auth, fallback_log_mode, company_row):
     """Снимается только то поле, которое записали напрямую."""
     svc.capture(employee, {"phone": "+7 700 111-11-11", "bio": "Прораб"}, actor_id=1)
 
     Client().put(
         f"/api/hr/v1/employees/{employee.id}/",
         data=json.dumps({"phone": "+7 777 000-11-22"}),
-        content_type="application/json", **_force_auth(),
+        content_type="application/json", **_force_auth(company_row),
     )
 
     request = IdentityChangeRequest.objects.get(employee=employee)

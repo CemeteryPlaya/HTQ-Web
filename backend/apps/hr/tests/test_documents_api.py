@@ -72,16 +72,30 @@ def auth(db):
 
 
 @pytest.fixture
-def admin_auth(db):
+def admin_auth(db, company_row):
     """is_staff=True — elevated: нужен для /employees/{id}/documents
-    (require_hr_access) и для правок карточки документа (PATCH/загрузка)."""
+    (require_hr_access) и для правок карточки документа (PATCH/загрузка).
+
+    Блок I задача 5: ``GET employees/{id}/documents`` стоит под
+    ``module="hr", level="read"`` — роль ``hr-lead`` выдана явно, потому что
+    ``is_staff`` сам по себе НОВЫЙ гейт не проходит (единственный
+    бесплатный обход там — ``is_superuser``). ``/documents/*`` (сама
+    коллекция) этой задачей НЕ гейтируется — её протокол не менялся.
+    """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
     user = User.objects.create(
         username="doc-admin", email="doc-admin@htq.test", password="x", status=UserStatus.ACTIVE,
         is_staff=True,
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    RoleAssignment.objects.create(
+        company_slug=company_row, user_id=user.id, role=Role.objects.get(code="hr-lead"),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 def _doc(emp, **kw):
