@@ -14,6 +14,10 @@ export const API_ENDPOINTS = {
   // RequestInstance из своего конструктора форм.
   signoff: 'signoff/v1',
   admin: 'admin/v1',
+  // Роли, права должностей и личные назначения (Django app apps.access).
+  // Каталог ролей глобален — одна роль действует во всех компаниях, — а
+  // роли должностей и личные назначения относятся к компании запроса.
+  access: 'access/v1',
   // Django "core" app (Phase 0) — service on/off registry (Task 0.5/0.7).
   // Not fronted by nginx yet; see hooks/useServiceStatus.ts for the
   // graceful-degradation contract while the Django backend isn't in traffic.

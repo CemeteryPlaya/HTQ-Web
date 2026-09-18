@@ -71,6 +71,8 @@ export interface CalendarUserOption {
   id: number;
   full_name: string;
   email: string;
+  /** Логин: в списке однофамильцев имя не различает, а он различает. */
+  username?: string;
 }
 
 export const fetchCalendarUserOptions = async (

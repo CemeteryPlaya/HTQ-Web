@@ -13,10 +13,10 @@ import {
   Plus, ChevronDown, ChevronRight, Calendar, Target, MapPin, AlertCircle, Layers
 } from 'lucide-react';
 import { SiteWorkTree } from '@/components/tasks/SiteWorkTree';
+import { usePermissions } from '@/hooks/usePermissions';
 import { buildWorkTree } from '@/lib/tasks/workTree';
 import { fetchProjects, fetchProjectTasks, fetchRoadmaps } from '@/api/tasks';
 import api from '@/api/client';
-import { usesEmployeeTaskExperience } from '@/lib/auth/roles';
 import type { UserProfile } from '@/types/userProfile';
 import type { Project } from '@/types/tasks';
 import { projectStatusBadgeClass, projectStatusLabel } from '@/lib/tasks/project';
@@ -148,7 +148,10 @@ const HRRoadmap: React.FC = () => {
     },
   });
 
-  const isRegularEmployee = usesEmployeeTaskExperience(profile);
+  const permissions = usePermissions();
+  // Рядовой сотрудник — тот, кто ведёт свою работу в задачах, но не
+  // управляет доменом. Прежде это выводилось из мёртвого словаря ролей.
+  const isRegularEmployee = permissions.atLeast('tasks', 'read') && !permissions.atLeast('tasks', 'admin');
 
   return (
     <TasksLayout

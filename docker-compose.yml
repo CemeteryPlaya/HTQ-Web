@@ -42,6 +42,10 @@ x-django-env: &django-env
   # Домены, с которых принимается форма входа в /django-admin/ (со схемой,
   # через запятую). За Cloudflare/nginx запрос доезжает до Django по http, а
   # Origin у браузера https — без этого списка админка отдаёт 403 CSRF.
+  # Второй источник — PUBLIC_BASE_URL, он объявлен ниже, в своей секции (сюда
+  # его дубликатом не возвращать: YAML запрещает повторный ключ, и compose
+  # падает на парсинге всего файла). См. «CSRF за прокси» в
+  # backend/htqweb/settings/base.py.
   CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-}
   # Django (psycopg, sync) идёт НАПРЯМУЮ в Postgres: CONN_MAX_AGE пулит на уровне
   # приложения, а PgBouncer transaction-mode рвал бы DDL/prepared-statements.
@@ -611,6 +615,7 @@ services:
       - "443:443"
     volumes:
       - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/htq-certs:/etc/htq-certs:ro
       - frontend_dist:/usr/share/nginx/html:ro
       - static_files:/app/staticfiles:ro
       - media_files:/app/media:ro
@@ -809,6 +814,10 @@ services:
         printf '{"keys":[{"kty":"oct","use":"sig","alg":"HS256","k":"%s"}]}' "$$k" > /tmp/htqweb-jwks.json
         exec /run.sh
     environment:
+      # GF_TELEGRAM_BOT_TOKEN и ALERT_EMAIL_TO объявлены НИЖЕ, в секции про
+      # доставку алертов, через синтаксис :? — там же написано, почему пустое
+      # значение роняет Grafana целиком. Сюда их дубликатом не возвращать:
+      # повторный ключ в YAML роняет парсинг всего compose-файла.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       # Синтаксис :? — compose ОТКАЗЫВАЕТСЯ поднимать стек без пароля. Раньше
       # здесь молча подставлялось admin/admin на панель со всеми метриками

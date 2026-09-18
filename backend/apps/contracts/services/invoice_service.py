@@ -237,6 +237,7 @@ def serialize_invoice(invoice: Invoice) -> dict:
         "status": invoice.status,
         "approval_state": invoice.approval_state,
         "request_id": invoice.request_id,
+        "document_date": invoice.document_date,
         "created_by": invoice.created_by,
         "created_at": invoice.created_at,
         "updated_at": invoice.updated_at,
@@ -246,6 +247,7 @@ def serialize_invoice(invoice: Invoice) -> dict:
 @transaction.atomic
 def create_invoice(*, name: str, budget_line_id: int, counterparty_id: int,
                    amount, note: str = "", request_id: int | None = None,
+                   document_date=None,
                    created_by: int | None = None) -> Invoice:
     line = _lock_line(budget_line_id)
     counterparty = get_counterparty_or_404(counterparty_id)
@@ -265,7 +267,8 @@ def create_invoice(*, name: str, budget_line_id: int, counterparty_id: int,
     invoice = Invoice.objects.create(
         name=name, note=note, budget_line=line, counterparty=counterparty,
         amount=amount, currency=line.budget.currency,
-        status=InvoiceStatus.DRAFT, request_id=request_id, created_by=created_by,
+        status=InvoiceStatus.DRAFT, request_id=request_id,
+        document_date=document_date, created_by=created_by,
     )
     log_link(request_id, kind="invoice", document_id=invoice.pk,
              title=f"Счёт: {invoice.name} ({invoice.amount} {invoice.currency})",

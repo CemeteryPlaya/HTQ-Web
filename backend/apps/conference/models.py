@@ -66,6 +66,11 @@ class ConferenceSession(models.Model):
     created_by_id = models.IntegerField(null=True, blank=True, db_index=True)
     created_by_name = models.CharField(max_length=255, default="", blank=True,
                                        db_default="")
+    #: Событие календаря, которому принадлежит комната. NULL — встречу
+    #: собрали кнопкой «Создать комнату», минуя календарь: это нормальное
+    #: состояние, а не потерянная связь. Не FK — ``tasks`` чужая аппка
+    #: (правило изоляции запрещает межаппочные FK).
+    calendar_event_id = models.IntegerField(null=True, blank=True, db_index=True)
     started_at = models.DateTimeField(db_index=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     duration_sec = models.PositiveIntegerField(null=True, blank=True)

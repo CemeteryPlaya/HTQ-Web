@@ -576,7 +576,8 @@
         "org": "Organisation",
         "tracking": "Time and attendance",
         "admin": "Logs and access"
-      }
+      },
+      "identityRequests": "Profile requests"
     },
     "calendar": {
       "title": "Production Calendar",
@@ -861,6 +862,11 @@
         "createDepartment": "Create new department",
         "createDepartmentTitle": "New department",
         "usernameHint": "Username will be derived from the email:",
+        "passwordPlaceholder": "Set or generate",
+        "generatePassword": "Generate",
+        "passwordHint": "The password is shown in clear — pass it to the employee. It cannot be viewed later.",
+        "mustChangePasswordNotice": "On first sign-in the employee must replace this password with their own — the one you gave stops working.",
+        "fromAccount": "Filled in from the account",
         "readOnlyNotice": "This card is read-only — editing requires HR permissions"
       },
       "structure": {
@@ -1243,6 +1249,37 @@
           "isActive": "Account active"
         },
         "copyFailed": "Could not copy — select the password and copy it manually"
+      },
+      "identity": {
+        "title": "Profile change requests",
+        "subtitle": "The account owns identity data; an HR edit applies once approved",
+        "dialogTitle": "Account data change",
+        "nightlyHint": "Found by the nightly reconcile: a value reached the card bypassing the API. The copy has been restored from the account — decide whether the found value should go to the account.",
+        "stale": "Account changed",
+        "atRequest": "At submission",
+        "accountNow": "Currently in account",
+        "proposed": "Proposed by HR",
+        "apply": "Apply to account",
+        "reject": "Keep as is",
+        "notePlaceholder": "Decision comment (optional)",
+        "decideAll": "Decide every row",
+        "submit": "Apply decision",
+        "decideError": "Could not apply the decision",
+        "approver": "Approver",
+        "approverDefault": "Employee's department manager",
+        "approverError": "Could not set the approver",
+        "statusFilter": "Status",
+        "sourceNightly": "Nightly reconcile",
+        "sourceHr": "Card edit",
+        "empty": "No requests",
+        "open": "Review",
+        "view": "View",
+        "fields": {
+          "employee": "Employee",
+          "source": "Source",
+          "status": "Status",
+          "created": "Created"
+        }
       }
     },
     "timeTracking": {
@@ -1717,6 +1754,12 @@
       "position": "Position",
       "department": "Department",
       "hireDate": "Hire date",
+      "tenureYears_one": "{{count}} year",
+      "tenureYears_other": "{{count}} years",
+      "tenureMonths_one": "{{count}} month",
+      "tenureMonths_other": "{{count}} months",
+      "tenureDays_one": "{{count}} day",
+      "tenureDays_other": "{{count}} days",
       "contactsRestricted": "Contacts are visible to company employees only.",
       "pmoProjects": "PMO projects",
       "noProjects": "This employee is not on any project yet.",
@@ -4024,6 +4067,8 @@
       "failed": "Could not join via the link"
     },
     "invite": {
+      "emailRemove": "Remove address",
+      "emailAdd": "External participant e-mail — press Enter to add",
       "title": "Invite to the conference",
       "subtitle": "Send the link to anyone. Only the person you give it to can see it, and you can revoke it.",
       "nameLabel": "Meeting name",
@@ -4031,6 +4076,8 @@
       "nameHint": "Shown to whoever opens the link, so they know what they were invited to.",
       "allowGuests": "Allow joining without an account",
       "allowGuestsHint": "An external participant enters a name and joins. Turn off when inviting employees only.",
+      "languageLabel": "Guest interface language",
+      "languageHint": "Whoever opens the link will see the platform in this language.",
       "create": "Create link",
       "created": "Link created and copied",
       "createError": "Could not create the link",
@@ -4044,7 +4091,7 @@
       "revoked": "Link revoked",
       "sendTitle": "Send the invitation",
       "emails": "Emails, comma separated — for external participants",
-      "staffSearch": "Find an employee",
+      "staffSearch": "Employee — name, login or e-mail",
       "send": "Send by email and messenger",
       "sendError": "Could not send",
       "schedule": "Add to calendar",
@@ -4076,11 +4123,33 @@
       "statePurged": "Deleted (retention)",
       "stateNone": "Not recorded"
     },
+    "overview": {
+      "pageTitle": "My meetings",
+      "tabToday": "Today",
+      "tabLive": "Live now",
+      "tabHistory": "History",
+      "openFullHistory": "Full history",
+      "join": "Join",
+      "start": "Start",
+      "openHistory": "Open",
+      "emptyToday": "No meetings today",
+      "emptyLive": "Nobody is talking right now",
+      "loadError": "Could not load the conference overview",
+      "status": {
+        "scheduled": "Scheduled",
+        "live": "Live",
+        "finished": "Finished"
+      }
+    },
     "detail": {
       "backToList": "Back to meetings",
       "notFound": "Meeting not found, or you do not have access to it",
       "participants": "Participants",
       "guest": "guest",
+      "who": "Participant",
+      "joinedAt": "Joined",
+      "leftAt": "Left",
+      "tillEnd": "till the end",
       "protocol": "Meeting transcript",
       "downloadProtocol": "Download transcript",
       "downloadVideo": "Download recording",
@@ -4099,6 +4168,7 @@
     "notify": {
       "starting": "🎥 Conference starting",
       "startsSoon": "“{{title}}” starts in 5 minutes.",
+      "started": "The meeting has started",
       "join": "Join"
     },
     "duration": {
@@ -4132,6 +4202,7 @@
       "unspotlight": "Remove focus",
       "spotlight": "Pin video",
       "host": "Host",
+      "guestBadge": "Guest",
       "youParen": "(You)",
       "volume": "Volume",
       "settingsSaved": "Room settings updated",
@@ -4153,6 +4224,10 @@
       "guest": "Guest",
       "tryingH264": "VP8 is unavailable. Trying H.264…",
       "joinFailed": "Could not connect: {{message}}",
+      "guestAutoJoining": "Connecting you to the call…",
+      "guestAutoJoinFailedTitle": "Could not join the call",
+      "guestAutoJoinFailedHint": "Check the browser's camera and microphone permissions and try again.",
+      "retryJoin": "Retry",
       "muteOnEntryNotice": "The host turned on mute-on-entry",
       "micError": "Microphone error: {{message}}",
       "audioOnlyNotice": "The camera is unavailable. The conference runs in audio-only mode.",
@@ -4244,6 +4319,8 @@
       "joinByIdTitle": "Join by ID",
       "joinByIdHint": "Enter the room ID the host gave you",
       "roomIdPlaceholder": "For example: 12ab-34cd",
+      "meetingTitleLabel": "Meeting title",
+      "autoTitleTemplate": "{{name}}'s meeting",
       "previewTitle": "Camera and sound check",
       "previewBadge": "Preview",
       "previewHint": "Make sure you look and sound right before joining",
@@ -4311,6 +4388,8 @@
       "calendar": "Calendar",
       "messenger": "Messenger",
       "email": "Email",
+      "conference": "Conferences",
+      "hrIdentity": "HR",
       "generic": "Notification"
     },
     "verb": {
@@ -4417,6 +4496,12 @@
     "selectedCount": "Selected: {{count}}",
     "searchByNameOrEmail": "Search by name or email",
     "removeParticipant": "Remove participant",
+    "deepLink": {
+      "title": "Event",
+      "loading": "Loading event…",
+      "notFound": "Event not found or unavailable",
+      "enter": "Enter the room"
+    },
     "noEmployees": "There are no employees in the directory —",
     "addEmployee": "add an employee"
   },

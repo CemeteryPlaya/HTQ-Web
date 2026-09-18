@@ -4,7 +4,7 @@
 import api from '@/api/client';
 import { API_ENDPOINTS } from '@/api/endpoints';
 import type {
-  Department, Position, Employee, EmployeeStats, HRUserOption,
+  Department, Position, Employee, EmployeeStats, HRUserOption, HRUserPrefill,
   Vacancy, Application,
   PrefillSourceRef, PrefillPreview, MailboxSource, MatchSuggestions,
   BulkImportResult,
@@ -141,6 +141,18 @@ export const fetchEmployeeUsers = async (params?: Record<string, string>): Promi
 };
 
 /**
+ * Данные аккаунта для посева формы создания сотрудника.
+ *
+ * Точечный запрос в момент выбора, а не поля в списке: bio и avatar_url нужны
+ * ровно для одного пользователя, и в ответе на сотни строк это лишний вес.
+ */
+export const fetchUserPrefill = async (userId: number): Promise<HRUserPrefill> => {
+  const res = await api.get(`${HR}employees/users/${userId}/prefill/`);
+  return res.data;
+};
+
+/**
+ * Заводит платформенного пользователя из HR-формы.
  * Завести учётку, не выходя из формы сотрудника.
  *
  * Пароль тут НЕ передаётся: его генерирует бэкенд и возвращает один раз в

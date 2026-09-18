@@ -41,7 +41,7 @@ def get_employee_brief(user_id: int) -> dict | None:
     row = (
         Employee.objects.filter(user_id=user_id, is_deleted=False)
         .values("id", "first_name", "last_name", "department_id",
-                "position__title", "status")
+                "position_id", "position__title", "status")
         .first()
     )
     if row is None:
@@ -50,6 +50,11 @@ def get_employee_brief(user_id: int) -> dict | None:
         "id": row["id"],
         "full_name": f"{row['last_name']} {row['first_name']}",
         "department_id": row["department_id"],
+        # Единственный шов стадии 2 с кадровым доменом: apps.access ключует
+        # роли на должности и обязана получать её id, а не заголовок
+        # (спека docs/plans/2026-08-29-stage2-access-and-roles-spec.md, §1.5).
+        # Ключ добавлен АДДИТИВНО — остальные читает действующий фронт.
+        "position_id": row["position_id"],
         "position_title": row["position__title"],
         "status": row["status"],
     }
@@ -223,3 +228,24 @@ def org_ancestors(department_id: int) -> list[dict]:
         for d in Department.objects.filter(path__in=prefixes).values(*_BRIEF_FIELDS)
     }
     return [by_path[p] for p in prefixes if p in by_path]
+
+
+def notice_user_profile_changed(user_id: int) -> None:
+    """Сосед (apps.users) сообщает, что профиль изменился — обновляем копию.
+
+    Вызывается ПОСЛЕ сохранения профиля. Ничего не возвращает: аккаунт —
+    владелец идентичности (спека 2026-05-29 §6), и кадровая копия обязана
+    догнать его, а не наоборот. Если сотрудника с таким аккаунтом нет —
+    обновлять нечего, это нормальный случай (аккаунт админа, внешний
+    пользователь).
+    """
+    require_service("hr")
+    from apps.hr.services import identity_sync_service
+
+    employee_id = (Employee.objects
+                   .filter(user_id=user_id, is_deleted=False)
+                   .values_list("id", flat=True)
+                   .first())
+    if employee_id is None:
+        return
+    identity_sync_service.sync_employee(employee_id)

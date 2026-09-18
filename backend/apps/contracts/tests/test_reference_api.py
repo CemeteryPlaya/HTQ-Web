@@ -75,12 +75,75 @@ def test_budget_card_labels_the_program_with_its_code():
 
 
 @pytest.mark.django_db
-def test_duplicate_program_is_409():
+def test_duplicate_program_code_and_name_is_409():
+    """Ключ программы — ПАРА «код + название», и повтор пары не проходит.
+
+    Один код ключом быть перестал (миграция 0023): коды у финансистов свои у
+    каждого проекта, и 111 — это разные программы у офиса и у Варваринского.
+    Ключом осталась пара, и вот ЕЁ повторить нельзя.
+    """
+    make_program(name="Образование", expense_item="Оборудование", code="EDU-01")
+    resp = post_json(Client(), f"{BASE}/programs",
+                     {"name": "Образование", "expense_item": "Прочее",
+                      "code": "EDU-01"},
+                     **auth(admin_token()))
+    assert resp.status_code == 409, resp.content
+
+
+@pytest.mark.django_db
+def test_same_program_code_under_a_different_name_is_allowed():
+    """Обратная сторона того же ключа, и ровно ради неё он и ослаблялся:
+    один код у двух проектов — это две разные программы (111 —
+    «Материально-техническое оснащение» у офиса и «Мобилизация» у
+    Варваринского), и ключ по одному коду не пустил бы вторую."""
+    make_program(name="Материально-техническое оснащение",
+                 expense_item="Оборудование", code="111")
+    resp = post_json(Client(), f"{BASE}/programs",
+                     {"name": "Мобилизация/демобилизация",
+                      "expense_item": "Услуги", "code": "111"},
+                     **auth(admin_token()))
+    assert resp.status_code == 201, resp.content
+
+
+@pytest.mark.django_db
+def test_same_program_name_is_allowed_when_codes_differ():
+    """Обратная сторона того же ключа, и именно она была нужна заказчику:
+    «Сопровождение проекта» — это и 3011, и 3020. Различает их ``display_name``
+    («код название»), поэтому в интерфейсе двусмысленности не возникает."""
+    make_program(name="Сопровождение проекта", expense_item="Услуги", code="3011")
+    resp = post_json(Client(), f"{BASE}/programs",
+                     {"name": "Сопровождение проекта", "expense_item": "Услуги",
+                      "code": "3020"},
+                     **auth(admin_token()))
+    assert resp.status_code == 201, resp.content
+
+
+@pytest.mark.django_db
+def test_programs_without_a_code_collide_by_name_and_item():
+    """Программа БЕЗ кода опознаётся так, как до появления кодов, — названием
+    и статьёй (``uq_contracts_program_uncoded``, миграция 0023).
+
+    Ключ «код + название» её не касается: он объявлен с условием на непустой
+    код. Без этого правила две одинаковые программы, заведённые руками,
+    ложились бы в базу дважды — что и происходило между 0022 и 0023.
+    """
     make_program(name="Образование", expense_item="Оборудование")
     resp = post_json(Client(), f"{BASE}/programs",
                      {"name": "Образование", "expense_item": "Оборудование"},
                      **auth(admin_token()))
     assert resp.status_code == 409, resp.content
+
+
+@pytest.mark.django_db
+def test_programs_without_a_code_differing_in_name_coexist():
+    """Пустые строки Postgres считает равными, поэтому ключ по одному лишь
+    ``code`` слил бы ВСЕ бескодовые программы в одну. Различает их пара
+    «название + статья»."""
+    make_program(name="Образование", expense_item="Оборудование")
+    resp = post_json(Client(), f"{BASE}/programs",
+                     {"name": "Транспорт", "expense_item": "Оборудование"},
+                     **auth(admin_token()))
+    assert resp.status_code == 201, resp.content
 
 
 @pytest.mark.django_db

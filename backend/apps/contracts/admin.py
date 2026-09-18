@@ -131,11 +131,17 @@ class CounterpartyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 @admin.register(Agreement)
 class AgreementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "number", "name", "counterparty", "budget_line",
-                    "amount", "currency", "payment_type", "status",
+                    "amount", "currency", "payment_type", "advance_share",
+                    "kind", "contract_type", "status",
                     "approval_state", "signed_date")
-    list_filter = ("status", "approval_state", "payment_type", "currency",
+    list_filter = ("status", "approval_state", "payment_type", "kind",
+                   "contract_type", "currency",
                    "budget_line__budget__period_year")
-    search_fields = ("number", "name", "counterparty__name", "counterparty__bin_iin")
+    # ``external_id`` в поиске, но не в колонках: искать по идентификатору
+    # источника нужно (пришла жалоба на договор из выгрузки), а показывать
+    # его в каждой строке списка — нет.
+    search_fields = ("number", "name", "counterparty__name", "counterparty__bin_iin",
+                     "external_id")
     readonly_fields = ("created_at", "updated_at", "file_id", "approval_state")
     raw_id_fields = ("budget_line", "counterparty")
     list_select_related = ("budget_line", "budget_line__program", "counterparty")
@@ -150,11 +156,14 @@ class AgreementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 @admin.register(Invoice)
 class InvoiceAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "name", "counterparty", "budget_line", "amount",
-                    "currency", "status", "approval_state", "created_at")
+                    "currency", "status", "approval_state", "document_date",
+                    "created_at")
     list_filter = ("status", "approval_state", "currency",
                    "budget_line__budget__period_year")
+    # ``external_id`` — в поиске, как у договора: у импортированных счетов
+    # он начинается с «ops:», и так их все можно найти разом.
     search_fields = ("name", "note", "counterparty__name",
-                     "counterparty__bin_iin")
+                     "counterparty__bin_iin", "external_id")
     readonly_fields = ("created_at", "updated_at", "file_id", "currency",
                        "approval_state")
     raw_id_fields = ("budget_line", "counterparty")
@@ -201,9 +210,11 @@ class AdvanceReportAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 @admin.register(ContractPayment)
 class ContractPaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "administrator", "agreement", "amount", "status",
-                    "approval_state", "posting_number", "paid_by", "paid_at")
+                    "approval_state", "document_date", "posting_number",
+                    "paid_by", "paid_at")
     list_filter = ("status", "approval_state", "administrator")
-    search_fields = ("agreement__number", "agreement__name", "posting_number")
+    search_fields = ("agreement__number", "agreement__name", "posting_number",
+                     "external_id")
     readonly_fields = ("created_at", "updated_at", "approval_state", "paid_by", "paid_at")
     raw_id_fields = ("administrator", "agreement")
     list_select_related = ("administrator", "agreement", "agreement__counterparty")

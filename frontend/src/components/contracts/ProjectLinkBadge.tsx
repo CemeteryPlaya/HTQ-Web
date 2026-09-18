@@ -16,18 +16,18 @@
  *
  * Ссылкой бейдж становится ТОЛЬКО для тех, кого пустит сам маршрут:
  * единственная страница проекта — `/tasks/projects/:id/plan-fact`, и она
- * закрыта `requiresRole: 'hr'`. Договорами занимаются не только эйчары, и
- * ссылка, ведущая в отказ, хуже её отсутствия — остальные видят тот же бейдж
- * без перехода. Решение берётся из `canAccessRouteRole`, общей с
- * `RequireAuth`: своя копия ролей тут уже успела разъехаться — она знала
- * только `HR_ROLES` и прятала ссылку от администратора.
+ * закрыта требованием `{ module: 'hr', level: 'read' }`. Договорами
+ * занимаются не только кадры, и ссылка, ведущая в отказ, хуже её отсутствия —
+ * остальные видят тот же бейдж без перехода. Условие берётся из того же
+ * `usePermissions`, что и охрана маршрута (`routeDefinitions.ts`), а не из
+ * своей копии: прежняя копия уже успела разъехаться с оригиналом и прятала
+ * ссылку от администратора.
  */
 import { Link } from 'react-router-dom';
 import { FolderKanban } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
-import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { canAccessRouteRole } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import { cn } from '@/lib/utils';
 
 export interface ProjectLinkBadgeProps {
@@ -52,9 +52,9 @@ const ProjectLinkBadge = ({
   exists,
   className,
 }: ProjectLinkBadgeProps) => {
-  const { data: profile } = useActiveProfile();
-  // Тот же гейт, что охраняет сам маршрут, — не своя копия ролей.
-  const canOpen = canAccessRouteRole(profile?.roles, 'hr');
+  const permissions = usePermissions();
+  // Тот же гейт, что охраняет сам маршрут, — не своя копия правил.
+  const canOpen = permissions.atLeast('hr', 'read');
 
   if (!projectId) return null;
 

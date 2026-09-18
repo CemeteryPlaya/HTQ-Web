@@ -2,6 +2,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -15,29 +16,34 @@ DEBUG = False
 ALLOWED_HOSTS = ["*"]           # локальный запуск; деплой — вне скоупа
 APPEND_SLASH = False            # пути повторяют API.md буквально, без редиректов
 
-# ── CSRF за обратным прокси ────────────────────────────────────────────────
-# TLS терминируется НЕ здесь: снаружи Cloudflare, дальше nginx слушает только
-# :80 (infra/nginx/default.conf) — до Django запрос доезжает по http. Браузер
-# при этом шлёт `Origin: https://<домен>`, а Django сверяет его с собственным
-# адресом, собранным из СХЕМЫ ЗАПРОСА (http) и Host: совпадения нет, и форма
-# входа в /django-admin/ отвечает 403 «Ошибка проверки CSRF».
+# ── CSRF за прокси (django-admin) ──────────────────────────────────────────
+# Django ≥4 на POST сверяет заголовок Origin с «request.scheme://Host». За
+# nginx/внешним TLS-терминатором бэкенд видит http://, а браузер шлёт
+# Origin: https://<домен> — и вход в /django-admin/ падал 403 «Ошибка проверки
+# CSRF». /api/ это не касается: он снят с CSRF (ApiCsrfExemptMiddleware).
 #
-# На /api/ этого не видно, поэтому симптом выглядит как «сломана только
-# админка»: там CSRF снимается до middleware (htqweb/middleware/
-# api_csrf_exempt.py), потому что JWT stateless и cookie-сессии не участвуют.
-#
-# Схему в значении указывать ОБЯЗАТЕЛЬНО, и каждый домен нужен целиком —
-# `htq.group` и `www.htq.group` это разные origin:
-#   CSRF_TRUSTED_ORIGINS=https://htq.group,https://www.htq.group
-#
-# Пусто = список пуст и поведение прежнее (за прокси админка будет давать
-# 403). Умолчания с боевым доменом здесь намеренно нет: settings общие для
-# всех сред, и молчаливо доверять чужому origin'у нельзя.
-CSRF_TRUSTED_ORIGINS = [
-    origin.strip()
-    for origin in env("CSRF_TRUSTED_ORIGINS").split(",")
-    if origin.strip()
-]
+# Лечится двумя строками, каждая закрывает свою топологию:
+#   * SECURE_PROXY_SSL_HEADER — TLS терминирует НАШ nginx: он на каждой
+#     location перезаписывает X-Forwarded-Proto своим $scheme, и Django узнаёт
+#     настоящую схему. Клиент, идущий мимо шлюза прямо на :8000, может прислать
+#     заголовок сам, но так он лишь ужесточает CSRF-проверку своего же запроса
+#     (без Origin становится обязателен Referer) — ослабить этим нечего.
+#   * CSRF_TRUSTED_ORIGINS — TLS снимается ДО nginx (облачный прокси,
+#     балансировщик), и до Django доходит честное http. Список = origin из
+#     PUBLIC_BASE_URL + CSRF_TRUSTED_ORIGINS через запятую (второй домен,
+#     http://<IP>). Схема обязательна: без неё Django не стартует (4_0.E001).
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+
+def _trusted_origins() -> list[str]:
+    origins = [o.strip().rstrip("/") for o in env("CSRF_TRUSTED_ORIGINS").split(",")]
+    public = urlsplit(env("PUBLIC_BASE_URL").strip())
+    if public.scheme and public.netloc:
+        origins.append(f"{public.scheme}://{public.netloc}")
+    return list(dict.fromkeys(o for o in origins if o))
+
+
+CSRF_TRUSTED_ORIGINS = _trusted_origins()
 
 # ── Среда и политика fallback'ов ───────────────────────────────────────────
 # Одна ось на три рантайма: тот же HTQ_ENV читают фронт (VITE_HTQ_ENV) и SFU.
@@ -84,6 +90,13 @@ INSTALLED_APPS = [
     # потому что под gunicorn'ом нужен multiprocess-реестр (см. там же).
     "django_prometheus",
     "apps.core",
+    # Реестр компаний группы. Живёт в public и обязателен для всех: именно
+    # он резолвит поддомен в схему Postgres, поэтому стоит до доменных аппок.
+    "apps.companies",
+    # Роли и права. Живёт в public: роль заводится один раз на всю группу
+    # (спека стадии 2, §1.3), поэтому в TENANT_APPS её НЕТ — изоляция этих
+    # таблиц держится обязательным фильтром по компании в сервисном слое.
+    "apps.access",
     "apps.users",
     "apps.cms",
     "apps.media_files",
@@ -115,12 +128,23 @@ INSTALLED_APPS = [
     "apps.signoff",
 ]
 
+# Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное
+# (users, cms, media_files, mail, messenger, conference, core, companies)
+# общее для группы — см. docs/multi-company-tenancy-design.md §3.
+#
+# Кортеж, а не список: набор фиксирован архитектурным решением, и случайный
+# .append() в чужом модуле не должен его расширять.
+TENANT_APPS = ("hr", "tasks", "contracts", "signoff")
+
 MIDDLEWARE = [
     # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —
     # последней. Иначе замеряется не полное время запроса, а только то, что
     # осталось внутри их «скобок», и латентность систематически занижается.
     "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "htqweb.middleware.request_id.RequestIDMiddleware",
+    # Ставится ДО ServiceGateMiddleware: тот гейтит домены и должен уже
+    # знать компанию, чтобы спросить и глобальный рубильник, и компанейский.
+    "htqweb.middleware.company_context.CompanyContextMiddleware",
     "htqweb.middleware.service_gate.ServiceGateMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # WhiteNoise отдаёт собранную (collectstatic) статику прямо из WSGI/ASGI-процесса
@@ -250,6 +274,14 @@ LANGUAGE_CODE = "ru"
 TIME_ZONE = "UTC"
 USE_TZ = True
 CELERY_TIMEZONE = TIME_ZONE
+# Хранение остаётся в UTC (TIME_ZONE выше не трогаем — смена задела бы
+# каждую дату на платформе). PLATFORM_TIME_ZONE — это пояс, в котором
+# физически живут люди: нужен только для ПОКАЗА времени и для границ
+# суток («сегодня» в календаре/обзоре конференций). Именованный пояс, а
+# не число смещения — офис может переехать или сместить закон о времени,
+# и тогда правка будет в одном месте, а не во всех местах, где кто-то
+# написал "+5" руками. См. apps/conference/services/platform_time.py.
+PLATFORM_TIME_ZONE = env("PLATFORM_TIME_ZONE", "Asia/Almaty")
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 # Своя статика проекта (фирменная тема админки). collectstatic сливает её

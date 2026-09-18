@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { hasEmployeeTaskAccess, isEditor, isHrManager } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import { bottomNavItems } from '@/app/navigation/navItems';
 import { UserCircle } from 'lucide-react';
 
@@ -12,8 +12,22 @@ export const BottomNav = () => {
     const { activeProfile, isLoggedIn } = useActiveProfile({
         staleTime: 5 * 60 * 1000, // 5 minutes
     });
+    const permissions = usePermissions();
 
     if (!isLoggedIn || !activeProfile) {
+        return null;
+    }
+
+    // Комната видеоконференции (`/room/<id>`, и лобби, и сам звонок) рисует
+    // собственную полноэкранную панель управления снизу — плавающую кнопку
+    // «Завершить» и переключатели микрофона/камеры. Эта панель смонтирована
+    // здесь же, в App.tsx, но z-50 против z-40 у панели звонка: она перехватывала
+    // клики поверх неё, и нажатие на «Завершить» на самом деле попадало в
+    // ссылку «Чаты» под ней — проверено определением элемента в точке экрана.
+    // Разговор занимает весь экран и всё внимание, так что на время нахождения
+    // в комнате нижнюю навигацию просто не показываем — самый надёжный способ
+    // развести два fixed-слоя, не гадая с z-index и отступами под все ширины.
+    if (location.pathname.startsWith('/room/')) {
         return null;
     }
 
@@ -21,9 +35,9 @@ export const BottomNav = () => {
     // раньше здесь был свой, и наборы разошлись: тут не было договоров и
     // согласований, в шапке — чатов, почты и файлов.
     const items = bottomNavItems({
-        isEditor: isEditor(activeProfile),
-        isHr: isHrManager(activeProfile),
-        hasTasks: hasEmployeeTaskAccess(activeProfile),
+        isEditor: permissions.atLeast('cms', 'write'),
+        isHr: permissions.atLeast('hr', 'read'),
+        hasTasks: permissions.atLeast('tasks', 'read'),
         hasDepartment: Boolean(activeProfile.department),
     });
 

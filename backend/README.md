@@ -313,6 +313,48 @@ Three things that trip people up:
 Reference implementations: `apps/contracts/approval_hooks.py` (real), `apps/signoff/tests/testapp/`
 (minimal, ~40 lines).
 
+### 12. Tenant apps live in a company schema — decide once, per app
+
+`settings.TENANT_APPS = ("hr", "tasks", "contracts", "signoff")` is the fixed list of apps whose
+tables live in a company's own Postgres schema (`co_<slug>`, `htqweb/tenancy/context.py::schema_for`)
+instead of `public`. `htqweb.middleware.company_context.CompanyContextMiddleware` picks the schema
+via `search_path` per request — the model layer itself never changes. The call is made once, when
+the app is created; moving an app in or out of `TENANT_APPS` later means an
+`ALTER TABLE ... SET SCHEMA` migration (see `manage.py tenancy_bootstrap` for the one that moved
+the original four), not a settings edit.
+
+**Criterion:** data belongs to one legal entity of the group (headcount, projects, contracts,
+approvals) → the app goes in `TENANT_APPS`. Data shared across the whole group (accounts, the
+public site, chat, files, mail) → the app stays in `public`.
+
+A `TENANT_APPS` member must:
+- **carry no company column on its models.** Isolation is the schema, not a filtered field —
+  adding one back would be redundant at best (the schema already isolates it) and a false sense of
+  safety at worst (nothing forces every query to apply the filter).
+- **pass `company_slug` to its own Celery tasks explicitly**, via `@company_task`
+  (`htqweb/tenancy/celery.py`). A task has no HTTP request to inherit context from; calling one
+  without `company_slug` raises `MissingCompanyArgument` instead of silently running against
+  `public`. Beat cannot pass per-company arguments to a schedule row, so a `@company_task` is never
+  what beat calls directly — it calls a companion **dispatcher** task (no `@company_task`, no
+  company of its own) that reads `apps.companies.interface.active_company_slugs()` and fans one
+  real task out per active company via `fan_out_to_companies` (same module); enqueue failure for
+  one company logs and moves on rather than aborting the rest. Mark the dispatcher
+  `@company_dispatch_task` — the reflective meta-test
+  `apps/core/tests/test_invariants.py::test_tenant_app_tasks_use_company_task_or_are_marked_dispatchers`
+  fails any `TENANT_APPS` task carrying neither marker, so a task added without either one breaks
+  CI rather than running against `public` in production. Reference: `apps/hr/tasks.py`
+  (`sync_identity` / `sync_identity_dispatch`), `apps/tasks/tasks.py` (`task_deadline_reminder` +
+  `calendar_event_reminder`, each with its `_dispatch` companion).
+- **declare `apps/<domain>/holding.py` with `HOLDING_MODELS`** — `HOLDING_MODELS = ()` is fine if
+  nothing from the app belongs in the group-wide holding views. This is not optional: the same
+  autodiscovery convention as `API_PREFIX`/`metrics.py` is enforced by
+  `apps.companies.services.holding_views.holding_models()`, which raises `ImproperlyConfigured`
+  when rebuilding the views if any `TENANT_APPS` entry is missing the module or the attribute — a
+  silently-skipped app would drop out of the holding dashboard's numbers without a trace, which is
+  worse than a startup error.
+
+Full design: [../docs/multi-company-tenancy-design.md](../docs/multi-company-tenancy-design.md).
+
 ## Adding a new domain app
 
 ```bash
@@ -320,6 +362,9 @@ cd backend
 .venv/Scripts/python.exe manage.py startapp <domain> apps/<domain>
 ```
 Then:
+0. Decide tenant vs `public` (rule 12 above) — this determines whether the new app's tables end up
+   in `settings.TENANT_APPS` and everything that follows from it (no company column, `@company_task`,
+   `holding.py`).
 1. Add `"apps.<domain>"` to `INSTALLED_APPS` (`htqweb/settings/base.py`).
 2. Set `API_PREFIX = "api/<domain>/v1/"` on its `AppConfig` (`apps/<domain>/apps.py`) — URL
    autodiscovery does the rest, don't touch `htqweb/urls.py`.

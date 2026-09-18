@@ -695,6 +695,7 @@ def _create_conference_invite(request, data: schemas.ConferenceInviteCreate):
             room_id=data.room_id, created_by_id=request.token.user_id,
             title=data.title, allow_guests=data.allow_guests,
             ttl_hours=data.ttl_hours, max_uses=data.max_uses,
+            locale=data.locale,
         )
     except conference_invite_service.InviteInvalid as exc:
         return json_error(exc.detail, 422)
@@ -750,6 +751,7 @@ def conference_invite_public(request, token: str):
         "allow_guests": invite.allow_guests,
         "expires_at": invite.expires_at,
         "room_id": invite.room_id if _authenticate_jwt(request) else None,
+        "locale": conference_invite_service.normalize_locale(invite.locale),
     }
     return schemas.ConferenceInvitePublic.model_validate(payload)
 

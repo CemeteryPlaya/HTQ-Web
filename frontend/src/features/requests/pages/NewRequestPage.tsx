@@ -17,8 +17,7 @@ import { RequestsLayout } from '@/features/requests/RequestsLayout';
 import { FormRenderer } from '@/features/requests/components/FormRenderer';
 import { useTemplate, useTemplates, useTemplateVersion } from '@/features/requests/hooks';
 import { blockedByRequired } from '@/features/requests/requiredFields';
-import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import type { FormTemplate } from '@/features/requests/types';
 import { useTranslation } from 'react-i18next';
 
@@ -48,8 +47,9 @@ function CatalogCard({ t, onPick }: { t: FormTemplate; onPick: () => void }) {
 
 export default function NewRequestPage() {
   const { t } = useTranslation();
-  const { activeProfile } = useActiveProfile();
-  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
+  // Тот же признак, что у RequestsLayout: «администратор» здесь — уровень
+  // модуля approvals, а не строка роли.
+  const isAdmin = usePermissions().atLeast('approvals', 'admin');
   const navigate = useNavigate();
   const templates = useTemplates(null);
   const [tplId, setTplId] = useState<number | null>(null);

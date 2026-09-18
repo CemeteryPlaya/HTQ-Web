@@ -25,13 +25,17 @@ from django.db import transaction
 from django.http import HttpResponse, JsonResponse
 from pydantic import ValidationError
 
+from htqweb.authn.rbac import require_admin
 from htqweb.http import api_view, json_error
 
 from apps.mail import interface as mail_interface
 from apps.users import interface as users_interface
 
 from . import access as hr_access
+from . import permissions as hr_permissions
 from . import schemas
+from .models import IdentityChangeRequest
+from .services import identity_request_service as identity_request_svc
 from .permissions import (
     CALENDAR_MANAGE,
     CALENDAR_VIEW,
@@ -185,6 +189,9 @@ _PERMISSION_CATALOG = {
         {"key": "hr.employees.view.all", "label": "Просмотр всех отделов", "description": None, "group": "Сотрудники"},
         {"key": "hr.users.list",         "label": "Список платформенных аккаунтов", "description": None, "group": "Аккаунты"},
         {"key": "hr.users.manage",       "label": "Управление аккаунтами",          "description": None, "group": "Аккаунты"},
+        {"key": "hr.identity.view",      "label": "Заявки на изменение — просмотр",  "description": "Очередь правок имени, телефона и био, ожидающих подтверждения владельцем.", "group": "Аккаунты"},
+        {"key": "hr.identity.manage",    "label": "Заявки на изменение — управление", "description": "Назначение подтверждающего.", "group": "Аккаунты"},
+        {"key": "hr.identity.force",     "label": "Менять данные без подтверждения", "description": "Имя, телефон, био и аватар записываются в карточку сразу, минуя подтверждение владельцем учётной записи. Ожидающая заявка по этим полям при этом снимается.", "group": "Аккаунты"},
 
         {"key": "hr.departments.view",  "label": "Просмотр отделов",       "description": None, "group": "Отделы"},
         {"key": "hr.departments.edit",  "label": "Редактирование отделов", "description": None, "group": "Отделы"},
@@ -503,11 +510,17 @@ def _serialize_user_option(user: dict) -> dict:
     (``users.interface.list_user_prefills``). Через ``.get`` потому, что тем
     же сериализатором отвечает POST этой же ручки, а ``create_user``
     возвращает более узкую option-форму: у только что заведённой учётки
-    телефона и аватара и не может быть.
+    телефона и не может быть.
 
     ``employee_id`` отвечает на вопрос, который раньше приходилось решать
     глазами по списку сотрудников, — «у этого пользователя карточка уже
     есть?». ``None`` значит «нет», а не «не проверяли».
+
+    ``bio`` и ``avatar_url`` сюда НЕ входят, хотя источник их отдаёт: они
+    нужны для ОДНОГО выбранного пользователя, а список бывает на сотни
+    строк. За ними ходят точечно — ``employees/users/<id>/prefill/``
+    (``user_prefill`` ниже), и фронт так и делает: из списка он читает
+    только ``employee_id``, ``phone`` и ``patronymic``.
     """
     return {
         "id": user["id"],
@@ -517,8 +530,6 @@ def _serialize_user_option(user: dict) -> dict:
         "last_name": user.get("last_name", ""),
         "patronymic": user.get("patronymic", ""),
         "phone": user.get("phone", ""),
-        "avatar_url": user.get("avatar_url") or "",
-        "bio": user.get("bio", ""),
         "employee_id": user.get("employee_id"),
     }
 
@@ -596,6 +607,30 @@ def employees_users_collection(request):
     if request.method == "POST":
         return _create_user_option(request)
     return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def user_prefill(request, user_id: int):
+    """Данные аккаунта для посева формы создания сотрудника.
+
+    Точечная ручка вместо расширения списка: bio и avatar_url нужны ровно в
+    момент выбора ОДНОГО пользователя (спека §10).
+    """
+    try:
+        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
+    except hr_access.HRAccessDenied as exc:
+        return json_error(exc.detail, 403)
+    if not access.can_list_user_options:
+        return json_error("Senior HR access required", 403)
+
+    profile = users_interface.get_user_profile_for_hr(user_id)
+    if profile is None:
+        return json_error("User not found", 404)
+    return {
+        **_serialize_user_option(profile),
+        "bio": profile.get("bio", ""),
+        "avatar_url": profile.get("avatar_url", ""),
+    }
 
 
 # ── /employees/sources/mailboxes — корпоративные ящики как источник ──────────
@@ -969,7 +1004,13 @@ def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
     core = schemas.EmployeeUpdate.model_validate(data.model_dump(exclude={"card_t2"}))
     try:
         with transaction.atomic():
-            employee = emp_svc.update_employee(id, core, changed_by_id=request.token.user_id)
+            employee, identity_request = emp_svc.update_employee(
+                id, core, changed_by_id=request.token.user_id,
+                # Платформенный админ проходит сюда своим "*" — и это не
+                # расширение его власти: решение по заявке он и так принимает
+                # сам (identity_request_service.may_decide), обход лишь
+                # избавляет от лишнего шага.
+                force_identity=access.has(hr_permissions.IDENTITY_FORCE))
             _apply_card_t2(id, data.card_t2, access)
     except emp_svc.DepartmentNotFound:
         return json_error("Department not found", 422)
@@ -981,7 +1022,16 @@ def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
         return json_error(str(exc), 403)
     except ValueError as exc:
         return json_error(str(exc), 422)
-    return svc.serialize_employee(employee)
+    payload = svc.serialize_employee(employee)
+    if identity_request is not None:
+        # Поля идентичности (имя, телефон, био, аватар) не пишутся в карточку
+        # сразу — они уходят заявкой владельцу аккаунта. Без этого ключа ответ
+        # неотличим от обычного сохранения, и правка выглядит пропавшей:
+        # форма закрылась, значение прежнее, ошибки нет.
+        from apps.hr.services import identity_request_service
+
+        payload["identity_request"] = identity_request_service.serialize(identity_request)
+    return payload
 
 
 @api_view(methods=("DELETE",), auth="jwt")
@@ -3002,3 +3052,120 @@ def audit_logs(request):
 # get_department_brief in-process — HTTP-роут и X-Internal-Token-проверка
 # больше не нужны (живых потребителей не найдено ни в backend, ни во
 # frontend). См. docs/superpowers/plans/2026-07-22-django-native-audit-spec.md §P1.3.
+
+
+# ── /identity-requests/ — сверка идентичности Сотрудник ↔ Аккаунт ──────────
+#
+# Спека: docs/superpowers/specs/2026-08-25-hr-identity-sync-design.md §10.
+#
+# Право ЧИТАТЬ очередь — кадровое (hr.identity.view). Право РЕШАТЬ кадровым не
+# является вовсе: оно принадлежит подтверждающему (назначенный человек либо
+# руководитель отдела) и админу платформы сверх них — поэтому проверяется не
+# через HRAccess, а через identity_request_service.may_decide.
+
+def _identity_access(request):
+    """Общий вход: разрешённый HR-скоуп (возможно пустой) + признак админа.
+
+    ``require_hr_access`` здесь НЕ применяется намеренно: подтверждающий —
+    руководитель отдела, а он в общем случае не кадровик и HR-прав не имеет
+    вовсе. Гейт по HR-доступу отсекал бы его от собственной задачи, поэтому
+    каждая вьюха ниже решает про доступ сама: админ, либо hr.identity.view,
+    либо «ты подтверждающий по этой заявке».
+    """
+    return hr_access.resolve_hr_access(request.token), require_admin(request.token)
+
+
+@api_view(methods=("GET",), auth="jwt")
+def identity_requests_collection(request):
+    """Очередь заявок.
+
+    Админ платформы видит все; HR с hr.identity.view — тоже все (он ведёт
+    очередь, но не решает); остальные — только те, где они подтверждающие.
+    """
+    access, is_admin = _identity_access(request)
+
+    status_filter = request.GET.get("status", IdentityChangeRequest.Status.PENDING)
+    queryset = (IdentityChangeRequest.objects
+                .select_related("employee", "employee__department")
+                .order_by("-created_at"))
+    if status_filter != "all":
+        queryset = queryset.filter(status=status_filter)
+
+    rows = list(queryset[:500])
+    if not (is_admin or access.can_view_identity_requests):
+        actor = request.token.user_id
+        rows = [r for r in rows
+                if identity_request_svc.resolve_approver(r.employee) == actor]
+
+    return [identity_request_svc.serialize(row, with_fields=False) for row in rows]
+
+
+@api_view(methods=("GET",), auth="jwt")
+def identity_request_detail(request, id: int):
+    access, is_admin = _identity_access(request)
+
+    row = (IdentityChangeRequest.objects
+           .select_related("employee", "employee__department")
+           .filter(pk=id)
+           .first())
+    if row is None:
+        return json_error("Identity request not found", 404)
+
+    may_read = (is_admin or access.can_view_identity_requests
+                or identity_request_svc.may_decide(
+                    row.employee, actor_id=request.token.user_id, is_admin=is_admin))
+    if not may_read:
+        return json_error("Forbidden", 403)
+    return identity_request_svc.serialize(row)
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.IdentityDecideRequest)
+def identity_request_decide(request, id: int, data: schemas.IdentityDecideRequest):
+    _access, is_admin = _identity_access(request)
+
+    try:
+        row = identity_request_svc.decide(
+            id, data.decisions, actor_id=request.token.user_id,
+            is_admin=is_admin, note=data.note,
+        )
+    except identity_request_svc.RequestNotFound:
+        return json_error("Identity request not found", 404)
+    except identity_request_svc.RequestClosed:
+        return json_error("Решение по заявке уже принято", 409)
+    except identity_request_svc.NotApprover:
+        return json_error("Решение принимает подтверждающий или админ платформы", 403)
+    except identity_request_svc.IncompleteDecision as exc:
+        return json_error(f"Не решены поля: {', '.join(exc.args[0])}", 422)
+    return identity_request_svc.serialize(row)
+
+
+@api_view(methods=("GET", "PUT"), auth="jwt", body=None)
+def identity_approver(request):
+    """Кто подтверждает заявки. GET — читать, PUT — назначать."""
+    access, is_admin = _identity_access(request)
+
+    if request.method == "GET":
+        row = identity_request_svc.get_approver()
+        user_id = row.user_id if row is not None else None
+        brief = users_interface.get_user_brief(user_id) if user_id else None
+        return {"user_id": user_id, "user": brief}
+
+    if not (is_admin or access.can_manage_identity_approver):
+        return json_error("Назначение подтверждающего требует hr.identity.manage", 403)
+    try:
+        data = schemas.IdentityApproverRequest.model_validate_json(request.body or b"{}")
+    except ValidationError as exc:
+        return _query_error(exc)
+
+    if data.user_id is not None and users_interface.get_user_brief(data.user_id) is None:
+        return json_error("User not found", 422)
+
+    row = identity_request_svc.set_approver(data.user_id, actor_id=request.token.user_id)
+    # Назначение подтверждающего = раздача права писать в чужие аккаунты,
+    # поэтому след в кадровом журнале обязателен (спека §6.2).
+    audit_service.log(
+        entity_type="identity_approver", entity_id=1, action="update",
+        new_values={"user_id": str(row.user_id)}, changed_by=request.token.user_id,
+    )
+    brief = users_interface.get_user_brief(row.user_id) if row.user_id else None
+    return {"user_id": row.user_id, "user": brief}

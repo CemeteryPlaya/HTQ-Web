@@ -1,13 +1,17 @@
 import React from 'react';
 import { Loader2 } from 'lucide-react';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { usesEmployeeTaskExperience } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 
 import HRTaskDetail from '@/pages/hr/HRTaskDetail';
 import EmployeeTaskDetail from '@/pages/hr/EmployeeTaskDetail';
 
 export const TaskDetailRouter: React.FC = () => {
     const { activeProfile, isLoading } = useActiveProfile();
+    const permissions = usePermissions();
+    // Раньше это был type guard над профилем; теперь права приходят
+    // отдельно, поэтому проверка на наличие профиля стала явной.
+    const isRegularEmployee = permissions.atLeast('tasks', 'read') && !permissions.atLeast('tasks', 'admin');
 
     if (isLoading) {
         return (
@@ -17,7 +21,7 @@ export const TaskDetailRouter: React.FC = () => {
         );
     }
 
-    if (usesEmployeeTaskExperience(activeProfile)) {
+    if (activeProfile && isRegularEmployee) {
         return <EmployeeTaskDetail profile={activeProfile} />;
     }
 

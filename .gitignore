@@ -111,3 +111,10 @@ db-vps.ps1
 # Бэкапы .env — внутри те же секреты, что и в самом .env
 .env.bak-*
 .env.bak
+memory.md
+prod-hotfix.patch
+docker-compose.override.yml
+*.bak
+db_schema.csv
+table_data.csv
+existing_models.py

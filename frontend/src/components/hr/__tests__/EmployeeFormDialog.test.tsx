@@ -46,6 +46,11 @@ vi.mock('@/api/hr', () => ({
   createDepartment: vi.fn(),
   createPosition: vi.fn(),
   createEmployeeUser: vi.fn(),
+  fetchUserPrefill: vi.fn(async () => ({
+    id: 7, full_name: 'Иванов Иван', email: 'ivanov@htq.test',
+    first_name: 'Иван', last_name: 'Иванов', patronymic: 'Петрович',
+    phone: '+7 705 111-22-33', bio: 'Инженер ПТО', avatar_url: '',
+  })),
 }));
 
 vi.mock('@/components/hr/ShareEmployeeDialog', () => ({
@@ -289,5 +294,42 @@ describe('EmployeeFormDialog — секции Т-2', () => {
     expect(await screen.findByLabelText(/Оклад/)).toBeInTheDocument();
     // И заголовок секции подсвечен бейджем ошибки.
     expect(await screen.findByText('Проверьте поля')).toBeInTheDocument();
+  });
+});
+
+describe('EmployeeFormDialog — досев из аккаунта', () => {
+  /** Открыть комбобокс пользователей и выбрать первого. */
+  const pickUser = async () => {
+    // Комбобоксов в форме несколько (пользователь, отдел, должность) —
+    // пикер пользователя идёт первым.
+    fireEvent.click(screen.getAllByRole('combobox')[0]);
+    const option = await screen.findByText(/Иванов Иван/);
+    await act(async () => {
+      fireEvent.click(option);
+    });
+  };
+
+  it('подставляет телефон и био выбранного аккаунта', async () => {
+    renderDialog(null);
+    await pickUser();
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/Подставлено из аккаунта/).length).toBeGreaterThan(0);
+    });
+    expect(screen.getByDisplayValue('Инженер ПТО')).toBeInTheDocument();
+  });
+
+  it('не затирает то, что HR ввёл руками', async () => {
+    // Смена выбранного пользователя не должна молча съедать набранный текст —
+    // иначе HR потеряет правку, даже не заметив этого.
+    renderDialog(null);
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'Своя заметка' } });
+
+    await pickUser();
+
+    await waitFor(() => {
+      expect(textarea.value).toBe('Своя заметка');
+    });
   });
 });

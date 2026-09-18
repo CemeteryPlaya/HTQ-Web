@@ -102,12 +102,25 @@ export interface HRUserOption {
   first_name?: string;
   last_name?: string;
   patronymic?: string;
-  /** Данные для переноса в карточку — их отдаёт GET /employees/users/. */
+  /** Данные для переноса в карточку — их отдаёт GET /employees/users/.
+   *  bio и avatar_url сюда не входят: список бывает на сотни строк, и за
+   *  ними ходят точечно (`HRUserPrefill`). */
   phone?: string;
-  avatar_url?: string;
-  bio?: string;
   /** Карточка сотрудника у этой учётки уже есть; null — ещё нет. */
   employee_id?: number | null;
+}
+
+
+/**
+ * Ответ точечной ручки `employees/users/<id>/prefill/`.
+ *
+ * Отличие от `HRUserOption` — не в наборе полей (список теперь несёт те же
+ * `bio`/`avatar_url`), а в их обязательности: у одного выбранного
+ * пользователя они приходят всегда, пусть и пустыми строками.
+ */
+export interface HRUserPrefill extends HRUserOption {
+  bio: string;
+  avatar_url: string;
 }
 
 /* ---------- Префилл: перенос уже имеющихся данных в карточку ---------- */

@@ -79,6 +79,7 @@ export const lazyPages = {
   HRHistory: React.lazy(() => import('@/pages/hr/HRHistory')),
   HRArchive: React.lazy(() => import('@/pages/hr/HRArchive')),
   HRAccounts: React.lazy(() => import('@/pages/hr/HRAccounts')),
+  HRIdentityRequests: React.lazy(() => import('@/pages/hr/HRIdentityRequests')),
   HRRoadmap: React.lazy(() => import('@/pages/hr/HRRoadmap')),
   HRRoadmapDetail: React.lazy(() => import('@/pages/hr/HRRoadmapDetail')),
   HRDailyReports: React.lazy(() => import('@/pages/hr/HRDailyReports')),
@@ -94,6 +95,9 @@ export const lazyPages = {
   HRShareLinks: React.lazy(() => import('@/pages/hr/HRShareLinks')),
   HRPositions: React.lazy(() => import('@/pages/hr/HRPositions')),
   HRAccessLevels: React.lazy(() => import('@/pages/hr/HRAccessLevels')),
+  // Каталог ролей (стадия 2 «Доступ и роли»). Плоский список, без диаграммы:
+  // иерархию несёт должность, а не роль.
+  AccessRoleCatalog: React.lazy(() => import('@/pages/access/RoleCatalog')),
   // Standalone-обёртки (HRLayout вокруг голого фрагмента-вкладки) — по
   // прямому URL эти страницы раньше открывались без шапки и навигации,
   // см. src/pages/hr/recruitmentStandalone.tsx.

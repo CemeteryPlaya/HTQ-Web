@@ -29,6 +29,7 @@ import {
   formatDate,
   formatMoment,
   formatMoney,
+  formatRemaining,
   remainingTone,
 } from '@/components/contracts/format';
 import { reportApiError } from '@/lib/apiError';
@@ -43,9 +44,10 @@ import ProjectLinkBadge from '@/components/contracts/ProjectLinkBadge';
 import { LinkedRequestBadge } from '@/components/contracts/LinkedRequestPicker';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import type { AgreementStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
+
 
 const STATUS_VARIANTS: Record<
   AgreementStatus,
@@ -89,8 +91,9 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
   const queryClient = useQueryClient();
 
   const { activeProfile } = useActiveProfile();
+  const permissions = usePermissions();
   const myId = activeProfile?.id ? Number(activeProfile.id) : null;
-  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
+  const isAdmin = permissions.atLeast('contracts', 'admin');
 
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -293,8 +296,12 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Договор всего (с НДС)
                 </p>
+                {/* У рамочного договора общей суммы нет по существу, и ноль вместо неё
+                    читался бы как потерянные данные — см. докстринг AgreementType. */}
                 <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums text-foreground">
-                  {formatMoney(agreement.amount, agreement.currency)}
+                  {agreement.contract_type === 'framework'
+                    ? 'Рамочный договор'
+                    : formatMoney(agreement.amount, agreement.currency)}
                 </p>
 
                 <div className="mt-3 grid grid-cols-2 gap-3 pt-3 border-t text-sm">
@@ -334,11 +341,14 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                 </div>
                 <div className="col-span-2 flex items-end justify-between gap-4 border-t pt-3">
                   <p className="text-xs text-muted-foreground">Остаток к оплате</p>
-                  <p className={`text-base font-semibold tabular-nums ${remainingTone(
-                    agreement.remaining_amount,
-                    agreement.amount,
-                  )}`}>
-                    {formatMoney(agreement.remaining_amount, agreement.currency)}
+                  {/* `null` — рамочный договор: суммы нет, значит нет и остатка,
+                      а тона «вышли за сумму» тем более. */}
+                  <p className={`text-base font-semibold tabular-nums ${
+                    agreement.remaining_amount === null
+                      ? 'text-muted-foreground'
+                      : remainingTone(agreement.remaining_amount, agreement.amount)
+                  }`}>
+                    {formatRemaining(agreement.remaining_amount, agreement.currency)}
                   </p>
                 </div>
               </div>

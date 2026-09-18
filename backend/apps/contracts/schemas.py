@@ -499,6 +499,9 @@ class AgreementCreate(OrderedDates):
     budget_line_id: int
     counterparty_id: int
     amount: Decimal = Field(..., gt=0)
+    # Доля аванса — 0..1, а НЕ проценты: та же граница, что и в
+    # CheckConstraint модели, чтобы «70» вместо «0.7» не доходило до БД.
+    advance_share: Decimal = Field(Decimal("0"), ge=0, le=1)
     payment_type: PaymentType = PaymentType.POSTPAYMENT
     direction: AgreementDirection = AgreementDirection.EXPENSE
     kind: AgreementKind = AgreementKind.WORKS_SERVICES
@@ -540,6 +543,7 @@ class AgreementUpdate(OrderedDates):
     counterparty_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
     payment_type: Optional[PaymentType] = None
+    advance_share: Optional[Decimal] = Field(None, ge=0, le=1)
     direction: Optional[AgreementDirection] = None
     kind: Optional[AgreementKind] = None
     contract_type: Optional[AgreementType] = None
@@ -593,6 +597,7 @@ class AgreementRead(BaseModel):
     counterparty_name: str
     counterparty_bin_iin: str
     payment_type: str
+    advance_share: Decimal
     direction: str
     kind: str
     contract_type: str
@@ -616,7 +621,8 @@ class AgreementRead(BaseModel):
     advance_payment_id: Optional[int]
     advance_paid_amount: Decimal
     contract_paid_amount: Decimal
-    remaining_amount: Decimal
+    # ``None`` у открытого договора: суммы нет — нет и остатка к оплате.
+    remaining_amount: Optional[Decimal]
     currency: str
     file_id: Optional[str]
     signed_date: Optional[date]
@@ -646,6 +652,9 @@ class InvoiceCreate(BaseModel):
     amount: Decimal = Field(..., gt=0)
     # Заявка конструктора, по которой выставляется счёт (как у договора).
     request_id: Optional[int] = None
+    # Дата самого счёта (не записи в платформу) — нужна отчёту о движении
+    # денег. Необязательна, как и в книге заказчика.
+    document_date: Optional[date] = None
 
 
 class InvoiceUpdate(BaseModel):
@@ -659,6 +668,7 @@ class InvoiceUpdate(BaseModel):
     counterparty_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
     request_id: Optional[int] = None
+    document_date: Optional[date] = None
 
 
 class InvoiceStatusChange(BaseModel):
@@ -711,6 +721,7 @@ class InvoiceRead(BaseModel):
     status: str
     approval_state: str
     request_id: Optional[int] = None
+    document_date: Optional[date]
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
@@ -740,6 +751,11 @@ class AdvancePaymentRead(BaseModel):
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
+    # На сколько строка бюджета за лимитом с учётом этой оплаты по ОТКРЫТОМУ
+    # договору (``budget_calc.open_payment_overrun``). Предупреждение, не
+    # запрет. Считается только в карточке и в ответе на создание — в списке
+    # всегда ``None``, иначе каждая строка списка стоила бы запросов к бюджету.
+    budget_overrun: Optional[Decimal] = None
 
 
 # ── Заявка на подотчётные средства ────────────────────────────────────────
@@ -809,9 +825,12 @@ class ContractPaymentRead(BaseModel):
     posting_number: str
     paid_by: Optional[int]
     paid_at: Optional[datetime]
+    document_date: Optional[date]
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
+    # См. ``AdvancePaymentRead.budget_overrun``.
+    budget_overrun: Optional[Decimal] = None
 
 
 class CompletionActRead(BaseModel):
@@ -834,6 +853,8 @@ class CompletionActRead(BaseModel):
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
+    # См. ``AdvancePaymentRead.budget_overrun``.
+    budget_overrun: Optional[Decimal] = None
 
 
 # ── Personal action queue ────────────────────────────────────────────────

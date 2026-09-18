@@ -49,8 +49,7 @@ import {
 } from '@/components/ui/table';
 import ProjectLinkBadge from '@/components/contracts/ProjectLinkBadge';
 import { contractsApi } from '@/api/contracts';
-import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { ADMIN_ROLES, hasAnyRole } from '@/lib/auth/roles';
+import { usePermissions } from '@/hooks/usePermissions';
 import type { AgreementStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
 
@@ -75,8 +74,8 @@ interface Props {
 const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
   const enabled = Number.isFinite(budgetId);
 
-  const { activeProfile } = useActiveProfile();
-  const isAdmin = hasAnyRole(activeProfile?.roles ?? [], ADMIN_ROLES);
+  const permissions = usePermissions();
+  const isAdmin = permissions.atLeast('contracts', 'admin');
 
   const {
     data: budget,

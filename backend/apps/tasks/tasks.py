@@ -7,6 +7,15 @@ reflective meta-test ``apps/core/tests/test_invariants.py`` (Test 1) verifies
 by AST rather than by string match: a disabled domain must not keep doing
 background work just because its HTTP surface is gated.
 
+``tasks`` is a tenant app (``settings.TENANT_APPS``): its tables live in a
+company's own Postgres schema, not ``public``. A Celery task has no HTTP
+request to inherit a company from, so ``task_deadline_reminder`` and
+``calendar_event_reminder`` are ``@company_task`` and take ``company_slug``
+as a named argument at the call site (``htqweb/tenancy/celery.py``). beat
+does not schedule them directly — it schedules the two ``*_dispatch``
+companions below, which have no company of their own and fan out one real
+task per active company (docs/multi-company-tenancy-followups.md п.1).
+
 What did NOT come across, and why:
 
 * ``workers/replica_sync.py`` — kept ``task_users``/``task_departments`` in
@@ -33,11 +42,13 @@ from celery import shared_task
 from django.utils import timezone
 
 from apps.core.services import require_service
+from htqweb.tenancy.celery import company_dispatch_task, company_task, fan_out_to_companies
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task
+@shared_task(name="apps.tasks.tasks.task_deadline_reminder")
+@company_task
 def task_deadline_reminder() -> int:
     """Notify assignees of tasks due today or tomorrow.
 
@@ -49,6 +60,11 @@ def task_deadline_reminder() -> int:
     The verb keeps the original's ``task_due_<N>d`` shape, so the frontend's
     verb parsing is unchanged. Returns the number of notifications written —
     useful in flower and asserted by the tests.
+
+    Called as ``task_deadline_reminder.delay(company_slug="...")`` — the
+    ``@company_task`` wrapper consumes ``company_slug`` before this body
+    runs and does not forward it (see ``htqweb/tenancy/celery.py``), so the
+    function itself takes no arguments.
     """
     require_service("tasks")
 
@@ -75,7 +91,25 @@ def task_deadline_reminder() -> int:
     return len(rows)
 
 
-@shared_task
+@shared_task(name="apps.tasks.tasks.task_deadline_reminder_dispatch")
+@company_dispatch_task
+def task_deadline_reminder_dispatch() -> dict:
+    """Dispatcher: fan ``task_deadline_reminder`` out to every active company.
+
+    No company of its own — reads
+    ``apps.companies.interface.active_company_slugs()`` and queues one
+    ``task_deadline_reminder`` per active company, ``company_slug`` as a
+    named argument. Enqueue failure for one company does not stop the fan
+    for the rest (``fan_out_to_companies``). This is what beat schedules now
+    (``apps/tasks/migrations/0019_tasks_periodic_tasks_use_dispatchers.py``).
+    """
+    require_service("tasks")
+    return fan_out_to_companies(task_deadline_reminder,
+                                label="tasks.task_deadline_reminder_dispatch")
+
+
+@shared_task(name="apps.tasks.tasks.calendar_event_reminder")
+@company_task
 def calendar_event_reminder() -> int:
     """Remind participants of events starting within the next 15 minutes.
 
@@ -89,6 +123,10 @@ def calendar_event_reminder() -> int:
     database: a participant already holding an unread reminder for the same
     event is skipped. That survives restarts and concurrent workers, which
     the in-memory list never did.
+
+    Called as ``calendar_event_reminder.delay(company_slug="...")`` — see
+    ``task_deadline_reminder``'s docstring above for why the function itself
+    takes no ``company_slug`` parameter.
     """
     require_service("tasks")
 
@@ -129,3 +167,16 @@ def calendar_event_reminder() -> int:
     if rows:
         logger.info("calendar_event_reminder wrote %d notifications", len(rows))
     return len(rows)
+
+
+@shared_task(name="apps.tasks.tasks.calendar_event_reminder_dispatch")
+@company_dispatch_task
+def calendar_event_reminder_dispatch() -> dict:
+    """Dispatcher: fan ``calendar_event_reminder`` out to every active company.
+
+    Same shape as ``task_deadline_reminder_dispatch`` above — see its
+    docstring for the fan-out contract.
+    """
+    require_service("tasks")
+    return fan_out_to_companies(calendar_event_reminder,
+                                label="tasks.calendar_event_reminder_dispatch")

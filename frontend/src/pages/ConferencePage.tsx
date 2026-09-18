@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { BackToProfile } from '@/components/BackToProfile';
 import { Header } from '@/components/Header';
 import { WebRTCManager, RemoteStream, QualityMetrics, WebRTCError } from '@/lib/webrtc';
@@ -18,10 +18,11 @@ import {
   Video, VideoOff, Mic, MicOff, PhoneOff, 
   MonitorPlay, Settings, Activity, Copy, Plus, LogIn, Link2,
   Volume2, VolumeX, Users, Shield, Zap, Sparkles, Check,
-  Maximize2, Minimize2, Pin, MessageSquare, Send, Share2,
+  Maximize2, Minimize2, Pin, MessageSquare, Send, Loader2,
   LayoutGrid, Grid, MonitorUp, Radio, CheckCircle2, Info,
   Sliders, SlidersHorizontal, Lock, Unlock, Crown, UserX,
-  UserCheck, Key, Eye, EyeOff, ShieldAlert, Sparkle, Ban
+  UserCheck, Key, Eye, EyeOff, ShieldAlert, Sparkle, Ban,
+  CalendarClock, History
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/api/client';
@@ -31,8 +32,13 @@ import { Slider } from '@/components/ui/slider';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getAccessToken } from '@/lib/auth/profileStorage';
-import { readGuestSession } from '@/lib/conference/guestSession';
+import { applyGuestLocale, readGuestSession } from '@/lib/conference/guestSession';
 import { InviteDialog } from '@/components/conference/InviteDialog';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  LivePanel, SessionRow, TodayPanel,
+} from '@/components/conference/OverviewPanels';
+import { fetchOverview, listSessions } from '@/api/conference';
 import { useTranslation } from 'react-i18next';
 import i18next from '@/i18n';
 import { copyText } from '@/lib/clipboard';
@@ -57,6 +63,27 @@ interface ChatMessage {
   timestamp: string;
   isSelf: boolean;
 }
+
+export interface ParticipantInfo {
+  name: string;
+  isGuest: boolean;
+}
+
+/** Список участников от SFU → карта для отрисовки. */
+export const toParticipantsMap = (
+  rows: Array<{ peerId: string; displayName?: string; isGuest?: boolean }>,
+): Map<string, ParticipantInfo> => {
+  const map = new Map<string, ParticipantInfo>();
+  for (const row of rows) {
+    map.set(row.peerId, {
+      name: row.displayName || '',
+      // Отсутствующий флаг — это СТАРЫЙ SFU, а не гость: помечать человека
+      // внешним по недостающему полю нельзя.
+      isGuest: row.isGuest === true,
+    });
+  }
+  return map;
+};
 
 export interface RoomSettings {
   roomTitle: string;
@@ -89,6 +116,19 @@ const DEFAULT_ROOM_SETTINGS: RoomSettings = {
   maxParticipants: 25,
   enableE2EEncryption: true,
 };
+
+// Признак «я создал эту комнату» обязан пережить переход /conference →
+// /room/<id> и обновление страницы (F5) внутри уже идущей встречи.
+// useState в компоненте этого не переживёт: это два разных top-level
+// маршрута без общего layout (см. routeDefinitions.ts), поэтому React
+// Router полностью размонтирует ConferencePage при переходе между ними и
+// монтирует заново с чистым состоянием — именно так создатель встречи
+// тихо терял корону и панель модерации сразу после «Создать комнату».
+// Ключ — room id, как и у настроек комнаты (`conf_settings_<roomId>`)
+// чуть ниже: значение живёт только в ЭТОМ браузере, поэтому ни гостя, ни
+// постороннего с той же ссылкой оно хозяином не сделает — прочитать его
+// может только тот, кто сам вызвал `localStorage.setItem` при создании.
+const hostFlagKey = (roomId: string) => `conf_host_${roomId}`;
 
 function resolveWebTransportConfig(
   conferenceConfig: ConferenceRuntimeConfig | undefined
@@ -334,23 +374,25 @@ function useAudioActivity(
 /**
  * Single Video Tile Component
  */
-const VideoTile = ({ 
-  stream, 
-  isLocal = false, 
-  displayName, 
+const VideoTile = ({
+  stream,
+  isLocal = false,
+  displayName,
   isPrimary = false,
   isSpotlighted = false,
   isHost = false,
+  isGuest = false,
   micEnabled = true,
   camEnabled = true,
   onSpotlightToggle
-}: { 
-  stream: MediaStream | null; 
-  isLocal?: boolean; 
+}: {
+  stream: MediaStream | null;
+  isLocal?: boolean;
   displayName: string;
   isPrimary?: boolean;
   isSpotlighted?: boolean;
   isHost?: boolean;
+  isGuest?: boolean;
   micEnabled?: boolean;
   camEnabled?: boolean;
   onSpotlightToggle?: () => void;
@@ -600,6 +642,11 @@ const VideoTile = ({
                 {t('conference.page.host')}
               </span>
             )}
+            {isGuest && (
+              <Badge variant="outline" className="ml-2 text-[10px]">
+                {t('conference.page.guestBadge', 'Гость')}
+              </Badge>
+            )}
             {isLocal && <span className="text-emerald-400 font-normal opacity-90">{t('conference.page.youParen')}</span>}
           </span>
         </div>
@@ -663,6 +710,29 @@ export const ConferencePage = () => {
   }, [roomIdFromUrl]);
   const isGuest = Boolean(guest) && !token;
   const signalingToken = () => (isGuest ? guest!.token : getAccessToken());
+
+  // Язык приглашения — только для гостя, и только здесь: сотрудник со своим
+  // токеном не попадает в ветку `isGuest`, а значит, чужой выбор языка на
+  // него никак не влияет, даже если по совпадению он открыл ту же ссылку.
+  // Переприменяем при каждом заходе в комнату (а не только на /join), потому
+  // что сюда попадают и прямым URL, и обновлением вкладки — оба раза i18n
+  // стартует заново и должен взять язык из guestSession, а не из браузера.
+  // guestLocaleReady гейтит только ТЕКСТ статус-экрана автовхода ниже
+  // (см. STATE B): сам вход в звонок (attemptGuestAutoJoin) идёт в
+  // независимом эффекте и от этого флага не зависит — иначе гость ждал бы
+  // подключения дольше, чем нужно, вместо того чтобы просто не видеть
+  // текст не на том языке долю секунды.
+  const [guestLocaleReady, setGuestLocaleReady] = useState(() => !(isGuest && guest?.locale));
+  useEffect(() => {
+    if (!isGuest || !guest?.locale) {
+      setGuestLocaleReady(true);
+      return;
+    }
+    let cancelled = false;
+    setGuestLocaleReady(false);
+    applyGuestLocale(guest.locale).finally(() => { if (!cancelled) setGuestLocaleReady(true); });
+    return () => { cancelled = true; };
+  }, [isGuest, guest]);
   const { data: userProfile } = useQuery({
     queryKey: ['profile'],
     queryFn: async () => {
@@ -683,6 +753,39 @@ export const ConferencePage = () => {
     enabled: !!token,
     staleTime: 5 * 60 * 1000,
   });
+
+  // Списки для вкладок «Сегодня» и «Идут сейчас».
+  //
+  // `enabled` по токену сотрудника: у гостя по ссылке-приглашению этих ручек
+  // нет (его токен закрывает всё API платформы), и запрос уводил бы его со
+  // звонка на страницу входа по 401.
+  //
+  // Обновление раз в 30 секунд: «идёт сейчас» устаревает быстро, но чаще —
+  // лишний трафик на каждой открытой вкладке у всех сотрудников сразу.
+  const {
+    data: overview,
+    isLoading: overviewLoading,
+    error: overviewError,
+  } = useQuery({
+    queryKey: ['conference-overview'],
+    queryFn: fetchOverview,
+    enabled: !!token,
+    refetchInterval: 30_000,
+  });
+
+  // Только несколько последних встреч: полный список с поиском и постраничкой
+  // живёт на /conference/history, и держать две копии одного экрана незачем.
+  const {
+    data: recentPage,
+    isLoading: recentLoading,
+    error: recentError,
+  } = useQuery({
+    queryKey: ['conference-recent'],
+    queryFn: () => listSessions({ page: 1, limit: 5 }),
+    enabled: !!token,
+  });
+  const recentSessions = recentPage?.items ?? [];
+
   // Гостю конфиг приезжает вместе с гостевым токеном: сам эндпоинт закрыт
   // платформенным JWT, и открывать его наружу ради адреса сигналинга —
   // лишняя публичная поверхность.
@@ -691,13 +794,25 @@ export const ConferencePage = () => {
     : fetchedConfig);
   
   const user = userProfile || null;
-  
+
+  // Автоназвание встречи — «имя создателя + конференция» (пример из
+  // требования: «Санжар конференция»). Имя берём человеческое (firstName из
+  // профиля), а не логин; email — тот же фолбэк, что уже используется чуть
+  // ниже для displayName участника, если имени в профиле нет вовсе. Гостю
+  // это не нужно: у него нет ни профиля, ни поля для ввода названия — там
+  // просто останется пустая строка, и на бэкенд ничего не уйдёт.
+  const autoMeetingTitle = useMemo(() => {
+    const humanName = user?.firstName?.trim() || user?.email || '';
+    if (!humanName) return '';
+    return t('conference.page.autoTitleTemplate', { name: humanName });
+  }, [user, t]);
+
   // WebRTC State
   const [manager, setManager] = useState<WebRTCManager | null>(null);
   const [connected, setConnected] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<RemoteStream[]>([]);
-  const [participants, setParticipants] = useState<Map<string, string>>(new Map());
+  const [participants, setParticipants] = useState<Map<string, ParticipantInfo>>(new Map());
   // Микрофон/камера остальных участников — по их собственным объявлениям
   // (сообщение `mediaState`). До первого объявления считаем включёнными.
   const [peerMediaState, setPeerMediaState] = useState<
@@ -705,11 +820,42 @@ export const ConferencePage = () => {
   >(new Map());
   const [metrics, setMetrics] = useState<QualityMetrics | null>(null);
   const [joinRoomInput, setJoinRoomInput] = useState('');
+  // Название встречи, вписанное сотрудником в лобби. Пусто по умолчанию —
+  // подсказка (placeholder) показывает автоназвание отдельно, значение в
+  // это состояние попадает только когда человек реально что-то напечатал.
+  const [meetingTitleInput, setMeetingTitleInput] = useState('');
   const [enteredPasswordInput, setEnteredPasswordInput] = useState('');
   const [joinedRoomId, setJoinedRoomId] = useState<string | null>(null);
   
   // Room Settings State (Host Configuration)
-  const [isHost, setIsHost] = useState(true); // Creator default as host
+  //
+  // Честно узнать хозяина встречи здесь неоткуда: сервер прав не считает,
+  // а `created_by_id` есть только у уже сохранённой сессии (после звонка),
+  // не у комнаты в момент входа. Поэтому isHost — это не «кто хозяин», а
+  // «кто сам создал комнату в ЭТОМ браузере»: единственное честное значение
+  // по умолчанию — false, а не true.
+  //
+  // Ленивый инициализатор, а не просто `useState(false)` с последующим
+  // `setIsHost(true)` в handleCreateRoomRoute: переход туда делает
+  // `navigate('/room/<id>')` на СОВСЕМ ДРУГОЙ top-level маршрут (не вложенный
+  // под общий layout), поэтому React Router размонтирует этот компонент
+  // целиком и монтирует заново — обычный `setIsHost(true)` до навигации
+  // просто исчезает вместе со старым инстансом. Значение поэтому читается
+  // из localStorage (`hostFlagKey`) уже на первом рендере НОВОГО инстанса —
+  // так же переживает и обновление страницы (F5) посреди встречи, когда
+  // компонент размонтируется и монтируется точно так же. `!isGuest` —
+  // защита от отказа, а не от честного пользователя: гость никаким путём
+  // этот флаг не пишет, но если он всё же откроет комнату, которую сам же
+  // (тем же браузером, тем же localStorage) когда-то создал как сотрудник,
+  // хозяином он всё равно быть не должен.
+  const [isHost, setIsHost] = useState(() => {
+    if (isGuest || !activeRoomId) return false;
+    try {
+      return localStorage.getItem(hostFlagKey(activeRoomId)) === '1';
+    } catch {
+      return false;
+    }
+  });
   const [roomSettings, setRoomSettings] = useState<RoomSettings>(DEFAULT_ROOM_SETTINGS);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [waitingRoomQueue, setWaitingRoomQueue] = useState<Array<{ peerId: string; name: string }>>([]);
@@ -731,14 +877,41 @@ export const ConferencePage = () => {
   const [previewCamEnabled, setPreviewCamEnabled] = useState(true);
   const [previewMicEnabled, setPreviewMicEnabled] = useState(true);
   const [previewAudioLevel, setPreviewAudioLevel] = useState(0);
-  // Предпросмотр включается ТОЛЬКО по явному действию. Раньше камера и
-  // микрофон захватывались на входе в комнату — человек ещё не решил,
-  // заходить ли в разговор, а лампочка камеры уже горела.
+  // Предпросмотр поднимается сам, но ТОЛЬКО в комнате ожидания (эффект
+  // ниже). Стартовое `false` — это состояние страницы `/conference`, где
+  // комната ещё не выбрана: там камера не должна включаться вообще, и
+  // человек не должен объяснять браузеру, зачем ему дали доступ к
+  // устройствам на экране со списком комнат.
   const [inviteOpen, setInviteOpen] = useState(false);
   const [previewActive, setPreviewActive] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const previewRingRef = useRef<HTMLDivElement>(null);
+
+  // Гостевой автовход: попытка должна случиться РОВНО один раз — handleJoin
+  // поднимает камеру и сигналинг, повторный вызов из-за перерисовки завёл
+  // бы второе подключение. Ref, а не флаг в handleJoin, потому что эффект
+  // ниже пересобирается при смене зависимостей чаще, чем должна повториться
+  // сама попытка. guestAutoJoinStarted — «автозапуск уже случился хоть раз»
+  // (не даёт эффекту сработать снова), guestJoinInFlight — «попытка выполняется
+  // ПРЯМО СЕЙЧАС» (не даёт двум вызовам handleJoin наложиться друг на друга,
+  // откуда бы attemptGuestAutoJoin ни позвали — из эффекта или с кнопки
+  // «Повторить»). Это разные вещи: после неудачи первое остаётся true
+  // навсегда, второе обязано сброситься, иначе повтор станет невозможен.
+  const guestAutoJoinStarted = useRef(false);
+  const guestJoinInFlight = useRef(false);
+  const [guestAutoJoinFailed, setGuestAutoJoinFailed] = useState(false);
+  // Только для дизейбла кнопки «Повторить» — источник истины для самой
+  // защиты от гонки остаётся guestJoinInFlight (ref, синхронный).
+  const [guestJoinPending, setGuestJoinPending] = useState(false);
+
+  // Та же гонка, что и у гостя выше, только на кнопке «Войти» в лобби
+  // сотрудника: два быстрых клика вызывали handleJoin дважды и поднимали
+  // два подключения. Тот же приём — ref для синхронной защиты (state
+  // обновится только к следующему рендеру и не успеет остановить второй
+  // клик между кликами), state только для disabled на кнопке.
+  const staffJoinInFlight = useRef(false);
+  const [staffJoinPending, setStaffJoinPending] = useState(false);
 
   const handlePreviewFailure = useCallback((err: unknown) => {
     console.warn('Pre-call media preview request failed:', err);
@@ -767,6 +940,30 @@ export const ConferencePage = () => {
   });
 
   useAudioActivity(previewStream, previewRingRef, setPreviewAudioLevel);
+
+  // Комната ожидания — это уже согласие показаться: сюда попадают по прямой
+  // ссылке на встречу или из списка комнат, то есть человек идёт в разговор,
+  // и лишний клик «включить предпросмотр» ничего не защищает.
+  //
+  // Зависимости здесь — весь смысл эффекта. Он срабатывает на СМЕНУ экрана
+  // (появилась комната; звонок закончился), а не на каждый ререндер, и
+  // поэтому не спорит с двумя случаями, где предпросмотр гасят намеренно:
+  //   • handleJoin отпускает устройства перед захватом в MediaEngine —
+  //     повторный автозапуск занял бы камеру собственной же вкладкой;
+  //   • handlePreviewFailure гасит его после отказа в доступе — иначе
+  //     страница бесконечно переспрашивала бы разрешение.
+  useEffect(() => {
+    // Гостю предпросмотр не нужен и не показывается (лобби для него не
+    // рендерится вовсе — он идёт прямо в звонок), поэтому камеру ему включать
+    // не для чего. Раньше это гасилось только порядком эффектов — handleJoin
+    // синхронно делает setPreviewActive(false) до первого await, — но это
+    // держится на том, что он всегда добегает до той строки. Ранний return
+    // (например, по needsSecureMediaContext) оставил бы этот setPreviewActive(true)
+    // единственным и неотменённым, и камера у гостя загорелась бы за спиной
+    // экрана «Не удалось войти».
+    if (!isRoomSelected || connected || isGuest) return;
+    setPreviewActive(true);
+  }, [isRoomSelected, connected, isGuest]);
 
   // Маршрут комнаты открыт без обязательной авторизации — иначе гость с
   // токеном в sessionStorage до неё бы не добрался. Право находиться здесь
@@ -873,6 +1070,13 @@ export const ConferencePage = () => {
     }
   }, [activeRoomId, connected]);
 
+  // Смена комнаты — повод сбросить вписанное название: иначе текст,
+  // напечатанный для одной встречи, молча уехал бы во вторую при переходе
+  // между комнатами без полной перезагрузки страницы.
+  useEffect(() => {
+    setMeetingTitleInput('');
+  }, [activeRoomId]);
+
   useEffect(() => {
     if (!connected || !manager || !joinedRoomId) return;
     if (activeRoomId === joinedRoomId) return;
@@ -898,6 +1102,19 @@ export const ConferencePage = () => {
 
   const handleCreateRoomRoute = () => {
     const newRoomId = generateRoomId();
+    // localStorage — не просто на будущее: `navigate` ниже размонтирует
+    // этот инстанс компонента (см. комментарий у isHost), и без записи
+    // сюда новый инстанс на /room/<id> не узнает, что это ОН только что
+    // создал комнату. `setIsHost(true)` оставлен рядом — он не переживёт
+    // переход, но подстраховывает на случай, если размонтирования вдруг
+    // не случится (например, в тестовом окружении с другим роутером).
+    try {
+      localStorage.setItem(hostFlagKey(newRoomId), '1');
+    } catch {
+      // localStorage бывает недоступен (приватный режим, квота) — тогда
+      // просто не будет пережившего перезагрузку статуса хозяина, как и
+      // было до этого фикса. Само создание комнаты это не блокирует.
+    }
     setIsHost(true);
     navigate(`/room/${newRoomId}`);
   };
@@ -910,6 +1127,16 @@ export const ConferencePage = () => {
         description: t('conference.page.enterRoomId'),
       });
       return;
+    }
+    // Симметрично handleCreateRoomRoute: явный «Войти по ID» — это явное
+    // «я не хозяин», и оно должно пережить обновление страницы точно так
+    // же, как и обратное решение. Без очистки редкий, но возможный случай
+    // (тот же человек когда-то создал комнату с таким же ID) after F5
+    // вернул бы корону тому, кто в этот раз зашёл не создателем.
+    try {
+      localStorage.removeItem(hostFlagKey(normalized));
+    } catch {
+      // см. комментарий в handleCreateRoomRoute
     }
     setIsHost(false);
     navigate(`/room/${encodeURIComponent(normalized)}`);
@@ -935,17 +1162,20 @@ export const ConferencePage = () => {
   const togglePreviewCam = () => setPreviewCamEnabled((on) => !on);
   const togglePreviewMic = () => setPreviewMicEnabled((on) => !on);
 
-  const handleJoin = async () => {
+  // Возвращает успех попытки: гостевой автовход (ниже) должен узнать,
+  // получилось ли соединиться, чтобы показать кнопку повтора — сам способ
+  // сообщить пользователю причину не меняется, это по-прежнему toast ниже.
+  const handleJoin = async (): Promise<boolean> => {
     if (!isRoomSelected) {
       toast({ variant: 'destructive', description: t('conference.page.noRoomYet') });
-      return;
+      return false;
     }
 
     // Гостю профиль не нужен: он представился на странице приглашения, и
     // его имя лежит в гостевой сессии.
     if (!user && !isGuest) {
       toast({ variant: 'destructive', description: t('conference.page.notAuthorised') });
-      return;
+      return false;
     }
 
     // Password validation if room requires PIN
@@ -955,7 +1185,7 @@ export const ConferencePage = () => {
           variant: 'destructive',
           description: t('conference.page.wrongPin'),
         });
-        return;
+        return false;
       }
     }
 
@@ -965,7 +1195,7 @@ export const ConferencePage = () => {
         variant: 'destructive',
         description: t('conference.page.roomLocked'),
       });
-      return;
+      return false;
     }
 
     if (needsSecureMediaContext()) {
@@ -973,7 +1203,7 @@ export const ConferencePage = () => {
         variant: 'destructive',
         description: t('conference.page.needsSecureContext'),
       });
-      return;
+      return false;
     }
 
     // Устройства предпросмотра отпускаются ДО того, как их запросит
@@ -985,7 +1215,7 @@ export const ConferencePage = () => {
     const signalingUrl = signalingUrlResolution.url;
     if (!signalingUrl) {
       toast({ variant: 'destructive', description: t('conference.page.noSfuUrl') });
-      return;
+      return false;
     }
 
     const runtimeIceServers = resolveRuntimeIceServers(conferenceConfig);
@@ -1013,10 +1243,11 @@ export const ConferencePage = () => {
       onRemoteStreamRemoved: (consumerId: string) => {
         setRemoteStreams(prev => prev.filter(s => s.consumerId !== consumerId));
       },
-      onParticipantJoined: (peerId: string, name: string) => {
+      onParticipantJoined: (peerId: string, name: string, isGuest: boolean) => {
         setParticipants(prev => {
           const next = new Map(prev);
-          next.set(peerId, name);
+          const info = toParticipantsMap([{ peerId, displayName: name, isGuest }]).get(peerId)!;
+          next.set(peerId, info);
           return next;
         });
         toast({ description: t('conference.page.participantJoined', { name }) });
@@ -1092,6 +1323,12 @@ export const ConferencePage = () => {
         displayName: user
           ? (user.firstName ? `${user.firstName} ${user.lastName || ''}` : user.email)
           : (guest?.displayName || t('conference.page.guest')),
+        // Пустое поле — не пустая строка на сервер: подсказка в лобби
+        // показывает ИМЕННО автоназвание, и обещание «встреча получит то,
+        // что видно в поле» должно выполняться дословно. У гостя (лобби ему
+        // не показывается) оба значения пусты — title не уйдёт вовсе,
+        // start_session решит сам.
+        title: isGuest ? undefined : (meetingTitleInput.trim() || autoMeetingTitle || undefined),
         iceServers: runtimeIceServers,
         initialVideoCodecPolicy: policy,
         autoVp8Fallback: false,
@@ -1116,7 +1353,7 @@ export const ConferencePage = () => {
         variant: 'destructive',
         description: t('conference.page.joinFailed', { message: joinResult.error.message })
       });
-      return;
+      return false;
     }
 
     setManager(activeManager);
@@ -1148,7 +1385,62 @@ export const ConferencePage = () => {
     if (roomSettings.muteOnEntry && !isHost) {
       toast({ description: t('conference.page.muteOnEntryNotice') });
     }
+
+    return true;
   };
+
+  // Кнопка «Войти» в лобби сотрудника — обёртка над handleJoin с той же
+  // защитой от двойного клика, что и у гостя (staffJoinInFlight — ref,
+  // синхронный источник истины; staffJoinPending — только для disabled).
+  const handleJoinClick = () => {
+    if (staffJoinInFlight.current) return;
+    staffJoinInFlight.current = true;
+    setStaffJoinPending(true);
+    void handleJoin().finally(() => {
+      staffJoinInFlight.current = false;
+      setStaffJoinPending(false);
+    });
+  };
+
+  // Повторная попытка гостя нажимает то же самое, чем управляла бы кнопка
+  // «Войти» у сотрудника, — второй способ сообщать об ошибке не заводим,
+  // handleJoin сам покажет toast с причиной. Здесь только флаг для кнопки
+  // «Повторить», которую в остальном лобби не показываем гостю вовсе.
+  // Без useCallback — как и остальные обработчики на этой странице,
+  // пересоздаётся каждый рендер, свежий handleJoin ей и нужен.
+  //
+  // Ранний выход по guestJoinInFlight — защита от гонки САМОЙ функции, а не
+  // только её вызывающих: кнопка «Повторить» вызывает ровно эту же
+  // attemptGuestAutoJoin, и быстрый двойной клик может случиться раньше, чем
+  // React перерисует disabled на кнопке. Проверка на ref (не на state)
+  // синхронна и не ждёт следующего рендера.
+  const attemptGuestAutoJoin = () => {
+    if (guestJoinInFlight.current) return;
+    guestJoinInFlight.current = true;
+    guestAutoJoinStarted.current = true;
+    setGuestAutoJoinFailed(false);
+    setGuestJoinPending(true);
+    void handleJoin()
+      .then((ok) => {
+        if (!ok) setGuestAutoJoinFailed(true);
+      })
+      .finally(() => {
+        guestJoinInFlight.current = false;
+        setGuestJoinPending(false);
+      });
+  };
+
+  // Гость, пришедший по ссылке-приглашению, попадает в разговор без лобби
+  // и без нажатия «Войти» — он уже назвался на странице приглашения. Ref
+  // guestAutoJoinStarted гарантирует ровно одну попытку за жизнь страницы;
+  // само handleJoin не входит в зависимости намеренно (эффект не должен
+  // перезапускаться на каждый ререндер, где handleJoin пересоздаётся).
+  useEffect(() => {
+    if (!isGuest || !isRoomSelected || connected) return;
+    if (guestAutoJoinStarted.current) return;
+    attemptGuestAutoJoin();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGuest, isRoomSelected, connected]);
 
   const handleLeave = async () => {
     if (manager) {
@@ -1296,11 +1588,27 @@ export const ConferencePage = () => {
         peerId,
         displayName: peerStreams[0]?.displayName || t('conference.media.participant'),
         stream: combinedStream,
+        // Плитка знает гостя по тому же журналу участников, что и панель
+        // справа — источник один, второй карты не заводим.
+        isGuest: participants.get(peerId)?.isGuest ?? false,
       };
     });
-  }, [remoteStreams, t]);
+  }, [remoteStreams, t, participants]);
 
   const localDisplayName = user?.firstName || t('conference.page.me');
+
+  // Вход в звонок — это смена ЛОКАЛЬНОГО состояния (connected), а не адреса:
+  // маршрут остаётся тем же `/room/<id>` что и в лобби. Глобальный сброс
+  // прокрутки (app/components/ScrollToTop.tsx) реагирует только на смену
+  // pathname и здесь не срабатывает — а на узком экране кнопка
+  // «Присоединиться» лежит ниже первого экрана лобби, и человек нажимает её,
+  // уже прокрутив страницу вниз. Без явного сброса шапка звонка (индикаторы
+  // связи и записи) оказывалась выше верхнего края экрана. Прокрутка
+  // страницы (не внутренних панелей звонка — их не трогаем) возвращается к
+  // нулю в момент, когда экран лобби меняется на экран разговора.
+  useEffect(() => {
+    if (connected) window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior });
+  }, [connected]);
 
   // ═══════════════════════════════════════════════════════════
   // ACTIVE CALL INTERFACE (CONNECTED STATE)
@@ -1310,11 +1618,28 @@ export const ConferencePage = () => {
 
     return (
       <TooltipProvider>
-        <div className="h-screen w-full bg-[#090a0c] text-gray-100 flex flex-col overflow-hidden font-sans select-none">
+        {/* `relative` здесь не для красоты: без него этот div — `overflow-
+            hidden`, но НЕ `position`-контейнер, и плавающий `<footer
+            className="absolute ...">` ниже (панель управления) ищет
+            ближайшего позиционированного предка где-то выше по дереву —
+            обрезка перестаёт быть гарантией, и на самом узком экране (360px)
+            футер, которому не хватает места по ширине, иногда протекал мимо
+            неё и растягивал document.documentElement.scrollWidth. `relative`
+            делает этот div контейнером позиционирования для всех `absolute`
+            потомков внутри — тогда их и обрезает именно его `overflow-
+            hidden`, как и предполагалось. */}
+        <div className="relative h-screen w-full bg-[#090a0c] text-gray-100 flex flex-col overflow-hidden font-sans select-none">
           
-          {/* Top Bar Header */}
-          <header className="h-14 bg-[#141518]/90 backdrop-blur-md border-b border-white/10 px-4 flex items-center justify-between shadow-md z-30 shrink-0">
-            <div className="flex items-center gap-3">
+          {/* Top Bar Header.
+              Бейджи + кнопка ID слева и элементы управления справа раньше
+              были в одну строку фиксированной высоты (h-14) — на 360px они
+              просто не помещались и обрезались родительским overflow-hidden
+              без всякого намёка на то, что часть контента пропала. flex-wrap
+              (с auto-высотой ниже sm) переносит правую группу на вторую
+              строку, когда не хватает места; на sm+ всё как раньше —
+              однострочный фиксированный h-14. */}
+          <header className="min-h-14 flex-wrap gap-y-2 py-2 bg-[#141518]/90 backdrop-blur-md border-b border-white/10 px-4 flex items-center justify-between shadow-md z-30 shrink-0 sm:h-14 sm:flex-nowrap sm:py-0">
+            <div className="flex items-center gap-3 flex-wrap gap-y-2 sm:flex-nowrap">
               <Badge variant="outline" className="gap-2 py-1 px-3 bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-xs font-semibold rounded-full">
                 <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 {t('conference.page.voiceConnected')}
@@ -1473,6 +1798,7 @@ export const ConferencePage = () => {
                           <VideoTile
                             stream={peer.stream}
                             displayName={peer.displayName}
+                            isGuest={peer.isGuest}
                             micEnabled={peerMediaState.get(peer.peerId)?.micEnabled ?? true}
                             camEnabled={peerMediaState.get(peer.peerId)?.camEnabled ?? true}
                             isSpotlighted={true}
@@ -1503,6 +1829,7 @@ export const ConferencePage = () => {
                           <VideoTile
                             stream={peer.stream}
                             displayName={peer.displayName}
+                            isGuest={peer.isGuest}
                             micEnabled={peerMediaState.get(peer.peerId)?.micEnabled ?? true}
                             camEnabled={peerMediaState.get(peer.peerId)?.camEnabled ?? true}
                           />
@@ -1538,6 +1865,7 @@ export const ConferencePage = () => {
                       key={peer.peerId}
                       stream={peer.stream}
                       displayName={peer.displayName}
+                      isGuest={peer.isGuest}
                       micEnabled={peerMediaState.get(peer.peerId)?.micEnabled ?? true}
                       camEnabled={peerMediaState.get(peer.peerId)?.camEnabled ?? true}
                       onSpotlightToggle={() => {
@@ -1587,9 +1915,16 @@ export const ConferencePage = () => {
               )}
             </main>
 
-            {/* Right Collapsible Sidebar */}
+            {/* Right Collapsible Sidebar.
+                На узком экране фиксированные 320px (w-80) рядом с видео
+                оставляли ему считаные пиксели — панель становилась
+                нечитаемой, а видео сжатым до полоски. Ниже sm панель
+                становится полноэкранным перекрытием (`absolute inset-0`
+                поверх родителя с `relative`), с sm возвращается прежним
+                боковым блоком фиксированной ширины — на десктопе ничего
+                не меняется. */}
             {showSidebar && (
-              <aside className="w-80 bg-[#121316] border-l border-white/10 flex flex-col shrink-0 z-20 shadow-2xl">
+              <aside className="absolute inset-0 z-20 flex flex-col bg-[#121316] shadow-2xl sm:static sm:w-80 sm:border-l sm:border-white/10 sm:shrink-0">
                 <div className="p-3 border-b border-white/10 bg-[#16171b] flex items-center justify-between">
                   <div className="flex gap-2">
                     <button
@@ -1672,13 +2007,20 @@ export const ConferencePage = () => {
                     </div>
 
                     {/* Remote users list */}
-                    {Array.from(participants.entries()).map(([peerId, name]) => (
+                    {Array.from(participants.entries()).map(([peerId, info]) => (
                       <div key={peerId} className="flex items-center justify-between p-2.5 rounded-xl hover:bg-white/5 border border-transparent transition-colors group">
                         <div className="flex items-center gap-2.5 truncate">
                           <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center font-bold text-white text-xs">
-                            {name.charAt(0).toUpperCase()}
+                            {info.name.charAt(0).toUpperCase()}
                           </div>
-                          <span className="text-xs font-medium text-gray-300 truncate">{name}</span>
+                          <span className="text-xs font-medium text-gray-300 truncate flex items-center">
+                            {info.name}
+                            {info.isGuest && (
+                              <Badge variant="outline" className="ml-2 text-[10px]">
+                                {t('conference.page.guestBadge', 'Гость')}
+                              </Badge>
+                            )}
+                          </span>
                         </div>
                         <div className="flex items-center gap-1">
                           {peerMediaState.get(peerId)?.micEnabled === false ? (
@@ -1695,10 +2037,10 @@ export const ConferencePage = () => {
                               </PopoverTrigger>
                               <PopoverContent side="left" className="w-44 bg-zinc-900 border-zinc-800 p-2 text-xs text-white">
                                 <div className="flex flex-col gap-1">
-                                  <button onClick={() => toast({ description: t('conference.page.participantMuted', { name }) })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-300">
+                                  <button onClick={() => toast({ description: t('conference.page.participantMuted', { name: info.name }) })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-300">
                                     <MicOff className="w-3.5 h-3.5" /> {t('conference.page.muteOne')}
                                   </button>
-                                  <button onClick={() => toast({ description: t('conference.page.participantKicked', { name }) })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-400 font-bold">
+                                  <button onClick={() => toast({ description: t('conference.page.participantKicked', { name: info.name }) })} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/10 text-rose-400 font-bold">
                                     <UserX className="w-3.5 h-3.5" /> {t('conference.page.kick')}
                                   </button>
                                 </div>
@@ -2058,7 +2400,19 @@ export const ConferencePage = () => {
             <Card className="glass shadow-elevated border-white/10 dark:bg-zinc-950/60 rounded-3xl overflow-hidden backdrop-blur-xl">
               <CardContent className="p-6 md:p-10">
                 <Tabs defaultValue="create" className="w-full">
-                  <TabsList className="grid grid-cols-2 w-full max-w-md mx-auto mb-8 h-12 bg-muted/50 p-1 rounded-xl">
+                  {/* Пять вкладок, а не две: человек приходит сюда с намерением
+                      «мне на встречу», и списки должны быть там же, где вход в
+                      неё. Раньше они жили только на соседней странице, куда
+                      отсюда не вело ни одной ссылки. */}
+                  {/* 5 вкладок в 2 колонки на мобильном дают 3 ряда, и
+                      последняя («История») повисает одна в левой ячейке с
+                      пустым местом справа. `[&>*:nth-child(5)]:col-span-2`
+                      растягивает её на всю ширину последнего ряда — ряд
+                      выглядит завершённым, а не оборванным. На sm+ сетка
+                      уже в 5 колонок, и это же правило сбрасывается обратно
+                      в одну колонку, чтобы не растянуть последнюю вкладку
+                      там, где она и так на своём месте. */}
+                  <TabsList className="grid grid-cols-2 sm:grid-cols-5 w-full max-w-3xl mx-auto mb-8 h-auto sm:h-12 bg-muted/50 p-1 rounded-xl gap-1 [&>*:nth-child(5)]:col-span-2 sm:[&>*:nth-child(5)]:col-span-1">
                     <TabsTrigger value="create" className="rounded-lg font-semibold text-sm">
                       <Plus className="w-4 h-4 mr-2" />
                       {t('conference.page.tabCreate')}
@@ -2067,7 +2421,69 @@ export const ConferencePage = () => {
                       <LogIn className="w-4 h-4 mr-2" />
                       {t('conference.page.tabJoin')}
                     </TabsTrigger>
+                    <TabsTrigger value="today" className="rounded-lg font-semibold text-sm">
+                      <CalendarClock className="w-4 h-4 mr-2" />
+                      {t('conference.overview.tabToday', 'Сегодня')}
+                    </TabsTrigger>
+                    <TabsTrigger value="live" className="rounded-lg font-semibold text-sm">
+                      <Radio className="w-4 h-4 mr-2" />
+                      {t('conference.overview.tabLive', 'Идут сейчас')}
+                    </TabsTrigger>
+                    <TabsTrigger value="history" className="rounded-lg font-semibold text-sm">
+                      <History className="w-4 h-4 mr-2" />
+                      {t('conference.overview.tabHistory', 'История')}
+                    </TabsTrigger>
                   </TabsList>
+
+                  <TabsContent value="today" className="space-y-6">
+                    <TodayPanel
+                      items={overview?.today ?? []}
+                      loading={overviewLoading}
+                      failed={Boolean(overviewError)}
+                    />
+                  </TabsContent>
+
+                  <TabsContent value="live" className="space-y-6">
+                    <LivePanel
+                      items={overview?.active ?? []}
+                      loading={overviewLoading}
+                      failed={Boolean(overviewError)}
+                    />
+                  </TabsContent>
+
+                  {/* Здесь намеренно только несколько последних встреч со
+                      ссылкой на полную страницу: поиск, фильтры и постраничка
+                      живут там, и переносить их сюда значило бы держать две
+                      копии одного экрана. */}
+                  <TabsContent value="history" className="space-y-6">
+                    {recentLoading ? (
+                      <div className="space-y-3">
+                        {Array.from({ length: 3 }).map((_, index) => (
+                          <Skeleton key={index} className="h-24 w-full rounded-lg" />
+                        ))}
+                      </div>
+                    ) : recentSessions.length > 0 ? (
+                      <ul className="space-y-3">
+                        {recentSessions.map((session) => (
+                          <SessionRow key={session.id} session={session} />
+                        ))}
+                      </ul>
+                    ) : !recentError && (
+                      <div className="rounded-lg border border-dashed p-12 text-center">
+                        <History className="mx-auto h-10 w-10 text-muted-foreground/50" />
+                        <p className="mt-4 text-muted-foreground">
+                          {t('conference.history.empty', 'Встреч пока не было')}
+                        </p>
+                      </div>
+                    )}
+                    <div className="text-center">
+                      <Button asChild variant="outline" className="rounded-xl">
+                        <Link to="/conference/history">
+                          {t('conference.overview.openFullHistory', 'Вся история')}
+                        </Link>
+                      </Button>
+                    </div>
+                  </TabsContent>
 
                   {/* Create Room Tab Content */}
                   <TabsContent value="create" className="space-y-6">
@@ -2141,11 +2557,78 @@ export const ConferencePage = () => {
           )}
 
           {/* STATE B: ROOM IS SELECTED (PRE-CALL MEDIA & DEVICE CHECK LOBBY) */}
-          {isRoomSelected && (
+          {/* Гостю лобби не показываем вовсе: он уже назвался на странице
+              приглашения, а комната ожидания хозяина физически недоступна —
+              её настройки лежат в localStorage чужого браузера. Поэтому
+              вместо проверки камеры/микрофона и повторного «Войти» гость
+              сразу видит статус автовхода (эффект ниже). */}
+          {isRoomSelected && (isGuest ? (
+            <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
+              {/* Пока guestLocaleReady === false, язык приглашения ещё
+                  переключается (см. эффект выше) — вместо текста статуса
+                  здесь нарочно только визуальный индикатор без единого
+                  слова, ни на одном языке: иначе мигание текста, которое
+                  убрали на странице входа, просто переехало бы сюда. Сам
+                  вход в звонок (attemptGuestAutoJoin) от этого флага не
+                  зависит и продолжается своим чередом. */}
+              {guestLocaleReady && guestAutoJoinFailed ? (
+                <>
+                  <div className="w-16 h-16 rounded-full bg-rose-500/10 flex items-center justify-center">
+                    <ShieldAlert className="w-8 h-8 text-rose-500" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-base font-semibold text-foreground">{t('conference.page.guestAutoJoinFailedTitle')}</p>
+                    <p className="text-sm text-muted-foreground max-w-sm">{t('conference.page.guestAutoJoinFailedHint')}</p>
+                  </div>
+                  {/* disabled — видимая сторона защиты от двойного клика;
+                      настоящий guard синхронный и лежит в attemptGuestAutoJoin
+                      (guestJoinInFlight), потому что state обновляется только
+                      к следующему рендеру и клик между кликом и перерисовкой
+                      он один не остановит. */}
+                  <Button
+                    onClick={attemptGuestAutoJoin}
+                    disabled={guestJoinPending}
+                    size="lg"
+                    className="rounded-xl font-bold px-8"
+                  >
+                    {t('conference.page.retryJoin')}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center animate-pulse">
+                    <LogIn className="w-8 h-8 text-primary" />
+                  </div>
+                  {guestLocaleReady && (
+                    <p className="text-base font-semibold text-foreground">{t('conference.page.guestAutoJoining')}</p>
+                  )}
+                </>
+              )}
+            </div>
+          ) : (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              
+
               {/* Left Side: Live Media Preview */}
               <div className="lg:col-span-7 flex flex-col gap-4">
+                {/* Название встречи — выше карточки предпросмотра камеры
+                    (требование заказчика). Placeholder — ТО ЖЕ САМОЕ
+                    автоназвание, что уйдёт на сервер, если поле оставить
+                    пустым: подсказка обязана совпадать с фактическим
+                    результатом, иначе она врёт. */}
+                <div className="p-3.5 bg-background/60 rounded-xl border border-border space-y-2">
+                  <Label htmlFor="conference-meeting-title" className="text-xs font-bold flex items-center gap-1">
+                    <Sparkles className="w-3.5 h-3.5" /> {t('conference.page.meetingTitleLabel')}
+                  </Label>
+                  <Input
+                    id="conference-meeting-title"
+                    value={meetingTitleInput}
+                    onChange={(e) => setMeetingTitleInput(e.target.value)}
+                    placeholder={autoMeetingTitle}
+                    maxLength={255}
+                    className="h-10 bg-background border-border text-sm"
+                  />
+                </div>
+
                 <Card className="glass shadow-elevated border-white/10 dark:bg-zinc-950/60 rounded-3xl overflow-hidden backdrop-blur-xl">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-lg font-bold flex items-center justify-between">
@@ -2308,14 +2791,22 @@ export const ConferencePage = () => {
                       </div>
                       {/* Диктовать идентификатор больше не нужно — и, главное,
                           внешнего участника иначе не позвать вовсе. */}
-                      <Button
-                        variant="secondary"
-                        className="rounded-xl"
-                        onClick={() => setInviteOpen(true)}
-                      >
-                        <Link2 className="mr-2 h-4 w-4" />
-                        {t('conference.page.inviteByLink')}
-                      </Button>
+                      {/* Гостю кнопка не нужна и не работает: его токен
+                          (token_type="guest") закрывает всё API платформы,
+                          включая ручку создания приглашений, — рабочая
+                          лобби-ветка и так не рендерится для гостя, но
+                          проверка оставлена рядом с кнопкой на случай,
+                          если её когда-нибудь вынесут в общий блок. */}
+                      {!isGuest && (
+                        <Button
+                          variant="secondary"
+                          className="rounded-xl"
+                          onClick={() => setInviteOpen(true)}
+                        >
+                          <Link2 className="mr-2 h-4 w-4" />
+                          {t('conference.page.inviteByLink')}
+                        </Button>
+                      )}
                     </div>
 
                     {/* Room Active Settings Pills Box */}
@@ -2381,10 +2872,12 @@ export const ConferencePage = () => {
                     {/* Action buttons */}
                     <div className="flex flex-col gap-3">
                       <Button
-                        onClick={handleJoin}
+                        onClick={handleJoinClick}
+                        disabled={staffJoinPending}
                         size="lg"
                         className="w-full text-base sm:text-lg h-14 sm:h-16 font-bold shadow-xl rounded-xl btn-primary shadow-primary/25 leading-snug whitespace-normal px-4 py-2"
                       >
+                        {staffJoinPending && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
                         {t('conference.page.joinConference')}
                       </Button>
                       <Button
@@ -2401,7 +2894,7 @@ export const ConferencePage = () => {
               </div>
 
             </div>
-          )}
+          ))}
 
           {/* Deep Room Settings Dialog */}
           <Dialog open={showSettingsModal} onOpenChange={setShowSettingsModal}>
