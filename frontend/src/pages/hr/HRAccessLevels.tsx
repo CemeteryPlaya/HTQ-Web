@@ -16,6 +16,7 @@ import {
   Lock,
 } from 'lucide-react';
 import api from '@/api/client';
+import { useHRLevel } from '@/hooks/useHRLevel';
 import HRLayout from '@/components/hr/HRLayout';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -43,18 +44,6 @@ interface Employee {
   position_id: number;
   department: { id: number; name: string; path: string } | null;
   position: { id: number; title: string } | null;
-}
-
-interface HRLevelResponse {
-  level: DeptLevel;
-  scope_department_id: number | null;
-  can_read_all: boolean;
-  can_write_basic: boolean;
-  can_create_employee: boolean;
-  can_transfer_employee: boolean;
-  can_delete_employee: boolean;
-  can_list_user_options: boolean;
-  can_manage_user_options: boolean;
 }
 
 /* ─── Level config ─────────────────────────────────────────────────────── */
@@ -387,12 +376,10 @@ export default function HRAccessLevels() {
   const [search, setSearch] = useState('');
   const [filterLevel, setFilterLevel] = useState<DeptLevel | 'all'>('all');
 
-  const { data: myLevel } = useQuery<HRLevelResponse>({
-    queryKey: ['hr-level'],
-    queryFn: async () => (await api.get<HRLevelResponse>('hr/v1/employees/hr-level/')).data,
-    staleTime: 5 * 60 * 1000,
-    retry: false,
-  });
+  // Задача 8 блока I: свой уровень читаем через useHRLevel (права из
+  // /access/v1/me), а не отдельным запросом к hr/v1/employees/hr-level/ —
+  // эта ручка больше не должна иметь вызывающих на фронте.
+  const hrLevel = useHRLevel();
 
   const { data: employees = [], isLoading } = useQuery<Employee[]>({
     queryKey: ['hr-employees-all-levels'],
@@ -468,25 +455,24 @@ export default function HRAccessLevels() {
         </div>
 
         {/* My access */}
-        {myLevel && (
+        {!hrLevel.isLoading && (
           <div className="rounded-xl border bg-card p-4">
             <div className="flex items-center gap-3">
               <Users className="h-5 w-5 text-muted-foreground" />
               <span className="text-sm font-medium">{t('hr.accessLevels.yourLevel')}</span>
-              <LevelBadge level={myLevel.level} />
+              <LevelBadge level={hrLevel.level} />
             </div>
-            {myLevel.level && (
+            {hrLevel.level && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {[
-                  { key: 'can_read_all', label: t('hr.accessLevels.flags.readAll') },
-                  { key: 'can_write_basic', label: t('hr.accessLevels.flags.basicEdits') },
-                  { key: 'can_create_employee', label: t('hr.accessLevels.flags.create') },
-                  { key: 'can_transfer_employee', label: t('hr.accessLevels.flags.transfer') },
-                  { key: 'can_delete_employee', label: t('hr.accessLevels.flags.delete') },
-                  { key: 'can_list_user_options', label: t('hr.accessLevels.flags.viewAccounts') },
-                  { key: 'can_manage_user_options', label: t('hr.accessLevels.flags.manageAccounts') },
-                ].map(({ key, label }) => {
-                  const has = myLevel[key as keyof HRLevelResponse] as boolean;
+                  { key: 'can_read_all', has: hrLevel.canReadAll, label: t('hr.accessLevels.flags.readAll') },
+                  { key: 'can_write_basic', has: hrLevel.canWriteBasic, label: t('hr.accessLevels.flags.basicEdits') },
+                  { key: 'can_create_employee', has: hrLevel.canCreateEmployee, label: t('hr.accessLevels.flags.create') },
+                  { key: 'can_transfer_employee', has: hrLevel.canTransferEmployee, label: t('hr.accessLevels.flags.transfer') },
+                  { key: 'can_delete_employee', has: hrLevel.canDeleteEmployee, label: t('hr.accessLevels.flags.delete') },
+                  { key: 'can_list_user_options', has: hrLevel.canListUserOptions, label: t('hr.accessLevels.flags.viewAccounts') },
+                  { key: 'can_manage_user_options', has: hrLevel.canManageUserOptions, label: t('hr.accessLevels.flags.manageAccounts') },
+                ].map(({ key, has, label }) => {
                   return (
                     <span
                       key={key}
