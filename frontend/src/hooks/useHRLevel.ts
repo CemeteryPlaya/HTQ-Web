@@ -59,20 +59,24 @@ interface NodeFlags {
  * `backend/apps/hr/legacy_roles.py::KEY_TO_NODE` — второе соответствие
  * здесь не изобретается.
  *
- * Ключи трёх аппки `contracts` (`contracts.advance_payment.record_payment`,
- * `contracts.accountable_funds_request.mark_paid`,
- * `contracts.contract_payment.record_payment` — см.
- * `backend/apps/contracts/services/*.py`) сюда СОЗНАТЕЛЬНО не входят: узел
- * им не принадлежит `apps.hr`, а придумывать соответствие для чужого узла —
- * то самое, что запрещено и backend-у (`legacy_roles.py::DEFERRED_KEYS`,
- * тот же повод). `hasPerm` ниже отдаёт `false` для любого ключа вне этой
- * таблицы — то есть и для трёх ключей `contracts`, и для `hr.card.certs.*`
- * (T2-секция «СРО и охрана труда», которой в старом каталоге прав
- * (`apps/hr/views.py::_PERMISSION_CATALOG`) никогда не было — `hasPerm` для
- * неё был `false` и раньше, это не регресс). См. отчёт задачи 8 — там же
- * зафиксировано, что три ключа `contracts` являются НАСТОЯЩИМ известным
- * ограничением: без сетевого ответа старой ручки перевести их не из чего,
- * пока `apps.contracts` не заведёт собственный узел реестра.
+ * Ключ `contracts.advance_payment.record_payment` (см.
+ * `backend/apps/contracts/services/advance_payment_service.py`) сюда
+ * СОЗНАТЕЛЬНО не входит: узел им не принадлежит `apps.hr`, а придумывать
+ * соответствие для чужого узла — то самое, что запрещено и backend-у
+ * (`legacy_roles.py::DEFERRED_KEYS`, тот же повод). Два похожих на вид ключа
+ * из `apps.contracts` — `contracts.accountable_funds_request.mark_paid` и
+ * `contracts.contract_payment.record_payment` — здесь тоже отсутствуют, но
+ * это НЕ тот же случай: они не входят в `apps/hr/permissions.py::ALL_KEYS`
+ * вовсе (проверено чтением файла), а `resolve_hr_access` в старом коде
+ * (`apps/hr/access.py`) пересекал `Position.permissions` именно с
+ * `ALL_KEYS` (`perms = frozenset(...) & ALL_KEYS`) — то есть эти два ключа
+ * физически не могли попасть в старый ответ `permissions[]`, и `hasPerm`
+ * для них был `false` ДО этой задачи тоже. Регрессия — ровно один ключ,
+ * `contracts.advance_payment.record_payment`: `hasPerm` для него теперь
+ * всегда `false` (раньше давал `true` тому, у чьей должности он был
+ * проставлен в `Position.permissions`, минуя admin-роль в `contracts`),
+ * пока `apps.contracts` не заведёт для него собственный узел реестра. См.
+ * отчёт задачи 8, раздел «Fix round 1».
  */
 const KEY_TO_NODE: Record<string, NodeFlags> = {
   'hr.employees.view': { node: NODE_EMPLOYEES, flags: VIEW },

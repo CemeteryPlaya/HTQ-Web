@@ -455,7 +455,19 @@ export default function HRAccessLevels() {
         </div>
 
         {/* My access */}
-        {!hrLevel.isLoading && (
+        {/*
+         * Раунд правок 1 задачи 8: изначально условие было
+         * `!hrLevel.isLoading` — при сбое запроса прав (`isError === true`,
+         * `level === null`) блок всё равно рендерился и `LevelBadge(null)`
+         * уверенно заявлял «нет доступа», хотя причина — не отсутствие
+         * прав, а неудача загрузки (та самая путаница, ради недопущения
+         * которой в usePermissions/useHRLevel заведён отдельный признак
+         * isError, см. докстринг usePermissions). Раньше, на старой сетевой
+         * ручке, сбой запроса означал `myLevel === undefined`, и блок молча
+         * не показывался вовсе — это и есть верное поведение при ошибке;
+         * `isError` восстанавливает его.
+         */}
+        {!hrLevel.isLoading && !hrLevel.isError && (
           <div className="rounded-xl border bg-card p-4">
             <div className="flex items-center gap-3">
               <Users className="h-5 w-5 text-muted-foreground" />

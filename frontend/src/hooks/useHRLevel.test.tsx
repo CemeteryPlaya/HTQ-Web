@@ -161,12 +161,12 @@ describe('useHRLevel', () => {
   });
 
   it('hasPerm отдаёт false для ключа, узел которого не принадлежит hr', async () => {
-    // contracts.advance_payment.record_payment и его соседи по apps.contracts
-    // сознательно не переведены — тот же повод, по которому backend
-    // (apps/hr/legacy_roles.py::DEFERRED_KEYS) не мапит его сам: узел этой
-    // области владеет apps.contracts, а не apps.hr. Даже при максимальной
-    // глубине на hr этот ключ обязан остаться false, а не превратиться в
-    // «пусти всех» по ошибке маппинга.
+    // contracts.advance_payment.record_payment сознательно не переведён —
+    // тот же повод, по которому backend (apps/hr/legacy_roles.py::
+    // DEFERRED_KEYS) не мапит его сам: узел этой области владеет
+    // apps.contracts, а не apps.hr. Даже при максимальной глубине на hr этот
+    // ключ обязан остаться false, а не превратиться в «пусти всех» по
+    // ошибке маппинга.
     getMe.mockResolvedValue(baseMe({
       permissions: { hr: { level: 'admin', scope: { kind: 'company', id: null } } },
       depth: { hr: ['view', 'create', 'edit', 'delete'] },
