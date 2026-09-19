@@ -245,9 +245,15 @@ def test_child_subdomain_is_forbidden_even_with_elevated_access(client, two_comp
 
 @pytest.mark.django_db(transaction=True)
 def test_plain_user_is_forbidden(client, two_companies):
-    """Обычный токен без управленческих флагов — 403 ещё до проверки вида
-    компании (та же ``PermissionDenied`` → ``"Forbidden"``, что у отчётов по
-    персоналу), сводка сервиса вообще не вызывается."""
+    """Обычный токен без управленческих флагов и без единой роли — 403.
+
+    Блок I, задача 7: отказывает ГЕЙТ МОДУЛЯ (``module="tasks",
+    level="admin"`` в декораторе ``holding_projects``), а не внутренняя
+    ``PermissionDenied`` — ту строку тот же коммит убрал из вьюхи (см.
+    докстринг ``holding_projects`` в ``views.py``). Ответ — тот же самый
+    конверт ``{"detail": "Forbidden"}`` (``htqweb/http.py`` отвечает им
+    ОБОИМ путям одинаково), поэтому проверка ниже не различает, КАКОЙ слой
+    отказал, — сводка сервиса в любом случае не вызывается."""
     resp = client.get(BASE, **headers(HOLDING_SLUG, token(company=HOLDING_SLUG)))
     assert resp.status_code == 403
     assert resp.json()["detail"] == "Forbidden"

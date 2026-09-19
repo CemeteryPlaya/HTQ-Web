@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from django.core.exceptions import PermissionDenied
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.http import HttpResponse
 from django.utils import timezone
 
@@ -1270,13 +1270,7 @@ def _list_engagements(request):
           status=201, admin=True, module="tasks", level="admin")
 def _create_engagement(request, data: schemas.ContractorEngagementCreate):
     try:
-        # atomic() — same unguarded uq_contractor_engagement collision as
-        # ``_create_project``'s comment describes; the original left this
-        # one an unhandled 500 too (see ``test_engagement_is_unique_per_
-        # contractor_project_site``), and the savepoint is what keeps that
-        # 500 an actual enveloped response instead of a bare crash.
-        with transaction.atomic():
-            row = contractor_service.create_engagement(data.model_dump())
+        row = contractor_service.create_engagement(data.model_dump())
     except ValueError as exc:
         return json_error(str(exc), 400)
     return schemas.ContractorEngagementResponse.model_validate(
@@ -1340,12 +1334,9 @@ def _list_sites(request):
 
 @api_view(methods=("POST",), body=schemas.SiteCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_site(request, data: schemas.SiteCreate):
-    # See the comment on ``_create_project`` — same unguarded unique-name
-    # collision, same fix.
-    with transaction.atomic():
-        return schemas.SiteResponse.model_validate(
-            site_service.build_response(site_service.create_site(data.model_dump()))
-        )
+    return schemas.SiteResponse.model_validate(
+        site_service.build_response(site_service.create_site(data.model_dump()))
+    )
 
 
 def sites_collection(request):
@@ -1428,15 +1419,7 @@ def _list_site_blocks(request, site_id: int):
 def _create_site_block(request, site_id: int, data: schemas.SiteBlockCreate):
     site_service.get_site(site_id)
     try:
-        # atomic(): a caught IntegrityError still leaves the connection
-        # refusing further statements until something rolls back — see the
-        # comment on ``_create_project``. Here that would surface as the
-        # NEXT query in this request (the 409 response is built and
-        # returned fine, but ``CompanyContextMiddleware``'s ``finally``
-        # resets ``search_path`` afterwards and that query is what actually
-        # blows up) turning this 409 into an un-enveloped 500.
-        with transaction.atomic():
-            block = block_service.create_block(site_id, data.model_dump())
+        block = block_service.create_block(site_id, data.model_dump())
     except IntegrityError:
         # uq_site_block_name / uq_site_block_code: «блок 1» на этой площадке
         # уже есть. 409, а не 500 — запрос корректен, конфликтует состояние.
@@ -1574,20 +1557,8 @@ def _list_projects(request):
 
 @api_view(methods=("POST",), body=schemas.ProjectCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_project(request, data: schemas.ProjectCreate):
-    # ``transaction.atomic()`` — not for the 500 itself (the original had no
-    # 409 branch for a duplicate name either, see ``test_project_name_must_
-    # be_unique``), but because a raw ``IntegrityError`` surfacing mid-atomic
-    # leaves Postgres refusing every further statement on this connection
-    # until rollback. Outside this savepoint that includes the ``SET
-    # search_path`` ``CompanyContextMiddleware`` issues in its ``finally`` on
-    # the way out — so the intended, enveloped 500 response never left this
-    # process; the middleware's own cleanup query died with
-    # ``TransactionManagementError`` first. A bare ``atomic()`` block turns
-    # the failed insert into a savepoint rollback instead, which leaves the
-    # connection usable again for that cleanup.
-    with transaction.atomic():
-        return project_service.build_response(project_service.create_project(
-            data.model_dump(), creator_id=request.token.user_id))
+    return project_service.build_response(project_service.create_project(
+        data.model_dump(), creator_id=request.token.user_id))
 
 
 def projects_collection(request):
@@ -1687,12 +1658,8 @@ def _list_roadmaps(request):
 @api_view(methods=("POST",), body=schemas.RoadmapCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_roadmap(request, data: schemas.RoadmapCreate):
     try:
-        # atomic() — see the comment on ``_create_site_block``'s try block:
-        # without it, catching the IntegrityError still leaves this
-        # connection unusable for the request's remaining queries.
-        with transaction.atomic():
-            roadmap = roadmap_service.create_roadmap(
-                data.model_dump(), creator_id=request.token.user_id)
+        roadmap = roadmap_service.create_roadmap(
+            data.model_dump(), creator_id=request.token.user_id)
     except ValueError as exc:
         # Блок не из проекта / несуществующая ссылка — 400, как у задач.
         return json_error(str(exc), 400)
@@ -1973,9 +1940,22 @@ def requirement_detail(request, requirement_id: int):
 #
 # Every route is caller-scoped; there is no path or body parameter that
 # names a recipient, so one user can never read or mutate another's feed.
+#
+# Раунд правок 1 (ревью): НЕ гейтированы ``module="tasks"`` — эти шесть ручек
+# несут не только уведомления домена задач. Лента смонтирована в
+# ``frontend/src/App.tsx`` для КАЖДОГО вошедшего на КАЖДОЙ странице
+# (колокольчик в шапке) и несёт уведомления мессенджера, конференций и
+# календаря тоже — платформенная лента, физически живущая в таблице этого
+# домена, а не «уведомления про задачи». Держатель роли без единого узла
+# ``tasks.*`` (например, роль только на ``messenger``) обязан видеть и
+# гасить СВОИ уведомления оттуда — гейт `module="tasks"` отрезал бы ему
+# именно это. Ровно определение причины ``self`` реестра
+# ``apps.access.self_service`` (сравни с ``users._get_profile``/
+# ``hr.my_employee`` — тоже "self", тоже без параметра-подмены получателя):
+# ``request.token.user_id`` — единственный источник "чей" во всех шести.
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",), module="tasks", level="read")
+@api_view(methods=("GET",))
 def notifications_collection(request):
     try:
         limit = _int_param(request, "limit", 50, minimum=1, maximum=200)
@@ -1984,7 +1964,7 @@ def notifications_collection(request):
     return notification_service.latest(request.token.user_id, limit)
 
 
-@api_view(methods=("GET",), module="tasks", level="read")
+@api_view(methods=("GET",))
 def notification_history(request):
     try:
         page = _int_param(request, "page", 1, minimum=1)
@@ -2001,25 +1981,25 @@ def notification_history(request):
     )
 
 
-@api_view(methods=("POST",), status=204, module="tasks", level="write")
+@api_view(methods=("POST",), status=204)
 def notification_mark_read(request, notification_id: int):
     notification_service.mark_read(notification_id, request.token.user_id)
     return _no_content()
 
 
-@api_view(methods=("POST",), status=204, module="tasks", level="write")
+@api_view(methods=("POST",), status=204)
 def notification_mark_unread(request, notification_id: int):
     notification_service.mark_unread(notification_id, request.token.user_id)
     return _no_content()
 
 
-@api_view(methods=("POST",), status=204, module="tasks", level="write")
+@api_view(methods=("POST",), status=204)
 def notifications_mark_all_read(request):
     notification_service.mark_all_read(request.token.user_id)
     return _no_content()
 
 
-@api_view(methods=("DELETE",), status=204, module="tasks", level="write")
+@api_view(methods=("DELETE",), status=204)
 def notification_detail(request, notification_id: int):
     notification_service.delete(notification_id, request.token.user_id)
     return _no_content()

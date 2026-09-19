@@ -73,9 +73,17 @@ def test_blocks_are_listed_in_declared_order(site):
     assert [b["name"] for b in resp.json()] == ["Блок 1", "Блок 2", "Блок 3"]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_block_name_is_unique_within_a_site_only(site):
-    """«Блок 1» есть на каждой площадке — это разные блоки."""
+    """«Блок 1» есть на каждой площадке — это разные блоки.
+
+    ``transaction=True`` — тестовый феномен, не боевой путь: подробности —
+    ``test_projects_api.py::test_project_name_must_be_unique``. Здесь
+    409-ветка (``_create_site_block`` ловит ``IntegrityError`` сама) всё
+    равно попадает в ту же ловушку — ``CompanyContextMiddleware`` сбрасывает
+    ``search_path`` уже ПОСЛЕ того, как 409 построен, и именно этот сброс
+    падает внутри обычного ``atomic()``-теста.
+    """
     other = Site.objects.create(name="Алга")
     hdr = auth(admin_token())
     assert post_json(Client(), f"{BASE}/sites/{site.id}/blocks",

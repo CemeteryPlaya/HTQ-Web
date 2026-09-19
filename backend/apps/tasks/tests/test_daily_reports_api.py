@@ -19,7 +19,7 @@ from django.test import Client
 
 from apps.tasks.models import (DailyReport, DailyReportRevision, Project,
                                ProjectSite, Roadmap, Site, SiteBlock, Task,
-                               TaskVolume, WorkVolumeType)
+                               TaskVolume, TaskWatcher, WorkVolumeType)
 
 from .helpers import (BASE, admin_token, auth, patch_json, post_json, token)
 
@@ -211,14 +211,32 @@ def test_deleted_report_no_longer_counts_as_fact(task):
 @pytest.mark.django_db
 def test_a_stranger_cannot_edit_someone_elses_report(task):
     """Завести свой отчёт может участник; править чужой — только автор,
-    супервайзер задачи или админ."""
+    супервайзер задачи или админ.
+
+    Раунд правок 1 (ревью): ``OTHER`` заведён наблюдателем задачи
+    (``TaskWatcher``), а не полным чужаком, — НАРОЧНО. Полный чужак не
+    виден задаче вовсе (``task_service._participant_q`` — ни assignee, ни
+    reporter, ни supervisor, ни watcher), и ``load_for_action`` внутри
+    ``_report_for_write`` отдал бы 404 раньше, чем код вообще дошёл бы до
+    строки, которую этот тест должен стеречь («автор/супервайзер/админ»,
+    ``_report_for_write`` дальше по функции). Наблюдатель — участник
+    (``_participant_q`` его включает, видимость есть), но НЕ входит в
+    список, которому позволена правка (``can_edit``/ручная проверка в
+    ``_report_for_write`` смотрят только на ``author_id``/``supervisor_id``/
+    ``is_elevated`` — наблюдателя там нет), поэтому запрос доходит именно до
+    проверки владения и получает от неё честный 403, а не 404 от видимости
+    и не 403 от гейта модуля (``OTHER`` держит роль ``tasks``/``write`` —
+    см. ``helpers.py::_ensure_company_and_roles`` — гейт модуля этот запрос
+    пропускает).
+    """
+    TaskWatcher.objects.create(task=task, user_id=OTHER)
     report_id = post_json(Client(), f"{BASE}/tasks/{task.id}/daily-reports",
                           {"work_date": "2026-06-05", "quantity": "180"},
                           **auth()).json()["id"]
     resp = patch_json(Client(), f"{BASE}/daily-reports/{report_id}",
                       {"quantity": "1"}, **auth(token(user_id=OTHER,
                                                       sub=str(OTHER))))
-    assert resp.status_code in (403, 404)
+    assert resp.status_code == 403
 
 
 @pytest.mark.django_db

@@ -6,9 +6,13 @@ test_module_gate``/``apps.hr.tests.test_module_gate`` (те же приёмы:
 звено: ``tasks`` — четвёртая и последняя аппка блока I, и с её включением в
 ``apps.access.self_service.TRANSLATED_APPS`` сторож
 ``apps/access/tests/test_gate.py::test_gate_covers_every_handle_of_
-translated_apps`` начинает требовать ``module=`` у ВСЕХ 128 её ручек
-(``SELF_SERVICE["tasks"]`` — пустой словарь: у домена задач нет
-самообслуживания в принципе, см. докстринг ``self_service``).
+translated_apps`` начинает требовать ``module=`` у 122 из её 128 ручек.
+Шесть исключений (раунд правок 1) — ``/notifications/*``: платформенная
+лента (колокольчик в шапке, несёт уведомления мессенджера/конференций/
+календаря тоже, не только задач), защищённая строго ``request.token.
+user_id`` без единого параметра-подмены — ``self`` в реестре
+``SELF_SERVICE["tasks"]``, тот же принцип, что у ``users._get_profile``/
+``hr.my_employee`` (см. докстринг ``self_service``).
 
 Отличие от ``hr``: у ``tasks`` есть засеянная роль рядового сотрудника
 (``employee-basic``, ``access/migrations/0004_seed_employee_role.py``) с
@@ -388,14 +392,48 @@ def test_staff_without_roles_cannot_read_the_holding_summary(client, holding_com
     assert resp.status_code == 403
 
 
+# ── уведомления: платформенная лента, self, не module="tasks" (раунд 1) ───
+
+
+@pytest.mark.django_db
+def test_holder_of_an_unrelated_role_reads_and_marks_their_own_notifications(client, company_row):
+    """Держатель роли БЕЗ единого узла ``tasks.*`` (здесь — только
+    ``messenger``) обязан по-прежнему видеть и гасить СВОИ уведомления:
+    колокольчик в шапке платформенный, не привязан к домену задач (см.
+    комментарий над секцией ``Notifications`` в ``views.py`` и запись
+    ``SELF_SERVICE["tasks"]`` — причина ``self``). До раунда правок 1 эти
+    шесть ручек стояли под ``module="tasks", level=…`` и отказали бы этому
+    вызывающему 403 — регресс, пойманный ревью, не тестами (``employee-
+    basic`` в остальных тестах файла несёт ``tasks`` = write и не ловит
+    сужение до чужого домена).
+    """
+    from apps.tasks.models import Notification
+
+    user = _mk("messenger-only")
+    assign(company_row, user.id, "messenger", "write")
+    head = headers(user, company_row)
+
+    notification = Notification.objects.create(
+        recipient_id=user.id, verb="task_assigned:TASK-1")
+
+    listed = client.get(f"{BASE}/notifications/", **head)
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()] == [notification.id]
+
+    marked = client.post(
+        f"{BASE}/notifications/{notification.id}/mark_read/", **head)
+    assert marked.status_code == 204
+
+
 # ── tasks в TRANSLATED_APPS (финальный шаг задачи 7) ──────────────────────
 
 
 def test_tasks_is_in_translated_apps():
     """Последний шаг задачи 7: как только ``tasks`` попадает в
     ``TRANSLATED_APPS``, сторож ``apps.access.tests.test_gate`` начинает
-    требовать ``module=`` у КАЖДОЙ из её 128 ручек (``SELF_SERVICE["tasks"]``
-    пуст — исключений нет) — это и есть главная проверка «ничего не забыто»."""
+    требовать ``module=`` у 122 из 128 её ручек (``SELF_SERVICE["tasks"]``
+    несёт шесть исключений ``self`` — уведомления, раунд правок 1) — это и
+    есть главная проверка «ничего не забыто»."""
     from apps.access.self_service import TRANSLATED_APPS
 
     assert "tasks" in TRANSLATED_APPS

@@ -520,8 +520,10 @@ def test_engagement_cannot_be_stripped_of_both_targets():
     assert engagement.site_id == site.id
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_engagement_is_unique_per_contractor_project_site():
+    """``transaction=True`` — тестовый феномен, не боевой путь: подробности —
+    ``test_projects_api.py::test_project_name_must_be_unique``."""
     contractor = _contractor()
     site = Site.objects.create(name="Алга")
     ContractorEngagement.objects.create(contractor=contractor, site=site)

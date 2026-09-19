@@ -106,6 +106,17 @@ def _ensure_company_and_roles() -> None:
       existing tests that use ``admin_token()`` to reach an
       ``admin=True``-gated write need an explicit role, the same fix
       ``apps/hr/tests/test_positions_api.py::admin_auth`` applied in task 5.
+    * ``user_id=555`` (the "some other, unrelated user" id — ``OTHER`` in
+      ``test_daily_reports_api.py``) gets ``"tasks"`` at ``"write"`` too.
+      Round 1 review, proven experimentally: without this, ``test_a_
+      stranger_cannot_edit_someone_elses_report`` authenticates as 555,
+      finds no role at all, and gets its expected 403 from the MODULE gate
+      — the ownership check inside ``_report_for_write`` (author/
+      supervisor/admin) it means to exercise never runs. Confirmed by
+      temporarily neutering that check (``if False and not (...)``): the
+      test stayed green. Granting 555 the SAME level as the default caller
+      lets it clear the gate and land on the ownership check instead,
+      which is what the test's name and docstring actually claim to cover.
     """
     from apps.access.tests.helpers import assign
     from apps.companies.models import Company, CompanyKind
@@ -115,6 +126,7 @@ def _ensure_company_and_roles() -> None:
                                 "kind": CompanyKind.SERVICE})
     assign(COMPANY, 7, "tasks", "write")
     assign(COMPANY, 9, "tasks", "full")
+    assign(COMPANY, 555, "tasks", "write")
 
 
 def auth(tok: str | None = None) -> dict:

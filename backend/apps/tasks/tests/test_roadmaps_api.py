@@ -123,8 +123,10 @@ def test_roadmap_response_carries_the_site_derived_from_the_block(roadmap, site)
     assert (body["site_id"], body["site_name"]) == (site.id, "Сазаган")
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_roadmap_name_is_unique_within_project_and_block(project, block, roadmap):
+    """``transaction=True`` — тестовый феномен, не боевой путь: подробности —
+    ``test_projects_api.py::test_project_name_must_be_unique``."""
     resp = post_json(Client(), f"{BASE}/roadmaps/",
                      {"project_id": project.id, "site_block_id": block.id,
                       "name": roadmap.name}, **auth(admin_token()))
