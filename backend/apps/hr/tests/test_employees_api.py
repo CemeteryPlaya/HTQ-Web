@@ -1175,19 +1175,21 @@ def creator_no_financial(db, hr_dep, company_row):
     само создание сотрудника.
 
     До задачи 9 блока I это была явная матрица ``Position.permissions``
-    (``hr.employees.*`` без ``hr.card.financial.edit``) под ролью
-    ``hr-middle`` для гейта. Теперь — ОДНА синтетическая роль: ``hr.employees:
-    full`` (агрегат модуля ``hr`` — ``write``, гейт проходит) плюс ЯВНЫЙ
-    запрет ``hr.employees.salary: none``. Запрет нужен, потому что узел без
-    своей строки наследует глубину предка (``resolve._nearest``) — без него
-    ``hr.employees: full`` дал бы и финансы; и он обязан лежать в ТОЙ ЖЕ
-    роли (см. ``_grant_custom_role``).
+    (``hr.employees.view/view.all/create/edit`` без ``hr.card.financial.edit``
+    и без ``hr.employees.delete``) под ролью ``hr-middle`` для гейта. Теперь
+    — ОДНА синтетическая роль: ``hr.employees: edit`` (пресет ``edit`` =
+    ``{view, create, edit}`` — ровно старый набор, без delete; агрегат модуля
+    ``hr`` — ``write``, гейт проходит) плюс ЯВНЫЙ запрет ``hr.employees.
+    salary: none``. Запрет нужен, потому что узел без своей строки наследует
+    глубину предка (``resolve._nearest``) — без него ``hr.employees: edit``
+    дал бы и финансы; и он обязан лежать в ТОЙ ЖЕ роли (см.
+    ``_grant_custom_role``).
     """
     pos = _pos("Custom Recruiter", hr_dep, weight=250)
     user, headers = _user_auth("create-no-fin@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "create-no-fin@htq.test", user_id=user.id)
     _grant_custom_role(company_row, user.id, "t-creator-no-financial",
-                       {"hr.employees": "full", "hr.employees.salary": "none"})
+                       {"hr.employees": "edit", "hr.employees.salary": "none"})
     return emp, headers
 
 

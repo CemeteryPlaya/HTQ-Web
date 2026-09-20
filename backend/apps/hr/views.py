@@ -206,10 +206,14 @@ def department_employees(request, department_id: int):
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Статический каталог — отдаётся UI, чтобы админы могли собрать матрицу прав
-# не хардкодя строки во фронте. Ключи авторитетны и проверяются в
-# app.auth.hr_access исходника (сюда ещё не перенесён — см. employees);
-# hr_level — пресет, который заполняет набор ключей. Дословный порт
-# _PERMISSION_CATALOG из роутера исходника.
+# должности (``PositionIn.permissions``), не хардкодя строки во фронте.
+# Дословный порт _PERMISSION_CATALOG из роутера исходника. С задачи 9 блока I
+# ключи ``hr.*`` отсюда НЕ проверяются как матрица должности: права считает
+# ``apps.hr.rbac`` по узлам ``apps.access`` (каждый ключ раскрывается в
+# узел+признаки через ``legacy_roles.KEY_TO_NODE``); ``hr_level``/
+# ``level_presets`` — UI-пресет и явный оверрайд для эвристики переноса
+# (``apps.hr.access.classify_hr_level``). Живой смысл у колонки остался
+# ровно один — ключи ``contracts.*`` (Ruling B задачи 9).
 _PERMISSION_CATALOG = {
     "hr_levels": [
         {"value": "junior", "label": "Junior", "description": "Просмотр своих данных и базовых справочников"},
@@ -3127,10 +3131,11 @@ def audit_logs(request):
 #
 # Спека: docs/superpowers/specs/2026-08-25-hr-identity-sync-design.md §10.
 #
-# Право ЧИТАТЬ очередь — кадровое (hr.identity.view). Право РЕШАТЬ кадровым не
+# Право ЧИТАТЬ очередь — кадровое (hr.identity.view — узел
+# ``hr.identity_requests``, ``rbac.NodeAccess.has``). Право РЕШАТЬ кадровым не
 # является вовсе: оно принадлежит подтверждающему (назначенный человек либо
 # руководитель отдела) и админу платформы сверх них — поэтому проверяется не
-# через HRAccess, а через identity_request_service.may_decide.
+# по узлам ``apps.hr.rbac``, а через identity_request_service.may_decide.
 
 def _identity_access(request):
     """Общий вход: разрешённый HR-скоуп (возможно пустой) + признак админа.
