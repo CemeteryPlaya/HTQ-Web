@@ -50,35 +50,6 @@ from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/hr/v1/employees"
 
-# ── Расхождения единой модели с прежней матрицей уровней (задача 9 блока I) ─
-#
-# Два маркера ниже — не «известные падения», а ЗАФИКСИРОВАННЫЕ РАСШИРЕНИЯ
-# доступа, которые единая модель даёт засеянным ролям по сравнению со старой
-# матрицей ``LEVEL_PRESETS``. Тесты под ними держат ПРЕЖНЕЕ, задуманное
-# поведение (их ассерты не менялись); ``strict=True`` — чтобы правка ролей,
-# закрывающая расширение, немедленно потребовала снять маркер. Разбор и
-# предлагаемая правка — ``task-9-report.md``, раздел «Расхождения из таблицы
-# задачи 1»; решение о правке ролей — за контроллером блока, не за этим
-# файлом.
-#
-# 1. ``EMPLOYEES_TRANSFER`` → ``("hr.employees", EDIT)`` — тот же узел и тот же
-#    признак, что у ``EMPLOYEES_EDIT`` (``legacy_roles.KEY_TO_NODE``, решение
-#    2 задачи 1). Кто прошёл проверку «может править», тот проходит и
-#    «может переводить»: middle переводит и увольняет, старая матрица давала
-#    это с senior.
-# 2. Узлы ``hr.employees.{salary,passport,family,identity}`` в засеянных
-#    ролях (``access/migrations/0005``) явных строк не имеют и НАСЛЕДУЮТ
-#    глубину ``hr.employees`` (``resolve._nearest``): junior видит финансы/
-#    личные данные/семью, middle их правит и пишет идентичность в обход
-#    подтверждения (``hr.identity.force`` — по замыслу не входил ни в один
-#    уровень, ``permissions.py``), senior/lead — тоже обход подтверждения.
-DIVERGENCE_TRANSFER = pytest.mark.xfail(strict=True, reason=(
-    "задача 9 блока I, расхождение 1: EMPLOYEES_TRANSFER → hr.employees EDIT — "
-    "совпадает с EMPLOYEES_EDIT, middle переводит; см. task-9-report.md"))
-DIVERGENCE_INHERITED_SUBNODES = pytest.mark.xfail(strict=True, reason=(
-    "задача 9 блока I, расхождение 2: hr.employees.{salary,passport,family,identity} "
-    "без явной строки наследуют глубину hr.employees; см. task-9-report.md"))
-
 
 def _dep(name, path, **kw):
     return Department.objects.create(name=name, path=path, **kw)
@@ -555,7 +526,6 @@ def test_update_ignores_none_fields(admin_auth, hr_dep):
     assert target.bio == "исходное"  # exclude_none в исходнике
 
 
-@DIVERGENCE_TRANSFER
 @pytest.mark.django_db
 def test_update_restricted_field_requires_transfer_permission(middle, other_dep):
     emp, headers = middle
@@ -569,7 +539,6 @@ def test_update_restricted_field_requires_transfer_permission(middle, other_dep)
     )
 
 
-@DIVERGENCE_TRANSFER
 @pytest.mark.django_db
 def test_update_status_to_terminated_requires_transfer_permission(middle):
     emp, headers = middle
@@ -680,7 +649,6 @@ def test_transfer_forbidden_without_any_hr_access(auth, hr_dep):
     assert resp.status_code == 403
 
 
-@DIVERGENCE_TRANSFER
 @pytest.mark.django_db
 def test_transfer_forbidden_for_middle_level(middle, other_dep):
     emp, headers = middle
@@ -1094,7 +1062,6 @@ def test_me_card_returns_full_shape_including_contacts(junior):
     assert body["pmos"] == []
 
 
-@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_me_card_t2_empty_without_any_card_permission(junior):
     """junior не несёт ни одного hr.card.* узла — t2 приходит пустым, но сам
@@ -1106,7 +1073,6 @@ def test_me_card_t2_empty_without_any_card_permission(junior):
     assert resp.json()["t2"] == {}
 
 
-@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_me_card_t2_empty_for_middle(middle):
     """После удаления секции certs у middle не остаётся ни одного hr.card.*

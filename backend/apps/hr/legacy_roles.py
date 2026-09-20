@@ -108,12 +108,18 @@ KEY_TO_NODE: dict[str, tuple[str, tuple[str, ...]]] = {
     # того же уровня (EMPLOYEES_EDIT с middle, EMPLOYEES_CREATE с senior),
     # объединение по узлу их не теряет.
     legacy.EMPLOYEES_DELETE: ("hr.employees", PURGE),
-    # ⚠️ Решение 2 (``transfer``): отдельного узла нет. Перевод сотрудника
-    # между отделами/должностями — это ИЗМЕНЕНИЕ существующей карточки
-    # (обновляется department_id/position_id уже заведённого сотрудника), а
-    # не создание нового человека, поэтому ближе к EDIT, а не к CREATE.
-    # Решение брифа принято как есть.
-    legacy.EMPLOYEES_TRANSFER: ("hr.employees", EDIT),
+    # Решение 2 задачи 1 вело ``transfer`` на ``("hr.employees", EDIT)`` —
+    # тот же узел и признак, что у ``EMPLOYEES_EDIT``, — и это оказалось
+    # расширением: старая матрица давала перевод только с senior, а по
+    # такой таблице ``has(TRANSFER) ≡ has(EDIT)`` и middle переводил бы,
+    # увольнял и менял должность (§6 отчёта задачи 9, «Расхождение 1»).
+    # Запрет задачи 1 «не выдумывать узлов» касался узлов ЧУЖОЙ аппки
+    # (``contracts``), а реестр ``hr`` — наша зона, поэтому фикс-раунд 1
+    # задачи 9 завёл под-узел ``hr.employees.transfer``
+    # (``apps/hr/access_functions.py``): senior/lead несут на нём EDIT,
+    # junior/middle — явную пустую строку (``access/migrations/0008``),
+    # иначе middle унаследовал бы EDIT от ``hr.employees``.
+    legacy.EMPLOYEES_TRANSFER: ("hr.employees.transfer", EDIT),
 
     # ── Отделы / должности / оргструктура ───────────────────────────────
     legacy.DEPARTMENTS_VIEW: ("hr.departments", VIEW),

@@ -19,6 +19,11 @@ FUNCTIONS = (
     ("hr.employees.passport", "Паспорт, ИИН, дата рождения"),
     ("hr.employees.family", "Образование, стаж, семья"),
     ("hr.employees.identity", "Имя, телефон, фото (идентичность)"),
+    # Перевод — не правка поля, а отдельное полномочие старой матрицы
+    # (``hr.employees.transfer`` — только с senior). Узел заведён фикс-раундом
+    # задачи 9 блока I, чтобы его можно было выдать или запретить отдельно
+    # от ``hr.employees: edit`` (см. ``legacy_roles.KEY_TO_NODE``).
+    ("hr.employees.transfer", "Перевод, смена должности, увольнение"),
 
     ("hr.departments", "Отделы"),
     ("hr.positions", "Должности"),

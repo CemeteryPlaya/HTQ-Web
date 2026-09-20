@@ -334,12 +334,28 @@ def page_hidden(user, route: str, company: str | None, *,
 
 def depth_map(user, company: str | None, *,
               resolution: Resolution | None = None) -> dict[str, list[str]]:
-    """Все узлы, на которых у пользователя есть хоть что-то, → список флагов.
+    """Карта «узел → флаги», из которой фронт восстанавливает ``flags_for``.
 
-    Узлы без единого флага в карту не попадают — по той же причине, по которой
-    модули со ``none`` не попадают в ``permissions_for``: отсутствие ключа и
-    есть «нет доступа», а явный пустой список заставлял бы обе стороны
-    различать два способа сказать одно и то же.
+    Контракт: фронт (``frontend/src/lib/auth/permissions.ts::depthFor``)
+    ищет узел, затем предков, и первое найденное значение — ответ, ПУСТОЙ
+    список у предка — запрет; то же правило, что у ``_nearest``. Карта
+    обязана быть такой, чтобы этот поиск по каждому узлу реестра давал ровно
+    ``flags_for(user, node)``, иначе интерфейс показывает не то, что
+    разрешит сервер.
+
+    Поэтому считается не объединение СТРОК ролей, а действующая глубина
+    каждого узла реестра (``flags_for`` — ``_nearest`` по каждой роли,
+    объединение по ролям), и в карту попадает узел, у которого она
+    ОТЛИЧАЕТСЯ от того, что фронт унаследовал бы от уже записанных предков.
+    Явный запрет под-узла при праве на предке (``hr.employees: view`` +
+    ``hr.employees.salary: {}`` — ``access/migrations/0008``) попадает в
+    карту пустым списком — единственный случай, когда пустой список несёт
+    смысл; узел без прав и без права у предков в карту не попадает, как и
+    раньше: отсутствие ключа и есть «нет доступа». Для ролей без запретов
+    карта совпадает с прежней (объединением строк).
+
+    Узлы — реестр (``registry.paths``) плюс строки ролей на путях вне
+    реестра (устаревшие узлы не должны молча выпадать из ответа).
     """
     _user_id, is_superuser = identity(user)
     if is_superuser:
@@ -349,11 +365,23 @@ def depth_map(user, company: str | None, *,
     if not res.scopes:
         return {}
 
-    merged: dict[str, frozenset[str]] = {}
-    for _role_id, nodes in res.rows.items():
-        for path, flags in nodes.items():
-            merged[path] = merged.get(path, frozenset()) | flags
-    return {path: sorted(flags) for path, flags in merged.items() if flags}
+    paths: set[str] = set(registry.paths())
+    for nodes in res.rows.values():
+        paths.update(nodes)
+
+    result: dict[str, list[str]] = {}
+    # Предки раньше потомков: предок — строгий префикс до точки, а ``.``
+    # сортируется раньше любого символа имени.
+    for path in sorted(paths):
+        effective = flags_for(user, path, company, resolution=res)
+        inherited: frozenset[str] = frozenset()
+        for ancestor in registry.ancestors(path):
+            if ancestor in result:
+                inherited = frozenset(result[ancestor])
+                break
+        if effective != inherited:
+            result[path] = sorted(effective)
+    return result
 
 
 def permissions_for(user, company: str | None, *,

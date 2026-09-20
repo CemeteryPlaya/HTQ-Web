@@ -57,11 +57,7 @@ import pytest
 from django.test import Client
 
 from apps.hr.models import Department, Employee, EmployeeCard, EmployeeGroups, Position
-from apps.hr.tests.test_employees_api import (
-    DIVERGENCE_INHERITED_SUBNODES,
-    _grant_custom_role,
-    _grant_seeded_role,
-)
+from apps.hr.tests.test_employees_api import _grant_custom_role, _grant_seeded_role
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -225,7 +221,6 @@ def test_card_t2_other_department_404_not_403(middle, other_dep):
 
 # ── GET card/t2 — полевой (секционный) гейтинг view-ключей ──────────────────
 
-@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_card_t2_get_empty_for_level_without_any_card_key(junior):
     emp, headers = junior
@@ -234,7 +229,6 @@ def test_card_t2_get_empty_for_level_without_any_card_key(junior):
     assert resp.json() == {}
 
 
-@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_card_t2_get_empty_for_middle(middle):
     """Единственной Т-2 секцией middle была certs — после её удаления у
@@ -253,7 +247,6 @@ def test_card_t2_get_shows_both_sections_for_senior(senior):
     assert set(resp.json().keys()) == {"financial", "personal"}
 
 
-@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_card_t2_get_never_leaks_field_masked_by_missing_view_key(middle):
     """Ключевой security-инвариант: секция без view-ключа ОТСУТСТВУЕТ в теле
@@ -268,7 +261,6 @@ def test_card_t2_get_never_leaks_field_masked_by_missing_view_key(middle):
 
 # ── PATCH card/t2 — полевой (секционный) гейтинг edit-ключей ────────────────
 
-@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_card_t2_patch_rejects_section_without_edit_key(middle):
     emp, headers = middle
@@ -367,7 +359,6 @@ def test_card_t2_trailing_slash_variant(admin_auth, hr_dep):
 
 # ── card/groups — единственный ключ на весь ресурс ───────────────────────────
 
-@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_card_groups_get_requires_view_key(junior):
     emp, headers = junior

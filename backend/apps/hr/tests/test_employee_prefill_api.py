@@ -29,8 +29,6 @@ from apps.mail.models import ProvisionedMailbox
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
-from apps.hr.tests.test_employees_api import DIVERGENCE_TRANSFER
-
 BASE = "/api/hr/v1/employees"
 
 
@@ -419,7 +417,6 @@ def test_apply_refuses_email_taken(admin_auth, target, hr_dep):
     assert resp.status_code == 409
 
 
-@DIVERGENCE_TRANSFER
 @pytest.mark.django_db
 def test_apply_transfer_fields_need_transfer_permission(middle, target, other_dep):
     """Префилл не должен становиться обходным путём для перевода."""

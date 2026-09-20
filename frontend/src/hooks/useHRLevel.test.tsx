@@ -146,6 +146,40 @@ describe('useHRLevel', () => {
     expect(result.current.canTransferEmployee).toBe(false);
   });
 
+  it('перевод считается по своему узлу hr.employees.transfer, а не по hr.employees', async () => {
+    // Фикс-раунд 1 задачи 9 блока I: у перевода отдельный под-узел (сервер —
+    // access/migrations/0008, hr-middle несёт на нём явный запрет). С правом
+    // править карточку, но запретом на перевод, кнопка «перевести» обязана
+    // быть недоступна — иначе интерфейс покажет то, на что сервер ответит 403.
+    getMe.mockResolvedValue(baseMe({
+      permissions: { hr: { level: 'write', scope: { kind: 'department', id: 5 } } },
+      depth: {
+        'hr.employees': ['view', 'edit'],
+        'hr.employees.transfer': [],
+      },
+    }));
+
+    const { result } = renderHook(() => useHRLevel(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.canWriteBasic).toBe(true);
+    expect(result.current.canTransferEmployee).toBe(false);
+    expect(result.current.hasPerm('hr.employees.transfer')).toBe(false);
+
+    // И наоборот: узел выдан явно (senior/lead) — перевод есть.
+    getMe.mockResolvedValue(baseMe({
+      permissions: { hr: { level: 'write', scope: { kind: 'company', id: null } } },
+      depth: {
+        'hr.employees': ['view', 'create', 'edit'],
+        'hr.employees.transfer': ['view', 'edit'],
+      },
+    }));
+    const senior = renderHook(() => useHRLevel(), { wrapper });
+    await waitFor(() => expect(senior.result.current.isLoading).toBe(false));
+    expect(senior.result.current.canTransferEmployee).toBe(true);
+    expect(senior.result.current.hasPerm('hr.employees.transfer')).toBe(true);
+  });
+
   it('hasPerm переводит старый ключ прав в узел+признаки, а не строку из ответа', async () => {
     getMe.mockResolvedValue(baseMe({
       permissions: { hr: { level: 'read', scope: { kind: 'company', id: null } } },

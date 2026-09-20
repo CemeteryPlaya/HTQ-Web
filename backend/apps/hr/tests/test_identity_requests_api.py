@@ -15,7 +15,6 @@ from apps.hr.models import (
 )
 from apps.hr.services import identity_request_service as svc
 from apps.hr.tests.conftest import auth_headers, make_user
-from apps.hr.tests.test_employees_api import DIVERGENCE_INHERITED_SUBNODES
 
 BASE = "/api/hr/v1/identity-requests"
 APPROVER = "/api/hr/v1/identity-approver/"
@@ -257,7 +256,6 @@ def test_approver_get_returns_current(lead_auth, account):
 
 # ── ответ на правку карточки ────────────────────────────────────────────────
 
-@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_update_response_says_the_change_went_to_approval(
         lead_auth, employee, approver_auth, fallback_log_mode):
@@ -314,10 +312,12 @@ def _force_auth(company_slug: str, email: str = "hr-force@htq.test"):
     без неё сотрудник другого отдела просто не находится, и тест падал бы на
     404, ничего не сказав о самом праве обхода.
 
-    ⚠️ Сегодня ``hr-middle`` и так НАСЛЕДУЕТ ``edit`` на ``hr.employees.
-    identity`` от ``hr.employees`` (расхождение 2, см. ``test_employees_
-    api.DIVERGENCE_INHERITED_SUBNODES``) — явная выдача здесь делает тест
-    независимым от этого расхождения: он проверяет право, а не наследование.
+    ``hr-middle`` несёт на ``hr.employees.identity`` явный ЗАПРЕТ
+    (``access/migrations/0008`` — раньше узел наследовал ``edit`` от
+    ``hr.employees``, фикс-раунд 1 задачи 9 это закрыл); запрет действует
+    только внутри той же роли, а признаки объединяются по всем ролям
+    вызывающего (``resolve.flags_for``), поэтому отдельная роль с ``edit``
+    на этом узле право даёт — ровно так «отдельная галка» и должна работать.
     """
     dep = Department.objects.create(name="HR-force", path="hrforce")
     pos = Position.objects.create(title="Кадровик с правом обхода", department=dep, weight=35)
@@ -386,7 +386,6 @@ def test_force_edit_leaves_other_pending_fields_alone(
     assert [f.field for f in request.fields.all()] == ["bio"]
 
 
-@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_without_the_permission_the_edit_still_goes_to_approval(
         lead_auth, employee, approver_auth, fallback_log_mode):

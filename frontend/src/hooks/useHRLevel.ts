@@ -28,6 +28,10 @@ const NODE_EMPLOYEES_IDENTITY = 'hr.employees.identity';
 const NODE_EMPLOYEES_SALARY = 'hr.employees.salary';
 const NODE_EMPLOYEES_PASSPORT = 'hr.employees.passport';
 const NODE_EMPLOYEES_FAMILY = 'hr.employees.family';
+// Перевод — отдельный под-узел (фикс-раунд 1 задачи 9 блока I): раньше ключ
+// вёл на hr.employees с EDIT и совпадал с hr.employees.edit, то есть middle
+// «переводил» по той же кнопке, что и правил, — сервер отдавал бы 403.
+const NODE_EMPLOYEES_TRANSFER = 'hr.employees.transfer';
 const NODE_DEPARTMENTS = 'hr.departments';
 const NODE_POSITIONS = 'hr.positions';
 const NODE_ORG = 'hr.org';
@@ -84,7 +88,7 @@ const KEY_TO_NODE: Record<string, NodeFlags> = {
   'hr.employees.create': { node: NODE_EMPLOYEES, flags: CREATE },
   'hr.employees.edit': { node: NODE_EMPLOYEES, flags: EDIT },
   'hr.employees.delete': { node: NODE_EMPLOYEES, flags: PURGE },
-  'hr.employees.transfer': { node: NODE_EMPLOYEES, flags: EDIT },
+  'hr.employees.transfer': { node: NODE_EMPLOYEES_TRANSFER, flags: EDIT },
 
   'hr.departments.view': { node: NODE_DEPARTMENTS, flags: VIEW },
   'hr.departments.edit': { node: NODE_DEPARTMENTS, flags: EDIT },
@@ -193,7 +197,7 @@ export function useHRLevel(_options: { enabled?: boolean } = {}) {
       canReadAll: canDo(NODE_EMPLOYEES, VIEW),
       canWriteBasic: canDo(NODE_EMPLOYEES, EDIT),
       canCreateEmployee: canDo(NODE_EMPLOYEES, CREATE),
-      canTransferEmployee: canDo(NODE_EMPLOYEES, EDIT),
+      canTransferEmployee: canDo(NODE_EMPLOYEES_TRANSFER, EDIT),
       canDeleteEmployee: canDo(NODE_EMPLOYEES, PURGE),
       canListUserOptions: canDo(NODE_ACCOUNTS, VIEW),
       canManageUserOptions: canDo(NODE_ACCOUNTS, FULL),
