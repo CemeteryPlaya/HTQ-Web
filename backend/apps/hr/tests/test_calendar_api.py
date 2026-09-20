@@ -7,18 +7,22 @@ ShiftPatternOut) + inline-словари роутера (put/{day}, working-days
 assign-template, assign-shift). Поведение — app/services/calendar_service.py.
 
 Авторизация (docs/plans/2026-07-20-hr-domain.md) — ДВЕ разные схемы в одном
-модуле, порт БУКВАЛЬНО:
+модуле, порт БУКВАЛЬНО исходника (роутер FastAPI), плюс задача 9 блока I
+поверх обеих:
   * /calendar/* (14 эндпойнтов): module-level ``_VIEW``/``_MANAGE`` исходника
     (require_permission("hr.calendar.view"/"hr.calendar.manage")) —
-    fine-grained PERMISSION-KEY, 403 detail ТОЧНАЯ строка
-    f"Missing permission: {key}" (как staffing, НЕ HRAccessDenied);
-  * /employees/{id}/calendar* (6 эндпойнтов): ``_visible()`` роутера —
-    СНАЧАЛА require_hr_access (403 "HR access required" при полном отсутствии
-    HR-доступа, ДАЖЕ если employee_id не существует — порядок проверок важен),
-    ЗАТЕМ get_employee + can_see_department (404 "Employee not found" и за
-    несуществующего, и за невидимого сотрудника), ТОЛЬКО ПОТОМ
-    access.has("hr.calendar.view"/"hr.calendar.manage") (403 "Missing
-    permission: ...").
+    fine-grained ПРОВЕРКА УЗЛА (``rbac.resolve(request).has(key)``), 403
+    detail ТОЧНАЯ строка f"Missing permission: {key}" (как staffing, тот же
+    механизм — не отдельный класс исключения);
+  * /employees/{id}/calendar* (6 эндпойнтов): исходник шёл СНАЧАЛА
+    require_hr_access (403 "HR access required" при полном отсутствии
+    HR-доступа, ДАЖЕ если employee_id не существует — порядок проверок
+    важен), ЗАТЕМ get_employee + can_see_department (404 "Employee not
+    found" и за несуществующего, и за невидимого сотрудника), ТОЛЬКО ПОТОМ
+    access.has("hr.calendar.view"/"hr.calendar.manage"). С задачи 9 первый
+    шаг делает модульный гейт вызывающей вьюхи (``module="hr", level=…``),
+    не сам ``_visible_access`` — порядок «доступ вообще → видимость отдела →
+    конкретный узел» для внешнего наблюдателя не меняется.
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
   * literal-segment routes (templates/working-days/import/shift-patterns)
@@ -93,14 +97,22 @@ def _user_auth(email, *, is_staff=False, company_slug=None):
     return user, headers
 
 
-def _grant_seeded_role(company_slug: str, user_id: int, code: str) -> None:
+def _grant_seeded_role(company_slug: str, user_id: int, code: str, *,
+                       department_id: int | None = None) -> None:
     """Задача 6 блока I: назначить УЖЕ существующую (засеянную миграцией)
-    роль ``apps.access`` — тот же приём, что в ``test_employees_api.py``."""
+    роль ``apps.access`` — тот же приём, что в ``test_employees_api.py``.
+    ``department_id`` (задача 9) — область ``DEPARTMENT`` вместо ``COMPANY``:
+    «свой отдел против всех» в единой модели — область выдачи роли, см.
+    докстринг одноимённого помощника в ``test_employees_api.py``."""
     from apps.access.models import Role, RoleAssignment, ScopeKind
 
+    if department_id is None:
+        scope_kind, scope_id = ScopeKind.COMPANY, None
+    else:
+        scope_kind, scope_id = ScopeKind.DEPARTMENT, department_id
     RoleAssignment.objects.create(
         company_slug=company_slug, user_id=user_id, role=Role.objects.get(code=code),
-        scope_kind=ScopeKind.COMPANY, scope_id=None,
+        scope_kind=scope_kind, scope_id=scope_id,
     )
 
 
@@ -129,9 +141,11 @@ def hr_dep(db):
 
 @pytest.fixture
 def admin_auth(db, company_row):
-    """is_staff=True -> HRAccess(level='lead', permissions={'*'}) — и
-    hr.calendar.view, и hr.calendar.manage, и can_read_all. Задача 6: + роль
-    ``hr-lead`` (агрегат модуля ``hr`` — ``admin``)."""
+    """``is_staff=True`` — до задачи 9 elevated коротился безусловно в
+    ``HRAccess(level='lead', permissions={'*'})`` (и hr.calendar.view, и
+    hr.calendar.manage, и can_read_all). Задача 6: + роль ``hr-lead``
+    (агрегат модуля ``hr`` — ``admin``) — сегодня единственный источник
+    этих прав."""
     user, headers = _user_auth("cal-admin@htq.test", is_staff=True, company_slug=company_row)
     _grant_seeded_role(company_row, user.id, "hr-lead")
     return headers
@@ -139,9 +153,9 @@ def admin_auth(db, company_row):
 
 @pytest.fixture
 def no_access_auth(db, company_row):
-    """Обычный вошедший без Employee-профиля — HRAccess() пустой. Задача 6:
-    тоже без единой роли ``apps.access`` — гейт отказывает РАНЬШЕ, чем
-    запрос доходит до старой проверки (см. изменённые ассерты)."""
+    """Обычный вошедший без Employee-профиля и без единой роли
+    ``apps.access`` — гейт отказывает раньше, чем запрос доходит до тела
+    вьюхи (см. изменённые ассерты)."""
     _user, headers = _user_auth("cal-noacc@htq.test", company_slug=company_row)
     return headers
 
@@ -467,9 +481,10 @@ def test_employee_scoped_hr_access_required_even_for_nonexistent_employee(no_acc
     """Порядок исходника: require_hr_access ПЕРЕД get_employee — 403 "HR
     access required", НЕ 404, даже если employee_id вообще не существует.
 
-    Задача 6: ``no_access_auth`` не несёт ни единой роли ``apps.access`` —
-    гейт ``module="hr", level="read"`` теперь отказывает РАНЬШЕ, чем запрос
-    доходит до ``require_hr_access`` внутри ``_visible_access``, поэтому
+    Задача 6/9: ``no_access_auth`` не несёт ни единой роли ``apps.access`` —
+    гейт ``module="hr", level="read"`` отказывает раньше, чем запрос доходит
+    до тела вьюхи и её ``_visible_access`` (задача 9 сняла из него отдельную
+    «есть ли HR-доступ вообще» — эту работу целиком делает гейт), поэтому
     detail общий "Forbidden" (403 остаётся 403, порядок "раньше 404"
     сохранён — просто первую дверь теперь держит гейт, а не старая
     проверка)."""
@@ -490,23 +505,22 @@ def test_employee_scoped_404_for_missing_employee(admin_auth):
 
 @pytest.mark.django_db
 def test_employee_scoped_404_for_invisible_department(hr_dep, dep, emp, company_row):
-    """Скоуп-ограниченный HR (без hr.employees.view.all) видит только СВОЙ
+    """Скоуп-ограниченный HR (область роли — свой отдел) видит только СВОЙ
     отдел — сотрудник из другого отдела отдаёт 404, не 403 (не раскрываем
     существование).
 
     Задача 6: роль ``hr-junior`` (агрегат модуля ``hr`` — ``read``) даёт
-    пройти НОВЫЙ гейт (``employee_calendar`` — ``level="read"``) — решение
-    по-прежнему у старой ``can_see_department``, ассерт не менялся."""
-    scoped_pos = _pos(
-        "Calendar Manager", hr_dep, weight=15,
-        permissions={"permissions": ["hr.calendar.view", "hr.calendar.manage"]},
-    )
+    пройти гейт (``employee_calendar`` — ``level="read"``). Задача 9: область
+    «свой отдел» — это ``DEPARTMENT``-область выдачи роли (раньше — отсутствие
+    ``hr.employees.view.all`` в явной матрице должности), решение у
+    ``can_see_department`` единой модели, ассерт не менялся."""
+    scoped_pos = _pos("Calendar Manager", hr_dep, weight=15)
     user, headers = _user_auth("cal-scoped@htq.test", company_slug=company_row)
     Employee.objects.create(
         first_name="И", last_name="И", email="cal-scoped@htq.test",
         department=hr_dep, position=scoped_pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
     )
-    _grant_seeded_role(company_row, user.id, "hr-junior")
+    _grant_seeded_role(company_row, user.id, "hr-junior", department_id=hr_dep.id)
     resp = Client().get(
         f"{EMP_BASE}/{emp.id}/calendar", {"start": "2026-06-01", "end": "2026-06-01"}, **headers,
     )
@@ -516,23 +530,24 @@ def test_employee_scoped_404_for_invisible_department(hr_dep, dep, emp, company_
 
 @pytest.mark.django_db
 def test_employee_scoped_missing_calendar_view_permission(hr_dep, emp, company_row):
-    """Видимый (свой отдел = чужого нет, can_read_all) сотрудник, но explicit
-    permissions без hr.calendar.view -> 403 "Missing permission:
-    hr.calendar.view" (ПОСЛЕ прохождения _visible).
+    """Видимый сотрудник (область — вся компания), но БЕЗ права на календарь
+    -> 403 "Missing permission: hr.calendar.view" (ПОСЛЕ прохождения _visible).
 
-    Задача 6: роль ``hr-junior`` (агрегат модуля ``hr`` — ``read``) даёт
-    пройти НОВЫЙ гейт — решение по-прежнему у старой explicit-проверки,
-    ассерт не менялся."""
-    scoped_pos = _pos(
-        "No Calendar", hr_dep, weight=16,
-        permissions={"permissions": ["hr.employees.view.all"]},
-    )
+    До задачи 9 блока I — явная матрица должности ``["hr.employees.view.all"]``
+    под ролью ``hr-junior`` для гейта. Теперь — одна синтетическая роль
+    ``hr.employees: view`` (гейт ``read`` проходит, карточка видна, область
+    ``COMPANY``), а узла ``hr.production_calendar`` у неё нет вовсе —
+    ``hr-junior`` здесь не годится, она несёт ``hr.production_calendar:
+    view`` и прошла бы проверку. Ассерт не менялся."""
+    from apps.access.tests.helpers import assign
+
+    scoped_pos = _pos("No Calendar", hr_dep, weight=16)
     user, headers = _user_auth("cal-nocal@htq.test", company_slug=company_row)
     Employee.objects.create(
         first_name="И", last_name="И", email="cal-nocal@htq.test",
         department=hr_dep, position=scoped_pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
     )
-    _grant_seeded_role(company_row, user.id, "hr-junior")
+    assign(company_row, user.id, "hr.employees", "view")
     resp = Client().get(
         f"{EMP_BASE}/{emp.id}/calendar", {"start": "2026-06-01", "end": "2026-06-01"}, **headers,
     )

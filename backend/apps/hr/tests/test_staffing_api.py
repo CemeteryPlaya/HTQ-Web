@@ -4,33 +4,33 @@
 — app/services/staffing_service.py.
 
 Авторизация (docs/plans/2026-07-20-hr-domain.md, под-модуль time-core) — ВАЖНО,
-это НЕ грубый api_view(admin=True) (positions/org) и НЕ тонкий
-require_hr_access/require_can_write_basic (employees). Исходник грепом не
+это НЕ грубый api_view(admin=True) (positions/org) и НЕ (снятая задачей 9)
+require_hr_access/require_can_write_basic пара (employees). Исходник грепом не
 светит Depends напрямую в сигнатуре — они вынесены в module-level константы
 ``_VIEW = require_permission("hr.staffing.view")``, ``_MANAGE =
 require_permission("hr.staffing.manage")`` (app/api/v1/staffing.py). Это
-fine-grained PERMISSION-KEY проверка (app/auth/hr_access.py::require_permission):
-403 detail — ТОЧНАЯ строка f"Missing permission: {key}", не "HR access
-required"/"HR write access required" (которые несёт HRAccessDenied в
-employees/apps.hr.access). Порт: occupancy/summary/list -> access.has(
+fine-grained ПРОВЕРКА УЗЛА (``rbac.resolve(request).has(key)`` — раньше
+``hr_access.resolve_hr_access(...).has(key)``, до задачи 9): 403 detail —
+ТОЧНАЯ строка f"Missing permission: {key}", не "HR access required"/"HR
+write access required" (которые нёс снятый ``HRAccessDenied``, до задачи 9
+в employees/apps.hr.access). Порт: occupancy/summary/list -> access.has(
 "hr.staffing.view"); create/update/delete -> access.has("hr.staffing.manage").
 
 Блок I, задача 6: ``module="hr", level=…`` (``read`` на occupancy/summary/
 list, ``write`` на create/update, ``admin`` на delete) добавлен ПОВЕРХ этой
 пары, без её замены — обе двери должны быть открыты разом (см.
 ``apps.hr.tests.test_module_gate``). Каждой фикстуре, которая раньше
-проходила ТОЛЬКО старую проверку (``admin_auth``/``middle_auth``/
+проходила ТОЛЬКО fine-grained проверку (``admin_auth``/``middle_auth``/
 ``senior_auth``), нужен теперь ещё и ``X-HTQ-Company`` + засеянная роль
-``apps.access`` — без контекста компании новый гейт отвечает 403
+``apps.access`` — без контекста компании гейт отвечает 403
 "Forbidden" РАНЬШЕ, чем запрос доходит до ``_require_permission``. Ролям
 подобрана СИЛА, СООТВЕТСТВУЮЩАЯ имени фикстуры (не сильнее и не слабее):
 ``admin_auth`` ("full access") -> ``hr-lead``; ``middle_auth``/
 ``senior_auth`` -> ``hr-middle``/``hr-senior`` — совпадающая по смыслу
-роль, поэтому итоговое решение по-прежнему выносит СТАРАЯ
-fine-grained-проверка (её текст ассертов не менялся); только
-``no_access_auth`` (ни одной старой ни новой привилегии) теперь получает
-403 от ГЕЙТА раньше "Missing permission: ..." — единственный ассерт с
-изменённым текстом, см. комментарий на месте.
+роль, поэтому итоговое решение по-прежнему выносит fine-grained проверка
+узла (её текст ассертов не менялся); только ``no_access_auth`` (ни одной
+привилегии) получает 403 от ГЕЙТА раньше "Missing permission: ..." —
+единственный ассерт с изменённым текстом, см. комментарий на месте.
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
   * headcount/salary/fot СТРОКАМИ (не float), квантованы до 2 знаков;
@@ -109,11 +109,12 @@ def hr_dep(db):
 
 @pytest.fixture
 def admin_auth(db, company_row):
-    """is_staff=True -> HRAccess(level='lead', permissions={'*'}) — имеет
-    и hr.staffing.view, и hr.staffing.manage. Задача 6: + роль ``hr-lead``
-    (агрегат модуля ``hr`` — ``admin``), иначе новый гейт отказывает
-    раньше старой проверки — "full access" по имени фикстуры сохраняется
-    двумя дверями сразу."""
+    """``is_staff=True`` — до задачи 9 elevated коротился безусловно в
+    ``HRAccess(level='lead', permissions={'*'})`` (и hr.staffing.view, и
+    hr.staffing.manage). Задача 6: + роль ``hr-lead`` (агрегат модуля
+    ``hr`` — ``admin``), иначе гейт модуля отказывает раньше
+    fine-grained-проверки узла — "full access" по имени фикстуры сохраняется
+    обеими дверями сразу."""
     user, headers = _user_auth("hr-admin@htq.test", is_staff=True, company_slug=company_row)
     _grant_seeded_role(company_row, user.id, "hr-lead")
     return headers
@@ -121,10 +122,10 @@ def admin_auth(db, company_row):
 
 @pytest.fixture
 def no_access_auth(db, company_row):
-    """Обычный вошедший без Employee-профиля — HRAccess() пустой, нет
-    hr.staffing.view/manage вообще. Задача 6: тоже без единой роли ``apps.
-    access`` — гейт модуля отказывает РАНЬШЕ, чем запрос доходит до
-    ``_require_permission`` (см. изменённый ассерт ниже)."""
+    """Обычный вошедший без Employee-профиля и без единой роли
+    ``apps.access`` — нет hr.staffing.view/manage вообще, гейт модуля
+    отказывает раньше, чем запрос доходит до ``_require_permission``
+    (см. изменённый ассерт ниже)."""
     _user, headers = _user_auth("plain@htq.test", company_slug=company_row)
     return headers
 
@@ -135,7 +136,7 @@ def middle_auth(db, hr_dep, company_row):
     появляется только с senior. Должен получить 403 "Missing permission:
     hr.staffing.view" на чтениях. Задача 6: + роль ``hr-middle`` (агрегат
     модуля ``hr`` — ``write`` >= ``read``, гейт пропускает GET) — решение
-    по-прежнему выносит СТАРАЯ fine-grained проверка, ассерт не менялся."""
+    по-прежнему выносит fine-grained проверка узла, ассерт не менялся."""
     pos = _pos("HR Manager", hr_dep, weight=20)
     user, headers = _user_auth("hr-middle@htq.test", company_slug=company_row)
     Employee.objects.create(
@@ -152,7 +153,7 @@ def senior_auth(db, hr_dep, company_row):
     hr.staffing.manage (см. apps/hr/permissions.py). Задача 6: + роль
     ``hr-senior`` (агрегат модуля ``hr`` — ``admin``, см. факты блока I) —
     гейт пропускает все три уровня (read/write/admin), решение по-прежнему
-    у старой проверки."""
+    у fine-grained проверки узла."""
     pos = _pos("Senior HR Manager", hr_dep, weight=30)
     user, headers = _user_auth("hr-senior@htq.test", company_slug=company_row)
     Employee.objects.create(
@@ -209,23 +210,29 @@ def test_senior_level_can_view_and_manage(senior_auth, pos, dep):
 @pytest.mark.django_db
 def test_view_permission_insufficient_for_manage(company_row):
     """Даже senior (view+manage) отличается от чисто-view сценария: с ТОЛЬКО
-    view (без manage) create/update/delete должны 403. Симулируется явной
-    матрицей прав на должности.
+    view (без manage) create/update/delete должны 403.
 
-    Задача 6: роль ``hr-middle`` (агрегат модуля ``hr`` — ``write``) даёт
-    ЭТОМУ вызывающему пройти НОВЫЙ гейт на GET (``read``) и на POST
-    (``write``) — иначе гейт отказал бы раньше, чем запрос вообще дошёл бы
-    до старой fine-grained проверки, которую этот тест и целится проверить.
-    Итоговое 403 на POST — по-прежнему от старой проверки (``hr.staffing.
-    manage`` отсутствует в explicit-списке должности), ассерт не менялся."""
+    До задачи 9 блока I симулировалось явной матрицей должности
+    ``["hr.staffing.view"]`` под ролью ``hr-middle`` для гейта. Теперь — две
+    синтетические роли: ``hr.staffing: view`` (сама проверяемая глубина) и
+    ``hr.departments: edit`` — ТОЛЬКО ради гейта: агрегат модуля ``hr`` у
+    вызывающего должен дотягивать до ``write``, иначе POST отказал бы гейт
+    раньше, чем запрос дошёл бы до проверки узла ``hr.staffing``, которую
+    тест и целится проверить (``hr-middle`` не годится: у неё нет узла
+    ``hr.staffing`` вовсе, GET получил бы 403). Итоговое 403 на POST — от
+    проверки узла (``manage`` = все четыре признака ``hr.staffing``, а есть
+    только ``view``), ассерт не менялся."""
+    from apps.access.tests.helpers import assign
+
     dep_ = _dep("HR2", "hr2")
-    pos_ = _pos("View Only", dep_, weight=1, permissions={"permissions": ["hr.staffing.view"]})
+    pos_ = _pos("View Only", dep_, weight=1)
     user, headers = _user_auth("view-only@htq.test", company_slug=company_row)
     Employee.objects.create(
         first_name="И", last_name="И", email="view-only@htq.test",
         department=dep_, position=pos_, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
     )
-    _grant_seeded_role(company_row, user.id, "hr-middle")
+    assign(company_row, user.id, "hr.staffing", "view")
+    assign(company_row, user.id, "hr.departments", "edit")
     assert Client().get(f"{BASE}/", **headers).status_code == 200
     resp = Client().post(
         f"{BASE}/", data={"position_id": 1, "department_id": 1},

@@ -163,13 +163,6 @@ def test_block_b_and_c_flags_come_from_the_structure():
 
 
 @pytest.mark.django_db
-def test_positions_carry_an_explicit_hr_level():
-    _seed()
-    for pos in Position.objects.all():
-        assert pos.permissions["hr_level"] in {"junior", "middle", "senior", "lead"}, pos.title
-
-
-@pytest.mark.django_db
 def test_phones_use_the_platform_mask():
     import re
     _seed()

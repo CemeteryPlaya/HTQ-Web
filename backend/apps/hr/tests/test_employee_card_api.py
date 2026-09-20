@@ -11,24 +11,30 @@ employee_groups_service.py (education/experience/relatives — единстве�
 Блок I, задача 6: обе ручки (GET card/t2, GET card/groups) — под
 ``module="hr", level="read"``; обе ручки записи (PATCH card/t2, PUT
 card/groups) — под ``level="write"``, ПОВЕРХ ``_visible_access``/
-секционных Т-2/groups-ключей, без их замены. Фикстуры ниже получили
-``X-HTQ-Company`` + засеянную роль ``apps.access`` СООТВЕТСТВУЮЩЕЙ силы
-(``admin_auth`` -> ``hr-lead``, ``junior`` -> ``hr-junior``, ``middle`` ->
-``hr-middle``, ``senior`` -> ``hr-senior``, ``financial_edit_only`` (пишет)
--> ``hr-middle``) — без контекста компании новый гейт отвечал бы 403
-"Forbidden" РАНЬШЕ старой проверки. ``junior`` — READ-уровень в новой модели
-(``hr-junior`` -> ``read``), поэтому её GET-тесты по-прежнему решает старая
-секционная проверка (текст не менялся), а ЕДИНСТВЕННЫЙ PUT-тест на этой
-фикстуре (``test_card_groups_put_requires_edit_key`` — ``write``-ручка)
-теперь получает 403 от ГЕЙТА раньше старого "Missing permission: hr.card.
-groups.edit" — см. комментарий на месте. ``auth`` (ни одной привилегии)
-аналогично: её 403 теперь от гейта, не от ``require_hr_access``.
+секционных Т-2/groups-ключей (задача 6 их не заменяла; задача 9 блока I
+сняла из ``_visible_access`` только отдельную «есть ли HR-доступ вообще» —
+секционные ключи остались узловой проверкой ``apps.hr.rbac`` внутри тела
+вьюхи). Фикстуры ниже получили ``X-HTQ-Company`` + засеянную роль
+``apps.access`` СООТВЕТСТВУЮЩЕЙ силы (``admin_auth`` -> ``hr-lead``,
+``junior`` -> ``hr-junior``, ``middle`` -> ``hr-middle``, ``senior`` ->
+``hr-senior``, ``financial_edit_only`` (пишет) -> ``hr-middle``) — без
+контекста компании гейт отвечал бы 403 "Forbidden" РАНЬШЕ секционной
+проверки. ``junior`` — READ-уровень (``hr-junior`` -> ``read``), поэтому её
+GET-тесты по-прежнему решает секционная проверка (текст не менялся), а
+ЕДИНСТВЕННЫЙ PUT-тест на этой фикстуре (``test_card_groups_put_requires_
+edit_key`` — ``write``-ручка) получает 403 от ГЕЙТА раньше секционного
+"Missing permission: hr.card.groups.edit" — см. комментарий на месте.
+``auth`` (ни одной привилегии) аналогично: её 403 — от гейта, узловая
+проверка тела вьюхи до неё не доходит вовсе.
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
-  * auth — ТА ЖЕ пара require_hr_access + _require_visible_employee, что и
-    history/documents/pmos (apps/hr/views.py::_visible_access, переиспользуется
-    буквально, не дублируется) — 403 "HR access required" без HR-доступа
-    вообще, 404 "Employee not found" за скрытый отдел;
+  * auth — та же ``_visible_access`` (apps/hr/views.py), что и у
+    history/documents/pmos, переиспользуется буквально, не дублируется —
+    404 "Employee not found" за скрытый отдел. Без единой роли ``hr.*``
+    задача 9 сняла отдельную проверку «есть ли HR-доступ вообще»
+    (``require_hr_access``, 403 "HR access required") — её работу теперь
+    делает модульный гейт вызывающей вьюхи, детальнее см. докстринг модуля
+    выше;
   * t2 GET — секция ПОЛНОСТЬЮ отсутствует в ответе (не null-значения) без
     соответствующего view-ключа;
   * t2 PATCH — 403 "Missing permission: hr.card.<section>.edit" за секцию без
@@ -51,6 +57,11 @@ import pytest
 from django.test import Client
 
 from apps.hr.models import Department, Employee, EmployeeCard, EmployeeGroups, Position
+from apps.hr.tests.test_employees_api import (
+    DIVERGENCE_INHERITED_SUBNODES,
+    _grant_custom_role,
+    _grant_seeded_role,
+)
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -86,15 +97,9 @@ def _user_auth(email, *, is_staff=False, company_slug=None):
     return user, headers
 
 
-def _grant_seeded_role(company_slug: str, user_id: int, code: str) -> None:
-    """Задача 6 блока I: назначить УЖЕ существующую (засеянную миграцией)
-    роль ``apps.access`` — тот же приём, что в ``test_employees_api.py``."""
-    from apps.access.models import Role, RoleAssignment, ScopeKind
-
-    RoleAssignment.objects.create(
-        company_slug=company_slug, user_id=user_id, role=Role.objects.get(code=code),
-        scope_kind=ScopeKind.COMPANY, scope_id=None,
-    )
+# ``_grant_seeded_role``/``_grant_custom_role`` — из ``test_employees_api.py``
+# (задача 9 блока I: там же объяснена область DEPARTMENT для junior/middle и
+# почему запрет узла обязан лежать в той же роли, что и право на предка).
 
 
 @pytest.fixture
@@ -118,8 +123,10 @@ def auth(db, company_row):
 
 @pytest.fixture
 def admin_auth(db, company_row):
-    """is_staff=True — elevated -> HRAccess(level='lead', permissions={'*'}).
-    Задача 6: + роль ``hr-lead`` (агрегат модуля ``hr`` — ``admin``)."""
+    """``is_staff=True`` — до задачи 9 elevated коротился безусловно в
+    ``HRAccess(level='lead', permissions={'*'})``; сегодня гейт сам по себе
+    голый ``is_staff`` не пропускает. Задача 6: + роль ``hr-lead`` (агрегат
+    модуля ``hr`` — ``admin``)."""
     user, headers = _user_auth("card-admin@htq.test", is_staff=True, company_slug=company_row)
     _grant_seeded_role(company_row, user.id, "hr-lead")
     return headers
@@ -134,7 +141,7 @@ def junior(db, hr_dep, company_row):
     pos = _pos("HR Assistant", hr_dep, weight=210)
     user, headers = _user_auth("card-junior@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "card-junior@htq.test", user_id=user.id)
-    _grant_seeded_role(company_row, user.id, "hr-junior")
+    _grant_seeded_role(company_row, user.id, "hr-junior", department_id=hr_dep.id)
     return emp, headers
 
 
@@ -145,7 +152,7 @@ def middle(db, hr_dep, company_row):
     pos = _pos("HR Manager", hr_dep, weight=220)
     user, headers = _user_auth("card-middle@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "card-middle@htq.test", user_id=user.id)
-    _grant_seeded_role(company_row, user.id, "hr-middle")
+    _grant_seeded_role(company_row, user.id, "hr-middle", department_id=hr_dep.id)
     return emp, headers
 
 
@@ -162,23 +169,27 @@ def senior(db, hr_dep, company_row):
 
 @pytest.fixture
 def financial_edit_only(db, hr_dep, company_row):
-    """Явная матрица permissions (position.permissions.permissions) —
-    ТОЛЬКО hr.card.financial.view/edit, НИ personal, НИ certs. Нужна, чтобы
+    """ТОЛЬКО финансы карточки (view+edit), НИ personal. Нужна, чтобы
     проверить partial-failure atomicity PATCH (ни один пресет не расщепляет
     financial и personal по отдельности — оба садятся вместе на senior).
-    Задача 6: + роль ``hr-middle`` (агрегат ``write``, хватает на PATCH
-    card/t2) — решение по-прежнему у explicit-матрицы позиции."""
-    pos = _pos(
-        "Custom Financial Clerk", hr_dep, weight=240,
-        permissions={"permissions": ["hr.employees.view", "hr.card.financial.view", "hr.card.financial.edit"]},
-    )
+
+    До задачи 9 блока I — явная матрица ``Position.permissions`` под ролью
+    ``hr-middle`` для гейта. Теперь — ОДНА синтетическая роль:
+    ``hr.employees: view`` (видимость карточки), ``hr.employees.salary: edit``
+    (агрегат модуля ``hr`` — ``write``, PATCH проходит гейт) и ЯВНЫЙ запрет
+    ``hr.employees.passport: none`` — без него узел паспорта унаследовал бы
+    ``view`` от ``hr.employees`` (``resolve._nearest``), а сам тест — про
+    ОТСУТСТВИЕ права на personal."""
+    pos = _pos("Custom Financial Clerk", hr_dep, weight=240)
     user, headers = _user_auth("card-fin-only@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "card-fin-only@htq.test", user_id=user.id)
-    _grant_seeded_role(company_row, user.id, "hr-middle")
+    _grant_custom_role(company_row, user.id, "t-financial-edit-only", {
+        "hr.employees": "view", "hr.employees.salary": "edit", "hr.employees.passport": "none",
+    })
     return emp, headers
 
 
-# ── auth: require_hr_access + _require_visible_employee (t2) ────────────────
+# ── auth: модульный гейт + _require_visible_employee (t2) ───────────────────
 
 @pytest.mark.django_db
 def test_card_t2_requires_jwt():
@@ -188,8 +199,9 @@ def test_card_t2_requires_jwt():
 @pytest.mark.django_db
 def test_card_t2_forbidden_without_any_hr_access(auth, hr_dep):
     """Задача 6: ``auth`` не несёт ни единой роли ``apps.access`` — гейт
-    ``module="hr", level="read"`` отказывает РАНЬШЕ ``require_hr_access``,
-    поэтому detail теперь общий "Forbidden"."""
+    ``module="hr", level="read"`` отказывает, задача 9 сняла отдельную
+    проверку «есть ли HR-доступ вообще» (``require_hr_access``), поэтому
+    detail — общий "Forbidden" от гейта."""
     target = _emp(hr_dep, _pos("A", hr_dep, weight=201), "t2-target1@htq.test")
     resp = Client().get(f"{BASE}/{target.id}/card/t2", **auth)
     assert resp.status_code == 403
@@ -213,6 +225,7 @@ def test_card_t2_other_department_404_not_403(middle, other_dep):
 
 # ── GET card/t2 — полевой (секционный) гейтинг view-ключей ──────────────────
 
+@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_card_t2_get_empty_for_level_without_any_card_key(junior):
     emp, headers = junior
@@ -221,6 +234,7 @@ def test_card_t2_get_empty_for_level_without_any_card_key(junior):
     assert resp.json() == {}
 
 
+@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_card_t2_get_empty_for_middle(middle):
     """Единственной Т-2 секцией middle была certs — после её удаления у
@@ -239,6 +253,7 @@ def test_card_t2_get_shows_both_sections_for_senior(senior):
     assert set(resp.json().keys()) == {"financial", "personal"}
 
 
+@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_card_t2_get_never_leaks_field_masked_by_missing_view_key(middle):
     """Ключевой security-инвариант: секция без view-ключа ОТСУТСТВУЕТ в теле
@@ -253,6 +268,7 @@ def test_card_t2_get_never_leaks_field_masked_by_missing_view_key(middle):
 
 # ── PATCH card/t2 — полевой (секционный) гейтинг edit-ключей ────────────────
 
+@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_card_t2_patch_rejects_section_without_edit_key(middle):
     emp, headers = middle
@@ -333,8 +349,8 @@ def test_card_t2_patch_partial_failure_persists_nothing(financial_edit_only):
 @pytest.mark.django_db
 def test_card_t2_patch_requires_visible_employee(auth, hr_dep):
     """Задача 6: ``auth`` не несёт ни единой роли — гейт ``module="hr",
-    level="write"`` отказывает раньше ``require_hr_access``, detail общий
-    "Forbidden"."""
+    level="write"`` отказывает (задача 9 сняла отдельную проверку «есть ли
+    HR-доступ вообще», ``require_hr_access``), detail общий "Forbidden"."""
     target = _emp(hr_dep, _pos("V", hr_dep, weight=205), "t2-visible@htq.test")
     resp = Client().patch(
         f"{BASE}/{target.id}/card/t2", data={"personal": {"citizenship": "X"}},
@@ -351,6 +367,7 @@ def test_card_t2_trailing_slash_variant(admin_auth, hr_dep):
 
 # ── card/groups — единственный ключ на весь ресурс ───────────────────────────
 
+@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_card_groups_get_requires_view_key(junior):
     emp, headers = junior

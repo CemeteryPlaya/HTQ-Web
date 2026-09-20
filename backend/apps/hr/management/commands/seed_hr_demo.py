@@ -374,9 +374,13 @@ class Command(BaseCommand):
                     "is_manager": post.is_manager,
                     "external_hierarchy": post.external_hierarchy,
                     "serves_subsidiaries": post.serves_subsidiaries,
-                    # Явная матрица приоритетнее эвристики по названию —
-                    # см. apps/hr/access.py.
-                    "permissions": {"hr_level": post.hr_level, "permissions": []},
+                    # ``permissions`` больше НЕ проставляется (задача 9 блока
+                    # I: колонка мертва для авторизации кадрового домена).
+                    # ``post.hr_level`` остаётся в справочнике структур как
+                    # исторические демо-данные — единственный живой путь к
+                    # кадровым правам теперь роли apps.access
+                    # (``PositionRole``), которые этот сид не заводит; см.
+                    # ``manage.py access_backfill_positions``.
                 },
             )
             out[post.title] = position

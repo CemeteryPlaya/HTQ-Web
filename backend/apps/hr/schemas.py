@@ -53,10 +53,17 @@ ExternalHierarchyLiteral = Literal["inherit", "none"]
 class PositionPermissions(BaseModel):
     """Матрица прав, прикреплённая к несистемной должности.
 
-    ``permissions`` — авторитетный набор ключей (проверяется исходником в
-    ``app.auth.hr_access``, который в porту ещё не появился — см. брифы
-    employees). ``hr_level`` — UI/миграционный пресет: выбор уровня
-    заполняет ``permissions`` соответствующим пресетом (apps.hr.permissions).
+    С задачи 9 блока I «Единая модель прав» ``permissions``/``hr_level``
+    здесь МЕРТВЫ для авторизации кадрового домена — права считает
+    ``apps.hr.rbac`` по узлам ``apps.access``, эту форму не читая. Запись
+    через API должностей остаётся намеренно (Ruling B, ``apps/hr/tests/
+    test_single_rbac_guards.py``): ``permissions`` — единственный оставшийся
+    путь, которым в колонку попадают ключи ``contracts.*`` (читает их
+    ``apps.hr.interface.user_has_permission`` — контракт с ``apps.contracts``
+    до их перехода на узлы ``access``, roadmap §6.4). ``hr_level`` —
+    UI/миграционный пресет: выбор уровня заполняет ``permissions``
+    соответствующим пресетом (``apps.hr.permissions``); живёт как явный
+    оверрайд для эвристики переноса ``apps.hr.access.classify_hr_level``.
     """
 
     hr_level: HRLevelLiteral | None = None

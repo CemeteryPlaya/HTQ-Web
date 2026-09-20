@@ -11,12 +11,15 @@ app/services/translation_service.py (build_translated_org_tree — перено�
 
 Авторизация — writes на ``POST/DELETE /relations`` ИЗМЕНЕНА относительно
 исходного порта: было ``admin=True`` (require_hr_write исходника =
-is_elevated), стало — ключ прав ``hr.org.edit`` через ``_require_permission``
-(доступен HR senior/lead, см. ``apps.hr.permissions``/``apps.hr.access``).
-``admin_auth`` (is_staff=True) доступ сохраняет — ``resolve_hr_access``
-коротит elevated-токены в ``HRAccess(permissions={"*"})``. Персональные связи
-сотрудников (``/org/employee-relations``) и руководитель отдела
-(``/org/departments/{id}/manager``) — новые ручки, см.
+is_elevated), стало — узел ``hr.org``, все четыре признака
+(``legacy_roles.KEY_TO_NODE[ORG_EDIT]``) через ``_require_permission``
+(доступен HR senior/lead, см. ``apps.hr.permissions``/``apps.hr.rbac``). ``admin_auth`` (is_staff=True)
+доступ сохраняет — до задачи 9 блока I за это отвечал резолвер
+(``resolve_hr_access`` коротил elevated-токены в ``HRAccess(
+permissions={"*"})``); сегодня ``is_staff`` сам по себе гейт модуля НЕ
+проходит, поэтому фикстура выдаёт роль ``hr-lead`` явно (см. её докстринг
+ниже). Персональные связи сотрудников (``/org/employee-relations``) и
+руководитель отдела (``/org/departments/{id}/manager``) — новые ручки, см.
 ``test_org_employee_relations_api.py``/``test_org_department_manager_api.py``.
 ``PUT /org/settings/deletion-strategy`` НАМЕРЕННО остался ``admin=True`` —
 эту задачу не переносили.
@@ -271,8 +274,8 @@ def test_add_relation_requires_jwt_at_all():
 
 @pytest.mark.django_db
 def test_add_relation_forbidden_for_non_admin_jwt_user(auth, dep):
-    """Пользователь без Employee-профиля вообще -> HRAccess() пустой,
-    permissions={} -> 403.
+    """Пользователь без Employee-профиля и без единой роли ``apps.access`` —
+    403.
 
     Блок I задача 5: без роли на модуль ``hr`` (``auth`` не несёт ни одной)
     ``module="hr", level="write"`` отказывает РАНЬШЕ, чем запрос доходит до
@@ -355,7 +358,7 @@ def test_deletion_strategy_put_forbidden_for_non_admin(auth):
 def test_deletion_strategy_put_still_forbidden_for_senior_hr(senior_auth):
     """Пин: PUT /org/settings/deletion-strategy НЕ переносили на
     hr.org.edit — это глобальная политика удаления отделов, остаётся
-    admin=True (require_admin), а не HRAccess."""
+    admin=True (require_admin), а не проверка узла ``apps.hr.rbac``."""
     resp = Client().put(
         f"{BASE}/settings/deletion-strategy", data={"deletion_strategy": "cascade"},
         content_type="application/json", **senior_auth,

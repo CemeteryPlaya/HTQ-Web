@@ -152,8 +152,15 @@ class Position(HrBase):
     serves_subsidiaries = models.BooleanField(
         default=False, db_default=False, db_index=True,
     )
-    # Явная матрица прав; когда задана, приоритетнее эвристики по названию
-    # должности (app/auth/hr_access.py в исходнике).
+    # Бывшая явная матрица прав (app/auth/hr_access.py в исходнике) — с
+    # задачи 9 блока I «Единая модель прав» МЕРТВА для авторизации: права
+    # кадрового домена считает apps.hr.rbac по узлам apps.access, эту
+    # колонку не читая. Живых читателей ровно два: apps.hr.interface.
+    # user_has_permission (контракт с apps.contracts до их перехода на узлы
+    # access) и эвристика переноса apps.hr.access.classify_hr_level (только
+    # ключ "hr_level", только для access_backfill_positions). Пишет её
+    # сегодня только API должностей (PositionIn.permissions) — см. докстринг
+    # apps/hr/tests/test_single_rbac_guards.py.
     # Форма: {"hr_level": "junior|middle|senior|lead", "permissions": [str, ...]}
     permissions = models.JSONField(null=True, blank=True)
 

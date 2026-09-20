@@ -15,6 +15,7 @@ from apps.hr.models import (
 )
 from apps.hr.services import identity_request_service as svc
 from apps.hr.tests.conftest import auth_headers, make_user
+from apps.hr.tests.test_employees_api import DIVERGENCE_INHERITED_SUBNODES
 
 BASE = "/api/hr/v1/identity-requests"
 APPROVER = "/api/hr/v1/identity-approver/"
@@ -33,10 +34,11 @@ def _grant_seeded_role(company_slug: str, user_id: int, code: str) -> None:
 
 
 def _hr_auth(title: str, weight: int, email: str, *, company_slug=None, role_code=None):
-    """HR-сотрудник нужного уровня: уровень считается из должности.
+    """HR-сотрудник нужного уровня.
 
     ``role_code`` — засеянная роль (``access/migrations/0005``) на модуль
-    ``hr``, добавленная блоком I задачей 5 поверх старой эвристики.
+    ``hr``, добавленная блоком I задачей 5; с задачи 9 это ЕДИНСТВЕННЫЙ
+    источник его прав (должность и отдел ниже — карточка, не права).
     """
     from htqweb.authn.jwt import issue_token_pair
 
@@ -255,6 +257,7 @@ def test_approver_get_returns_current(lead_auth, account):
 
 # ── ответ на правку карточки ────────────────────────────────────────────────
 
+@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_update_response_says_the_change_went_to_approval(
         lead_auth, employee, approver_auth, fallback_log_mode):
@@ -299,31 +302,35 @@ def test_update_of_non_identity_field_has_no_request_key(
 # ── право менять напрямую (hr.identity.force) ───────────────────────────────
 
 def _force_auth(company_slug: str, email: str = "hr-force@htq.test"):
-    """HR-должность с явно выданным правом обхода подтверждения.
+    """Кадровик с ЯВНО выданным правом обхода подтверждения.
 
-    Блок I задача 5: PUT ``/employees/{id}/`` стоит под ``module="hr",
-    level="write"`` — роль ``hr-middle`` (агрегированный уровень модуля —
-    ``write``) выдана явно, чтобы гейт пропускал запрос к СТАРОЙ, explicit-
-    списочной матрице прав должности ниже, которую и проверяет тест.
+    До задачи 9 блока I право лежало в явной матрице ``Position.permissions``
+    (``hr.identity.force``) под ролью ``hr-middle`` для гейта. Теперь право —
+    узел ``hr.employees.identity`` с признаком ``edit`` (``legacy_roles.
+    KEY_TO_NODE[IDENTITY_FORCE]``), и он выдаётся отдельной синтетической
+    ролью через ``apps.access.tests.helpers.assign`` — «отдельной галкой», как
+    и задумано у ключа. ``hr-middle`` (область — вся компания) остаётся ради
+    гейта ``level="write"``, права правки карточки и видимости чужого отдела:
+    без неё сотрудник другого отдела просто не находится, и тест падал бы на
+    404, ничего не сказав о самом праве обхода.
+
+    ⚠️ Сегодня ``hr-middle`` и так НАСЛЕДУЕТ ``edit`` на ``hr.employees.
+    identity`` от ``hr.employees`` (расхождение 2, см. ``test_employees_
+    api.DIVERGENCE_INHERITED_SUBNODES``) — явная выдача здесь делает тест
+    независимым от этого расхождения: он проверяет право, а не наследование.
     """
     dep = Department.objects.create(name="HR-force", path="hrforce")
-    pos = Position.objects.create(
-        title="Кадровик с правом обхода", department=dep, weight=35,
-        # Полный набор для правки чужой карточки: без view/view.all сотрудник
-        # другого отдела просто не находится, и тест падал бы на 404, ничего не
-        # сказав о самом праве обхода.
-        permissions={"hr_level": "senior",
-                     "permissions": ["hr.employees.view", "hr.employees.view.all",
-                                     "hr.employees.edit", "hr.identity.force"]},
-    )
+    pos = Position.objects.create(title="Кадровик с правом обхода", department=dep, weight=35)
     user = make_user(email)
     Employee.objects.create(
         email=email, department=dep, position=pos, user_id=user.id,
         hire_date=datetime.date(2024, 1, 9), first_name="Ф", last_name="О",
     )
+    from apps.access.tests.helpers import assign
     from htqweb.authn.jwt import issue_token_pair
 
     _grant_seeded_role(company_slug, user.id, "hr-middle")
+    assign(company_slug, user.id, "hr.employees.identity", "edit")
     token = issue_token_pair(user, company_slug=company_slug)["access"]
     return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_slug}
 
@@ -379,6 +386,7 @@ def test_force_edit_leaves_other_pending_fields_alone(
     assert [f.field for f in request.fields.all()] == ["bio"]
 
 
+@DIVERGENCE_INHERITED_SUBNODES
 @pytest.mark.django_db
 def test_without_the_permission_the_edit_still_goes_to_approval(
         lead_auth, employee, approver_auth, fallback_log_mode):

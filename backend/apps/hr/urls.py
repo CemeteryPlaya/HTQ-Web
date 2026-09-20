@@ -79,11 +79,10 @@ urlpatterns = [
     path("substitutions/<int:sub_id>/", views.substitution_detail),
 
     # ── employees ─────────────────────────────────────────────────────────
-    # Литеральные роуты (hr-level/, me/) — ДО /<int:id>/, ровно как в
-    # роутере исходника (users/ тоже был бы здесь, но эндпойнт отложен —
-    # см. tests/test_employees_api.py растяжку).
-    path("employees/hr-level/", views.employee_hr_level),
-    path("employees/hr-level", views.employee_hr_level),
+    # Литеральный роут (me/) — ДО /<int:id>/, ровно как в роутере исходника
+    # (users/ тоже был бы здесь, но эндпойнт отложен — см.
+    # tests/test_employees_api.py растяжку). ``hr-level/`` снята задачей 9
+    # блока I — свой уровень вызывающий узнаёт из ``/api/access/v1/me``.
 
     path("employees/me/", views.my_employee),
     path("employees/me", views.my_employee),

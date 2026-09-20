@@ -22,12 +22,16 @@ test_gate_covers_every_handle_of_translated_apps`` уже проверяет П�
    ``self_service`` — выдать его означало бы открыть ВЕСЬ модуль).
 2. Держатели настоящих засеянных ролей ``hr-junior``/``hr-middle``/
    ``hr-lead`` (``access/migrations/0005``) проходят через НОВЫЙ гейт ровно
-   на уровне, который несёт их роль, но финальное решение по-прежнему даёт
-   СТАРАЯ модель (``apps.hr.access.resolve_hr_access`` — Employee/Position-
-   эвристика): обе двери должны быть открыты разом, поэтому фикстуры ниже
-   заводят Employee/Position нужного уровня И назначают ту же по смыслу
-   засеянную роль (тот же приём, что в ``test_employees_api.py::
-   _grant_seeded_role`` — см. его докстринг про две независимые модели).
+   на уровне, который несёт их роль. На момент написания (задачи 5–6)
+   финальное решение по-прежнему давала СТАРАЯ модель (``apps.hr.access.
+   resolve_hr_access`` — Employee/Position-эвристика): обе двери должны
+   были быть открыты разом, поэтому фикстуры ниже заводят Employee/Position
+   нужного уровня И назначают ту же по смыслу засеянную роль (тот же приём,
+   что в ``test_employees_api.py::_grant_seeded_role`` — см. его докстринг
+   про две независимые модели). Задача 9 блока I сняла старую модель
+   целиком — Employee/Position ниже переживают её как ИСТОРИЧЕСКАЯ
+   избыточность (не мешают, но больше ни на что не влияют): единственная
+   действующая проверка сегодня — роль ``apps.access``.
 3. ЧТЕНИЕ справочников ``departments``/``positions`` открыто любому
    вошедшему без единой роли (см. ``apps.access.self_service`` — записи с
    причиной ``open``) — задача 5 это НЕ сузила, что здесь и проверяется
@@ -39,16 +43,18 @@ test_gate_covers_every_handle_of_translated_apps`` уже проверяет П�
    403.
 4. **Чувствительность к самому гейту** (раунд правок 1). Все тесты пунктов
    1–3 с отказом используют вызывающего, которого СТАРАЯ модель
-   (``resolve_hr_access``) тоже отвергает — они прошли бы и без единого
-   ``module=``. После задачи 9 старая модель исчезнет, и гейт останется
-   единственной защитой, поэтому нужен вызывающий, которого старая модель
-   ПУСКАЕТ, а гейт — нет: ``is_staff=True`` БЕЗ единой роли.
-   ``resolve_hr_access`` по ``token.is_elevated`` даёт ему ``HRAccess(
-   level="lead", permissions={"*"})`` — старая модель открывает ему всё, —
-   а ``permissions_for`` без назначений (и без ``is_superuser``) отдаёт
-   ``{}``, уровень ``none``, и гейт обязан ответить 403. Эти тесты падают,
-   стоит снять ``module=`` с ручки, — проверено вживую при раунде правок 1
-   (см. отчёт задачи 5).
+   (``resolve_hr_access``, на момент написания тестов) тоже отвергала — они
+   прошли бы и без единого ``module=``. Задача 9 блока I сняла старую модель
+   целиком, и гейт остался ЕДИНСТВЕННОЙ защитой — тогда, до её снятия, нужен
+   был вызывающий, которого старая модель ПУСКАЛА, а гейт — нет:
+   ``is_staff=True`` БЕЗ единой роли. ``resolve_hr_access`` по
+   ``token.is_elevated`` давал ему ``HRAccess(level="lead",
+   permissions={"*"})`` — старая модель открывала ему всё, — а
+   ``permissions_for`` без назначений (и без ``is_superuser``) отдаёт
+   ``{}``, уровень ``none``, и гейт обязан ответить 403 (это верно и
+   сегодня, ``resolve_hr_access`` в формуле участвовать перестал, но исход
+   для этого вызывающего тот же). Эти тесты падают, стоит снять ``module=``
+   с ручки, — проверено вживую при раунде правок 1 (см. отчёт задачи 5).
 """
 
 from __future__ import annotations
@@ -172,11 +178,12 @@ def lead_employee(company_row, hr_dep):
 
 @pytest.fixture
 def senior_employee(company_row, hr_dep):
-    """Задача 6: старший кадровик — старая модель ``senior`` (несёт
-    ``STAFFING_VIEW``/``STAFFING_MANAGE``/``CALENDAR_MANAGE``/``EMPLOYEES_
-    VIEW_ALL`` — см. ``apps/hr/permissions.py::_SENIOR``), новая роль
+    """Задача 6: старший кадровик — на момент написания старая модель тоже
+    отвечала ``senior`` (несёт ``STAFFING_VIEW``/``STAFFING_MANAGE``/
+    ``CALENDAR_MANAGE``/``EMPLOYEES_VIEW_ALL`` — см. ``apps/hr/
+    permissions.py::_SENIOR``); действующая сегодня (задача 9) — роль
     ``hr-senior`` (агрегат модуля ``hr`` — ``admin``, факт блока I). Нужен
-    там, где ``middle``/``junior`` не несут нужного старого ключа
+    там, где ``middle``/``junior`` не несут нужного узла
     (``hr.staffing.*``/``hr.calendar.manage`` появляются только с senior) —
     в отличие от employees/org (задача 5), где middle/lead уже достаточно."""
     pos = Position.objects.create(title="Senior HR Manager", department=hr_dep, weight=30)
@@ -195,10 +202,10 @@ def staff_admin(company_row):
     """Задача 6: ``is_staff=True`` (проходит ``admin=True``/``require_admin``
     в теле — тот предикат смотрит ТОЛЬКО на флаги токена, не на Employee/
     Position) + роль ``hr-lead`` (агрегат модуля ``hr`` — ``admin``). Нужна
-    там, где старая проверка ручки — буквальный ``admin=True`` (PMO,
-    personnel-history): ``lead_employee`` (Employee-based ``resolve_hr_
-    access`` без ``is_staff``) ЭТУ старую дверь не проходит вовсе — она не
-    смотрит на Employee, только на токен."""
+    там, где проверка ручки — буквальный ``admin=True`` (PMO,
+    personnel-history): ``lead_employee`` (несёт роль, но не ``is_staff``)
+    эту дверь не проходит вовсе — ``require_admin`` не смотрит на Employee,
+    только на флаги токена."""
     user = _mk("staff-admin", is_staff=True)
     give_seeded_role(user, company_row, "hr-lead")
     return headers(user, company_row)
@@ -208,15 +215,16 @@ def staff_admin(company_row):
 def staff_without_roles(company_row):
     """``is_staff=True`` БЕЗ единой роли и без Employee-профиля.
 
-    Старая модель его ПУСКАЕТ везде: ``resolve_hr_access`` первой строкой
-    смотрит ``token.is_elevated`` (``is_admin or is_staff or is_superuser``)
-    и отдаёт ``HRAccess(level="lead", permissions={"*"})``, не заглядывая ни
-    в Employee, ни в Position; ``admin=True`` на ручках должностей —
-    тот же предикат (``require_admin``). Новый гейт его НЕ пускает:
+    До задачи 9 старая модель его ПУСКАЛА везде: ``resolve_hr_access``
+    первой строкой смотрел ``token.is_elevated`` (``is_admin or is_staff or
+    is_superuser``) и отдавал ``HRAccess(level="lead", permissions={"*"})``,
+    не заглядывая ни в Employee, ни в Position; ``admin=True`` на ручках
+    должностей — тот же предикат (``require_admin``, он не снят и действует
+    сегодня так же). Гейт модуля его НЕ пускает ни тогда, ни сейчас:
     ``permissions_for`` короткое замыкание делает только для
     ``is_superuser``, а дальше считает по назначениям ролей — их нет,
     карта пустая, уровень модуля ``none``. Единственный вызывающий, на
-    котором 403 доказывает именно гейт, а не старую модель.
+    котором 403 доказывает именно гейт, а не (бывшую) старую модель.
     """
     user = _mk("staff-no-roles", is_staff=True)
     return headers(user, company_row)
@@ -253,8 +261,7 @@ def test_employee_basic_keeps_own_card(client, plain_employee):
 @pytest.mark.django_db
 def test_employee_basic_is_denied_the_employee_list(client, plain_employee):
     """``employee-basic`` не несёт ни одного узла ``hr.*`` — гейт
-    ``module="hr"`` отказывает РАНЬШЕ, чем запрос доходит до старой
-    ``require_hr_access``."""
+    ``module="hr"`` отказывает раньше, чем запрос доходит до тела вьюхи."""
     _emp, head = plain_employee
     resp = client.get(f"{BASE}/employees/", **head)
     assert resp.status_code == 403
@@ -346,9 +353,10 @@ def test_hr_junior_sees_the_employee_directory(client, junior_employee):
 def test_hr_junior_cannot_edit_an_employee(client, junior_employee, eng_dep):
     """hr-junior несёт только VIEW-узлы (``access/migrations/0005``) —
     агрегированный уровень модуля ``hr`` у неё ``read``, а PATCH стоит под
-    ``level="write"``: гейт отказывает РАНЬШЕ старой
-    ``require_can_write_basic`` (которая тоже отказала бы — junior не имеет
-    ``hr.employees.edit`` — но теперь до неё дело не доходит)."""
+    ``level="write"``: гейт отказывает раньше, чем запрос доходит до тела
+    вьюхи и её собственной проверки узла (``access.has(EMPLOYEES_EDIT)`` —
+    junior не имеет ``hr.employees.edit`` и отказала бы тоже, но до неё дело
+    не доходит)."""
     _actor, head = junior_employee
     pos = Position.objects.create(title="Инженер", department=eng_dep, weight=6)
     target = Employee.objects.create(
@@ -409,13 +417,15 @@ def test_hr_lead_can_delete_an_employee(client, lead_employee, hr_dep):
     assert target.is_deleted is True
 
 
-# ── чувствительность к гейту: is_staff без ролей — старая модель пускает ──
+# ── чувствительность к гейту: is_staff без ролей — старая модель пускала ──
 #
-# Каждый тест ниже прошёл бы со статусом 2xx, не будь на ручке module=/level=:
-# старая модель (resolve_hr_access → is_elevated → level="lead", {"*"};
-# admin=True → require_admin → is_elevated) даёт этому вызывающему всё.
-# Отказать может ТОЛЬКО гейт. Убери module= с ручки — соответствующий тест
-# упадёт (проверено вживую при раунде правок 1, см. отчёт задачи 5).
+# Каждый тест ниже прошёл бы со статусом 2xx, не будь на ручке module=/level=
+# (это было верно и до задачи 9: старая модель — resolve_hr_access →
+# is_elevated → level="lead", {"*"} — давала этому вызывающему всё же тогда).
+# ``admin=True`` → ``require_admin`` → ``is_elevated`` не менялся и даёт то
+# же самое сегодня. Отказать может ТОЛЬКО гейт. Убери module= с ручки —
+# соответствующий тест упадёт (проверено вживую при раунде правок 1, см.
+# отчёт задачи 5).
 
 
 @pytest.mark.django_db
@@ -648,8 +658,9 @@ def test_staff_without_roles_cannot_delete_a_calendar_template(client, staff_wit
 @pytest.mark.django_db
 def test_staff_without_roles_cannot_read_employee_calendar(client, staff_without_roles, target_employee):
     """``employee_calendar`` — ``level="read"`` ПОВЕРХ ``_visible_access``
-    (``require_hr_access``-эквивалент); ``{"*"}`` прошёл бы обе старые
-    проверки (доступ + видимость отдела), отказывает только гейт."""
+    (видимость отдела); до задачи 9 ``{"*"}`` старой модели прошёл бы и её
+    отдельную «есть ли HR-доступ вообще», и видимость отдела — отказывает
+    только гейт."""
     resp = client.get(
         f"{BASE}/employees/{target_employee.id}/calendar"
         "?start=2026-06-01&end=2026-06-01",

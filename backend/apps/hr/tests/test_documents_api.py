@@ -21,7 +21,7 @@ apps/hr/services/document_service.py.
     JSON — обоснование см. комментарий над `_upload_document` в
     `apps/hr/views.py`, тот же приём, что запись отделов в задаче 5.
     Открытым (без гейта) на записи `/documents/*` остаётся только DELETE.
-  * /employees/{id}/documents — require_hr_access + _require_visible_employee
+  * /employees/{id}/documents — модульный гейт + _require_visible_employee
     (та же пара, что history), НЕ admin=True.
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
@@ -82,8 +82,8 @@ def auth(db):
 
 @pytest.fixture
 def admin_auth(db, company_row):
-    """is_staff=True — elevated: нужен для /employees/{id}/documents
-    (require_hr_access) и для правок карточки документа (PATCH/загрузка).
+    """is_staff=True — elevated: нужен для /employees/{id}/documents и для
+    правок карточки документа (PATCH/загрузка).
 
     Блок I задача 5: ``GET employees/{id}/documents`` стоит под
     ``module="hr", level="read"`` — роль ``hr-lead`` выдана явно, потому что
@@ -327,11 +327,12 @@ def hr_uploader_auth(db, dep, pos, company_row):
     карточки некуда.
 
     Блок I, задача 6: ``_upload_document_multipart`` теперь ещё и под
-    ``module="hr", level="write"`` (поверх ``require_can_write_basic``,
-    который эта фикстура уже проходила через ``is_staff``) — без
-    ``X-HTQ-Company`` + засеянной роли новый гейт отвечал бы 403 раньше
-    старой проверки. ``hr-lead`` выбран как "full access", соответствующий
-    имени и духу фикстуры (та же роль, что ``admin_auth`` в этом файле).
+    ``module="hr", level="write"`` — до задачи 9 поверх узловой проверки
+    ``EMPLOYEES_EDIT`` (которую эта фикстура уже проходила через
+    ``is_staff``, коротившийся в ней безусловно); без ``X-HTQ-Company`` +
+    засеянной роли гейт отвечал бы 403 раньше той проверки. ``hr-lead``
+    выбран как "full access", соответствующий имени и духу фикстуры (та же
+    роль, что ``admin_auth`` в этом файле).
     """
     from apps.access.models import Role, RoleAssignment, ScopeKind
 

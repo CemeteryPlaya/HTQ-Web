@@ -10,9 +10,9 @@ repositories/base_repo.py в части, которую он использов�
   эндпойнт (включая POST/PUT/DELETE) не зовёт ``require_hr_write``, в
   отличие от positions/org, где записи защищены ``is_elevated``. Это
   странность исходника, не баг порта: все 13 эндпойнтов здесь —
-  ``api_view(auth="jwt")`` без ``admin=True``, и ``apps.hr.access``
-  (HRAccess/resolve_hr_access) тоже не задействован — recruiting в
-  исходнике не использует и его.
+  ``api_view(auth="jwt")`` без ``admin=True``, и без единого узла реестра
+  ``apps.hr.rbac`` тоже — recruiting в исходнике не проверял кадровые права
+  вовсе, и порт этого не добавляет.
 * ``archive()`` (GET /applications/archive/) в исходнике джойнит модель
   ``Document`` (``app/models/document.py``) — ``select(Document).order_by(
   Document.created_at.desc()).limit(200)``, без фильтра по employee/vacancy

@@ -37,7 +37,9 @@ def test_participant_oversees_the_group_but_does_not_serve_it():
     assert position.is_manager is True
     assert position.external_hierarchy == ExternalHierarchy.INHERIT
     assert position.serves_subsidiaries is False
-    assert position.permissions == {"hr_level": "lead", "permissions": []}
+    # ``permissions`` не проставляется вовсе (задача 9 блока I: колонка
+    # мертва для авторизации, ``ensure_participant`` её больше не пишет).
+    assert position.permissions is None
 
 
 @pytest.mark.django_db

@@ -35,8 +35,7 @@ from apps.mail import interface as mail_interface
 from apps.signoff import interface as signoff
 from apps.users import interface as users_interface
 
-from . import access as hr_access
-from . import permissions as hr_permissions
+from . import rbac
 from . import schemas
 from .models import IdentityChangeRequest
 from .services import identity_request_service as identity_request_svc
@@ -45,10 +44,19 @@ from .permissions import (
     CALENDAR_VIEW,
     CARD_GROUPS_EDIT,
     CARD_GROUPS_VIEW,
+    EMPLOYEES_CREATE,
+    EMPLOYEES_DELETE,
+    EMPLOYEES_EDIT,
+    EMPLOYEES_TRANSFER,
+    IDENTITY_FORCE,
+    IDENTITY_MANAGE,
+    IDENTITY_VIEW,
     LEVEL_PRESETS,
     ORG_EDIT,
     STAFFING_MANAGE,
     STAFFING_VIEW,
+    USERS_LIST,
+    USERS_MANAGE,
 )
 from .services import approval_service as approval_svc
 from .services import audit_service
@@ -538,17 +546,19 @@ def move_position(request, id: int, data: schemas.PositionMoveRequest):
 #  {id}/card — раскрыты под-модулем employee_card (EmployeeCard/build_card).
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Авторизация здесь — НЕ грубый api_view(admin=True) (как в positions):
-# каждая вьюха аутентифицирует через ``auth="jwt"``, затем сама зовёт
-# ``hr_access.resolve_hr_access(request.token)`` и проверяет ``access.can_*``,
-# поднимая нужный 403 с ТОЧНЫМ detail исходника. ``HRAccessDenied`` несёт
-# detail "HR access required" / "HR write access required" (require_hr_access/
-# require_can_write_basic); остальные 403 ("Senior HR access required", "CO HR
-# access required", "Transferring, changing position...") — inline, как в
-# роутере исходника.
+# Авторизация здесь — ДВА слоя одной модели (``apps.access``, блок I):
+# вход в ручку решает гейт ``api_view(module="hr", level=…)`` (уровень
+# модуля), конкретное ДЕЙСТВИЕ — проверка узла реестра через
+# ``rbac.resolve(request).has(<ключ>)`` (``apps/hr/rbac.py``: ключ →
+# узел + признаки по ``legacy_roles.KEY_TO_NODE``, той же таблице, которой
+# засеяны роли). Тексты 403 — те же, что у роутера исходника ("Senior HR
+# access required", "CO HR access required", "HR write access required",
+# "Transferring, changing position..."): контракт с фронтом не менялся.
+# Область «свой отдел / вся компания» — ``access.can_see_department`` /
+# ``access.scope`` из области выданной роли, не из карточки вызывающего.
 
 
-def _require_visible_employee(id: int, access: hr_access.HRAccess):
+def _require_visible_employee(id: int, access: rbac.NodeAccess):
     """Порт ``_require_visible_employee`` роутера исходника.
 
     404 "Employee not found" (НЕ 403) для чужого отдела — намеренно: не
@@ -562,23 +572,10 @@ def _require_visible_employee(id: int, access: hr_access.HRAccess):
     return employee
 
 
-# ── /employees/hr-level/ (литеральный роут — ДО /{id}/) ──────────────────────
-
-@api_view(methods=("GET",), auth="jwt")
-def employee_hr_level(request):
-    access = hr_access.resolve_hr_access(request.token)
-    return {
-        "level": access.level,
-        "scope_department_id": access.department_id,
-        "can_read_all": access.can_read_all,
-        "can_write_basic": access.can_write_basic,
-        "can_create_employee": access.can_create_employee,
-        "can_transfer_employee": access.can_transfer_employee,
-        "can_delete_employee": access.can_delete_employee,
-        "can_list_user_options": access.can_list_user_options,
-        "can_manage_user_options": access.can_manage_user_options,
-        "permissions": sorted(access.permissions),
-    }
+# ``GET /employees/hr-level/`` удалена задачей 9 блока I: свой кадровый
+# уровень и область вызывающий узнаёт из ``/api/access/v1/me`` (единственный
+# потребитель — ``useHRLevel`` — переведён туда задачей 8), а вторая ручка
+# про то же самое была бы вторым источником правды о правах.
 
 
 # ── /employees/me/ (литеральный роут — ДО /{id}/) ─────────────────────────────
@@ -641,11 +638,8 @@ def _list_user_options(request):
     целиком и искала по нему в браузере — это работало ровно до тех пор,
     пока учёток было меньше сотни.
     """
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-    if not access.can_list_user_options:
+    access = rbac.resolve(request)
+    if not access.has(USERS_LIST):
         return json_error("Senior HR access required", 403)
 
     search = (request.GET.get("search") or "").strip() or None
@@ -663,11 +657,8 @@ def _list_user_options(request):
 
 @api_view(methods=("POST",), auth="jwt", body=schemas.HRUserCreateRequest, status=201, module="hr", level="write")
 def _create_user_option(request, data: schemas.HRUserCreateRequest):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-    if not access.can_manage_user_options:
+    access = rbac.resolve(request)
+    if not access.has(USERS_MANAGE):
         return json_error("CO HR access required", 403)
 
     if not data.email or "@" not in data.email:
@@ -715,11 +706,8 @@ def user_prefill(request, user_id: int):
     Точечная ручка вместо расширения списка: bio и avatar_url нужны ровно в
     момент выбора ОДНОГО пользователя (спека §10).
     """
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-    if not access.can_list_user_options:
+    access = rbac.resolve(request)
+    if not access.has(USERS_LIST):
         return json_error("Senior HR access required", 403)
 
     profile = users_interface.get_user_profile_for_hr(user_id)
@@ -743,11 +731,8 @@ def employee_mailbox_sources(request):
     mail отдаёт пустой список, а не 503 (см. ``mail.interface``): вкладка
     источника просто пуста, форма сотрудника работает.
     """
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-    if not access.can_list_user_options:
+    access = rbac.resolve(request)
+    if not access.has(USERS_LIST):
         return json_error("Senior HR access required", 403)
 
     search = (request.GET.get("search") or "").strip()
@@ -770,7 +755,7 @@ def _source_access_error(source_type: str, access):
     право, что и пикер учёток (``hr.users.list``). Источник «сотрудник» —
     свои же карточки, он закрыт обычной видимостью отдела (ниже)."""
     if source_type in (prefill_svc.SOURCE_USER, prefill_svc.SOURCE_MAILBOX) \
-            and not access.can_list_user_options:
+            and not access.has(USERS_LIST):
         return json_error("Senior HR access required", 403)
     return None
 
@@ -809,18 +794,15 @@ _PREFILL_ERRORS = (
 
 @api_view(methods=("POST",), auth="jwt", body=schemas.PrefillPreviewRequest, module="hr", level="write")
 def employee_prefill_preview(request, data: schemas.PrefillPreviewRequest):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    access = rbac.resolve(request)
 
     employee = None
     if data.employee_id is None:
         # Карточку ещё создают — право то же, что и на само создание.
-        if not access.can_create_employee:
+        if not access.has(EMPLOYEES_CREATE):
             return json_error("Senior HR access required", 403)
     else:
-        if not access.can_write_basic:
+        if not access.has(EMPLOYEES_EDIT):
             return json_error("HR write access required", 403)
         try:
             employee = _require_visible_employee(data.employee_id, access)
@@ -844,10 +826,9 @@ def employee_prefill_preview(request, data: schemas.PrefillPreviewRequest):
 
 @api_view(methods=("POST",), auth="jwt", body=schemas.PrefillApplyRequest, module="hr", level="write")
 def employee_prefill_apply(request, id: int, data: schemas.PrefillApplyRequest):
-    try:
-        access = hr_access.require_can_write_basic(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    access = rbac.resolve(request)
+    if not access.has(EMPLOYEES_EDIT):
+        return json_error("HR write access required", 403)
     try:
         _require_visible_employee(id, access)
     except emp_svc.EmployeeNotFound:
@@ -856,7 +837,7 @@ def employee_prefill_apply(request, id: int, data: schemas.PrefillApplyRequest):
     # Отдел и должность через префилл меняются по тому же праву, что и через
     # PATCH (_update_employee выше): иначе «подтянуть данные» стало бы
     # обходным путём для перевода сотрудника.
-    if not access.can_transfer_employee and (set(data.fields) & prefill_svc.TRANSFER_FIELDS):
+    if not access.has(EMPLOYEES_TRANSFER) and (set(data.fields) & prefill_svc.TRANSFER_FIELDS):
         return json_error(
             "Transferring, changing position, or terminating requires the transfer permission",
             403,
@@ -889,11 +870,8 @@ def employee_match_suggestions(request):
     вызывается на каждый ввод (с дебаунсом на фронте) — кэшируемость и
     отменяемость здесь важнее компактного тела.
     """
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-    if not access.can_create_employee:
+    access = rbac.resolve(request)
+    if not access.has(EMPLOYEES_CREATE):
         return json_error("Senior HR access required", 403)
 
     try:
@@ -912,11 +890,8 @@ def employee_match_suggestions(request):
 
 @api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_import_candidates(request):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-    if not access.can_create_employee:
+    access = rbac.resolve(request)
+    if not access.has(EMPLOYEES_CREATE):
         return json_error("Senior HR access required", 403)
 
     try:
@@ -933,11 +908,8 @@ def employee_import_candidates(request):
 def employee_bulk_import(request, data: schemas.BulkImportRequest):
     """Ответ — 200 с отчётом, а не 201: пачка почти всегда частично успешна,
     и «создано 38, пропущено 2 с причинами» — это результат, а не ошибка."""
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-    if not access.can_create_employee:
+    access = rbac.resolve(request)
+    if not access.has(EMPLOYEES_CREATE):
         return json_error("Senior HR access required", 403)
     if not access.can_see_department(data.department_id):
         return json_error("Department not found", 404)
@@ -971,10 +943,7 @@ def _list_employees(request):
     except ValidationError as exc:
         return _query_error(exc)
 
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    access = rbac.resolve(request)
 
     effective_department_id = query.department_id
     if not access.can_read_all:
@@ -1019,11 +988,8 @@ def _apply_card_t2(employee_id: int, patch_model, access) -> None:
 
 @api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeCreateRequest, status=201, module="hr", level="write")
 def _create_employee(request, data: schemas.EmployeeCreateRequest):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-    if not access.can_create_employee:
+    access = rbac.resolve(request)
+    if not access.has(EMPLOYEES_CREATE):
         return json_error("Senior HR access required", 403)
 
     core = schemas.EmployeeCreate.model_validate(data.model_dump(exclude={"card_t2"}))
@@ -1065,10 +1031,7 @@ def employees_collection(request):
 
 @api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def _get_employee(request, id: int):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    access = rbac.resolve(request)
     try:
         employee = _require_visible_employee(id, access)
     except emp_svc.EmployeeNotFound:
@@ -1080,16 +1043,15 @@ def _get_employee(request, id: int):
 def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
     # PUT — задокументированный контракт исходника; PATCH регистрируем тоже
     # (аддитивно), как и в departments/positions.
-    try:
-        access = hr_access.require_can_write_basic(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    access = rbac.resolve(request)
+    if not access.has(EMPLOYEES_EDIT):
+        return json_error("HR write access required", 403)
     try:
         _require_visible_employee(id, access)
     except emp_svc.EmployeeNotFound:
         return json_error("Employee not found", 404)
 
-    if not access.can_transfer_employee and (
+    if not access.has(EMPLOYEES_TRANSFER) and (
         data.department_id is not None
         or data.position_id is not None
         or data.termination_date is not None
@@ -1109,7 +1071,7 @@ def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
                 # расширение его власти: решение по заявке он и так принимает
                 # сам (identity_request_service.may_decide), обход лишь
                 # избавляет от лишнего шага.
-                force_identity=access.has(hr_permissions.IDENTITY_FORCE))
+                force_identity=access.has(IDENTITY_FORCE))
             _apply_card_t2(id, data.card_t2, access)
     except emp_svc.DepartmentNotFound:
         return json_error("Department not found", 422)
@@ -1135,11 +1097,8 @@ def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
 
 @api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_employee(request, id: int):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-    if not access.can_delete_employee:
+    access = rbac.resolve(request)
+    if not access.has(EMPLOYEES_DELETE):
         return json_error("CO HR access required", 403)
     try:
         _require_visible_employee(id, access)
@@ -1163,11 +1122,8 @@ def employee_detail(request, id: int):
 
 @api_view(methods=("POST",), auth="jwt", body=schemas.EmployeeTransfer, module="hr", level="write")
 def transfer_employee(request, id: int, data: schemas.EmployeeTransfer):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-    if not access.can_transfer_employee:
+    access = rbac.resolve(request)
+    if not access.has(EMPLOYEES_TRANSFER):
         return json_error("Senior HR access required", 403)
     try:
         _require_visible_employee(id, access)
@@ -1187,10 +1143,7 @@ def transfer_employee(request, id: int, data: schemas.EmployeeTransfer):
 
 @api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_history(request, id: int):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    access = rbac.resolve(request)
     try:
         _require_visible_employee(id, access)
     except emp_svc.EmployeeNotFound:
@@ -1201,19 +1154,14 @@ def employee_history(request, id: int):
 # ── /employees/{id}/documents ────────────────────────────────────────────────
 #
 # Порт employees.py::employee_documents (исходник, hr-docs под-модуль): та же
-# пара require_hr_access + _require_visible_employee, что и history выше
-# (буквально идентичный auth-пролог исходника: ``require_hr_access(await
-# resolve_hr_access(db, current_user))`` + ``_require_visible_employee``).
-# Раскрыт после переноса модели Document (apps/hr/services/document_service.py)
-# — растяжка test_documents_endpoint_todo_is_tracked в test_employees_api.py
-# снята.
+# пара — модульный гейт (``module="hr", level="read"``) + _require_visible_employee
+# — что и history выше. Раскрыт после переноса модели Document
+# (apps/hr/services/document_service.py) — растяжка
+# test_documents_endpoint_todo_is_tracked в test_employees_api.py снята.
 
 @api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_documents(request, id: int):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    access = rbac.resolve(request)
     try:
         _require_visible_employee(id, access)
     except emp_svc.EmployeeNotFound:
@@ -1229,7 +1177,7 @@ def employee_documents(request, id: int):
 # ``PMOService.get_employee_pmos`` исходника — здесь pmo_svc.get_employee_pmos
 # (см. apps/hr/services/pmo_service.py). Auth — идентична соседям: /me/pmos
 # резолвит СВОЙ Employee (как my_employee выше, 404 "Employee profile not
-# found" при отсутствии профиля); /{id}/pmos — require_hr_access +
+# found" при отсутствии профиля); /{id}/pmos — модульный гейт +
 # _require_visible_employee (как history/documents выше).
 
 @api_view(methods=("GET",), auth="jwt")
@@ -1242,10 +1190,7 @@ def my_pmos(request):
 
 @api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_pmos(request, id: int):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    access = rbac.resolve(request)
     try:
         _require_visible_employee(id, access)
     except emp_svc.EmployeeNotFound:
@@ -1257,33 +1202,31 @@ def employee_pmos(request, id: int):
 #
 # Порт employees.py::my_employee_card/employee_card исходника — РАСКРЫТЫ этим
 # под-модулем (модель EmployeeCard появилась, employee_card_service.build_card
-# перенесён). ``/me/card`` — БЕЗ require_hr_access, буквально как исходник
-# (``access = await resolve_hr_access(db, current_user)`` — НЕ обёрнуто в
-# require_hr_access, в отличие от /{id}/card ниже и от /me/pmos выше, который
-# access вообще не резолвит): любой со своим Employee-профилем видит СВОЮ
-# карточку целиком (email/phone/manager/subordinates/pmos — всегда), а Т-2
-# секции внутри неё (``card["t2"]``) гейтятся ПОЛЕВЫМ RBAC card_t2_svc —
-# сотрудник без единого hr.card.*.view ключа получит пустой ``t2: {}``, но не
-# 403 на сам эндпойнт. ``/{id}/card`` — ТА ЖЕ пара require_hr_access +
-# _require_visible_employee, что history/documents/pmos выше (403 "HR access
-# required" при полном отсутствии HR-доступа, 404 "Employee not found" за
-# несуществующего/невидимого — приватность, не различаем случаи).
+# перенесён). ``/me/card`` — БЕЗ модульного гейта, в реестре самообслуживания
+# как ``self`` (своя карточка): у вызывающего может не быть ни единой роли
+# ``hr.*`` (employee-basic тоже сюда стучится), и ``rbac.NodeAccess.scope``
+# тогда честно отвечает ``("none", None)`` вместо исключения — любой со своим
+# Employee-профилем видит СВОЮ карточку целиком (email/phone/manager/
+# subordinates/pmos — всегда), а Т-2 секции внутри неё (``card["t2"]``)
+# гейтятся ПОЛЕВЫМ RBAC card_t2_svc — без единого ``hr.card.*.view`` узла
+# получится пустой ``t2: {}``, но не 403 на сам эндпойнт. ``/{id}/card`` —
+# под модульным гейтом (``module="hr", level="read"``) + той же
+# ``_require_visible_employee``, что history/documents/pmos выше (404
+# "Employee not found" за несуществующего/невидимого — приватность, не
+# различаем случаи).
 
 @api_view(methods=("GET",), auth="jwt")
 def my_employee_card(request):
     employee = emp_svc.get_my_employee(request.token)
     if employee is None:
         return json_error("Employee profile not found", 404)
-    access = hr_access.resolve_hr_access(request.token)
+    access = rbac.resolve(request)
     return card_svc.build_card(employee.id, mode="full", access=access)
 
 
 @api_view(methods=("GET",), auth="jwt", module="hr", level="read")
 def employee_card(request, id: int):
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    access = rbac.resolve(request)
     try:
         _require_visible_employee(id, access)
     except emp_svc.EmployeeNotFound:
@@ -1300,12 +1243,16 @@ def employee_card(request, id: int):
 # employee-relations``, ``PUT departments/{id}/manager``) — ИЗМЕНЕНА
 # относительно исходного порта: было ``api_view(admin=True)`` (=
 # require_hr_write исходника = is_elevated, тот же грубый предикат, что у
-# positions/*). Стало — ключ прав ``hr.org.edit`` через ``_require_permission``
-# (идиома staffing/*), доступный HR senior/lead — решение пользователя:
-# оргструктуру правит HR, а не только платформенный админ. Elevated-токены
-# (``is_staff``/``is_superuser``) доступ СОХРАНЯЮТ: ``resolve_hr_access``
-# коротит их в ``HRAccess(level="lead", permissions={"*"})``, а ``has()``
-# отдаёт True на любой ключ при ``"*"``.
+# positions/*). Стало — узел реестра ``hr.org``, все четыре признака
+# (``legacy_roles.KEY_TO_NODE[ORG_EDIT]`` — полный CRUD над рёбрами дерева)
+# через ``_require_permission`` (идиома staffing/*), доступный HR
+# senior/lead — решение пользователя: оргструктуру правит HR, а не только
+# платформенный админ. Из elevated-токенов (``is_staff``/``is_admin``/
+# ``is_superuser``) свободный проход сохраняет только ``is_superuser``
+# (``apps.access`` коротит на нём одном — см. ``resolve.flags_for``); голый
+# ``is_staff`` без единой роли ``hr.*`` не проходит уже модульный гейт
+# (``module="hr", level="write"`` выше) — эта проверка узла лишь повторяет
+# отказ, до неё дело не доходит.
 #
 # ``PUT /org/settings/deletion-strategy`` НАМЕРЕННО остаётся ``admin=True`` —
 # это глобальная политика удаления отделов, а не редактирование связей
@@ -1882,19 +1829,17 @@ def time_monthly_report(request):
 #  /staffing/* — порт services/hr/app/api/v1/staffing.py (6 эндпойнтов)
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Авторизация — НЕ hr_access.require_hr_access/require_can_write_basic
-# (грубые ворота employees) и НЕ api_view(admin=True) (positions/org):
-# исходник гейтит fine-grained PERMISSION-KEY через module-level
-# ``_VIEW = require_permission("hr.staffing.view")``/``_MANAGE =
-# require_permission("hr.staffing.manage")`` (app/auth/hr_access.py::
-# require_permission) — 403 detail — ТОЧНАЯ строка f"Missing permission:
-# {key}", отличная от HRAccessDenied ("HR access required"/"HR write access
-# required"). Порт: _require_permission(request, key) ниже воспроизводит это
-# буквально через hr_access.resolve_hr_access(request.token).has(key).
+# Авторизация — fine-grained ПРОВЕРКА УЗЛА (``hr.staffing.view``/
+# ``hr.staffing.manage``), а не грубые ворота employees и не
+# api_view(admin=True) (positions/org): _require_permission(request, key)
+# ниже зовёт ``rbac.resolve(request).has(key)`` — ключ раскрывается в узел
+# реестра и набор признаков через ``legacy_roles.KEY_TO_NODE`` (задача 9
+# блока I). 403 detail — ТОЧНАЯ строка f"Missing permission: {key}" —
+# контракт с фронтом, не меняется.
 
 def _require_permission(request, key: str):
     """None, err — err — готовый json_error(403) если ключа нет у вызывающего."""
-    access = hr_access.resolve_hr_access(request.token)
+    access = rbac.resolve(request)
     if not access.has(key):
         return None, json_error(f"Missing permission: {key}", 403)
     return access, None
@@ -2070,14 +2015,16 @@ def personnel_history_detail(request, id: int):
 # app/auth/hr_access.py::require_permission).
 #
 # Авторизация /employees/{id}/calendar* — ОТДЕЛЬНАЯ схема исходника
-# (_visible() роутера calendar.py): СНАЧАЛА require_hr_access (403 "HR access
-# required" при полном отсутствии HR-доступа) -> ЗАТЕМ EmployeeService.
+# (_visible() роутера calendar.py): исходник шёл require_hr_access (403 "HR
+# access required" при полном отсутствии HR-доступа) -> EmployeeService.
 # get_employee + can_see_department (404 "Employee not found" и за
-# несуществующего, и за невидимого сотрудника) -> ТОЛЬКО ПОТОМ
-# access.has("hr.calendar.view"/"hr.calendar.manage") (403 "Missing
-# permission: ..."). Порт: _visible_access(request, employee_id) ниже
-# буквально воспроизводит этот порядок, переиспользуя
-# _require_visible_employee (employees section выше).
+# несуществующего, и за невидимого сотрудника) -> access.has("hr.calendar.
+# view"/"manage") (403 "Missing permission: ..."). ``_visible_access`` ниже
+# сохраняет второй и третий шаг (``_require_visible_employee`` из employees
+# section выше + финальная проверка узла в вызывающей вьюхе); первый шаг с
+# задачи 9 блока I делает не он сам, а модульный гейт вызывающей вьюхи
+# (``module="hr", level=…``) — без единой роли ``hr.*`` он отверг бы запрос
+# раньше, чем тот дошёл бы до ``_visible_access``.
 #
 # Путь-параметр ``day`` — у исходника это pydantic ``date`` (FastAPI сам
 # отдаёт 422 на невалидный формат); Django не имеет встроенного date-
@@ -2099,11 +2046,14 @@ def _parse_day(value: str):
 def _visible_access(request, employee_id: int):
     """(access, None) | (None, err) — порт _visible(employee_id, db,
     current_user) роутера исходника (БЕЗ финальной проверки конкретного
-    permission-ключа — её делает вызывающая вьюха, ровно как в исходнике)."""
-    try:
-        access = hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return None, json_error(exc.detail, 403)
+    permission-ключа — её делает вызывающая вьюха, ровно как в исходнике).
+
+    Старая проверка «есть ли кадровый доступ хоть какой-нибудь»
+    (``require_hr_access``) снята задачей 9 блока I: у КАЖДОЙ вызывающей
+    вьюхи уже стоит модульный гейт (``module="hr", level=…``) — без единой
+    роли ``hr.*`` он отверг бы запрос раньше, чем тот сюда дошёл бы, — так
+    что отдельно проверять «доступ вообще есть» здесь избыточно."""
+    access = rbac.resolve(request)
     try:
         _require_visible_employee(employee_id, access)
     except emp_svc.EmployeeNotFound:
@@ -2491,10 +2441,8 @@ def _upload_document_multipart(request):
     # (``store_file(internal_authorized=True)``). У JSON-ветки исходника
     # проверки нет и мы её туда не добавляем, но здесь без неё ручаться
     # не за что.
-    try:
-        hr_access.require_can_write_basic(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    if not rbac.resolve(request).has(EMPLOYEES_EDIT):
+        return json_error("HR write access required", 403)
 
     employee_raw = request.POST.get("employee") or request.POST.get("employee_id")
     try:
@@ -2554,10 +2502,8 @@ def _patch_document(request, id: int, data: schemas.DocumentPatch):
     получал 405, а семантика тут одна — частичное обновление переданных
     полей (та же пара методов, что у employees/positions/time-entries).
     """
-    try:
-        hr_access.require_can_write_basic(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
+    if not rbac.resolve(request).has(EMPLOYEES_EDIT):
+        return json_error("HR write access required", 403)
     try:
         return doc_svc.patch_document(id, data)
     except doc_svc.DocumentNotFound:
@@ -2603,10 +2549,11 @@ def document_detail(request, id: int):
 #  пара эндпойнтов, что в исходнике (build_card целиком, а не только t2).
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Auth — ``_visible_access`` (определена выше, секция /calendar/*): БУКВАЛЬНО
-# ``_visible_employee`` роутера исходника (``require_hr_access(await
-# resolve_hr_access(...))`` + ``EmployeeService.get_employee`` +
-# ``can_see_department`` -> 404 "Employee not found") — тот же хелпер, что уже
+# Auth — ``_visible_access`` (определена выше, секция /calendar/*): порт
+# ``_visible_employee`` роутера исходника (``EmployeeService.get_employee`` +
+# ``can_see_department`` -> 404 "Employee not found"; «есть ли HR-доступ
+# вообще» с задачи 9 блока I решает модульный гейт вызывающей вьюхи, не сам
+# хелпер — см. докстринг ``_visible_access``) — тот же хелпер, что уже
 # используют employee_calendar*, переиспользуется буквально, не дублируется.
 #
 # Полевой RBAC-гейтинг Т-2 секций (financial/personal) — ВНУТРИ
@@ -2878,7 +2825,7 @@ def pmo_org_chart(request, id: int):
 #     (``auth=None``): доступ по знанию токена ссылки, проверка внутри
 #     share_link_service;
 #   * department-files/department-file-folders — ``get_current_user`` +
-#     собственный department-based access-check (НЕ hr_access.HRAccess,
+#     собственный department-based access-check (НЕ ``apps.hr.rbac``,
 #     НЕ require_permission — самостоятельная авторизационная модель
 #     исходника, отдел сотрудника == department_id ИЛИ is_elevated);
 #   * /logs/ (audit) — обычный ``get_current_user`` -> auth="jwt", БЕЗ
@@ -3188,13 +3135,17 @@ def audit_logs(request):
 def _identity_access(request):
     """Общий вход: разрешённый HR-скоуп (возможно пустой) + признак админа.
 
-    ``require_hr_access`` здесь НЕ применяется намеренно: подтверждающий —
-    руководитель отдела, а он в общем случае не кадровик и HR-прав не имеет
-    вовсе. Гейт по HR-доступу отсекал бы его от собственной задачи, поэтому
-    каждая вьюха ниже решает про доступ сама: админ, либо hr.identity.view,
-    либо «ты подтверждающий по этой заявке».
+    Единого гейта «есть ли кадровый доступ вообще» здесь НЕТ намеренно:
+    подтверждающий — руководитель отдела, а он в общем случае не кадровик и
+    ни одной роли ``hr.*`` не имеет вовсе. Такой гейт отсекал бы его от
+    собственной задачи, поэтому каждая вьюха ниже решает про доступ сама:
+    админ, либо ``hr.identity.view``/``hr.identity.manage`` (узел реестра
+    через ``rbac.NodeAccess.has``), либо «ты подтверждающий по этой заявке».
+    ``rbac.resolve`` отвечает честной пустой областью (``scope == ("none",
+    None)``), а не исключением, ровно когда ролей ``hr.*`` нет вовсе — это и
+    нужно вызывающему без единого кадрового права.
     """
-    return hr_access.resolve_hr_access(request.token), require_admin(request.token)
+    return rbac.resolve(request), require_admin(request.token)
 
 
 @api_view(methods=("GET",), auth="jwt")
@@ -3214,7 +3165,7 @@ def identity_requests_collection(request):
         queryset = queryset.filter(status=status_filter)
 
     rows = list(queryset[:500])
-    if not (is_admin or access.can_view_identity_requests):
+    if not (is_admin or access.has(IDENTITY_VIEW)):
         actor = request.token.user_id
         rows = [r for r in rows
                 if identity_request_svc.resolve_approver(r.employee) == actor]
@@ -3233,7 +3184,7 @@ def identity_request_detail(request, id: int):
     if row is None:
         return json_error("Identity request not found", 404)
 
-    may_read = (is_admin or access.can_view_identity_requests
+    may_read = (is_admin or access.has(IDENTITY_VIEW)
                 or identity_request_svc.may_decide(
                     row.employee, actor_id=request.token.user_id, is_admin=is_admin))
     if not may_read:
@@ -3278,14 +3229,14 @@ def _set_identity_approver(request):
     """Назначить подтверждающего.
 
     ``module="hr", level="admin"`` ПОВЕРХ уже существующей проверки
-    (``is_admin or access.can_manage_identity_approver``, т.е.
+    (``is_admin or access.has(IDENTITY_MANAGE)``, т.е.
     ``hr.identity.manage`` — только у ``lead``): в отличие от READ/DECIDE-
     ручек этого под-модуля, у НАЗНАЧЕНИЯ подтверждающего нет escape-хода
     «ты и так подтверждающий» — это чистая кадрово-административная
     операция («раздача права писать в чужие аккаунты», см. комментарий
     ниже), гейт её не сужает."""
     access, is_admin = _identity_access(request)
-    if not (is_admin or access.can_manage_identity_approver):
+    if not (is_admin or access.has(IDENTITY_MANAGE)):
         return json_error("Назначение подтверждающего требует hr.identity.manage", 403)
     try:
         data = schemas.IdentityApproverRequest.model_validate_json(request.body or b"{}")
@@ -3350,7 +3301,7 @@ def submit_subject(request, subject_type: str, subject_id: int):
 def _deny_unless_holding(request):
     """Сводка по всей группе доступна только с поддомена холдинга.
 
-    Обычная кадровая проверка (``hr_access.require_hr_access``) знает только
+    Обычный модульный гейт (``module="hr", level="read"``) знает только
     уровень доступа ВЫЗЫВАЮЩЕГО в его собственной компании и ничего не знает
     про ВИД этой компании: без этой сверки директор дочернего общества с
     обычным HR-доступом читал бы численность и ФОТ соседних компаний группы.
@@ -3385,12 +3336,12 @@ def _company_display_name(slug: str) -> str:
 def holding_headcount(request):
     """Люди, структура и штат по каждой действующей компании группы.
 
-    Авторизация — тот же ``hr_access.require_hr_access``, что и у соседних
-    ручек домена, теперь ПОВЕРХ него ``module="hr", level="read"`` (задача 6
+    Авторизация — модульный гейт ``module="hr", level="read"`` (задача 6
     блока I добавила ``hr`` в ``apps.access.self_service.TRANSLATED_APPS`` —
     сторож ``apps.access.tests.test_gate`` с этого коммита требует гейт и
-    здесь). Поверх обоих — свой гейт по виду компании
-    (``_deny_unless_holding``): гейт модуля → гейт HR-доступа → гейт вида
+    здесь; отдельная кадровая проверка узла поверх него была снята задачей 9
+    — ручка не спрашивает ничего тоньше уровня модуля). Поверх него — свой
+    гейт по виду компании (``_deny_unless_holding``): гейт модуля → гейт вида
     компании → сервис → форма ответа.
 
     ``HoldingViewsUnavailable`` (``migrate_companies`` временно сносит
@@ -3407,11 +3358,6 @@ def holding_headcount(request):
     падает на сам слаг, а не роняет всю сводку 500-й — цифры по компании
     настоящие, отсутствует только имя.
     """
-    try:
-        hr_access.require_hr_access(hr_access.resolve_hr_access(request.token))
-    except hr_access.HRAccessDenied as exc:
-        return json_error(exc.detail, 403)
-
     denied = _deny_unless_holding(request)
     if denied is not None:
         return denied
