@@ -180,6 +180,60 @@ anymore):
 both issues and validates every token, in-process, for every app — no
 introspection round-trip, no separate identity service.
 
+### Authorization — one rule: JWT + company + `module × level`
+
+Stated once here; the per-domain tables below do **not** repeat it per row.
+
+1. **JWT** (`Authorization: Bearer`) — every `/api/*` route unless marked
+   *Public* / `auth=None`.
+2. **Company context** — `X-HTQ-Company: <slug>` (nginx sets it from the
+   subdomain; the SPA and any client on a subdomain gets it for free). The
+   token's `company` claim must equal the header's company, otherwise
+   **403** — a subdomain is trivial to spoof, a signature is not. Switching
+   company means logging in again on that subdomain (login refuses a company
+   the user has no `CompanyMembership` in).
+3. **Module × level** — a route declared `api_view(module="<m>",
+   level="read"|"write"|"admin")` asks `apps.access` for the caller's level
+   on that module *in the request's company* and answers **403** when it is
+   below the declared one. The level is the projection of the caller's roles
+   (`GET /api/access/v1/me` → `permissions[<m>].level`), computed from
+   `PositionRole` (roles of the position they hold, incl. inherited from a
+   serving ancestor company) plus personal `RoleAssignment`. **Without a
+   company context the level is `none` for everyone but a superuser** — the
+   only free pass left; `is_staff`/`is_admin` alone open nothing.
+   `admin=True` on a route is the platform-admin predicate and is checked
+   in addition, not instead.
+4. **Finer than the level** — inside a route the domain may check a single
+   function-registry node (`apps/hr/rbac.py::NodeAccess.has`, e.g.
+   `hr.employees` with flag `delete`), because the module level aggregates
+   over the whole subtree (`hr-senior` reaches `admin` on `hr` through
+   `delete` on org/staffing/calendar without being allowed to delete
+   employees). Such checks answer 403 `{"detail": "Missing permission:
+   <node>.<flag>"}`. The *scope* of a grant (`department` vs `company`,
+   `/me` → `permissions[<m>].scope`) narrows the data a read returns
+   (employee list of one's own department), not the route's availability.
+
+**Which routes carry the gate.** Every route of `hr`, `users`, `companies`,
+`access` and `tasks` — enforced by `apps/access/tests/test_gate.py` — except
+the ones listed in the self-service registry `apps/access/self_service.py`,
+each with a declared reason: `self` (returns strictly the caller's own data,
+e.g. `GET /api/hr/v1/employees/me`, `/api/users/v1/profile/me`), `open` (a
+company-wide reference such as `GET /api/hr/v1/org/tree`, deliberately
+readable by any signed-in employee) or `scoped` (protected by its own
+non-role check — one's own department's files, being the approver of a
+given identity request). `contracts` and `signoff` are **not** gated yet —
+their owners add `api_view(module=…)` themselves (roadmap §6.2/6.3); until
+then they follow the older "read = JWT, write = admin / explicit
+permission" wording in their own sections.
+
+The seeded roles (`access/migrations/0004`, `0005`, `0008`): `employee-basic`
+(profile, messenger, mail, tasks, calendar, news, requests — granted to every
+company member by `manage.py access_backfill_basic`), `hr-junior` (hr:
+read, own department), `hr-middle` (hr: write, own department), `hr-senior`
+and `hr-lead` (hr: admin, whole company), `platform-admin`. Positions get
+them through `PositionRole` (`PUT /api/access/v1/positions/{id}/roles`, or
+`manage.py access_backfill_positions` once, at rollout).
+
 ### Refresh token
 
 ```

@@ -84,12 +84,12 @@
 | Уровни N-1…N-4 | ✅ `LevelThreshold` + `UnitType.DIRECTORATE` | пороги сеются при заведении схемы компании (миграция `hr/0024`); на боевой БД no-op |
 | Внешняя иерархия (правило 4) | ✅ | поля `is_manager`/`external_hierarchy` есть, `subordinate_companies` считается по ним; отметку «руководящая» ставит кадровик вручную в карточке должности — автоматического бэкфилла по оргструктуре нет |
 | Права холдинга в ДО (блок C) | ✅ `serves_subsidiaries` + `apps/access/services/inheritance.py`, `inherited_from` в `/me` | членство (`CompanyMembership`) в ДО остаётся отдельным явным шагом — без него признак не даёт ничего (`company_grant --serving`, разрыв виден на дашборде); данные по внешней иерархии по-прежнему не режутся, только наследуются права (см. строку выше) |
-| Роли «функция × глубина» | ✅ | гейт `api_view(module=…)` не навешен ни на одну из 470 ручек; `Position.permissions`+`hr-level` живут параллельно |
+| Роли «функция × глубина» | ✅ **единственная** модель прав (блок I): гейт `api_view(module=, level=)` на каждой ручке `hr/users/companies/access/tasks`, кроме реестра самообслуживания (`apps/access/self_service.py`, сторож `apps/access/tests/test_gate.py`); проверки тоньше уровня — по узлу (`apps/hr/rbac.py`); уровни `junior…lead` перенесены в системные роли `hr-*` (`access/0005`, `0008`), перенос данных — `access_backfill_positions`/`access_backfill_basic` | `contracts`/`signoff` пока без гейта — вешают владельцы (§6.2/6.3); `Position.permissions` — мёртвая колонка, жива только ради `hr.interface.user_has_permission` для `contracts` (§6.6); гейты требуют контекста компании → выкатка только вместе с поддоменами (§7) |
 | Сводки холдинга | ✅ читаются — экран «Сводка группы» (`/holding`), ручки `hr` и `tasks` | финансы (`contracts`) и согласования (`signoff`) остаются плитками-заглушками до читателей второго разработчика |
 | Матрица полномочий | ✅ десять кадровых предметов согласования (`hr.*`) с фактами для условий, блок G | финансовые строки 11–15 — зона contracts; относительные согласующие («руководитель блока», ОСУ) и кросс-компанейские этапы — зона signoff (§6.2), у меня для них готовы `participant_position()`, `manager_position_of`, `substitutes_for` |
 | Замещение | ✅ `hr.Substitution` + `substitutes_for` | расхождение названия должностей в HR-FRM-006 и оргструктуре (§8.2); строка «Системный администратор → внутригрупповой ИТ-подрядчик» не выражается должностью |
 | ОСУ / Участник | ✅ системная должность `Участник (ОСУ)` над ГД, `hr_participant`, `hr.participant_position()` | «N-0» реализован положением в дереве, не порогом (решение 1 плана F) |
-| Демо-данные | ✅ `seed_group_demo` | `group_structures.py` (4 утверждённые структуры), `seed_group_demo` заводит холдинг и ДО, сеет структуры и учётки |
+| Демо-данные | ✅ `seed_group_demo` | `group_structures.py` (4 утверждённые структуры), `seed_group_demo` заводит холдинг и ДО, сеет структуры и учётки; с блока I `seed_hr_demo --company` раскладывает `Post.hr_level` в роли должностей (`access.interface.ensure_position_role`) — `Position.permissions` сид больше не пишет |
 
 ## 5. Блоки работ (моя зона)
 
@@ -268,11 +268,54 @@
   `managed=False`; сторожа в их тестах проверяют и отсутствие дублей, и
   присутствие настоящих таблиц.
 
-### I. Свернуть параллельный RBAC (спека §1.6)
-Навесить `api_view(module=, level=)` на ручки `hr/users/companies/access/
-tasks`; перевести `junior/middle/senior/lead` в роли; удалить `hr-level`,
-`Position.permissions`, `useHRLevel` (31 файл). До этого матрица полномочий
-не имеет серверного исполнителя.
+### I. Свернуть параллельный RBAC (спека §1.6) — (выполнено)
+План блока — `docs/plans/2026-09-17-block-i-single-rbac.md`, журнал —
+`.superpowers/sdd/2026-09-17-block-i-single-rbac/`. Сделано:
+- `api_view(module=, level=)` стоит на КАЖДОЙ ручке `hr/users/companies/
+  access/tasks`; исключения перечислены поимённо в реестре самообслуживания
+  `apps/access/self_service.py` с причиной из закрытого списка `self` (ручка
+  отдаёт строго данные вызывающего) | `open` (общий справочник, у которого
+  не было и нет ни одной проверки — сужать не наше решение) | `scoped`
+  (защищена своей, не ролевой проверкой — «свой отдел», «я согласующий»);
+  сторож `apps/access/tests/test_gate.py` требует гейт у всего, чего нет в
+  реестре, и причину у всего, что в нём есть.
+- Угадывание уровня по названию должности (`apps/hr/access.py::
+  resolve_hr_access`) заменено ролями должности: четыре системные роли
+  `hr-junior/middle/senior/lead` (`access/0005`, запреты на под-узлах —
+  `0008`) собраны из старых пресетов `apps/hr/permissions.py` таблицей
+  `apps/hr/legacy_roles.py::KEY_TO_NODE`; равенство «роль ⇔ старый пресет
+  по каждому ключу» держит `apps/access/tests/test_hr_level_roles_exact.py`.
+  Область «свой отдел»/«вся компания» — не признак узла, а
+  `PositionRole.scope_kind` (junior/middle → `department`, senior/lead →
+  `company`). Внутри ручки права считает `apps/hr/rbac.py::NodeAccess` по
+  узлу реестра (нужно, потому что `hr-senior` агрегируется в `admin`
+  модуля так же, как `hr-lead`, — уровень модуля не отличает их, узел
+  `hr.employees` с признаком `delete` отличает).
+- Перенос данных: `manage.py access_backfill_positions [--dry-run]`
+  (уровень берётся тем же порядком, что видел живой запрос: явный
+  `Position.permissions["hr_level"]`, иначе эвристика `classify_hr_level`
+  по держателю; конфликты и расхождения держателей печатаются, не решаются)
+  и `manage.py access_backfill_basic` (`employee-basic` каждому
+  действующему участнику компании). Оба идемпотентны. Порядок выкатки — §7.
+- Фронт читает права ТОЛЬКО из `/api/access/v1/me` (`usePermissions`);
+  `useHRLevel` ужат до тонкой обёртки для четырёх экранов `pages/contracts/*`
+  (сторож `hooks/__tests__/useHRLevelImporters.test.ts`), навигация
+  кадрового раздела — одна таблица `app/navigation/hrNavAccess.ts`.
+- `apps/hr/access.py` остался ТОЛЬКО как эвристика переноса
+  (`classify_hr_level` для `hr.interface.list_positions_hr_levels`); сторож
+  `apps/hr/tests/test_single_rbac_guards.py` не пускает других читателей.
+  Уходит вместе с командой переноса после выкатки на все компании.
+- **`Position.permissions` — мёртвая колонка.** Кадровый домен её не
+  читает; сид её не пишет; жива она ради одного читателя —
+  `hr.interface.user_has_permission`, которым `apps/contracts` проверяет
+  три ключа `contracts.*` (§6.6), и API должностей продолжает её принимать
+  только ради него. Удалять — вместе с `user_has_permission`, `apps/hr/
+  permissions.py::CONTRACTS_*`, `DEFERRED_KEYS` в `legacy_roles.py` и
+  `useHRLevel.ts`, ПОСЛЕ того как `contracts` объявит свои узлы и перейдёт
+  на `access.interface.flags_for`/`can` (§6.6); отдельной contract-миграцией
+  через `migrate_companies` (столбец в `hr_position` — тенантная таблица).
+- Экран `HRAccessLevels` (`pages/hr/HRAccessLevels.tsx`) построен на
+  снятой эвристике — кандидат на снятие вместе с колонкой.
 
 ### J. Документы
 `design.md`, `stage2-spec §1.6/§7`, `STRUCTURE.md`, `CLAUDE.md` — под новый
@@ -323,6 +366,8 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
   крупные сделки, списание) с лимитами и участниками
   ОСУ → ГД УК → CFO → Руководитель блока.
 - Навесить `api_view(module="contracts", level=…)`.
+- Перейти с `hr.interface.user_has_permission` на узлы `contracts.*` — см.
+  §6.6 (блок I).
 
 ### 6.4 Данные, которые уезжают вместе с этим
 - slug'и и названия компаний: `hi-tech-group` (холдинг), `hi-tech-qazaqstan`,
@@ -385,6 +430,44 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
 - `tenancy_status` — общий инструмент проверки «ничего не потеряно» до и
   после выкатки; результат прикладывается к релизу.
 
+### 6.6 Блок I «Единая модель прав» — что переезжает к вам
+
+Параллельная кадровая модель снята (§5.I); у вас остаётся три пункта в
+`contracts` и один во фронте, у `signoff` — ничего сверх §6.2.
+
+(а) **`contracts`, бэкенд.** `hr.interface.user_has_permission(user_id,
+permission)` — ЕДИНСТВЕННЫЙ оставшийся читатель `Position.permissions`, и
+живёт он до вашего перехода. Семь вызовов в `apps/contracts/services/*`
+(`accountable_funds_request_service`, `advance_payment_service`,
+`completion_act_service`, `contract_payment_service`, три в
+`work_queue_service`) проверяют три ключа: `contracts.accountable_funds_
+request.mark_paid`, `contracts.advance_payment.record_payment`,
+`contracts.contract_payment.record_payment`. Что сделать: объявить под них
+узлы в своём реестре функций (`apps/contracts/access_functions.py` — узел
+`contracts.payments` уже есть, решение о раскладке за вами: блок I узлов
+чужой аппки не выдумывал намеренно, см. `legacy_roles.DEFERRED_KEYS`) и
+проверять `access.interface.flags_for(user, node, company)` (или свою
+обёртку `can`) вместо `user_has_permission`. После этого
+`user_has_permission`, ключи `CONTRACTS_*` в `apps/hr/permissions.py` и
+сама колонка удаляются вместе (§5.I).
+
+(б) **`contracts`, фронт.** Четыре экрана `src/pages/contracts/*`
+(`AccountableFundsRequestDetail`, `AdvancePaymentDetail`,
+`CompletionActDetail`, `ContractPaymentDetail`) читают
+`useHRLevel().hasPerm(<ключ contracts.*>)`. ⚠️ С задачи 8 блока I `hasPerm`
+для этих ключей **всегда `false`** — узла под них нет, а `hasPerm` считает
+по узлам `/access/v1/me` через `KEY_TO_NODE`; кнопки «отметить оплату»
+у бухгалтера на фронте сейчас скрыты (сервер их всё ещё пускает по
+`user_has_permission`). Перейти на `usePermissions().can(<ваш узел>,
+'edit')` — после чего `hooks/useHRLevel.ts` удаляется целиком (сторож
+`hooks/__tests__/useHRLevelImporters.test.ts` это допускает: он разрешает
+импорт только из `pages/contracts/*`).
+
+(в) **`signoff`** — ничего: гейт `api_view(module="signoff", level=…)`
+вешаете сами (§6.2), `access_functions.py` у вас объявлен, реестр
+самообслуживания (`apps/access/self_service.py::TRANSLATED_APPS`) вашу
+аппку не проверяет, пока вы её туда не впишете.
+
 ## 7. Порядок выкатки
 
 1. **A** (реестр, переключатель, `tenancy_status`, гейт последней компании)
@@ -416,8 +499,31 @@ tasks`; перевести `junior/middle/senior/lead` в роли; удалит
    (`StaffingPosition` добавлен в сводимые модели `hr`) требует `migrate_companies`
    отдельным шагом выкатки — порядок «мигрировать все компании → пересобрать
    вьюхи» обеспечивает сама команда; миграции `hr/0036`, `hr/0037`, `tasks/0020`.
-   **I** — снятие параллельного RBAC; `api_view(module=)`
-   навешивается по аппкам, каждая — отдельным коммитом с прогоном.
+   **I** (выполнено в коде) — снятие параллельного RBAC. ⚠️ **Гейты уже в
+   коде, и они требуют контекста компании**: без `X-HTQ-Company` (голый
+   домен) `permission_level` отвечает `none` любому, кроме суперпользователя,
+   то есть выкатка блока I на бой **невозможна раньше перевода фронта на
+   поддомены компаний** (шаг 5) — на голом домене 403 получат все.
+   Порядок обязательный, перенос — строго ДО того, как код с гейтами
+   попадёт под трафик:
+   1. `manage.py migrate_shared` — роли `hr-*` (`access/0005`),
+      `scope_kind` (`0006`–`0007`), запреты на под-узлах (`0008`);
+   2. `manage.py migrate_companies` — схемы компаний (по данным no-op);
+   3. `manage.py access_backfill_positions --dry-run` — по всем компаниям;
+      **прочитать сводку**: конфликты (должность уже несёт другую роль
+      `hr-*`) и расхождения по держателям команда не решает — их разбирает
+      кадровик до следующего шага;
+   4. `manage.py access_backfill_positions` — реальный перенос;
+      повторный прогон обязан показать «создано сейчас 0»;
+   5. `manage.py access_backfill_basic` — `employee-basic` каждому
+      действующему участнику; число выданных = число членств;
+   6. `tenancy_status --json --exact` до и после (без `--exact` — оценки
+      планировщика, на свежей базе нули);
+   7. и только теперь — код с гейтами под трафик на поддоменах.
+   Репетиция на стенде (dev-БД, 4 компании, 25 должностей, 24 членства) —
+   отчёт задачи 11 блока I, §3: 25 `PositionRole`, 24 `RoleAssignment`, оба
+   переноса идемпотентны, живая проверка под `hr-middle`/`hr-junior`
+   показала список сотрудников, суженный до отдела держателя (4 из 13).
 7. **J** — документы закрываются вместе с каждым блоком, финальная сверка.
 
 ## 8. Вопросы руководству (расхождения в самих документах)

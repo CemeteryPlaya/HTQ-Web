@@ -69,7 +69,7 @@ HTQWeb1/
 |---|---|---|---|
 | **core** | — (примонтирована в корень `htqweb/urls.py`, свой префикс `api/core/v1/` объявляет сама) | — (сам реестр) | `/health/`, `/health/ready/`, `/api/core/v1/services/`; общий ETL-хелпер (`etl.py`) |
 | **users** | `api/users/v1/` | `users` | Identity, JWT issuer+validator, профиль, регистрация, админ-юзеры, items |
-| **hr** | `api/hr/v1/` | `hr` | Сотрудники, отделы, должности (`is_manager`/`external_hierarchy` — руководящая должность и участие во внешней иерархии между компаниями, `substitutes_for` — матрица замещения, `participant_position()` — ОСУ через `services/participant_service.py`), вакансии, табель, документы, аудит, оргдерево, PMO, **десять кадровых предметов согласования** (`approval_hooks.py` — объявление и регистрация из `HrConfig.ready()`, `services/approval_service.py` — отправка на согласование через `apps.signoff.interface`), сводка по группе для холдинга (`holding_models.py` — читатели `holding.hr_*`, `services/holding_service.py`, блок H) |
+| **hr** | `api/hr/v1/` | `hr` | Сотрудники, отделы, должности (`is_manager`/`external_hierarchy` — руководящая должность и участие во внешней иерархии между компаниями, `substitutes_for` — матрица замещения, `participant_position()` — ОСУ через `services/participant_service.py`), вакансии, табель, документы, аудит, оргдерево, PMO, **десять кадровых предметов согласования** (`approval_hooks.py` — объявление и регистрация из `HrConfig.ready()`, `services/approval_service.py` — отправка на согласование через `apps.signoff.interface`), сводка по группе для холдинга (`holding_models.py` — читатели `holding.hr_*`, `services/holding_service.py`, блок H). **Права** — `rbac.py` (`NodeAccess`: проверка по узлу реестра `apps.access` через старые ключи `permissions.py` и таблицу `legacy_roles.py::KEY_TO_NODE`; единственная модель прав домена с блока I); `access.py` — НЕ модель прав, а эвристика переноса (`classify_hr_level` для `interface.list_positions_hr_levels` → `access_backfill_positions`; сторож `tests/test_single_rbac_guards.py`) |
 | **tasks** | `api/tasks/v1/` | `tasks` | Workflow-движок Jira+SharePoint (см. §4.2); сводка по группе для холдинга (`holding_models.py` — читатели `holding.tasks_*`, `services/holding_service.py`, блок H) |
 | **approvals** | `api/requests/v1/` | `approvals` | ⭐ Lark-style конструктор форм + workflow согласований (см. §3.4). Префикс URL (`requests`) и app_label (`approvals`) сознательно расходятся — см. `apps/approvals/urls.py` докстринг |
 | **cms** | `api/cms/v1/` | `cms` | Новости, категории/теги, contact-requests, ConferenceConfig |
@@ -80,7 +80,7 @@ HTQWeb1/
 | **signoff** | `api/signoff/v1/` | `signoff` | ⭐ Универсальное многоэтапное согласование ЧУЖИХ объектов (см. §3.6). **Не путать с `approvals`**: та согласует собственные `RequestInstance` из своего конструктора форм, эта — строки в таблицах предметных аппок |
 | **conference** | `api/conference/v1/` | `conference` | ⭐ История видеоконференций, записи и протокол (см. §5). Данные заводит SFU через `internal/*`, а не пользователь |
 | **companies** | `api/companies/v1/` | `companies` | ⭐ Реестр компаний группы и мультикомпанейность — схема Postgres на компанию (см. §3.7). Часть `CORE_MODULES`: на уровне компании не выключается, только глобально |
-| **access** | `api/access/v1/` | `access` | Роли «функция × глубина» (`services/resolve.py`), должность → роли (штатный путь) / личное назначение (исключение), `/me`. `services/hierarchy.py` считает `subordinate_companies` (кто НИЖЕ по владению, блок B); `services/inheritance.py` — обратный обход: должность, помеченная `serves_subsidiaries`, несёт свои роли из компании-предка вниз во все компании ниже по дереву (блок C, `inherited_from` в `/me`); `services/holders.py` — кто держит роль, включая держателей из компаний-предков (его же переиспользует ручка `apps.companies` `external-holders`) |
+| **access** | `api/access/v1/` | `access` | Роли «функция × глубина» (`services/resolve.py`), должность → роли (штатный путь) / личное назначение (исключение), `/me`. `services/hierarchy.py` считает `subordinate_companies` (кто НИЖЕ по владению, блок B); `services/inheritance.py` — обратный обход: должность, помеченная `serves_subsidiaries`, несёт свои роли из компании-предка вниз во все компании ниже по дереву (блок C, `inherited_from` в `/me`); `services/holders.py` — кто держит роль, включая держателей из компаний-предков (его же переиспользует ручка `apps.companies` `external-holders`). `self_service.py` — реестр «какие аппки под гейтом `api_view(module=)`» и «каким их ручкам гейт не положен» с причиной `self`/`open`/`scoped` (сторож `tests/test_gate.py`); `management/commands/access_backfill_positions.py` (кадровые уровни → роли должностей `hr-*`, `--dry-run`, идемпотентно) и `access_backfill_basic.py` (`employee-basic` каждому участнику компании) — перенос данных блока I, порядок выкатки в roadmap §7 |
 
 Полный список канонических имён сервисов — `apps.core.models.KNOWN_SERVICES`. Имя `conference` долго стояло там «про запас», под SFU-стек без своей Django-аппки; теперь аппка есть (`apps.conference`, §5), и флаг гейтит уже её маршруты.
 
@@ -110,7 +110,7 @@ backend/apps/<domain>/
 
 **Запомнить:**
 - Бизнес-логика — всегда в `services/<file>.py`. `views.py` её только вызывает.
-- API-слой — `htqweb.http.api_view` (декоратор), НЕ Django REST Framework: `methods=`, `auth="jwt"|"admin_session"|None`, опц. `body=<PydanticModel>`, `admin=True` (гейт через `htqweb.authn.rbac.require_admin`). Конверт ошибок — всегда `{"detail": ...}`.
+- API-слой — `htqweb.http.api_view` (декоратор), НЕ Django REST Framework: `methods=`, `auth="jwt"|"admin_session"|None`, опц. `body=<PydanticModel>`, `admin=True` (гейт через `htqweb.authn.rbac.require_admin`), **`module="<аппка>", level="read"|"write"|"admin"`** — прикладной гейт «модуль × уровень» по ролям `apps.access` в контексте компании запроса (единственная модель прав; правило описано один раз в [API.md](./API.md) § Authorization). Ручка без `module=` в переведённой аппке допустима только с записью в `apps/access/self_service.py`. Конверт ошибок — всегда `{"detail": ...}`.
 - JWT: issuer `htqweb-auth` (см. `htqweb/settings/base.py::JWT_ISSUER`) — не путать с доменом `users`, который его лишь выпускает/валидирует. Проверка — `htqweb/authn/jwt.py`, HS256, общий `JWT_SECRET`.
 - Отключаемость: `apps.core.models.ServiceStatus` (строка на аппку) + `htqweb.middleware.service_gate.ServiceGateMiddleware` (гейт по URL-префиксу `/api/...`, `/ws/...`) + `apps.core.services.require_service()` (внутрипроцессный гейт — обязателен первой строкой в `interface.py` и `tasks.py`) + `htqweb.admin_gate.ServiceGatedAdminMixin` (гейт `django-admin`). Переключатель: `python manage.py service <name> --on/--off`.
 
@@ -294,10 +294,13 @@ frontend/src/
 │                       #   calendar.ts, email.ts, fileManager.ts, search.ts (глобальный fan-out поиск),
 │                       #   companies.ts (реестр компаний — apps.companies)
 ├── services/           # emailService.ts (тонкие обёртки над api/)
-├── hooks/              # useActiveProfile, useHRLevel, use-mobile, use-toast,
-│                       #   useMyCompanies (мои компании — переключатель в шапке), …
+├── hooks/              # useActiveProfile, usePermissions (права из /api/access/v1/me —
+│                       #   единственный источник), useHRLevel (ТОЛЬКО для pages/contracts/*,
+│                       #   тонкая обёртка над usePermissions; сторож __tests__/useHRLevelImporters),
+│                       #   use-mobile, use-toast, useMyCompanies (переключатель компании), …
 ├── lib/
 │   ├── auth/           # profileStorage.ts, roles.ts (RBAC хелперы)
+│   (app/navigation/hrNavAccess.ts — одна таблица «пункт кадрового меню → предикат по /me» для HRLayout и ProfileSidebar)
 │   ├── transport/      # IMediaTransport + WebRTCAdapter
 │   ├── webrtc/         # ⭐ MediaEngine, WebRTCManager, SignalingClient (WS+WebTransport), SdpMunger, BitrateController
 │   ├── telemetry.ts    # Frontend → backend client-errors
@@ -591,6 +594,9 @@ URL-флоу приватных файлов: API возвращает стаб�
 | DTO запроса/ответа | `backend/apps/<domain>/schemas.py` (Pydantic) |
 | Дать соседней аппке доступ к своим данным | `backend/apps/<domain>/interface.py` — новая функция, начинается с `require_service("<name>")`, отдаёт только dict/примитивы |
 | Auth/JWT примитив | `backend/htqweb/authn/` (issue/decode — `jwt.py`; уровни/роли — `levels.py`/`rbac.py`) |
+| Права на ручку | `api_view(module="<аппка>", level=…)` в `views.py`; ручка без гейта — только с записью и причиной в `backend/apps/access/self_service.py` (сторож `apps/access/tests/test_gate.py`) |
+| Проверка тоньше уровня модуля (конкретное действие) | `backend/apps/hr/rbac.py::NodeAccess.has(<старый ключ>)` — по узлу реестра через `legacy_roles.KEY_TO_NODE`; свой узел объявлять в `apps/<domain>/access_functions.py` и — ОБЯЗАТЕЛЬНО — явной строкой в системных ролях (`access/migrations/0008` как образец), иначе под-узел унаследует глубину предка |
+| Выдать роль должности из кода/сида | `apps.access.interface.ensure_position_role(company_slug, position_id, role_code, scope_kind)` — идемпотентно, не трогает остальные роли должности |
 | Фоновая задача | `backend/apps/<domain>/tasks.py` (`@shared_task`, первая строка `require_service`) |
 | Периодика (cron) | Django-миграция данных для `django_celery_beat.PeriodicTask` — см. `apps/mail/migrations/0004_mail_periodic_tasks.py` как образец |
 | Включить/выключить домен | `manage.py service <name> --on/--off` (см. `apps/core/management/commands/service.py`) |
@@ -610,6 +616,8 @@ URL-флоу приватных файлов: API возвращает стаб�
 ---
 
 ## 10. Известные «ловушки»
+
+- **Модель прав ОДНА, и она требует компанию.** С блока I «Единая модель прав» (`docs/plans/2026-09-17-block-i-single-rbac.md`) кадровый домен не угадывает уровень по названию должности и не читает `Position.permissions` — права считаются по ролям `apps.access` (`PositionRole`/`RoleAssignment`, `services/resolve.py`) и ТОЛЬКО в контексте компании: без `X-HTQ-Company` уровень `none` у всех, кроме суперпользователя, и гейт `api_view(module=)` отвечает 403. `apps/hr/access.py` — не модель прав, а эвристика переноса; `Position.permissions` — мёртвая колонка, жива ради `hr.interface.user_has_permission` для `contracts` (roadmap §6.6). Новый под-узел реестра заводится сразу с явными строками в системных ролях: сторож `test_hr_level_roles_exact.py` сверяет только старые ключи и молчаливое наследование глубины предка не поймает.
 
 - **`/sqladmin/`, `/mongo-admin` больше не существуют.** Несколько мест во фронтенде всё ещё на них ссылаются (см. §4) — это не 503 «сервис выключен», это честный 404/дохлая ссылка, потому что маршрута нет вовсе ни в nginx, ни во Vite-proxy. Админка — `/django-admin/`.
 - **`POST /api/users/v1/admin-session/login`/`/logout` — код существует, но реального потребителя больше нет.** Эти эндпойнты ставили `admin_session`-cookie для входа в sqladmin; сам sqladmin снесён, а `django-admin` использует свою обычную Django session-аутентификацию (не эту JWT-cookie). Не удивляться, что "рабочий" эндпойнт никуда не ведёт.
