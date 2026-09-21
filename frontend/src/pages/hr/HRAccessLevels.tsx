@@ -16,7 +16,7 @@ import {
   Lock,
 } from 'lucide-react';
 import api from '@/api/client';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import HRLayout from '@/components/hr/HRLayout';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -376,10 +376,23 @@ export default function HRAccessLevels() {
   const [search, setSearch] = useState('');
   const [filterLevel, setFilterLevel] = useState<DeptLevel | 'all'>('all');
 
-  // Задача 8 блока I: свой уровень читаем через useHRLevel (права из
-  // /access/v1/me), а не отдельным запросом к hr/v1/employees/hr-level/ —
-  // эта ручка больше не должна иметь вызывающих на фронте.
-  const hrLevel = useHRLevel();
+  // Задача 10 блока I: свой доступ читаем из `usePermissions` (`/access/v1/
+  // me`) напрямую. Этот экран — про четыре СТАРЫХ кадровых уровня (легенда
+  // по названиям должностей выше, `LEVEL_CONFIG`), поэтому бейдж «ваш
+  // уровень» — проекция новой модели на них, посчитанная здесь и только
+  // здесь: `admin` → lead; `write` по всей компании → senior; `write` в
+  // области отдела → middle; `read` → junior (backend/apps/access/depth.py::
+  // legacy_level + область выдачи роли, решение 1 legacy_roles.py). Это
+  // отображение для легенды, а не гейт: ни одна кнопка по нему не
+  // решается — признаки ниже считаются по узлам через `can`.
+  const permissions = usePermissions();
+  const myLevel = useMemo<DeptLevel>(() => {
+    const level = permissions.level('hr');
+    if (level === 'admin') return 'lead';
+    if (level === 'write') return permissions.scope('hr')?.kind === 'company' ? 'senior' : 'middle';
+    if (level === 'read') return 'junior';
+    return null;
+  }, [permissions]);
 
   const { data: employees = [], isLoading } = useQuery<Employee[]>({
     queryKey: ['hr-employees-all-levels'],
@@ -457,33 +470,35 @@ export default function HRAccessLevels() {
         {/* My access */}
         {/*
          * Раунд правок 1 задачи 8: изначально условие было
-         * `!hrLevel.isLoading` — при сбое запроса прав (`isError === true`,
-         * `level === null`) блок всё равно рендерился и `LevelBadge(null)`
+         * `!isLoading` — при сбое запроса прав (`isError === true`,
+         * уровень `null`) блок всё равно рендерился и `LevelBadge(null)`
          * уверенно заявлял «нет доступа», хотя причина — не отсутствие
          * прав, а неудача загрузки (та самая путаница, ради недопущения
-         * которой в usePermissions/useHRLevel заведён отдельный признак
-         * isError, см. докстринг usePermissions). Раньше, на старой сетевой
-         * ручке, сбой запроса означал `myLevel === undefined`, и блок молча
-         * не показывался вовсе — это и есть верное поведение при ошибке;
-         * `isError` восстанавливает его.
+         * которой в usePermissions заведён отдельный признак isError, см.
+         * его докстринг). Раньше, на старой сетевой ручке, сбой запроса
+         * означал `myLevel === undefined`, и блок молча не показывался
+         * вовсе — это и есть верное поведение при ошибке; `isError`
+         * восстанавливает его. Признаки — по узлам реестра (те же, что
+         * `KEY_TO_NODE` на бэкенде): «видит всех» — область company,
+         * остальные — `can(узел, различающий признак)`.
          */}
-        {!hrLevel.isLoading && !hrLevel.isError && (
+        {!permissions.isLoading && !permissions.isError && (
           <div className="rounded-xl border bg-card p-4">
             <div className="flex items-center gap-3">
               <Users className="h-5 w-5 text-muted-foreground" />
               <span className="text-sm font-medium">{t('hr.accessLevels.yourLevel')}</span>
-              <LevelBadge level={hrLevel.level} />
+              <LevelBadge level={myLevel} />
             </div>
-            {hrLevel.level && (
+            {myLevel && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {[
-                  { key: 'can_read_all', has: hrLevel.canReadAll, label: t('hr.accessLevels.flags.readAll') },
-                  { key: 'can_write_basic', has: hrLevel.canWriteBasic, label: t('hr.accessLevels.flags.basicEdits') },
-                  { key: 'can_create_employee', has: hrLevel.canCreateEmployee, label: t('hr.accessLevels.flags.create') },
-                  { key: 'can_transfer_employee', has: hrLevel.canTransferEmployee, label: t('hr.accessLevels.flags.transfer') },
-                  { key: 'can_delete_employee', has: hrLevel.canDeleteEmployee, label: t('hr.accessLevels.flags.delete') },
-                  { key: 'can_list_user_options', has: hrLevel.canListUserOptions, label: t('hr.accessLevels.flags.viewAccounts') },
-                  { key: 'can_manage_user_options', has: hrLevel.canManageUserOptions, label: t('hr.accessLevels.flags.manageAccounts') },
+                  { key: 'can_read_all', has: permissions.can('hr.employees', 'view') && permissions.scope('hr')?.kind === 'company', label: t('hr.accessLevels.flags.readAll') },
+                  { key: 'can_write_basic', has: permissions.can('hr.employees', 'edit'), label: t('hr.accessLevels.flags.basicEdits') },
+                  { key: 'can_create_employee', has: permissions.can('hr.employees', 'create'), label: t('hr.accessLevels.flags.create') },
+                  { key: 'can_transfer_employee', has: permissions.can('hr.employees.transfer', 'edit'), label: t('hr.accessLevels.flags.transfer') },
+                  { key: 'can_delete_employee', has: permissions.can('hr.employees', 'delete'), label: t('hr.accessLevels.flags.delete') },
+                  { key: 'can_list_user_options', has: permissions.can('hr.accounts', 'view'), label: t('hr.accessLevels.flags.viewAccounts') },
+                  { key: 'can_manage_user_options', has: permissions.can('hr.accounts', 'create'), label: t('hr.accessLevels.flags.manageAccounts') },
                 ].map(({ key, has, label }) => {
                   return (
                     <span

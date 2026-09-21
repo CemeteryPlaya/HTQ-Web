@@ -7,11 +7,12 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 /**
  * Раунд правок 1 задачи 8 блока I.
  *
- * `HRAccessLevels` показывает свой собственный уровень через `useHRLevel`
- * (задача 8 сняла отдельный запрос к `hr/v1/employees/hr-level/`). Первая
- * версия правки открывала блок «Ваш уровень доступа» условием
- * `!hrLevel.isLoading` — при сбое запроса прав (`isError: true`,
- * `level: null`, тот же результат, что и у штатного «доступа нет») блок всё
+ * `HRAccessLevels` показывает свой собственный уровень из `usePermissions`
+ * (задача 8 сняла отдельный запрос к `hr/v1/employees/hr-level/`, задача
+ * 10 — промежуточный `useHRLevel`). Первая версия правки открывала блок
+ * «Ваш уровень доступа» условием `!isLoading` — при сбое запроса прав
+ * (`isError: true`, модуля `hr` нет в карте — тот же результат, что и у
+ * штатного «доступа нет») блок всё
  * равно рендерился, и бейдж уверенно заявлял «Нет доступа», хотя причина —
  * не отсутствие прав, а неудавшаяся загрузка. Раньше, на старой сетевой
  * ручке, сбой запроса означал `data === undefined`, и блок молча не
@@ -28,32 +29,36 @@ vi.mock('@/components/hr/HRLayout', () => ({
   default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-const hrLevel: {
-  level: 'junior' | 'middle' | 'senior' | 'lead' | null;
+// Задача 10 блока I: экран читает `usePermissions` напрямую. `hr: 'none'` —
+// штатное «доступа нет» (модуля нет в карте), `isError` — «не загрузилось».
+const access: {
+  hr: 'none' | 'read' | 'write' | 'admin';
   isLoading: boolean;
   isError: boolean;
-  canReadAll: boolean;
-  canWriteBasic: boolean;
-  canCreateEmployee: boolean;
-  canTransferEmployee: boolean;
-  canDeleteEmployee: boolean;
-  canListUserOptions: boolean;
-  canManageUserOptions: boolean;
 } = {
-  level: null,
+  hr: 'none',
   isLoading: false,
   isError: false,
-  canReadAll: false,
-  canWriteBasic: false,
-  canCreateEmployee: false,
-  canTransferEmployee: false,
-  canDeleteEmployee: false,
-  canListUserOptions: false,
-  canManageUserOptions: false,
 };
 
-vi.mock('@/hooks/useHRLevel', () => ({
-  useHRLevel: () => hrLevel,
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    company: 'demo',
+    level: (m: string) => (m === 'hr' ? access.hr : 'none'),
+    atLeast: (m: string, req: string) => {
+      const order = ['none', 'read', 'write', 'admin'];
+      return order.indexOf(m === 'hr' ? access.hr : 'none') >= order.indexOf(req);
+    },
+    scope: () => null,
+    depth: () => [],
+    can: () => false,
+    pageHidden: () => false,
+    subordinateCompanies: [],
+    inheritedFrom: [],
+    isLoading: access.isLoading,
+    isError: access.isError,
+    refetch: () => {},
+  }),
 }));
 
 vi.mock('@/api/client', () => ({
@@ -73,17 +78,17 @@ const mockedApi = vi.mocked(api, true);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  hrLevel.level = null;
-  hrLevel.isLoading = false;
-  hrLevel.isError = false;
+  access.hr = 'none';
+  access.isLoading = false;
+  access.isError = false;
   mockedApi.get.mockImplementation((() => Promise.resolve({ data: { items: [], total: 0 } })) as never);
 });
 
 describe('HRAccessLevels — блок «Ваш уровень доступа»', () => {
   it('при ошибке загрузки прав НЕ утверждает, что доступа нет', async () => {
-    hrLevel.isLoading = false;
-    hrLevel.isError = true;
-    hrLevel.level = null;
+    access.isLoading = false;
+    access.isError = true;
+    access.hr = 'none';
 
     renderWithProviders(<HRAccessLevels />);
     await waitFor(() => expect(mockedApi.get).toHaveBeenCalled());
@@ -101,9 +106,9 @@ describe('HRAccessLevels — блок «Ваш уровень доступа»',
     // Контрольный кейс: подтверждает, что правка не спрятала блок вообще
     // всегда, а только на время загрузки/при ошибке — сам штатный «доступа
     // нет» по-прежнему виден.
-    hrLevel.isLoading = false;
-    hrLevel.isError = false;
-    hrLevel.level = null;
+    access.isLoading = false;
+    access.isError = false;
+    access.hr = 'none';
 
     renderWithProviders(<HRAccessLevels />);
     await waitFor(() => expect(mockedApi.get).toHaveBeenCalled());
@@ -114,9 +119,9 @@ describe('HRAccessLevels — блок «Ваш уровень доступа»',
   });
 
   it('пока права ещё грузятся, блок тоже не показывается', async () => {
-    hrLevel.isLoading = true;
-    hrLevel.isError = false;
-    hrLevel.level = null;
+    access.isLoading = true;
+    access.isError = false;
+    access.hr = 'none';
 
     renderWithProviders(<HRAccessLevels />);
     await waitFor(() => expect(mockedApi.get).toHaveBeenCalled());

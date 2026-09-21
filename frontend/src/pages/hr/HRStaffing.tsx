@@ -3,16 +3,19 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import HRLayout from '@/components/hr/HRLayout';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { fetchStaffingLines, fetchStaffingSummary, deleteStaffingLine, type StaffingLine } from '@/api/hr';
 import { useTranslation } from 'react-i18next';
 
 const HRStaffing = () => {
   const { t } = useTranslation();
-  const { hasPerm } = useHRLevel();
+  // Узел `hr.staffing` — тот же, что проверяет бэкенд через
+  // `_require_permission` (STAFFING_VIEW → view; STAFFING_MANAGE → полный
+  // CRUD строк штатки, различающий признак `delete`; apps/hr/legacy_roles.py).
+  const permissions = usePermissions();
   const qc = useQueryClient();
-  const canView = hasPerm('hr.staffing.view');
-  const canManage = hasPerm('hr.staffing.manage');
+  const canView = permissions.can('hr.staffing', 'view');
+  const canManage = permissions.can('hr.staffing', 'delete');
 
   const { data: lines } = useQuery({ queryKey: ['staffing-lines'], queryFn: fetchStaffingLines, enabled: canView });
   const { data: summary } = useQuery({ queryKey: ['staffing-summary'], queryFn: fetchStaffingSummary, enabled: canView });
