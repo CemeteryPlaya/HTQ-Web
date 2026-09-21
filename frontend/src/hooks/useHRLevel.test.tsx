@@ -1,12 +1,13 @@
 /**
- * Задача 8 блока I: `useHRLevel` больше не ходит в `hr/v1/employees/hr-level/`
- * — уровень и предикаты считаются из прав (`usePermissions`, `/access/v1/me`).
- * Публичный интерфейс хука не меняется, поэтому здесь проверяется именно
- * СЧЁТ, а не форма ответа: соответствие уровней взято дословно из
- * `backend/apps/access/depth.py::legacy_level` (delete → admin, create|edit →
- * write, view → read), а `can_*`-предикаты обязаны читаться по узлам
- * реестра (`can(node, flag)`), а не выводиться из агрегированного уровня —
- * иначе право на один узел кадрового поддерева протекало бы на все остальные.
+ * `useHRLevel` после задачи 10 блока I — тонкая обёртка над `usePermissions`
+ * ради четырёх экранов `src/pages/contracts/*` (см. докстринг хука): из него
+ * остались `hasPerm`, `isLoading`, `isError`, `permissions`. Здесь
+ * проверяется ровно то, что осталось: `hasPerm` раскрывает старый ключ в
+ * узел реестра и ВСЕ его признаки (`backend/apps/hr/legacy_roles.py::
+ * KEY_TO_NODE`), а не выводит ответ из агрегированного уровня модуля;
+ * ключ чужой аппки — `false`; «не загрузилось» отличимо от «прав нет».
+ * Уровни и `can*`-предикаты сняты вместе с потребителями — тестов на них
+ * больше нет намеренно.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
@@ -45,88 +46,22 @@ beforeEach(() => {
   getMe.mockReset();
 });
 
-describe('useHRLevel', () => {
-  it('admin на hr отдаёт lead', async () => {
-    getMe.mockResolvedValue(baseMe({
-      permissions: { hr: { level: 'admin', scope: { kind: 'company', id: null } } },
-      depth: { hr: ['view', 'create', 'edit', 'delete'] },
-    }));
-
-    const { result } = renderHook(() => useHRLevel(), { wrapper });
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.level).toBe('lead');
-    expect(result.current.isLead).toBe(true);
-    expect(result.current.hasHrAccess).toBe(true);
-  });
-
-  it('write на hr с областью «отдел» отдаёт middle', async () => {
-    getMe.mockResolvedValue(baseMe({
-      permissions: { hr: { level: 'write', scope: { kind: 'department', id: 7 } } },
-      depth: { hr: ['view', 'create', 'edit'] },
-    }));
-
-    const { result } = renderHook(() => useHRLevel(), { wrapper });
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.level).toBe('middle');
-    expect(result.current.isMiddle).toBe(true);
-    expect(result.current.scopeDepartmentId).toBe(7);
-  });
-
-  it('write на hr с областью «вся компания» отдаёт senior', async () => {
-    // Не из обязательного списка брифа, но без этого случая `isSenior`
-    // (которым гейтятся ~9 экранов HR) никогда не стал бы true иначе как
-    // через lead — старый уровень 'senior' был бы недостижим. Разница
-    // middle/senior — это ОБЛАСТЬ выдачи роли (department/company), а не
-    // признак глубины (см. решение 1, backend/apps/hr/legacy_roles.py,
-    // комментарий у EMPLOYEES_VIEW_ALL) — тот же расчёт, что и на бэкенде
-    // в `apps/access/services/resolve.py::permissions_for`.
-    getMe.mockResolvedValue(baseMe({
-      permissions: { hr: { level: 'write', scope: { kind: 'company', id: null } } },
-      depth: { hr: ['view', 'create', 'edit'] },
-    }));
-
-    const { result } = renderHook(() => useHRLevel(), { wrapper });
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.level).toBe('senior');
-    expect(result.current.isSenior).toBe(true);
-    expect(result.current.scopeDepartmentId).toBeNull();
-  });
-
-  it('read на hr отдаёт junior', async () => {
-    getMe.mockResolvedValue(baseMe({
-      permissions: { hr: { level: 'read', scope: { kind: 'department', id: 4 } } },
-      depth: { hr: ['view'] },
-    }));
-
-    const { result } = renderHook(() => useHRLevel(), { wrapper });
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.level).toBe('junior');
-    expect(result.current.isJunior).toBe(true);
-    expect(result.current.scopeDepartmentId).toBe(4);
-  });
-
-  it('без прав на hr отдаёт null', async () => {
+describe('useHRLevel (только hasPerm для contracts)', () => {
+  it('отдаёт ровно hasPerm, permissions, isLoading, isError — ничего из снятого', async () => {
     getMe.mockResolvedValue(baseMe({}));
 
     const { result } = renderHook(() => useHRLevel(), { wrapper });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.level).toBeNull();
-    expect(result.current.hasHrAccess).toBe(false);
-    expect(result.current.isError).toBe(false);
+    expect(Object.keys(result.current).sort()).toEqual(['hasPerm', 'isError', 'isLoading', 'permissions']);
+    expect(result.current.permissions).toEqual([]);
   });
 
-  it('can_*-предикаты считаются по узлу, а не по агрегированному уровню', async () => {
-    // Уровень модуля 'hr' здесь — 'admin' (delete есть в поддереве, только
-    // не на hr.employees, а на hr.documents), поэтому `level` обязан
-    // остаться 'lead'. Но `canDeleteEmployee`/`canWriteBasic`/
-    // `canCreateEmployee` обязаны быть false: у hr.employees в карте
-    // глубины есть только 'view'. Если бы предикаты выводились из уровня
-    // ('lead' → всё можно), этот тест бы упал.
+  it('hasPerm считает по узлу и всем его признакам, а не по уровню модуля', async () => {
+    // Уровень модуля 'hr' здесь — 'admin' (delete есть в поддереве, но на
+    // hr.documents), а у hr.employees в карте глубины только 'view'. Ключи
+    // на hr.employees с create/edit/delete обязаны быть false: вывод из
+    // уровня («admin → всё можно») соврал бы, что сотрудника можно удалить.
     getMe.mockResolvedValue(baseMe({
       permissions: { hr: { level: 'admin', scope: { kind: 'company', id: null } } },
       depth: {
@@ -138,19 +73,18 @@ describe('useHRLevel', () => {
     const { result } = renderHook(() => useHRLevel(), { wrapper });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.level).toBe('lead');
-    expect(result.current.canReadAll).toBe(true);
-    expect(result.current.canWriteBasic).toBe(false);
-    expect(result.current.canCreateEmployee).toBe(false);
-    expect(result.current.canDeleteEmployee).toBe(false);
-    expect(result.current.canTransferEmployee).toBe(false);
+    expect(result.current.hasPerm('hr.employees.view')).toBe(true);
+    expect(result.current.hasPerm('hr.employees.edit')).toBe(false);
+    expect(result.current.hasPerm('hr.employees.create')).toBe(false);
+    expect(result.current.hasPerm('hr.employees.delete')).toBe(false);
+    expect(result.current.hasPerm('hr.documents.manage')).toBe(true);
   });
 
   it('перевод считается по своему узлу hr.employees.transfer, а не по hr.employees', async () => {
     // Фикс-раунд 1 задачи 9 блока I: у перевода отдельный под-узел (сервер —
     // access/migrations/0008, hr-middle несёт на нём явный запрет). С правом
-    // править карточку, но запретом на перевод, кнопка «перевести» обязана
-    // быть недоступна — иначе интерфейс покажет то, на что сервер ответит 403.
+    // править карточку, но запретом на перевод, ключ перевода обязан быть
+    // false — иначе интерфейс покажет то, на что сервер ответит 403.
     getMe.mockResolvedValue(baseMe({
       permissions: { hr: { level: 'write', scope: { kind: 'department', id: 5 } } },
       depth: {
@@ -162,8 +96,7 @@ describe('useHRLevel', () => {
     const { result } = renderHook(() => useHRLevel(), { wrapper });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.canWriteBasic).toBe(true);
-    expect(result.current.canTransferEmployee).toBe(false);
+    expect(result.current.hasPerm('hr.employees.edit')).toBe(true);
     expect(result.current.hasPerm('hr.employees.transfer')).toBe(false);
 
     // И наоборот: узел выдан явно (senior/lead) — перевод есть.
@@ -176,7 +109,6 @@ describe('useHRLevel', () => {
     }));
     const senior = renderHook(() => useHRLevel(), { wrapper });
     await waitFor(() => expect(senior.result.current.isLoading).toBe(false));
-    expect(senior.result.current.canTransferEmployee).toBe(true);
     expect(senior.result.current.hasPerm('hr.employees.transfer')).toBe(true);
   });
 
@@ -200,7 +132,7 @@ describe('useHRLevel', () => {
     // DEFERRED_KEYS) не мапит его сам: узел этой области владеет
     // apps.contracts, а не apps.hr. Даже при максимальной глубине на hr этот
     // ключ обязан остаться false, а не превратиться в «пусти всех» по
-    // ошибке маппинга.
+    // ошибке маппинга. Ровно этот вызов делают экраны contracts.
     getMe.mockResolvedValue(baseMe({
       permissions: { hr: { level: 'admin', scope: { kind: 'company', id: null } } },
       depth: { hr: ['view', 'create', 'edit', 'delete'] },
@@ -210,20 +142,21 @@ describe('useHRLevel', () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.hasPerm('contracts.advance_payment.record_payment')).toBe(false);
+    expect(result.current.hasPerm('contracts.accountable_funds_request.mark_paid')).toBe(false);
+    expect(result.current.hasPerm('contracts.contract_payment.record_payment')).toBe(false);
   });
 
   it('различает «права не загрузились» и «прав нет»', async () => {
-    // Оба случая отдают level: null — так и должно быть, отказ в закрытую
+    // Оба случая отдают hasPerm → false — так и должно быть, отказ в закрытую
     // (докстринг usePermissions). Но это РАЗНЫЕ ситуации: одна — временная
     // сетевая проблема, другая — штатное «доступа нет». `isError` — это и
-    // есть отличие; молча схлопнуть их значило бы то самое поведение, из-за
-    // которого в usePermissions заведён отдельный признак.
+    // есть отличие.
     getMe.mockRejectedValue(new Error('сеть недоступна'));
 
     const { result } = renderHook(() => useHRLevel(), { wrapper });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.level).toBeNull();
+    expect(result.current.hasPerm('hr.employees.view')).toBe(false);
     expect(result.current.isError).toBe(true);
   });
 });
