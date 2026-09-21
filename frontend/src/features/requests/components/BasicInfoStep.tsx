@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 
-import { EmployeePicker } from '@/features/requests/components/EmployeePicker';
+import { EmployeePicker } from '@/components/common/EmployeePicker';
 import type { TemplateConfig } from '@/features/requests/types';
 import { useTranslation } from 'react-i18next';
 

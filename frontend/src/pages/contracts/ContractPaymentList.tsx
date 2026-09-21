@@ -12,6 +12,7 @@ import {
 } from '@/components/contracts/CollectionPage';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { formatAmount } from '@/components/contracts/format';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -129,6 +130,11 @@ export default function ContractPaymentList() {
                     subjectId={row.id}
                     state={row.approval_state}
                     submit={contractsApi.submitContractPayment}
+                    blockedReason={draftOnlySubmitBlock(
+                      row.status,
+                      statusLabel[row.status] ?? row.status,
+                      'оплата',
+                    )}
                     invalidate={[['contracts', 'contract-payments']]}
                     showState={false}
                   />

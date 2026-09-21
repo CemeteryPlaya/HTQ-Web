@@ -138,7 +138,8 @@ class RouteCollectionView(SignoffView):
     @admin_read
     def get(self, request):
         rows = routes.list_routes(subject_type=self.str_param("subject_type"),
-                                  is_active=self.bool_param("is_active"))
+                                  is_active=self.bool_param("is_active"),
+                                  scope=self.request.GET.get("scope"))
         return [schemas.RouteRead.model_validate(routes.serialize_route(row))
                 for row in rows]
 
@@ -227,8 +228,11 @@ class ProcessCollectionView(SignoffView):
         subject_id = self.int_param("subject_id")
         state = self.str_param("state")
         initiator_id = self.int_param("initiator_id")
+        scope = self.request.GET.get("scope")
         if subject_type is not None:
             query = query.filter(subject_type=subject_type)
+        if scope is not None:
+            query = query.filter(scope=scope)
         if subject_id is not None:
             query = query.filter(subject_id=subject_id)
         if state is not None:
@@ -249,6 +253,7 @@ class ProcessCollectionView(SignoffView):
             process = engine.start(
                 subject_type=data.subject_type, subject_id=data.subject_id,
                 initiator_id=data.initiator_id or request.token.user_id,
+                scope=data.scope,
             )
         except CONFLICTS as exc:
             return self.conflict(exc)
@@ -415,6 +420,27 @@ class TaskDecisionView(SignoffView):
             presentation.serialize_process(process, enrich=True))
 
 
+class TaskBatchDecisionView(SignoffView):
+    """Одно решение по пачке запросов — «одобрить всё выбранное».
+
+    Поштучно и без общей транзакции: каждый запрос — свой процесс, и отказ
+    по одному (уже закрыт, не ваш) не должен откатывать остальные. Ответ
+    называет, что прошло, а что нет, — как ``batch-approve`` в «Запросах».
+    """
+
+    @write("POST", body=schemas.BatchDecision, admin=False)
+    def post(self, request, data: schemas.BatchDecision):
+        results = []
+        for task_id in data.task_ids:
+            try:
+                engine.act(task_id=task_id, actor_id=request.token.user_id,
+                           decision=data.decision, comment=data.comment)
+                results.append({"task_id": task_id, "ok": True})
+            except (Http404, *CONFLICTS) as exc:
+                results.append({"task_id": task_id, "ok": False, "error": str(exc)})
+        return [schemas.BatchDecisionResult.model_validate(row) for row in results]
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Служебное
 # ═══════════════════════════════════════════════════════════════════════
@@ -435,16 +461,46 @@ class SubjectsView(SignoffView):
     @read
     def get(self, request):
         configured = set(ApprovalRoute.objects.filter(is_active=True)
-                         .values_list("subject_type", flat=True))
+                         .values_list("subject_type", "scope"))
         return [
             schemas.SubjectRead.model_validate({
                 "subject_type": subject.subject_type,
                 "label": subject.label,
-                "has_active_route": subject.subject_type in configured,
+                "has_active_route": (subject.subject_type, "") in configured,
                 "fields": self._fields(subject.subject_type),
+                "scopes": [
+                    {**row, "has_active_route":
+                        (subject.subject_type, row["scope"]) in configured}
+                    for row in self._scopes(subject.subject_type)
+                ],
+                "approver_fields": self._approver_fields(subject.subject_type),
+                "requirement_fields": self._requirement_fields(subject.subject_type),
             })
             for subject in registry.registered_subjects()
         ]
+
+    def _scopes(self, subject_type: str) -> list[dict]:
+        try:
+            return registry.scopes_for(subject_type)
+        except Exception:
+            logger.warning("signoff: scopes() для %s упал", subject_type, exc_info=True)
+            return []
+
+    def _approver_fields(self, subject_type: str) -> list[dict]:
+        try:
+            return registry.approver_fields_for(subject_type)
+        except Exception:
+            logger.warning("signoff: approver_fields() для %s упал",
+                           subject_type, exc_info=True)
+            return []
+
+    def _requirement_fields(self, subject_type: str) -> list[dict]:
+        try:
+            return registry.requirement_fields_for(subject_type)
+        except Exception:
+            logger.warning("signoff: requirement_fields() для %s упал",
+                           subject_type, exc_info=True)
+            return []
 
     def _fields(self, subject_type: str) -> list[dict]:
         """Схема фактов одного типа, не роняющая список остальных.

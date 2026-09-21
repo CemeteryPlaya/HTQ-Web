@@ -35,6 +35,7 @@ from apps.contracts.services import advance_payment_service as advance_payment_s
 from apps.contracts.services import budget_calc
 from apps.contracts.services.counterparty_service import get_counterparty_or_404
 from apps.contracts.services.reference_service import ReferenceConflict, conflict_as
+from apps.contracts.services.request_link import check_request_link, log_link
 # Единственный сосед, к которому обращается этот модуль, и только через его
 # interface — прямой импорт apps.media_files.models/services запрещён
 # (apps/core/tests/test_app_isolation.py).
@@ -180,7 +181,8 @@ def _validate_context(line: BudgetLine, counterparty, currency: str, *,
 def list_agreements(*, budget_id: int | None = None, budget_line_id: int | None = None,
                     counterparty_id: int | None = None,
                     administrator_id: int | None = None, program_id: int | None = None,
-                    status: str | None = None, period_year: int | None = None):
+                    status: str | None = None, period_year: int | None = None,
+                    request_id: int | None = None):
     """``budget_id`` фильтрует по бюджету ЦЕЛИКОМ (все его программы),
     ``budget_line_id`` — по одной программе. Нужны оба: карточка бюджета
     показывает договоры всех своих строк, карточка строки — только свои."""
@@ -203,6 +205,8 @@ def list_agreements(*, budget_id: int | None = None, budget_line_id: int | None 
         query = query.filter(status=status)
     if period_year is not None:
         query = query.filter(budget_line__budget__period_year=period_year)
+    if request_id is not None:
+        query = query.filter(request_id=request_id)
     return list(query)
 
 
@@ -293,6 +297,7 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "signed_date": agreement.signed_date,
         "status": agreement.status,
         "approval_state": agreement.approval_state,
+        "request_id": agreement.request_id,
         "created_by": agreement.created_by,
         "created_at": agreement.created_at,
         "updated_at": agreement.updated_at,
@@ -325,14 +330,33 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
                      term_comment: str = "",
                      currency: str = "KZT",
                      signed_date=None, status: str | None = None,
+                     request_id: int | None = None,
                      created_by: int | None = None) -> Agreement:
     line = _lock_line(budget_line_id)
     counterparty = get_counterparty_or_404(counterparty_id)
     _validate_context(line, counterparty, currency)
+    # Заявка, по которой заключается договор, — до записи: она обязана быть
+    # одобрена под эту же строку бюджета (см. request_link).
+    check_request_link(request_id, budget_line_id=line.pk)
 
     status = status or AgreementStatus.DRAFT
     if status not in AgreementStatus.values:
         raise AgreementRuleViolation(f"Неизвестный статус договора: {status}")
+    if status == AgreementStatus.ON_REVIEW:
+        # «На согласовании» — не состояние, которое объявляют, а следствие
+        # запущенного процесса: в него договор переводит
+        # ``approval_hooks._agreement_on_started`` из транзакции движка.
+        # Создание договора сразу в нём разводит две оси: процесса нет,
+        # ``approval_state`` остаётся ``draft`` — фронтенд по нему рисует
+        # кнопку «На согласование», а ``submit_for_approval`` отвечает на неё
+        # 409 «отправляется черновик». Вернуть такой договор в ``draft``
+        # можно только через ``/status`` руками. Остальные непроектные
+        # статусы (``approved``/``signed``) остаются разрешёнными намеренно:
+        # это заведение задним числом договора, согласованного вне системы.
+        raise AgreementRuleViolation(
+            "Статус «На согласовании» ставит само согласование: заведите "
+            "черновик и отправьте его на согласование"
+        )
 
     direction = direction or AgreementDirection.EXPENSE
     if direction not in AgreementDirection.values:
@@ -378,6 +402,7 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
             "start_date": start_date,
             "end_date": end_date,
             "status": status,
+            "request_id": request_id,
             "created_by": created_by,
         }
         # Необязательные поля подставляются только заданными: договор,
@@ -403,7 +428,11 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
         if retention_amount is not None:
             kwargs["retention_amount"] = retention_amount
 
-        return Agreement.objects.create(**kwargs)
+        agreement = Agreement.objects.create(**kwargs)
+    log_link(request_id, kind="agreement", document_id=agreement.pk,
+             title=f"Договор {agreement.number} — {agreement.name}",
+             url=f"/contracts/agreements/{agreement.pk}", actor_id=created_by)
+    return agreement
 
 
 @transaction.atomic
@@ -433,6 +462,13 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
     _validate_context(line, counterparty, currency,
                       check_budget_status=budget_changed,
                       check_counterparty_status=counterparty_changed)
+    # Связь с заявкой перепроверяется и при смене строки бюджета: договор,
+    # уведённый на другую строку, перестал бы исполнять свою заявку.
+    request_id = fields.get("request_id")
+    request_changed = request_id is not None and request_id != agreement.request_id
+    if request_changed or (budget_changed and agreement.request_id is not None):
+        check_request_link(request_id if request_changed else agreement.request_id,
+                           budget_line_id=line.pk)
 
     # Тип, который у договора БУДЕТ после этой правки: от него зависят обе
     # проверки ниже — и что занимает строку бюджета, и есть ли сумма, которую
@@ -482,6 +518,10 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
     if changed:
         with conflict_as("Договор с таким номером уже зарегистрирован"):
             agreement.save()
+    if request_changed:
+        log_link(request_id, kind="agreement", document_id=agreement.pk,
+                 title=f"Договор {agreement.number} — {agreement.name}",
+                 url=f"/contracts/agreements/{agreement.pk}", actor_id=None)
     return agreement
 
 

@@ -84,6 +84,21 @@ let _isRefreshing = false;
 let _refreshPromise: Promise<string> | null = null;
 
 /**
+ * Когда 403-ветка последний раз обновляла токен.
+ *
+ * 403 — это «ты опознан, но тебе нельзя», и обновление токена помогает ровно в
+ * одном случае: права выдали уже после выпуска токена, и в нём устаревшие
+ * claims. Такое бывает раз за сессию. А вот НАСТОЯЩИЙ запрет повторяется на
+ * каждом показе экрана, и без этой отсечки каждый такой ответ гнал свой
+ * запрос на обновление токена — десятки за минуту, каждый со своей новой парой
+ * токенов поверх предыдущей. Отсюда и расшатанная сессия у согласующего без
+ * прав на HR. Одной попытки в минуту хватает, чтобы подхватить выданные права,
+ * и достаточно, чтобы отказ оставался просто отказом.
+ */
+const FORBIDDEN_REFRESH_COOLDOWN_MS = 60_000;
+let _lastForbiddenRefreshAt = 0;
+
+/**
  * Выполняет одну попытку обновления токена через /api/users/v1/token/refresh/.
  * Возвращает новый access-токен или выбрасывает ошибку.
  */
@@ -255,12 +270,30 @@ client.interceptors.response.use(
     }
 
     // ── 403: возможно устаревшие claims — одна попытка обновления ──
+    // Обновление идёт через тот же замок, что и в 401-ветке: иначе десять
+    // параллельных 403 запускали десять refresh'ей разом, и запрос мог
+    // уехать с токеном, который уже перезаписан соседним ответом.
     if (status === 403 && !config._retry403 && !isAuthEndpoint) {
       config._retry403 = true;
+      const joinable = _isRefreshing && _refreshPromise;
+      if (!joinable
+          && Date.now() - _lastForbiddenRefreshAt < FORBIDDEN_REFRESH_COOLDOWN_MS) {
+        // Недавно уже пробовали — значит это настоящий запрет, а не claims.
+        return Promise.reject(error);
+      }
       try {
-        const newToken = _isRefreshing && _refreshPromise
-          ? await _refreshPromise
-          : await doTokenRefresh();
+        let newToken: string;
+        if (joinable) {
+          newToken = await _refreshPromise!;
+        } else {
+          _lastForbiddenRefreshAt = Date.now();
+          _isRefreshing = true;
+          _refreshPromise = doTokenRefresh().finally(() => {
+            _isRefreshing = false;
+            _refreshPromise = null;
+          });
+          newToken = await _refreshPromise;
+        }
         const retryConfig = {
           ...config,
           headers: { ...config.headers, Authorization: `Bearer ${newToken}` },

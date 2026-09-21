@@ -1,12 +1,11 @@
-"""Combined validation of a template version (schema + workflow + cross-refs).
+"""Validation of a template version — the form schema.
 
-Ported from ``services/requests/app/services/template_validation.py``. The
-cross-reference check is the part that matters: a condition node may only
-reference form fields that actually exist, otherwise the workflow silently
-takes the ``false`` branch forever at runtime (``condition_eval`` resolves an
-unknown ``var`` to ``None``, which is falsy). Catching it at publish time is
-the difference between "the builder told me" and "requests mysteriously skip
-the manager's step".
+Маршрут согласования больше не часть версии: он живёт в ``apps.signoff``
+(маршрут по области ``template:<id>``) и правится отдельно от формы. Поэтому
+проверяется только ``schema_json``. ``workflow_json`` старых версий и
+клиентов принимается и, если непуст, проверяется как прежде — ради истории
+(его читает конвертер ``migrate_workflows_to_signoff``) и старых тестов, но
+на исполнение он не влияет.
 """
 
 from __future__ import annotations
@@ -20,15 +19,19 @@ from .workflow_schema import (
 
 
 def validate_template_version(schema_json: dict,
-                              workflow_json: dict) -> tuple[FormSchema, WorkflowGraph]:
-    """Validate both blobs and their cross-references.
+                              workflow_json: dict | None = None,
+                              ) -> tuple[FormSchema, WorkflowGraph | None]:
+    """Validate the schema and, when a legacy workflow is supplied, its
+    cross-references.
 
     Raises ``pydantic.ValidationError`` or ``ValueError`` on any problem; the
     view maps both to 422.
     """
     schema = validate_form_schema(schema_json)
-    graph = validate_workflow(workflow_json)
+    if not workflow_json:
+        return schema, None
 
+    graph = validate_workflow(workflow_json)
     keys = schema.keys
     for node in graph.nodes:
         if node.type == "condition":

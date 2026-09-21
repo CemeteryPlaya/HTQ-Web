@@ -19,12 +19,14 @@ from __future__ import annotations
 from typing import Any
 
 from apps.core.services import ServiceDisabled
+from apps.signoff import interface as signoff
 from apps.users import interface as users_interface
 
 from ..models import (
-    ApprovalAction, RequestFormTemplate, RequestFormTemplateVersion,
-    RequestInstance, RequestReferenceRow, RequestReferenceSource,
+    RequestFormTemplate, RequestFormTemplateVersion, RequestInstance,
+    RequestReferenceRow, RequestReferenceSource, RequestStatus,
 )
+from . import budget_line_refs
 
 # Fixed metadata columns, left-to-right (Lark parity).
 COL_CODE = "Номер запроса"
@@ -98,6 +100,11 @@ def _render(v: Any) -> str:
     if isinstance(v, dict) and "amount" in v:
         amount, currency = v.get("amount"), v.get("currency", "")
         return f"{amount} {currency}".strip() if amount is not None else ""
+    if isinstance(v, dict):
+        # Блок (неповторяемая группа) — «ключ: значение» через точку с
+        # запятой; пустые пропускаем.
+        return "; ".join(f"{k}: {_render(x)}" for k, x in v.items()
+                         if x not in (None, "", [], {}))
     if isinstance(v, list):
         return ", ".join(_render(x) for x in v)
     if isinstance(v, bool):
@@ -137,6 +144,27 @@ def can_view_data_table(source: RequestReferenceSource, user_id: int,
                        if isinstance(x, int)]
 
 
+def _current_approvers(instance: RequestInstance) -> list[int]:
+    """Кто должен решить прямо сейчас — из процесса signoff.
+
+    Пусто, если заявка не на согласовании, процесса нет или signoff выключен:
+    колонка «Текущий согласующий» — оформление таблицы, и отказывать в
+    записи строки из-за неё нельзя.
+    """
+    if instance.status != RequestStatus.PENDING:
+        return []
+    try:
+        card = signoff.get_process_for(RequestInstance.SIGNOFF_SUBJECT_TYPE,
+                                       instance.pk)
+    except ServiceDisabled:
+        return []
+    if not card or card.get("state") != "pending":
+        return []
+    return [task["user_id"]
+            for stage in card.get("stages", []) if stage.get("state") == "active"
+            for task in stage.get("tasks", []) if task.get("state") == "pending"]
+
+
 def sync_row_for_instance(instance: RequestInstance) -> None:
     """Upsert the row mirroring ``instance``.
 
@@ -155,11 +183,7 @@ def sync_row_for_instance(instance: RequestInstance) -> None:
     schema = version.schema_json if version else {}
     values = instance.form_values_json or {}
 
-    assignee_ids = []
-    if instance.current_node_id:
-        assignee_ids = list(ApprovalAction.objects.filter(
-            request=instance, node_id=instance.current_node_id,
-            acted_at__isnull=True).values_list("approver_id", flat=True))
+    assignee_ids = _current_approvers(instance)
 
     names = _names_for([instance.initiator_id, *assignee_ids])
     data: dict[str, str] = {
@@ -173,12 +197,26 @@ def sync_row_for_instance(instance: RequestInstance) -> None:
         COL_ASSIGNEE: ", ".join(
             n for n in (names.get(a) for a in assignee_ids) if n),
     }
-    for f in (schema or {}).get("fields", []):
+    fields = (schema or {}).get("fields", [])
+    # Строка бюджета в таблице — подписью, а не числом: id ничего не
+    # говорит финансисту, который эту таблицу читает. Один батч на все
+    # такие поля формы (обычно оно одно).
+    line_ids = [values.get(f.get("key")) for f in fields
+                if f.get("type") == budget_line_refs.WIDGET_TYPE]
+    line_labels = budget_line_refs.labels_for(
+        v for v in line_ids if isinstance(v, int) and not isinstance(v, bool))
+    for f in fields:
         if f.get("type") in _SKIP_TYPES:
             continue
         col = f.get("label") or f.get("key") or ""
-        if col:
-            data[col] = _render(values.get(f.get("key")))
+        if not col:
+            continue
+        value = values.get(f.get("key"))
+        if (f.get("type") == budget_line_refs.WIDGET_TYPE
+                and isinstance(value, int) and value in line_labels):
+            data[col] = line_labels[value]
+        else:
+            data[col] = _render(value)
 
     row = RequestReferenceRow.objects.filter(instance_id=instance.id).first()
     if row is None:

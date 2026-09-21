@@ -59,6 +59,8 @@ class RouteCreate(BaseModel):
     subject_type: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=200)
     is_active: bool = True
+    # Область внутри типа (``ApprovalRoute.scope``); пустая — весь тип.
+    scope: str = Field("", max_length=64)
 
 
 class RouteUpdate(BaseModel):
@@ -89,13 +91,23 @@ class StageCreate(BaseModel):
     condition: Condition = Field(default_factory=list)
     is_fallback: bool = False
     approver_kind: ApproverKind = ApproverKind.POSITION
+    # Для ``users`` — учётные записи поимённо; для ``subject`` — ключ из
+    # ``approver_fields`` типа. Сочетания с видом проверяет сервис
+    # (``route_service._check_approver_kind``).
+    user_ids: list[int] = Field(default_factory=list)
+    approver_key: str = Field("", max_length=64)
     requires_attachment: bool = False
     requires_comment: bool = False
+    # Что этап требует от ОБЪЕКТА (ключ из ``requirement_fields`` типа) —
+    # проверяет сервис, как и ключ согласующих.
+    requirement_key: str = Field("", max_length=64)
 
     @model_validator(mode="after")
     def _roles_match_kind(self):
         if len(set(self.position_ids)) != len(self.position_ids):
             raise ValueError("должности в этапе повторяются")
+        if len(set(self.user_ids)) != len(self.user_ids):
+            raise ValueError("согласующие в этапе повторяются")
         # Смысл сочетаний — в route_service._check_approver_kind; здесь
         # проверяется ровно то, что видно из схемы: список либо нужен, либо
         # неуместен. Дубль осознанный — 422 на форме понятнее, чем 409 из
@@ -105,7 +117,11 @@ class StageCreate(BaseModel):
             raise ValueError("нужна хотя бы одна должность")
         if self.approver_kind != ApproverKind.POSITION and self.position_ids:
             raise ValueError(
-                "у этапа с этим видом согласующих список не заполняется")
+                "у этапа с этим видом согласующих должности не заполняются")
+        if self.approver_kind == ApproverKind.USERS and not self.user_ids:
+            raise ValueError("нужен хотя бы один согласующий")
+        if self.approver_kind == ApproverKind.SUBJECT and not self.approver_key:
+            raise ValueError("укажите, кого объект назначает согласующим")
         return self
 
 
@@ -124,8 +140,24 @@ class StageUpdate(BaseModel):
     # присылать вместе с ним ``approver_ids: []`` не нужно (и непустой список
     # вместе с ним сервис отвергнет как противоречие).
     approver_kind: Optional[ApproverKind] = None
+    user_ids: Optional[list[int]] = None
+    approver_key: Optional[str] = Field(None, max_length=64)
     requires_attachment: Optional[bool] = None
     requires_comment: Optional[bool] = None
+    requirement_key: Optional[str] = Field(None, max_length=64)
+
+
+class StageUserRead(BaseModel):
+    user_id: int
+    full_name: str = ""
+    is_active: bool = True
+
+
+class ApproverFieldRead(BaseModel):
+    """Ключ «назначает объект» — что предметная аппка умеет спросить у объекта."""
+
+    key: str
+    label: str = ""
 
 
 class RoleRead(BaseModel):
@@ -145,6 +177,14 @@ class StageRead(BaseModel):
     approver_kind: ApproverKind = ApproverKind.POSITION
     requires_attachment: bool = False
     requires_comment: bool = False
+    # Настройка двух других видов: люди поимённо (с именами для редактора)
+    # и ключ «назначает объект» с подписью из ``approver_fields``.
+    user_ids: list[int] = Field(default_factory=list)
+    users: list[StageUserRead] = Field(default_factory=list)
+    approver_key: str = ""
+    approver_label: Optional[str] = None
+    requirement_key: str = ""
+    requirement_label: Optional[str] = None
     # Пустой у этапа, который согласует инициатор: конкретный человек станет
     # известен только на запуске процесса.
     roles: list[RoleRead]
@@ -167,9 +207,16 @@ class CoverageGap(BaseModel):
 class RouteRead(BaseModel):
     id: int
     subject_type: str
+    scope: str = ""
+    scope_label: Optional[str] = None
     name: str
     is_active: bool
     stages: list[StageRead]
+    # Схема области — только в карточке одного маршрута (редактор): по каким
+    # фактам ветвить и какие ключи «назначает объект» предлагать.
+    fields: Optional[list["SubjectField"]] = None
+    approver_fields: Optional[list[ApproverFieldRead]] = None
+    requirement_fields: Optional[list[ApproverFieldRead]] = None
     # Считаются только для карточки одного маршрута — в списке этих полей
     # нет (см. route_service.serialize_route).
     coverage_gaps: Optional[list[CoverageGap]] = None
@@ -187,6 +234,8 @@ class ProcessStart(BaseModel):
     subject_type: str = Field(..., min_length=1, max_length=64)
     subject_id: int
     initiator_id: Optional[int] = None
+    # None — область назовёт сама предметная аппка (``Subject.scope_of``).
+    scope: Optional[str] = Field(None, max_length=64)
 
 
 class TaskRead(BaseModel):
@@ -221,8 +270,12 @@ class ProcessStageRead(BaseModel):
     # решении.
     approver_kind: ApproverKind = ApproverKind.POSITION
     role_ids: list[int] = Field(default_factory=list)
+    user_ids: list[int] = Field(default_factory=list)
+    approver_key: str = ""
     requires_attachment: bool = False
     requires_comment: bool = False
+    requirement_key: str = ""
+    requirement_label: Optional[str] = None
     decided_at: Optional[datetime]
     tasks: list[TaskRead]
 
@@ -231,6 +284,7 @@ class ProcessRead(BaseModel):
     id: int
     subject_type: str
     subject_id: int
+    scope: str = ""
     state: ProcessState
     initiator_id: Optional[int]
     current_order: Optional[int]
@@ -279,11 +333,16 @@ class InboxItem(BaseModel):
     subject_title: Optional[str]
     subject_url: Optional[str]
     stage_name: str
+    # Положение шага в маршруте («этап 2 из 4») — прогресс для того, у кого
+    # в маршруте несколько этапов подряд.
+    stage_order: int
+    stage_count: int
     quorum: str
     # Решение по этому запросу требует приложенного PDF и/или пояснения —
     # видно в очереди, а не только в диалоге решения.
     requires_attachment: bool = False
     requires_comment: bool = False
+    requirement_label: Optional[str] = None
     file_id: Optional[str] = None
     initiator_id: Optional[int]
     created_at: datetime
@@ -308,6 +367,12 @@ class SubjectField(BaseModel):
     options: list[FieldOption] = Field(default_factory=list)
 
 
+class ScopeRead(BaseModel):
+    scope: str
+    label: str = ""
+    has_active_route: bool = False
+
+
 class SubjectRead(BaseModel):
     """Согласуемый тип — для настройки маршрута."""
 
@@ -317,3 +382,22 @@ class SubjectRead(BaseModel):
     # Пустой список — тип не поддерживает ветвление (аппка не объявила
     # fact_fields); редактор в этом случае условий не показывает.
     fields: list[SubjectField] = Field(default_factory=list)
+    # Области типа (``Subject.scopes``): у типов без областей пусто, и
+    # маршрут заводится на весь тип.
+    scopes: list[ScopeRead] = Field(default_factory=list)
+    approver_fields: list[ApproverFieldRead] = Field(default_factory=list)
+    requirement_fields: list[ApproverFieldRead] = Field(default_factory=list)
+
+
+class BatchDecision(BaseModel):
+    """Одно решение по нескольким запросам сразу — «одобрить всё выбранное»."""
+
+    task_ids: list[int] = Field(..., min_length=1, max_length=100)
+    decision: str = Field(..., pattern="^(approve|reject|rework)$")
+    comment: str = Field("", max_length=2000)
+
+
+class BatchDecisionResult(BaseModel):
+    task_id: int
+    ok: bool
+    error: Optional[str] = None

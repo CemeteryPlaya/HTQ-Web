@@ -162,7 +162,8 @@ def submit_for_approval(payment_id: int, *, actor_id: int | None = None) -> dict
     _approved_agreement(payment.agreement_id)
     if payment.status != AdvancePaymentStatus.DRAFT:
         raise AdvancePaymentRuleViolation(
-            "На согласование можно отправить только предоплату в статусе «Черновик»"
+            f"На согласование отправляется черновик; предоплата в статусе "
+            f"«{payment.get_status_display()}»"
         )
     if payment.approval_state not in signoff.ApprovalState.editable():
         payment.assert_editable()

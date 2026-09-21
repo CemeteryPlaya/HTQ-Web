@@ -178,6 +178,14 @@ urlpatterns = [
     path("completion-acts/<int:act_id>", views.CompletionActDetailView.as_view()),
     path("completion-acts/<int:act_id>/", views.CompletionActDetailView.as_view()),
 
+    # ── Заявки конструктора «Запросы» (прокси к apps.approvals.interface) ──
+    path("requests/<int:request_id>/documents", views.LinkedRequestDocumentsView.as_view()),
+    path("requests/<int:request_id>/documents/", views.LinkedRequestDocumentsView.as_view()),
+    path("requests", views.LinkedRequestCollectionView.as_view()),
+    path("requests/", views.LinkedRequestCollectionView.as_view()),
+    path("requests/<int:request_id>", views.LinkedRequestDetailView.as_view()),
+    path("requests/<int:request_id>/", views.LinkedRequestDetailView.as_view()),
+
     # ── Товарные накладные ─────────────────────────────────────────────────
     path("goods-invoices/<int:invoice_id>/submit", views.GoodsInvoiceSubmitView.as_view()),
     path("goods-invoices/<int:invoice_id>/submit/", views.GoodsInvoiceSubmitView.as_view()),

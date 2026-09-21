@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef } from 'react';
 
+import { contractsApi } from '@/api/contracts';
 import { fetchEmployees } from '@/api/hr';
 import { requestsApi } from '@/api/requests';
 import { getAccessToken } from '@/lib/auth/profileStorage';
@@ -125,6 +126,19 @@ export function useReferenceOptions(
   });
 }
 
+/** Строки бюджета для виджета `budget_line_ref` — тот же плоский список,
+ *  что читает форма договора (`GET /api/contracts/v1/budget-lines`).
+ *  Раздел «Договоры» может быть выключен (503 `service_disabled`) — это не
+ *  ошибка формы, поэтому без повторов; контрол показывает подсказку. */
+export function useBudgetLines(enabled = true) {
+  return useQuery({
+    queryKey: ['contracts', 'budget-lines', 'requests-widget'],
+    queryFn: () => contractsApi.listBudgetLines().then((r) => r.data),
+    enabled,
+    retry: false,
+  });
+}
+
 /** Map of platform user_id -> employee full name, for resolving picked people
  *  (approvers, CC) to names in the workflow builder. Shares the EmployeePicker
  *  query cache. */
@@ -149,60 +163,23 @@ export function useCreateDraft() {
   });
 }
 
+/** Отправка на согласование. Ответ — карточка ПРОЦЕССА signoff, поэтому в
+ *  кэш заявки он не кладётся: саму заявку перечитываем — её статус изменил
+ *  колбэк движка. */
 export function useSubmitInstance(id: number) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => requestsApi.instances.submit(id),
-    onSuccess: (data) => {
-      qc.setQueryData(QK.instance(id), data);
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.instance(id) });
       qc.invalidateQueries({ queryKey: ['requests', 'instances'] });
+      qc.invalidateQueries({ queryKey: ['signoff'] });
     },
   });
 }
 
-export function useApprove(id: number) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (comment: string) => requestsApi.actions.approve(id, comment),
-    onSuccess: (data) => {
-      qc.setQueryData(QK.instance(id), data);
-      qc.invalidateQueries({ queryKey: ['requests', 'instances'] });
-    },
-  });
-}
 
-export function useReject(id: number) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (comment: string) => requestsApi.actions.reject(id, comment),
-    onSuccess: (data) => {
-      qc.setQueryData(QK.instance(id), data);
-      qc.invalidateQueries({ queryKey: ['requests', 'instances'] });
-    },
-  });
-}
 
-export function useRequestChanges(id: number) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (comment: string) => requestsApi.actions.requestChanges(id, comment),
-    onSuccess: (data) => {
-      qc.setQueryData(QK.instance(id), data);
-      qc.invalidateQueries({ queryKey: ['requests', 'instances'] });
-    },
-  });
-}
-
-export function useCancel(id: number) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => requestsApi.actions.cancel(id),
-    onSuccess: (data) => {
-      qc.setQueryData(QK.instance(id), data);
-      qc.invalidateQueries({ queryKey: ['requests', 'instances'] });
-    },
-  });
-}
 
 /* ─── SSE stream — fan-in real-time updates to the query cache ──────── */
 
@@ -229,6 +206,10 @@ export function useRequestsStream() {
         if (requestId) qc.invalidateQueries({ queryKey: QK.instance(requestId) });
       } catch { /* ignore parse errors */ }
       qc.invalidateQueries({ queryKey: ['requests', 'instances'] });
+      // Личная сводка считается на сервере и от списков не зависит —
+      // её надо обновлять отдельно, иначе «Отправлено мной» и суммы
+      // застывают до перезагрузки страницы.
+      qc.invalidateQueries({ queryKey: ['requests', 'stats', 'mine'] });
     };
 
     for (const kind of [

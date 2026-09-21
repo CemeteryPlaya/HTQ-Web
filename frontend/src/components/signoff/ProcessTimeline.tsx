@@ -35,6 +35,7 @@ import {
   Split,
   Undo2,
   XCircle,
+  ClipboardCheck,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -216,6 +217,12 @@ export function ProcessTimeline({
                     <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                       <MessageSquare className="h-3.5 w-3.5 shrink-0" />
                       согласование только с пояснением
+                    </p>
+                  )}
+                  {stage.requirement_label && (
+                    <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <ClipboardCheck className="h-3.5 w-3.5 shrink-0" />
+                      {t('signoff.timeline.requires', { what: stage.requirement_label })}
                     </p>
                   )}
                   {stage.matched_by !== 'always' && (

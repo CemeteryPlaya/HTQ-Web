@@ -17,6 +17,7 @@ CALLS: list[tuple[str, int]] = []
 
 def reset() -> None:
     CALLS.clear()
+    EVENTS.clear()
 
 
 def _on_started(subject_id: int) -> None:
@@ -67,13 +68,71 @@ def _facts(subject_id: int) -> dict:
     return {"zone": doc.zone, "amount": doc.amount, "urgent": doc.urgent}
 
 
-def _fact_fields() -> list[dict]:
-    return [
+def _fact_fields(scope: str = "") -> list[dict]:
+    fields = [
         {"key": "zone", "label": "Зона", "type": "choice",
          "options": [{"value": value, "label": label} for value, label in ZONES]},
         {"key": "amount", "label": "Сумма", "type": "number"},
         {"key": "urgent", "label": "Срочно", "type": "bool"},
     ]
+    # Схема ПО области: у области «strict» есть дополнительный факт — так
+    # проверяется, что редактор и проверка условий получают схему именно
+    # своей области, а не общую.
+    if scope == "strict":
+        fields.append({"key": "audited", "label": "Проверено", "type": "bool"})
+    return fields
+
+
+# ── области и согласующие, которых называет объект ──────────────────────
+
+SCOPES = [("", "Обычные"), ("strict", "Строгие")]
+
+
+def _scope_of(subject_id: int) -> str:
+    doc = ProbeDoc.objects.filter(pk=subject_id).first()
+    return doc.scope if doc is not None else ""
+
+
+def _scopes() -> list[dict]:
+    return [{"scope": scope, "label": label} for scope, label in SCOPES if scope]
+
+
+def _approvers(subject_id: int, key: str) -> list[int]:
+    doc = ProbeDoc.objects.filter(pk=subject_id).first()
+    if doc is None or key != "owner" or doc.owner_id is None:
+        return []
+    return [doc.owner_id]
+
+
+def _approver_fields(scope: str = "") -> list[dict]:
+    return [{"key": "owner", "label": "Владелец документа"}]
+
+
+# ── требования этапа к объекту ──────────────────────────────────────────
+#
+# «Документ назван» — то, что этап может потребовать от объекта прежде, чем
+# закроется. У заявки на закуп это «заполнен поставщик»; здесь достаточно
+# заголовка, чтобы не заводить колонку ради теста.
+
+REQUIREMENT_TITLED = "titled"
+
+
+def _requirement_fields(scope: str = "") -> list[dict]:
+    return [{"key": REQUIREMENT_TITLED, "label": "Документ назван"}]
+
+
+def _check_requirement(subject_id: int, key: str) -> str | None:
+    doc = ProbeDoc.objects.filter(pk=subject_id).first()
+    if doc is None or key != REQUIREMENT_TITLED:
+        return None
+    return None if doc.title.strip() else "у документа нет названия"
+
+
+EVENTS: list[tuple[int, str, dict]] = []
+
+
+def _on_event(subject_id: int, kind: str, payload: dict) -> None:
+    EVENTS.append((subject_id, kind, payload))
 
 
 def register() -> None:
@@ -89,4 +148,11 @@ def register() -> None:
         describe=_describe,
         facts=_facts,
         fact_fields=_fact_fields,
+        scope_of=_scope_of,
+        scopes=_scopes,
+        approvers=_approvers,
+        approver_fields=_approver_fields,
+        on_event=_on_event,
+        requirement_fields=_requirement_fields,
+        check_requirement=_check_requirement,
     )

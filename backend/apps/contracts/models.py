@@ -711,6 +711,16 @@ class Agreement(signoff.Approvable, models.Model):
     status = models.CharField(max_length=20, choices=AgreementStatus.choices,
                               default=AgreementStatus.DRAFT,
                               db_default=AgreementStatus.DRAFT)
+    # Заявка конструктора «Запросы» (``apps.approvals.RequestInstance``), по
+    # которой заключён договор. Голый id, не FK — межаппный ключ запрещён
+    # (тот же приём, что ``Administrator.project_id``). Владелец связи —
+    # договор: он ссылается на заявку так же, как на строку бюджета, и
+    # обязан ссылаться на ТУ ЖЕ строку, под которую заявку одобрили
+    # (``services/request_link.py``).
+    request_id = models.IntegerField(
+        null=True, blank=True, db_index=True,
+        verbose_name="Заявка на закуп",
+    )
     # Идентификатор договора в системе-источнике (LARK), если запись пришла
     # импортом. Это НЕ второй номер договора и не бизнес-поле: в интерфейсе
     # его не показывают и по нему не ищут. Он существует ради одного —
@@ -834,6 +844,12 @@ class Invoice(signoff.Approvable, models.Model):
     status = models.CharField(max_length=20, choices=InvoiceStatus.choices,
                               default=InvoiceStatus.DRAFT,
                               db_default=InvoiceStatus.DRAFT)
+    # Та же связь с заявкой, что у договора (см. ``Agreement.request_id``):
+    # прямая закупка по счёту — второй способ исполнить одобренную заявку.
+    request_id = models.IntegerField(
+        null=True, blank=True, db_index=True,
+        verbose_name="Заявка на закуп",
+    )
     # Дата самого счёта — не дата его записи в платформу. Для отчёта о
     # движении денег это разные вещи: счёт от 31 декабря, заведённый в
     # январе, относится к прошлому году. Необязательна: в книге заказчика

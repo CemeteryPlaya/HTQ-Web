@@ -12,6 +12,7 @@ import {
 } from '@/components/contracts/CollectionPage';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { formatAmount } from '@/components/contracts/format';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -135,6 +136,11 @@ const AdvancePaymentList = () => {
                     subjectId={row.id}
                     state={row.approval_state}
                     submit={contractsApi.submitAdvancePayment}
+                    blockedReason={draftOnlySubmitBlock(
+                      row.status,
+                      documentStatusLabel[row.status] ?? row.status,
+                      'предоплата',
+                    )}
                     invalidate={[['contracts', 'advance-payments']]}
                     showState={false}
                   />

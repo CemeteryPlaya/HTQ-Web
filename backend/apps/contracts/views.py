@@ -41,6 +41,7 @@ from typing import Callable, Iterable
 from django.http import Http404, HttpResponse
 from django.utils.decorators import method_decorator
 
+from apps.approvals import interface as approvals
 from apps.signoff import interface as signoff
 from htqweb import date_rules
 from htqweb.http import ApiView, api_view, json_error
@@ -78,6 +79,7 @@ from .services.contract_payment_service import ContractPaymentRuleViolation
 from .services.completion_act_service import CompletionActRuleViolation
 from .services.goods_invoice_service import GoodsInvoiceRuleViolation
 from .services.reference_service import ReferenceConflict
+from .services.request_link import RequestLinkViolation
 
 # Конфликты доменного уровня, которые вьюха переводит в 409. Собраны в один
 # кортеж, чтобы каждый `except` не перечислял их заново и не разъезжался с
@@ -92,7 +94,7 @@ CONFLICTS = (ReferenceConflict, AgreementRuleViolation, InvoiceRuleViolation,
              AccountableFundsRequestRuleViolation,
              AdvanceReportRuleViolation,
              ContractPaymentRuleViolation,
-             CompletionActRuleViolation,
+             CompletionActRuleViolation, RequestLinkViolation,
              GoodsInvoiceRuleViolation,
              BudgetExceeded, signoff.SignoffError, signoff.UnknownSubject)
 
@@ -520,6 +522,47 @@ class BudgetAgreementsView(ContractsView):
                 for row in rows]
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Заявки конструктора «Запросы», по которым заводятся договоры и счета
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Три ручки-прокси к ``apps.approvals.interface``. Фронтенд договорного
+# контура ходит СЮДА, а не в ``/api/requests/v1``: там видимость заявки
+# определяется участием в согласовании, а финансисту, заводящему договор,
+# нужна карточка любой одобренной заявки. Выключенный approvals даёт 503 —
+# документ ПО заявке без approvals не заводится (``services/request_link.py``).
+
+class LinkedRequestCollectionView(ContractsView):
+    """Одобренные заявки со строкой бюджета — список для выбора в форме."""
+
+    @read
+    def get(self, request):
+        return [schemas.LinkedRequestRead.model_validate(row)
+                for row in approvals.list_approved_requests()]
+
+
+class LinkedRequestDetailView(ContractsView):
+    @read
+    def get(self, request, request_id: int):
+        brief = approvals.get_request_brief(request_id)
+        if brief is None:
+            raise Http404("Заявка не найдена")
+        return schemas.LinkedRequestRead.model_validate(brief)
+
+
+class LinkedRequestDocumentsView(ContractsView):
+    """Договоры и счета, заведённые по заявке, — блок на карточке заявки."""
+
+    @read
+    def get(self, request, request_id: int):
+        return schemas.LinkedRequestDocumentsRead(
+            agreements=[schemas.AgreementRead.model_validate(agr_svc.serialize_agreement(row))
+                        for row in agr_svc.list_agreements(request_id=request_id)],
+            invoices=[schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(row))
+                      for row in inv_svc.list_invoices(request_id=request_id)],
+        )
+
+
 class BudgetLineCollectionView(ContractsView):
     """Плоский список строк ВСЕХ бюджетов — источник данных формы договора.
 
@@ -659,6 +702,7 @@ class AgreementCollectionView(ContractsView):
             program_id=self.int_param("program_id"),
             period_year=self.int_param("period_year"),
             status=self.str_param("status"),
+            request_id=self.int_param("request_id"),
         )
         return self.paginated(
             rows,
@@ -814,6 +858,7 @@ class InvoiceCollectionView(ContractsView):
             program_id=self.int_param("program_id"),
             period_year=self.int_param("period_year"),
             status=self.str_param("status"),
+            request_id=self.int_param("request_id"),
         )
         return self.paginated(
             rows,

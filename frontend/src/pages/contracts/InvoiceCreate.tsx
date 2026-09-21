@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ArrowLeft, Loader2, Paperclip, Receipt } from 'lucide-react';
@@ -18,6 +18,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { LinkedRequestPicker } from '@/components/contracts/LinkedRequestPicker';
+import { useLinkedRequest } from '@/components/contracts/useLinkedRequest';
 import { formatAmount } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
 import { reportApiError } from '@/lib/apiError';
@@ -139,6 +141,18 @@ const InvoiceCreate = () => {
   );
   const blockedByAgreement = Boolean(activeAgreement);
 
+  // Заявка на закуп — как в форме договора: её строка бюджета подставляется
+  // в каскад и запирает его (см. LinkedRequestPicker).
+  const linkedRequest = useLinkedRequest(lines);
+  useEffect(() => {
+    const row = linkedRequest.line;
+    if (!row) return;
+    setAdministratorId(String(row.administrator_id));
+    setProgramId(String(row.program_id));
+    setLineId(String(row.id));
+  }, [linkedRequest.line]);
+  const fundingLocked = linkedRequest.linked != null;
+
   const chooseAdministrator = (value: string) => {
     setAdministratorId(value);
     setProgramId('');
@@ -190,6 +204,7 @@ const InvoiceCreate = () => {
           budget_line_id: Number(lineId),
           counterparty_id: Number(counterpartyId),
           amount: amount.trim().replace(',', '.'),
+          request_id: linkedRequest.linked?.id ?? null,
         })
         .then((r) => r.data);
 
@@ -284,13 +299,19 @@ const InvoiceCreate = () => {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <LinkedRequestPicker
+                value={linkedRequest.linked}
+                onChange={linkedRequest.setLinked}
+                missing={linkedRequest.missing}
+                presetFailed={linkedRequest.presetFailed}
+              />
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <Label htmlFor="administrator">Администратор бюджета</Label>
                   <Select
                     value={administratorId}
                     onValueChange={chooseAdministrator}
-                    disabled={budgetsLoading || administrators.length === 0}
+                    disabled={budgetsLoading || administrators.length === 0 || fundingLocked}
                   >
                     <SelectTrigger
                       id="administrator"
@@ -314,7 +335,7 @@ const InvoiceCreate = () => {
                   <Select
                     value={programId}
                     onValueChange={chooseProgram}
-                    disabled={!administratorId}
+                    disabled={!administratorId || fundingLocked}
                   >
                     <SelectTrigger
                       id="program"
@@ -341,7 +362,7 @@ const InvoiceCreate = () => {
               {yearOptions.length > 1 && (
                 <div className="sm:w-48">
                   <Label htmlFor="budget-year">Бюджетный год</Label>
-                  <Select value={lineId} onValueChange={setLineId}>
+                  <Select value={lineId} onValueChange={setLineId} disabled={fundingLocked}>
                     <SelectTrigger
                       id="budget-year"
                       className={errors.budget ? 'border-destructive' : undefined}

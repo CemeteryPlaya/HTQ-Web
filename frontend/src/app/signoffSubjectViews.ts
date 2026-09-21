@@ -33,6 +33,10 @@ export interface SubjectViewProps {
 export type SubjectView = LazyExoticComponent<ComponentType<SubjectViewProps>>;
 
 export const SIGNOFF_SUBJECT_VIEWS: Record<string, SubjectView> = {
+  // Заявка конструктора «Запросы»: тот же движок согласует и её.
+  'approvals.request': lazy(
+    () => import('@/features/requests/components/RequestSubjectView'),
+  ),
   'contracts.budget': lazy(() => import('@/components/contracts/BudgetDetailView')),
   'contracts.counterparty': lazy(
     () => import('@/components/contracts/CounterpartyDetailView'),
