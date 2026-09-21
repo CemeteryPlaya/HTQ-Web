@@ -86,12 +86,22 @@ def admin_auth(db, company_row):
     правок карточки документа (PATCH/загрузка).
 
     Блок I задача 5: ``GET employees/{id}/documents`` стоит под
-    ``module="hr", level="read"`` — роль ``hr-lead`` выдана явно, потому что
+    ``module="hr", level="read"`` — роль выдана явно, потому что
     ``is_staff`` сам по себе НОВЫЙ гейт не проходит (единственный
     бесплатный обход там — ``is_superuser``). ``/documents/*`` (сама
     коллекция) этой задачей НЕ гейтируется — её протокол не менялся.
+
+    Задача 11: роль СИНТЕТИЧЕСКАЯ (``assign(…, "hr", "full")``), а не
+    засеянная ``Role.objects.get(code="hr-lead")``. Эту фикстуру берёт
+    ``test_upload_document_invalid_employee_id_500`` с ``transaction=True``;
+    pytest-django гонит транзакционные тесты ПОСЛЕДНИМИ, а более ранние
+    транзакционные тесты ``apps/access``/``apps/companies`` делают flush и
+    стирают роли, засеянные миграциями, — в полном прогоне ``hr-lead`` уже
+    нет и setup падал ``DoesNotExist``. ``assign()`` пересоздаёт свою роль
+    идемпотентно на каждом вызове, поэтому flush ей не страшен; глубина
+    ``full`` на корне ``hr`` — тот же «полный доступ», что и у ``hr-lead``.
     """
-    from apps.access.models import Role, RoleAssignment, ScopeKind
+    from apps.access.tests.helpers import assign
 
     user = User.objects.create(
         username="doc-admin", email="doc-admin@htq.test", password="x", status=UserStatus.ACTIVE,
@@ -99,10 +109,7 @@ def admin_auth(db, company_row):
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    RoleAssignment.objects.create(
-        company_slug=company_row, user_id=user.id, role=Role.objects.get(code="hr-lead"),
-        scope_kind=ScopeKind.COMPANY, scope_id=None,
-    )
+    assign(company_row, user.id, "hr", "full")
     token = issue_token_pair(user, company_slug=company_row)["access"]
     return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
@@ -330,11 +337,11 @@ def hr_uploader_auth(db, dep, pos, company_row):
     ``module="hr", level="write"`` — до задачи 9 поверх узловой проверки
     ``EMPLOYEES_EDIT`` (которую эта фикстура уже проходила через
     ``is_staff``, коротившийся в ней безусловно); без ``X-HTQ-Company`` +
-    засеянной роли гейт отвечал бы 403 раньше той проверки. ``hr-lead``
-    выбран как "full access", соответствующий имени и духу фикстуры (та же
-    роль, что ``admin_auth`` в этом файле).
+    засеянной роли гейт отвечал бы 403 раньше той проверки. Глубина
+    ``full`` на корне ``hr`` выбрана как "full access", соответствующий
+    имени и духу фикстуры (та же роль, что ``admin_auth`` в этом файле).
     """
-    from apps.access.models import Role, RoleAssignment, ScopeKind
+    from apps.access.tests.helpers import assign
 
     user = User.objects.create(
         username="doc-uploader", email="doc-uploader@htq.test", password="x",
@@ -346,10 +353,9 @@ def hr_uploader_auth(db, dep, pos, company_row):
         first_name="Загрузчик", last_name="Кадровик", email="doc-uploader@htq.test",
         department=dep, position=pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
     )
-    RoleAssignment.objects.create(
-        company_slug=company_row, user_id=user.id, role=Role.objects.get(code="hr-lead"),
-        scope_kind=ScopeKind.COMPANY, scope_id=None,
-    )
+    # Синтетическая роль, как в ``admin_auth`` выше (задача 11): файл содержит
+    # транзакционный тест, после которого засеянных ролей может не быть.
+    assign(company_row, user.id, "hr", "full")
     token = issue_token_pair(user, company_slug=company_row)["access"]
     return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
