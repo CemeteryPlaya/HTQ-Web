@@ -4,8 +4,8 @@
  * засеянных ролей (`backend/apps/access/migrations/0005_seed_hr_level_roles`
  * + `0008_hr_role_subnode_denies`) новые предикаты дают ТОТ ЖЕ набор
  * пунктов, что старая таблица «маршрут → уровни» в `HRLayout`/
- * `ProfileSidebar`, — с одним объяснённым отличием (`/hr/accounts`, см.
- * комментарий в `hrNavAccess.ts`).
+ * `ProfileSidebar`, — с одним намеренным отличием: `/hr/accounts` (см.
+ * `LEGACY_LEVELS` ниже и комментарий в `hrNavAccess.ts`).
  *
  * Карты глубины ниже — литералы из миграций, а не пересказ: если сид
  * поменяется, тест обязан покраснеть, а не подстроиться.
@@ -99,10 +99,20 @@ const ROLES: Record<string, Permissions> = {
   ),
 };
 
-/** Суперпользователь: `/me` отдаёт admin/company на модуль и все признаки. */
+/** Суперпользователь: `/me` отдаёт admin/company на КАЖДЫЙ модуль и все
+ *  признаки (`resolve.permissions_for`/`depth_map`, ветка is_superuser). */
 const SUPERUSER = permissionsOf(
-  { hr: { level: 'admin', scope: { kind: 'company', id: null } } },
-  { hr: ADMIN },
+  {
+    hr: { level: 'admin', scope: { kind: 'company', id: null } },
+    users: { level: 'admin', scope: { kind: 'company', id: null } },
+  },
+  { hr: ADMIN, users: ADMIN },
+);
+
+/** Платформенный админ учёток без единой кадровой роли. */
+const USERS_ADMIN_ONLY = permissionsOf(
+  { users: { level: 'admin', scope: { kind: 'company', id: null } } },
+  { users: ADMIN },
 );
 
 const NOBODY = permissionsOf({}, {});
@@ -110,8 +120,12 @@ const NOBODY = permissionsOf({}, {});
 /** Старая таблица `HRLayout.navItems[].levels` — кто видел пункт ДО задачи 10. */
 const LEGACY_LEVELS: Record<string, string[]> = {
   '/hr/employees': ['junior', 'middle', 'senior', 'lead'],
-  // Было `['lead']`; senior видит с задачи 8 и имеет право (см. hrNavAccess.ts).
-  '/hr/accounts': ['senior', 'lead'],
+  // Было `['lead']` (а с задачи 8 — фактически и senior). Старая таблица
+  // была НЕВЕРНА: экран `/hr/accounts` зовёт `users/v1/admin/users/` под
+  // `users:admin` + `admin=True`, а ни одна из четырёх кадровых ролей не
+  // несёт узлов `users.*` — пункт вёл кадровика на 403. Ожидание здесь —
+  // никому из четырёх; кому виден — см. отдельный кейс `users:admin` ниже.
+  '/hr/accounts': [],
   '/hr/identity-requests': ['senior', 'lead'],
   '/hr/recruitment': ['middle', 'senior', 'lead'],
   '/hr/archive': ['senior', 'lead'],
@@ -133,7 +147,8 @@ describe('hrNavAccess — соответствие старой таблице �
   });
 
   for (const [route, levels] of Object.entries(LEGACY_LEVELS)) {
-    it(`${route}: виден ${levels.join('/')} и никому другому`, () => {
+    const who = levels.length > 0 ? levels.join('/') : 'никому из четырёх кадровых ролей';
+    it(`${route}: виден ${who} и никому другому`, () => {
       for (const [role, perm] of Object.entries(ROLES)) {
         expect(hrNavVisible(perm, route), `${role} на ${route}`).toBe(levels.includes(role));
       }
@@ -144,6 +159,18 @@ describe('hrNavAccess — соответствие старой таблице �
     for (const route of Object.keys(HR_NAV_VISIBLE)) {
       expect(hrNavVisible(SUPERUSER, route), route).toBe(true);
       expect(hrNavVisible(NOBODY, route), route).toBe(false);
+    }
+  });
+
+  it('/hr/accounts открыт администратору учёток (users:admin), а не кадровым ролям', () => {
+    // Фикс-раунд 1 задачи 10: предикат — гейт самого экрана
+    // (`users/v1/admin/users/` → `users:admin`), поэтому платформенный
+    // админ без кадровых ролей пункт видит, а hr-lead без `users` — нет.
+    expect(hrNavVisible(USERS_ADMIN_ONLY, '/hr/accounts')).toBe(true);
+    expect(hrNavVisible(ROLES.lead, '/hr/accounts')).toBe(false);
+    // …и при этом ни один кадровый пункт ему не открылся заодно.
+    for (const route of Object.keys(HR_NAV_VISIBLE).filter((r) => r !== '/hr/accounts')) {
+      expect(hrNavVisible(USERS_ADMIN_ONLY, route), route).toBe(false);
     }
   });
 

@@ -35,8 +35,13 @@ const SELF = new Set([
   'hooks/__tests__/useHRLevelImporters.test.ts',
 ]);
 
-/** Импорт по алиасу или относительный, плюс мок в тестах. */
-const IMPORT_RE = /(?:from\s*|vi\.mock\(\s*)['"](?:@\/hooks\/useHRLevel|\.{1,2}\/(?:hooks\/)?useHRLevel)['"]/;
+/**
+ * Импорт по алиасу или относительный — статический (`from`), динамический
+ * (`import(`), плюс моки в тестах (`vi.mock(`, `vi.doMock(`). Динамическая
+ * форма добавлена фикс-раундом 1: `await import('@/hooks/useHRLevel')`
+ * обходил бы сторож молча.
+ */
+const IMPORT_RE = /(?:from\s*|import\(\s*|vi\.(?:do)?[mM]ock\(\s*)['"](?:@\/hooks\/useHRLevel|\.{1,2}\/(?:hooks\/)?useHRLevel)['"]/;
 
 function sourceFiles(dir: string, acc: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -68,11 +73,14 @@ describe('useHRLevel — импортёры', () => {
     ).toEqual([]);
   });
 
-  it('регулярка ловит и алиас, и относительный путь, и мок', () => {
+  it('регулярка ловит алиас, относительный путь, динамический импорт и оба мока', () => {
     expect(IMPORT_RE.test("import { useHRLevel } from '@/hooks/useHRLevel';")).toBe(true);
     expect(IMPORT_RE.test("import { useHRLevel } from './useHRLevel';")).toBe(true);
     expect(IMPORT_RE.test("import { useHRLevel } from '../hooks/useHRLevel';")).toBe(true);
+    expect(IMPORT_RE.test("const m = await import('@/hooks/useHRLevel');")).toBe(true);
+    expect(IMPORT_RE.test("import( \"../hooks/useHRLevel\" )")).toBe(true);
     expect(IMPORT_RE.test("vi.mock('@/hooks/useHRLevel', () => ({}))")).toBe(true);
+    expect(IMPORT_RE.test("vi.doMock('@/hooks/useHRLevel', () => ({}))")).toBe(true);
     // Упоминание в комментарии — не импорт.
     expect(IMPORT_RE.test('// раньше читалось из useHRLevel')).toBe(false);
   });

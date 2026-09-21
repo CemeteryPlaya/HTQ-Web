@@ -25,7 +25,8 @@
  * Скрытие здесь — удобство, а не защита: рубеж стоит на бэкенде и на гейте
  * маршрута (`app/routing/routeDefinitions.ts`, все `/hr/*` под `hr:read`).
  * Соответствие четырём засеянным ролям (`access/migrations/0005`, `0008`)
- * закреплено тестом `hrNavAccess.test.ts`.
+ * закреплено тестом `hrNavAccess.test.ts` — с одним намеренным отличием от
+ * старой таблицы (`/hr/accounts`, см. комментарий у пункта).
  */
 import type { Permissions } from '@/hooks/usePermissions';
 
@@ -44,11 +45,19 @@ const companyWideWrite: Visible = (p) =>
 export const HR_NAV_VISIBLE: Record<string, Visible> = {
   // ── Персонал
   '/hr/employees': anyHrAccess,
-  // Список учётных записей отдаёт `USERS_LIST` → `hr.accounts: view`
-  // (apps/hr/views.py). Старая таблица держала пункт за одним lead, но
-  // senior уже видел его с задачи 8 (роль hr-senior несёт delete на
-  // оргструктуре и агрегируется в `admin`) — и по праву: список ему открыт.
-  '/hr/accounts': (p) => p.can('hr.accounts', 'view'),
+  // Экран `HRAccounts` — платформенное администрирование учёток: он зовёт
+  // `GET users/v1/admin/users/` (`api/accounts.ts::fetchPlatformAccounts`),
+  // а та ручка стоит под `admin=True` + `module="users", level="admin"`
+  // (apps/users/views.py). Кадровый узел `hr.accounts` (USERS_LIST →
+  // `hr/v1/employees/users/`) гейтит ДРУГОЙ список — выбор учётки в форме
+  // сотрудника — и к этому экрану отношения не имеет. Старая таблица
+  // держала пункт за lead (а с задачи 8 — и за senior), то есть вела
+  // кадровика на экран, отвечающий ему 403 первым же запросом; это
+  // расхождение фронта с бэкендом здесь закрыто, а не воспроизведено
+  // (фикс-раунд 1 задачи 10). Платформенный флаг `admin=True`
+  // (`token.is_elevated`) во фронтовых правах не отражён — `users:admin`
+  // ровно то, что у `ProfileSidebar` уже называется `admin`.
+  '/hr/accounts': (p) => p.atLeast('users', 'admin'),
   '/hr/identity-requests': (p) => p.can('hr.identity_requests', 'view'),
   '/hr/recruitment': hrWrite,
   // Архив — уволенные по всей компании; область «свой отдел» его не видит.

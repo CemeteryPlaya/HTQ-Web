@@ -128,11 +128,19 @@ const HRPositions = () => {
   // (apps/hr/views.py, positions/*), поэтому и здесь — уровень модуля
   // `admin`, а не старый `isSenior` (write + область company), который
   // показывал редактирование тому, кому сервер ответил бы 403.
+  // ⚠️ Паритет с сервером — только по УРОВНЮ МОДУЛЯ. Те же ручки стоят ещё и
+  // под `admin=True` (`token.is_elevated`: is_staff/is_admin/is_superuser,
+  // htqweb/http.py), а этого флага в `usePermissions` нет — hr-lead без
+  // платформенного admin увидит кнопки и получит 403. Дыра pre-existing
+  // (старый `isSenior` её не закрывал) и здесь честно не закрыта: зеркала
+  // `is_elevated` во фронтовых правах нет, тянуть `useActiveProfile` ради
+  // него — отдельное решение (ревью задачи 10, minor 2).
   const hrAdmin = permissions.atLeast('hr', 'admin');
   // Роли должности — другой домен: `PUT /access/v1/positions/{id}/roles`
   // гейтится `module="access", level="admin"` (apps/access/views.py::
-  // PositionRolesView.put), и диалог обязан спрашивать тот же модуль —
-  // иначе он рисует чекбоксы, которые нельзя сохранить.
+  // PositionRolesView.put — тоже с `admin=True`, см. выше), и диалог обязан
+  // спрашивать тот же модуль — иначе он рисует чекбоксы, которые нельзя
+  // сохранить.
   const canEditPositionRoles = permissions.atLeast('access', 'admin');
 
   // Вкладка живёт в ?tab= — справочник уровней был отдельным адресом

@@ -305,6 +305,42 @@ describe('EmployeeFormDialog — секции Т-2', () => {
   });
 });
 
+describe('EmployeeFormDialog — статус «уволен» и право перевода', () => {
+  // Фикс-раунд 1 задачи 10 блока I. Бэкенд (apps/hr/views.py::
+  // _update_employee) требует EMPLOYEES_TRANSFER для terminated/suspended/
+  // rejected — раньше селект целиком открывался по `canWriteBasic`, и middle
+  // выбирал «уволен», чтобы получить 403. Недоступные поля в этом диалоге
+  // помечаются `disabled` (отдел, должность) — тот же приём и здесь.
+  //
+  // Radix Select в jsdom открывается pointerDown'ом по триггеру (полифиллы
+  // Pointer Capture — в src/test/setup.ts; приём — как в
+  // components/__tests__/BodyPointerEventsGuard.test.tsx).
+  const openStatusSelect = async () => {
+    const trigger = (await screen.findByText(/Активен/)).closest('button');
+    expect(trigger).not.toBeNull();
+    act(() => {
+      fireEvent.pointerDown(trigger!, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    });
+    return screen.findByRole('option', { name: /Уволен/ });
+  };
+
+  it('без права перевода пункт «Уволен» недоступен, остальные статусы — доступны', async () => {
+    can.mockImplementation(deny('hr.employees.transfer', 'edit'));
+    renderDialog(EMPLOYEE);
+
+    const terminated = await openStatusSelect();
+    expect(terminated).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('option', { name: /Неактивен/ })).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('с правом перевода пункт «Уволен» доступен', async () => {
+    renderDialog(EMPLOYEE);
+
+    const terminated = await openStatusSelect();
+    expect(terminated).not.toHaveAttribute('aria-disabled', 'true');
+  });
+});
+
 describe('EmployeeFormDialog — досев из аккаунта', () => {
   /** Открыть комбобокс пользователей и выбрать первого. */
   const pickUser = async () => {

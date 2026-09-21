@@ -43,9 +43,16 @@ const HRDepartments = () => {
   const permissions = usePermissions();
   // Удаление отдела (`DELETE /departments/{id}` — `module="hr",
   // level="admin"`, каскад необратим) и должности (`admin=True` +
-  // `level="admin"`), apps/hr/views.py: кнопки показываются по тому же
-  // уровню модуля, что проверяет сервер. Старый `isSenior` (write + область
-  // company) показал бы их и тому, кому сервер ответит 403.
+  // `level="admin"`), apps/hr/views.py: кнопки показываются по уровню
+  // модуля `hr`, который проверяет сервер. Старый `isSenior` (write +
+  // область company) показал бы их и тому, кому сервер ответит 403.
+  // ⚠️ Паритет с сервером — только по УРОВНЮ МОДУЛЯ. Удаление должности стоит ещё и
+  // под `admin=True` (`token.is_elevated`: is_staff/is_admin/is_superuser,
+  // htqweb/http.py), а этого флага в `usePermissions` нет — hr-lead без
+  // платформенного admin увидит кнопки и получит 403. Дыра pre-existing
+  // (старый `isSenior` её не закрывал) и здесь честно не закрыта: зеркала
+  // `is_elevated` во фронтовых правах нет, тянуть `useActiveProfile` ради
+  // него — отдельное решение (ревью задачи 10, minor 2).
   const hrAdmin = permissions.atLeast('hr', 'admin');
 
   /* ---- Data ---- */

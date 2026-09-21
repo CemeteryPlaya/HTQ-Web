@@ -65,10 +65,17 @@ const HRHistory = () => {
   const queryClient = useQueryClient();
   const permissions = usePermissions();
   // Удаление записи кадровой истории — на бэкенде под
-  // `module="hr", level="admin"` (+ платформенный `admin=True`,
-  // apps/hr/views.py), поэтому кнопки показываются по тому же уровню
-  // модуля, что проверяет сервер. Старый `isSenior` (write + область
-  // company) был шире и показывал кнопку тому, кому сервер ответил бы 403.
+  // `admin=True` + `module="hr", level="admin"` (apps/hr/views.py), поэтому
+  // кнопки показываются по уровню модуля `hr`, который проверяет сервер.
+  // Старый `isSenior` (write + область company) был шире и показывал кнопку
+  // тому, кому сервер ответил бы 403.
+  // ⚠️ Паритет с сервером — только по УРОВНЮ МОДУЛЯ. Те же ручки стоят ещё и
+  // под `admin=True` (`token.is_elevated`: is_staff/is_admin/is_superuser,
+  // htqweb/http.py), а этого флага в `usePermissions` нет — hr-lead без
+  // платформенного admin увидит кнопки и получит 403. Дыра pre-existing
+  // (старый `isSenior` её не закрывал) и здесь честно не закрыта: зеркала
+  // `is_elevated` во фронтовых правах нет, тянуть `useActiveProfile` ради
+  // него — отдельное решение (ревью задачи 10, minor 2).
   const hrAdmin = permissions.atLeast('hr', 'admin');
 
   const { data: records, isLoading, error } = useQuery({

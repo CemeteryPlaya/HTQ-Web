@@ -911,7 +911,19 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                   <SelectContent>
                     <SelectItem value="active">{t('hr.pages.employees.status.active')}</SelectItem>
                     <SelectItem value="inactive">{t('hr.pages.employees.status.inactive', 'Неактивен')}</SelectItem>
-                    <SelectItem value="terminated">{t('hr.pages.employees.status.terminated', 'Уволен')}</SelectItem>
+                    {/* Увольнение — это перевод, а не правка карточки: бэкенд
+                        (apps/hr/views.py::_update_employee) требует
+                        EMPLOYEES_TRANSFER для status ∈ {terminated, suspended,
+                        rejected}, поэтому пункт закрыт тем же признаком, что
+                        отдел и должность (`disabled`, как принято в этом
+                        диалоге для недоступных полей), а не общим
+                        `canWriteBasic` — иначе middle выбирал бы «уволен» и
+                        получал 403. При создании транспорт другой
+                        (`EMPLOYEES_CREATE`, без проверки статуса), там пункт
+                        открыт как раньше. */}
+                    <SelectItem value="terminated" disabled={editing ? !canTransferEmployee : false}>
+                      {t('hr.pages.employees.status.terminated', 'Уволен')}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </label>
