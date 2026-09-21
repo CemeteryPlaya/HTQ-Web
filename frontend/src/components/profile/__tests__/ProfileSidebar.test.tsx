@@ -14,14 +14,13 @@ vi.mock('@/api/client', () => ({
   default: { get: vi.fn(() => Promise.reject(new Error('offline'))) },
 }));
 
-vi.mock('@/hooks/useHRLevel', () => ({
-  useHRLevel: () => ({ level: null, hasHrAccess: false }),
-}));
-
 // Предмет теста — раскрытие разделов, а не выдача прав, поэтому права
 // подставляются напрямую. Со стадии 2 HR-раздел открывает уровень `hr:read`,
 // а НЕ флаг `staff`: прежде `staff` входил в HR-ведро мёртвого словаря ролей
-// и попадал в раздел даром.
+// и попадал в раздел даром. С задачи 10 блока I кадровые пункты тоже читают
+// `usePermissions` (узлы через `can`, область через `scope`), а не
+// `useHRLevel` — здесь их нет: `hr:read` без единого узла открывает ровно
+// пункты «для любого кадрового доступа» (сотрудники, оргсхема, документы).
 const levels: Record<string, string> = { hr: 'read' };
 const order = ['none', 'read', 'write', 'admin'];
 vi.mock('@/hooks/usePermissions', () => ({
@@ -31,6 +30,8 @@ vi.mock('@/hooks/usePermissions', () => ({
     atLeast: (m: string, req: string) =>
       order.indexOf(levels[m] ?? 'none') >= order.indexOf(req),
     scope: () => null,
+    depth: () => [],
+    can: () => false,
     subordinateCompanies: [],
     isLoading: false,
   }),

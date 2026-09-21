@@ -12,21 +12,29 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { EmployeeFormDialog } from '@/components/hr/EmployeeFormDialog';
 
-const hasPerm = vi.fn();
+// Права — `usePermissions().can(node, flag)` (задача 10 блока I). Секции
+// Т-2 сидят на узлах `hr.employees.salary` (финансы) и
+// `hr.employees.passport` (личные данные) — `SECTION_NODE` в cardT2Fields.
+// Мок по умолчанию разрешает всё; кейсы ниже отзывают ОДИН признак на одном
+// узле — ровно то, что раньше выражалось через `hasPerm('hr.card.<секция>.
+// <view|edit>')`.
+const can = vi.fn<(node: string, flag: string) => boolean>();
+const deny = (node: string, flag: string) => (n: string, f: string) => !(n === node && f === flag);
 
-vi.mock('@/hooks/useHRLevel', () => ({
-  useHRLevel: () => ({
-    level: 'lead',
-    hasHrAccess: true,
-    canWriteBasic: true,
-    canCreateEmployee: true,
-    canTransferEmployee: true,
-    canDeleteEmployee: true,
-    canListUserOptions: true,
-    canManageUserOptions: true,
-    permissions: [],
-    hasPerm,
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    company: 'demo',
+    level: () => 'admin',
+    atLeast: () => true,
+    scope: () => ({ kind: 'company', id: null }),
+    depth: () => ['view', 'create', 'edit', 'delete'],
+    can: (node: string, flag: string) => can(node, flag),
+    pageHidden: () => false,
+    subordinateCompanies: [],
+    inheritedFrom: [],
     isLoading: false,
+    isError: false,
+    refetch: () => {},
   }),
 }));
 
@@ -92,13 +100,13 @@ const save = () => act(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  hasPerm.mockImplementation(() => true);
+  can.mockImplementation(() => true);
 });
 
 describe('EmployeeFormDialog — секции Т-2', () => {
   it('не показывает секцию без права view', async () => {
-    hasPerm.mockImplementation(
-      (key: string) => key !== 'hr.card.financial.view' && key !== 'hr.card.financial.edit',
+    can.mockImplementation(
+      (node, flag) => !(node === 'hr.employees.salary' && (flag === 'view' || flag === 'edit')),
     );
     renderDialog(EMPLOYEE);
 
@@ -109,7 +117,7 @@ describe('EmployeeFormDialog — секции Т-2', () => {
   it('скрывает секцию, на которую есть edit, но нет view — иначе сохранение затёрло бы её null-ами', async () => {
     // edit есть, view нет: показывать нечего, а показать пустую форму значит
     // предложить пользователю затереть данные, которых он не видит.
-    hasPerm.mockImplementation((key: string) => key !== 'hr.card.financial.view');
+    can.mockImplementation(deny('hr.employees.salary', 'view'));
     renderDialog(EMPLOYEE);
 
     await waitFor(() => expect(screen.getByText(/Личные данные/)).toBeInTheDocument());
@@ -117,7 +125,7 @@ describe('EmployeeFormDialog — секции Т-2', () => {
   });
 
   it('делает поля read-only при view без edit', async () => {
-    hasPerm.mockImplementation((key: string) => key !== 'hr.card.financial.edit');
+    can.mockImplementation(deny('hr.employees.salary', 'edit'));
     renderDialog(EMPLOYEE);
 
     fireEvent.click(await screen.findByText(/Финансовые данные/));
@@ -180,7 +188,7 @@ describe('EmployeeFormDialog — секции Т-2', () => {
     // прошёл бы его тоже — скрытая секция там не трогается и потому «чистая».
     // Явно проверяем, что financial без view не попадает в payload, даже
     // когда мы редактируем другую (personal) секцию.
-    hasPerm.mockImplementation((key: string) => key !== 'hr.card.financial.view');
+    can.mockImplementation(deny('hr.employees.salary', 'view'));
     renderDialog(EMPLOYEE);
 
     // financial здесь скрыта (нет view), так что якорить на её значении
@@ -243,7 +251,7 @@ describe('EmployeeFormDialog — секции Т-2', () => {
     expect(dateInput).toBeTruthy();
     fireEvent.change(dateInput!, { target: { value: '2024-05-01' } });
 
-    // Заполняем Т-2 поле — секция открыта по умолчанию правами (hasPerm
+    // Заполняем Т-2 поле — секция открыта по умолчанию правами (can
     // мокнут в true), только раскрываем Collapsible.
     fireEvent.click(await screen.findByText(/Финансовые данные/));
     await act(async () => {

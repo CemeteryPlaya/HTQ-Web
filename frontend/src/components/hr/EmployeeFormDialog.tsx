@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
@@ -15,6 +15,7 @@ import {
   fetchPositions,
   fetchUserPrefill,
   updateEmployeeWithCard,
+  type CardT2Section,
 } from '@/api/hr';
 import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { DateInput } from '@/components/ui/date-input';
@@ -31,10 +32,10 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { cn } from '@/lib/utils';
 import { withSuggestedEmail } from '@/lib/translit';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { Employee, relationId } from '@/components/hr/employeeCommon';
 import {
-  SECTION_FIELDS, SECTION_TITLE, T2_SECTIONS,
+  SECTION_FIELDS, SECTION_NODE, SECTION_TITLE, T2_SECTIONS,
   buildCardT2Payload, emptyT2Form, isT2SectionDirty, t2FormFromServer, validateT2Money,
   type T2FormState,
 } from '@/components/hr/cardT2Fields';
@@ -155,14 +156,21 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   const navigate = useNavigate();
   const editing = employee;
 
-  const {
-    canWriteBasic,
-    canCreateEmployee,
-    canTransferEmployee,
-    canListUserOptions,
-    canManageUserOptions,
-    hasPerm,
-  } = useHRLevel();
+  // Права — по узлам реестра функций через `usePermissions` (задача 10
+  // блока I), теми же узлами и признаками, что проверяет бэкенд на ручках
+  // сотрудника (`backend/apps/hr/legacy_roles.py::KEY_TO_NODE`):
+  // правка карточки — `hr.employees: edit`, создание — `hr.employees:
+  // create`, перевод/увольнение/смена должности — ОТДЕЛЬНЫЙ под-узел
+  // `hr.employees.transfer` (фикс-раунд 1 задачи 9: у middle на нём явный
+  // запрет, иначе он переводил бы той же кнопкой, что и правил), выбор
+  // учётной записи — `hr.accounts: view` (USERS_LIST), заведение новой —
+  // `hr.accounts: create` (USERS_MANAGE).
+  const permissions = usePermissions();
+  const canWriteBasic = permissions.can('hr.employees', 'edit');
+  const canCreateEmployee = permissions.can('hr.employees', 'create');
+  const canTransferEmployee = permissions.can('hr.employees.transfer', 'edit');
+  const canListUserOptions = permissions.can('hr.accounts', 'view');
+  const canManageUserOptions = permissions.can('hr.accounts', 'create');
 
   // Запросы включаются только когда диалог открыт, чтобы не дёргать API на
   // каждом рендере страницы-списка.
@@ -205,10 +213,18 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   t2FormRef.current = t2Form;
   t2InitialRef.current = t2Initial;
 
-  /** Секции, которые вообще показываем: нужен view. */
+  /** Секции, которые вообще показываем: нужен view на узле секции
+   *  (`SECTION_NODE`; у секции без узла прав нет — она не показывается). */
+  const sectionAllows = useCallback(
+    (section: CardT2Section, flag: 'view' | 'edit'): boolean => {
+      const node = SECTION_NODE[section];
+      return node !== undefined && permissions.can(node, flag);
+    },
+    [permissions],
+  );
   const visibleSections = useMemo(
-    () => T2_SECTIONS.filter((s) => hasPerm(`hr.card.${s}.view`)),
-    [hasPerm],
+    () => T2_SECTIONS.filter((s) => sectionAllows(s, 'view')),
+    [sectionAllows],
   );
 
   const { data: cardT2 } = useQuery({
@@ -229,8 +245,8 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
    *  отработал (или упал) — иначе пользователь печатал бы поверх пустого
    *  снимка и стёр бы то, чего не видел. */
   const editableSections = useMemo(
-    () => (t2Loaded ? visibleSections.filter((s) => hasPerm(`hr.card.${s}.edit`)) : []),
-    [visibleSections, hasPerm, t2Loaded],
+    () => (t2Loaded ? visibleSections.filter((s) => sectionAllows(s, 'edit')) : []),
+    [visibleSections, sectionAllows, t2Loaded],
   );
 
   // Заполняем секции при открытии — и повторно, если пришли более свежие

@@ -54,13 +54,19 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { DjangoIcon } from '@/components/icons/DjangoIcon';
 import { ServiceUnavailableDialog } from '@/components/ServiceUnavailableDialog';
-import { useHRLevel } from '@/hooks/useHRLevel';
 import { usePermissions } from '@/hooks/usePermissions';
+import { hrNavVisible } from '@/app/navigation/hrNavAccess';
 import { useServiceStatus } from '@/hooks/useServiceStatus';
 import { grafanaSsoUrl } from '@/lib/monitoring';
 import { cn } from '@/lib/utils';
 
 type Props = {
+    /**
+     * Роли аккаунта. Сайдбар их больше не читает (задача 10 блока I: HR-пункты
+     * открываются правами из `usePermissions`, а не кадровым уровнем), проп
+     * оставлен, чтобы не трогать вызывающих — `MyProfile`/`Settings` его
+     * передают.
+     */
     roles?: string[];
     department?: string;
     position?: string;
@@ -231,7 +237,7 @@ const SidebarSection: React.FC<SectionProps> = ({ id, title, children, count, fo
     );
 };
 
-export const ProfileSidebar: React.FC<Props> = ({ roles, department, position }) => {
+export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
     const { t } = useTranslation();
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -243,8 +249,11 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     const admin = permissions.atLeast('users', 'admin');
     const elevated = permissions.atLeast('tasks', 'admin');
     const hasTasksAccess = permissions.atLeast('tasks', 'read');
-    const { level, hasHrAccess } = useHRLevel({ enabled: Boolean(roles?.length) });
-    const showHrItem = (levels: string[]) => admin || !hasHrAccess || (level ? levels.includes(level) : false);
+    // Кадровые пункты — по тому же правилу, что и навигация самого HR-модуля
+    // (`HRLayout`): `hrNavVisible` читает права из `usePermissions`, а не
+    // кадровый уровень (задача 10 блока I). Администратор платформы видит
+    // всё — как и раньше.
+    const showHrItem = (route: string) => admin || hrNavVisible(permissions, route);
 
     const { isDisabled } = useServiceStatus();
     const [blockedService, setBlockedService] = useState<string | null>(null);
@@ -320,22 +329,22 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     }, [t, editor]);
 
     const hrItems: ItemConfig[] = useMemo(() => {
-        if (!hrManager && !hasHrAccess) return [];
+        if (!hrManager) return [];
         const items: ItemConfig[] = [];
-        if (showHrItem(['junior', 'middle', 'senior', 'lead'])) items.push({ id: 'hr-employees', to: '/hr/employees', icon: Users, label: t('hr.nav.employees') });
-        if (showHrItem(['middle', 'senior', 'lead'])) items.push({ id: 'hr-departments', to: '/hr/departments', icon: Building2, label: t('hr.nav.structure') });
-        if (showHrItem(['middle', 'senior', 'lead'])) items.push({ id: 'hr-positions', to: '/hr/positions', icon: Briefcase, label: t('hr.nav.positions') });
-        if (showHrItem(['junior', 'middle', 'senior', 'lead'])) items.push({ id: 'hr-org', to: '/hr/org-chart', icon: Network, label: t('hr.nav.orgChart') });
-        if (showHrItem(['senior', 'lead'])) items.push({ id: 'hr-pmo', to: '/hr/pmo', icon: Handshake, label: t('hr.nav.pmo') });
-        if (showHrItem(['senior', 'lead'])) items.push({ id: 'hr-share', to: '/hr/share-links', icon: Link2, label: t('hr.nav.shareLinks') });
-        if (showHrItem(['middle', 'senior', 'lead'])) items.push({ id: 'hr-time', to: '/hr/time-tracking', icon: Clock, label: t('hr.nav.timeTracking') });
-        if (showHrItem(['middle', 'senior', 'lead'])) items.push({ id: 'hr-recruitment', to: '/hr/recruitment', icon: ClipboardList, label: t('hr.nav.recruitment') });
-        if (showHrItem(['senior', 'lead'])) items.push({ id: 'hr-archive', to: '/hr/archive', icon: Archive, label: t('hr.nav.archive') });
-        if (showHrItem(['junior', 'middle', 'senior', 'lead'])) items.push({ id: 'hr-docs', to: '/hr/documents', icon: FileText, label: t('hr.nav.documents') });
-        if (showHrItem(['senior', 'lead'])) items.push({ id: 'hr-history', to: '/hr/history', icon: History, label: t('hr.nav.history') });
-        if (showHrItem(['lead'])) items.push({ id: 'hr-accounts', to: '/hr/accounts', icon: KeyRound, label: t('hr.nav.accounts') });
+        if (showHrItem('/hr/employees')) items.push({ id: 'hr-employees', to: '/hr/employees', icon: Users, label: t('hr.nav.employees') });
+        if (showHrItem('/hr/departments')) items.push({ id: 'hr-departments', to: '/hr/departments', icon: Building2, label: t('hr.nav.structure') });
+        if (showHrItem('/hr/positions')) items.push({ id: 'hr-positions', to: '/hr/positions', icon: Briefcase, label: t('hr.nav.positions') });
+        if (showHrItem('/hr/org-chart')) items.push({ id: 'hr-org', to: '/hr/org-chart', icon: Network, label: t('hr.nav.orgChart') });
+        if (showHrItem('/hr/pmo')) items.push({ id: 'hr-pmo', to: '/hr/pmo', icon: Handshake, label: t('hr.nav.pmo') });
+        if (showHrItem('/hr/share-links')) items.push({ id: 'hr-share', to: '/hr/share-links', icon: Link2, label: t('hr.nav.shareLinks') });
+        if (showHrItem('/hr/time-tracking')) items.push({ id: 'hr-time', to: '/hr/time-tracking', icon: Clock, label: t('hr.nav.timeTracking') });
+        if (showHrItem('/hr/recruitment')) items.push({ id: 'hr-recruitment', to: '/hr/recruitment', icon: ClipboardList, label: t('hr.nav.recruitment') });
+        if (showHrItem('/hr/archive')) items.push({ id: 'hr-archive', to: '/hr/archive', icon: Archive, label: t('hr.nav.archive') });
+        if (showHrItem('/hr/documents')) items.push({ id: 'hr-docs', to: '/hr/documents', icon: FileText, label: t('hr.nav.documents') });
+        if (showHrItem('/hr/history')) items.push({ id: 'hr-history', to: '/hr/history', icon: History, label: t('hr.nav.history') });
+        if (showHrItem('/hr/accounts')) items.push({ id: 'hr-accounts', to: '/hr/accounts', icon: KeyRound, label: t('hr.nav.accounts') });
         return items;
-    }, [t, hrManager, hasHrAccess, admin, level]);
+    }, [t, hrManager, admin, permissions]);
 
     const adminItems: ItemConfig[] = useMemo(() => {
         // «Сводка группы» держит СВОЙ гейт, отдельный от остального списка:

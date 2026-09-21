@@ -23,6 +23,25 @@ export interface FieldSpec {
 
 export const T2_SECTIONS: readonly CardT2Section[] = ['financial', 'personal', 'certs'];
 
+/**
+ * Узел реестра прав, которым гейтится секция, — ДОСЛОВНО
+ * `backend/apps/hr/legacy_roles.py::KEY_TO_NODE` (`hr.card.financial.*` →
+ * `hr.employees.salary`, `hr.card.personal.*` → `hr.employees.passport`);
+ * `view`/`edit` на нём — то, что проверяет
+ * `employee_card_t2_service._SECTIONS` на бэкенде. Задача 10 блока I: форма
+ * и карточка спрашивают `usePermissions().can(node, flag)` напрямую, а не
+ * старый строковый ключ через `useHRLevel().hasPerm`.
+ *
+ * У `certs` узла НЕТ намеренно: ключа `hr.card.certs.*` не было ни в старом
+ * каталоге прав, ни в реестре (колонки сняты миграцией hr/0016), поэтому
+ * секция никому не показывалась и раньше — здесь это воспроизведено как
+ * есть, а не «открыто заодно».
+ */
+export const SECTION_NODE: Partial<Record<CardT2Section, string>> = {
+  financial: 'hr.employees.salary',
+  personal: 'hr.employees.passport',
+};
+
 export const SECTION_FIELDS: Record<CardT2Section, FieldSpec[]> = {
   financial: [
     { name: 'salary', kind: 'money', labelKey: 'hr.pages.employees.fields.salary', labelFallback: 'Оклад' },

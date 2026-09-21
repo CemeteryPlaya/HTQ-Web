@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
-import { useHRLevel } from '@/hooks/useHRLevel';
 import { splitForHeader, visibleNavItems, type NavItem } from '@/app/navigation/navItems';
 import { CompanySwitcher } from '@/components/companies/CompanySwitcher';
 import {
@@ -52,7 +51,6 @@ export const Header = () => {
     staleTime: 5 * 60 * 1000,
   });
   const permissions = usePermissions();
-  const { hasHrAccess } = useHRLevel({ enabled: isLoggedIn });
 
   useEffect(() => {
     const handleScroll = () => {
@@ -122,7 +120,7 @@ export const Header = () => {
   // разошлись: из шапки были недостижимы чаты, почта и файлы.
   const employeeNav = visibleNavItems({
     isEditor: permissions.atLeast('cms', 'write'),
-    isHr: permissions.atLeast('hr', 'read') || hasHrAccess,
+    isHr: permissions.atLeast('hr', 'read'),
     hasTasks: permissions.atLeast('tasks', 'read'),
     hasDepartment: Boolean(activeProfile?.department),
   });
