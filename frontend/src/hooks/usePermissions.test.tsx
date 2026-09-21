@@ -10,9 +10,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ACCESS_ME_FIXTURE, ACCESS_ME_NO_COMPANY } from '@/api/access.fixture';
+import { ACCESS_TOKEN_KEY } from '@/lib/auth/profileStorage';
 import type { AccessMe } from '@/types/access';
 
 import { usePermissions } from './usePermissions';
@@ -33,6 +34,13 @@ const wrapper = ({ children }: { children: ReactNode }) => {
 
 beforeEach(() => {
   getMe.mockReset();
+  // Хук спрашивает права только у залогиненного — см. тест про анонима.
+  window.localStorage.setItem(ACCESS_TOKEN_KEY, 'access-token');
+});
+
+afterEach(() => {
+  window.localStorage.clear();
+  document.cookie = `${ACCESS_TOKEN_KEY}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
 });
 
 describe('usePermissions', () => {
@@ -95,6 +103,20 @@ describe('usePermissions', () => {
     const { result } = renderHook(() => usePermissions(), { wrapper });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.atLeast('hr', 'read')).toBe(false);
+  });
+
+  it('без токена не спрашивает права вовсе и ничего не разрешает', () => {
+    // Аноним на публичном лендинге: запрос дал бы 401, а 401 для клиента —
+    // «сессия протухла», то есть редирект гостя на /login.
+    window.localStorage.clear();
+    document.cookie = `${ACCESS_TOKEN_KEY}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+
+    const { result } = renderHook(() => usePermissions(), { wrapper });
+
+    expect(getMe).not.toHaveBeenCalled();
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isError).toBe(false);
     expect(result.current.atLeast('hr', 'read')).toBe(false);
   });
 });
