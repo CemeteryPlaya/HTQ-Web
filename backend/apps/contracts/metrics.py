@@ -35,6 +35,7 @@ from .models import (
     BudgetLine,
     CompletionAct,
     ContractPayment,
+    GoodsInvoice,
     Invoice,
 )
 from .services.budget_calc import (
@@ -113,6 +114,7 @@ def collect() -> dict:
     payment_like = (
         ("payment", ContractPayment),
         ("completion_act", CompletionAct),
+        ("goods_invoice", GoodsInvoice),
         ("advance_payment", AdvancePayment),
     )
     for label, model in payment_like:

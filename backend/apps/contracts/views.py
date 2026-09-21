@@ -66,6 +66,7 @@ from .services import accountable_funds_request_service as accountable_funds_svc
 from .services import advance_report_service as advance_report_svc
 from .services import contract_payment_service as contract_payment_svc
 from .services import completion_act_service as completion_act_svc
+from .services import goods_invoice_service as goods_invoice_svc
 from .services import reference_service as ref_svc
 from .services import work_queue_service as work_queue_svc
 from .services.agreement_service import AgreementRuleViolation
@@ -76,6 +77,7 @@ from .services.accountable_funds_request_service import AccountableFundsRequestR
 from .services.advance_report_service import AdvanceReportRuleViolation
 from .services.contract_payment_service import ContractPaymentRuleViolation
 from .services.completion_act_service import CompletionActRuleViolation
+from .services.goods_invoice_service import GoodsInvoiceRuleViolation
 from .services.reference_service import ReferenceConflict
 from .services.request_link import RequestLinkViolation
 
@@ -93,6 +95,7 @@ CONFLICTS = (ReferenceConflict, AgreementRuleViolation, InvoiceRuleViolation,
              AdvanceReportRuleViolation,
              ContractPaymentRuleViolation,
              CompletionActRuleViolation, RequestLinkViolation,
+             GoodsInvoiceRuleViolation,
              BudgetExceeded, signoff.SignoffError, signoff.UnknownSubject)
 
 
@@ -499,6 +502,13 @@ class CompletionActSubmitView(SubmitView):
     def post(self, request, act_id: int):
         return self.submitted(
             lambda **kw: completion_act_svc.submit_for_approval(act_id, **kw))
+
+
+class GoodsInvoiceSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, invoice_id: int):
+        return self.submitted(
+            lambda **kw: goods_invoice_svc.submit_for_approval(invoice_id, **kw))
 
 
 class BudgetAgreementsView(ContractsView):
@@ -1374,6 +1384,98 @@ class CompletionActPaymentOrderUrlView(ContractsView):
             completion_act_svc.get_completion_act_or_404(act_id))
         if url is None:
             raise Http404("К акту не приложено платёжное поручение")
+        return {"url": url}
+
+
+class GoodsInvoiceCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = goods_invoice_svc.list_goods_invoices(
+            administrator_id=self.int_param("administrator_id"),
+            agreement_id=self.int_param("agreement_id"),
+            awaiting_payment=self.bool_param("awaiting_payment"),
+        )
+        return self.paginated(
+            rows,
+            lambda row: schemas.GoodsInvoiceRead.model_validate(
+                goods_invoice_svc.serialize_goods_invoice(row)),
+        )
+
+    @write("POST", status=201, admin=False)
+    def post(self, request):
+        try:
+            administrator_id = int(request.POST.get("administrator_id") or "")
+            agreement_id = int(request.POST.get("agreement_id") or "")
+            amount = Decimal(request.POST.get("amount") or "")
+        except (TypeError, ValueError, InvalidOperation):
+            return json_error("Укажите администратора, договор и корректную сумму", 422)
+        if amount <= 0:
+            return json_error("Сумма должна быть больше нуля", 422)
+        waybill = request.FILES.get("waybill")
+        if waybill is None:
+            return json_error("Файл накладной не передан (ожидается поле «waybill»)", 422)
+        try:
+            invoice = goods_invoice_svc.create_goods_invoice(
+                administrator_id=administrator_id, agreement_id=agreement_id, amount=amount,
+                waybill_data=waybill.read(), waybill_filename=waybill.name,
+                waybill_mime=waybill.content_type or "application/octet-stream",
+                created_by=request.token.user_id,
+            )
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.GoodsInvoiceRead.model_validate(
+            goods_invoice_svc.serialize_goods_invoice(invoice, with_budget=True))
+
+
+class GoodsInvoiceDetailView(ContractsView):
+    @read
+    def get(self, request, invoice_id: int):
+        return schemas.GoodsInvoiceRead.model_validate(
+            goods_invoice_svc.serialize_goods_invoice(
+                goods_invoice_svc.get_goods_invoice_or_404(invoice_id), with_budget=True))
+
+
+class GoodsInvoiceWaybillUrlView(ContractsView):
+    @read
+    def get(self, request, invoice_id: int):
+        url = goods_invoice_svc.waybill_url(goods_invoice_svc.get_goods_invoice_or_404(invoice_id))
+        if url is None:
+            raise Http404("К записи не приложена накладная")
+        return {"url": url}
+
+
+class GoodsInvoicePaymentOrderView(ContractsView):
+    @write("POST", admin=False)
+    def post(self, request, invoice_id: int):
+        posting_number = (request.POST.get("posting_number") or "").strip()
+        if not posting_number:
+            return json_error("Укажите номер проводки", 422)
+        if len(posting_number) > 100:
+            return json_error("Номер проводки не длиннее 100 символов", 422)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+        try:
+            invoice = goods_invoice_svc.record_payment(
+                invoice_id, posting_number=posting_number, data=upload.read(),
+                filename=upload.name, mime=upload.content_type or "application/octet-stream",
+                actor_id=request.token.user_id, is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.GoodsInvoiceRead.model_validate(
+            goods_invoice_svc.serialize_goods_invoice(invoice))
+
+
+class GoodsInvoicePaymentOrderUrlView(ContractsView):
+    @read
+    def get(self, request, invoice_id: int):
+        url = goods_invoice_svc.payment_order_url(
+            goods_invoice_svc.get_goods_invoice_or_404(invoice_id))
+        if url is None:
+            raise Http404("К накладной не приложено платёжное поручение")
         return {"url": url}
 
 
