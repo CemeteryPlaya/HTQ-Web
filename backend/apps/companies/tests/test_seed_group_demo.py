@@ -154,8 +154,10 @@ def test_is_idempotent(fake_provisioning, monkeypatch):
 
 @pytest.mark.django_db
 def test_explains_why_there_are_no_serving_holders(fake_provisioning, capsys):
-    """Ноль обслуживающих — штатное состояние свежего стенда (ролей ещё нет),
-    и оно обязано быть объяснено: молчание здесь читается как «наследование
+    """Ноль обслуживающих (фикстура подменяет ``serving_holders`` пустым
+    списком — с задачи 11 блока I на настоящем стенде роли должностям выдаёт
+    сам ``seed_hr_demo``, и ноль означает, что их сняли или у держателей нет
+    учёток) обязан быть объяснён: молчание здесь читается как «наследование
     прав сломано»."""
     _run(skip_tasks=True)
     out = capsys.readouterr().out
