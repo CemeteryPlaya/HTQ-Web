@@ -177,4 +177,18 @@ urlpatterns = [
     path("completion-acts/", views.CompletionActCollectionView.as_view()),
     path("completion-acts/<int:act_id>", views.CompletionActDetailView.as_view()),
     path("completion-acts/<int:act_id>/", views.CompletionActDetailView.as_view()),
+
+    # ── Товарные накладные ─────────────────────────────────────────────────
+    path("goods-invoices/<int:invoice_id>/submit", views.GoodsInvoiceSubmitView.as_view()),
+    path("goods-invoices/<int:invoice_id>/submit/", views.GoodsInvoiceSubmitView.as_view()),
+    path("goods-invoices/<int:invoice_id>/waybill-url", views.GoodsInvoiceWaybillUrlView.as_view()),
+    path("goods-invoices/<int:invoice_id>/waybill-url/", views.GoodsInvoiceWaybillUrlView.as_view()),
+    path("goods-invoices/<int:invoice_id>/payment-order", views.GoodsInvoicePaymentOrderView.as_view()),
+    path("goods-invoices/<int:invoice_id>/payment-order/", views.GoodsInvoicePaymentOrderView.as_view()),
+    path("goods-invoices/<int:invoice_id>/payment-order-url", views.GoodsInvoicePaymentOrderUrlView.as_view()),
+    path("goods-invoices/<int:invoice_id>/payment-order-url/", views.GoodsInvoicePaymentOrderUrlView.as_view()),
+    path("goods-invoices", views.GoodsInvoiceCollectionView.as_view()),
+    path("goods-invoices/", views.GoodsInvoiceCollectionView.as_view()),
+    path("goods-invoices/<int:invoice_id>", views.GoodsInvoiceDetailView.as_view()),
+    path("goods-invoices/<int:invoice_id>/", views.GoodsInvoiceDetailView.as_view()),
 ]
