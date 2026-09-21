@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from django.db import transaction
 
-from apps.access.models import PositionRole, Role, RoleAssignment, ScopeKind
+from apps.access.models import (
+    POSITION_ROLE_SCOPE_KINDS, PositionRole, Role, RoleAssignment, ScopeKind,
+)
 from apps.access.services.errors import ScopeInvalid, UnknownRole
 
 
@@ -45,6 +47,53 @@ def set_position_roles(company: str, position_id: int, role_ids: list[int]) -> N
             PositionRole(company_slug=company, position_id=position_id, role_id=rid)
             for rid in unique_ids
         ])
+
+
+def ensure_position_role(company: str, position_id: int, role_code: str,
+                         scope_kind: str) -> bool:
+    """Добавить должности ОДНУ системную роль, не трогая остальные. Идемпотентно.
+
+    Задача 11 блока I — для сидов (``seed_hr_demo`` раскладывает
+    ``Post.hr_level`` структур в роли должностей) и любого другого кода,
+    которому нужно ровно то, что сделал бы администратор после переноса:
+    «у этой должности есть эта роль с этой областью». Отличается от
+    ``set_position_roles`` по двум пунктам, и оба — принципиальные:
+
+    * НЕ заменяет набор ролей должности целиком — роль, выданная кадровиком
+      руками, остаётся; ``set_position_roles`` её стёр бы;
+    * принимает ``scope_kind`` — штатный API его не знает (см. докстринг
+      ``PositionRole``), а сиду нужна область «свой отдел» для младших
+      уровней, иначе ``hr-junior`` на стенде видел бы всю компанию.
+
+    Роль ищется ПО КОДУ и ТОЛЬКО среди системных: коды ``hr-*``/
+    ``employee-basic`` сеют миграции ``access/0004``–``0005``, и подставить
+    вместо них одноимённую пользовательскую роль (каталог общий, коды
+    уникальны, но ``is_system`` — единственная гарантия, что за кодом стоит
+    именно засеянный набор) сид не должен. Отсутствие — ``UnknownRole`` с
+    указанием на миграцию, а не молчаливый пропуск.
+
+    Уже существующая связь с ДРУГИМ ``scope_kind`` не переписывается — тот
+    же принцип, что у ``access_backfill_positions``: перенос и сид не
+    отменяют решение человека. Возвращает ``True``, если связь создана
+    сейчас, ``False`` — если уже была.
+    """
+    allowed = {kind for kind, _label in POSITION_ROLE_SCOPE_KINDS}
+    if scope_kind not in allowed:
+        raise ScopeInvalid(
+            f"область {scope_kind!r} недопустима для роли должности; "
+            f"допустимы: {sorted(allowed)}"
+        )
+    role = Role.objects.filter(code=role_code, is_system=True).first()
+    if role is None:
+        raise UnknownRole(
+            f"системной роли {role_code!r} нет в реестре (миграции "
+            f"access.0004/0005 не применены?)"
+        )
+    _row, created = PositionRole.objects.get_or_create(
+        company_slug=company, position_id=position_id, role=role,
+        defaults={"scope_kind": scope_kind},
+    )
+    return created
 
 
 def _check_scope(item: dict) -> None:

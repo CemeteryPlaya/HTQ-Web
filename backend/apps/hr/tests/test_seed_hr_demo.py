@@ -288,6 +288,93 @@ def test_holding_structure_sets_serving_and_managing_flags(company_schema):
         assert ReportingRelation.objects.filter(relation_type="direct").count() == 12
 
 
+# ── роли должностей (задача 11 блока I) ─────────────────────────────────
+
+def _seed_system_roles() -> None:
+    """Четыре системные роли ``hr-*`` на месте — тем же приёмом, что
+    ``apps/access/tests/test_backfill_positions.py::_seed_roles``: сид
+    миграции ``access/0005`` как обычная функция (get_or_create внутри).
+    Нужно, потому что транзакционные тесты соседних аппок flush'ат базу
+    вместе с ролями, засеянными миграцией, а ``ensure_position_role`` без
+    роли честно падает ``UnknownRole``."""
+    import importlib
+    from types import SimpleNamespace
+
+    from django.apps import apps as django_apps
+
+    migration = importlib.import_module("apps.access.migrations.0005_seed_hr_level_roles")
+    migration.seed(django_apps, SimpleNamespace())
+
+
+def test_company_seed_grants_position_roles_from_hr_level(company_schema):
+    """После ``seed_hr_demo --company X`` у КАЖДОЙ должности с ``hr_level``
+    есть ``PositionRole`` с ролью ``legacy_roles.ROLE_CODES[level]`` и
+    областью ``legacy_roles.SCOPE_KINDS[level]`` — ровно то, что дал бы
+    перенос ``access_backfill_positions`` по явной колонке. Повторный
+    запуск не дублирует и не переписывает."""
+    from apps.access.models import PositionRole
+    from apps.hr import legacy_roles
+    from htqweb.tenancy.db import use_company
+
+    slug = company_schema["slug"]
+    _seed_system_roles()
+    _seed(company=slug)
+
+    structure = gs.structure_for("service")  # kind фикстуры
+    assert structure.posts, "структура без должностей — тест ничего не проверяет"
+    with use_company(slug):
+        by_title = {p.title: p.id for p in Position.objects.all()}
+
+    for post in structure.posts:
+        rows = list(PositionRole.objects.filter(
+            company_slug=slug, position_id=by_title[post.title]).select_related("role"))
+        assert len(rows) == 1, post.title
+        assert rows[0].role.code == legacy_roles.ROLE_CODES[post.hr_level], post.title
+        assert rows[0].role.is_system is True
+        assert rows[0].scope_kind == legacy_roles.SCOPE_KINDS[post.hr_level], post.title
+
+    snapshot = sorted(PositionRole.objects.filter(company_slug=slug)
+                      .values_list("position_id", "role__code", "scope_kind"))
+    _seed(company=slug)
+    assert sorted(PositionRole.objects.filter(company_slug=slug)
+                  .values_list("position_id", "role__code", "scope_kind")) == snapshot
+
+
+def test_company_seed_keeps_a_scope_set_by_hand(company_schema):
+    """Область, выставленная кадровиком руками, переживает пересев — сид
+    не отменяет решение человека (тот же принцип, что у переноса)."""
+    from apps.access.models import PositionRole
+    from htqweb.tenancy.db import use_company
+
+    slug = company_schema["slug"]
+    _seed_system_roles()
+    _seed(company=slug)
+    with use_company(slug):
+        director_id = Position.objects.get(title="Директор").id
+    row = PositionRole.objects.get(company_slug=slug, position_id=director_id)
+    assert row.scope_kind == "company"          # lead → компания по правилу
+    PositionRole.objects.filter(pk=row.pk).update(scope_kind="department")
+
+    _seed(company=slug)
+
+    row.refresh_from_db()
+    assert row.scope_kind == "department"
+    assert PositionRole.objects.filter(company_slug=slug, position_id=director_id).count() == 1
+
+
+@pytest.mark.django_db
+def test_seed_without_company_grants_no_position_roles(capsys):
+    """Режим перехода: компании нет — ``PositionRole`` ключуется по
+    ``company_slug``, и выдавать роль некому. Шаг пропускается вслух, а не
+    подставляет ``public`` за компанию."""
+    from apps.access.models import PositionRole
+
+    call_command("seed_hr_demo", verbosity=1)
+    assert not PositionRole.objects.exists()
+    out = capsys.readouterr().out
+    assert "Роли должностей" in out and "пропущено" in out
+
+
 def test_company_option_rejects_unknown_company(db):
     with pytest.raises(CommandError, match="не найдена"):
         _seed(company="t-no-such-company")

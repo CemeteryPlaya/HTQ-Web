@@ -243,6 +243,23 @@ ROLE_CODES: dict[str, str] = {
     "lead": "hr-lead",
 }
 
+#: Старый уровень -> область роли ДОЛЖНОСТИ (``PositionRole.scope_kind``) —
+#: то же правило, что у переноса ``access_backfill_positions``
+#: (``SCOPE_KIND_BY_LEVEL`` там; равенство держит
+#: ``apps/access/tests/test_backfill_positions.py::
+#: test_scope_kinds_match_legacy_source``): junior/middle старая модель
+#: сужала до своего отдела, senior/lead видели всю компанию. Значения —
+#: строковые литералы ``apps.access.models.ScopeKind``, а не импорт (см.
+#: докстринг модуля: ``apps.access`` — соседняя аппка). Читает
+#: ``seed_hr_demo``, раскладывая ``Post.hr_level`` структур в роли через
+#: ``apps.access.interface.ensure_position_role`` (задача 11 блока I).
+SCOPE_KINDS: dict[str, str] = {
+    "junior": "department",
+    "middle": "department",
+    "senior": "company",
+    "lead": "company",
+}
+
 
 def nodes_for_level(level: HRLevel) -> dict[str, frozenset[str]]:
     """Узлы и признаки роли для старого уровня — раскрыть пресет через таблицу.

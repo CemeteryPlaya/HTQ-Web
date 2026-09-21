@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from apps.access.services import hierarchy, holders, resolve
+from apps.access.services import assignment, hierarchy, holders, resolve
 from apps.access.services.identity import identity
 from apps.core.services import require_service
 
@@ -118,5 +118,33 @@ def serving_holders(company: str) -> list[int]:
     return holders.serving_holder_ids(company)
 
 
-__all__ = ["external_holders", "flags_for", "permission_level", "permissions_for",
-           "resolution", "serving_holders", "subordinate_companies"]
+def ensure_position_role(company_slug: str, position_id: int, role_code: str,
+                         scope_kind: str) -> bool:
+    """Выдать должности системную роль по коду — идемпотентно, не трогая
+    остальные её роли (задача 11 блока I, ``apps.access.services.assignment.
+    ensure_position_role``).
+
+    Для сидов и переносов, а не для UI: ровно то, что сделал бы
+    администратор в разделе «Роли должностей» после ``access_backfill_
+    positions``. ``seed_hr_demo`` раскладывает через неё ``Post.hr_level``
+    справочника структур (``apps/hr/management/group_structures.py``) в
+    ``PositionRole`` — колонку ``Position.permissions`` сид с задачи 9 не
+    пишет, а без ролей свежий стенд получал бы директоров без кадровых прав.
+    Область — по тому же правилу, что у переноса: junior/middle → отдел
+    держателя, senior/lead → компания.
+
+    ``scope_kind`` — строковое значение (``"company"``/``"department"``):
+    вызывающий не импортирует ``apps.access.models.ScopeKind`` — сосед
+    видит только этот модуль. Роль обязана быть системной и существовать;
+    иначе ``UnknownRole``/``ScopeInvalid`` (``apps.access.services.errors``)
+    — сид не должен молча пропускать выдачу.
+
+    Возвращает ``True``, если связь создана этим вызовом, ``False`` — если
+    уже была (в т.ч. с другой областью — её не переписывает).
+    """
+    require_service("access")
+    return assignment.ensure_position_role(company_slug, position_id, role_code, scope_kind)
+
+
+__all__ = ["ensure_position_role", "external_holders", "flags_for", "permission_level",
+           "permissions_for", "resolution", "serving_holders", "subordinate_companies"]

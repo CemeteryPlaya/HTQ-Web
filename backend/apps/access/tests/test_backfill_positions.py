@@ -81,6 +81,13 @@ def test_role_codes_match_legacy_source():
     assert ROLE_CODE_BY_LEVEL == legacy_roles.ROLE_CODES
 
 
+def test_scope_kinds_match_legacy_source():
+    """``apps.hr.legacy_roles.SCOPE_KINDS`` (его читает ``seed_hr_demo``,
+    задача 11) обязан совпадать с правилом переноса — иначе стенд и бой
+    получат разные области для одного и того же уровня."""
+    assert SCOPE_KIND_BY_LEVEL == legacy_roles.SCOPE_KINDS
+
+
 def test_scope_kind_matches_controller_decision():
     """junior/middle — DEPARTMENT (старая модель сужала список сотрудников
     до своего отдела), senior/lead — COMPANY (несли hr.employees.view.all)."""

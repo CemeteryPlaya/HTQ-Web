@@ -14,8 +14,9 @@
 читаемым. Всё через ``update_or_create`` по естественному ключу, поэтому
 второй запуск ничего не дублирует, а правит на месте.
 
-**Порядок шагов не косметика**: уровни → отделы → должности → люди →
-руководители → подчинение → штатное расписание. Уровни идут первыми,
+**Порядок шагов не косметика**: уровни → отделы → должности → роли
+должностей → люди → руководители → подчинение → штатное расписание. Уровни
+идут первыми,
 потому что ``Position.level`` — кэш, который считается из
 ``LevelThreshold`` по весу должности; без порогов должность молча получает
 запасной уровень (``position_service._DEFAULT_LEVEL``), и иерархия
@@ -24,6 +25,21 @@
 NOT NULL``), а руководители отделов проставляются после сотрудников:
 ``Department.manager`` ссылается на ``Employee``, которого до этого шага
 ещё нет.
+
+**Роли должностей** (задача 11 блока I «Единая модель прав»). С задачи 9
+сид не пишет ``Position.permissions`` — колонка мертва для кадровых прав, —
+и ``Post.hr_level`` справочника структур раскладывается напрямую в
+``PositionRole`` через ``apps.access.interface.ensure_position_role``:
+ровно то, что администратор сделал бы руками после переноса
+(``access_backfill_positions``), с тем же кодом роли
+(``legacy_roles.ROLE_CODES``) и той же областью (``legacy_roles.
+SCOPE_KINDS``: junior/middle → отдел держателя, senior/lead → компания).
+Без этого свежий стенд после ``seed_group_demo`` получал бы директоров без
+кадровых ролей — перенос без колонки угадывает уровень по названию, а
+«директор» кадровиком не считается. Только с ``--company``: роль должности
+живёт в ``public`` с ключом ``company_slug``, и в режиме перехода (без
+компании) выдавать её некому — шаг пропускается с сообщением, а не
+подставляет ``public`` за компанию.
 """
 
 from __future__ import annotations
@@ -219,7 +235,7 @@ class Command(BaseCommand):
         if slug is None:
             # Режим перехода (roadmap §3): единственная компания — HTQ, её
             # таблицы — там, куда указывает текущий search_path.
-            self._run(gs.structure_for("construction"), options)
+            self._run(gs.structure_for("construction"), options, company_slug=None)
             return
 
         from apps.companies import interface as companies
@@ -242,15 +258,16 @@ class Command(BaseCommand):
 
         with use_company(slug):
             self.stdout.write(f"Компания {slug} ({company['kind']}): {structure.company_name}")
-            self._run(structure, options)
+            self._run(structure, options, company_slug=slug)
 
     @transaction.atomic
-    def _run(self, structure: gs.Structure, options) -> None:
+    def _run(self, structure: gs.Structure, options, *, company_slug: str | None) -> None:
         if options["purge_e2e"]:
             self._purge_e2e()
         levels = self._seed_levels()
         units = self._seed_units(structure)
         positions = self._seed_positions(structure, units)
+        roles = self._seed_position_roles(structure, positions, company_slug)
         employees = self._seed_employees(structure, positions)
         managers = self._seed_managers(structure, units, positions, employees)
         relations = self._seed_relations(structure, positions)
@@ -258,9 +275,9 @@ class Command(BaseCommand):
         staffing = self._seed_staffing(positions)
         self.stdout.write(self.style.SUCCESS(
             f"\nГотово: уровней {levels}, подразделений {len(units)}, должностей "
-            f"{len(positions)}, сотрудников {len(employees)}, руководителей "
-            f"{managers}, связей подчинения {relations}, замещений {substitutions}, "
-            f"штатных единиц {staffing}."
+            f"{len(positions)}, ролей должностей {roles}, сотрудников "
+            f"{len(employees)}, руководителей {managers}, связей подчинения "
+            f"{relations}, замещений {substitutions}, штатных единиц {staffing}."
         ))
 
     # ── шаги ────────────────────────────────────────────────────────────
@@ -376,16 +393,50 @@ class Command(BaseCommand):
                     "serves_subsidiaries": post.serves_subsidiaries,
                     # ``permissions`` больше НЕ проставляется (задача 9 блока
                     # I: колонка мертва для авторизации кадрового домена).
-                    # ``post.hr_level`` остаётся в справочнике структур как
-                    # исторические демо-данные — единственный живой путь к
-                    # кадровым правам теперь роли apps.access
-                    # (``PositionRole``), которые этот сид не заводит; см.
-                    # ``manage.py access_backfill_positions``.
+                    # ``post.hr_level`` раскладывается в роли apps.access
+                    # (``PositionRole``) следующим шагом —
+                    # ``_seed_position_roles`` (задача 11).
                 },
             )
             out[post.title] = position
         self.stdout.write(f"  {len(out)}")
         return out
+
+    def _seed_position_roles(self, structure, positions, company_slug: str | None) -> int:
+        """``Post.hr_level`` → системная роль должности с областью по правилу
+        переноса (см. докстринг модуля). Возвращает число должностей с ролью.
+
+        Через ``apps.access.interface`` — ``apps.access`` для ``apps.hr``
+        соседняя аппка, её модели отсюда не видны (сторож
+        ``apps/core/tests/test_app_isolation.py``). Идемпотентность — на
+        стороне ``ensure_position_role``: второй прогон ничего не дублирует и
+        область, выставленную кадровиком руками, не переписывает.
+        """
+        self.stdout.write("Роли должностей...")
+        if company_slug is None:
+            self.stdout.write(
+                "  пропущено: роль должности (PositionRole) ключуется по "
+                "company_slug, а без --company компании нет; выдайте роли через "
+                "manage.py access_backfill_positions после переноса."
+            )
+            return 0
+
+        from apps.access import interface as access
+        from apps.hr import legacy_roles
+
+        granted = created = 0
+        for post in structure.posts:
+            level = post.hr_level
+            if level not in legacy_roles.ROLE_CODES:
+                continue
+            if access.ensure_position_role(
+                company_slug, positions[post.title].id,
+                legacy_roles.ROLE_CODES[level], legacy_roles.SCOPE_KINDS[level],
+            ):
+                created += 1
+            granted += 1
+        self.stdout.write(f"  {granted} (создано сейчас {created})")
+        return granted
 
     def _seed_employees(self, structure, positions) -> dict[str, Employee]:
         self.stdout.write("Сотрудники...")
