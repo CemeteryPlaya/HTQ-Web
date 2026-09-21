@@ -37,7 +37,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 
 const STATUS_BADGE: Record<string, { className: string; dot: string }> = {
   active:     { className: 'bg-emerald-500/10 text-emerald-700 border-emerald-300', dot: 'bg-emerald-500' },
@@ -73,15 +73,26 @@ const HREmployees = () => {
   // Lifted share-dialog state — opened from the row action button. ``null``
   // means closed; a partial Employee carries id + display name only.
   const [shareTarget, setShareTarget] = useState<{ id: number; full_name: string } | null>(null);
-  const {
-    level,
-    hasHrAccess,
-    canWriteBasic,
-    canCreateEmployee,
-    canDeleteEmployee,
-    canListUserOptions,
-    isLoading: levelLoading,
-  } = useHRLevel();
+  // Права — по узлам реестра через `usePermissions` (задача 10 блока I),
+  // теми же узлами и признаками, что проверяет бэкенд на ручках сотрудника
+  // (`backend/apps/hr/legacy_roles.py::KEY_TO_NODE`): вход на экран — любой
+  // кадровый доступ (модуль `hr` в карте), правка — `hr.employees: edit`,
+  // создание и импорт — `hr.employees: create`, удаление — `hr.employees:
+  // delete`, импорт из пользователей — ещё и `hr.accounts: view`
+  // (USERS_LIST, список учётных записей).
+  const permissions = usePermissions();
+  const hasHrAccess = permissions.atLeast('hr', 'read');
+  const canWriteBasic = permissions.can('hr.employees', 'edit');
+  const canCreateEmployee = permissions.can('hr.employees', 'create');
+  const canDeleteEmployee = permissions.can('hr.employees', 'delete');
+  const canListUserOptions = permissions.can('hr.accounts', 'view');
+  const levelLoading = permissions.isLoading;
+  // Подпись уровня у счётчика: раньше — кадровый уровень (junior…lead),
+  // теперь — уровень модуля `hr` и, если область сужена, её вид.
+  const hrScope = permissions.scope('hr');
+  const accessLabel = hasHrAccess
+    ? [permissions.level('hr'), hrScope && hrScope.kind !== 'company' ? hrScope.kind : null].filter(Boolean).join(' · ')
+    : null;
 
   // Массовый импорт — действие страницы, а не формы: он заводит СРАЗУ много
   // карточек и формой сотрудника не пользуется.
@@ -242,7 +253,7 @@ const HREmployees = () => {
             <div className="text-xs text-muted-foreground whitespace-nowrap">
               {t('hr.common.total')}: {visibleEmployees.length}
               {employees && visibleEmployees.length !== employees.length ? ` / ${employees.length}` : ''}
-              {level && <span className="ml-2 uppercase tracking-wide">({level.replace('_', ' ')})</span>}
+              {accessLabel && <span className="ml-2 uppercase tracking-wide">({accessLabel})</span>}
             </div>
           </div>
           {canCreateEmployee && canListUserOptions && (

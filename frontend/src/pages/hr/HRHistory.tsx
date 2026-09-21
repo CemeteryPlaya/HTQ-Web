@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { DateInput } from '@/components/ui/date-input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 
 interface HistoryRecord {
   id: number;
@@ -63,7 +63,13 @@ const EVENT_COLORS: Record<string, string> = {
 const HRHistory = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Удаление записи кадровой истории — на бэкенде под
+  // `module="hr", level="admin"` (+ платформенный `admin=True`,
+  // apps/hr/views.py), поэтому кнопки показываются по тому же уровню
+  // модуля, что проверяет сервер. Старый `isSenior` (write + область
+  // company) был шире и показывал кнопку тому, кому сервер ответил бы 403.
+  const hrAdmin = permissions.atLeast('hr', 'admin');
 
   const { data: records, isLoading, error } = useQuery({
     queryKey: ['hr-personnel-history'],
@@ -382,7 +388,7 @@ const HRHistory = () => {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
                       <Button size="sm" variant="outline" onClick={() => startEdit(rec)}>{t('hr.common.edit')}</Button>
-                      {isSenior && (
+                      {hrAdmin && (
                         <Button
                           size="sm"
                           variant="destructive"

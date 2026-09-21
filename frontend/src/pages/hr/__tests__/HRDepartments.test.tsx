@@ -9,15 +9,33 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 //
 // HRLayout тянет Header/Footer со всем окружением приложения — к предмету
 // теста отношения не имеет (тот же приём, что в HRPositions.test.tsx).
-// useHRLevel мокаем, чтобы управлять правами явно.
+// usePermissions мокаем, чтобы управлять правами явно (задача 10 блока I:
+// кнопки удаления — уровень модуля `hr:admin`, как гейт на бэкенде).
 
 vi.mock('@/components/hr/HRLayout', () => ({
   default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-const hrLevel = { isSenior: true };
-vi.mock('@/hooks/useHRLevel', () => ({
-  useHRLevel: () => hrLevel,
+const access = { hr: 'admin' as 'none' | 'read' | 'write' | 'admin' };
+const ORDER = ['none', 'read', 'write', 'admin'];
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    // `company: null` — как отдавал НЕмокнутый хук до задачи 10 (ответ
+    // `/access/v1/me` здесь подменялся пустым `data: []` через api.get).
+    company: null,
+    level: (m: string) => (m === 'hr' ? access.hr : 'none'),
+    atLeast: (m: string, req: string) =>
+      ORDER.indexOf(m === 'hr' ? access.hr : 'none') >= ORDER.indexOf(req),
+    scope: () => ({ kind: 'company', id: null }),
+    depth: () => [],
+    can: () => false,
+    pageHidden: () => false,
+    subordinateCompanies: [],
+    inheritedFrom: [],
+    isLoading: false,
+    isError: false,
+    refetch: () => {},
+  }),
 }));
 
 vi.mock('@/api/client', () => ({
@@ -56,7 +74,7 @@ const DEPARTMENTS = [
 
 beforeEach(() => {
   vi.clearAllMocks();
-  hrLevel.isSenior = true;
+  access.hr = 'admin';
   mockedApi.get.mockImplementation((() => Promise.resolve({ data: DEPARTMENTS })) as never);
 });
 

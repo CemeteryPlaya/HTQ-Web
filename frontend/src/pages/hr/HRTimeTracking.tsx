@@ -18,7 +18,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 import i18next from '@/i18n';
 
@@ -103,7 +103,14 @@ const emptyForm = {
 const HRTimeTracking = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Удаление записи времени — кадровику с правом писать по ВСЕЙ компании, а не в своём
+  // отделе (старый senior/lead): узла в ролях у учёта
+  // времени нет (`hr.time_tracking`), ручка по узлу не гейтится.
+  // Разница middle/senior в старой модели — область выдачи роли, не
+  // признак (backend/apps/hr/legacy_roles.py, решение 1), поэтому здесь
+  // `scope('hr')`, а не уровень.
+  const companyWide = permissions.atLeast('hr', 'write') && permissions.scope('hr')?.kind === 'company';
 
   const { data: entries, isLoading, error } = useQuery({
     queryKey: ['hr-timetracking'],
@@ -410,7 +417,7 @@ const HRTimeTracking = () => {
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-2">
                     <Button size="sm" variant="outline" onClick={() => startEdit(entry)}>{t('hr.common.edit')}</Button>
-                    {isSenior && (
+                    {companyWide && (
                       <Button
                         size="sm"
                         variant="destructive"

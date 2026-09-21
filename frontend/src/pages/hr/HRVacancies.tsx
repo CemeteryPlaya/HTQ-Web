@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 
 interface Vacancy {
   id: number;
@@ -36,7 +36,14 @@ interface Department {
 const HRVacancies = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Вилка зарплаты и закрытие вакансии — кадровику с правом писать по ВСЕЙ компании, а не в своём
+  // отделе (старый senior/lead): узла в ролях
+  // у подбора нет (`hr.recruitment`), ручки по узлу не гейтятся.
+  // Разница middle/senior в старой модели — область выдачи роли, не
+  // признак (backend/apps/hr/legacy_roles.py, решение 1), поэтому здесь
+  // `scope('hr')`, а не уровень.
+  const companyWide = permissions.atLeast('hr', 'write') && permissions.scope('hr')?.kind === 'company';
   const { data: vacancies, isLoading, error } = useQuery({
     queryKey: ['hr-vacancies'],
     queryFn: async () => {
@@ -214,7 +221,7 @@ const HRVacancies = () => {
                     </SelectContent>
                   </Select>
                 </label>
-                {isSenior && (
+                {companyWide && (
                   <div className="grid gap-4 md:grid-cols-2">
                     <label className="grid gap-2 text-sm">
                       {t('hr.pages.vacancies.fields.salaryMin')}
@@ -253,7 +260,7 @@ const HRVacancies = () => {
               <TableHead>{t('hr.pages.vacancies.table.title')}</TableHead>
               <TableHead>{t('hr.pages.vacancies.table.department')}</TableHead>
               <TableHead>{t('hr.pages.vacancies.table.status')}</TableHead>
-              {isSenior && <TableHead>{t('hr.pages.vacancies.table.salaryRange')}</TableHead>}
+              {companyWide && <TableHead>{t('hr.pages.vacancies.table.salaryRange')}</TableHead>}
               <TableHead>{t('hr.pages.vacancies.table.applications')}</TableHead>
               <TableHead>{t('hr.pages.vacancies.table.created')}</TableHead>
               <TableHead className="text-right">{t('hr.pages.vacancies.table.actions')}</TableHead>
@@ -269,7 +276,7 @@ const HRVacancies = () => {
                     {statusLabels[vacancy.status] || vacancy.status}
                   </Badge>
                 </TableCell>
-                {isSenior && (
+                {companyWide && (
                   <TableCell>
                     {vacancy.salary_min && vacancy.salary_max
                       ? t('hr.pages.vacancies.salaryRange', { min: vacancy.salary_min, max: vacancy.salary_max })
@@ -281,7 +288,7 @@ const HRVacancies = () => {
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-2">
                     <Button size="sm" variant="outline" onClick={() => startEdit(vacancy)}>{t('hr.common.edit')}</Button>
-                    {isSenior && (
+                    {companyWide && (
                       <Button
                         size="sm"
                         variant="destructive"

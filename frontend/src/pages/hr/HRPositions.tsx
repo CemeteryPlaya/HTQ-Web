@@ -20,7 +20,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { useHRLevel } from '@/hooks/useHRLevel';
 import { usePermissions } from '@/hooks/usePermissions';
 import { errorDetail, reportApiError } from '@/lib/apiError';
 import type { PositionRole } from '@/types/access';
@@ -122,7 +121,19 @@ function collectDescendantNames(node: CompanyTreeNode | null): string[] {
 const HRPositions = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Всё управление справочником должностей и уровней (создание, правка,
+  // удаление, вес, перенос между уровнями, ребаланс, справочник уровней) на
+  // бэкенде под `admin=True` + `module="hr", level="admin"`
+  // (apps/hr/views.py, positions/*), поэтому и здесь — уровень модуля
+  // `admin`, а не старый `isSenior` (write + область company), который
+  // показывал редактирование тому, кому сервер ответил бы 403.
+  const hrAdmin = permissions.atLeast('hr', 'admin');
+  // Роли должности — другой домен: `PUT /access/v1/positions/{id}/roles`
+  // гейтится `module="access", level="admin"` (apps/access/views.py::
+  // PositionRolesView.put), и диалог обязан спрашивать тот же модуль —
+  // иначе он рисует чекбоксы, которые нельзя сохранить.
+  const canEditPositionRoles = permissions.atLeast('access', 'admin');
 
   // Вкладка живёт в ?tab= — справочник уровней был отдельным адресом
   // (/admin/levels), поэтому на него должна оставаться прямая ссылка.
@@ -431,7 +442,7 @@ const HRPositions = () => {
   // новых не заводим. Роли — только когда должность уже существует (у новой
   // нет id, значит нет и назначенных ролей); дерево компаний — как только
   // переключатель включён, независимо от того, создание это или правка.
-  const { company } = usePermissions();
+  const { company } = permissions;
 
   const previewRolesQuery = useQuery<PositionRole[]>({
     queryKey: ['access', 'positions', editingPos?.id, 'roles'],
@@ -457,7 +468,7 @@ const HRPositions = () => {
   }, [companyTreeQuery.data, company]);
 
   const onDragEnd = (result: DropResult) => {
-    if (!result.destination || !isSenior) return;
+    if (!result.destination || !hrAdmin) return;
     const sourceLevel = Number(result.source.droppableId);
     const targetLevel = Number(result.destination.droppableId);
     const sourceItems = [...(groups.get(sourceLevel) ?? [])];
@@ -520,7 +531,7 @@ const HRPositions = () => {
               </div>
             </div>
 
-            {isSenior && (
+            {hrAdmin && (
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="outline"
@@ -961,7 +972,7 @@ const HRPositions = () => {
                         </p>
                       )}
                     </div>
-                    {isSenior && (
+                    {hrAdmin && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -974,7 +985,7 @@ const HRPositions = () => {
                     )}
                   </div>
 
-                  <Droppable droppableId={String(level)} isDropDisabled={!isSenior}>
+                  <Droppable droppableId={String(level)} isDropDisabled={!hrAdmin}>
                     {(provided, snapshot) => (
                       <div
                         ref={provided.innerRef}
@@ -986,7 +997,7 @@ const HRPositions = () => {
                             key={position.id}
                             draggableId={String(position.id)}
                             index={index}
-                            isDragDisabled={!isSenior}
+                            isDragDisabled={!hrAdmin}
                           >
                             {(dragProvided, dragSnapshot) => (
                               <div
@@ -1021,7 +1032,7 @@ const HRPositions = () => {
                         {t('hr.positions.gradeValue', { grade: position.grade })}
                                   </div>
                                 </div>
-                                {isSenior && (
+                                {hrAdmin && (
                                   <div className="flex items-center gap-1">
                                     <Button
                                       size="sm"
@@ -1076,7 +1087,7 @@ const HRPositions = () => {
           positionTitle={rolesFor?.title ?? ''}
           open={rolesFor !== null}
           onOpenChange={(next) => { if (!next) setRolesFor(null); }}
-          canEdit={isSenior}
+          canEdit={canEditPositionRoles}
           servesSubsidiaries={rolesFor?.serves_subsidiaries ?? false}
         />
     </div>
@@ -1084,7 +1095,7 @@ const HRPositions = () => {
 
   return (
     <HRLayout title={t('hr.pages.positions.title')} subtitle={t('hr.pages.positions.subtitle')}>
-      {isSenior ? (
+      {hrAdmin ? (
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             <TabsTrigger value="positions">{t('hr.pages.positions.tabs.positions')}</TabsTrigger>

@@ -8,8 +8,9 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 // ── моки ───────────────────────────────────────────────────────────────────
 //
 // HRLayout — сквозной враппер приложения, к предмету теста отношения не
-// имеет (тот же приём, что HRPositions.test.tsx). useHRLevel мокаем, чтобы
-// управлять правами напрямую, а не через ответ /employees/hr-level/.
+// имеет (тот же приём, что HRPositions.test.tsx). usePermissions мокаем,
+// чтобы управлять правами напрямую: правка схемы — узел `hr.org` со всеми
+// четырьмя признаками (задача 10 блока I, как ORG_EDIT на бэкенде).
 // OrgChart мокается за пределами узнаваемой геометрии React Flow — jsdom не
 // даёт @xyflow/react реальный layout, а этому тесту он и не нужен: важно
 // только то, какой ПАНЕЛЬЮ (OrgEditPanel vs EmployeeDetailDrawer) страница
@@ -19,9 +20,22 @@ vi.mock('@/components/hr/HRLayout', () => ({
   default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-const hrLevel = { isSeniorOrAbove: true, isLoading: false };
-vi.mock('@/hooks/useHRLevel', () => ({
-  useHRLevel: () => hrLevel,
+const access = { orgFlags: ['view', 'create', 'edit', 'delete'] as string[], isLoading: false };
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    company: null,
+    level: (m: string) => (m === 'hr' ? 'admin' : 'none'),
+    atLeast: (m: string) => m === 'hr',
+    scope: () => ({ kind: 'company', id: null }),
+    depth: (node: string) => (node === 'hr.org' ? access.orgFlags : []),
+    can: (node: string, flag: string) => node === 'hr.org' && access.orgFlags.includes(flag),
+    pageHidden: () => false,
+    subordinateCompanies: [],
+    inheritedFrom: [],
+    isLoading: access.isLoading,
+    isError: false,
+    refetch: () => {},
+  }),
 }));
 
 vi.mock('@xyflow/react', () => ({
@@ -73,8 +87,8 @@ const TREE = { nodes: [{ id: 'pos_1', label: 'Инженер', type: 'position' 
 
 beforeEach(() => {
   vi.clearAllMocks();
-  hrLevel.isSeniorOrAbove = true;
-  hrLevel.isLoading = false;
+  access.orgFlags = ['view', 'create', 'edit', 'delete'];
+  access.isLoading = false;
   mockedApi.get.mockImplementation(((url: string) => {
     if (url.includes('departments')) return Promise.resolve({ data: [] });
     if (url.includes('org/tree')) return Promise.resolve({ data: TREE });
@@ -84,7 +98,7 @@ beforeEach(() => {
 
 describe('HROrgChart — гейт правки', () => {
   it('не показывает тумблер «Редактировать» пользователю без прав senior/lead', async () => {
-    hrLevel.isSeniorOrAbove = false;
+    access.orgFlags = ['view'];
     renderWithProviders(<HROrgChart />);
     await waitFor(() => expect(screen.getByTestId('org-chart-editable')).toBeInTheDocument());
     expect(screen.queryByText('Редактировать:')).not.toBeInTheDocument();

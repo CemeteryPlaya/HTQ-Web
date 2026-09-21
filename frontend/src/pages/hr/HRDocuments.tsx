@@ -18,7 +18,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 
 /**
@@ -64,7 +64,16 @@ const employeeName = (emp?: EmployeeOption): string => {
 const HRDocuments = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Удаление документа — кадровику с правом писать по ВСЕЙ компании, а не в своём
+  // отделе (старый senior/lead): `delete` на `hr.documents`
+  // не несёт ни одна роль (DOCUMENTS_MANAGE → FULL без delete, решение
+  // задачи 1), а DELETE /documents/{id} на бэкенде без гейта по узлу —
+  // узловой предикат спрятал бы кнопку от всех, включая lead.
+  // Разница middle/senior в старой модели — область выдачи роли, не
+  // признак (backend/apps/hr/legacy_roles.py, решение 1), поэтому здесь
+  // `scope('hr')`, а не уровень.
+  const companyWide = permissions.atLeast('hr', 'write') && permissions.scope('hr')?.kind === 'company';
 
   const { data: documents, isLoading, error } = useQuery({
     queryKey: ['hr-documents'],
@@ -333,7 +342,7 @@ const HRDocuments = () => {
                     >
                       {t('hr.common.download')}
                     </Button>
-                    {isSenior && (
+                    {companyWide && (
                       <Button
                         size="sm"
                         variant="destructive"

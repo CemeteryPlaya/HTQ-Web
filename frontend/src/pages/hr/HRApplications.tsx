@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { PhoneInput } from '@/components/ui/phone-input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 
 interface Application {
   id: number;
@@ -37,7 +37,15 @@ interface Vacancy {
 const HRApplications = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Удаление отклика — кадровику с правом писать по ВСЕЙ компании, а не в своём
+  // отделе (старый senior/lead): узла в ролях у подбора нет
+  // (`hr.recruitment` не выдан ни одной из четырёх ролей), а бэкенд ручку
+  // DELETE /applications/{id} по узлу не гейтит (apps/hr/views.py).
+  // Разница middle/senior в старой модели — область выдачи роли, не
+  // признак (backend/apps/hr/legacy_roles.py, решение 1), поэтому здесь
+  // `scope('hr')`, а не уровень.
+  const companyWide = permissions.atLeast('hr', 'write') && permissions.scope('hr')?.kind === 'company';
   const { data: applications, isLoading, error } = useQuery({
     queryKey: ['hr-applications'],
     queryFn: async () => {
@@ -333,7 +341,7 @@ const HRApplications = () => {
                       {t('hr.pages.applications.step.next')}
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => startEdit(app)}>{t('hr.common.edit')}</Button>
-                    {isSenior && (
+                    {companyWide && (
                       <Button
                         size="sm"
                         variant="destructive"
