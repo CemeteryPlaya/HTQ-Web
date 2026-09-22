@@ -37,17 +37,34 @@ def get_departments_brief(department_ids: list[int]) -> list[dict]:
     return list(Department.objects.filter(id__in=ids).values(*_BRIEF_FIELDS))
 
 
-def get_employee_brief(user_id: int) -> dict | None:
-    """Карточка сотрудника по user_id из JWT. Мягко удалённые не отдаются."""
+_EMPLOYEE_BRIEF_VALUES = (
+    "id", "first_name", "last_name", "department_id",
+    "position_id", "position__title", "status",
+    "position__is_manager", "position__external_hierarchy",
+    "position__serves_subsidiaries",
+)
+
+
+def get_employee_brief(user_id: int, *, email: str | None = None) -> dict | None:
+    """Карточка сотрудника по user_id из JWT. Мягко удалённые не отдаются.
+
+    ``email`` (финальная волна блока I, рулинг L) — второй ключ поиска для
+    карточки, привязанной к учётке только почтой (``user_id`` пуст): так
+    искал карточку старый кадровый резолвер (``1f69716:backend/apps/hr/
+    access.py::resolve_hr_access`` — ``Q(user_id) | Q(email)``) и так же
+    ищет её до сих пор самообслуживание ``/employees/me``
+    (``employee_service.get_my_employee``). Без него держатель такой
+    карточки терял бы должностные роли (``apps.access.services.resolve``),
+    сохраняя анкету. Сравнение точное, как в обоих источниках. Карточка по
+    ``user_id`` приоритетнее: почтой ищется, только если её нет.
+    Без ``email`` — поведение прежнее, другие вызывающие его не передают.
+    """
     require_service("hr")
-    row = (
-        Employee.objects.filter(user_id=user_id, is_deleted=False)
-        .values("id", "first_name", "last_name", "department_id",
-                "position_id", "position__title", "status",
-                "position__is_manager", "position__external_hierarchy",
-                "position__serves_subsidiaries")
-        .first()
-    )
+    alive = Employee.objects.filter(is_deleted=False)
+    row = alive.filter(user_id=user_id).values(*_EMPLOYEE_BRIEF_VALUES).first()
+    if row is None and email:
+        row = (alive.filter(email=email).order_by("id")
+               .values(*_EMPLOYEE_BRIEF_VALUES).first())
     if row is None:
         return None
     return {

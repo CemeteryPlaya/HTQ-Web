@@ -25,3 +25,16 @@ def identity(user) -> tuple[int, bool]:
             "нет ни id, ни user_id"
         )
     return int(user_id), bool(getattr(user, "is_superuser", False))
+
+
+def email_of(user) -> str | None:
+    """Почта из Django-модели либо из ``TokenPayload`` — ``None``, если пуста.
+
+    Отдельно от ``identity``, а не третьим элементом её кортежа: кортеж
+    разбирают на две переменные по всему резолверу. Нужна одному месту —
+    поиску кадровой карточки держателя по почте (рулинг L финальной волны
+    блока I, ``resolve._position_role_ids``). Обе формы пользователя несут
+    ``email`` (у ``auth.User`` пустая строка вместо ``None``), запроса в БД
+    нет.
+    """
+    return getattr(user, "email", None) or None

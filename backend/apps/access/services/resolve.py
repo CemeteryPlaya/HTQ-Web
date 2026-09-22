@@ -29,7 +29,7 @@ from apps.access.models import (
     RolePermission,
     ScopeKind,
 )
-from apps.access.services.identity import identity
+from apps.access.services.identity import email_of, identity
 from htqweb.fallback import fallback
 
 # Чем шире область, тем больше число — сравнивается так же, как уровни.
@@ -43,7 +43,7 @@ def _known_modules() -> list[str]:
 
 
 def _position_role_ids(
-    user_id: int, company: str
+    user_id: int, company: str, email: str | None = None
 ) -> list[tuple[int, str, int | None]]:
     """Роли штатной должности пользователя, уже с готовой областью.
 
@@ -64,6 +64,11 @@ def _position_role_ids(
     отдел держателя, и назначать роли этой должности вслепую значило бы
     выдать их тому, у кого нет даже основания их получить.
 
+    ``email`` (рулинг L финальной волны блока I) — второй ключ поиска
+    карточки, как у старого кадрового резолвера (``Q(user_id) | Q(email)``):
+    карточка, привязанная к учётке только почтой, иначе теряла бы роли
+    должности. ``user_id`` приоритетнее (``hr.interface.get_employee_brief``).
+
     ``scope_kind`` вне ``PositionRole.POSITION_ROLE_SCOPE_KINDS`` (порча
     данных — модель и штатный API его не допускают, см. докстринг модели) —
     роль этой строки не попадает в результат и об этом ГРОМКО сообщается
@@ -74,7 +79,7 @@ def _position_role_ids(
     try:
         from apps.hr import interface as hr
 
-        brief = hr.get_employee_brief(user_id)
+        brief = hr.get_employee_brief(user_id, email=email)
     except Exception as exc:
         # Кадровый модуль выключен или недоступен: должностные роли не
         # прочитать. Это ПОДМЕНА — права считаются по неполным данным, — и она
@@ -170,7 +175,7 @@ def _role_scopes(
     user_id, _ = identity(user)
     scopes: dict[int, tuple[str, int | None]] = {
         role_id: (kind, scope_id)
-        for role_id, kind, scope_id in _position_role_ids(user_id, company)
+        for role_id, kind, scope_id in _position_role_ids(user_id, company, email_of(user))
     }
     inherited = inheritance.inherit(user_id, company)
     scopes.update(inherited.scopes)

@@ -280,3 +280,83 @@ def test_unsupported_scope_kind_is_loud_not_silent(two_holders_same_position):
     with pytest.raises(FallbackNotAllowed) as excinfo:
         resolve.permissions_for(h["user_a"], COMPANY)
     assert "access.resolve.position_role_scope_kind_invalid" in str(excinfo.value)
+
+
+# ── Финальная волна блока I, рулинг L: карточка по почте ────────────────────
+#
+# Старый кадровый резолвер искал карточку ``Q(user_id) | Q(email)``
+# (``1f69716:backend/apps/hr/access.py::resolve_hr_access``), самообслуживание
+# ``/employees/me`` ищет так до сих пор. Резолвер ролей искал только по
+# ``user_id`` — держатель карточки, привязанной к учётке одной почтой,
+# терял все должностные роли (F2 финального ревью).
+
+
+def _unlinked_card(email: str, department, position):
+    from apps.hr.models import Employee
+
+    return Employee.objects.create(
+        first_name="Т", last_name="Почтой", email=email,
+        department=department, position=position,
+        hire_date=datetime.date(2024, 1, 9), user_id=None,
+    )
+
+
+@pytest.fixture
+def card_linked_by_email_only(db):
+    from apps.hr.models import Department, Position
+
+    dep = Department.objects.create(name="Бухгалтерия", path="buh-mail")
+    position = Position.objects.create(title="Бухгалтер", department=dep, weight=10)
+    user = get_user_model().objects.create_user(
+        username="mail-only", email="mail-only@htq.test", password="x")
+    _unlinked_card("mail-only@htq.test", dep, position)
+    role = _role("mail-role", "hr")
+    PositionRole.objects.create(
+        company_slug=COMPANY, position_id=position.id, role=role,
+        scope_kind=ScopeKind.DEPARTMENT,
+    )
+    return {"user": user, "dep": dep, "position": position}
+
+
+@pytest.mark.django_db
+def test_card_linked_by_email_only_gives_position_roles(card_linked_by_email_only):
+    c = card_linked_by_email_only
+    perms = resolve.permissions_for(c["user"], COMPANY)
+    assert perms["hr"]["scope"] == {"kind": ScopeKind.DEPARTMENT, "id": c["dep"].id}
+
+
+@pytest.mark.django_db
+def test_card_linked_by_email_only_works_from_the_token(card_linked_by_email_only):
+    """Гейт ``api_view`` держит ``TokenPayload``, а не ``auth.User``:
+    почта обязана дойти до поиска карточки и оттуда."""
+    from htqweb.authn.payload import TokenPayload
+
+    c = card_linked_by_email_only
+    token = TokenPayload(user_id=c["user"].id, exp=0, email="mail-only@htq.test")
+    assert resolve.permission_level(token, "hr", COMPANY) == Level.WRITE
+    no_email = TokenPayload(user_id=c["user"].id, exp=0)
+    assert resolve.permission_level(no_email, "hr", COMPANY) == Level.NONE
+
+
+@pytest.mark.django_db
+def test_card_by_user_id_wins_over_card_by_email(two_holders_same_position):
+    """Своя карточка по ``user_id`` приоритетнее карточки по почте: почта
+    токена указывает на другую карточку (без ``user_id``, другой отдел) —
+    область всё равно из своей. Почта в ``hr_employee`` уникальна, поэтому
+    расхождение возможно только так: почта учётки сменилась, а карточка
+    осталась привязанной по ``user_id``."""
+    from apps.hr.models import Position
+    from htqweb.authn.payload import TokenPayload
+
+    h = two_holders_same_position
+    other = Position.objects.create(title="Другая", department=h["dep_b"], weight=20)
+    _unlinked_card("renamed@htq.test", h["dep_b"], other)
+    role = _role("prio-role", "hr")
+    for position in (h["position"], other):
+        PositionRole.objects.create(
+            company_slug=COMPANY, position_id=position.id, role=role,
+            scope_kind=ScopeKind.DEPARTMENT,
+        )
+    token = TokenPayload(user_id=h["user_a"].id, exp=0, email="renamed@htq.test")
+    perms = resolve.permissions_for(token, COMPANY)
+    assert perms["hr"]["scope"] == {"kind": ScopeKind.DEPARTMENT, "id": h["dep_a"].id}
