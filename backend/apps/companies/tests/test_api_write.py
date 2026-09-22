@@ -189,3 +189,58 @@ def test_archive_and_restore_are_platform_operations(client, two_companies):
     assert res.status_code == 200
     assert res.json()["status"] == "active"
     assert res.json()["archived_at"] is None
+
+
+@pytest.mark.django_db
+def test_patch_sets_keeps_and_clears_subdomain(client, pair):
+    """Блок I.2, задача 3: ключа нет — «не трогать», ``""``/``null`` — снять
+    псевдоним (как ``parent_slug`` через ``UNSET``)."""
+    _holding, htq = pair
+    url = f"{BASE}/companies/{htq.slug}"
+    res = patch_json(client, url, {"subdomain": "htq"}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["subdomain"] == "htq"
+
+    res = patch_json(client, url, {"name": "HTQ 2"}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["subdomain"] == "htq"
+
+    res = patch_json(client, url, {"subdomain": ""}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["subdomain"] is None
+
+    patch_json(client, url, {"subdomain": "htq"}, **auth(superuser_token()))
+    res = patch_json(client, url, {"subdomain": None}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["subdomain"] is None
+
+
+@pytest.mark.django_db
+def test_patch_subdomain_validation_errors_are_422(client, pair):
+    """Ошибка ``Company.clean()`` доходит до клиента 422 с текстом, а не 500."""
+    holding, htq = pair
+    url = f"{BASE}/companies/{htq.slug}"
+    res = patch_json(client, url, {"subdomain": "api"}, **auth(superuser_token()))
+    assert res.status_code == 422
+    assert res.json()["code"] == "invalid"
+    assert "subdomain" in res.json()["detail"]
+
+    # Чужой слаг псевдонимом — тоже 422.
+    res = patch_json(client, url, {"subdomain": holding.slug}, **auth(superuser_token()))
+    assert res.status_code == 422
+    assert "subdomain" in res.json()["detail"]
+    htq.refresh_from_db()
+    assert htq.subdomain is None
+
+
+@pytest.mark.django_db
+def test_patch_subdomain_is_platform_admin_only(client, pair):
+    """Правка псевдонима — та же проверка, что у остальных платформенных
+    полей: write в своей компании не даёт её, 403 и поле не меняется."""
+    holding, htq = pair
+    tok = _company_write_token(103, htq.slug)
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}", {"subdomain": "htq"},
+                     **headers(htq.slug, tok))
+    assert res.status_code == 403
+    htq.refresh_from_db()
+    assert htq.subdomain is None

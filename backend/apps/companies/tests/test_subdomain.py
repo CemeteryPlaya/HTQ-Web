@@ -60,3 +60,34 @@ def test_own_slug_as_own_subdomain_is_allowed():
     company.full_clean()
     company.save()
     assert company.subdomain == "acme"
+
+
+@pytest.mark.django_db
+def test_provision_company_accepts_subdomain():
+    from apps.companies.services import lifecycle
+
+    company = lifecycle.provision_company(
+        slug="acme-corp", name="Acme", kind=CompanyKind.IT, subdomain="acme",
+    )
+    assert company.subdomain == "acme"
+
+
+@pytest.mark.django_db
+def test_update_company_sets_and_clears_subdomain():
+    from apps.companies.services import lifecycle
+
+    lifecycle.provision_company(slug="acme-corp", name="Acme", kind=CompanyKind.IT)
+    assert lifecycle.update_company("acme-corp", subdomain="acme").subdomain == "acme"
+    # Пустая строка — «убрать псевдоним», компания возвращается на слаг.
+    assert lifecycle.update_company("acme-corp", subdomain="").subdomain is None
+    # Ключ не передан — «не трогать».
+    assert lifecycle.update_company("acme-corp", name="Acme 2").subdomain is None
+
+
+@pytest.mark.django_db
+def test_registry_row_carries_subdomain():
+    from apps.companies import interface
+
+    Company.objects.create(slug="acme", name="Acme", kind=CompanyKind.IT,
+                           subdomain="ac")
+    assert interface.get_company("acme")["subdomain"] == "ac"

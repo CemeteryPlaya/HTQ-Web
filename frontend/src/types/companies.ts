@@ -12,6 +12,11 @@ export type CompanyStatus = 'active' | 'archived';
 export interface Company {
   id: number;
   slug: string;
+  /**
+   * Блок I.2: короткий адрес компании (`htq` вместо `hi-tech-qazaqstan`).
+   * `null` — компания открывается по слагу.
+   */
+  subdomain?: string | null;
   name: string;
   kind: CompanyKind;
   status: CompanyStatus;
@@ -38,19 +43,26 @@ export interface CompanyTreeNode {
 
 export interface MyCompany {
   slug: string;
+  /** Короткий адрес; `null` — адрес по слагу. */
+  subdomain?: string | null;
   name: string;
   kind: CompanyKind;
   is_default: boolean;
   is_current: boolean;
 }
 
-/** `parent_slug: null` — «без родителя»; отсутствие ключа — «не трогать». */
+/**
+ * `parent_slug: null` — «без родителя»; отсутствие ключа — «не трогать».
+ * `subdomain: ''` или `null` — снять короткий адрес (компания вернётся на
+ * адрес по слагу); отсутствие ключа — «не трогать».
+ */
 export interface CompanyPatch {
   name?: string;
   kind?: CompanyKind;
   country?: string;
   parent_slug?: string | null;
   show_external_holders?: boolean;
+  subdomain?: string | null;
 }
 
 export interface CompanyModule {

@@ -29,10 +29,12 @@ export function CompanyFormDialog({ company, candidates, open, onOpenChange, onS
   const [country, setCountry] = useState(company.country);
   const [parent, setParent] = useState(company.parent_slug ?? '');
   const [showExternalHolders, setShowExternalHolders] = useState(company.show_external_holders);
+  const [subdomain, setSubdomain] = useState(company.subdomain ?? '');
 
   useEffect(() => {
     setName(company.name); setKind(company.kind); setCountry(company.country); setParent(company.parent_slug ?? '');
     setShowExternalHolders(company.show_external_holders);
+    setSubdomain(company.subdomain ?? '');
   }, [company]);
 
   const mutation = useMutation({
@@ -48,6 +50,9 @@ export function CompanyFormDialog({ company, candidates, open, onOpenChange, onS
     if (country !== company.country) body.country = country;
     if ((parent || null) !== company.parent_slug) body.parent_slug = parent || null;
     if (showExternalHolders !== company.show_external_holders) body.show_external_holders = showExternalHolders;
+    // Как есть: пустая строка снимает короткий адрес, проверку формата,
+    // зарезервированных меток и столкновений делает бэкенд (422).
+    if (subdomain !== (company.subdomain ?? '')) body.subdomain = subdomain;
     mutation.mutate(body);
   };
 
@@ -88,6 +93,12 @@ export function CompanyFormDialog({ company, candidates, open, onOpenChange, onS
               onCheckedChange={setShowExternalHolders}
             />
           </div>
+          <div><Label htmlFor="cf-subdomain">{t('companies.field.subdomain')}</Label>
+            <Input id="cf-subdomain" maxLength={32} value={subdomain} placeholder={company.slug}
+              aria-describedby="cf-subdomain-hint" onChange={(e) => setSubdomain(e.target.value)} />
+            <p id="cf-subdomain-hint" className="mt-1 text-xs text-muted-foreground">
+              {t('companies.subdomainHint')}
+            </p></div>
           <p className="text-xs text-muted-foreground">
             {t('companies.slugLocked', 'slug не правится: он — имя схемы данных и поддомен компании.')}
           </p>

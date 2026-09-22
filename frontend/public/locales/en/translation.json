@@ -4952,5 +4952,11 @@
     "messenger": "Chats",
     "email": "Mail",
     "files": "Files"
+  },
+  "companies": {
+    "field": {
+      "subdomain": "Short address"
+    },
+    "subdomainHint": "Latin letters, digits and hyphens; empty — address by slug."
   }
 }

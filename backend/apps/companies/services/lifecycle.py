@@ -138,7 +138,8 @@ def _rebuild_or_raise(what: str) -> None:
 
 
 def provision_company(*, slug: str, name: str, kind: str,
-                      parent_slug: str | None = None, country: str = "") -> Company:
+                      parent_slug: str | None = None, country: str = "",
+                      subdomain: str | None = None) -> Company:
     """Строка реестра + схема + миграции + сводки холдинга.
 
     Порядок шагов — единственный безопасный (подробно — докстринг
@@ -154,7 +155,8 @@ def provision_company(*, slug: str, name: str, kind: str,
     if Company.objects.filter(slug=slug).exists():
         raise CompanyExists(f"Компания {slug} уже существует.")
     parent = _resolve_parent(parent_slug)
-    company = Company(slug=slug, name=name, kind=kind, parent=parent, country=country)
+    company = Company(slug=slug, name=name, kind=kind, parent=parent,
+                      country=country, subdomain=subdomain or None)
     _full_clean(company)
 
     with transaction.atomic():
@@ -178,7 +180,8 @@ def provision_company(*, slug: str, name: str, kind: str,
 
 def update_company(slug: str, *, name: str | None = None, kind: str | None = None,
                    country: str | None = None, parent_slug=UNSET,
-                   show_external_holders: bool | None = None) -> Company:
+                   show_external_holders: bool | None = None,
+                   subdomain=UNSET) -> Company:
     """Правка реестровых полей. Slug не правится никогда: он — имя схемы и поддомен.
 
     ``show_external_holders`` (задача 7 блока C) не нуждается в ``UNSET``, в
@@ -201,6 +204,11 @@ def update_company(slug: str, *, name: str | None = None, kind: str | None = Non
         company.parent = parent
     if show_external_holders is not None:
         company.show_external_holders = show_external_holders
+    if subdomain is not UNSET:
+        # Пустая строка — «снять псевдоним», компания возвращается на слаг;
+        # UNSET — «не трогать». Как у parent_slug: у поля есть третье,
+        # явно пустое значение, и None его не выражает.
+        company.subdomain = (subdomain or None)
     _full_clean(company)
     company.save()
     return company

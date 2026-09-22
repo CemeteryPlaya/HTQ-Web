@@ -52,12 +52,15 @@ class Command(BaseCommand):
         parser.add_argument("--kind", required=True, choices=[c.value for c in CompanyKind])
         parser.add_argument("--parent", help="slug вышестоящей компании")
         parser.add_argument("--country", default="")
+        parser.add_argument("--subdomain", default=None,
+                            help="короткий адрес компании (htq вместо hi-tech-qazaqstan)")
 
     def handle(self, *args, **opts):
         try:
             company = lifecycle.provision_company(
                 slug=opts["slug"], name=opts["name"], kind=opts["kind"],
                 parent_slug=opts["parent"], country=opts["country"],
+                subdomain=opts["subdomain"],
             )
         except lifecycle.LifecycleError as exc:
             raise CommandError(exc.detail) from exc

@@ -61,6 +61,7 @@ def _serialize(company: Company) -> dict:
     return {
         "id": company.id,
         "slug": company.slug,
+        "subdomain": company.subdomain,
         "name": company.name,
         "kind": company.kind,
         "status": company.status,

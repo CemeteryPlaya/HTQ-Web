@@ -18,6 +18,7 @@ class CompanyRead(BaseModel):
 
     id: int
     slug: str
+    subdomain: str | None = None
     name: str
     kind: str
     status: str
@@ -38,6 +39,7 @@ class CompanyTreeNode(BaseModel):
 
 class MyCompany(BaseModel):
     slug: str
+    subdomain: str | None = None
     name: str
     kind: str
     is_default: bool
@@ -59,6 +61,13 @@ class CompanyPatch(BaseModel):
     # само поле не прислало); значение задаётся ТОЛЬКО платформенным
     # администратором — тем же гейтом, что и остальные поля этой схемы.
     show_external_holders: bool | None = None
+    # Блок I.2: короткий адрес компании. Пустая строка или null — «снять
+    # псевдоним» (компания возвращается на адрес по слагу); отсутствие ключа —
+    # «не трогать» (во вьюхе — ``UNSET``, как у ``parent_slug``). Правит только
+    # платформенный администратор — тот же гейт, что у остальных полей схемы.
+    # Формат, зарезервированные метки и столкновения со слагами проверяет
+    # ``Company.full_clean()`` в сервисе (422 ``invalid``), не схема.
+    subdomain: str | None = Field(default=None, max_length=32)
 
     @field_validator("kind")
     @classmethod

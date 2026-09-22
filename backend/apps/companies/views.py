@@ -105,7 +105,8 @@ class MyCompaniesView(ApiView):
         )
         return [
             schemas.MyCompany(
-                slug=m.company.slug, name=m.company.name, kind=m.company.kind,
+                slug=m.company.slug, subdomain=m.company.subdomain,
+                name=m.company.name, kind=m.company.kind,
                 is_default=m.is_default, is_current=(m.company.slug == current),
             )
             for m in rows
@@ -180,6 +181,10 @@ class CompanyItemView(CompaniesView):
                  "show_external_holders": data.show_external_holders}
         if "parent_slug" in data.model_fields_set:
             kwargs["parent_slug"] = data.parent_slug
+        if "subdomain" in data.model_fields_set:
+            # Ключ есть — ""/null снимают псевдоним; ключа нет — UNSET
+            # (умолчание update_company), поле не трогается.
+            kwargs["subdomain"] = data.subdomain
         try:
             company = lifecycle.update_company(slug, **kwargs)
         except lifecycle.LifecycleError as exc:

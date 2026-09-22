@@ -54,4 +54,36 @@ describe('CompanyFormDialog', () => {
     expect(patch).toHaveBeenCalledWith('hi-tech-qazaqstan', { show_external_holders: false });
     expect(onSaved).toHaveBeenCalled();
   });
+
+  it('поле «Короткий адрес» показывает псевдоним и уходит в PATCH как есть', async () => {
+    patch.mockReset();
+    patch.mockResolvedValue({ data: { ...htq, subdomain: 'htq' } });
+    renderWithProviders(
+      <CompanyFormDialog company={htq} candidates={[group, htq]} open onOpenChange={() => {}} onSaved={() => {}} />,
+    );
+    const input = screen.getByLabelText(/Короткий адрес/) as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(screen.getByText(/латиница, цифры и дефис/i)).toBeInTheDocument();
+
+    await userEvent.type(input, 'htq');
+    await userEvent.click(screen.getByRole('button', { name: /Сохранить/ }));
+
+    expect(patch).toHaveBeenCalledWith('hi-tech-qazaqstan', { subdomain: 'htq' });
+  });
+
+  it('очищенный короткий адрес уходит пустой строкой — снять псевдоним', async () => {
+    patch.mockReset();
+    const aliased: Company = { ...htq, subdomain: 'htq' };
+    patch.mockResolvedValue({ data: { ...htq, subdomain: null } });
+    renderWithProviders(
+      <CompanyFormDialog company={aliased} candidates={[group, aliased]} open onOpenChange={() => {}} onSaved={() => {}} />,
+    );
+    const input = screen.getByLabelText(/Короткий адрес/) as HTMLInputElement;
+    expect(input.value).toBe('htq');
+
+    await userEvent.clear(input);
+    await userEvent.click(screen.getByRole('button', { name: /Сохранить/ }));
+
+    expect(patch).toHaveBeenCalledWith('hi-tech-qazaqstan', { subdomain: '' });
+  });
 });

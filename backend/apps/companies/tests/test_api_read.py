@@ -40,10 +40,10 @@ def test_me_lists_active_memberships_and_marks_current(client, group):
     res = client.get(f"{BASE}/me", **headers("hi-tech-qazaqstan", token(company="hi-tech-qazaqstan")))
     assert res.status_code == 200
     assert res.json() == [
-        {"slug": "hi-tech-qazaqstan", "name": "Hi-Tech Qazaqstan", "kind": "construction",
-         "is_default": True, "is_current": True},
-        {"slug": "hi-tech-group", "name": "Hi-Tech Group", "kind": "holding",
-         "is_default": False, "is_current": False},
+        {"slug": "hi-tech-qazaqstan", "subdomain": None, "name": "Hi-Tech Qazaqstan",
+         "kind": "construction", "is_default": True, "is_current": True},
+        {"slug": "hi-tech-group", "subdomain": None, "name": "Hi-Tech Group",
+         "kind": "holding", "is_default": False, "is_current": False},
     ]
 
 
@@ -70,7 +70,8 @@ def test_superuser_lists_all_by_default_and_filters_by_status(client, group):
     assert res.status_code == 200
     assert [c["slug"] for c in res.json()] == ["hi-tech-group", "hi-tech-qazaqstan", "keg"]
     htq = next(c for c in res.json() if c["slug"] == "hi-tech-qazaqstan")
-    assert htq == {"id": group["htq"].id, "slug": "hi-tech-qazaqstan", "name": "Hi-Tech Qazaqstan",
+    assert htq == {"id": group["htq"].id, "slug": "hi-tech-qazaqstan", "subdomain": None,
+                   "name": "Hi-Tech Qazaqstan",
                    "kind": "construction", "status": "active", "country": "KZ",
                    "parent_slug": "hi-tech-group", "archived_at": None,
                    # Задача 7 блока C: включено по умолчанию (решение заказчика 4).
