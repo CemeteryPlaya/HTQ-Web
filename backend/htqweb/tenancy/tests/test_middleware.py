@@ -92,3 +92,58 @@ def test_context_is_cleared_even_when_view_raises(kz, rf):
     with pytest.raises(RuntimeError):
         middleware(request)
     assert current_company_or_none() is None
+
+
+# ── Метка хоста — псевдоним ИЛИ слаг (блок I.2, задача 4) ──────────────────
+
+
+@pytest.mark.django_db
+def test_middleware_resolves_alias_into_schema_of_its_company(client):
+    """Заголовок несёт псевдоним, а search_path встаёт по слагу."""
+    Company.objects.create(slug="hi-tech-qazaqstan", name="HTQ",
+                           kind=CompanyKind.CONSTRUCTION, subdomain="htq",
+                           status=CompanyStatus.ACTIVE)
+
+    resp = client.get("/api/companies/v1/me", HTTP_X_HTQ_COMPANY="htq")
+
+    assert resp.status_code != 404
+
+
+@pytest.mark.django_db
+def test_middleware_rejects_slug_of_a_company_that_has_an_alias(client):
+    Company.objects.create(slug="hi-tech-qazaqstan", name="HTQ",
+                           kind=CompanyKind.CONSTRUCTION, subdomain="htq",
+                           status=CompanyStatus.ACTIVE)
+
+    resp = client.get("/api/companies/v1/me",
+                      HTTP_X_HTQ_COMPANY="hi-tech-qazaqstan")
+
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "Компания не найдена"}
+
+
+@pytest.mark.django_db
+def test_alias_sets_context_and_request_company_by_slug(rf):
+    """Дальше middleware по коду идёт СЛАГ, а не метка хоста.
+
+    Шпион изнутри запроса: код «!= 404» выше не отличил бы «контекст стоит
+    на слаге» от «контекст стоит на псевдониме» — а псевдоним в contextvar
+    означал бы схему ``co_htq``, которой нет, и токен на компанию «htq».
+    """
+    from htqweb.middleware.company_context import CompanyContextMiddleware
+
+    Company.objects.create(slug="hi-tech-qazaqstan", name="HTQ",
+                           kind=CompanyKind.CONSTRUCTION, subdomain="htq",
+                           status=CompanyStatus.ACTIVE)
+    seen = {}
+
+    def spy(request):
+        seen["context"] = current_company_or_none()
+        seen["request"] = request.company["slug"]
+        return HttpResponse("ok")
+
+    CompanyContextMiddleware(spy)(
+        rf.get("/api/tasks/v1/", HTTP_X_HTQ_COMPANY="HTQ"))
+
+    assert seen == {"context": "hi-tech-qazaqstan",
+                    "request": "hi-tech-qazaqstan"}

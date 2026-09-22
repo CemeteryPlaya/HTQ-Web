@@ -91,3 +91,40 @@ def test_registry_row_carries_subdomain():
     Company.objects.create(slug="acme", name="Acme", kind=CompanyKind.IT,
                            subdomain="ac")
     assert interface.get_company("acme")["subdomain"] == "ac"
+
+
+# ── Метка хоста → компания (задача 4 блока I.2) ─────────────────────────────
+
+
+@pytest.mark.django_db
+def test_host_label_resolves_by_subdomain_first():
+    from apps.companies import interface
+
+    Company.objects.create(slug="hi-tech-qazaqstan", name="HTQ",
+                           kind=CompanyKind.CONSTRUCTION, subdomain="htq")
+    assert interface.resolve_host_label("htq")["slug"] == "hi-tech-qazaqstan"
+
+
+@pytest.mark.django_db
+def test_company_with_alias_is_not_reachable_by_slug():
+    """Один канонический хост на компанию: иначе два origin'а и два localStorage."""
+    from apps.companies import interface
+
+    Company.objects.create(slug="hi-tech-qazaqstan", name="HTQ",
+                           kind=CompanyKind.CONSTRUCTION, subdomain="htq")
+    assert interface.resolve_host_label("hi-tech-qazaqstan") is None
+
+
+@pytest.mark.django_db
+def test_company_without_alias_is_reachable_by_slug():
+    from apps.companies import interface
+
+    Company.objects.create(slug="acme", name="Acme", kind=CompanyKind.IT)
+    assert interface.resolve_host_label("acme")["slug"] == "acme"
+
+
+@pytest.mark.django_db
+def test_unknown_label_resolves_to_none():
+    from apps.companies import interface
+
+    assert interface.resolve_host_label("nope") is None

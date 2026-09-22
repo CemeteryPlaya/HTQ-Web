@@ -84,6 +84,29 @@ def get_company(slug: str) -> dict | None:
     return found or None
 
 
+def resolve_host_label(label: str) -> dict | None:
+    """Строка реестра по МЕТКЕ ХОСТА (первая часть поддомена), или None.
+
+    Порядок: сначала псевдоним (``subdomain``), затем слаг — и только у
+    компании, у которой псевдонима нет. Так у каждой компании ровно один
+    канонический хост: будь доступны оба, у одной компании было бы два
+    origin'а, а значит два раздельных ``localStorage`` и два токена.
+
+    Кэш живёт те же 5 секунд, что и ``get_company``; явного сброса нет —
+    смена псевдонима вступает в силу не позже чем через 5 с.
+    """
+    def produce():
+        company = (Company.objects.select_related("parent")
+                   .filter(subdomain=label).first())
+        if company is None:
+            company = (Company.objects.select_related("parent")
+                       .filter(slug=label, subdomain__isnull=True).first())
+        return _serialize(company) if company else {}
+
+    found = _cached(f"company:label:{label}", produce)
+    return found or None
+
+
 def is_holding(slug: str) -> bool:
     """Компания этого слага — холдинг (владеет долями остальных).
 

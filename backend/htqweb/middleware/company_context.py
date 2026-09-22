@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from django.http import JsonResponse
 
-from apps.companies.interface import get_company
+from apps.companies.interface import resolve_host_label
 from htqweb.tenancy.context import reset_company, set_company
 from htqweb.tenancy.db import apply_search_path
 
@@ -45,20 +45,24 @@ class CompanyContextMiddleware:
             request.company = None
             return self.get_response(request)
 
-        slug = request.headers.get(COMPANY_HEADER, "").strip().lower()
-        if not slug:
+        label = request.headers.get(COMPANY_HEADER, "").strip().lower()
+        if not label:
             # Компания не указана — запрос обслуживается в public. Это режим
-            # общих доменов (users/cms/media) и переходный период до полного
-            # перевода фронта на поддомены.
+            # общих доменов (users/cms/media) и страниц голого домена: вход,
+            # регистрация, выбор компании, /join/<token>.
             request.company = None
             return self.get_response(request)
 
-        company = get_company(slug)
+        # Метка хоста — это псевдоним ИЛИ слаг (apps.companies.interface.
+        # resolve_host_label), а дальше по коду везде идёт слаг: он и имя
+        # схемы (co_<slug>), и claim токена, и company_slug в ролях.
+        company = resolve_host_label(label)
         if company is None or not company["is_active"]:
             # 404, а не 403: существование компании — само по себе сведение,
             # которое незачем подтверждать анонимному запросу.
             return JsonResponse({"detail": "Компания не найдена"}, status=404)
 
+        slug = company["slug"]
         request.company = company
         token = set_company(slug)
         try:
