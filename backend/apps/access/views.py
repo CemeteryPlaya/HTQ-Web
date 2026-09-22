@@ -20,6 +20,9 @@ module="access", level=…)`` на каждой ручке, кроме трёх,
 и обоснование — в реестре). Уровень выбирается по
 операции: чтение — ``read``, создание и правка — ``write``, удаление и
 администрирование — ``admin`` (то же правило, что в ``depth.legacy_level``).
+Правка общего каталога ролей (создание, переименование, копия, матрица прав)
+— администрирование в чистом виде: ``admin`` (T4 финальной волны; внутри
+``deny_unless_platform_admin``, поведение от этого не меняется).
 Ручки, уже стоявшие под ``admin=True``, флаг СОХРАНЯЮТ: платформенный
 админ-гейт и гейт модуля отвечают на разные вопросы («пускают ли его в
 администрирование платформы» и «есть ли у него права на этот модуль в этой
@@ -162,7 +165,10 @@ class RoleCollectionView(AccessView):
         return [schemas.RoleRead.model_validate(row)
                 for row in Role.objects.all()]
 
-    @write("POST", body=schemas.RoleIn, status=201, admin=False)
+    # Правка ОБЩЕГО каталога ролей — администрирование, ``admin`` (T4
+    # финальной волны блока I): поведение не меняется — метод и так пускает
+    # только суперпользователя, — но уровень честно называет операцию.
+    @write("POST", body=schemas.RoleIn, status=201, admin=False, level="admin")
     def post(self, request, data: schemas.RoleIn):
         if (denied := self.deny_unless_platform_admin()):
             return denied
@@ -176,7 +182,10 @@ class RoleCollectionView(AccessView):
 class RoleItemView(AccessView):
     """``PATCH|DELETE roles/<id>``."""
 
-    @write("PATCH", body=schemas.RolePatchIn, admin=False)
+    # Правка ОБЩЕГО каталога ролей — администрирование, ``admin`` (T4
+    # финальной волны блока I): поведение не меняется — метод и так пускает
+    # только суперпользователя, — но уровень честно называет операцию.
+    @write("PATCH", body=schemas.RolePatchIn, admin=False, level="admin")
     def patch(self, request, role_id: int, data: schemas.RolePatchIn):
         if (denied := self.deny_unless_platform_admin()):
             return denied
@@ -232,7 +241,10 @@ class RoleCopyView(AccessView):
     роль без единого права — от настоящей она неотличима, а даёт ноль.
     """
 
-    @write("POST", body=schemas.RoleIn, status=201, admin=False)
+    # Правка ОБЩЕГО каталога ролей — администрирование, ``admin`` (T4
+    # финальной волны блока I): поведение не меняется — метод и так пускает
+    # только суперпользователя, — но уровень честно называет операцию.
+    @write("POST", body=schemas.RoleIn, status=201, admin=False, level="admin")
     def post(self, request, role_id: int, data: schemas.RoleIn):
         if (denied := self.deny_unless_platform_admin()):
             return denied
@@ -252,7 +264,10 @@ class RolePermissionsView(AccessView):
     def get(self, request, role_id: int):
         return catalog.permissions_of(role_id)
 
-    @write("PUT", body=schemas.PermissionsIn, admin=False)
+    # Правка ОБЩЕГО каталога ролей — администрирование, ``admin`` (T4
+    # финальной волны блока I): поведение не меняется — метод и так пускает
+    # только суперпользователя, — но уровень честно называет операцию.
+    @write("PUT", body=schemas.PermissionsIn, admin=False, level="admin")
     def put(self, request, role_id: int, data: schemas.PermissionsIn):
         if (denied := self.deny_unless_platform_admin()):
             return denied

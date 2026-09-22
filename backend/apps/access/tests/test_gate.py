@@ -128,13 +128,15 @@ def test_gate_without_company_context_rejects():
 # Гейт на них не ретрофит на старые ручки — он часть исходного дизайна.
 # Список должен быть КОРОТКИМ: каждая запись — это декларация, что у аппки
 # нет старых ручек без авторизации, к которым гейт был приклеен потом.
-_GATE_ALLOWLIST = {
-    "apps/companies/views.py",  # новая аппка, ручки и гейт авторизации спроектированы вместе
-}
+# Пуст с финальной волны блока I (рулинг J): единственная запись,
+# ``apps/companies/views.py``, ушла под перевёрнутый сторож ниже
+# (``self_service.TRANSLATED_APPS``) — декларацию сменило требование.
+_GATE_ALLOWLIST: set[str] = set()
 
-# Четыре аппки блока I «Единая модель прав» — их судьбу решает
+# Пять аппок блока I «Единая модель прав» — их судьбу решает
 # apps.access.self_service (TRANSLATED_APPS/SELF_SERVICE), а не бланковый
-# запрет ниже: задачи 4-7 вешают на них module=/level= по одной за коммит.
+# запрет ниже: задачи 4-7 вешали на них module=/level= по одной за коммит,
+# companies добавлена финальной волной (рулинг J).
 _RBAC_APPS = frozenset(self_service.SELF_SERVICE)
 
 # apps/signoff, apps/contracts — гейт на них ведёт параллельно другой
@@ -396,3 +398,26 @@ def test_access_is_not_imported_at_module_level():
     head = pathlib.Path(http.__file__).read_text(encoding="utf-8").splitlines()
     imports = [line for line in head if line.startswith(("import ", "from "))]
     assert not any("apps.access" in line for line in imports)
+
+
+def test_every_module_gate_names_its_level():
+    """У каждого ``api_view(module=…)`` явно указан ``level=`` (T4, финальная
+    волна блока I).
+
+    У ``api_view`` есть уровень по умолчанию, и ручка, забывшая ``level=``,
+    молча получила бы его — для записи или администрирования это было бы
+    расширение, не видное в декораторе. Сегодня ни одна ручка на умолчание
+    не полагается (финальное ревью проверило скриптом); сторож держит это
+    правилом. ``contracts``/``signoff`` — зона другого разработчика, вне
+    области, как и у проверок выше.
+    """
+    backend = pathlib.Path(__file__).resolve().parents[3]
+    offenders = []
+    for path in sorted((backend / "apps").rglob("views.py")):
+        if path.parent.name in _OUT_OF_SCOPE_APPS:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for start_lineno, _end, block in _iter_api_view_calls(text):
+            if "module=" in block and "level=" not in block:
+                offenders.append(f"{path.relative_to(backend).as_posix()}:{start_lineno}")
+    assert offenders == [], f"гейт модуля без явного level=: {offenders}"

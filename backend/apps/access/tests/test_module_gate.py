@@ -216,3 +216,29 @@ def test_role_catalog_writes_stay_platform_only(client, company_row):
     assert not Role.objects.filter(code__in=("x", "c")).exists()
     role.refresh_from_db()
     assert role.title == "Жертва"
+
+
+@pytest.mark.django_db
+def test_role_catalog_writes_need_access_admin_at_the_gate(client, company_row):
+    """T4 финальной волны блока I: правка общего каталога — ``admin``.
+
+    Держатель ``access:write`` (без admin) останавливается уже ГЕЙТОМ
+    (``Forbidden``), а не проверкой суперпользователя внутри метода — до
+    правки гейт его пропускал, и 403 приходил только от
+    ``deny_unless_platform_admin`` (другой ``detail``). Поведение для
+    пользователя то же — 403, — поэтому проверяется именно источник отказа.
+    """
+    assign(company_row, 7, "access", "edit")
+    role = Role.objects.create(code="victim-t4", title="Жертва")
+    head = headers(company_row, token(company=company_row))
+
+    responses = [
+        post_json(client, f"{BASE}/roles", {"code": "x", "title": "X"}, **head),
+        patch_json(client, f"{BASE}/roles/{role.id}", {"title": "Новое"}, **head),
+        post_json(client, f"{BASE}/roles/{role.id}/copy", {"code": "c", "title": "C"}, **head),
+        put_json(client, f"{BASE}/roles/{role.id}/permissions",
+                 [{"node": "hr", "preset": "view"}], **head),
+    ]
+    assert [r.status_code for r in responses] == [403] * 4
+    assert [r.json()["detail"] for r in responses] == ["Forbidden"] * 4
+

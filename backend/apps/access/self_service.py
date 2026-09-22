@@ -119,8 +119,10 @@ from __future__ import annotations
 #: сторож); задача 7 добавила "tasks" — последним шагом, после того как
 #: гейт навешан на 122 из её 128 ручек (шесть уведомлений — исключение
 #: ``self``, раунд правок 1: платформенная лента, не только про задачи, см.
-#: комментарий у ``SELF_SERVICE["tasks"]`` ниже).
-TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks"})
+#: комментарий у ``SELF_SERVICE["tasks"]`` ниже). Финальная волна блока I
+#: (рулинг J) добавила "companies": её ручки гейт несли с рождения аппки
+#: (``_GATE_ALLOWLIST`` сторожа), теперь это требование, а не декларация.
+TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -130,8 +132,8 @@ TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks"})
 REASONS: frozenset[str] = frozenset({"self", "open", "scoped"})
 
 #: аппка -> {имя ручки: причина из REASONS} (см. докстринг модуля). Ключи —
-#: "access", "users", "hr", "tasks" всегда присутствуют (даже с пустым
-#: словарём), чтобы сторож проверял все четыре аппки единообразно.
+#: "access", "users", "hr", "tasks", "companies" всегда присутствуют (даже с
+#: пустым словарём), чтобы сторож проверял все пять аппок единообразно.
 SELF_SERVICE: dict[str, dict[str, str]] = {
     "access": {
         # /me — права ТЕКУЩЕГО пользователя, посчитанные по его
@@ -415,5 +417,22 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         "notification_mark_unread": "self",
         "notifications_mark_all_read": "self",
         "notification_detail": "self",
+    },
+    # companies (финальная волна блока I, рулинг J): гейты НЕ менялись — всё
+    # остальное уже под ``module="companies"`` (общие ``read``/``write``).
+    "companies": {
+        # GET companies/v1/me — СВОИ членства: выборка строго по
+        # ``request.token.user_id``, параметра-подмены нет. Нужна каждому
+        # вошедшему, чтобы переключиться между компаниями.
+        "MyCompaniesView.get": "self",
+        # Фабрика ``platform(...)`` — один вызов ``api_view(admin=True)`` на
+        # три ручки: архив (``CompanyArchiveView.post``), восстановление
+        # (``CompanyRestoreView.post``) и отзыв членства
+        # (``CompanyMembershipItemView.delete``). Защита — своя и сильнее
+        # любого уровня модуля: ``admin=True`` в декораторе плюс
+        # ``deny_unless_platform_admin`` (``is_superuser``) первой строкой
+        # каждого метода. Сторож видит фабрику одним именем — новая ручка на
+        # ``@platform`` обязана звать ту же проверку.
+        "platform": "scoped",
     },
 }
