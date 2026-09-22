@@ -151,7 +151,7 @@ def test_gate_is_not_hung_on_apps_without_a_translation_plan():
     """Гейт не навешивается на ручку аппки, для которой это ещё не решено.
 
     Продолжение того же инварианта, что был раньше («гейт нигде»), но уже
-    не «нигде» — а «нигде за пределами четырёх аппок блока I и параллельной
+    не «нигде» — а «нигде за пределами пяти аппок блока I и параллельной
     ветки signoff/contracts»: у первых своя, перевёрнутая проверка ниже
     (``test_gate_covers_every_handle_of_translated_apps``), у вторых —
     работа другого разработчика, в которую этот файл не вмешивается.
@@ -267,7 +267,7 @@ def _enclosing_scope(lines: list[str], from_idx: int, inner_indent: int) -> str 
 def _qualified_name(lines: list[str], start_lineno: int, end_lineno: int) -> str | None:
     """Имя-ключ ручки для сверки с ``self_service.SELF_SERVICE``.
 
-    Три формы, которыми объявлена ручка в этих четырёх аппках:
+    Три формы, которыми объявлена ручка в этих пяти аппках:
 
     - ``@api_view(...)`` прямо над ``def name(...)`` — hr/users/tasks, а
       также отдельно объявленная class-based ручка (``MyCompaniesView.get``
@@ -379,8 +379,9 @@ def test_self_service_reasons_are_declared():
     данные, просто сегодня БЕЗ единой проверки прав). Ложь в реестре
     исключений дороже всего: это единственное место, где дыру можно
     объявить легальной, не объяснившись. Закрытый список причин
-    (``self``/``open``) не даёт добавить исключение молча — сторож требует
-    ОДНУ из них у каждой записи, а не любую строку.
+    (``self``/``open``/``scoped`` — третью добавил раунд правок 1 задачи 6)
+    не даёт добавить исключение молча — сторож требует ОДНУ из них у каждой
+    записи, а не любую строку.
     """
     bad = [
         f"{app}.{name} = {reason!r}"
@@ -388,7 +389,7 @@ def test_self_service_reasons_are_declared():
         for name, reason in exempt.items()
         if reason not in self_service.REASONS
     ]
-    assert not bad, f"недопустимая причина исключения (не self/open): {bad}"
+    assert not bad, f"недопустимая причина исключения (не self/open/scoped): {bad}"
 
 
 def test_access_is_not_imported_at_module_level():

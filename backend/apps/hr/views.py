@@ -1071,10 +1071,13 @@ def _update_employee(request, id: int, data: schemas.EmployeeUpdateRequest):
         with transaction.atomic():
             employee, identity_request = emp_svc.update_employee(
                 id, core, changed_by_id=request.token.user_id,
-                # Платформенный админ проходит сюда своим "*" — и это не
-                # расширение его власти: решение по заявке он и так принимает
-                # сам (identity_request_service.may_decide), обход лишь
-                # избавляет от лишнего шага.
+                # Суперпользователь проходит сюда без ролей — identity() в
+                # резолвере прав отдаёт ему все признаки узла (wildcard «*»
+                # снят вместе со старым HRAccess, is_staff без роли сюда не
+                # доходит — 403 на гейте модуля). Это не расширение его
+                # власти: решение по заявке он и так принимает сам
+                # (identity_request_service.may_decide), обход лишь избавляет
+                # от лишнего шага.
                 force_identity=access.has(IDENTITY_FORCE))
             _apply_card_t2(id, data.card_t2, access)
     except emp_svc.DepartmentNotFound:

@@ -208,31 +208,47 @@ Stated once here; the per-domain tables below do **not** repeat it per row.
    `hr.employees` with flag `delete`), because the module level aggregates
    over the whole subtree (`hr-senior` reaches `admin` on `hr` through
    `delete` on org/staffing/calendar without being allowed to delete
-   employees). Such checks answer 403 `{"detail": "Missing permission:
-   <node>.<flag>"}`. The *scope* of a grant (`department` vs `company`,
+   employees). Such checks answer 403 with the domain's own detail — in
+   `hr` most often `{"detail": "Missing permission: <old key>"}`, where the
+   key is the legacy permission name the node check was asked for (e.g.
+   `hr.calendar.manage`), not `<node>.<flag>`. The *scope* of a grant (`department` vs `company`,
    `/me` → `permissions[<m>].scope`) narrows the data a read returns
    (employee list of one's own department), not the route's availability.
 
-**Which routes carry the gate.** Every route of `hr`, `users`, `companies`,
-`access` and `tasks` — enforced by `apps/access/tests/test_gate.py` — except
-the ones listed in the self-service registry `apps/access/self_service.py`,
-each with a declared reason: `self` (returns strictly the caller's own data,
-e.g. `GET /api/hr/v1/employees/me`, `/api/users/v1/profile/me`), `open` (a
-company-wide reference such as `GET /api/hr/v1/org/tree`, deliberately
-readable by any signed-in employee) or `scoped` (protected by its own
-non-role check — one's own department's files, being the approver of a
-given identity request). `contracts` and `signoff` are **not** gated yet —
+**Which routes carry the gate.** Every route of the five apps `hr`, `users`,
+`companies`, `access` and `tasks` — enforced by the inverted guard in
+`apps/access/tests/test_gate.py` (every route outside the registry must carry
+`module=`, always with an explicit `level=`) — except the ones listed in the
+self-service registry `apps/access/self_service.py`, each with a declared
+reason: `self` (returns strictly the caller's own data, e.g.
+`GET /api/hr/v1/employees/me`, `/api/users/v1/profile/me`,
+`GET /api/companies/v1/me`), `open` (a company-wide reference such as
+`GET /api/hr/v1/org/tree`, deliberately readable by any signed-in employee) or
+`scoped` (protected by its own non-role check — one's own department's files,
+being the approver of a given identity request; the platform operations of
+`companies` — archive, restore, revoking a membership — which only a
+superuser may call: `admin=True` plus `is_superuser` in the method). The
+destructive `hr` routes that used to be open to anyone signed in
+(`DELETE /vacancies/{id}/`, `/applications/{id}/`,
+`/time-tracking/entries/{id}/`, `/documents/{id}/`) are gated at `hr: admin`
+— the third deliberate exception of block I; creating and editing those
+resources stays open. `contracts` and `signoff` are **not** gated yet —
 their owners add `api_view(module=…)` themselves (roadmap §6.2/6.3); until
 then they follow the older "read = JWT, write = admin / explicit
 permission" wording in their own sections.
 
-The seeded roles (`access/migrations/0004`, `0005`, `0008`): `employee-basic`
-(profile, messenger, mail, tasks, calendar, news, requests — granted to every
-company member by `manage.py access_backfill_basic`), `hr-junior` (hr:
-read, own department), `hr-middle` (hr: write, own department), `hr-senior`
-and `hr-lead` (hr: admin, whole company), `platform-admin`. Positions get
+The seeded roles: `platform-admin` (`access/migrations/0002`);
+`employee-basic` (`0004` — profile, messenger, conference (join only), mail,
+tasks, calendar, news, requests), granted to a new member together with the
+membership (`membership_service.grant_membership` →
+`access.interface.ensure_basic_role`) and to members that existed at rollout
+by `manage.py access_backfill_basic`; `hr-junior` (hr: read, own department),
+`hr-middle` (hr: write, own department), `hr-senior` and `hr-lead` (hr:
+admin, whole company) — `0005`, sub-node denies `0008`. Positions get
 them through `PositionRole` (`PUT /api/access/v1/positions/{id}/roles`, or
-`manage.py access_backfill_positions` once, at rollout).
+`manage.py access_backfill_positions` once, at rollout — a position whose
+old explicit key list replaced its level preset gets a named role
+`hr-custom-<slug>-<id>` instead of a level role).
 
 ### Refresh token
 
@@ -1022,14 +1038,14 @@ the finer `depth` map, kept for routing and the `api_view(module=)` gate —
 | Endpoint | Method | Auth | Notes |
 |---|---|---|---|
 | `/api/access/v1/me` | GET | jwt | Caller's resolved permissions in the request's company — fields below |
-| `/api/access/v1/functions` | GET | jwt | Function-registry tree (`module → function → field`) + flat page list, for the roles/permissions editor |
-| `/api/access/v1/roles` | GET, POST | jwt (access/read, write) | Role catalog; global — one role acts the same in every company |
-| `/api/access/v1/roles/{id}` | GET, PATCH, DELETE | jwt (access/read, write) | 409 deleting an `is_system` role |
-| `/api/access/v1/roles/{id}/permissions` | GET, PUT | jwt (access/read, write) | Depth flags per registry node for this role |
+| `/api/access/v1/functions` | GET | access/read | Function-registry tree (`module → function → field`) + flat page list, for the roles/permissions editor |
+| `/api/access/v1/roles` | GET, POST | GET jwt (open); POST access/admin + superuser | Role catalog; global — one role acts the same in every company, so every catalog write is superuser-only |
+| `/api/access/v1/roles/{id}` | PATCH, DELETE | access/admin + superuser | 409 deleting an `is_system` role |
+| `/api/access/v1/roles/{id}/permissions` | GET, PUT | GET access/read; PUT access/admin + superuser | Depth flags per registry node for this role |
 | `/api/access/v1/roles/{id}/holders` | GET | jwt (access/read) | Who holds the role — `position` (via `PositionRole`, fix by editing the position) vs `personal` (`RoleAssignment`, fix by editing the assignment) — named so a role can actually be unassigned before deletion |
-| `/api/access/v1/roles/{id}/copy` | POST | jwt (access/write) | Duplicate a role's permission set under a new code/title |
-| `/api/access/v1/positions/{position_id}/roles` | GET, PUT | jwt (access/read, write) | Roles carried by a position — the normal path, including the cross-company one described below |
-| `/api/access/v1/assignments/{user_id}` | GET, PUT | jwt (access/read, write) | Personal role assignments — the exception path |
+| `/api/access/v1/roles/{id}/copy` | POST | access/admin + superuser | Duplicate a role's permission set under a new code/title |
+| `/api/access/v1/positions/{position_id}/roles` | GET, PUT | GET jwt (open); PUT access/admin + `admin=True` | Roles carried by a position — the normal path, including the cross-company one described below |
+| `/api/access/v1/assignments/{user_id}` | GET, PUT | GET access/read; PUT access/admin + `admin=True` | Personal role assignments — the exception path |
 
 **`GET /me` response** (`MeRead`):
 
