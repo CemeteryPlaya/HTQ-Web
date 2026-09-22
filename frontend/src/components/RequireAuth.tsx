@@ -6,6 +6,10 @@ import { useActiveProfile } from "@/hooks/useActiveProfile";
 import { usePermissions } from "@/hooks/usePermissions";
 import type { RouteRequirement } from "@/app/routing/types";
 import { useTranslation } from 'react-i18next';
+import { companyFromHost } from "@/lib/auth/companySwitch";
+
+/** Экран выбора компании — единственный защищённый маршрут голого домена. */
+const COMPANY_PICKER_PATH = "/companies/choose";
 
 interface RequireAuthProps {
     children: JSX.Element;
@@ -65,6 +69,14 @@ const RequireAuth = ({ children, requires, page }: RequireAuthProps) => {
 
     if (activeProfile?.must_change_password) {
         return <ForcePasswordChange />;
+    }
+
+    // Голый домен: компания не выбрана. Любой защищённый маршрут уводит на
+    // экран выбора — на голом домене у запросов нет контекста компании, и
+    // гейт модуля ответил бы 403 (блок I.2, S4). Исходное место — в
+    // state.from: экран выбора вернёт человека туда уже на поддомене.
+    if (companyFromHost(window.location.host) === null && page !== COMPANY_PICKER_PATH) {
+        return <Navigate to={COMPANY_PICKER_PATH} replace state={{ from: location }} />;
     }
 
     // Страница — слой ВЫШЕ глубины: закрытая отменяет всё, что разрешено

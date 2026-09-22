@@ -4957,6 +4957,15 @@
     "field": {
       "subdomain": "Short address"
     },
-    "subdomainHint": "Latin letters, digits and hyphens; empty — address by slug."
+    "subdomainHint": "Latin letters, digits and hyphens; empty — address by slug.",
+    "picker": {
+      "title": "Choose a company",
+      "subtitle": "You have access to several companies of the group. Choose the one to work in.",
+      "redirecting": "Taking you to your company…",
+      "default": "Primary",
+      "none": "You do not have access to any company of the group.",
+      "noneHint": "Company access is granted by an administrator — please contact them.",
+      "loadError": "Could not load the list of companies."
+    }
   }
 }

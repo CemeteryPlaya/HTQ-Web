@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useMyCompanies } from '@/hooks/useMyCompanies';
-import { companyFromHost, switchCompany } from '@/lib/auth/companySwitch';
+import { companyFromHost, hostLabelOf, switchCompany } from '@/lib/auth/companySwitch';
 
 /**
  * Переключатель компании — навигация на поддомен, не запрос к API
@@ -22,10 +22,19 @@ export function CompanySwitcher({ enabled = true }: { enabled?: boolean }) {
   if (companies.length === 0) return null;
   if (companies.length === 1 && current === null) return null;
 
-  const value = current ?? companies.find((c) => c.is_current)?.slug ?? companies[0].slug;
+  // Значение пункта — метка хоста (псевдоним или слаг, блок I.2), а не слаг:
+  // `current` берётся из хоста, и сравнивать надо в одной системе координат.
+  const value = current
+    ?? hostLabelOf(companies.find((c) => c.is_current) ?? companies[0]);
+
+  const onValueChange = (label: string) => {
+    if (label === current) return;
+    const target = companies.find((c) => hostLabelOf(c) === label);
+    if (target) switchCompany(target);
+  };
 
   return (
-    <Select value={value} onValueChange={(slug) => { if (slug !== current) switchCompany(slug); }}>
+    <Select value={value} onValueChange={onValueChange}>
       <SelectTrigger
         className="h-10 w-auto min-w-[12rem] gap-2 rounded-full"
         aria-label={t('companies.switcher.label', 'Компания')}
@@ -35,7 +44,7 @@ export function CompanySwitcher({ enabled = true }: { enabled?: boolean }) {
       </SelectTrigger>
       <SelectContent>
         {companies.map((c) => (
-          <SelectItem key={c.slug} value={c.slug}>{c.name}</SelectItem>
+          <SelectItem key={c.slug} value={hostLabelOf(c)}>{c.name}</SelectItem>
         ))}
       </SelectContent>
     </Select>

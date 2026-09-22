@@ -8,8 +8,8 @@
  * раньше, чем приедет ответ.
  */
 import { render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AccessLevel } from '@/lib/auth/permissions';
 
@@ -72,7 +72,25 @@ const renderGate = (requires?: { module: string; level: AccessLevel }) =>
     </MemoryRouter>,
   );
 
+/**
+ * Хост страницы. RequireAuth уводит с голого домена на экран выбора компании
+ * (блок I.2), а jsdom по умолчанию стоит на голом `localhost:3000` — поэтому
+ * тесты гейта по модулю живут на поддомене компании, как и настоящие страницы
+ * за гейтом. Без этого каждый из них проверял бы редирект на выбор компании,
+ * а не то, что заявлено в названии.
+ */
+const stubHost = (host: string) => {
+  vi.stubGlobal('location', {
+    host, hostname: host.split(':')[0], pathname: '/gated', search: '', hash: '', protocol: 'http:',
+  });
+};
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 beforeEach(() => {
+  stubHost('htq.localhost:3000');
   useActiveProfile.mockReturnValue({
     activeProfile,
     isLoading: false,
@@ -144,5 +162,78 @@ describe('RequireAuth — гейт по модулю и уровню', () => {
     renderGate({ module: 'hr', level: 'read' });
 
     expect(screen.queryByText('содержимое страницы')).not.toBeInTheDocument();
+  });
+});
+
+describe('RequireAuth — голый домен (блок I.2)', () => {
+  // Маршруты приложения передают `page`, а с ним RequireAuth спрашивает
+  // `pageHidden` — здесь ни одна страница не закрыта.
+  beforeEach(() => {
+    permissionsSpy.mockReturnValue({ ...permissionsOf({ hr: 'write' }), pageHidden: () => false });
+  });
+
+  const PickerProbe = () => {
+    const location = useLocation();
+    const from = (location.state as { from?: { pathname: string } } | null)?.from;
+    return <div>выбор компании; шёл на {from?.pathname ?? '—'}</div>;
+  };
+
+  const renderAt = (path: string) =>
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route
+            path="/gated"
+            element={
+              <RequireAuth page="/gated">
+                <div>содержимое страницы</div>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/companies/choose"
+            element={
+              // Как в App.tsx: `page` — путь своего маршрута.
+              <RequireAuth page="/companies/choose">
+                <PickerProbe />
+              </RequireAuth>
+            }
+          />
+          <Route path="/login" element={<div>страница входа</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+  it('уводит на экран выбора компании и помнит, куда человек шёл', () => {
+    stubHost('localhost:3000');
+
+    renderAt('/gated');
+
+    expect(screen.queryByText('содержимое страницы')).not.toBeInTheDocument();
+    expect(screen.getByText('выбор компании; шёл на /gated')).toBeInTheDocument();
+  });
+
+  it('сам экран выбора на голом домене не уводит по кругу', () => {
+    stubHost('htq.group');
+
+    renderAt('/companies/choose');
+
+    expect(screen.getByText('выбор компании; шёл на —')).toBeInTheDocument();
+  });
+
+  it('неаутентифицированного ведёт на вход, а не на выбор компании', () => {
+    stubHost('htq.group');
+    useActiveProfile.mockReturnValue({
+      activeProfile: null,
+      isLoading: false,
+      error: null,
+      isLoggedIn: false,
+      clearAuthStorage: vi.fn(),
+      refetch: vi.fn(),
+    });
+
+    renderAt('/gated');
+
+    expect(screen.getByText('страница входа')).toBeInTheDocument();
   });
 });

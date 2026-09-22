@@ -18,8 +18,10 @@ vi.mock('@/api/companies', () => ({
 
 const switchCompany = vi.fn();
 const companyFromHost = vi.fn<(host: string) => string | null>();
-vi.mock('@/lib/auth/companySwitch', () => ({
-  switchCompany: (slug: string) => switchCompany(slug),
+vi.mock('@/lib/auth/companySwitch', async (importOriginal) => ({
+  // hostLabelOf — настоящий: переключатель строит по нему значения пунктов.
+  hostLabelOf: (await importOriginal<typeof import('@/lib/auth/companySwitch')>()).hostLabelOf,
+  switchCompany: (company: MyCompany) => switchCompany(company),
   companyFromHost: (host: string) => companyFromHost(host),
 }));
 
@@ -53,6 +55,21 @@ describe('CompanySwitcher', () => {
     renderWithProviders(<CompanySwitcher />);
     await userEvent.click(await screen.findByRole('combobox'));
     await userEvent.click(await screen.findByRole('option', { name: /Hi-Tech Group/ }));
-    expect(switchCompany).toHaveBeenCalledWith('hi-tech-group');
+    expect(switchCompany).toHaveBeenCalledWith(group);
+  });
+
+  it('на поддомене-псевдониме узнаёт текущую компанию и переходит по объекту компании', async () => {
+    // Блок I.2: хост несёт псевдоним (htq), а не слаг — сравнение с текущей
+    // компанией обязано идти по метке хоста, иначе переключатель не узнал бы
+    // свою же компанию.
+    const htqAlias: MyCompany = { ...htq, subdomain: 'htq' };
+    const hts: MyCompany = { slug: 'hi-tech-systems', subdomain: 'hts', name: 'Hi-Tech Systems', kind: 'it', is_default: false, is_current: false };
+    companyFromHost.mockReturnValue('htq');
+    myCompanies.mockResolvedValue({ data: [htqAlias, hts] });
+    renderWithProviders(<CompanySwitcher />);
+    expect(await screen.findByRole('combobox')).toHaveTextContent('Hi-Tech Qazaqstan');
+    await userEvent.click(screen.getByRole('combobox'));
+    await userEvent.click(await screen.findByRole('option', { name: /Hi-Tech Systems/ }));
+    expect(switchCompany).toHaveBeenCalledWith(hts);
   });
 });

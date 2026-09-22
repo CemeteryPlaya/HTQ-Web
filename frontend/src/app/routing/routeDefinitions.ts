@@ -48,6 +48,10 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/manage/projects', component: lazyPages.HRProjects, requiresAuth: true, requires: { module: 'hr', level: 'read' } },
 
   // ─── Personal / messenger / tasks (any logged-in user) ────────────────
+  // Экран выбора компании на голом домене (блок I.2): сюда RequireAuth уводит
+  // любой защищённый маршрут, пока в хосте нет поддомена компании. Гейта
+  // модуля нет намеренно — без компании уровня модуля нет ни у кого.
+  { path: '/companies/choose', component: lazyPages.CompanyPicker, requiresAuth: true },
   { path: '/myprofile', component: lazyPages.MyProfile, requiresAuth: true },
   { path: '/employee/me', component: lazyPages.MyEmployeeCard, requiresAuth: true },
   { path: '/settings', component: lazyPages.Settings, requiresAuth: true },

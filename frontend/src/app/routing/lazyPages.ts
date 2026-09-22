@@ -14,6 +14,7 @@ export const lazyPages = {
   NewsDetail: React.lazy(() => import('@/pages/NewsDetail')),
   Login: React.lazy(() => import('@/pages/Login')),
   Register: React.lazy(() => import('@/pages/Register')),
+  CompanyPicker: React.lazy(() => import('@/pages/CompanyPicker')),
   MyProfile: React.lazy(() => import('@/pages/MyProfile')),
   MyEmployeeCard: React.lazy(() => import('@/pages/MyEmployeeCard')),
   Settings: React.lazy(() => import('@/pages/Settings')),
