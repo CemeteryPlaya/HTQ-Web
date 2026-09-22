@@ -39,6 +39,7 @@ from types import SimpleNamespace
 import pytest
 from django.apps import apps as django_apps
 
+from apps.access import registry
 from apps.access.models import RolePermission
 from apps.access.services.resolve import _nearest
 from apps.hr import legacy_roles
@@ -68,6 +69,18 @@ def _rows(role_code: str) -> dict[str, frozenset[str]]:
     }
 
 
+def _source(nodes: dict[str, frozenset[str]], node: str) -> str:
+    """Откуда пришли признаки узла: сам узел или НАЙДЕННЫЙ предок (T9-C).
+
+    Диагностика расширения обязана назвать строку, которую надо поправить:
+    «<- предок» без имени отправлял искать его по реестру руками.
+    """
+    for candidate in registry.self_and_ancestors(node):
+        if candidate in nodes:
+            return node if candidate == node else f"{node} <- предок {candidate}"
+    return f"{node} (ни у узла, ни у предков строки нет)"
+
+
 #: Область, не признак — см. докстринг модуля.
 SCOPE_KEYS = frozenset({legacy.EMPLOYEES_VIEW_ALL})
 
@@ -86,7 +99,7 @@ def test_seeded_role_answers_every_key_exactly_as_the_old_preset(level):
         node, flags = legacy_roles.KEY_TO_NODE[key]
         has = frozenset(flags) <= _nearest(nodes, node)
         if has and key not in preset:
-            widened.append(f"{key} (через {node}{'' if node in nodes else ' <- предок'})")
+            widened.append(f"{key} (через {_source(nodes, node)})")
         elif not has and key in preset:
             narrowed.append(f"{key} (узел {node}, есть {sorted(_nearest(nodes, node))})")
 

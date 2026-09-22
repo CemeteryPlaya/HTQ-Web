@@ -104,7 +104,7 @@ _SKIPPED = frozenset({
     tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT,
     tokenize.DEDENT, tokenize.ENCODING, tokenize.ENDMARKER,
 })
-_DEF_RE = re.compile(r"^(\s*)def\s+(\w+)\s*\(")
+_DEF_RE = re.compile(r"^(\s*)(?:async\s+)?def\s+(\w+)\s*\(")
 
 
 def _working_code_files():
@@ -137,20 +137,36 @@ def _is_import_line(tok: tokenize.TokenInfo) -> bool:
 
 
 def _enclosing_function(lines: list[str], lineno: int) -> str | None:
-    """Имя ближайшего ``def`` строго меньшего отступа над строкой ``lineno``.
+    """Имя функции, в ТЕЛЕ которой стоит строка ``lineno``, — или ``None``.
 
-    ``None`` для кода на уровне модуля (``_PRESCRIBED = {…}``,
-    ``_PERMISSION_CATALOG``): у него нет функции, которую можно было бы
-    разрешить поимённо, — такой код не исключается никогда.
+    Подъём вверх по блокам: первая непустая строка (не комментарий) с
+    МЕНЬШИМ отступом — заголовок объемлющего блока. ``def``/``async def`` —
+    ответ; иначе (``class``, ``if``, ``with``, перенос выражения) — подъём
+    продолжается уже от её отступа. Раньше граница была «ближайший ``def``
+    меньшего отступа», и строка в теле КЛАССА, объявленного сразу после
+    разрешённой функции модуля, приписывалась этой функции — поимённое
+    исключение молча накрывало чужой код (T9-A финальной волны блока I).
+
+    ``None`` для кода на уровне модуля или класса (``_PRESCRIBED = {…}``,
+    ``_PERMISSION_CATALOG``, атрибуты класса): у него нет функции, которую
+    можно было бы разрешить поимённо, — такой код не исключается никогда.
     """
     line = lines[lineno - 1]
     indent = len(line) - len(line.lstrip())
-    if indent == 0:
-        return None
     for up in range(lineno - 2, -1, -1):
-        m = _DEF_RE.match(lines[up])
-        if m and len(m.group(1)) < indent:
+        if indent == 0:
+            return None
+        candidate = lines[up]
+        stripped = candidate.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        cand_indent = len(candidate) - len(candidate.lstrip())
+        if cand_indent >= indent:
+            continue
+        m = _DEF_RE.match(candidate)
+        if m:
             return m.group(2)
+        indent = cand_indent
     return None
 
 
@@ -325,3 +341,33 @@ def test_hr_level_endpoint_is_not_in_the_self_service_registry():
     from apps.access.self_service import SELF_SERVICE
 
     assert "employee_hr_level" not in SELF_SERVICE["hr"]
+
+
+# ── T9-A: граница объемлющей функции ─────────────────────────────────────
+
+
+def test_enclosing_function_does_not_leak_into_a_following_class():
+    """Строка в теле класса сразу после разрешённой функции модуля — НЕ
+    её тело: поимённое исключение функции не должно её накрывать."""
+    lines = [
+        "def user_has_permission(user_id, permission):",
+        "    return position.permissions",
+        "",
+        "class Leaky:",
+        "    value = position.permissions",
+    ]
+    assert _enclosing_function(lines, 2) == "user_has_permission"
+    assert _enclosing_function(lines, 5) is None
+
+
+def test_enclosing_function_climbs_through_nested_blocks_and_async_def():
+    lines = [
+        "class Service:",
+        "    async def serialize(self, position):",
+        "        if position:",
+        "            data = foo(",
+        "                position.permissions,",
+        "            )",
+    ]
+    assert _enclosing_function(lines, 5) == "serialize"
+    assert _enclosing_function(lines, 1) is None
