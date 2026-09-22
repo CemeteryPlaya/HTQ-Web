@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models.functions import Now
@@ -25,6 +26,15 @@ SLUG_VALIDATOR = RegexValidator(
     "Только строчные латинские буквы, цифры и дефис; первый символ — буква; "
     "не заканчивается дефисом; до 32 символов; \"www\" зарезервирован.",
 )
+
+#: Метки, которые компанией быть не могут. "www" уже запрещён самим
+#: SLUG_VALIDATOR и регуляркой nginx; остальные — технические имена, под
+#: которые поддомены заводят чаще всего (комментарий над server_name в
+#: infra/nginx/default.conf называет это известным пробелом регулярки).
+RESERVED_SUBDOMAINS = frozenset({
+    "www", "api", "admin", "mail", "static", "cdn",
+    "grafana", "media", "sfu", "ws", "localhost",
+})
 
 
 class CompanyKind(models.TextChoices):
@@ -61,6 +71,13 @@ class Company(models.Model):
     """
 
     slug = models.CharField(max_length=32, unique=True, validators=[SLUG_VALIDATOR])
+    #: Короткий адрес компании: htq.htq.group вместо hi-tech-qazaqstan.htq.group.
+    #: Пусто — компания живёт по слагу (стенд, разработка на *.localhost).
+    #: Форма та же, что у слага: её понимает регулярка server_name в nginx.
+    subdomain = models.CharField(
+        max_length=32, unique=True, null=True, blank=True, default=None,
+        validators=[SLUG_VALIDATOR],
+    )
     name = models.CharField(max_length=255)
     kind = models.CharField(max_length=16, choices=CompanyKind.choices)
     country = models.CharField(max_length=2, blank=True, default="", db_default="")
@@ -104,6 +121,37 @@ class Company(models.Model):
     def parent_slug(self) -> str | None:
         """Slug вышестоящей компании — для схем ответа (``from_attributes``)."""
         return self.parent.slug if self.parent_id else None
+
+    def clean(self):
+        """Метка адреса уникальна по ВСЕМ хостам, а не только по своей колонке.
+
+        Один хост обязан резолвиться в одну компанию, поэтому псевдоним не
+        может совпасть со слагом другой компании, а слаг — с чужим
+        псевдонимом. Своя же пара (slug == subdomain) — один и тот же хост,
+        это допустимо.
+        """
+        super().clean()
+        errors = {}
+        if self.subdomain:
+            if self.subdomain in RESERVED_SUBDOMAINS:
+                errors["subdomain"] = (
+                    f"{self.subdomain!r} — зарезервированная метка: "
+                    f"{', '.join(sorted(RESERVED_SUBDOMAINS))}."
+                )
+            elif (Company.objects.filter(slug=self.subdomain)
+                  .exclude(pk=self.pk).exists()):
+                errors["subdomain"] = (
+                    f"{self.subdomain!r} — слаг другой компании; один хост не "
+                    "может вести в две компании."
+                )
+        if self.slug and (Company.objects.filter(subdomain=self.slug)
+                          .exclude(pk=self.pk).exists()):
+            errors["slug"] = (
+                f"{self.slug!r} — псевдоним другой компании; один хост не "
+                "может вести в две компании."
+            )
+        if errors:
+            raise ValidationError(errors)
 
 
 class CompanyServiceLink(models.Model):
