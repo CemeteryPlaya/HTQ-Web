@@ -3260,11 +3260,16 @@ def _get_identity_approver(request):
     return {"user_id": user_id, "user": brief}
 
 
-@api_view(methods=("PUT",), auth="jwt", body=None, module="hr", level="admin")
+# level="write", а не "admin": узел ``hr.identity`` несёт признак edit, а
+# уровень модуля считается по всему поддереву hr.* — на admin поднимается
+# только роль с delete где-нибудь в кадрах. До блока I (1f69716) ручку
+# открывал любой кадровый доступ; admin здесь сузил бы её держателю именной
+# роли (блок I.2, находка n10 финального ревью).
+@api_view(methods=("PUT",), auth="jwt", body=None, module="hr", level="write")
 def _set_identity_approver(request):
     """Назначить подтверждающего.
 
-    ``module="hr", level="admin"`` ПОВЕРХ уже существующей проверки
+    ``module="hr", level="write"`` ПОВЕРХ уже существующей проверки
     (``is_admin or access.has(IDENTITY_MANAGE)``, т.е.
     ``hr.identity.manage`` — только у ``lead``): в отличие от READ/DECIDE-
     ручек этого под-модуля, у НАЗНАЧЕНИЯ подтверждающего нет escape-хода

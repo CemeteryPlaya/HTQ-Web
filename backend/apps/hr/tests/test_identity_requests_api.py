@@ -15,6 +15,8 @@ from apps.hr.models import (
 )
 from apps.hr.services import identity_request_service as svc
 from apps.hr.tests.conftest import auth_headers, make_user
+from apps.users.models import User, UserStatus
+from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/hr/v1/identity-requests"
 APPROVER = "/api/hr/v1/identity-approver/"
@@ -403,3 +405,32 @@ def test_force_key_is_not_part_of_any_level():
     from apps.hr.permissions import IDENTITY_FORCE, LEVEL_PRESETS
 
     assert not any(IDENTITY_FORCE in preset for preset in LEVEL_PRESETS.values())
+
+
+@pytest.mark.django_db
+def test_identity_approver_is_set_by_holder_of_the_identity_node(company_row):
+    """Право назначать подтверждающего — узел hr.identity_requests, а не агрегат модуля.
+
+    До блока I ручка требовала кадрового доступа любого уровня. Уровень
+    ``admin`` на модуле её сузил: именная роль (hr-custom-*) с одним ключом
+    ``hr.identity.manage`` агрегируется в ``write`` и получала 403.
+    """
+    from apps.access.tests.helpers import assign
+
+    user = User.objects.create(
+        username="identity-manager", email="im@htq.test", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    user.set_password("S3cret!Pass1")
+    user.save()
+    assign(company_row, user.id, "hr.identity_requests", "edit")
+    auth = {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user, company_slug=company_row)['access']}",
+            "HTTP_X_HTQ_COMPANY": company_row}
+
+    resp = Client().put(
+        APPROVER,
+        data=json.dumps({"employee_id": None}),
+        content_type="application/json", **auth,
+    )
+
+    assert resp.status_code != 403, resp.content
