@@ -146,5 +146,25 @@ def ensure_position_role(company_slug: str, position_id: int, role_code: str,
     return assignment.ensure_position_role(company_slug, position_id, role_code, scope_kind)
 
 
-__all__ = ["ensure_position_role", "external_holders", "flags_for", "permission_level",
-           "permissions_for", "resolution", "serving_holders", "subordinate_companies"]
+def ensure_basic_role(company_slug: str, user_id: int) -> bool:
+    """Выдать участнику компании базовую роль ``employee-basic`` —
+    идемпотентно (рулинг M финальной волны блока I,
+    ``apps.access.services.assignment.ensure_basic_role``).
+
+    Единственный вызывающий — ``apps.companies`` в точке создания членства
+    (``membership_service.grant_membership``): через неё идут ``company_grant``,
+    ``tenancy_bootstrap --grant-all``, экран участников и стенд. Базовый
+    доступ участникам на день выкатки раздаёт ``access_backfill_basic``;
+    эта функция — всем, кто станет участником после.
+
+    Область — вся компания. Роли нет в каталоге — ``UnknownRole``
+    (``apps.access.services.errors``), а не молчаливое членство без прав.
+    Возвращает ``True``, если назначение создано этим вызовом.
+    """
+    require_service("access")
+    return assignment.ensure_basic_role(company_slug, user_id)
+
+
+__all__ = ["ensure_basic_role", "ensure_position_role", "external_holders", "flags_for",
+           "permission_level", "permissions_for", "resolution", "serving_holders",
+           "subordinate_companies"]

@@ -73,6 +73,41 @@ def reset_company_context(request):
                 cur.execute("SET search_path TO public")
 
 
+@pytest.fixture(autouse=True)
+def reseed_basic_role_for_transactional_tests(request):
+    """Базовая роль ``employee-basic`` на месте и в transaction=True-тестах.
+
+    С финальной волны блока I (рулинг M) создание членства
+    (``membership_service.grant_membership``) выдаёт участнику эту роль и
+    ГРОМКО падает (``UnknownRole``), если её нет в каталоге: на бою это
+    значит «миграции access не применены». В тестовой базе роль сеет
+    миграция ``access/0004``, но pytest-django чистит ``public`` TRUNCATE'ом
+    после КАЖДОГО transaction=True-теста — засеянное миграциями уходит, и
+    следующий такой тест, заводящий членство (``company_grant``,
+    ``tenancy_bootstrap --grant-all``, ``seed_group_demo``), падал бы по чужой
+    причине. Обычные ``django_db``-тесты это не задевает: pytest-django
+    ставит их ВСЕ раньше транзакционных (``get_order_number`` плагина), они
+    видят базу сразу после миграций. Поэтому пересев — только для
+    транзакционных, тем же условием, что у плагина, и сидом самой миграции,
+    а не копией её данных.
+    """
+    from pytest_django.plugin import validate_django_db
+
+    marker = request.node.get_closest_marker("django_db")
+    transactional = bool(marker) and any(validate_django_db(marker)[:2])
+    transactional = transactional or bool(
+        {"transactional_db", "live_server"} & set(request.fixturenames))
+    if transactional:
+        import importlib
+
+        from django.apps import apps as django_apps
+
+        request.getfixturevalue("transactional_db")
+        importlib.import_module(
+            "apps.access.migrations.0004_seed_employee_role").seed(django_apps, None)
+    yield
+
+
 # Прод-режим подмен на один тест. Весь прогон идёт в strict (settings/test.py:
 # fallback поднимает FallbackNotAllowed вместо подмены), и это правильный
 # дефолт — но тесту, который проверяет ПОВЕДЕНИЕ деградации (что вьюха отдала

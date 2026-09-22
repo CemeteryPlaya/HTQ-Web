@@ -21,6 +21,8 @@ filter on the returned is_active themselves"), и заводить второй 
 
 from __future__ import annotations
 
+from django.db import transaction
+
 from apps.users.interface import get_user_brief, get_users_brief, list_users_brief
 
 from ..models import Company, CompanyMembership
@@ -64,11 +66,27 @@ def grant_membership(company: Company, user_id: int, *,
     вторую строку — ``get_or_create`` по тому же ключу, что несёт
     ``uniq_membership``. Возвращает ``True``, если строка создана заново,
     ``False`` — если членство уже было.
+
+    Новое членство сразу получает базовую роль ``employee-basic``
+    (``apps.access.interface.ensure_basic_role``, рулинг M финальной волны
+    блока I): это ЕДИНСТВЕННАЯ точка создания членства — через неё идут
+    ``company_grant``, ``tenancy_bootstrap --grant-all``, экран участников
+    (``POST companies/<slug>/memberships``) и ``seed_group_demo``, — и без
+    роли новый участник получал бы 403 на подбор коллег и весь ``tasks``.
+    Одной транзакцией: членство без роли не остаётся, если выдача упала.
+    Уже существующему членству роль не довыдаётся — это делал перенос
+    ``access_backfill_basic``, а снятую человеком роль повторный grant
+    возвращать не должен.
     """
-    _, created = CompanyMembership.objects.get_or_create(
-        company=company, user_id=user_id,
-        defaults={"is_default": is_default},
-    )
+    from apps.access import interface as access
+
+    with transaction.atomic():
+        _, created = CompanyMembership.objects.get_or_create(
+            company=company, user_id=user_id,
+            defaults={"is_default": is_default},
+        )
+        if created:
+            access.ensure_basic_role(company.slug, user_id)
     return created
 
 

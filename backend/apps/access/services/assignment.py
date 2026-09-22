@@ -96,6 +96,43 @@ def ensure_position_role(company: str, position_id: int, role_code: str,
     return created
 
 
+#: Код базовой роли из ``access/0004_seed_employee_role`` — тот же литерал,
+#: что ``access_backfill_basic.ROLE_CODE`` (сверяет
+#: ``apps/access/tests/test_basic_role_on_membership.py``).
+BASIC_ROLE_CODE = "employee-basic"
+
+
+def ensure_basic_role(company: str, user_id: int) -> bool:
+    """Выдать участнику компании базовую роль — идемпотентно (рулинг M).
+
+    ``employee-basic`` (``access/0004``) — «шаблон дня приёма»: профиль,
+    подбор коллег, задачи, ежедневка. ``access_backfill_basic`` раздал её
+    тем, кто был участником на день выкатки; эта функция выдаёт её каждому
+    НОВОМУ участнику в момент создания членства
+    (``apps.companies.services.membership_service.grant_membership``) — иначе
+    новый человек получал бы 403 на ``users/options`` и весь ``tasks``.
+
+    Область ``COMPANY`` (почему не отдел — докстринг
+    ``access_backfill_basic``). Личное назначение, а не роль должности:
+    базовый доступ есть у участника, а не у штатной единицы, и у человека
+    без кадровой карточки тоже. Уже существующее назначение не трогается.
+    Роли нет в каталоге — ``UnknownRole``: членство без базового доступа
+    хуже громкой ошибки выкатки (миграции ``access`` не применены).
+    Возвращает ``True``, если назначение создано сейчас.
+    """
+    role = Role.objects.filter(code=BASIC_ROLE_CODE, is_system=True).first()
+    if role is None:
+        raise UnknownRole(
+            f"системной роли {BASIC_ROLE_CODE!r} нет в реестре (миграция "
+            f"access.0004 не применена?)"
+        )
+    _row, created = RoleAssignment.objects.get_or_create(
+        company_slug=company, user_id=user_id, role=role,
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+    return created
+
+
 def _check_scope(item: dict) -> None:
     kind, scope_id = item.get("scope_kind"), item.get("scope_id")
     if kind not in ScopeKind.values:

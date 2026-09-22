@@ -519,7 +519,11 @@ request.mark_paid`, `contracts.advance_payment.record_payment`,
       пресет уровня) переносятся именными ролями `hr-custom-<slug>-<id>` —
       после переноса их просмотреть (строки «явный список ключей» сводки);
    5. `manage.py access_backfill_basic` — `employee-basic` каждому
-      действующему участнику; число выданных = число членств;
+      действующему участнику; число выданных = число членств. Только для
+      уже существующих членств: новому участнику базовая роль выдаётся при
+      создании членства (`membership_service.grant_membership` →
+      `access.interface.ensure_basic_role` — `company_grant`, экран
+      участников, `tenancy_bootstrap --grant-all`);
    6. `tenancy_status --json --exact` до и после (без `--exact` — оценки
       планировщика, на свежей базе нули);
    7. и только теперь — код с гейтами под трафик на поддоменах.
