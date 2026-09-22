@@ -40,6 +40,10 @@ def _trusted_origins() -> list[str]:
     public = urlsplit(env("PUBLIC_BASE_URL").strip())
     if public.scheme and public.netloc:
         origins.append(f"{public.scheme}://{public.netloc}")
+        # Компании живут на поддоменах (блок I.2): django-admin и формы,
+        # открытые на htq.htq.group, обязаны проходить проверку CSRF.
+        # Django понимает подстановку одного уровня с версии 4.0.
+        origins.append(f"{public.scheme}://*.{public.netloc}")
     return list(dict.fromkeys(o for o in origins if o))
 
 

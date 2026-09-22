@@ -30,7 +30,9 @@ user_id — int, а не пользовательская строка.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlsplit
 
+from django.conf import settings
 from django.core.cache import cache
 
 from .models import Company, CompanyKind, CompanyMembership, CompanyModule, CompanyStatus
@@ -105,6 +107,27 @@ def resolve_host_label(label: str) -> dict | None:
 
     found = _cached(f"company:label:{label}", produce)
     return found or None
+
+
+def public_url(slug: str) -> str | None:
+    """Адрес компании для ссылок, уходящих наружу: https://<метка>.<корень>.
+
+    Корень берётся из ``PUBLIC_BASE_URL`` (https://htq.group → htq.group).
+    Нужен там, где ссылка ведёт на страницу, читающую таблицы КОМПАНИИ:
+    на голом домене контекста компании нет, и такая страница не найдёт
+    ничего. Пусто — вызывающий остаётся на своём прежнем поведении.
+    """
+    # require_service здесь НЕ зовётся намеренно: реестр компаний —
+    # фундамент, а не отключаемый домен (докстринг модуля).
+    base = (settings.PUBLIC_BASE_URL or "").strip()
+    if not base:
+        return None
+    company = get_company(slug)
+    if company is None:
+        return None
+    parts = urlsplit(base)
+    label = company["subdomain"] or company["slug"]
+    return f"{parts.scheme}://{label}.{parts.netloc}"
 
 
 def is_holding(slug: str) -> bool:

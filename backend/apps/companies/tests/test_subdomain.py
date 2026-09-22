@@ -128,3 +128,31 @@ def test_unknown_label_resolves_to_none():
     from apps.companies import interface
 
     assert interface.resolve_host_label("nope") is None
+
+
+@pytest.mark.django_db
+def test_public_url_uses_alias(settings):
+    from apps.companies import interface
+
+    settings.PUBLIC_BASE_URL = "https://htq.group"
+    Company.objects.create(slug="hi-tech-qazaqstan", name="HTQ",
+                           kind=CompanyKind.CONSTRUCTION, subdomain="htq")
+    assert interface.public_url("hi-tech-qazaqstan") == "https://htq.htq.group"
+
+
+@pytest.mark.django_db
+def test_public_url_falls_back_to_slug(settings):
+    from apps.companies import interface
+
+    settings.PUBLIC_BASE_URL = "https://htq.group"
+    Company.objects.create(slug="acme", name="Acme", kind=CompanyKind.IT)
+    assert interface.public_url("acme") == "https://acme.htq.group"
+
+
+@pytest.mark.django_db
+def test_public_url_is_none_without_public_base_url(settings):
+    from apps.companies import interface
+
+    settings.PUBLIC_BASE_URL = ""
+    Company.objects.create(slug="acme", name="Acme", kind=CompanyKind.IT)
+    assert interface.public_url("acme") is None

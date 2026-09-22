@@ -432,3 +432,36 @@ def test_public_consume_writes_audit_row(auth):
     )
     assert "created" in actions
     assert "open" in actions
+
+
+# ── адрес ссылки: поддомен компании (блок I.2, S3) ──────────────────────────
+
+@pytest.mark.django_db
+def test_share_link_points_at_the_company_subdomain(settings, company_row, hr_admin_auth):
+    """Публичная страница читает таблицы КОМПАНИИ — на голом домене контекста
+    компании нет, поэтому ссылка обязана вести на её поддомен (псевдоним)."""
+    from apps.companies.models import Company
+
+    settings.PUBLIC_BASE_URL = "https://htq.group"
+    Company.objects.filter(slug=company_row).update(subdomain="htq")
+
+    # Заголовок несёт МЕТКУ хоста: у компании с псевдонимом слаг адресом
+    # больше не служит (resolve_host_label), так что и в запросе — псевдоним.
+    headers = {**hr_admin_auth, "HTTP_X_HTQ_COMPANY": "htq"}
+    resp = Client().post(f"{BASE}/", data={"target_type": "org"},
+                         content_type="application/json", **headers)
+
+    assert resp.status_code == 201, resp.content
+    assert resp.json()["url"].startswith("https://htq.htq.group/public/org/")
+
+
+@pytest.mark.django_db
+def test_share_link_without_company_keeps_public_base_url(settings, auth):
+    """Без компании запроса — прежний источник, PUBLIC_BASE_URL."""
+    settings.PUBLIC_BASE_URL = "https://htq.group"
+
+    resp = Client().post(f"{BASE}/", data={"target_type": "org"},
+                         content_type="application/json", **auth)
+
+    assert resp.status_code == 201, resp.content
+    assert resp.json()["url"].startswith("https://htq.group/public/org/")

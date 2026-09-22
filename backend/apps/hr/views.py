@@ -2875,12 +2875,23 @@ def _share_link_public_path(target_type: str) -> str:
 
 
 def _share_link_public_url(request, raw_token: str, target_type: str = "org") -> str:
-    """Строит user-facing публичный URL — порт ``_public_url`` роутера
-    исходника. ``settings.public_base_url`` исходника не имеет здесь прямого
-    аналога (Django-настройки этой аппки его не заводят — граница задачи
-    ограничена ``backend/apps/hr/**``); ``getattr`` с дефолтом воспроизводит
-    тот же "нет — падаем на следующий уровень" фолбэк, что и исходник."""
+    """Публичный адрес share-ссылки.
+
+    Ссылка ведёт на страницу, которая читает таблицы КОМПАНИИ
+    (``public_org_view``/``public_employee_view``), поэтому она обязана
+    указывать на поддомен компании: на голом домене контекста нет и
+    страница не найдёт ничего (блок I.2, S3). ``PUBLIC_BASE_URL`` остаётся
+    вторым источником — для стендов без реестра компаний, заголовки
+    запроса — третьим.
+    """
     path = _share_link_public_path(target_type)
+    company = getattr(request, "company", None)
+    if company:
+        from apps.companies import interface as companies_iface
+        base = companies_iface.public_url(company["slug"])
+        if base:
+            return f"{base}{path}{raw_token}"
+
     base = getattr(django_settings, "PUBLIC_BASE_URL", None)
     if base:
         return f"{base.rstrip('/')}{path}{raw_token}"
