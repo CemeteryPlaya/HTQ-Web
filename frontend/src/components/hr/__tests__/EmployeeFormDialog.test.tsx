@@ -341,6 +341,68 @@ describe('EmployeeFormDialog — статус «уволен» и право п�
   });
 });
 
+describe('EmployeeFormDialog — PATCH только изменённых полей перевода (T10-A)', () => {
+  // Бэкенд требует права перевода при ЛЮБОМ присланном department_id/
+  // position_id/termination_date и статусе «уволен»; форма раньше слала отдел
+  // и должность всегда — middle получал 403 за то, чего не менял.
+  it('нетронутые отдел, должность и статус в PATCH не уходят', async () => {
+    can.mockImplementation(deny('hr.employees.transfer', 'edit'));
+    renderDialog(EMPLOYEE);
+
+    fireEvent.click(await screen.findByText(/Финансовые данные/));
+    await screen.findByDisplayValue('450000.00');
+    save();
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    const [, payload] = mockUpdate.mock.calls[0]!;
+    expect(payload).not.toHaveProperty('department_id');
+    expect(payload).not.toHaveProperty('position_id');
+    expect(payload).not.toHaveProperty('status');
+    expect(payload).not.toHaveProperty('termination_date');
+    expect(payload).toMatchObject({ phone: EMPLOYEE.phone, first_name: EMPLOYEE.first_name });
+  });
+
+  it('изменённый статус уходит', async () => {
+    renderDialog(EMPLOYEE);
+    fireEvent.click(await screen.findByText(/Финансовые данные/));
+    await screen.findByDisplayValue('450000.00');
+
+    const trigger = (await screen.findByText(/Активен/)).closest('button');
+    act(() => {
+      fireEvent.pointerDown(trigger!, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    });
+    fireEvent.click(await screen.findByRole('option', { name: /Неактивен/ }));
+    save();
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    const [, payload] = mockUpdate.mock.calls[0]!;
+    expect(payload).toHaveProperty('status');
+    expect(payload).not.toHaveProperty('department_id');
+  });
+});
+
+describe('EmployeeFormDialog — статус при создании (T10-B)', () => {
+  const statusTrigger = async () => (await screen.findByText(/Активен/)).closest('button');
+
+  it('без права создания селект статуса недоступен — как отдел и должность', async () => {
+    can.mockImplementation(deny('hr.employees', 'create'));
+    renderDialog(null);
+
+    expect(await statusTrigger()).toBeDisabled();
+  });
+
+  it('с правом создания селект открыт, и «Уволен» в ветке создания не закрыт', async () => {
+    renderDialog(null);
+
+    const trigger = await statusTrigger();
+    expect(trigger).not.toBeDisabled();
+    act(() => {
+      fireEvent.pointerDown(trigger!, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    });
+    expect(await screen.findByRole('option', { name: /Уволен/ })).not.toHaveAttribute('aria-disabled', 'true');
+  });
+});
+
 describe('EmployeeFormDialog — досев из аккаунта', () => {
   /** Открыть комбобокс пользователей и выбрать первого. */
   const pickUser = async () => {

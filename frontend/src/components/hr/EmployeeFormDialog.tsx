@@ -193,6 +193,10 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   });
 
   const [form, setForm] = useState(blankForm());
+  // Форма, какой её заполнили из карточки при открытии на редактирование —
+  // эталон для сборки PATCH (T10-A финальной волны блока I): отдел,
+  // должность, статус и дата увольнения уходят, только если их поменяли.
+  const initialFormRef = useRef<ReturnType<typeof blankForm> | null>(null);
   const [prefillOpen, setPrefillOpen] = useState(false);
 
   const [formError, setFormError] = useState<string | null>(null);
@@ -335,6 +339,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     setFormError(null);
     setFieldErrors({});
     if (!employee) {
+      initialFormRef.current = null;
       setForm(blankForm());
       return;
     }
@@ -344,7 +349,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     const userId = employee.user_id ?? (typeof employee.user === 'number' ? employee.user : null);
     const positionId = employee.position_id ?? relationId(employee.position);
     const departmentId = employee.department_id ?? relationId(employee.department);
-    setForm({
+    const filled = {
       ...blankForm(),
       user: userId ? String(userId) : 'none',
       position: positionId ? String(positionId) : 'none',
@@ -359,7 +364,9 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       middle_name: employee.middle_name || '',
       email: employee.email || '',
       avatar_url: employee.avatar_url || '',
-    });
+    };
+    initialFormRef.current = filled;
+    setForm(filled);
   }, [open, employee]);
 
   const saveMutation = useMutation({
@@ -369,8 +376,16 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
 
       if (editing) {
         // EmployeeUpdate — every field optional. Only send what changed.
+        // Отдел, должность, статус и дата увольнения — только если их
+        // поменяли (T10-A финальной волны блока I): бэкенд
+        // (apps/hr/views.py::_update_employee) требует права перевода при
+        // ЛЮБОМ присланном department_id/position_id/termination_date и
+        // статусе «уволен/приостановлен», и middle, сохранивший карточку с
+        // нетронутыми полями, получал бы 403 за то, чего не менял.
+        const initial = initialFormRef.current;
+        const changed = (key: 'status' | 'position' | 'department' | 'date_dismissed') =>
+          !initial || form[key] !== initial[key];
         const patch: Record<string, unknown> = {
-          status: backendStatus,
           phone: form.phone || undefined,
           bio: form.notes || undefined,
           first_name: form.first_name || undefined,
@@ -379,9 +394,10 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
           email: form.email || undefined,
           avatar_url: form.avatar_url || undefined,
         };
-        if (form.position !== 'none') patch.position_id = Number(form.position);
-        if (form.department !== 'none') patch.department_id = Number(form.department);
-        if (form.date_dismissed) patch.termination_date = form.date_dismissed;
+        if (changed('status')) patch.status = backendStatus;
+        if (changed('position') && form.position !== 'none') patch.position_id = Number(form.position);
+        if (changed('department') && form.department !== 'none') patch.department_id = Number(form.department);
+        if (changed('date_dismissed') && form.date_dismissed) patch.termination_date = form.date_dismissed;
         if (cardT2) patch.card_t2 = cardT2;
         // card_t2 может нести зарплату/паспорт/ИИН — в консоль их не пишем,
         // только какие секции ушли (см. заголовок «Финансовые данные
@@ -904,7 +920,9 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               )}
               <label className="grid gap-2 text-sm">
                 {t('hr.pages.employees.fields.status')}
-                <Select value={form.status} onValueChange={(value) => setForm({ ...form, status: value })} disabled={!canWriteBasic}>
+                {/* При создании статус — часть новой карточки: тот же признак,
+                    что у отдела и должности (T10-B финальной волны блока I). */}
+                <Select value={form.status} onValueChange={(value) => setForm({ ...form, status: value })} disabled={editing ? !canWriteBasic : !canCreateEmployee}>
                   <SelectTrigger>
                     <SelectValue placeholder={t('hr.pages.employees.placeholders.selectStatus')} />
                   </SelectTrigger>

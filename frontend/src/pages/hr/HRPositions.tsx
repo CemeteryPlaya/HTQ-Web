@@ -190,7 +190,6 @@ const HRPositions = () => {
     level: string;
     weight: string;
     grade: string;
-    hr_level: HRLevelKey | '';
     permissions: string[];
     is_manager: boolean;
     external_hierarchy: 'inherit' | 'none';
@@ -201,7 +200,6 @@ const HRPositions = () => {
     level: '',
     weight: '100',
     grade: '1',
-    hr_level: '',
     permissions: [],
     is_manager: false,
     external_hierarchy: 'inherit',
@@ -260,11 +258,16 @@ const HRPositions = () => {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const permissions = (form.hr_level || form.permissions.length > 0)
-        ? {
-            hr_level: form.hr_level || null,
-            permissions: form.permissions,
-          }
+      // Кадровый доступ колонка `Position.permissions` больше не даёт (блок I:
+      // права — роли должности, диалог «Роли должности»), поэтому `hr_level`
+      // форма не шлёт вовсе (рулинг N финальной волны). Список ключей уходит
+      // целиком, как пришёл: галочки показаны только для ключей вне `hr.*`
+      // (сегодня — `contracts.*`, их читает `apps.contracts` через
+      // `hr.interface.user_has_permission`), а скрытые `hr.*` должности
+      // возвращаются нетронутыми. У правки должности, у которой список был,
+      // пустой список уходит тоже — иначе снять последнюю галочку нельзя.
+      const permissions = (form.permissions.length > 0 || editingPos?.permissions)
+        ? { permissions: form.permissions }
         : null;
       // For system positions: skip title/department/is_active in the
       // payload — backend rejects those edits with 409.
@@ -300,8 +303,7 @@ const HRPositions = () => {
         level: '',
         weight: '100',
         grade: '1',
-        hr_level: '',
-        permissions: [],
+          permissions: [],
         is_manager: false,
         external_hierarchy: 'inherit',
         serves_subsidiaries: false,
@@ -399,7 +401,6 @@ const HRPositions = () => {
       level: firstLevel ? String(firstLevel.level_number) : '',
       weight: String(firstLevel?.weight_from ?? 100),
       grade: '1',
-      hr_level: '',
       permissions: [],
       is_manager: false,
       external_hierarchy: 'inherit',
@@ -419,7 +420,6 @@ const HRPositions = () => {
       level: String(pos.level),
       weight: String(pos.weight),
       grade: String(pos.grade),
-      hr_level: pos.permissions?.hr_level ?? '',
       permissions: pos.permissions?.permissions ?? [],
       is_manager: pos.is_manager ?? false,
       external_hierarchy: pos.external_hierarchy ?? 'inherit',
@@ -439,7 +439,10 @@ const HRPositions = () => {
 
   const groupedPermissions = useMemo(() => {
     const groups = new Map<string, PermissionCatalogItem[]>();
-    for (const item of permissionsCatalog?.permissions ?? []) {
+    // Только ключи ВНЕ кадрового домена: `hr.*` колонка больше не выдаёт
+    // (рулинг N финальной волны блока I) — кадровые права выдаёт диалог
+    // «Роли должности».
+    for (const item of (permissionsCatalog?.permissions ?? []).filter((p) => !p.key.startsWith('hr.'))) {
       if (!groups.has(item.group)) groups.set(item.group, []);
       groups.get(item.group)!.push(item);
     }
@@ -705,35 +708,6 @@ const HRPositions = () => {
                         )}
                       </label>
                     </details>
-
-                    <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
-                      <div className="text-sm font-semibold">{t('hr.positions.hrAccessLevel')}</div>
-                      <p className="text-xs text-muted-foreground">
-                        {t('hr.positions.hrAccessHint')}
-                      </p>
-                      <Select
-                        value={form.hr_level || 'none'}
-                        onValueChange={(v) => {
-                          const level = v === 'none' ? '' : (v as HRLevelKey);
-                          const preset = level
-                            ? (permissionsCatalog?.level_presets?.[level] ?? [])
-                            : [];
-                          setForm({ ...form, hr_level: level, permissions: preset });
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder={t('hr.positions.noHrAccess')} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">{t('hr.positions.noHrAccess')}</SelectItem>
-                          {permissionsCatalog?.hr_levels.map((lvl) => (
-                            <SelectItem key={lvl.value} value={lvl.value}>
-                              {lvl.label} — {lvl.description}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
 
                     <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
                       <div className="text-sm font-semibold">
