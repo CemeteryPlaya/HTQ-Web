@@ -17,8 +17,10 @@
 порядком, каким их видел живой запрос до переноса, — иначе перенос выдал бы
 не те права, что были. Это единственное законное применение угадывания по
 названию; сторож ``apps/hr/tests/test_single_rbac_guards.py`` не пускает
-никого другого. Когда перенос на всех боевых компаниях выполнен и команда
-уходит, уходит и этот файл.
+никого другого. Тому же вызывающему служит ``_explicit_keys_from_permissions``
+— явный список ключей должности, третий источник старой модели (рулинг K
+финальной волны блока I). Когда перенос на всех боевых компаниях выполнен и
+команда уходит, уходит и этот файл.
 """
 from __future__ import annotations
 
@@ -52,6 +54,29 @@ def _level_from_permissions(position) -> HRLevel | None:
     if hr_level in _VALID_LEVELS:
         return hr_level  # type: ignore[return-value]
     return None
+
+
+def _explicit_keys_from_permissions(position) -> tuple[bool, list[str]]:
+    """Явный список ключей должности — третий источник старой модели.
+
+    Финальная волна блока I, рулинг K: до задачи 9 непустой
+    ``Position.permissions["permissions"]`` ЗАМЕНЯЛ пресет уровня целиком
+    (``1f69716:backend/apps/hr/access.py::resolve_hr_access`` —
+    ``frozenset(список) & ALL_KEYS``). Перенос обязан его знать, иначе
+    держатель такой должности остался бы без прав либо получил бы полный
+    пресет вместо суженного руками списка.
+
+    ``(список_непуст, отсортированное пересечение с ALL_KEYS)`` — первое
+    ровно то условие, которое проверял старый резолвер, ДО пересечения:
+    список из одних неизвестных ключей тоже отменял пресет уровня.
+    """
+    from apps.hr.permissions import ALL_KEYS
+
+    perms = getattr(position, "permissions", None)
+    raw = perms.get("permissions") if isinstance(perms, dict) else None
+    if not isinstance(raw, list) or not raw:
+        return False, []
+    return True, sorted({str(key) for key in raw} & ALL_KEYS)
 
 
 def classify_hr_level(employee: Employee | None) -> HRLevel | None:

@@ -70,6 +70,42 @@ resolve._position_role_ids`` читает ``PositionRole`` на каждом б�
 ОТДЕЛЬНОЙ категорией сводки, рядом с конфликтом: человек на бою обязан
 увидеть, что для этой должности перенос выбирал МЕЖДУ уровнями, а не
 подтверждённое согласие всех держателей. Разбор — руками, не автоматикой.
+
+⚠️ Явный список ключей должности (финальная волна блока I, рулинг K).
+Старый резолвер знал ТРИ источника, а не два: непустой
+``Position.permissions["permissions"]`` ЗАМЕНЯЛ пресет уровня целиком
+(``1f69716:backend/apps/hr/access.py::resolve_hr_access``) — права держателя
+были ровно ``список ∩ ALL_KEYS``. Роль уровня такую должность не переносит:
+без ``hr_level`` она осталась бы без роли (сужение), с уровнем и суженным
+руками списком получила бы полный пресет (расширение). Поэтому должность с
+непустым списком получает ИМЕННУЮ роль ``hr-custom-<slug>-<position_id>``
+(``is_system=False``, «Кадры: должность <название> (<slug>)»): узлы —
+объединение ``KEY_TO_NODE`` по ключам списка (``apps.hr.interface.
+legacy_key_nodes``), плюс явный ЗАПРЕТ на каждом «ключевом» под-узле
+выданного узла, которого список не даёт, — иначе под-узел унаследовал бы
+признаки предка (``hr.employees: view`` открыл бы зарплату и паспорт), то
+самое расширение, которое для ролей уровней закрыла ``access/0008``.
+Область — ``COMPANY``, если в списке ``hr.employees.view.all`` (ровно так
+старая модель считала ``can_read_all``), иначе ``DEPARTMENT``.
+
+Слаг компании в коде роли — не украшение: каталог ролей общий на всю группу
+(``public``), а id должностей нумеруются в каждой схеме заново — у двух
+компаний есть «должность 5», и ``hr-custom-5`` второй компании досталась бы
+роль первой.
+
+Если вычисленные узлы и область ДОСЛОВНО совпадают с одной из ролей уровня
+(список = пресет уровня — так форма должности и сохраняла список: выбор
+уровня в ней заполнял галочки пресетом), должность получает эту роль
+уровня: выдача та же самая, а каталог не зарастает копиями системных ролей.
+Совпадение сверяется со строками роли в БД, а не с названием уровня.
+
+Ключи вне таблицы (``DEFERRED_KEYS`` — чужой ключ ``contracts``) в роль не
+идут и печатаются: ``contracts`` читает их из колонки сам. Список, в котором
+кадровых ключей нет вовсе, роли не даёт — печатается отдельной строкой.
+Каждая именная роль печатается строкой сводки (должность, ключи, узлы,
+область), в ``--dry-run`` тоже; после переноса их нужно просмотреть.
+Повторный запуск роль не пересоздаёт и её узлы не переписывает (человек мог
+поправить роль в каталоге) — расхождение с вычисленным печатается.
 """
 
 from __future__ import annotations
@@ -77,8 +113,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 
-from apps.access.models import PositionRole, Role, ScopeKind
+from apps.access.models import PositionRole, Role, RolePermission, ScopeKind
 
 #: Тот же код, что ``apps.hr.legacy_roles.ROLE_CODES`` (задача 1) — сюда
 #: НЕ импортируется напрямую: ``apps.hr`` для ``apps.access`` соседняя аппка,
@@ -107,6 +144,76 @@ SCOPE_KIND_BY_LEVEL: dict[str, str] = {
 }
 
 
+#: Ключ, по которому старая модель давала «всю компанию» (``can_read_all``).
+VIEW_ALL_KEY = "hr.employees.view.all"
+
+_FLAG_COLUMNS = {"view": "can_view", "create": "can_create",
+                 "edit": "can_edit", "delete": "can_delete"}
+_FLAG_ORDER = ("view", "create", "edit", "delete")
+
+
+def custom_role_code(slug: str, position_id: int) -> str:
+    return f"hr-custom-{slug}-{position_id}"
+
+
+def custom_role_nodes(
+    keys, key_to_node: dict[str, tuple[str, tuple[str, ...]]],
+) -> tuple[dict[str, frozenset[str]], list[str]]:
+    """Узлы именной роли по явному списку ключей + ключи вне таблицы.
+
+    Узлы — объединение признаков ``key_to_node`` по ключам списка. Затем
+    каждый узел таблицы, лежащий СТРОГО ниже выданного и списком не
+    выданный, получает пустой набор — запрет: глубина наследуется вниз
+    (``resolve._nearest``), и без него ``hr.employees: view`` дал бы
+    ``hr.employees.salary``. Правило то же, что у ролей уровней после
+    ``access/0008`` — сверяет
+    ``test_backfill_positions.py::test_custom_nodes_of_each_preset_equal_the_level_role``.
+    Ключи вне таблицы (отложенные) — второй элемент ответа, в роль не идут.
+    """
+    granted: dict[str, set[str]] = {}
+    deferred: list[str] = []
+    for key in sorted(set(keys)):
+        if key not in key_to_node:
+            deferred.append(key)
+            continue
+        node, flags = key_to_node[key]
+        granted.setdefault(node, set()).update(flags)
+    table_nodes = {node for node, _flags in key_to_node.values()}
+    nodes = {node: frozenset(flags) for node, flags in granted.items()}
+    for node in sorted(table_nodes - set(granted)):
+        if any(node.startswith(parent + ".") for parent in granted):
+            nodes[node] = frozenset()
+    return nodes, deferred
+
+
+def _format_nodes(nodes: dict[str, frozenset[str]]) -> str:
+    return ", ".join(
+        f"{node}={'+'.join(f for f in _FLAG_ORDER if f in flags) or 'запрет'}"
+        for node, flags in sorted(nodes.items())
+    )
+
+
+@dataclass
+class _Custom:
+    position_id: int
+    title: str
+    code: str
+    keys: tuple[str, ...]
+    deferred: tuple[str, ...]
+    nodes: dict[str, frozenset[str]]
+    scope_kind: str
+    #: "создаётся" | "уже есть" | "узлы отличаются" | "конфликт"
+    status: str
+    existing_codes: tuple[str, ...] = ()
+
+
+@dataclass
+class _NoHrKeys:
+    position_id: int
+    title: str
+    keys: tuple[str, ...]
+
+
 @dataclass
 class _Conflict:
     position_id: int
@@ -132,6 +239,8 @@ class _CompanyStats:
     skipped_no_level: int = 0
     conflicts: list[_Conflict] = field(default_factory=list)
     divergent: list[_Divergence] = field(default_factory=list)
+    custom: list[_Custom] = field(default_factory=list)
+    no_hr_keys: list[_NoHrKeys] = field(default_factory=list)
 
     @property
     def granted(self) -> int:
@@ -139,7 +248,9 @@ class _CompanyStats:
 
     @property
     def skipped(self) -> int:
-        return self.skipped_no_level + len(self.conflicts)
+        custom_conflicts = sum(1 for c in self.custom if c.status == "конфликт")
+        return (self.skipped_no_level + len(self.conflicts) + custom_conflicts
+                + len(self.no_hr_keys))
 
 
 class Command(BaseCommand):
@@ -192,9 +303,17 @@ class Command(BaseCommand):
                 "применена?): " + ", ".join(sorted(missing))
             )
         hr_role_ids = {role.id for role in roles_by_code.values()}
+        # Строки ролей уровней — эталон, с которым сравнивается именная роль:
+        # совпали узлы и область — та же выдача, роль уровня вместо копии.
+        codes_by_id = {role.id: code for code, role in roles_by_code.items()}
+        level_rows: dict[str, dict[str, frozenset[str]]] = {
+            code: {} for code in roles_by_code
+        }
+        for row in RolePermission.objects.filter(role_id__in=hr_role_ids):
+            level_rows[codes_by_id[row.role_id]][row.node] = row.flags
 
         all_stats = [
-            self._process_company(slug, roles_by_code, hr_role_ids, dry_run)
+            self._process_company(slug, roles_by_code, hr_role_ids, level_rows, dry_run)
             for slug in slugs
         ]
 
@@ -203,13 +322,15 @@ class Command(BaseCommand):
         if len(all_stats) > 1:
             self._print_grand_summary(all_stats, dry_run)
 
-    def _process_company(self, slug, roles_by_code, hr_role_ids, dry_run) -> _CompanyStats:
+    def _process_company(self, slug, roles_by_code, hr_role_ids, level_rows,
+                         dry_run) -> _CompanyStats:
         from apps.hr import interface as hr
         from htqweb.tenancy.db import use_company
 
         stats = _CompanyStats(slug=slug)
         with use_company(slug):
             positions = hr.list_positions_hr_levels()
+            key_to_node = hr.legacy_key_nodes()
             stats.total = len(positions)
 
             existing_by_position: dict[int, set[int]] = {}
@@ -223,13 +344,24 @@ class Command(BaseCommand):
             for position in positions:
                 level = position["hr_level"]
 
-                # Расхождение печатается НЕЗАВИСИМО от того, что случится с
-                # ролью дальше (создана/уже верна/конфликт/пропуск): если
-                # первый держатель не даёт уровня (level is None), а другой
-                # держатель этой же должности его даёт, должность будет
-                # пропущена ниже — и это ЕЩЁ важнее увидеть в сводке, не
-                # только сам факт разногласия.
-                if position["divergent"]:
+                if position["explicit_list"]:
+                    # Явный список заменял пресет уровня целиком (рулинг K):
+                    # уровень — и разногласие держателей о нём — для прав
+                    # такой должности не значил ничего, поэтому расхождение
+                    # здесь не печатается.
+                    level = self._explicit_list(
+                        slug, position, key_to_node, level_rows, roles_by_code,
+                        existing_by_position, stats, dry_run,
+                    )
+                    if level is None:
+                        continue
+                elif position["divergent"]:
+                    # Расхождение печатается НЕЗАВИСИМО от того, что случится
+                    # с ролью дальше (создана/уже верна/конфликт/пропуск):
+                    # если первый держатель не даёт уровня (level is None), а
+                    # другой держатель этой же должности его даёт, должность
+                    # будет пропущена ниже — и это ЕЩЁ важнее увидеть в
+                    # сводке, не только сам факт разногласия.
                     stats.divergent.append(_Divergence(
                         position_id=position["id"], title=position["title"],
                         holder_levels=position["holder_levels"], chosen_level=level,
@@ -267,18 +399,124 @@ class Command(BaseCommand):
 
         return stats
 
+    def _explicit_list(self, slug, position, key_to_node, level_rows,
+                       roles_by_code, existing_by_position, stats,
+                       dry_run) -> str | None:
+        """Должность с непустым явным списком ключей (рулинг K).
+
+        Уровень — если вычисленная роль дословно (узлы и область) совпала с
+        ролью уровня: дальше должность идёт обычным путём уровня. ``None`` —
+        должность обработана здесь: именная роль либо строка «кадровых
+        ключей в списке нет».
+        """
+        keys = tuple(position["explicit_keys"])
+        nodes, deferred = custom_role_nodes(keys, key_to_node)
+        if not nodes:
+            stats.no_hr_keys.append(_NoHrKeys(
+                position_id=position["id"], title=position["title"], keys=keys,
+            ))
+            return None
+
+        scope_kind = ScopeKind.COMPANY if VIEW_ALL_KEY in keys else ScopeKind.DEPARTMENT
+        for level, code in ROLE_CODE_BY_LEVEL.items():
+            if level_rows.get(code) == nodes and SCOPE_KIND_BY_LEVEL[level] == scope_kind:
+                return level
+
+        entry = _Custom(
+            position_id=position["id"], title=position["title"],
+            code=custom_role_code(slug, position["id"]), keys=keys,
+            deferred=tuple(deferred), nodes=nodes, scope_kind=scope_kind,
+            status="создаётся",
+        )
+        stats.custom.append(entry)
+
+        existing_level_ids = existing_by_position.get(position["id"], set())
+        if existing_level_ids:
+            # Роль уровня уже стоит (кадровик или прежний прогон) — решение
+            # человека не отменяем, как и у конфликта ролей уровней.
+            entry.status = "конфликт"
+            entry.existing_codes = tuple(sorted(
+                code for code, role in roles_by_code.items()
+                if role.id in existing_level_ids
+            ))
+            return None
+
+        role = Role.objects.filter(code=entry.code).first()
+        if role is not None:
+            current = {row.node: row.flags for row in RolePermission.objects.filter(role=role)}
+            entry.status = "уже есть" if current == nodes else "узлы отличаются"
+            if PositionRole.objects.filter(
+                company_slug=slug, position_id=position["id"], role=role,
+            ).exists():
+                stats.already_correct += 1
+                return None
+
+        stats.created += 1
+        if dry_run:
+            return None
+        with transaction.atomic():
+            if role is None:
+                title = f"Кадры: должность {position['title']}"[:230]
+                role = Role.objects.create(
+                    code=entry.code, title=f"{title} ({slug})", is_system=False,
+                )
+                RolePermission.objects.bulk_create([
+                    RolePermission(role=role, node=node, **{
+                        column: flag in flags for flag, column in _FLAG_COLUMNS.items()
+                    })
+                    for node, flags in sorted(nodes.items())
+                ])
+            PositionRole.objects.get_or_create(
+                company_slug=slug, position_id=position["id"], role=role,
+                defaults={"scope_kind": scope_kind},
+            )
+        return None
+
     def _print_company_summary(self, stats: _CompanyStats, dry_run: bool) -> None:
         prefix = "[dry-run] " if dry_run else ""
         divergent_note = (
             f", расхождений по держателям {len(stats.divergent)}"
             if stats.divergent else ""
         )
+        custom_note = (
+            f", именных ролей по явному списку ключей {len(stats.custom)}"
+            if stats.custom else ""
+        )
         self.stdout.write(self.style.SUCCESS(
             f"{prefix}Компания {stats.slug}: должностей всего {stats.total}, "
             f"роль назначена {stats.granted} (создано сейчас {stats.created}, "
             f"уже было верно {stats.already_correct}), пропущено {stats.skipped}"
-            f"{divergent_note}."
+            f"{divergent_note}{custom_note}."
         ))
+        for custom in stats.custom:
+            deferred = (
+                f"; не перенесены (чужие ключи, модуль читает их из колонки "
+                f"сам): {', '.join(custom.deferred)}" if custom.deferred else ""
+            )
+            if custom.status == "конфликт":
+                tail = (f" — должность уже несёт {', '.join(custom.existing_codes)}: "
+                        f"не тронуто, решите вручную")
+                style = self.style.WARNING
+            elif custom.status == "узлы отличаются":
+                tail = " — роль уже есть, но её узлы отличаются от вычисленных: не переписана"
+                style = self.style.WARNING
+            else:
+                tail = f" — роль {custom.status}"
+                style = self.style.NOTICE
+            self.stdout.write(style(
+                f"  - явный список ключей: должность #{custom.position_id} "
+                f"«{custom.title}» → именная роль {custom.code}; "
+                f"ключи: {', '.join(custom.keys)}; узлы: {_format_nodes(custom.nodes)}; "
+                f"область: {custom.scope_kind}{deferred}{tail}."
+            ))
+        for entry in stats.no_hr_keys:
+            self.stdout.write(self.style.WARNING(
+                f"  - явный список без кадровых ключей: должность "
+                f"#{entry.position_id} «{entry.title}» "
+                f"({', '.join(entry.keys) or 'ни одного известного ключа'}) — "
+                f"кадровой роли нет (список заменял пресет уровня); "
+                f"проверьте вручную."
+            ))
         if stats.skipped_no_level:
             self.stdout.write(
                 f"  - без сигнала об уровне (не HR-профиль и нет явного "

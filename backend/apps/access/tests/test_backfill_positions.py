@@ -24,9 +24,13 @@ from django.core.management.base import CommandError
 from apps.access.management.commands.access_backfill_positions import (
     ROLE_CODE_BY_LEVEL,
     SCOPE_KIND_BY_LEVEL,
+    custom_role_code,
+    custom_role_nodes,
 )
-from apps.access.models import PositionRole, Role, RoleAssignment, ScopeKind
+from apps.access.models import PositionRole, Role, RoleAssignment, RolePermission, ScopeKind
+from apps.access.services.resolve import _nearest
 from apps.hr import legacy_roles
+from apps.hr import permissions as legacy
 from htqweb.tenancy.db import use_company
 
 _seed_migration = importlib.import_module(
@@ -386,3 +390,249 @@ def test_no_company_flag_processes_all_active_companies(two_company_schemas, cap
     assert PositionRole.objects.filter(
         company_slug=slug_b, position_id=position_b.id, role__code="hr-junior",
     ).exists()
+
+
+# ── Финальная волна блока I, рулинг K: явный список ключей должности ──────
+#
+# Старый резолвер (``1f69716:backend/apps/hr/access.py::resolve_hr_access``)
+# знал ТРИ источника: непустой ``Position.permissions["permissions"]``
+# ЗАМЕНЯЛ пресет уровня целиком. Перенос, смотревший только на уровень,
+# молча терял таких держателей (без уровня — ни одной роли) или расширял их
+# (уровень + суженный список — полный пресет). Первый тест ниже — зонд
+# финального ревьюера (``final-review.md``, F1), повторённый как тест.
+
+_SEED_0008 = importlib.import_module("apps.access.migrations.0008_hr_role_subnode_denies")
+
+#: Под-узлы ``hr.employees``, у которых есть свой старый ключ: именная роль с
+#: ``hr.employees`` без их ключей обязана нести на них явный запрет.
+_EMPLOYEE_SUBNODES = (
+    "hr.employees.family", "hr.employees.identity", "hr.employees.passport",
+    "hr.employees.salary", "hr.employees.transfer",
+)
+
+
+def _seed_all_roles() -> None:
+    _seed_roles()
+    _SEED_0008.seed(django_apps, SimpleNamespace())
+
+
+def _role_rows(role) -> dict[str, frozenset[str]]:
+    return {row.node: row.flags for row in RolePermission.objects.filter(role=role)}
+
+
+def test_probe_f1_list_without_level_gets_a_custom_role(company_schema, capsys):
+    """Зонд F1: «Бухгалтер» без ``hr_level`` и без HR-маркеров, но с явным
+    списком ``[hr.employees.view, hr.documents.view]``. Старая модель пускала
+    держателя (``has_access=True``, ``has("hr.employees.view")``); перенос до
+    рулинга K — «без сигнала об уровне», ``PositionRole`` пуст."""
+    _seed_all_roles()
+    slug = company_schema["slug"]
+    keys = [legacy.EMPLOYEES_VIEW, legacy.DOCUMENTS_VIEW]
+    with use_company(slug):
+        dep = _department("Бухгалтерия", "buh")
+        position = _position("Бухгалтер", dep, weight=40,
+                             permissions={"hr_level": None, "permissions": keys})
+        _employee(position, dep, "buh@htq.test")
+
+    _run(company=slug)
+
+    link = PositionRole.objects.get(company_slug=slug, position_id=position.id)
+    assert link.role.code == custom_role_code(slug, position.id)
+    assert link.role.is_system is False
+    assert link.scope_kind == ScopeKind.DEPARTMENT
+    assert _role_rows(link.role) == {
+        "hr.employees": frozenset({"view"}),
+        "hr.documents": frozenset({"view"}),
+        **{node: frozenset() for node in _EMPLOYEE_SUBNODES},
+    }
+    out = capsys.readouterr().out
+    assert "явный список ключей" in out
+    assert f"#{position.id}" in out
+    assert "hr.documents.view, hr.employees.view" in out
+    assert "hr.employees.salary=запрет" in out
+    assert "область: department" in out
+    assert "без сигнала об уровне" not in out
+
+
+def test_level_with_narrowed_list_gets_custom_role_not_the_level_role(
+        company_schema, capsys):
+    """Уровень senior + список, суженный руками (сняты финансы): старая
+    модель давала ровно список, а не пресет. Роль уровня была бы
+    расширением — должность получает именную роль."""
+    _seed_all_roles()
+    slug = company_schema["slug"]
+    keys = sorted(legacy.LEVEL_PRESETS["senior"]
+                  - {legacy.CARD_FINANCIAL_VIEW, legacy.CARD_FINANCIAL_EDIT})
+    with use_company(slug):
+        dep = _department("Отдел кадров", "hr-narrow")
+        position = _position("HR-специалист", dep, weight=41,
+                             permissions={"hr_level": "senior", "permissions": keys})
+        _employee(position, dep, "narrow@htq.test")
+
+    _run(company=slug)
+
+    links = list(PositionRole.objects.filter(company_slug=slug, position_id=position.id))
+    assert [link.role.code for link in links] == [custom_role_code(slug, position.id)]
+    rows = _role_rows(links[0].role)
+    assert rows["hr.employees.salary"] == frozenset()
+    assert rows["hr.employees.passport"] == frozenset({"view", "edit"})
+    # view.all в списке — вся компания, как старый can_read_all.
+    assert links[0].scope_kind == ScopeKind.COMPANY
+
+
+@pytest.mark.parametrize(("keys", "scope"), [
+    (["hr.employees.view", "hr.employees.view.all"], ScopeKind.COMPANY),
+    (["hr.employees.view", "hr.reports.view"], ScopeKind.DEPARTMENT),
+])
+def test_custom_role_scope_follows_view_all(company_schema, keys, scope):
+    _seed_all_roles()
+    slug = company_schema["slug"]
+    with use_company(slug):
+        dep = _department("Склад", f"sklad-{scope}")
+        position = _position("Кладовщик", dep, weight=42,
+                             permissions={"permissions": keys})
+
+    _run(company=slug)
+
+    link = PositionRole.objects.get(company_slug=slug, position_id=position.id)
+    assert link.role.code == custom_role_code(slug, position.id)
+    assert link.scope_kind == scope
+
+
+def test_custom_role_second_run_creates_nothing(company_schema, capsys):
+    _seed_all_roles()
+    slug = company_schema["slug"]
+    with use_company(slug):
+        dep = _department("Бухгалтерия", "buh-rerun")
+        position = _position("Бухгалтер", dep, weight=43, permissions={
+            "permissions": [legacy.EMPLOYEES_VIEW, legacy.DOCUMENTS_VIEW]})
+
+    _run(company=slug)
+    capsys.readouterr()
+    _run(company=slug)
+    out = capsys.readouterr().out
+
+    assert "создано сейчас 0" in out
+    assert "уже было верно 1" in out
+    assert "роль уже есть" in out
+    assert Role.objects.filter(code=custom_role_code(slug, position.id)).count() == 1
+    assert PositionRole.objects.filter(
+        company_slug=slug, position_id=position.id).count() == 1
+
+
+def test_custom_role_dry_run_prints_the_line_and_writes_nothing(company_schema, capsys):
+    _seed_all_roles()
+    slug = company_schema["slug"]
+    with use_company(slug):
+        dep = _department("Бухгалтерия", "buh-dry")
+        position = _position("Бухгалтер", dep, weight=44, permissions={
+            "permissions": [legacy.EMPLOYEES_VIEW]})
+
+    _run(company=slug, dry_run=True)
+    out = capsys.readouterr().out
+
+    assert "[dry-run]" in out
+    assert custom_role_code(slug, position.id) in out
+    assert "создано сейчас 1" in out
+    assert not Role.objects.filter(code=custom_role_code(slug, position.id)).exists()
+    assert not PositionRole.objects.filter(company_slug=slug).exists()
+
+
+def test_list_equal_to_a_level_preset_gets_that_level_role(company_schema, capsys):
+    """Форма должности сохраняла список = пресет выбранного уровня (+ ключ
+    contracts галочкой). Именная роль вышла бы копией роли уровня — перенос
+    выдаёт саму роль уровня, каталог не зарастает копиями."""
+    _seed_all_roles()
+    slug = company_schema["slug"]
+    keys = sorted(legacy.LEVEL_PRESETS["middle"]
+                  | {legacy.CONTRACTS_ADVANCE_PAYMENT_RECORD_PAYMENT})
+    with use_company(slug):
+        dep = _department("Отдел кадров", "hr-preset")
+        position = _position("HR-специалист", dep, weight=45,
+                             permissions={"hr_level": "middle", "permissions": keys})
+
+    _run(company=slug)
+
+    link = PositionRole.objects.get(company_slug=slug, position_id=position.id)
+    assert link.role.code == "hr-middle"
+    assert link.scope_kind == ScopeKind.DEPARTMENT
+    assert not Role.objects.filter(code__startswith="hr-custom-").exists()
+
+
+def test_list_without_hr_keys_gets_no_role_and_is_reported(company_schema, capsys):
+    """Только ключ contracts: кадровых прав список не давал (а заменял
+    пресет уровня) — роли нет, строка в сводке."""
+    _seed_all_roles()
+    slug = company_schema["slug"]
+    with use_company(slug):
+        dep = _department("Бухгалтерия", "buh-contracts")
+        position = _position("Бухгалтер", dep, weight=46, permissions={
+            "hr_level": "senior",
+            "permissions": [legacy.CONTRACTS_ADVANCE_PAYMENT_RECORD_PAYMENT]})
+
+    _run(company=slug)
+
+    assert not PositionRole.objects.filter(
+        company_slug=slug, position_id=position.id).exists()
+    out = capsys.readouterr().out
+    assert "явный список без кадровых ключей" in out
+    assert f"#{position.id}" in out
+
+
+def test_custom_role_codes_do_not_collide_across_companies(two_company_schemas):
+    """Каталог ролей общий, id должностей в схемах свои: одна и та же
+    «должность 9001» в двух компаниях — две разные именные роли."""
+    from apps.hr.models import Position
+
+    _seed_all_roles()
+    slug_a, slug_b = two_company_schemas
+    for slug, keys in ((slug_a, [legacy.EMPLOYEES_VIEW]),
+                       (slug_b, [legacy.DOCUMENTS_VIEW])):
+        with use_company(slug):
+            dep = _department("Бухгалтерия", f"buh-{slug}")
+            Position.objects.create(id=9001, title="Бухгалтер", department=dep,
+                                    weight=47, permissions={"permissions": keys})
+
+    _run()
+
+    role_a = PositionRole.objects.get(company_slug=slug_a, position_id=9001).role
+    role_b = PositionRole.objects.get(company_slug=slug_b, position_id=9001).role
+    assert role_a.id != role_b.id
+    assert "hr.employees" in _role_rows(role_a)
+    assert set(_role_rows(role_b)) == {"hr.documents"}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("level", ["junior", "middle", "senior", "lead"])
+def test_custom_nodes_of_each_preset_equal_the_level_role(level):
+    """Правило именной роли, применённое к пресету уровня, даёт ДОСЛОВНО
+    строки засеянной роли уровня (0005 + явные запреты 0008) — то есть
+    правило запретов то же, и замена «список = пресет → роль уровня» точна."""
+    _seed_all_roles()
+    nodes, deferred = custom_role_nodes(legacy.LEVEL_PRESETS[level], legacy_roles.KEY_TO_NODE)
+    assert deferred == []
+    role = Role.objects.get(code=legacy_roles.ROLE_CODES[level])
+    assert nodes == _role_rows(role)
+
+
+@pytest.mark.parametrize("key", sorted(legacy.ALL_KEYS - legacy_roles.DEFERRED_KEYS))
+def test_single_key_custom_role_grants_only_that_key(key):
+    """Точность по ключу: роль из одного ключа отвечает «да» только на него
+    и на ключи ТОГО ЖЕ узла, чьи признаки он покрывает (складывание ключей в
+    узел — свойство модели узлов, у ролей уровней то же). Ключ под-узла и
+    ключ предка — «нет»: запрет на под-узле и отсутствие строки у предка."""
+    nodes, _deferred = custom_role_nodes([key], legacy_roles.KEY_TO_NODE)
+    own_node, own_flags = legacy_roles.KEY_TO_NODE[key]
+    for other, (node, flags) in legacy_roles.KEY_TO_NODE.items():
+        has = frozenset(flags) <= _nearest(nodes, node)
+        expected = other == key or (node == own_node and set(flags) <= set(own_flags))
+        assert has == expected, (key, other)
+
+
+def test_deferred_keys_are_left_out_of_the_role():
+    nodes, deferred = custom_role_nodes(
+        [legacy.EMPLOYEES_VIEW, legacy.CONTRACTS_ADVANCE_PAYMENT_RECORD_PAYMENT],
+        legacy_roles.KEY_TO_NODE,
+    )
+    assert deferred == [legacy.CONTRACTS_ADVANCE_PAYMENT_RECORD_PAYMENT]
+    assert nodes["hr.employees"] == frozenset({"view"})

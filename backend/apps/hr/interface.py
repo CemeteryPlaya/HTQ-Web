@@ -226,12 +226,28 @@ def list_positions_hr_levels() -> list[dict]:
     explicit-переопределении: оно не зависит от держателя, поэтому все
     держатели такой должности неизбежно дают один и тот же уровень.
 
+    ``explicit_list``/``explicit_keys`` (финальная волна блока I, рулинг K):
+    ТРЕТИЙ источник старой модели. До задачи 9 непустой список
+    ``Position.permissions["permissions"]`` ЗАМЕНЯЛ пресет уровня целиком —
+    права держателя были ровно ``список ∩ ALL_KEYS``, а уровень решал только
+    «есть ли доступ вообще» (``1f69716:backend/apps/hr/access.py::
+    resolve_hr_access``). ``explicit_list`` — список непуст (именно это
+    условие проверял старый резолвер, до пересечения); ``explicit_keys`` —
+    отсортированное пересечение с ``apps.hr.permissions.ALL_KEYS``, пустое,
+    если списка нет (``apps.hr.access._explicit_keys_from_permissions``).
+    Решение, во что список переносится, — за вызывающим
+    (``access_backfill_positions``): здесь только данные.
+
     Действует в контексте ТЕКУЩЕЙ компании, как ``substitutes_for``/
     ``participant_position``: вызывающий сам входит в схему нужной компании
     через ``htqweb.tenancy.db.use_company``.
     """
     require_service("hr")
-    from apps.hr.access import _level_from_permissions, classify_hr_level
+    from apps.hr.access import (
+        _explicit_keys_from_permissions,
+        _level_from_permissions,
+        classify_hr_level,
+    )
 
     positions = list(Position.objects.all().order_by("id"))
     if not positions:
@@ -262,6 +278,7 @@ def list_positions_hr_levels() -> list[dict]:
             holder_levels = ()
 
         divergent = len(holder_levels) > 1
+        explicit_list, explicit_keys = _explicit_keys_from_permissions(position)
         result.append({
             "id": position.id,
             "title": position.title,
@@ -269,8 +286,27 @@ def list_positions_hr_levels() -> list[dict]:
             "hr_level": level,
             "divergent": divergent,
             "holder_levels": holder_levels if divergent else (),
+            "explicit_list": explicit_list,
+            "explicit_keys": explicit_keys,
         })
     return result
+
+
+def legacy_key_nodes() -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Старый кадровый ключ → (узел реестра прав, признаки глубины).
+
+    Копия ``apps.hr.legacy_roles.KEY_TO_NODE`` для ``apps.access`` — тот
+    раскладывает явный список ключей должности в именную роль
+    (``access_backfill_positions``, рулинг K финальной волны блока I) и
+    импортировать ``legacy_roles`` напрямую не вправе
+    (``apps/core/tests/test_app_isolation.py``). Ключи ``DEFERRED_KEYS``
+    (чужой ключ ``contracts``) в таблице отсутствуют — ровно как в
+    ``KEY_TO_NODE``: вызывающий узнаёт отложенный ключ по его отсутствию.
+    """
+    require_service("hr")
+    from apps.hr.legacy_roles import KEY_TO_NODE
+
+    return {key: (node, tuple(flags)) for key, (node, flags) in KEY_TO_NODE.items()}
 
 
 def resolve_position_users(position_ids: list[int]) -> dict[int, list[int]]:

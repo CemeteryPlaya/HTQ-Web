@@ -30,7 +30,9 @@
    ``PositionOut.permissions`` остаётся в API, потому что через него в
    колонку попадают ключи contracts (Ruling B); ``access.
    _level_from_permissions`` — эвристика переноса, читает только ``hr_level``
-   (Ruling C).
+   (Ruling C); ``access._explicit_keys_from_permissions`` — явный список
+   ключей, третий источник старой модели, тоже только для переноса
+   (Ruling K финальной волны).
 3. ``Position.permissions`` никто не ПИШЕТ — сиды, ``participant_service``,
    ``group_structures`` перестали. Форму колонки (``"hr_level"``) называют
    только те же три функции плюс ``list_positions_hr_levels`` (отдаёт
@@ -77,7 +79,8 @@ HEURISTIC_CALLERS_ALLOWED: dict[str, frozenset[str]] = {
 COLUMN_READERS_ALLOWED: dict[str, frozenset[str]] = {
     "interface.py": frozenset({"user_has_permission"}),           # Ruling A
     "services/position_service.py": frozenset({"serialize"}),     # Ruling B
-    "access.py": frozenset({"_level_from_permissions"}),          # Ruling C
+    # Ruling C; Ruling K (финальная волна) — явный список ключей для переноса.
+    "access.py": frozenset({"_level_from_permissions", "_explicit_keys_from_permissions"}),
 }
 
 #: Кто вправе называть форму колонки (``"hr_level"``, ``"permissions": …``)
