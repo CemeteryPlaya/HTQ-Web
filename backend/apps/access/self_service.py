@@ -262,27 +262,28 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         # проверки прав (комментарий над секцией в ``apps/hr/views.py``:
         # "любой залогиненный пользователь может создавать/менять/удалять
         # чужие вакансии/отклики" — странность исходника, не баг порта).
-        # Первый же ``module="hr"`` был бы сужением.
+        # Первый же ``module="hr"`` был бы сужением. Исключение — DELETE
+        # (``_close_vacancy``, ``_delete_application``): сознательное
+        # исключение №3 блока I (рулинг O финальной волны) поставило их под
+        # ``module="hr", level="admin"`` — в реестре их больше нет.
         "_list_vacancies": "open",
         "_create_vacancy": "open",
         "_get_vacancy": "open",
         "_update_vacancy": "open",
-        "_close_vacancy": "open",
         "vacancy_applications": "open",
         "_list_applications": "open",
         "_create_application": "open",
         "applications_archive": "open",
         "_get_application": "open",
         "_update_application": "open",
-        "_delete_application": "open",
         "change_application_status": "open",
         # /time-tracking/* — та же странность исходника, тот же комментарий:
         # ВСЕ 8 ручек, включая POST/PUT/DELETE, используют только обычный
-        # ``auth="jwt"``, ни одна не проверяет HR-права.
+        # ``auth="jwt"``, ни одна не проверяет HR-права. DELETE
+        # (``_delete_time_entry``) — под ``hr:admin`` (исключение №3, рулинг O).
         "_list_time_entries": "open",
         "_create_time_entry": "open",
         "_update_time_entry": "open",
-        "_delete_time_entry": "open",
         "time_daily_report": "open",
         "time_weekly_report": "open",
         "time_monthly_report": "open",
@@ -293,7 +294,9 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         "_list_personnel_history": "open",
         # /documents/* — комментарий над секцией в ``apps/hr/views.py``:
         # исходник НЕ зовёт ``require_hr_write`` нигде в documents.py.
-        # Список/чтение/удаление — буквально без проверки, ``open``.
+        # Список/чтение — буквально без проверки, ``open``. Удаление
+        # (``_delete_document``) — под ``hr:admin``: сознательное исключение
+        # №3 блока I (рулинг O финальной волны), в реестре его нет.
         # ``_upload_document`` (JSON-ветка `POST /documents/`) в реестре
         # НЕТ намеренно — раунд правок 1 задачи 6 поставил её под
         # ``module="hr", level="write"`` РЯДОМ с multipart-веткой
@@ -305,7 +308,6 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         # ``apps/hr/views.py``, по образцу записи отделов задачи 5.
         "_list_documents": "open",
         "_get_document": "open",
-        "_delete_document": "open",
         # /pmo/* — та же пара, что у departments/positions/org в задаче 5:
         # reads голым ``auth="jwt"``, writes под ``admin=True`` (получают
         # ``module="hr", level="admin"`` в декораторе, в реестре не значатся).

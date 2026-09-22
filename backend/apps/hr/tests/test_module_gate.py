@@ -910,3 +910,77 @@ def test_hr_is_in_translated_apps():
     from apps.access.self_service import TRANSLATED_APPS
 
     assert "hr" in TRANSLATED_APPS
+
+
+# ── Сознательное исключение №3 (рулинг O финальной волны блока I) ─────────
+#
+# Разрушающие ручки, которые до блока были голым auth="jwt" и остались в
+# реестре как ``open``: закрытие вакансии, удаление отклика, записи учёта
+# времени, документа. Основание — то же, что у удаления отделов (задача 5,
+# рулинг I-2): кнопка в UI видна только кадровику с правом писать по всей
+# компании (seeded — hr-senior/hr-lead, агрегат admin), поэтому гейт admin
+# сужает лишь тех, кого UI сюда не пускал. Создание/правка — по-прежнему open.
+
+
+def _destructive_target(kind: str, target_employee):
+    """(URL, «ресурс ещё цел?») для каждой из четырёх ручек."""
+    from apps.hr.models import Application, Document, TimeEntry, Vacancy
+
+    if kind == "vacancy":
+        obj = Vacancy.objects.create(title="Инженер", department=target_employee.department,
+                                     position=target_employee.position, status="open")
+        return f"{BASE}/vacancies/{obj.id}/", lambda: Vacancy.objects.get(id=obj.id).status == "open"
+    if kind == "application":
+        vacancy = Vacancy.objects.create(title="Инженер", department=target_employee.department,
+                                         position=target_employee.position)
+        obj = Application.objects.create(vacancy=vacancy, candidate_name="И",
+                                         candidate_email="cand@htq.test")
+        return f"{BASE}/applications/{obj.id}/", Application.objects.filter(id=obj.id).exists
+    if kind == "time_entry":
+        obj = TimeEntry.objects.create(employee=target_employee, date=datetime.date(2026, 1, 5),
+                                       start_time=datetime.time(9, 0), end_time=datetime.time(17, 0))
+        return f"{BASE}/time-tracking/entries/{obj.id}/", TimeEntry.objects.filter(id=obj.id).exists
+    obj = Document.objects.create(employee=target_employee, title="Т", doc_type="other",
+                                  file_path="/files/a.pdf", file_size=1)
+    return f"{BASE}/documents/{obj.id}/", Document.objects.filter(id=obj.id).exists
+
+
+_DESTRUCTIVE = ("vacancy", "application", "time_entry", "document")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", _DESTRUCTIVE)
+def test_staff_without_roles_cannot_run_destructive_open_handles(
+        client, staff_without_roles, target_employee, kind):
+    url, intact = _destructive_target(kind, target_employee)
+    assert client.delete(url, **staff_without_roles).status_code == 403
+    assert intact()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", _DESTRUCTIVE)
+def test_hr_middle_cannot_run_destructive_open_handles(
+        client, middle_employee, target_employee, kind):
+    """middle — ``hr:write`` со своим отделом: кнопки удаления в UI у него
+    нет (``companyWide`` на экранах), гейт admin его и не пускает."""
+    _emp, head = middle_employee
+    url, intact = _destructive_target(kind, target_employee)
+    assert client.delete(url, **head).status_code == 403
+    assert intact()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", _DESTRUCTIVE)
+def test_hr_senior_runs_destructive_open_handles_as_before(
+        client, senior_employee, target_employee, kind):
+    _emp, head = senior_employee
+    url, intact = _destructive_target(kind, target_employee)
+    assert client.delete(url, **head).status_code == 204
+    assert not intact()
+
+
+def test_destructive_handles_left_the_open_registry():
+    from apps.access.self_service import SELF_SERVICE
+
+    gone = {"_close_vacancy", "_delete_application", "_delete_time_entry", "_delete_document"}
+    assert gone.isdisjoint(SELF_SERVICE["hr"])

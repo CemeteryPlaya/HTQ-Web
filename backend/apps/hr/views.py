@@ -1595,7 +1595,14 @@ def _update_vacancy(request, id: int, data: schemas.VacancyUpdate):
         return json_error("Vacancy not found", 404)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+# Сознательное исключение №3 блока I (рулинг O финальной волны): до блока
+# ручка была голым auth="jwt" — разрушающая операция, открытая любому
+# вошедшему. Основание то же, что у удаления отделов (задача 5, рулинг I-2):
+# единственный путь из UI — кнопка на экране под hr:read, видимая только
+# кадровику с правом писать по всей компании (seeded — hr-senior/hr-lead,
+# агрегат модуля admin), поэтому гейт сужает лишь тех, кого UI сюда не
+# пускал. Создание/правка того же ресурса остаются open.
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _close_vacancy(request, id: int):
     # DELETE в исходнике — НЕ физическое удаление: close_vacancy помечает
     # status="closed" + closed_at=today и оставляет строку (контракт, не баг).
@@ -1684,7 +1691,14 @@ def _update_application(request, id: int, data: schemas.ApplicationUpdate):
         return json_error("Application not found", 404)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+# Сознательное исключение №3 блока I (рулинг O финальной волны): до блока
+# ручка была голым auth="jwt" — разрушающая операция, открытая любому
+# вошедшему. Основание то же, что у удаления отделов (задача 5, рулинг I-2):
+# единственный путь из UI — кнопка на экране под hr:read, видимая только
+# кадровику с правом писать по всей компании (seeded — hr-senior/hr-lead,
+# агрегат модуля admin), поэтому гейт сужает лишь тех, кого UI сюда не
+# пускал. Создание/правка того же ресурса остаются open.
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_application(request, id: int):
     try:
         rec_svc.delete_application(id)
@@ -1784,7 +1798,14 @@ def _update_time_entry(request, id: int, data: schemas.TimeEntryUpdate):
         return json_error("Time entry not found", 404)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+# Сознательное исключение №3 блока I (рулинг O финальной волны): до блока
+# ручка была голым auth="jwt" — разрушающая операция, открытая любому
+# вошедшему. Основание то же, что у удаления отделов (задача 5, рулинг I-2):
+# единственный путь из UI — кнопка на экране под hr:read, видимая только
+# кадровику с правом писать по всей компании (seeded — hr-senior/hr-lead,
+# агрегат модуля admin), поэтому гейт сужает лишь тех, кого UI сюда не
+# пускал. Создание/правка того же ресурса остаются open.
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_time_entry(request, id: int):
     try:
         time_svc.delete_entry(id)
@@ -2514,7 +2535,14 @@ def _patch_document(request, id: int, data: schemas.DocumentPatch):
         return json_error("Document not found", 404)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+# Сознательное исключение №3 блока I (рулинг O финальной волны): до блока
+# ручка была голым auth="jwt" — разрушающая операция, открытая любому
+# вошедшему. Основание то же, что у удаления отделов (задача 5, рулинг I-2):
+# единственный путь из UI — кнопка на экране под hr:read, видимая только
+# кадровику с правом писать по всей компании (seeded — hr-senior/hr-lead,
+# агрегат модуля admin), поэтому гейт сужает лишь тех, кого UI сюда не
+# пускал. Создание/правка того же ресурса остаются open.
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
 def _delete_document(request, id: int):
     try:
         doc_svc.delete_document(id)

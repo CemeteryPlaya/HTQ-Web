@@ -9,7 +9,9 @@ application.py (ApplicationOut), app/schemas/common.py (PaginatedResponse),
 ВСЕ 13 эндпойнтов — ``get_current_user`` исходника (обычный jwt), БЕЗ
 ``require_hr_write``/``admin=True`` — в отличие от positions/org, запись
 вакансий/откликов не защищена coarse-гейтом is_elevated в исходнике. Это
-странность исходника, не баг порта.
+странность исходника, не баг порта. Исключение с финальной волны блока I
+(рулинг O, сознательное исключение №3): оба DELETE — под ``module="hr",
+level="admin"``; их тесты ниже идут от держателя admin (``hr_admin_auth``).
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
   * список — конверт PaginatedResponse {items,total,page,pages,limit};
@@ -246,9 +248,9 @@ def test_vacancy_update_404(auth):
 # ── DELETE /vacancies/{id}/ (close, не физическое удаление) ─────────────────
 
 @pytest.mark.django_db
-def test_vacancy_delete_closes_not_removes(auth, dep, pos):
+def test_vacancy_delete_closes_not_removes(hr_admin_auth, dep, pos):
     v = _vac(dep, pos, status="open")
-    resp = Client().delete(f"{VBASE}/{v.id}/", **auth)
+    resp = Client().delete(f"{VBASE}/{v.id}/", **hr_admin_auth)
     assert resp.status_code == 204
     v.refresh_from_db()
     assert Vacancy.objects.filter(id=v.id).exists()
@@ -257,9 +259,17 @@ def test_vacancy_delete_closes_not_removes(auth, dep, pos):
 
 
 @pytest.mark.django_db
-def test_vacancy_delete_404(auth):
-    resp = Client().delete(f"{VBASE}/999999/", **auth)
+def test_vacancy_delete_404(hr_admin_auth):
+    resp = Client().delete(f"{VBASE}/999999/", **hr_admin_auth)
     assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_vacancy_delete_is_denied_to_a_plain_user(auth, dep, pos):
+    v = _vac(dep, pos, status="open")
+    assert Client().delete(f"{VBASE}/{v.id}/", **auth).status_code == 403
+    v.refresh_from_db()
+    assert v.status == "open"
 
 
 # ── GET /vacancies/{id}/applications ─────────────────────────────────────────
@@ -496,18 +506,25 @@ def test_application_update_404(auth):
 # ── DELETE /applications/{id}/ ───────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_application_delete_204(auth, dep, pos):
+def test_application_delete_204(hr_admin_auth, dep, pos):
     v = _vac(dep, pos)
     a = _app(v)
-    resp = Client().delete(f"{ABASE}/{a.id}/", **auth)
+    resp = Client().delete(f"{ABASE}/{a.id}/", **hr_admin_auth)
     assert resp.status_code == 204
     assert not Application.objects.filter(id=a.id).exists()
 
 
 @pytest.mark.django_db
-def test_application_delete_404(auth):
-    resp = Client().delete(f"{ABASE}/999999/", **auth)
+def test_application_delete_404(hr_admin_auth):
+    resp = Client().delete(f"{ABASE}/999999/", **hr_admin_auth)
     assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_application_delete_is_denied_to_a_plain_user(auth, dep, pos):
+    a = _app(_vac(dep, pos))
+    assert Client().delete(f"{ABASE}/{a.id}/", **auth).status_code == 403
+    assert Application.objects.filter(id=a.id).exists()
 
 
 # ── POST /applications/{id}/status ───────────────────────────────────────────

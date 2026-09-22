@@ -20,7 +20,9 @@ apps/hr/services/document_service.py.
     только на multipart-ветке снимался бы простой сменой заголовка на
     JSON — обоснование см. комментарий над `_upload_document` в
     `apps/hr/views.py`, тот же приём, что запись отделов в задаче 5.
-    Открытым (без гейта) на записи `/documents/*` остаётся только DELETE.
+    DELETE с финальной волны блока I (рулинг O, сознательное исключение
+    №3) — под ``module="hr", level="admin"``: открытой записи на
+    `/documents/*` не осталось.
   * /employees/{id}/documents — модульный гейт + _require_visible_employee
     (та же пара, что history), НЕ admin=True.
 
@@ -232,16 +234,23 @@ def test_get_document_returns_full_shape(auth, emp):
 
 
 @pytest.mark.django_db
-def test_delete_document_plain_jwt_user_can_delete(auth, emp):
+def test_delete_document_hr_admin_deletes(hr_admin_auth, auth, emp):
     doc = _doc(emp)
-    resp = Client().delete(f"{BASE}/{doc.id}/", **auth)
+    resp = Client().delete(f"{BASE}/{doc.id}/", **hr_admin_auth)
     assert resp.status_code == 204
     assert Client().get(f"{BASE}/{doc.id}/", **auth).status_code == 404
 
 
 @pytest.mark.django_db
-def test_delete_document_not_found(auth):
-    assert Client().delete(f"{BASE}/999999/", **auth).status_code == 404
+def test_delete_document_plain_jwt_user_is_denied(auth, emp):
+    doc = _doc(emp)
+    assert Client().delete(f"{BASE}/{doc.id}/", **auth).status_code == 403
+    assert Document.objects.filter(id=doc.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_document_not_found(hr_admin_auth):
+    assert Client().delete(f"{BASE}/999999/", **hr_admin_auth).status_code == 404
 
 
 @pytest.mark.django_db(transaction=True)
