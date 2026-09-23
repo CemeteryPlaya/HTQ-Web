@@ -50,12 +50,36 @@ for c in bad:
 
 Если команда ничего не напечатала — коллизий нет, можно продолжать.
 
+## Предпроверка до окна: членство администраторов
+
+На голом домене любой защищённый маршрут уводит на экран выбора компании,
+а экран без членства говорит «нет доступа» и предлагает только выход. До
+блока I.2 платформенный администратор открывал `/admin/companies` и прочее
+прямо на голом домене; после выкатки суперпользователь без членства
+заперт — останется только django-admin. Проверка — до окна, на боевой БД:
+
+```bash
+cd backend
+../.venv/Scripts/python.exe manage.py shell -c "
+from django.contrib.auth import get_user_model
+from apps.companies.models import CompanyMembership
+members = set(CompanyMembership.objects.values_list('user_id', flat=True))
+for u in get_user_model().objects.filter(is_superuser=True) | get_user_model().objects.filter(is_staff=True):
+    if u.id not in members:
+        print(u.id, u.username)
+"
+```
+
+Пусто — у каждого администратора есть членство хотя бы в одной компании.
+Иначе выдать до окна: `manage.py company_grant --company <slug> --user <username>`
+(идемпотентна).
+
 Если напечатала строку — **остановиться**. Компания со слагом из списка
 не является той компанией, что должна получить этот псевдоним (сверить
 по `SUBDOMAINS` в миграции 0006: `hi-tech-qazaqstan → htq`,
 `hi-tech-systems → hts`, `kazakhstan-engineering-group → keg`,
 `hi-tech-group → group`). Псевдоним у неё нужно сменить (или явно
-назначить ей другой слаг) ДО выкатки — `PATCH /api/companies/v1/<slug>`
+назначить ей другой слаг) ДО выкатки — `PATCH /api/companies/v1/companies/<slug>`
 платформенным администратором либо `manage.py shell`. Миграция 0006
 идемпотентна и трогает только пустой `subdomain`, поэтому её саму
 менять не нужно — правится только конфликтующая компания.
@@ -123,7 +147,7 @@ CSRF-origin'ов (`backend/htqweb/settings/base.py::_trusted_origins`) оба
 Новый образ `backend-web`/`backend-asgi`/`backend-worker` со всеми
 миграциями. При старте контейнера (`RUN_MIGRATIONS` в
 `docker-compose.yml` по умолчанию `1` — `${RUN_MIGRATIONS:-1}`, ни
-`.env`/`.env.example`/`.env.production` его не переопределяют, поэтому
+`.env`, ни `.env.example` его не переопределяют, поэтому
 убедиться явно, что флаг включён) `docker-entrypoint.sh` сам вызывает
 `manage.py migrate_shared` — общие аппки: роли `hr-*`
 (`access/0005`–`0008`), поле `Role.company_slug`, поле
@@ -180,11 +204,34 @@ curl -s -o /dev/null -w '%{http_code}\n' https://hi-tech-qazaqstan.htq.group/api
 # раньше AuthenticationMiddleware и раньше диспетчера api_view).
 ```
 
+Псевдонимы — у всех четырёх компаний после `migrate_shared` (и у тех, что
+заведены позже `companies/0006` через `company_create --subdomain`):
+
+```bash
+cd backend
+../.venv/Scripts/python.exe manage.py shell -c "
+from apps.companies.models import Company
+for c in Company.objects.order_by('slug'):
+    print(c.slug, c.subdomain)
+"
+# ожидается: hi-tech-group group, hi-tech-qazaqstan htq,
+# hi-tech-systems hts, kazakhstan-engineering-group keg — ни одного None
+```
+
+Пустой `subdomain` у компании из этого списка — компания осталась на адресе
+по слагу; проставить `PATCH /api/companies/v1/companies/<slug>`
+(`{"subdomain": "<метка>"}`) до открытия трафика.
+
 Дополнительно (руками, не curl):
 
 - вход на `https://htq.group/login` → после входа при нескольких
   компаниях — экран выбора компании (`/companies/choose`), при одной —
   немедленный редирект на её хост;
+- на поддомене вы уже вошли: второго входа нет, открывается та страница,
+  куда вы шли (refresh-cookie родительского домена меняется на access-токен
+  до редиректа на `/login`);
+- у каждого администратора есть членство хотя бы в одной компании (см.
+  предпроверку выше);
 - переключение компаний через `CompanySwitcher` уводит на
   `<псевдоним>.htq.group`;
 - конференция на `https://htq.htq.group` — сигналинг проходит проверку
@@ -201,6 +248,12 @@ curl -s -o /dev/null -w '%{http_code}\n' https://hi-tech-qazaqstan.htq.group/api
 
 Только после того, как шаг 8 прошёл полностью. Пользователи приходят на
 `htq.group`, входят и штатно попадают на свою компанию.
+
+**Share-ссылки, выданные до выкатки, перестанут открываться.** Фронт строил
+их из адреса страницы, то есть на голом домене `htq.group`, а там нет
+контекста компании: публичная страница ответит 404 «ссылка
+недействительна». Предупредить тех, кто рассылал ссылки на оргструктуру и
+карточки сотрудников, — выдать их заново уже с поддомена компании.
 
 ## Разработка
 

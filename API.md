@@ -283,7 +283,11 @@ What the rollout moves over, and what it deliberately doesn't:
 - Revoking a membership (`DELETE …/memberships/{user_id}`) leaves the user's
   `PositionRole`/`RoleAssignment` rows in place (customer decision). They are
   inert: without a membership neither login nor refresh issues a token for
-  that company (`apps.companies.interface.user_may_enter_company`).
+  that company (`apps.companies.interface.user_may_enter_company`). Caveat:
+  an access token issued before the revocation keeps working, with all its
+  roles, until it expires (`JWT_ACCESS_TTL_MIN`, 60 min) — `api_view` checks
+  the `company` claim, not the membership. That was already so before
+  block I.2.
 - A membership created in django-admin goes through
   `membership_service.grant_membership` too, so it gets `employee-basic` like
   every other path.
