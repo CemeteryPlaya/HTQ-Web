@@ -229,9 +229,12 @@ export interface Agreement {
   retention_rate: string;
   retention_amount: string | null;
   start_date: string | null;
+  /** «Срок действия по»: после него новые оплаты по договору не заводятся. */
   end_date: string | null;
   term_comment: string;
   amount: string;
+  /** Позиции договора (ТЗ 9.2); у старых договоров может быть пусто. */
+  items?: AgreementItem[];
   /** Единственная предоплата по договору, если она создана. */
   advance_payment_id: number | null;
   /** Закрытая предоплата; исходную сумму договора не меняет. */
@@ -244,6 +247,7 @@ export interface Agreement {
   remaining_amount: string | null;
   currency: string;
   file_id: string | null;
+  /** «Дата договора» — по документу; входит в уникальность договора. */
   signed_date: string | null;
   status: AgreementStatus;
   /**
@@ -333,6 +337,41 @@ export interface LinkedRequest {
   budget_line_id: number | null;
   submitted_at: string | null;
   finalized_at: string | null;
+}
+
+/** Позиция договора. `request_item_key` — строка заявки («items:3»); пусто —
+ *  позиция вписана вручную (договор без заявки). */
+export interface AgreementItem {
+  id: number;
+  line_no: number;
+  request_item_key: string;
+  name: string;
+  unit: string;
+  quantity: string;
+  /** `null` — у открытого договора суммы нет. */
+  amount: string | null;
+}
+
+/** Позиция в запросе на создание / правку договора. */
+export interface AgreementItemInput {
+  request_item_key: string;
+  name: string;
+  unit: string;
+  quantity: string;
+  amount: string | null;
+}
+
+/** Позиция заявки с остатком — строка «Плана закупок» в форме договора. */
+export interface LinkedRequestItem {
+  key: string;
+  name: string;
+  unit: string;
+  quantity: string;
+  /** Уже расписано по другим договорам этой заявки (кроме расторгнутых). */
+  contracted: string;
+  remaining: string;
+  /** Сумма из заявки, если шаблон её спрашивает; иначе `null`. */
+  amount: string | null;
 }
 
 export interface LinkedRequestDocuments {

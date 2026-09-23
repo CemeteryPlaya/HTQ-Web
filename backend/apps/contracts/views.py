@@ -57,6 +57,7 @@ from .models import (
     InvoiceStatus,
     PaymentType,
 )
+from .services import agreement_items as agreement_items_svc
 from .services import agreement_service as agr_svc
 from .services import budget_service as budget_svc
 from .services import counterparty_service as cp_svc
@@ -548,6 +549,22 @@ class LinkedRequestDetailView(ContractsView):
         if brief is None:
             raise Http404("Заявка не найдена")
         return schemas.LinkedRequestRead.model_validate(brief)
+
+
+class LinkedRequestItemsView(ContractsView):
+    """Позиции заявки с остатком — «План закупок» формы договора.
+
+    ``exclude_agreement_id`` — правка договора: его собственные позиции
+    остатка не уменьшают."""
+
+    @read
+    def get(self, request, request_id: int):
+        try:
+            rows = agreement_items_svc.request_items(
+                request_id, exclude_agreement_id=self.int_param("exclude_agreement_id"))
+        except agreement_items_svc.AgreementItemsViolation as exc:
+            raise Http404(str(exc)) from exc
+        return [schemas.LinkedRequestItemRead.model_validate(row) for row in rows]
 
 
 class LinkedRequestDocumentsView(ContractsView):

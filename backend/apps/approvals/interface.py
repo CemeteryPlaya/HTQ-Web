@@ -28,6 +28,7 @@ from apps.approvals.models import (
 )
 from apps.approvals.services import budget_line_refs
 from apps.approvals.services.form_schema import validate_form_schema
+from apps.approvals.services.personal_stats import _item_groups, _number
 from apps.core.services import require_service
 
 # Событие ленты, которое оставляет сосед, заведя по заявке свой документ.
@@ -112,6 +113,65 @@ def list_approved_requests(*, with_budget_line: bool = True) -> list[dict]:
     if with_budget_line:
         briefs = [row for row in briefs if row["budget_line_id"] is not None]
     return briefs
+
+
+def get_request_items(instance_id: int) -> list[dict] | None:
+    """Позиции заявки — строки её ПОВТОРЯЕМЫХ групп: ``[{key, name, unit,
+    quantity, amount}]``. ``None`` — заявки нет.
+
+    Нужны договору, который заключают по заявке: его позиции — это позиции
+    заявки (ТЗ «План закупок»), и количество по договору не может превысить
+    заявленное. Колонки опознаются тем же правилом, что и в личной
+    статистике (``personal_stats._item_groups``): ЧТО — первое текстовое
+    поле строки, СКОЛЬКО — ``summarize_keys`` или первое число, В ЧЁМ —
+    первый выпадающий список. Одно правило на оба места, иначе «позиция» в
+    сводке и в договоре значила бы разное.
+
+    ``key`` — ``"<ключ группы>:<номер строки>"``. Номер строки стабилен:
+    одобренную заявку не правят. ``amount`` — первое денежное поле строки,
+    если шаблон его объявил (у «Заявки на закуп» его нет — цена появляется
+    только в договоре), иначе ``None``. Строки без наименования пропускаются:
+    позицию без названия в договор не вписать.
+    """
+    require_service("approvals")
+
+    instance = RequestInstance.objects.filter(pk=instance_id).first()
+    if instance is None:
+        return None
+    version = (RequestFormTemplateVersion.objects
+               .filter(pk=instance.template_version_id).first())
+    if version is None:
+        return []
+    try:
+        schema = validate_form_schema(version.schema_json)
+    except ValueError:
+        return []
+
+    money_keys = {
+        field.key: next((f.key for f in field.fields if f.type == "money"), None)
+        for field in schema.fields
+        if field.type == "group" and field.repeatable
+    }
+    values = instance.form_values_json or {}
+    out = []
+    for group_key, spec in _item_groups(schema):
+        for index, row in enumerate(values.get(group_key) or [], start=1):
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get(spec["name"]) or "").strip()
+            if not name:
+                continue
+            unit = str(row.get(spec["unit"]) or "").strip() if spec["unit"] else ""
+            money_key = money_keys.get(group_key)
+            amount = _number(row, [money_key]) if money_key else None
+            out.append({
+                "key": f"{group_key}:{index}",
+                "name": name,
+                "unit": unit,
+                "quantity": _number(row, spec["quantity"]),
+                "amount": amount if amount else None,
+            })
+    return out
 
 
 def log_linked_document(instance_id: int, *, kind: str, document_id: int,

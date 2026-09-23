@@ -181,6 +181,8 @@ urlpatterns = [
     # ── Заявки конструктора «Запросы» (прокси к apps.approvals.interface) ──
     path("requests/<int:request_id>/documents", views.LinkedRequestDocumentsView.as_view()),
     path("requests/<int:request_id>/documents/", views.LinkedRequestDocumentsView.as_view()),
+    path("requests/<int:request_id>/items", views.LinkedRequestItemsView.as_view()),
+    path("requests/<int:request_id>/items/", views.LinkedRequestItemsView.as_view()),
     path("requests", views.LinkedRequestCollectionView.as_view()),
     path("requests/", views.LinkedRequestCollectionView.as_view()),
     path("requests/<int:request_id>", views.LinkedRequestDetailView.as_view()),

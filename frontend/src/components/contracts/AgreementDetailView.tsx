@@ -77,7 +77,7 @@ const KIND_LABELS: Record<string, string> = {
 const TYPE_LABELS: Record<string, string> = {
   standard: 'Стандартный',
   non_standard: 'Нетиповой',
-  framework: 'Рамочный',
+  framework: 'Открытый',
 };
 
 interface Props {
@@ -121,8 +121,6 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
 
   const statusLabel = (value: AgreementStatus) =>
     enums?.agreement_status.find((option) => option.value === value)?.label ?? value;
-  const paymentLabel = (value: string) =>
-    enums?.payment_type.find((option) => option.value === value)?.label ?? value;
 
   const directionLabel = (val?: string) =>
     enums?.direction?.find((o) => o.value === val)?.label ?? DIRECTION_LABELS[val ?? ''] ?? val ?? 'Расход';
@@ -174,7 +172,8 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
     { label: 'БИН/ИИН', value: agreement.counterparty_bin_iin },
     { label: 'Предмет', value: agreement.subject || agreement.name },
     { label: 'Направление', value: directionLabel(agreement.direction) },
-    { label: 'Вид / тип', value: `${kindLabel(agreement.kind)} · ${contractTypeLabel(agreement.contract_type)}` },
+    { label: 'Вид', value: kindLabel(agreement.kind) },
+    { label: 'Тип оплаты', value: contractTypeLabel(agreement.contract_type) },
     {
       label: 'Сумма без НДС',
       value: formatMoney(
@@ -201,15 +200,17 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
         ? `${agreement.retention_rate}%`
         : 'нет',
     },
-    { label: 'Дата подписания', value: formatDate(agreement.signed_date) },
-    {
-      label: 'Срок исполнения',
-      // Срок часто задан словом («уточнить»), а не датой — показываем то,
-      // что заполнено, иначе в колонке будет пустая строка вместо ответа.
-      value: agreement.end_date
-        ? `${formatDate(agreement.start_date)} — ${formatDate(agreement.end_date)}`
-        : agreement.term_comment || formatDate(agreement.start_date),
-    },
+    { label: 'Дата договора', value: formatDate(agreement.signed_date) },
+    // Срок у старых договоров бывает задан словом («уточнить») — тогда
+    // показываем его, иначе в колонке была бы пустая строка вместо ответа.
+    ...(agreement.end_date || agreement.term_comment
+      ? [{
+          label: 'Срок действия по',
+          value: agreement.end_date
+            ? formatDate(agreement.end_date)
+            : agreement.term_comment,
+        }]
+      : []),
     { label: 'Менеджер / куратор', value: agreement.manager_name },
     { label: 'Статья бюджета', value: `${agreement.program_name} · ${agreement.expense_item}` },
   ];
@@ -300,7 +301,7 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                     читался бы как потерянные данные — см. докстринг AgreementType. */}
                 <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums text-foreground">
                   {agreement.contract_type === 'framework'
-                    ? 'Рамочный договор'
+                    ? 'Открытый договор'
                     : formatMoney(agreement.amount, agreement.currency)}
                 </p>
 
@@ -409,16 +410,30 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
                     {agreement.manager_name || 'Не назначен'}
                   </span>
                 </Field>
-                <Field label="Тип оплаты">{paymentLabel(agreement.payment_type)}</Field>
-                <Field label="Дата подписания">
+                {/* «Тип оплаты» у заказчика — «стандартный / открытый»
+                    (`contract_type`); предоплата/постоплата выводятся из
+                    аванса и отдельно не показываются. */}
+                <Field label="Тип оплаты">{contractTypeLabel(agreement.contract_type)}</Field>
+                <Field label="Дата договора">
                   {formatDate(agreement.signed_date)}
                 </Field>
-                <Field label="Сроки действия">
-                  <span className="inline-flex items-center gap-1">
-                    <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
-                    {formatDate(agreement.start_date)} — {formatDate(agreement.end_date)}
-                  </span>
+                {/* Срок действия необязателен; после него новые оплаты по
+                    договору не заводятся (BR-036). */}
+                <Field label="Срок действия по">
+                  {agreement.end_date ? (
+                    <span className="inline-flex items-center gap-1">
+                      <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                      {formatDate(agreement.end_date)}
+                    </span>
+                  ) : (
+                    'не ограничен'
+                  )}
                 </Field>
+                {/* «Дата начала» и комментарий к сроку форма больше не
+                    спрашивает — они есть только у договоров из импорта. */}
+                {agreement.start_date && (
+                  <Field label="Дата начала">{formatDate(agreement.start_date)}</Field>
+                )}
                 {agreement.term_comment && (
                   <Field label="Срок исполнения (комментарий)" className="sm:col-span-2">
                     <span className="italic">{agreement.term_comment}</span>
