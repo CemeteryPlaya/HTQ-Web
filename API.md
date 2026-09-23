@@ -30,7 +30,8 @@
 │   backend-web    :8000   gunicorn/WSGI — all of /api/*, /django-admin/,│
 │                          static. Only this process migrates          │
 │                          (`migrate_shared` — shared apps only) +     │
-│                          seeds the admin account (RUN_MIGRATIONS=1)   │
+│                          seeds the admin account (RUN_BOOTSTRAP=1;   │
+│                          migrations — RUN_MIGRATIONS=1)              │
 │   backend-asgi   :8000   uvicorn/ASGI  — SSE /api/requests/v1/stream +│
 │                          WebSocket /ws/ (messenger Socket.IO)         │
 │   backend-worker         Celery worker (all domains' @shared_task)   │
@@ -183,9 +184,11 @@ anymore):
   company, token_type: "access" | "refresh", iat, exp, iss }
 ```
 `is_admin = is_staff OR is_superuser`. `company` is the slug of the company
-the token was issued for — the request's company (`X-HTQ-Company`) if the
-user holds a membership there, otherwise their default company
-(`htqweb/authn/jwt.py::_base_claims`). A refresh token carries only `sub`,
+the token was issued for — the request's company (`X-HTQ-Company`;
+membership required, otherwise login/refresh answer 403 and issue no
+token); without the header — the user's default company
+(`apps/users/views.py::_company_slug_for_token`,
+`htqweb/authn/jwt.py::_base_claims`). A refresh token carries only `sub`,
 `user_id`, `iss` plus the type/time claims. `apps.users` (`htqweb/authn/jwt.py`)
 both issues and validates every token, in-process, for every app — no
 introspection round-trip, no separate identity service.
@@ -343,8 +346,12 @@ session/login form against the same `User` model. Don't wire new code to
 ### Bootstrap an admin user
 
 The `backend-web` process seeds one automatically and idempotently on every
-start (`RUN_MIGRATIONS=1` → `docker-entrypoint.sh` → `migrate_shared` then a
-`manage.py shell` one-liner):
+start (`RUN_BOOTSTRAP=1` → `docker-entrypoint.sh` → a `manage.py shell`
+one-liner, after collectstatic and bucket creation). `RUN_BOOTSTRAP` is
+separate from `RUN_MIGRATIONS` (which only gates `migrate_shared`) and is
+`1` in all three compose files (a `${RUN_BOOTSTRAP:-1}` default in
+`docker-compose.yml`/`test-env`, hard-coded in `test-local`), so the admin
+is seeded even where migrations are off:
 ```
 username=admin, password=admin12345, is_staff=is_superuser=True, status=ACTIVE
 ```
@@ -1284,7 +1291,7 @@ in-process Python contract instead.
 | `api_public`      | 10 req/min  | `/api/hr/v1/public/`                                        | 5     |
 | `media_upload`    | 5 req/s     | `POST /api/media/v1/files/`                                  | 10    |
 | `websocket`       | 10 req/s    | `/ws/sfu/` (burst 5), `/ws/` (burst 20)                       | 5–20  |
-| `api_auth`        | 5 req/min   | *(zone defined in nginx, not currently attached to any `location`)* | —     |
+| `api_auth`        | 5 req/min   | `/api/users/v1/token`, `token/refresh`, `register` (exact-match, both spellings) | 2     |
 
 `/api/email/v1/webhooks/` is explicitly exempt from rate limiting (webhook
 senders retry aggressively; false-positive 429s would just cause more

@@ -360,7 +360,7 @@ Full design: [../docs/multi-company-tenancy-design.md](../docs/multi-company-ten
 
 ```bash
 cd backend
-.venv/Scripts/python.exe manage.py startapp <domain> apps/<domain>
+../.venv/Scripts/python.exe manage.py startapp <domain> apps/<domain>
 ```
 Then:
 0. Decide tenant vs `public` (rule 12 above) — this determines whether the new app's tables end up
@@ -387,8 +387,9 @@ Brings up `backend-web` (gunicorn WSGI in prod / `runserver` in dev, `:8000`→h
 `backend-asgi` (uvicorn ASGI, SSE `/api/requests/v1/stream` + WS `/ws/`, `:8000`→host `:8001`),
 `backend-worker`/`backend-beat` (Celery), `flower` (`:5555`), plus `db`/`redis`/`minio` and the
 Vite dev server (`:3000`) which proxies to all of the above. `backend-web` is the only process
-that runs migrations (`migrate_shared` — shared apps only, rule 6) and seeds `admin`/`admin12345`
-(`RUN_MIGRATIONS=1`, see `docker-entrypoint.sh`). Rebuild one process after a code change:
+that runs migrations (`migrate_shared` — shared apps only, rule 6; gated by `RUN_MIGRATIONS=1`) and
+seeds `admin`/`admin12345` (gated separately by `RUN_BOOTSTRAP=1`, which every compose file sets to `1` even where migrations
+are off — see `docker-entrypoint.sh`). Rebuild one process after a code change:
 ```bash
 docker compose -f docker-compose.test-local.yml up -d --build --no-deps backend-web
 ```
@@ -401,8 +402,8 @@ for the full story (why port `:55432`, not `:5432`/`:6432`). Short version:
 ```bash
 docker compose -f docker-compose.test-local.yml up -d db   # once, publishes :55432
 cd backend
-.venv/Scripts/python.exe -m pytest -q                                    # whole suite
-.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name    # single test
+../.venv/Scripts/python.exe -m pytest -q                                    # whole suite
+../.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name    # single test
 ```
 `pytest.ini` pins `DJANGO_SETTINGS_MODULE=htqweb.settings.test`; that settings module fixes
 `JWT_SECRET`, runs Celery eagerly (synchronous, no broker), and uses `LocMemCache`. The

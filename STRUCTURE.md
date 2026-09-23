@@ -119,7 +119,7 @@ backend/apps/<domain>/
 
 ```bash
 cd backend
-.venv/Scripts/python.exe manage.py startapp <domain> apps/<domain>   # каркас Django
+../.venv/Scripts/python.exe manage.py startapp <domain> apps/<domain>   # каркас Django (интерпретатор — корневой .venv)
 # затем: добавить "apps.<domain>" в INSTALLED_APPS (htqweb/settings/base.py),
 #        API_PREFIX = "api/<domain>/v1/" в apps/<domain>/apps.py (автодискавери сделает остальное),
 #        имя сервиса — в apps.core.models.KNOWN_SERVICES + htqweb.middleware.service_gate.PREFIX_TO_SERVICE
@@ -209,7 +209,8 @@ backend/htqweb/tenancy/       # Контекст компании и перев�
 │                              #   htqweb, не Django-аппка и не гейтится ServiceStatus/require_service
 ├── __init__.py                 # ре-экспорт: current_company, current_company_or_none,
 │                                #   set_company/reset_company, schema_for, NoCompanyContext, HOLDING_SCHEMA,
-│                                #   holding_active (признак use_holding() для читателей сводок, блок H)
+│                                #   holding_active (признак use_holding() для читателей сводок, блок H —
+│                                #   b53cda8, 17.09.2026)
 ├── context.py                   # contextvars-хранилище slug'а (не threading.local — под ASGI
 │                                #   поток обслуживает много корутин) + schema_for("co_" + slug)
 ├── db.py                         # apply_search_path()/use_company()/use_holding() — SET search_path
@@ -292,7 +293,8 @@ frontend/src/
 │   ├── Email/          # OAuth callback, inbox, compose modal, settings panel
 │   ├── hr/             # HR-страницы (Departments, Employees, Vacancies, Tasks, Roadmap, …)
 │   ├── holding/        # GroupSummary.tsx — «Сводка группы» (/holding): ручки hr/v1/holding/headcount
-│   │                   #   и tasks/v1/holding/projects, только на поддомене холдинга (блок H)
+│   │                   #   и tasks/v1/holding/projects, только на поддомене холдинга (блок H —
+│   │                   #   43c8816, 17.09.2026)
 │   └── companies/      # CompanyRegistry.tsx — «Компании группы»: дерево владения, карточка
 │                       #   (правка/архив/восстановление), вкладки «Модули»/«Участники»
 ├── features/
@@ -325,7 +327,6 @@ frontend/src/
 │   ├── telemetry.ts    # Frontend → backend client-errors
 │   └── utils.ts        # cn() и общие хелперы
 ├── data/               # Статика лендинга (contacts.ts, projects.ts, services.ts)
-├── locales/            # ru/kz/en JSON (см. check-i18n.mjs / update_i18n.py)
 ├── types/              # Глобальные TS-типы
 └── test/               # Vitest setup
 ```
@@ -336,6 +337,7 @@ frontend/src/
 - Глобальный поиск (`api/search.ts`) — fan-out: параллельно дёргает list-эндпойнты доменов и мёржит (упавший источник, напр. 403/503-disabled, молча игнорится).
 - Доменная фича крупнее одной страницы — `features/<name>/` (как `messenger`, `requests`).
 - UI-примитив — `components/ui/` (shadcn). Доменный — `components/<domain>/`.
+- Локали — не в `src/`, а в `frontend/public/locales/{en,ru}/translation.json` (валидатор `check-i18n.mjs`, `update_i18n.py`).
 
 **Известный хвост:** несколько мест во фронтенде (`pages/AdminUsers.tsx`, `components/profile/ProfileSidebar.tsx`, `components/admin/UserEditDialog.tsx`, `App.tsx`) всё ещё ссылаются на `/sqladmin` — этой панели больше нет (см. §3.1, §6, [API.md](./API.md)). Не бэкенд-докой чинится — фронтенд-код вне скоупа этого файла, но имей в виду при отладке "битой" ссылки на админку.
 
@@ -590,7 +592,7 @@ URL-флоу приватных файлов: API возвращает стаб�
 | Метрики Celery | `/metrics` самого Flower; события задач включает `CELERY_WORKER_SEND_TASK_EVENTS` в [settings/base.py](backend/htqweb/settings/base.py) — настройкой, а НЕ флагом `-E` у воркера (флаг пришлось бы повторять в трёх compose-файлах, и забытая копия ломается молча). Длина очередей — от redis-exporter: `REDIS_EXPORTER_CHECK_KEYS=2=celery,2=conference_media`. ⚠️ БД **2**, а не 9: `CELERY_BROKER_URL` в compose перекрывает дефолт из settings, и со «9» экспортер сканировал бы пустую базу |
 | Метрики хоста и контейнеров | `node-exporter` + `cadvisor` (диск, память, OOM, рестарты) |
 | Метрики шлюза и SFU | nginx `stub_status` → `nginx-exporter` (профиль `production`); SFU — [sfu/src/metrics.ts](sfu/src/metrics.ts) |
-| Бизнес-метрики | `apps/<домен>/metrics.py` (свои модели) + автодискавери в [apps/core/metrics.py](backend/apps/core/metrics.py); считает Celery-beat раз в 60 с в кэш, префикс `htqweb_*`. Есть у **всех одиннадцати** доменов, плюс у `access` и `companies`. ⚠️ Но у четырёх тенантных аппок (`hr`, `tasks`, `contracts`, `signoff`) сборщик их пропускает (`_metric_modules()` отсекает `settings.TENANT_APPS` до импорта — `collect()` без контекста компании вызывать нечем): их метрики не экспортируются, панели по ним пусты, шесть бизнес-правил на них не срабатывают (`noDataState: OK`) — открытый пункт [followups п. 3](docs/multi-company-tenancy-followups.md). `require_service` в них намеренно НЕТ: наблюдаемость обязана работать как раз тогда, когда домен выключили. В именах метрик нельзя цифры — регексп сторожа `htqweb_[a-z_]+` |
+| Бизнес-метрики | `apps/<домен>/metrics.py` (свои модели) + автодискавери в [apps/core/metrics.py](backend/apps/core/metrics.py); считает Celery-beat раз в 60 с в кэш, префикс `htqweb_*`. Есть у **всех одиннадцати** доменов, плюс у `access` и `companies`. ⚠️ Но у четырёх тенантных аппок (`hr`, `tasks`, `contracts`, `signoff`) сборщик их пропускает (`_metric_modules()` отсекает `settings.TENANT_APPS` до импорта — `collect()` без контекста компании вызывать нечем): их метрики не экспортируются, панели по ним пусты, шесть правил алертинга на них не срабатывают (`noDataState: OK`) — открытый пункт [followups п. 3](docs/multi-company-tenancy-followups.md). `require_service` в них намеренно НЕТ: наблюдаемость обязана работать как раз тогда, когда домен выключили. В именах метрик нельзя цифры — регексп сторожа `htqweb_[a-z_]+` |
 | Подмены значений (fallback) | Один примитив на три рантайма: [htqweb/fallback.py](backend/htqweb/fallback.py), [frontend/src/lib/fallback.ts](frontend/src/lib/fallback.ts), [sfu/src/fallback.ts](sfu/src/fallback.ts). На проде и стейдже — строка `FALLBACK …` + `htqweb_fallback_total`/`sfu_fallback_total`, пользователю не видно; у разработчика (`HTQ_ENV=development`) подмен нет вовсе — летит исключение. Среды разводит `HTQ_ENV`/`VITE_HTQ_ENV`, точечно — `FALLBACK_MODE`. Правила и список того, что через примитив НЕ проходит, — в CLAUDE.md §«Среды и политика fallback'ов» |
 | Тестовая среда (staging) | [docker-compose.staging.yml](./docker-compose.staging.yml) — прод-настройки и прод-поведение, отличается только меткой среды (`HTQ_ENV=staging`, `SERVICE_ENV`, `PROMETHEUS_ENV`), исходники не смонтированы |
 | Всего джобов Prometheus | **13** ([prometheus.yml](infra/logging/prometheus/prometheus.yml)); хранение 30 дней **или** 10 ГБ. Джоб `nginx` поднят на `dns_sd`, а не на статическом таргете: экспортер живёт в профиле `production`, и вне его имя не резолвится — у джоба ноль таргетов вместо вечного `up==0` |
@@ -626,7 +628,7 @@ URL-флоу приватных файлов: API возвращает стаб�
 | Новый фронтенд-роут/страница | `frontend/src/app/routing/routeDefinitions.ts` + `pages/<Name>.tsx` |
 | HTTP-вызов из фронтенда | `frontend/src/api/<domain>.ts` (axios через `client.ts`, префиксы в `endpoints.ts`) — без изменений |
 | Доменная UI-фича | `frontend/src/features/<name>/` (масштаб > одной страницы) |
-| Локализация | `frontend/src/locales/{ru,kz,en}/*.json` (валидатор `check-i18n.mjs`) |
+| Локализация | `frontend/public/locales/{en,ru}/translation.json` (валидатор `check-i18n.mjs`) |
 | Конференц-логика на клиенте | `frontend/src/lib/webrtc/` |
 | SFU/медиа | `sfu/src/` |
 | Загрузить/отдать файл (из бэкенда) | `apps.media_files.interface.store_file()`/`.get_file_url()` (соседи); `htqweb.storage.get_storage()` напрямую — только `apps.cms` |
