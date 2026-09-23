@@ -39,7 +39,8 @@ const HR_PAGES: { path: string; marker: RegExp }[] = [
   { path: "/hr/production-calendar", marker: /Календар|Calendar/i },
   // Уровни должностей — вкладка внутри «Должностей», отдельного адреса нет.
   { path: "/hr/positions?tab=levels", marker: /Уровн|Level/i },
-  { path: "/admin/access-levels", marker: /Уровн|Level|Доступ/i },
+  // /admin/access-levels снят задачей 11 блока I.2 вместе со снятой
+  // эвристикой уровня по названию должности — маршрута больше нет.
 ];
 
 async function pinLanguage(page: Page) {
