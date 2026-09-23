@@ -69,10 +69,12 @@ def grant_membership(company: Company, user_id: int, *,
 
     Новое членство сразу получает базовую роль ``employee-basic``
     (``apps.access.interface.ensure_basic_role``, рулинг M финальной волны
-    блока I): это ЕДИНСТВЕННАЯ точка создания членства — через неё идут
-    ``company_grant``, ``tenancy_bootstrap --grant-all``, экран участников
-    (``POST companies/<slug>/memberships``) и ``seed_group_demo``, — и без
-    роли новый участник получал бы 403 на подбор коллег и весь ``tasks``.
+    блока I): это ЕДИНСТВЕННАЯ точка ЛОГИКИ создания членства — через неё
+    идут ``company_grant``, ``tenancy_bootstrap --grant-all``, экран
+    участников (``POST companies/<slug>/memberships``), ``seed_group_demo``
+    и ``CompanyMembershipAdmin.save_model`` (блок I.2, задача 9 — раньше
+    админка создавала строку напрямую, в обход сервиса), — и без роли новый
+    участник получал бы 403 на подбор коллег и весь ``tasks``.
     Одной транзакцией: членство без роли не остаётся, если выдача упала.
     Уже существующему членству роль не довыдаётся — это делал перенос
     ``access_backfill_basic``, а снятую человеком роль повторный grant

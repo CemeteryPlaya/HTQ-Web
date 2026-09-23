@@ -4,9 +4,11 @@
 выкатки, но после него роль не выдавал никто: ни ``company_grant``, ни экран
 участников, ни ``tenancy_bootstrap --grant-all`` — новый участник получал 403
 на подбор коллег (``users/options``) и весь ``tasks`` (F3 финального ревью).
-Теперь её выдаёт единственная точка создания членства
+Теперь её выдаёт единственная точка ЛОГИКИ создания членства
 (``apps.companies.services.membership_service.grant_membership``) через
-``apps.access.interface.ensure_basic_role``.
+``apps.access.interface.ensure_basic_role`` — каждый вход, который заводит
+``CompanyMembership`` (включая ``CompanyMembershipAdmin`` в django-admin,
+блок I.2 задача 9), обязан идти через неё, а не писать строку напрямую.
 
 Модели ``apps.companies``/``apps.users`` импортируются напрямую — в
 ``tests/`` это разрешено (сторож границ каталоги тестов не сканирует).
