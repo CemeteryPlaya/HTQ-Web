@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
+import { EntityCombobox } from '@/components/hr/OrgChart/EntityCombobox';
 import { DateInput } from '@/components/ui/date-input';
 import { DATES_OUT_OF_ORDER, INVALID_DATE, datesOutOfOrder } from '@/lib/validation';
 import { reportApiError } from '@/lib/apiError';
@@ -26,7 +28,7 @@ import {
 import { toast } from 'sonner';
 import {
   AlertCircle, Check, Edit, HardHat, MapPin, Plus, Search, Trash2, UserMinus, Users,
-  Building2, Phone, Mail, FileText, CheckCircle2,
+  Building2, Phone, Mail, FileText, CheckCircle2, Link2, RefreshCw,
 } from 'lucide-react';
 import {
   createContractor, createContractorWorker, createEngagement,
@@ -34,6 +36,8 @@ import {
   fetchContractors, fetchContractorWorkers, fetchEngagements,
   fetchProjects, fetchSites, updateContractor, updateContractorWorker,
 } from '@/api/tasks';
+import { contractsApi } from '@/api/contracts';
+import type { Counterparty } from '@/types/contracts';
 import type {
   Contractor, ContractorLevel, ContractorStatus, ContractorWorker,
 } from '@/types/tasks';
@@ -58,6 +62,41 @@ const emptyContractor = {
   name: '', short_name: '', bin_iin: '', contact_person: '',
   phone: '', email: '', address: '', notes: '',
   status: 'active' as ContractorStatus,
+  counterparty_id: null as number | null,
+};
+
+type ContractorForm = typeof emptyContractor;
+
+/** Форма БИН/ИИН партнёра (бэкенд: `^\d{12}$`). Иностранный номер
+ *  контрагента другой формы партнёру не переносится — ему некуда лечь. */
+const KZ_BIN_RE = /^\d{12}$/;
+
+/**
+ * Подтянуть реквизиты контрагента в форму партнёра.
+ *
+ * `overwrite=false` — при выборе контрагента: заполняются только пустые
+ * поля, чтобы не затереть то, что уже вписали руками (прораб на объекте не
+ * обязан совпадать с директором из договорной карточки). `overwrite=true` —
+ * по явной кнопке «Подтянуть реквизиты».
+ */
+const fillFromCounterparty = (
+  form: ContractorForm, cp: Counterparty, overwrite: boolean,
+): ContractorForm => {
+  const next = { ...form, counterparty_id: cp.id };
+  const pairs: [keyof ContractorForm, string][] = [
+    ['name', cp.name],
+    ['contact_person', cp.contact_name],
+    ['phone', cp.phone],
+    ['email', cp.email],
+    ['address', cp.address],
+  ];
+  if (KZ_BIN_RE.test(cp.bin_iin)) pairs.push(['bin_iin', cp.bin_iin]);
+  for (const [key, value] of pairs) {
+    if (value && (overwrite || !String(next[key] ?? '').trim())) {
+      (next as Record<string, unknown>)[key] = value;
+    }
+  }
+  return next;
 };
 
 const emptyWorker = {
@@ -66,7 +105,7 @@ const emptyWorker = {
 };
 
 const emptyEngagement = {
-  project_id: '', site_id: '', contract_no: '', scope: '',
+  project_id: '', site_id: '', contract_no: '', agreement_id: '', scope: '',
   start_date: '', end_date: '',
 };
 
@@ -74,9 +113,14 @@ const HRContractors: React.FC = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
 
+  const [searchParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // `?id=` — сюда ведёт ссылка «партнёр на объектах» из карточки контрагента.
+  const [selectedId, setSelectedId] = useState<number | null>(() => {
+    const fromUrl = Number(searchParams.get('id'));
+    return Number.isInteger(fromUrl) && fromUrl > 0 ? fromUrl : null;
+  });
 
   const [contractorDialog, setContractorDialog] = useState(false);
   const [editingContractor, setEditingContractor] = useState<Contractor | null>(null);
@@ -121,8 +165,48 @@ const HRContractors: React.FC = () => {
     queryFn: () => fetchSites(),
   });
 
+  // Реестр контрагентов — для выбора в форме и для подсказки «найден по
+  // БИН». Успех запроса и есть признак, что «Договоры» доступны: модуль
+  // может быть выключен у компании или закрыт пользователю, и тогда блок
+  // связи просто не показывается, а страница партнёров работает как раньше.
+  const counterpartiesQuery = useQuery({
+    queryKey: ['contracts', 'counterparties', 'partner-picker'],
+    queryFn: () => contractsApi.listCounterparties().then((r) => r.data),
+    enabled: contractorDialog || selectedId !== null,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const counterparties = useMemo(() => counterpartiesQuery.data ?? [], [counterpartiesQuery.data]);
+  const contractsAvailable = counterpartiesQuery.isSuccess;
+
+  // Контрагент уже связан с другим партнёром — выбрать его нельзя (один
+  // контрагент — один партнёр, бэкенд ответит 409), поэтому он не в списке.
+  const counterpartyOptions = useMemo(
+    () => counterparties
+      .filter((cp) => !cp.contractor || cp.contractor.id === editingContractor?.id)
+      .map((cp) => ({ id: cp.id, label: cp.name, subLabel: `БИН/ИИН ${cp.bin_iin}` })),
+    [counterparties, editingContractor],
+  );
+
+  // Несвязанный партнёр с БИН, под которым в «Договорах» уже есть свободный
+  // контрагент, — это почти наверняка одна организация, заведённая дважды.
+  const suggestedCounterparty = selected && !selected.counterparty_id && selected.bin_iin
+    ? counterparties.find((cp) => cp.bin_iin === selected.bin_iin && !cp.contractor) ?? null
+    : null;
+
+  const { data: counterpartyAgreements = [] } = useQuery({
+    queryKey: ['contracts', 'agreements', { counterparty_id: selected?.counterparty_id }],
+    queryFn: () => contractsApi
+      .listAgreements({ counterparty_id: selected!.counterparty_id! })
+      .then((r) => r.data),
+    enabled: engagementDialog && Boolean(selected?.counterparty_id),
+    retry: false,
+  });
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['contractors'] });
+    // Бейдж «партнёр на объектах» в реестре контрагентов тоже поменялся.
+    queryClient.invalidateQueries({ queryKey: ['contracts', 'counterparties'] });
     if (selectedId) {
       queryClient.invalidateQueries({ queryKey: ['contractor-workers', selectedId] });
       queryClient.invalidateQueries({ queryKey: ['contractor-engagements', selectedId] });
@@ -134,8 +218,8 @@ const HRContractors: React.FC = () => {
   };
 
   const contractorMutation = useMutation({
-    mutationFn: (payload: typeof emptyContractor) => {
-      const body = {
+    mutationFn: (payload: ContractorForm) => {
+      const body: Partial<Contractor> = {
         name: payload.name.trim(),
         short_name: payload.short_name.trim() || null,
         bin_iin: payload.bin_iin.trim() || null,
@@ -146,6 +230,11 @@ const HRContractors: React.FC = () => {
         notes: payload.notes.trim() || null,
         status: payload.status,
       };
+      // Связь отправляется, только если её тронули: иначе форма, открытая
+      // при недоступных «Договорах», не могла бы сохранить даже телефон.
+      if (payload.counterparty_id !== (editingContractor?.counterparty_id ?? null)) {
+        body.counterparty_id = payload.counterparty_id;
+      }
       return editingContractor
         ? updateContractor(editingContractor.id, body)
         : createContractor(body);
@@ -155,6 +244,16 @@ const HRContractors: React.FC = () => {
       setContractorDialog(false);
       if (!editingContractor) setSelectedId(saved.id);
       toast.success(t('tasks.pages.contractors.saved', 'Партнёр сохранён'));
+    },
+    onError: fail('tasks.pages.contractors.saveError', 'Не удалось сохранить'),
+  });
+
+  const linkCounterpartyMutation = useMutation({
+    mutationFn: ({ contractorId, counterpartyId }: { contractorId: number; counterpartyId: number }) =>
+      updateContractor(contractorId, { counterparty_id: counterpartyId }),
+    onSuccess: () => {
+      invalidate();
+      toast.success(t('tasks.pages.contractors.counterpartyLinked', 'Партнёр связан с контрагентом'));
     },
     onError: fail('tasks.pages.contractors.saveError', 'Не удалось сохранить'),
   });
@@ -222,7 +321,9 @@ const HRContractors: React.FC = () => {
       contractor_id: selectedId!,
       project_id: payload.project_id ? Number(payload.project_id) : null,
       site_id: payload.site_id ? Number(payload.site_id) : null,
-      contract_no: payload.contract_no.trim() || null,
+      // Выбран договор — номер поставит бэкенд (его номер и есть номер).
+      agreement_id: payload.agreement_id ? Number(payload.agreement_id) : null,
+      contract_no: payload.agreement_id ? null : payload.contract_no.trim() || null,
       scope: payload.scope,
       start_date: payload.start_date || null,
       end_date: payload.end_date || null,
@@ -253,10 +354,22 @@ const HRContractors: React.FC = () => {
       name: c.name, short_name: c.short_name ?? '', bin_iin: c.bin_iin ?? '',
       contact_person: c.contact_person ?? '', phone: c.phone ?? '',
       email: c.email ?? '', address: c.address ?? '', notes: c.notes ?? '',
-      status: c.status,
+      status: c.status, counterparty_id: c.counterparty_id,
     });
     setContractorDialog(true);
   };
+
+  const pickCounterparty = (idStr: string) => {
+    if (!idStr) {
+      setContractorForm({ ...contractorForm, counterparty_id: null });
+      return;
+    }
+    const cp = counterparties.find((row) => row.id === Number(idStr));
+    if (cp) setContractorForm(fillFromCounterparty(contractorForm, cp, false));
+  };
+
+  const pickedCounterparty = counterparties.find(
+    (cp) => cp.id === contractorForm.counterparty_id) ?? null;
 
   const openCreateWorker = () => {
     setEditingWorker(null); setWorkerForm(emptyWorker); setWorkerDialog(true);
@@ -456,6 +569,64 @@ const HRContractors: React.FC = () => {
                     <span className="font-medium text-foreground">{t('tasks.pages.contractors.notesLabel')} </span>{selected.notes}
                   </div>
                 )}
+
+                {/* Та же организация в «Договорах». Связанный партнёр ведёт на
+                    карточку контрагента (там договоры и файлы); несвязанный —
+                    либо на найденного по БИН, либо на заведение «из партнёра». */}
+                {(selected.counterparty_id || contractsAvailable) && (
+                  <div className="pt-3 border-t flex flex-wrap items-center justify-between gap-2 text-xs">
+                    {selected.counterparty ? (
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Link2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                        <span className="text-muted-foreground">{t('tasks.pages.contractors.counterpartyLabel', 'Контрагент в «Договорах»:')}</span>
+                        <Link
+                          to={`/contracts/counterparties/${selected.counterparty.id}`}
+                          className="font-semibold truncate hover:underline underline-offset-2"
+                        >
+                          {selected.counterparty.name}
+                        </Link>
+                      </div>
+                    ) : selected.counterparty_id ? (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Link2 className="h-3.5 w-3.5 shrink-0" />
+                        {t('tasks.pages.contractors.counterpartyUnavailable', 'Связан с контрагентом, но модуль «Договоры» сейчас недоступен')}
+                      </div>
+                    ) : suggestedCounterparty ? (
+                      <>
+                        <span className="text-muted-foreground">
+                          {t('tasks.pages.contractors.counterpartyFoundByBin', {
+                            name: suggestedCounterparty.name,
+                            defaultValue: 'В «Договорах» есть контрагент «{{name}}» с тем же БИН/ИИН',
+                          })}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1.5 rounded-xl text-xs"
+                          disabled={linkCounterpartyMutation.isPending}
+                          onClick={() => linkCounterpartyMutation.mutate({
+                            contractorId: selected.id, counterpartyId: suggestedCounterparty.id,
+                          })}
+                        >
+                          <Link2 className="h-3.5 w-3.5" />
+                          {t('tasks.pages.contractors.linkCounterparty', 'Связать')}
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-muted-foreground">
+                          {t('tasks.pages.contractors.counterpartyNone', 'Не связан с контрагентом в «Договорах»')}
+                        </span>
+                        <Button asChild size="sm" variant="outline" className="h-7 gap-1.5 rounded-xl text-xs">
+                          <Link to={`/contracts/counterparties/new?from_contractor=${selected.id}`}>
+                            <Plus className="h-3.5 w-3.5" />
+                            {t('tasks.pages.contractors.createCounterparty', 'Завести контрагента из партнёра')}
+                          </Link>
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Привлечения на объекты */}
@@ -495,7 +666,17 @@ const HRContractors: React.FC = () => {
                             <TableCell className="font-medium">
                               {e.site_name || e.project_name || '—'}
                             </TableCell>
-                            <TableCell className="font-mono text-muted-foreground">{e.contract_no || '—'}</TableCell>
+                            <TableCell className="font-mono text-muted-foreground">
+                              {e.agreement ? (
+                                <Link
+                                  to={`/contracts/agreements/${e.agreement.id}`}
+                                  title={e.agreement.name}
+                                  className="text-foreground hover:underline underline-offset-2"
+                                >
+                                  {e.agreement.number}
+                                </Link>
+                              ) : (e.contract_no || '—')}
+                            </TableCell>
                             <TableCell>{e.scope || '—'}</TableCell>
                             <TableCell className="text-muted-foreground">
                               {[e.start_date, e.end_date].filter(Boolean).join(' — ') || '—'}
@@ -618,6 +799,44 @@ const HRContractors: React.FC = () => {
             </DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 text-xs">
+            {contractsAvailable && (
+              <div className="rounded-2xl border border-dashed p-3 space-y-2">
+                <Label className="text-xs">{t('tasks.pages.contractors.counterpartyPick', 'Контрагент из «Договоров»')}</Label>
+                {/* Пустой список у EntityCombobox подписан «заполните в кадрах» —
+                    для реестра контрагентов это неправда, поэтому своя строка. */}
+                {counterpartyOptions.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    {t('tasks.pages.contractors.counterpartyNoneFree', 'Свободных контрагентов нет: все уже связаны с партнёрами или реестр пуст.')}
+                  </p>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <EntityCombobox
+                      value={contractorForm.counterparty_id ? String(contractorForm.counterparty_id) : ''}
+                      onChange={pickCounterparty}
+                      options={counterpartyOptions}
+                      placeholder={t('tasks.pages.contractors.counterpartyPickPlaceholder', 'Не связан — выберите, чтобы подтянуть реквизиты')}
+                      searchPlaceholder={t('tasks.pages.contractors.counterpartySearch', 'Название или БИН/ИИН…')}
+                      className="h-8 rounded-xl text-xs"
+                    />
+                    {pickedCounterparty && (
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        className="h-8 w-8 shrink-0 rounded-xl"
+                        title={t('tasks.pages.contractors.counterpartyRefill', 'Подтянуть все реквизиты контрагента заново')}
+                        onClick={() => setContractorForm(fillFromCounterparty(contractorForm, pickedCounterparty, true))}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                )}
+                <p className="text-[11px] text-muted-foreground">
+                  {t('tasks.pages.contractors.counterpartyHint', 'Та же организация, с которой заключают договоры: при выборе пустые поля заполнятся из её карточки, а договоры станут доступны в привлечениях.')}
+                </p>
+              </div>
+            )}
             <div>
               <Label className="text-xs">{t('tasks.pages.contractors.companyNameRequired')}</Label>
               <Input
@@ -779,15 +998,51 @@ const HRContractors: React.FC = () => {
               />
             </div>
 
-            <div>
-              <Label className="text-xs">{t('tasks.pages.contractors.contractNumber')}</Label>
-              <Input
-                value={engagementForm.contract_no}
-                onChange={(e) => setEngagementForm({ ...engagementForm, contract_no: e.target.value })}
-                placeholder={t('tasks.pages.contractors.contractPlaceholder')}
-                className="h-8 rounded-xl bg-muted/30 mt-1 font-mono"
-              />
-            </div>
+            {/* Партнёр связан с контрагентом — договор выбирается из его
+                договоров; номер тогда ставит бэкенд. Свободный номер остаётся
+                для договоров, которых в системе нет. */}
+            {selected?.counterparty_id && contractsAvailable && (
+              <div>
+                <Label className="text-xs">{t('tasks.pages.contractors.agreement', 'Договор из «Договоров»')}</Label>
+                <Select
+                  value={engagementForm.agreement_id || 'none'}
+                  onValueChange={(val) => setEngagementForm({
+                    ...engagementForm, agreement_id: val === 'none' ? '' : val,
+                  })}
+                >
+                  <SelectTrigger className="h-8 rounded-xl bg-muted/30 mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-2xl">
+                    <SelectItem value="none">
+                      {t('tasks.pages.contractors.agreementNone', 'Нет в системе — указать номер вручную')}
+                    </SelectItem>
+                    {counterpartyAgreements.map((a) => (
+                      <SelectItem key={a.id} value={String(a.id)}>
+                        {a.number} — {a.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {counterpartyAgreements.length === 0 && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {t('tasks.pages.contractors.agreementEmpty', 'С этим контрагентом договоров пока нет.')}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {!engagementForm.agreement_id && (
+              <div>
+                <Label className="text-xs">{t('tasks.pages.contractors.contractNumber')}</Label>
+                <Input
+                  value={engagementForm.contract_no}
+                  onChange={(e) => setEngagementForm({ ...engagementForm, contract_no: e.target.value })}
+                  placeholder={t('tasks.pages.contractors.contractPlaceholder')}
+                  className="h-8 rounded-xl bg-muted/30 mt-1 font-mono"
+                />
+              </div>
+            )}
 
             <div>
               <Label className="text-xs">{t('tasks.pages.contractors.workKind')}</Label>

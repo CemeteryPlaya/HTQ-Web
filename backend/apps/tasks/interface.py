@@ -132,6 +132,63 @@ def find_project_by_name(name: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
+class ContractorLinkConflict(Exception):
+    """Связать партнёра с контрагентом нельзя: партнёр уже за другим
+    контрагентом, БИН/ИИН пары расходится и т. п. Текст — для человека,
+    вызывающий отдаёт его как 409.
+
+    Своё исключение интерфейса, а не сервисное: соседу нельзя импортировать
+    ``apps.tasks.services``, а ловить ему что-то нужно."""
+
+
+def get_contractors_by_counterparty(counterparty_ids) -> dict[int, dict]:
+    """Партнёры, связанные с контрагентами, — ``{counterparty_id: {id, name,
+    status}}``. Для карточки контрагента в «Договорах»: «работает у нас на
+    объектах как партнёр …». Батчем — реестр контрагентов показывает всех
+    разом. Контрагенты без партнёра в ответ не попадают."""
+    require_service("tasks")
+    from .models import Contractor
+
+    ids = sorted({int(cp_id) for cp_id in counterparty_ids if cp_id is not None})
+    if not ids:
+        return {}
+    return {
+        row["counterparty_id"]: {"id": row["id"], "name": row["name"],
+                                 "status": row["status"]}
+        for row in Contractor.objects.filter(counterparty_id__in=ids)
+        .values("id", "name", "status", "counterparty_id")
+    }
+
+
+def link_contractor_to_counterparty(contractor_id: int,
+                                    counterparty_id: int) -> dict:
+    """Связать партнёра с контрагентом — для карточки контрагента, заведённой
+    «из партнёра». Зовётся в транзакции соседа: откатится создание
+    контрагента — откатится и связь.
+
+    Те же проверки, что у правки карточки партнёра (БИН/ИИН пары, один
+    партнёр на контрагента), плюс запрет молча перепривязать уже связанного
+    партнёра. Неизвестный партнёр — ``Http404``.
+    """
+    require_service("tasks")
+    from .services import contractor_service
+
+    try:
+        row = contractor_service.link_counterparty(contractor_id, counterparty_id)
+    except contractor_service.CounterpartyLinkConflict as exc:
+        raise ContractorLinkConflict(str(exc)) from exc
+    return {"id": row.id, "name": row.name, "status": str(row.status)}
+
+
+def unlink_counterparty(counterparty_id: int) -> None:
+    """Контрагента удалили — снять ссылку с партнёра, чтобы она не вела в
+    пустоту. Идемпотентно: нет связанного партнёра — ничего не делает."""
+    require_service("tasks")
+    from .services import contractor_service
+
+    contractor_service.unlink_counterparty(counterparty_id)
+
+
 def push_notification(*, recipient_id: int, verb: str,
                       actor_id: int | None = None,
                       actor_avatar_url: str | None = None,

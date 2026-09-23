@@ -464,6 +464,19 @@ class CounterpartyFullCreate(BaseModel):
     email: BlankableEmail = Field("", max_length=254)
     address: str = ""
     status: Optional[CounterpartyStatus] = None
+    # Карточка заведена «из партнёра» (``apps.tasks``): реквизиты форма
+    # подтянула оттуда, а здесь — чтобы связать пару в той же транзакции.
+    # Сорвётся связь — не будет и контрагента, а не полдела.
+    contractor_id: Optional[int] = None
+
+
+class CounterpartyContractorRef(BaseModel):
+    """Партнёр из модуля задач, связанный с контрагентом, — для бейджа
+    «работает на объектах» со ссылкой на карточку партнёра."""
+
+    id: int
+    name: str
+    status: str
 
 
 class CounterpartyRead(BaseModel):
@@ -486,6 +499,9 @@ class CounterpartyRead(BaseModel):
     address: str
     status: str
     approval_state: str
+    #: Та же организация в модуле задач (партнёр на объектах), если связана.
+    #: Кладётся атрибутом ``counterparty_service.attach_contractors``.
+    contractor: Optional[CounterpartyContractorRef] = None
     created_at: datetime
     updated_at: datetime
 

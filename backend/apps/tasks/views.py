@@ -1136,19 +1136,22 @@ def link_detail(request, link_id: int):
 
 @api_view(methods=("GET",))
 def _list_contractors(request):
-    return [schemas.ContractorResponse.model_validate(
-        contractor_service.build_contractor(row))
-        for row in contractor_service.list_contractors(
-            status=_str_param(request, "status"),
-            search=_str_param(request, "search"))]
+    return [schemas.ContractorResponse.model_validate(item)
+            for item in contractor_service.build_contractors(
+                contractor_service.list_contractors(
+                    status=_str_param(request, "status"),
+                    search=_str_param(request, "search")))]
 
 
 @api_view(methods=("POST",), body=schemas.ContractorCreate, status=201,
           admin=True)
 def _create_contractor(request, data: schemas.ContractorCreate):
+    try:
+        row = contractor_service.create_contractor(data.model_dump())
+    except contractor_service.CounterpartyLinkConflict as exc:
+        return json_error(str(exc), 409)
     return schemas.ContractorResponse.model_validate(
-        contractor_service.build_contractor(
-            contractor_service.create_contractor(data.model_dump())))
+        contractor_service.build_contractor(row))
 
 
 def contractors_collection(request):
@@ -1169,10 +1172,13 @@ def _get_contractor(request, contractor_id: int):
 @api_view(methods=("PATCH",), body=schemas.ContractorUpdate, admin=True)
 def _update_contractor(request, contractor_id: int,
                        data: schemas.ContractorUpdate):
+    try:
+        row = contractor_service.update_contractor(
+            contractor_id, data.model_dump(exclude_unset=True))
+    except contractor_service.CounterpartyLinkConflict as exc:
+        return json_error(str(exc), 409)
     return schemas.ContractorResponse.model_validate(
-        contractor_service.build_contractor(
-            contractor_service.update_contractor(
-                contractor_id, data.model_dump(exclude_unset=True))))
+        contractor_service.build_contractor(row))
 
 
 @api_view(methods=("DELETE",), status=204, admin=True)
@@ -1254,12 +1260,12 @@ def _list_engagements(request):
         roadmap_id = _int_param(request, "roadmap_id")
     except _ParamError as exc:
         return exc.response
-    return [schemas.ContractorEngagementResponse.model_validate(
-        contractor_service.build_engagement(row))
-        for row in contractor_service.list_engagements(
-            contractor_id=contractor_id, project_id=project_id,
-            site_id=site_id, roadmap_id=roadmap_id,
-            active_only=_bool_param(request, "active_only", False))]
+    return [schemas.ContractorEngagementResponse.model_validate(item)
+            for item in contractor_service.build_engagements(
+                contractor_service.list_engagements(
+                    contractor_id=contractor_id, project_id=project_id,
+                    site_id=site_id, roadmap_id=roadmap_id,
+                    active_only=_bool_param(request, "active_only", False)))]
 
 
 @api_view(methods=("POST",), body=schemas.ContractorEngagementCreate,
@@ -1267,6 +1273,8 @@ def _list_engagements(request):
 def _create_engagement(request, data: schemas.ContractorEngagementCreate):
     try:
         row = contractor_service.create_engagement(data.model_dump())
+    except contractor_service.CounterpartyLinkConflict as exc:
+        return json_error(str(exc), 409)
     except ValueError as exc:
         return json_error(str(exc), 400)
     return schemas.ContractorEngagementResponse.model_validate(
@@ -1291,6 +1299,8 @@ def _update_engagement(request, engagement_id: int,
     except date_rules.DatesOutOfOrder as exc:
         # 422, а не 500: до правила дат раньше добиралась только БД.
         return json_error(str(exc), 422)
+    except contractor_service.CounterpartyLinkConflict as exc:
+        return json_error(str(exc), 409)
     except ValueError as exc:
         return json_error(str(exc), 400)
     return schemas.ContractorEngagementResponse.model_validate(

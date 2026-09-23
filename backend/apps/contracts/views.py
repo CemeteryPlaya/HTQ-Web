@@ -630,12 +630,12 @@ class BudgetLineDetailView(ContractsView):
 class CounterpartyCollectionView(ContractsView):
     @read
     def get(self, request):
-        rows = cp_svc.list_counterparties(
+        rows = cp_svc.attach_contractors(cp_svc.list_counterparties(
             search=self.str_param("search"),
             status=self.str_param("status"),
             country_id=self.int_param("country_id"),
             approval_state=self.str_param("approval_state"),
-        )
+        ))
         return self.paginated(rows, schemas.CounterpartyRead.model_validate)
 
     @write("POST", body=schemas.CounterpartyCreate, status=201, admin=False)
@@ -657,6 +657,7 @@ class CounterpartyFullCreateView(ContractsView):
                 bin_iin=data.bin_iin, name=data.name, country=data.country,
                 vat=data.vat, contact_name=data.contact_name, phone=data.phone,
                 email=data.email, address=data.address, status=data.status,
+                contractor_id=data.contractor_id,
             )
         except CONFLICTS as exc:
             return self.conflict(exc)
@@ -666,8 +667,9 @@ class CounterpartyFullCreateView(ContractsView):
 class CounterpartyDetailView(ContractsView):
     @read
     def get(self, request, counterparty_id: int):
+        row = cp_svc.get_counterparty_or_404(counterparty_id)
         return schemas.CounterpartyRead.model_validate(
-            cp_svc.get_counterparty_or_404(counterparty_id))
+            cp_svc.attach_contractors([row])[0])
 
     @write("PATCH", body=schemas.CounterpartyUpdate)
     def patch(self, request, counterparty_id: int,
@@ -676,7 +678,8 @@ class CounterpartyDetailView(ContractsView):
             row = cp_svc.update_counterparty(counterparty_id, **data.model_dump())
         except CONFLICTS as exc:
             return self.conflict(exc)
-        return schemas.CounterpartyRead.model_validate(row)
+        return schemas.CounterpartyRead.model_validate(
+            cp_svc.attach_contractors([row])[0])
 
     @write("DELETE")
     def delete(self, request, counterparty_id: int):

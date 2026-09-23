@@ -5,10 +5,12 @@
 другой аппки запрещён и ловится тестом
 ``apps/core/tests/test_app_isolation.py``.
 
-Единственный потребитель сегодня — ``apps.approvals``: виджет
-``budget_line_ref`` конструктора форм хранит в запросе ``budget_line_id`` и
-через ``get_budget_lines_brief`` проверяет его при отправке и подписывает в
-таблице данных. Остальные функции заведены не «на всякий случай», а потому
+Потребители — ``apps.approvals``: виджет ``budget_line_ref`` конструктора
+форм хранит в запросе ``budget_line_id`` и через ``get_budget_lines_brief``
+проверяет его при отправке и подписывает в таблице данных; и ``apps.tasks``:
+партнёр хранит ``counterparty_id``, его привлечение — ``agreement_id``
+(``get_counterparties_brief`` / ``get_agreements_brief``). Остальные
+функции заведены не «на всякий случай», а потому
 что вызовы просматриваются (отчётный раздел, которому нужен остаток бюджета).
 Все следуют контракту, общему для всех ``interface.py`` в репозитории:
 
@@ -29,6 +31,7 @@ from apps.contracts.models import (
     Agreement,
     Budget,
     BudgetLine,
+    Counterparty,
     Country,
     Invoice,
     Program,
@@ -236,6 +239,62 @@ def get_agreement_brief(agreement_id: int) -> dict | None:
         "budget_id": agreement.budget_line.budget_id,
         "signed_date": agreement.signed_date,
     }
+
+
+def get_counterparties_brief(counterparty_ids: Iterable[int]) -> list[dict]:
+    """Контрагенты ПЛОСКО и батчем — для партнёра из ``apps.tasks``, который
+    хранит ``counterparty_id`` (та же организация в роли исполнителя).
+
+    Контакты отдаются вместе с реквизитами: партнёр при связывании
+    подтягивает их к себе, и без них ему пришлось бы ходить за ними в чужой
+    HTTP. Батч и «отсутствующие id просто не попадают» — как у
+    ``get_budget_lines_brief``: ошибка это или нет, решает сосед.
+    """
+    require_service("contracts")
+
+    ids = sorted({int(cp_id) for cp_id in counterparty_ids if cp_id is not None})
+    if not ids:
+        return []
+    return [
+        {
+            "id": row.pk,
+            "name": row.name,
+            "bin_iin": row.bin_iin,
+            "status": row.status,
+            "approval_state": row.approval_state,
+            "contact_name": row.contact_name,
+            "phone": row.phone,
+            "email": row.email,
+            "address": row.address,
+        }
+        for row in Counterparty.objects.filter(pk__in=ids)
+    ]
+
+
+def get_agreements_brief(agreement_ids: Iterable[int]) -> list[dict]:
+    """Договоры ПЛОСКО и батчем — для привлечения партнёра в ``apps.tasks``.
+
+    ``counterparty_id`` отдаётся затем, чтобы сосед проверил, что договор
+    заключён именно с контрагентом его партнёра. Сумм и бюджета здесь нет:
+    привлечению нужен номер и ссылка, а деньги — дело карточки договора.
+    """
+    require_service("contracts")
+
+    ids = sorted({int(a_id) for a_id in agreement_ids if a_id is not None})
+    if not ids:
+        return []
+    return [
+        {
+            "id": row.pk,
+            "number": row.number,
+            "name": row.name,
+            "counterparty_id": row.counterparty_id,
+            "status": row.status,
+            "approval_state": row.approval_state,
+            "signed_date": row.signed_date,
+        }
+        for row in Agreement.objects.filter(pk__in=ids)
+    ]
 
 
 def get_invoice_brief(invoice_id: int) -> dict | None:

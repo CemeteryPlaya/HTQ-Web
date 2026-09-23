@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Building2, Loader2 } from 'lucide-react';
+import { ArrowLeft, Building2, HardHat, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ContractsShell } from '@/components/contracts/ContractsShell';
+import { EntityCombobox } from '@/components/hr/OrgChart/EntityCombobox';
 import { BinIinInput } from '@/components/ui/bin-iin-input';
 import { Button } from '@/components/ui/button';
 import { InternationalPhoneInput } from '@/components/ui/international-phone-input';
@@ -25,8 +26,10 @@ import {
   type ReferenceValue,
 } from '@/components/contracts/ReferenceCombobox';
 import { contractsApi } from '@/api/contracts';
+import { fetchContractors } from '@/api/tasks';
 import { reportApiError } from '@/lib/apiError';
 import type { CounterpartyStatus } from '@/types/contracts';
+import type { Contractor } from '@/types/tasks';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -41,6 +44,11 @@ import { useTranslation } from 'react-i18next';
  * отдельных поля (ФИО, телефон, e-mail) вместо прежней свободной строки: по
  * ним теперь можно и написать, и позвонить, не разбирая текст глазами.
  * Должности среди них нет намеренно — см. модель Counterparty.
+ *
+ * «Подтянуть из партнёра» — та же организация уже заведена в модуле задач
+ * (партнёр на объектах): реквизиты берутся оттуда, а связь ставится на
+ * бэкенде той же транзакцией, что и создание (`contractor_id`). Сюда же
+ * ведёт кнопка «Завести контрагента из партнёра» — с `?from_contractor=`.
  */
 
 /** Казахстанский БИН/ИИН — 12 цифр. Иностранные номера другой формы, поэтому
@@ -77,6 +85,73 @@ const CounterpartyCreate = () => {
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
   const [status, setStatus] = useState<CounterpartyStatus>('active');
+
+  const [searchParams] = useSearchParams();
+  const [contractorId, setContractorId] = useState<number | null>(() => {
+    const fromUrl = Number(searchParams.get('from_contractor'));
+    return Number.isInteger(fromUrl) && fromUrl > 0 ? fromUrl : null;
+  });
+
+  // Партнёры модуля задач. Ошибка запроса (модуль выключен, нет доступа) —
+  // просто нет блока «из партнёра»: контрагента заводят и без него.
+  const partnersQuery = useQuery({
+    queryKey: ['contractors', 'counterparty-picker'],
+    queryFn: () => fetchContractors(),
+    retry: false,
+  });
+  const partners = useMemo(() => partnersQuery.data ?? [], [partnersQuery.data]);
+  // Уже связанный партнёр не предлагается: перепривязать его отсюда нельзя
+  // (бэкенд ответит 409), это делается в карточке партнёра.
+  const partnerOptions = useMemo(
+    () => partners
+      .filter((row) => row.counterparty_id === null)
+      .map((row) => ({
+        id: row.id,
+        label: row.name,
+        subLabel: row.bin_iin ? `БИН/ИИН ${row.bin_iin}` : null,
+      })),
+    [partners],
+  );
+
+  /** Заполнить пустые поля формы реквизитами партнёра. Пустые — чтобы не
+   *  затереть то, что уже вписали руками. */
+  const fillFromPartner = (partner: Contractor) => {
+    const fill = (current: string, value: string | null, set: (v: string) => void) => {
+      if (value && !current.trim()) set(value);
+    };
+    fill(binIin, partner.bin_iin, setBinIin);
+    fill(name, partner.name, setName);
+    fill(contactName, partner.contact_person, setContactName);
+    fill(phone, partner.phone, setPhone);
+    fill(email, partner.email, setEmail);
+    fill(address, partner.address, setAddress);
+  };
+
+  const pickPartner = (idStr: string) => {
+    const partner = partners.find((row) => row.id === Number(idStr)) ?? null;
+    setContractorId(partner?.id ?? null);
+    if (partner) fillFromPartner(partner);
+  };
+
+  // Пришли по кнопке «Завести контрагента из партнёра» — подтянуть один раз,
+  // как только список партнёров загрузится.
+  const prefilledFromUrl = useRef(false);
+  useEffect(() => {
+    if (prefilledFromUrl.current || contractorId === null) return;
+    if (partnersQuery.isError) {
+      // Модуль задач недоступен — связывать не с чем, заводим как обычно.
+      prefilledFromUrl.current = true;
+      setContractorId(null);
+      return;
+    }
+    if (!partnersQuery.isSuccess) return;
+    prefilledFromUrl.current = true;
+    const partner = partners.find((row) => row.id === contractorId);
+    if (partner && partner.counterparty_id === null) fillFromPartner(partner);
+    else setContractorId(null);
+    // fillFromPartner читает текущие поля формы — на первом проходе они пусты.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partners, contractorId, partnersQuery.isSuccess, partnersQuery.isError]);
 
   const [errors, setErrors] = useState<Errors>({});
 
@@ -120,10 +195,12 @@ const CounterpartyCreate = () => {
           email: email.trim(),
           address: address.trim(),
           status,
+          contractor_id: contractorId,
         })
         .then((r) => r.data),
     onSuccess: (row) => {
       queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      if (row.contractor) queryClient.invalidateQueries({ queryKey: ['contractors'] });
       toast.success(t('contracts.counterpartyForm.added', { name: row.name }));
       navigate('/contracts/counterparties');
     },
@@ -168,6 +245,27 @@ const CounterpartyCreate = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
+          {partnersQuery.isSuccess && (partnerOptions.length > 0 || contractorId !== null) && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <HardHat className="h-4 w-4 text-muted-foreground" />
+                  {t('contracts.counterpartyForm.fromPartner')}
+                </CardTitle>
+                <CardDescription>{t('contracts.counterpartyForm.fromPartnerHint')}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <EntityCombobox
+                  value={contractorId ? String(contractorId) : ''}
+                  onChange={pickPartner}
+                  options={partnerOptions}
+                  placeholder={t('contracts.counterpartyForm.fromPartnerPlaceholder')}
+                  searchPlaceholder={t('contracts.counterpartyForm.fromPartnerSearch')}
+                />
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle>{t('contracts.counterparty.details')}</CardTitle>

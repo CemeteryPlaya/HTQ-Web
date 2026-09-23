@@ -158,6 +158,9 @@ export interface Counterparty {
   status: CounterpartyStatus;
   /** Ось согласования — отдельно от `status`. См. Budget.approval_state. */
   approval_state: ApprovalState;
+  /** Та же организация в модуле задач — партнёр на объектах, если связан.
+   *  `null` и при выключенном модуле задач. */
+  contractor?: { id: number; name: string; status: string } | null;
   created_at: string;
   updated_at: string;
 }
@@ -555,6 +558,8 @@ export interface CounterpartyFullCreatePayload {
   email: string;
   address: string;
   status?: CounterpartyStatus;
+  /** Карточка заведена «из партнёра» — связь ставится той же транзакцией. */
+  contractor_id?: number | null;
 }
 
 /** Одна строка заявки: программа и её собственная сумма. */
