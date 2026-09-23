@@ -4,7 +4,9 @@
 > and the Django monolith that preceded them are both gone. One Django
 > backend (Python 3.14, Django 5.2.7) now serves every domain behind a Vite
 > dev proxy (`:3000`) or the nginx prod gateway (`:80`). Real-time chat over
-> Socket.IO, served by the backend's ASGI process. One Postgres schema.
+> Socket.IO, served by the backend's ASGI process. One Postgres database:
+> shared apps in schema `public`, the tenant apps (`hr`, `tasks`,
+> `contracts`, `signoff`) in one schema per company (`co_<slug>`).
 
 ## Architecture
 
@@ -26,7 +28,8 @@
 │ in prod), same image, different `command` per process:               │
 │                                                                       │
 │   backend-web    :8000   gunicorn/WSGI — all of /api/*, /django-admin/,│
-│                          static. Only this process runs `migrate` +   │
+│                          static. Only this process migrates          │
+│                          (`migrate_shared` — shared apps only) +     │
 │                          seeds the admin account (RUN_MIGRATIONS=1)   │
 │   backend-asgi   :8000   uvicorn/ASGI  — SSE /api/requests/v1/stream +│
 │                          WebSocket /ws/ (messenger Socket.IO)         │
@@ -38,7 +41,8 @@
           ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Postgres :5432 (direct — no pooling middleman in the request path)   │
-│   one schema: public. Table names are Django's own default           │
+│   public (shared apps) + co_<slug> per company (TENANT_APPS) +       │
+│   holding (UNION ALL views). Table names are Django's own default    │
 │   (<app_label>_<model>, e.g. hr_department, mail_emailaccount)       │
 │   PgBouncer :6432 kept for host tooling only, not live traffic       │
 │ Redis :6379  (cache, Celery broker/results, SSE pub/sub bridge)      │
@@ -48,7 +52,9 @@
 
 Domains are Django apps under `backend/apps/`: `users`, `hr`, `tasks`,
 `approvals` (mounted at `/api/requests/`), `cms`, `media_files` (mounted at
-`/api/media/`), `mail` (mounted at `/api/email/`), `messenger`, plus `core`
+`/api/media/`), `mail` (mounted at `/api/email/`), `messenger`, `contracts`,
+`signoff`, `conference`, `companies` (the group's company registry) and
+`access` (roles and permissions), plus `core`
 (health checks + the service registry, no domain of its own). Each domain's
 URLs live in `apps/<domain>/urls.py` — that is now the source of truth this
 document is checked against, not a FastAPI router. See
@@ -173,10 +179,14 @@ JWT claims (HS256 with `JWT_SECRET`, issuer `htqweb-auth` — unchanged from
 the FastAPI generation, even though there's no separate user-service
 anymore):
 ```
-{ user_id, username, email, is_staff, is_superuser, is_admin,
-  token_type: "access" | "refresh", iat, exp, iss }
+{ sub, user_id, username, email, is_staff, is_superuser, is_admin,
+  company, token_type: "access" | "refresh", iat, exp, iss }
 ```
-`is_admin = is_staff OR is_superuser`. `apps.users` (`htqweb/authn/jwt.py`)
+`is_admin = is_staff OR is_superuser`. `company` is the slug of the company
+the token was issued for — the request's company (`X-HTQ-Company`) if the
+user holds a membership there, otherwise their default company
+(`htqweb/authn/jwt.py::_base_claims`). A refresh token carries only `sub`,
+`user_id`, `iss` plus the type/time claims. `apps.users` (`htqweb/authn/jwt.py`)
 both issues and validates every token, in-process, for every app — no
 introspection round-trip, no separate identity service.
 
@@ -197,8 +207,12 @@ Stated once here; the per-domain tables below do **not** repeat it per row.
    the SPA sends a signed-in user to `/companies/choose` there. The
    token's `company` claim must equal the header's company, otherwise
    **403** — a subdomain is trivial to spoof, a signature is not. Switching
-   company means logging in again on that subdomain (login refuses a company
-   the user has no `CompanyMembership` in).
+   company means moving to that company's host: the SPA there has no access
+   token of its own (it is per-origin) and exchanges the refresh token, kept
+   in a cookie on the parent domain, for one issued for that company
+   (`frontend/src/lib/auth/sessionRestore.ts`, `companySwitch.ts`) — no
+   second login. Both login and refresh refuse (**403**) a company the user
+   has no `CompanyMembership` in.
 3. **Module × level** — a route declared `api_view(module="<m>",
    level="read"|"write"|"admin")` asks `apps.access` for the caller's level
    on that module *in the request's company* and answers **403** when it is
@@ -300,7 +314,11 @@ Content-Type: application/json
 
 { "refresh": "<jwt>" }
 → 200 { "access": "<jwt>", "token_type": "Bearer" }
+→ 403 { "detail": "Forbidden" }   # X-HTQ-Company names a company the user has no membership in
 ```
+The new access token is issued for the request's company, not for the one
+the refresh token was first issued in (a refresh token carries no
+`company`); without `X-HTQ-Company` — for the user's default company.
 
 ### Admin-session cookie — legacy, kept for contract parity, no live consumer
 
@@ -325,7 +343,7 @@ session/login form against the same `User` model. Don't wire new code to
 ### Bootstrap an admin user
 
 The `backend-web` process seeds one automatically and idempotently on every
-start (`RUN_MIGRATIONS=1` → `docker-entrypoint.sh` → `migrate` then a
+start (`RUN_MIGRATIONS=1` → `docker-entrypoint.sh` → `migrate_shared` then a
 `manage.py shell` one-liner):
 ```
 username=admin, password=admin12345, is_staff=is_superuser=True, status=ACTIVE
@@ -433,7 +451,7 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/hr/v1/pmo/`                         | GET, POST | Project management office   |
 | `/api/hr/v1/share-links/`                 | GET, POST |                              |
 | `/api/hr/v1/public/org/{token}`           | GET    | Public org-chart by share link — nginx `api_public` rate limit |
-| `/api/hr/v1/holding/headcount`            | GET    | Сводка по группе: люди/структура/штат по каждой действующей компании (блок H, `holding.*` через `apps/hr/holding_models.py`). JWT + обычный HR-доступ, ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
+| `/api/hr/v1/holding/headcount`            | GET    | Сводка по группе: люди/структура/штат по каждой действующей компании (блок H, `holding.*` через `apps/hr/holding_models.py`). JWT + гейт `module="hr", level="read"`, ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/hr/urls.py` (170 registered patterns, counting both
 slash spellings — see [STRUCTURE.md §4.2](STRUCTURE.md) for HR-adjacent
@@ -500,7 +518,7 @@ business logic).
 | `/api/tasks/v1/production-calendar/`              | GET, PATCH | Production days, Kazakhstan holidays |
 | `/api/tasks/v1/sequences/`                        | GET    | Jira-style key generators     |
 | `/api/tasks/v1/notifications/`                    | GET    |                              |
-| `/api/tasks/v1/holding/projects`                  | GET    | Сводка по группе: проекты/объекты/задачи/отчётность по каждой действующей компании (блок H, `holding.*` через `apps/tasks/holding_models.py`). JWT + `is_elevated` (staff/superuser), ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
+| `/api/tasks/v1/holding/projects`                  | GET    | Сводка по группе: проекты/объекты/задачи/отчётность по каждой действующей компании (блок H, `holding.*` через `apps/tasks/holding_models.py`). JWT + гейт `module="tasks", level="admin"` (`is_staff` без роли не проходит), ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/tasks/urls.py`. FSM transitions and the role model
 (reporter/supervisor/assignee/delegate/watcher) are unchanged from the
@@ -1170,7 +1188,7 @@ platform administrator only.**
 | `/api/companies/v1/companies/{slug}/memberships`            | GET    | jwt (companies/read), own company only | Account fields joined in via `apps.users.interface.get_users_brief`. A membership whose account got deleted still shows, with blank account fields, rather than being hidden — a hidden row can't be revoked. `deny_unless_own_company` inside the view — see the company-blind-gate note above |
 | `/api/companies/v1/companies/{slug}/memberships`             | POST   | jwt (companies/write) + superuser | `{user_id, is_default?}`. 422 if `user_id` doesn't resolve via `get_user_brief`. Idempotent on `(company, user_id)`: 201 on first grant, 200 on repeat, never a second row. `deny_unless_platform_admin` inside the view — granting membership hands out a legitimate `company` claim and that company's whole tenant schema, see the company-blind-gate note above |
 | `/api/companies/v1/companies/{slug}/memberships/{user_id}`   | DELETE | admin (superuser)     | 409 `self_revoke` — can't revoke your own membership over HTTP (locking yourself out is one click; getting back in needs `manage.py company_grant` from a console). 404 if there's no such membership |
-| `/api/companies/v1/companies/{slug}/external-holders`         | GET    | jwt, own company only | Block C. Who from a company *above* this one in the ownership tree currently holds rights here through a serving position (`hr.Position.serves_subsidiaries` → `apps.access.services.inheritance`) — `[{full_name, home_company, position, modules: [{module, level}]}]`, exactly those four fields and nothing else (no email/phone/department — this is holding-staff data disclosed to the subsidiary). `deny_unless_own_company`, same as the membership roster. 403 with a body (not an empty list — an empty list would mean "nobody from outside holds rights here", which would be false) when `Company.show_external_holders` is off for this company |
+| `/api/companies/v1/companies/{slug}/external-holders`         | GET    | jwt (companies/read), own company only | Block C. Who from a company *above* this one in the ownership tree currently holds rights here through a serving position (`hr.Position.serves_subsidiaries` → `apps.access.services.inheritance`) — `[{full_name, home_company, position, modules: [{module, level}]}]`, exactly those four fields and nothing else (no email/phone/department — this is holding-staff data disclosed to the subsidiary). `deny_unless_own_company`, same as the membership roster. 403 with a body (not an empty list — an empty list would mean "nobody from outside holds rights here", which would be false) when `Company.show_external_holders` is off for this company |
 
 **`show_external_holders`** (`CompanyRead`/`CompanyPatch`, migration `companies/0004`, default `true`) is a per-company, platform-admin-only setting: it controls whether a subsidiary can *see* who from a parent company holds rights in it via the endpoint above — it does not control the access itself, and a subsidiary cannot turn it off for itself (customer decision 4, block C). Defaulting to on is deliberate: hiding it by default would hide the fact of access from the company whose data is actually being read.
 
@@ -1248,11 +1266,11 @@ in-process Python contract instead.
 | **Request ID**        | Gateway emits `X-Request-ID`; `htqweb.middleware.request_id.RequestIDMiddleware` echoes/generates it and puts it on `request.request_id`. |
 | **JWT validation**    | Every app decodes the JWT the same way, in-process (`htqweb/authn/jwt.py`), HS256, shared `JWT_SECRET`. No introspection, no S2S JWT anymore — the Django port explicitly dropped the old `SERVICE_JWT_SECRET`/`X-User-Id` service-to-service concept (see `apps/media_files/views.py`'s `_can_access_private` docstring). |
 | **User context**      | `request.token.user_id` (int) is the source of truth for the calling user. |
-| **Authorisation**     | `is_staff`/`is_superuser`/`is_admin` claims (`TokenPayload.is_elevated`) gate admin paths, via `api_view(admin=True)` / `htqweb.authn.rbac.require_admin`. |
+| **Authorisation**     | Application routes: `api_view(module=, level=)` — the caller's roles in `apps.access`, counted in the request's company (see Authentication → Authorization). Platform-admin paths: `is_staff`/`is_superuser`/`is_admin` claims (`TokenPayload.is_elevated`) via `api_view(admin=True)` / `htqweb.authn.rbac.require_admin`, checked in addition to the module gate, not instead of it. |
 | **Cross-app calls**   | A neighbour app is reached only through its `apps.<x>.interface` module — a plain Python function call, not HTTP. Every `interface.py` function starts with `require_service("<name>")`, so a disabled dependency degrades the same way an external call would (`ServiceDisabled` → 503 envelope), instead of a raw exception. |
 | **Logging**           | structlog-style JSON to stdout → Promtail → Loki. |
-| **Database**           | One Postgres schema (`public`), one connection per app process (`CONN_MAX_AGE=0`, direct to `db:5432`, no PgBouncer in the request path). Table names are Django's own `<app_label>_<model>` default. |
-| **Migrations**        | Plain Django `makemigrations`/`migrate`, `managed=True`. No Alembic. |
+| **Database**           | One Postgres database: shared apps in `public`, `TENANT_APPS` (`hr`, `tasks`, `contracts`, `signoff`) in one `co_<slug>` schema per company, chosen per request by `search_path` (`CompanyContextMiddleware`); group-wide read views in schema `holding`. One connection per app process (`CONN_MAX_AGE=0`, direct to `db:5432`, no PgBouncer in the request path). Table names are Django's own `<app_label>_<model>` default. |
+| **Migrations**        | Plain Django `makemigrations`, `managed=True`, no Alembic. Applied in two steps: `manage.py migrate_shared` (shared apps — what container start runs) and `manage.py migrate_companies` (each company's schema, a separate rollout step) — never bare `migrate` once `tenancy_bootstrap` has moved the tenant apps out of `public`. |
 | **Pub/Sub**            | Redis pub/sub survives for exactly one purpose now: bridging `apps.approvals`' SSE stream across the WSGI/ASGI process split (see the SSE section above). The old `user.upserted`/`user.deactivated` replication channels were dropped — neighbours call `apps.users.interface` directly instead of consuming an async replica. |
 | **Worker queue**      | Celery, Redis broker. One `backend-worker` + one `backend-beat` for the whole platform (not one pair per domain anymore). Every task's first line is `require_service("<app>")`. |
 
@@ -1288,8 +1306,8 @@ change:
 |----------|---------------------------------------------------------------------|
 | 400      | Validation / malformed request (`SuspiciousOperation`)               |
 | 401      | Missing or invalid JWT                                               |
-| 403      | Authenticated but not authorised (e.g. non-admin on admin route), or `django-admin` `PermissionDenied` |
-| 404      | Resource (or route) not found — see the routing table above          |
+| 403      | Authenticated but not authorised (e.g. non-admin on admin route, module level below the route's, token `company` claim ≠ the request's company), or `django-admin` `PermissionDenied` |
+| 404      | Resource (or route) not found — see the routing table above; also `{"detail": "Компания не найдена"}` from `CompanyContextMiddleware` for a request to an unknown or archived company's host |
 | 409      | Conflict (e.g. duplicate email on register)                          |
 | 422      | Pydantic validation error (`body=` schema on `api_view`)              |
 | 429      | Rate limit exceeded (nginx prod only)                                |

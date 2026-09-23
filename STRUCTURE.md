@@ -1,6 +1,6 @@
 # STRUCTURE.md — навигационная карта проекта HTQWeb
 
-Путеводитель по репозиторию для людей и ИИ-агентов: где что лежит, по каким правилам устроены каталоги, куда смотреть в первую очередь. Цель — не сканировать весь проект. Актуализировано под завершённый cutover (единый Django-backend). Дата сверки — 2026-09-02 (раздел «Наблюдаемость» переписан полностью: он утверждал вещи, которых уже не было).
+Путеводитель по репозиторию для людей и ИИ-агентов: где что лежит, по каким правилам устроены каталоги, куда смотреть в первую очередь. Цель — не сканировать весь проект. Актуализировано под завершённый cutover (единый Django-backend). Дата сверки — 2026-09-02 (раздел «Наблюдаемость» переписан полностью: он утверждал вещи, которых уже не было); 2026-09-24 — сверка с кодом после блоков A–I.2 рефакторинга структуры группы (§3.2, §3.7, §4, §6–§8).
 
 > Дополняющие документы: [README.md](./README.md) (как поднять), [API.md](./API.md) (роутинг и контракты), [backend/README.md](./backend/README.md) (анатомия Django-аппки), [docs/architecture.md](./docs/architecture.md) (заметки по слоям — местами не в ногу с реальным деревом, см. предупреждение в CLAUDE.md).
 
@@ -113,7 +113,7 @@ backend/apps/<domain>/
 - Бизнес-логика — всегда в `services/<file>.py`. `views.py` её только вызывает.
 - API-слой — `htqweb.http.api_view` (декоратор), НЕ Django REST Framework: `methods=`, `auth="jwt"|"admin_session"|None`, опц. `body=<PydanticModel>`, `admin=True` (гейт через `htqweb.authn.rbac.require_admin`), **`module="<аппка>", level="read"|"write"|"admin"`** — прикладной гейт «модуль × уровень» по ролям `apps.access` в контексте компании запроса (единственная модель прав; правило описано один раз в [API.md](./API.md) § Authorization). Ручка без `module=` в переведённой аппке допустима только с записью в `apps/access/self_service.py`. Конверт ошибок — всегда `{"detail": ...}`.
 - JWT: issuer `htqweb-auth` (см. `htqweb/settings/base.py::JWT_ISSUER`) — не путать с доменом `users`, который его лишь выпускает/валидирует. Проверка — `htqweb/authn/jwt.py`, HS256, общий `JWT_SECRET`.
-- Отключаемость: `apps.core.models.ServiceStatus` (строка на аппку) + `htqweb.middleware.service_gate.ServiceGateMiddleware` (гейт по URL-префиксу `/api/...`, `/ws/...`) + `apps.core.services.require_service()` (внутрипроцессный гейт — обязателен первой строкой в `interface.py` и `tasks.py`) + `htqweb.admin_gate.ServiceGatedAdminMixin` (гейт `django-admin`). Переключатель: `python manage.py service <name> --on/--off`.
+- Отключаемость: `apps.core.models.ServiceStatus` (строка на аппку) + `htqweb.middleware.service_gate.ServiceGateMiddleware` (гейт по URL-префиксу `/api/...`, `/ws/...`) + `apps.core.services.require_service()` (внутрипроцессный гейт — обязателен первой строкой в `interface.py` и `tasks.py`) + `htqweb.admin_gate.ServiceGatedAdminMixin` (гейт `django-admin`). Переключатель: `python manage.py service <name> --on/--off`. Поверх глобального — второй слой на уровне компании: `apps.companies.models.CompanyModule` (кроме `CORE_MODULES`), оба слоя сводит `apps.core.services.service_status()` — его спрашивают и middleware, и `require_service()` (см. §3.7, CLAUDE.md «Два независимых рубильника»).
 
 ### 3.3 Как добавить новую аппку/домен
 
@@ -208,7 +208,8 @@ cd backend
 backend/htqweb/tenancy/       # Контекст компании и перевод соединения в её схему — часть фундамента
 │                              #   htqweb, не Django-аппка и не гейтится ServiceStatus/require_service
 ├── __init__.py                 # ре-экспорт: current_company, current_company_or_none,
-│                                #   set_company/reset_company, schema_for, NoCompanyContext, HOLDING_SCHEMA
+│                                #   set_company/reset_company, schema_for, NoCompanyContext, HOLDING_SCHEMA,
+│                                #   holding_active (признак use_holding() для читателей сводок, блок H)
 ├── context.py                   # contextvars-хранилище slug'а (не threading.local — под ASGI
 │                                #   поток обслуживает много корутин) + schema_for("co_" + slug)
 ├── db.py                         # apply_search_path()/use_company()/use_holding() — SET search_path
@@ -225,7 +226,7 @@ backend/apps/companies/        # Реестр компаний (схема publi
 │                                #   MyCompany, …) — правка формы только вслед за планом; фронт
 │                                #   (src/types/companies.ts) собран по той же таблице
 ├── views.py                       # HTTP-слой me/companies/tree/companies/<slug>/{archive,restore,
-│                                #   modules,memberships}: чтение и правка реестра — api_view(module=
+│                                #   modules,memberships,external-holders}: чтение и правка реестра — api_view(module=
 │                                #   "companies"); архив/восстановление/отзыв членства — admin=True +
 │                                #   is_superuser. Заведения компании здесь нет (см. company_create)
 ├── urls.py                        # path() для views.py; companies/tree стоит ВЫШЕ companies/<slug>,
@@ -245,6 +246,9 @@ backend/apps/companies/        # Реестр компаний (схема publi
 │   │                                   #   гейт LastActiveCompany (архив последней компании = 404 её трафику)
 │   ├── module_service.py                # модули ОДНОЙ компании (CompanyModule) — компанейский слой
 │   │                                    #   рубильника поверх KNOWN_SERVICES/CORE_MODULES из apps.core
+│   ├── membership_service.py            # grant_membership() — единственная точка выдачи CompanyMembership
+│   │                                    #   (команды, HTTP, django-admin); вместе с членством выдаёт
+│   │                                    #   базовую роль employee-basic (access.interface.ensure_basic_role)
 │   └── holding_views.py                # drop_holding_views()/rebuild_holding_views() — сводные
 │                                        #   UNION ALL представления схемы holding
 └── management/commands/
@@ -258,6 +262,9 @@ backend/apps/companies/        # Реестр компаний (схема publi
     │                                     #   сводок холдинга вокруг прогона)
     ├── migrate_shared.py                  # migrate только нетенантных аппок — этим стартует
     │                                      #   контейнер вместо голого migrate (RUN_MIGRATIONS=1)
+    ├── seed_group_demo.py                 # стенд группы: четыре компании (холдинг + три ДО) — реестр,
+    │                                      #   схемы, оргструктуры, учётки, членства, задачи HTQ; только
+    │                                      #   локальная БД (псевдонимов не ставит — стенд живёт по слагу)
     ├── tenancy_bootstrap.py                # разовый перенос hr/tasks/contracts/signoff из public
     │                                       #   в схему первой компании (ALTER TABLE ... SET SCHEMA)
     └── tenancy_status.py                    # слепок раскладки тенантных таблиц по схемам, ТОЛЬКО чтение —
@@ -276,12 +283,16 @@ frontend/src/
 ├── main.tsx   App.tsx   index.css   i18n.js
 ├── app/
 │   ├── routing/        # ⭐ routeDefinitions.ts, lazyPages.ts, prefetch.ts
+│   ├── navigation/     # navItems.ts; hrNavAccess.ts — одна таблица «пункт кадрового меню → предикат
+│   │                   #   по /me» для HRLayout и ProfileSidebar
 │   └── components/
 ├── pages/              # ⭐ Точки входа роутов (Index, Login, Admin*, HR*, Calendar, Email/, hr/, public/, requests/)
 │   ├── CompanyPicker.tsx  # /companies/choose — выбор компании на голом домене после входа (одна — сразу
 │   │                   #   редирект на её поддомен); RequireAuth ведёт сюда любой защищённый маршрут без компании
 │   ├── Email/          # OAuth callback, inbox, compose modal, settings panel
 │   ├── hr/             # HR-страницы (Departments, Employees, Vacancies, Tasks, Roadmap, …)
+│   ├── holding/        # GroupSummary.tsx — «Сводка группы» (/holding): ручки hr/v1/holding/headcount
+│   │                   #   и tasks/v1/holding/projects, только на поддомене холдинга (блок H)
 │   └── companies/      # CompanyRegistry.tsx — «Компании группы»: дерево владения, карточка
 │                       #   (правка/архив/восстановление), вкладки «Модули»/«Участники»
 ├── features/
@@ -297,16 +308,18 @@ frontend/src/
 │                       #   client.ts (base axios+JWT), endpoints.ts (карта префиксов),
 │                       #   users.ts, hr.ts, tasks.ts, requests.ts, cms.ts, media.ts,
 │                       #   calendar.ts, email.ts, fileManager.ts, search.ts (глобальный fan-out поиск),
-│                       #   companies.ts (реестр компаний — apps.companies)
+│                       #   companies.ts (реестр компаний — apps.companies), access.ts (/me, роли),
+│                       #   holding.ts (сводка группы)
 ├── services/           # emailService.ts (тонкие обёртки над api/)
 ├── hooks/              # useActiveProfile, usePermissions (права из /api/access/v1/me —
 │                       #   единственный источник), useHRLevel (ТОЛЬКО для pages/contracts/*,
 │                       #   тонкая обёртка над usePermissions; сторож __tests__/useHRLevelImporters),
 │                       #   use-mobile, use-toast, useMyCompanies (переключатель компании), …
 ├── lib/
-│   ├── auth/           # profileStorage.ts, roles.ts (RBAC хелперы), companySwitch.ts (метка хоста ↔ компания,
-│   │                   #   переход на поддомен `subdomain ?? slug`)
-│   (app/navigation/hrNavAccess.ts — одна таблица «пункт кадрового меню → предикат по /me» для HRLayout и ProfileSidebar)
+│   ├── auth/           # profileStorage.ts, roles.ts (RBAC хелперы), permissions.ts (depthFor — глубина по узлу),
+│   │                   #   companySwitch.ts (метка хоста ↔ компания, переход на поддомен `subdomain ?? slug`;
+│   │                   #   refresh-cookie на родительском домене), sessionRestore.ts (на новом поддомене —
+│   │                   #   один обмен refresh-cookie на access-токен вместо второго входа, зовёт RequireAuth)
 │   ├── transport/      # IMediaTransport + WebRTCAdapter
 │   ├── webrtc/         # ⭐ MediaEngine, WebRTCManager, SignalingClient (WS+WebTransport), SdpMunger, BitrateController
 │   ├── telemetry.ts    # Frontend → backend client-errors
@@ -524,7 +537,8 @@ GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,
 /api/email/v1/webhooks/  → backend        (БЕЗ rate-limit — Gmail Pub/Sub + Graph + Mailcow push)
 /api/media/v1/files/     → backend        (upload — жёсткий лимит, буфер выключен)
 /api/media/              → backend        (+ edge-кэш публичных вариантов, proxy_cache media_cache)
-/api/                    → backend        (все остальные домены — users/hr/tasks/requests/cms/mail/messenger)
+/api/                    → backend        (все остальные домены — users/hr/tasks/requests/cms/mail/messenger/
+                                            contracts/signoff/conference/companies/access)
 /ws/sfu/                 → sfu:4443       (WebRTC-сигналинг, не Django)
 /django-admin/           → backend
 /static/                 → backend        (collectstatic)
@@ -532,6 +546,8 @@ GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,
 /                        → frontend (Vite-сборка через nginx)
 ```
 > `/sqladmin/*` и `/mongo-admin` **убраны** — старой sqladmin/AdminJS-панели больше нет, база администрируется через `/django-admin/` (см. §3.1, §10).
+
+**Компания запроса — по хосту, а не по пути.** Регулярка `server_name` в `infra/nginx/default.conf` вынимает первую метку поддомена (`htq.htq.group` → `htq`; `www`, IP и голый домен не матчатся) и жёстко ставит её в `X-HTQ-Company` на всех `location`, проксирующих в Django; в dev то же делает прокси Vite (`frontend/vite.config.ts`, `companyFromHost`). `CompanyContextMiddleware` переводит метку в компанию через `apps.companies.interface.resolve_host_label` — сначала псевдоним `Company.subdomain` (`htq`, `hts`, `keg`, `group`), затем слаг, но только у компании без псевдонима; неизвестная или архивная компания — 404. Дальше везде слаг: схема `co_<slug>`, claim `company` токена. Голый домен компании не несёт (`search_path=public`) — вход, регистрация, выбор компании `/companies/choose`. Правила целиком — CLAUDE.md «Мультикомпанейность», выкатка — [docs/deploy/subdomains-runbook.md](docs/deploy/subdomains-runbook.md).
 
 При добавлении эндпойнта: роутер в `backend/apps/<domain>/views.py` → зарегистрировать в `backend/apps/<domain>/urls.py` (оба написания — со слешем и без, `APPEND_SLASH=False`) → nginx трогать НЕ нужно (уже проксирует весь `/api/`, кроме уже выделенных под особые лимиты location'ов выше). Полный контракт — в [API.md](./API.md).
 
@@ -542,7 +558,7 @@ GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,
 - **PostgreSQL** — Django ходит **напрямую** (`DB_HOST=db DB_PORT=5432`, `psycopg`, синхронно, `CONN_MAX_AGE=0` — пул на уровне приложения, не внешнего пулера). PgBouncer (`:6432`) остаётся в compose для хостовых утилит/ручного `psql`, но в путь живого запроса больше не входит.
 - **Схема:** одна `public` — кроме `hr`/`tasks`/`contracts`/`signoff`, которые живут в схеме компании `co_<slug>` (см. §3.7). Имена таблиц — **стандартные Django** `<app_label>_<model>` (например `hr_department`, `tasks_task`, `mail_emailaccount`, `users_user`) — никакого ручного префиксования: раньше (`hr_*`, `task_*`, `request_*`…) это было вынужденной адаптацией под то, что PgBouncer в transaction-режиме сбрасывал `search_path`; в Django-монолите такой проблемы нет (см. §10 — как было).
 - **MongoDB — убрана.** HR-документы, раньше лежавшие в `htqweb_docs`, теперь обычные Django-модели/файлы через `apps.media_files`.
-- **Миграции:** обычные Django `makemigrations`/`migrate`, `managed=True`. Никакого Alembic, никакого ручного управления транзакцией миграции.
+- **Миграции:** обычные Django `makemigrations`, `managed=True`. Никакого Alembic, никакого ручного управления транзакцией миграции. Применяются двумя командами: `manage.py migrate_shared` — общие аппки (её зовёт старт контейнера при `RUN_MIGRATIONS=1`), `manage.py migrate_companies` — схемы компаний `co_<slug>`, отдельным шагом выкатки. Голый `migrate` после `tenancy_bootstrap` пересоздал бы таблицы тенантных аппок в `public` пустыми (см. §3.7, CLAUDE.md «Мультикомпанейность»).
 - **Фоновые задачи:** Celery (Redis-брокер `redis://redis:6379/2` — задаётся `x-django-env` в `docker-compose.yml` и одинаков в проде и dev-оверлее, который эту переменную не переопределяет; `/9` — это лишь запасной дефолт в `htqweb/settings/base.py` на случай запуска `manage.py` вне docker-compose. Результаты — `django-celery-results`, периодика — `django-celery-beat` DatabaseScheduler). Объявление — `apps/<domain>/tasks.py`, `@shared_task`, обязательная первая строка `require_service("<name>")` (метатест-конвенция потоков). Мониторинг — Flower (`:5555`). Отдельные `<svc>-worker`/`<svc>-scheduler`-контейнеры на домен — история; теперь один `backend-worker` + один `backend-beat` на всю платформу.
 - **Идентификация:** `apps.users` сам выпускает и валидирует JWT, `iss=htqweb-auth` (см. `htqweb/settings/base.py::JWT_ISSUER`) — имя issuer'а не изменилось с FastAPI-эпохи, хотя отдельного `user-service` больше нет.
 - **ETL (фаза 10, разовая операция при cutover):** `apps/<domain>/management/commands/etl_<domain>.py` (hr/mail/messenger/task/requests(`etl_requests`)/media) + общий хелпер [`apps/core/etl.py`](backend/apps/core/etl.py) — read-only курсор в legacy-Postgres (порт `:55432`) + детерминированный per-row hash для сверки count+hash между legacy-схемой и новыми Django-таблицами. `--dry-run`/`--verify`/`--limit`/`--source-dsn` флаги у каждой команды.
@@ -574,7 +590,7 @@ URL-флоу приватных файлов: API возвращает стаб�
 | Метрики Celery | `/metrics` самого Flower; события задач включает `CELERY_WORKER_SEND_TASK_EVENTS` в [settings/base.py](backend/htqweb/settings/base.py) — настройкой, а НЕ флагом `-E` у воркера (флаг пришлось бы повторять в трёх compose-файлах, и забытая копия ломается молча). Длина очередей — от redis-exporter: `REDIS_EXPORTER_CHECK_KEYS=2=celery,2=conference_media`. ⚠️ БД **2**, а не 9: `CELERY_BROKER_URL` в compose перекрывает дефолт из settings, и со «9» экспортер сканировал бы пустую базу |
 | Метрики хоста и контейнеров | `node-exporter` + `cadvisor` (диск, память, OOM, рестарты) |
 | Метрики шлюза и SFU | nginx `stub_status` → `nginx-exporter` (профиль `production`); SFU — [sfu/src/metrics.ts](sfu/src/metrics.ts) |
-| Бизнес-метрики | `apps/<домен>/metrics.py` (свои модели) + автодискавери в [apps/core/metrics.py](backend/apps/core/metrics.py); считает Celery-beat раз в 60 с в кэш, префикс `htqweb_*`. Есть у **всех одиннадцати** доменов. `require_service` в них намеренно НЕТ: наблюдаемость обязана работать как раз тогда, когда домен выключили. В именах метрик нельзя цифры — регексп сторожа `htqweb_[a-z_]+` |
+| Бизнес-метрики | `apps/<домен>/metrics.py` (свои модели) + автодискавери в [apps/core/metrics.py](backend/apps/core/metrics.py); считает Celery-beat раз в 60 с в кэш, префикс `htqweb_*`. Есть у **всех одиннадцати** доменов, плюс у `access` и `companies`. ⚠️ Но у четырёх тенантных аппок (`hr`, `tasks`, `contracts`, `signoff`) сборщик их пропускает (`_metric_modules()` отсекает `settings.TENANT_APPS` до импорта — `collect()` без контекста компании вызывать нечем): их метрики не экспортируются, панели по ним пусты, шесть бизнес-правил на них не срабатывают (`noDataState: OK`) — открытый пункт [followups п. 3](docs/multi-company-tenancy-followups.md). `require_service` в них намеренно НЕТ: наблюдаемость обязана работать как раз тогда, когда домен выключили. В именах метрик нельзя цифры — регексп сторожа `htqweb_[a-z_]+` |
 | Подмены значений (fallback) | Один примитив на три рантайма: [htqweb/fallback.py](backend/htqweb/fallback.py), [frontend/src/lib/fallback.ts](frontend/src/lib/fallback.ts), [sfu/src/fallback.ts](sfu/src/fallback.ts). На проде и стейдже — строка `FALLBACK …` + `htqweb_fallback_total`/`sfu_fallback_total`, пользователю не видно; у разработчика (`HTQ_ENV=development`) подмен нет вовсе — летит исключение. Среды разводит `HTQ_ENV`/`VITE_HTQ_ENV`, точечно — `FALLBACK_MODE`. Правила и список того, что через примитив НЕ проходит, — в CLAUDE.md §«Среды и политика fallback'ов» |
 | Тестовая среда (staging) | [docker-compose.staging.yml](./docker-compose.staging.yml) — прод-настройки и прод-поведение, отличается только меткой среды (`HTQ_ENV=staging`, `SERVICE_ENV`, `PROMETHEUS_ENV`), исходники не смонтированы |
 | Всего джобов Prometheus | **13** ([prometheus.yml](infra/logging/prometheus/prometheus.yml)); хранение 30 дней **или** 10 ГБ. Джоб `nginx` поднят на `dns_sd`, а не на статическом таргете: экспортер живёт в профиле `production`, и вне его имя не резолвится — у джоба ноль таргетов вместо вечного `up==0` |
