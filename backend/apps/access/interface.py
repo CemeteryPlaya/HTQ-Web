@@ -17,10 +17,17 @@ from apps.access.services.identity import identity
 from apps.core.services import require_service
 
 
-def permission_level(user, module: str, company: str | None) -> str:
-    """Уровень пользователя на модуль в компании: none | read | write | admin."""
+def permission_level(user, module: str, company: str | None, *,
+                     resolution=None) -> str:
+    """Уровень пользователя на модуль в компании: none | read | write | admin.
+
+    ``resolution`` — уже посчитанные роли (``resolution()`` ниже): гейт
+    ``api_view(module=, level=)`` считает их один раз на запрос и отдаёт сюда,
+    чтобы узловые проверки внутри вьюхи не пересчитывали то же самое (блок
+    I.2, R8). ``None`` — «посчитай сам», как у ``flags_for``/``permissions_for``.
+    """
     require_service("access")
-    return resolve.permission_level(user, module, company)
+    return resolve.permission_level(user, module, company, resolution=resolution)
 
 
 def resolution(user, company: str | None):

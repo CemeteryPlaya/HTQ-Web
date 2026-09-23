@@ -10,15 +10,22 @@
 
 from __future__ import annotations
 
-import pytest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from apps.access.tests.helpers import assign, grant, token
+import pytest
+from django.test import Client
+
+from apps.access import interface as access_interface
+from apps.access.services import resolve as access_resolve
+from apps.access.tests.helpers import assign, auth, grant, superuser_token, token
 from apps.hr import permissions as legacy
 from apps.hr import rbac
 from apps.hr.legacy_roles import DEFERRED_KEYS
 from htqweb.authn.jwt import decode_token
 
 USER_ID = 7  # см. helpers.token()
+HR = "/api/hr/v1"
 
 
 def _payload(**over):
@@ -134,3 +141,105 @@ def test_deferred_key_is_a_programming_error():
     (key,) = DEFERRED_KEYS
     with pytest.raises(KeyError):
         access.has(key)
+
+
+# ── Один расчёт ролей на запрос (задача 14 блока I.2, R8) ───────────────────
+#
+# Гейт ``api_view(module=, level=)`` считает роли, чтобы узнать уровень
+# модуля, и кладёт расчёт в ``request.access_resolution`` парой
+# (компания, контекст); ``NodeAccess`` той же ручки берёт его оттуда, а не
+# считает второй раз. Без этого каждая кадровая ручка с узловой проверкой
+# платила за роли дважды — по три запроса и переключению схемы на
+# компании-предки каждый раз.
+
+
+def _company_headers(tok: str, company: str) -> dict:
+    return {"HTTP_X_HTQ_COMPANY": company, **auth(tok)}
+
+
+def _counting(target, name):
+    """Патч ``target.name``, считающий вызовы и зовущий оригинал."""
+    calls = []
+    original = getattr(target, name)
+
+    def counting(*a, **kw):
+        calls.append(a)
+        return original(*a, **kw)
+
+    return patch.object(target, name, counting), calls
+
+
+@pytest.mark.django_db
+def test_roles_are_resolved_once_per_request(company_row):
+    """Гейт и узловая проверка используют ОДИН расчёт ролей.
+
+    ``GET /employees/users/`` стоит под ``module="hr", level="read"`` и сразу
+    за гейтом спрашивает ``NodeAccess.has(USERS_LIST)`` — ровно та пара, что
+    считала роли дважды."""
+    assign(company_row, USER_ID, "hr.accounts", "view")
+    patcher, calls = _counting(access_resolve, "resolve_for")
+    with patcher:
+        resp = Client().get(f"{HR}/employees/users/",
+                            **_company_headers(token(company=company_row), company_row))
+    assert resp.status_code == 200, resp.content
+    assert len(calls) == 1, f"расчётов ролей: {len(calls)}"
+
+
+@pytest.mark.django_db
+def test_superuser_resolution_none_is_reused_not_recomputed(company_row):
+    """``resolution()`` суперпользователю отдаёт ``None`` — и это ПОСЧИТАННЫЙ
+    ответ, а не «не считали»: ``NodeAccess`` за гейтом не должен спрашивать
+    ``resolution()`` второй раз. Различает их сам факт наличия пары в
+    запросе, а не значение контекста."""
+    patcher, calls = _counting(access_interface, "resolution")
+    roles_patcher, role_calls = _counting(access_resolve, "resolve_for")
+    with patcher, roles_patcher:
+        resp = Client().get(
+            f"{HR}/employees/users/",
+            **_company_headers(superuser_token(company=company_row), company_row))
+    assert resp.status_code == 200, resp.content
+    assert len(calls) == 1, f"вызовов resolution(): {len(calls)}"
+    assert role_calls == []
+
+
+@pytest.mark.django_db
+def test_handle_without_gate_resolves_roles_itself(company_row, employee, account):
+    """Ручка самообслуживания (``/employees/me/card``) гейта модуля не имеет —
+    пары в запросе нет, и ``NodeAccess`` считает роли сам, ровно один раз."""
+    from htqweb.authn.jwt import issue_token_pair
+
+    tok = issue_token_pair(account, company_slug=company_row)["access"]
+    patcher, calls = _counting(access_resolve, "resolve_for")
+    with patcher:
+        resp = Client().get(f"{HR}/employees/me/card",
+                            **_company_headers(tok, company_row))
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["id"] == employee.id
+    assert len(calls) == 1, f"расчётов ролей: {len(calls)}"
+
+
+@pytest.mark.django_db
+def test_cached_resolution_of_another_company_is_not_reused(company_row):
+    """Расчёт годится только для той компании, для которой сделан: пара с
+    чужой компанией в запросе игнорируется, роли считаются заново."""
+    assign(company_row, USER_ID, "hr.employees", "view")
+    payload = _payload(company=company_row)
+    foreign = access_interface.resolution(payload, "some-other-co")
+    request = SimpleNamespace(token=payload, access_resolution=("some-other-co", foreign))
+    access = rbac.NodeAccess(payload, company_row, request=request)
+    assert access.has(legacy.EMPLOYEES_VIEW)
+
+
+@pytest.mark.django_db
+def test_cached_resolution_of_the_same_company_is_reused(company_row):
+    """Пара той же компании берётся как есть — ``resolve_for`` не зовётся."""
+    assign(company_row, USER_ID, "hr.employees", "view")
+    payload = _payload(company=company_row)
+    cached = access_interface.resolution(payload, company_row)
+    request = SimpleNamespace(token=payload, access_resolution=(company_row, cached))
+    patcher, calls = _counting(access_resolve, "resolve_for")
+    with patcher:
+        access = rbac.NodeAccess(payload, company_row, request=request)
+        assert access.has(legacy.EMPLOYEES_VIEW)
+        assert access.scope == ("company", None)
+    assert calls == []

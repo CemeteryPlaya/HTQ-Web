@@ -129,8 +129,20 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                         from apps.access.models import LEVEL_ORDER
                         from htqweb.tenancy.context import current_company_or_none
 
+                        company = current_company_or_none()
+                        # Расчёт ролей стоит нескольких запросов и переключения
+                        # схемы на компании-предки, а вьюха с узловыми
+                        # проверками (apps.hr.rbac.NodeAccess) спрашивает его
+                        # сразу после гейта. Кладём в запрос парой (компания,
+                        # расчёт) — явно, а не в contextvar: состояние,
+                        # пережившее вызов, пришлось бы сбрасывать между
+                        # запросами (докстринг resolve.Resolution). Сам факт
+                        # наличия атрибута значит «считали»: у суперпользователя
+                        # расчёт — None, и это ответ, а не его отсутствие.
+                        resolution = access.resolution(request.token, company)
+                        request.access_resolution = (company, resolution)
                         have = access.permission_level(
-                            request.token, module, current_company_or_none())
+                            request.token, module, company, resolution=resolution)
                         if LEVEL_ORDER[have] < LEVEL_ORDER[level]:
                             return json_error("Forbidden", 403)
                 else:
