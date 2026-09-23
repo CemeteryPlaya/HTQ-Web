@@ -37,7 +37,7 @@ const HRVacancies = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const permissions = usePermissions();
-  // Вилка зарплаты и закрытие вакансии — кадровику с правом писать по ВСЕЙ компании, а не в своём
+  // Вилка зарплаты — кадровику с правом писать по ВСЕЙ компании, а не в своём
   // отделе (старый senior/lead): узла в ролях
   // у подбора нет (`hr.recruitment`), ручки по узлу не гейтятся.
   // Разница middle/senior в старой модели — область выдачи роли, не

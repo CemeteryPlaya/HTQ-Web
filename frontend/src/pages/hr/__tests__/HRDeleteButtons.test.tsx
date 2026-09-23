@@ -20,6 +20,7 @@ vi.mock('@/components/hr/HRLayout', () => ({
 }));
 
 const access = { hr: 'admin' as 'none' | 'read' | 'write' | 'admin' };
+const scope = { kind: 'company' as 'company' | 'department', id: null as number | null };
 const ORDER = ['none', 'read', 'write', 'admin'];
 vi.mock('@/hooks/usePermissions', () => ({
   usePermissions: () => ({
@@ -27,7 +28,7 @@ vi.mock('@/hooks/usePermissions', () => ({
     level: (m: string) => (m === 'hr' ? access.hr : 'none'),
     atLeast: (m: string, req: string) =>
       ORDER.indexOf(m === 'hr' ? access.hr : 'none') >= ORDER.indexOf(req),
-    scope: () => ({ kind: 'company', id: null }),
+    scope: () => ({ kind: scope.kind, id: scope.id }),
     depth: () => [],
     can: () => false,
     pageHidden: () => false,
@@ -127,6 +128,8 @@ const TIME_ENTRIES = [
 beforeEach(() => {
   vi.clearAllMocks();
   access.hr = 'admin';
+  scope.kind = 'company';
+  scope.id = null;
   mockedApi.get.mockImplementation(((url: string) => {
     if (url === 'hr/v1/documents/') return Promise.resolve({ data: DOCUMENTS });
     if (url === 'hr/v1/employees/') return Promise.resolve({ data: EMPLOYEES });
@@ -151,6 +154,15 @@ describe('кнопки удаления кадровых экранов', () => 
       access.hr = 'admin';
       renderWithProviders(<HRDocuments />);
       expect(await screen.findAllByRole('button', { name: /удалить/i })).not.toHaveLength(0);
+    });
+
+    it('показывает удаление документа держателю admin + область отдела', async () => {
+      access.hr = 'admin';
+      scope.kind = 'department';
+      scope.id = 42;
+      renderWithProviders(<HRDocuments />);
+      expect(await screen.findByText('Трудовой договор №1')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /удалить/i })).toBeInTheDocument();
     });
   });
 

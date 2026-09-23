@@ -38,14 +38,6 @@ const HRApplications = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const permissions = usePermissions();
-  // Удаление отклика — кадровику с правом писать по ВСЕЙ компании, а не в своём
-  // отделе (старый senior/lead): узла в ролях у подбора нет
-  // (`hr.recruitment` не выдан ни одной из четырёх ролей), а бэкенд ручку
-  // DELETE /applications/{id} по узлу не гейтит (apps/hr/views.py).
-  // Разница middle/senior в старой модели — область выдачи роли, не
-  // признак (backend/apps/hr/legacy_roles.py, решение 1), поэтому здесь
-  // `scope('hr')`, а не уровень.
-  const companyWide = permissions.atLeast('hr', 'write') && permissions.scope('hr')?.kind === 'company';
   // Удаление стоит под hr:admin на сервере (блок I, рулинг O): кнопка,
   // видимая при write, вела бы в 403 у держателя именной роли.
   const canDelete = permissions.atLeast('hr', 'admin');
