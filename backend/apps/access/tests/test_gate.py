@@ -12,12 +12,15 @@
 (докстринг там объясняет оба решения и их обоснование).
 """
 
+import ast
 import pathlib
 import re
 
 import pytest
 from django.test import RequestFactory
+from django.views import View as _DjangoView
 
+import htqweb.http as _http
 from apps.access import self_service
 from apps.access.models import Level, Role, RoleAssignment, ScopeKind
 from apps.access.tests.helpers import auth, superuser_token, token
@@ -411,6 +414,14 @@ def test_every_module_gate_names_its_level():
     не полагается (финальное ревью проверило скриптом); сторож держит это
     правилом. ``contracts``/``signoff`` — зона другого разработчика, вне
     области, как и у проверок выше.
+
+    Блок I.2, R7: раньше проверка была текстовой — «в вызове есть подстрока
+    ``level=``». Фабрика ``level=level`` проходила её при любом значении
+    параметра, в том числе без умолчания в сигнатуре или с ``"none"``;
+    ``**gate`` не проверялся вовсе. Теперь уровень РАЗРЕШАЕТСЯ
+    (``_level_offenders``): литерал, константа модуля или параметр фабрики с
+    литеральным умолчанием в сигнатуре — плюс литералы, которые фабрике
+    передают её вызовы; и он обязан быть ``read``/``write``/``admin``.
     """
     backend = pathlib.Path(__file__).resolve().parents[3]
     offenders = []
@@ -418,7 +429,469 @@ def test_every_module_gate_names_its_level():
         if path.parent.name in _OUT_OF_SCOPE_APPS:
             continue
         text = path.read_text(encoding="utf-8")
-        for start_lineno, _end, block in _iter_api_view_calls(text):
-            if "module=" in block and "level=" not in block:
-                offenders.append(f"{path.relative_to(backend).as_posix()}:{start_lineno}")
-    assert offenders == [], f"гейт модуля без явного level=: {offenders}"
+        for lineno, name, why in _level_offenders(text):
+            offenders.append(f"{path.relative_to(backend).as_posix()}:{lineno} ({name}): {why}")
+    assert offenders == [], f"гейт модуля без явного уровня: {offenders}"
+
+
+def test_every_view_method_of_translated_apps_is_decorated():
+    """Метод-ручка класса-вьюхи переведённой аппки несёт декоратор с ``api_view``.
+
+    Блок I.2, R7. Без декоратора у метода нет ни гейта модуля, ни даже
+    авторизации (``ApiView`` сам ``api_view`` не зовёт), а сторож полноты
+    выше, читающий вызовы ``api_view(``, такой ручки не видит — ему нечего
+    сверять. Исключения — тот же реестр самообслуживания, что у сторожа
+    полноты; запись там для метода БЕЗ ``api_view`` всё равно упадёт в
+    ``unknown_exempt`` соседнего теста (сверять её не с чем), так что
+    реестр не становится обходом.
+    """
+    backend = pathlib.Path(__file__).resolve().parents[3]
+    offenders = []
+    for app in sorted(self_service.TRANSLATED_APPS):
+        path = backend / "apps" / app / "views.py"
+        exempt = self_service.SELF_SERVICE.get(app, {})
+        for lineno, name in _iter_undecorated_api_methods(path.read_text(encoding="utf-8")):
+            if name not in exempt:
+                offenders.append(f"apps/{app}/views.py:{lineno} ({name})")
+    assert offenders == [], f"ручка класса-вьюхи без api_view: {offenders}"
+
+
+def test_text_parser_sees_every_api_view_call():
+    """Текстовый ``_iter_api_view_calls`` не пропускает настоящих вызовов.
+
+    Оба сторожа выше стоят на нём, а он пропускает строки-комментарии и
+    тройные кавычки эвристикой по счёту ``\"\"\"``. Сверка с ``ast`` (который
+    комментарии и строки отбрасывает сам) по каждому файлу: число вызовов
+    совпадает — эвристика не проглотила живой гейт (или его отсутствие).
+    """
+    backend = pathlib.Path(__file__).resolve().parents[3]
+    mismatched = []
+    for path in sorted((backend / "apps").rglob("views.py")):
+        if path.parent.name in _OUT_OF_SCOPE_APPS:
+            continue
+        text = path.read_text(encoding="utf-8")
+        by_text = sum(1 for _call in _iter_api_view_calls(text))
+        by_ast = sum(1 for node in ast.walk(ast.parse(text))
+                     if isinstance(node, ast.Call) and _base_name(node.func) == "api_view")
+        if by_text != by_ast:
+            mismatched.append(f"{path.relative_to(backend).as_posix()}: текст {by_text}, ast {by_ast}")
+    assert mismatched == [], f"текстовый разбор расходится с ast: {mismatched}"
+
+
+# ── Блок I.2, R7: слепые пятна сторожей ────────────────────────────────────
+#
+# Сторож полноты выше читает ВЫЗОВЫ ``api_view(``. Два места он не видел:
+# метод класса-вьюхи вовсе без декоратора (вызова нет — нечего и проверять,
+# а ручка при этом живая и без гейта) и уровень, который приходит в
+# ``api_view`` не литералом рядом с ``module=``, а именем — параметром
+# фабрики-декоратора (``access/views.py::write``) или константой. Тесты на
+# синтетических образцах ниже доказывают, что сторож эти формы видит; два
+# сторожа на реальном коде — ``test_every_view_method_of_translated_apps_is_
+# decorated`` и ``test_every_module_gate_names_its_level``.
+#
+# Здесь разбор — ``ast``, а не построчный текст: вопросы «от кого унаследован
+# класс», «какие декораторы над методом», «какое умолчание у параметра
+# фабрики» построчно решаются хрупко (многострочные сигнатуры и декораторы).
+# Импорта вьюх по-прежнему нет — ``ast.parse`` читает исходник, не исполняя
+# его, так что довод ``test_access_is_not_imported_at_module_level`` в силе.
+
+#: Корни классов-вьюх: джанговский ``View`` и каждый его наследник, объявленный
+#: в ``htqweb.http`` (сегодня — ``ApiView``). Список снимается с модуля, а не
+#: пишется руками: новый общий базовый класс там не станет слепым пятном.
+#: Базы доменов (``CompaniesView``, ``AccessView``) сторож находит сам —
+#: по наследованию от уже известных вьюх в том же файле.
+_VIEW_ROOTS: frozenset[str] = frozenset(
+    {"View"} | {
+        name for name, obj in vars(_http).items()
+        if isinstance(obj, type) and issubclass(obj, _DjangoView)
+    }
+)
+
+#: Имена методов, которые ``View.dispatch`` сделает ручкой. Полный список
+#: Django, а не суженный ``ApiView.http_method_names``: наследник вправе его
+#: расширить, и метод ``options``/``head`` тогда тоже станет ручкой.
+_HANDLER_METHODS: frozenset[str] = frozenset(_DjangoView.http_method_names)
+
+#: Уровни, которые гейт реально требует. ``none`` — гейт, который пускает
+#: всех, то есть не гейт.
+_GATE_LEVELS: frozenset[str] = frozenset({Level.READ.value, Level.WRITE.value,
+                                          Level.ADMIN.value})
+
+
+def _base_name(node) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _calls_api_view(node) -> bool:
+    return any(isinstance(sub, ast.Call) and _base_name(sub.func) == "api_view"
+               for sub in ast.walk(node))
+
+
+def _gate_decorator_names(tree: ast.Module) -> set[str]:
+    """Имена модуля, которые сами несут ``api_view``: декоратор-переменная
+    (``read = method_decorator(api_view(...))``) или фабрика, чей ``return``
+    его строит (``def write(...): return method_decorator(api_view(...))``,
+    ``platform(...)``)."""
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and _calls_api_view(node.value):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+            isinstance(sub, ast.Return) and sub.value is not None
+            and _calls_api_view(sub.value)
+            for sub in ast.walk(node)
+        ):
+            names.add(node.name)
+    return names
+
+
+def _is_gate_decorator(decorator, gate_names: set[str]) -> bool:
+    if _calls_api_view(decorator):
+        return True
+    head = decorator.func if isinstance(decorator, ast.Call) else decorator
+    return isinstance(head, ast.Name) and head.id in gate_names
+
+
+def _view_classes(tree: ast.Module) -> list[ast.ClassDef]:
+    """Классы файла, унаследованные (прямо или через другой класс файла) от
+    корня ``_VIEW_ROOTS``."""
+    classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    known = set(_VIEW_ROOTS)
+    views: dict[str, ast.ClassDef] = {}
+    changed = True
+    while changed:
+        changed = False
+        for cls in classes:
+            if cls.name not in views and any(_base_name(b) in known for b in cls.bases):
+                views[cls.name] = cls
+                known.add(cls.name)
+                changed = True
+    return sorted(views.values(), key=lambda cls: cls.lineno)
+
+
+def _iter_undecorated_api_methods(text: str):
+    """(lineno, ``Класс.метод``) для каждой ручки класса-вьюхи без гейта-декоратора.
+
+    Сторож полноты читает вызовы ``api_view(``; метод CBV без декоратора он
+    не видел вовсе — то есть ручка без гейта (и без авторизации: ``ApiView``
+    сам ``api_view`` не зовёт) была для него невидимой (блок I.2, R7).
+    Ручка — метод из ``_HANDLER_METHODS`` в классе из ``_view_classes``.
+    Декоратор засчитывается, только если несёт ``api_view``: сам вызов
+    внутри или имя из ``_gate_decorator_names`` — ``@method_decorator(
+    csrf_exempt)`` гейтом не считается. Ручка, заведённая присваиванием в
+    теле класса (``post = get``), декоратора не имеет вовсе — нарушение.
+    """
+    tree = ast.parse(text)
+    gate_names = _gate_decorator_names(tree)
+    for cls in _view_classes(tree):
+        for item in cls.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if item.name in _HANDLER_METHODS and not any(
+                    _is_gate_decorator(d, gate_names) for d in item.decorator_list
+                ):
+                    yield item.lineno, f"{cls.name}.{item.name}"
+            elif isinstance(item, ast.Assign):
+                for target in item.targets:
+                    if isinstance(target, ast.Name) and target.id in _HANDLER_METHODS:
+                        yield item.lineno, f"{cls.name}.{target.id}"
+
+
+class _Ref(str):
+    """Значение гейта, заданное ИМЕНЕМ (константа модуля, параметр фабрики),
+    а не литералом. Равно самому имени; ``isinstance`` отличает его от
+    литерала с тем же текстом."""
+
+
+_GATE_KW_RE = re.compile(
+    r"(?<![\w.])(module|level)\s*=\s*(\"[^\"]*\"|'[^']*'|[A-Za-z_]\w*)")
+_SPLAT_RE = re.compile(r"\*\*\s*[A-Za-z_]")
+
+
+def _gate_of(block: str) -> dict:
+    """``module``/``level`` вызова ``api_view(...)`` из ``_iter_api_view_calls``.
+
+    Литерал — строкой без кавычек, имя — ``_Ref``; ключа нет — аргумент не
+    передан. ``"**": True`` — в вызов что-то приходит распаковкой, и её
+    содержимого текстовый разбор не видит.
+    """
+    gate: dict = {}
+    for keyword, raw in _GATE_KW_RE.findall(block):
+        gate.setdefault(keyword, raw[1:-1] if raw[0] in "\"'" else _Ref(raw))
+    if _SPLAT_RE.search(block):
+        gate["**"] = True
+    return gate
+
+
+_REQUIRED = object()
+
+
+def _param_default(fn, name: str):
+    """Умолчание параметра ``name`` у ``fn``: узел выражения; ``_REQUIRED`` —
+    параметр обязательный; ``None`` — такого параметра нет."""
+    args = fn.args
+    positional = [*args.posonlyargs, *args.args]
+    defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+    pairs = [*zip(positional, defaults), *zip(args.kwonlyargs, args.kw_defaults)]
+    for arg, default in pairs:
+        if arg.arg == name:
+            return _REQUIRED if default is None else default
+    return None
+
+
+def _literal(node, constants: dict[str, str]) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in constants:
+        return constants[node.id]
+    return None
+
+
+def _level_problem(value: str) -> str | None:
+    if value in _GATE_LEVELS:
+        return None
+    return f"level={value!r} — не {'/'.join(sorted(_GATE_LEVELS))}"
+
+
+def _factory_call_offenders(tree, factory, param: str, constants, lines):
+    """Вызовы фабрики ``factory`` в файле, передающие ей уровень не тем, что
+    сторож может прочитать, или уровнем вне ``_GATE_LEVELS``. Вызов без
+    уровня — не нарушение: тогда действует умолчание сигнатуры, проверенное
+    вызывающим (а обязательный параметр Python без значения не пропустит)."""
+    positional = [a.arg for a in (*factory.args.posonlyargs, *factory.args.args)]
+    index = positional.index(param) if param in positional else None
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                and call.func.id == factory.name):
+            continue
+        value = next((kw.value for kw in call.keywords if kw.arg == param), None)
+        if value is None and index is not None and len(call.args) > index:
+            value = call.args[index]
+        if value is None:
+            continue
+        name = _qualified_name(lines, call.lineno, call.end_lineno) or factory.name
+        literal = _literal(value, constants)
+        if literal is None:
+            yield call.lineno, name, f"{factory.name}(…{param}=?) — уровень не литерал"
+        elif problem := _level_problem(literal):
+            yield call.lineno, name, problem
+
+
+def _level_offenders(text: str):
+    """(lineno, имя, причина) для каждого гейта ``module=``, чей уровень не
+    объявлен явно или не требует ничего (блок I.2, R7).
+
+    Явно — это литерал рядом с ``module=``, константа модуля либо параметр
+    объемлющей фабрики, чьё умолчание — литерал в её сигнатуре
+    (``access/views.py::write(..., level: str = "write")``) или который
+    обязателен; литералы, которые фабрике передают её вызовы, проверяются
+    тоже. Нарушение — уровня нет вовсе (сработало бы умолчание самого
+    ``api_view``), он приходит распаковкой ``**``, вычисляется или назван
+    именем, которого сторож не может разрешить.
+    """
+    tree = ast.parse(text)
+    lines = text.splitlines()
+    constants = {
+        target.id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+        for target in node.targets if isinstance(target, ast.Name)
+    }
+    functions = [node for node in ast.walk(tree)
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    checked_factories: set[str] = set()
+    for start, end, block in _iter_api_view_calls(text):
+        gate = _gate_of(block)
+        if "module" not in gate:
+            continue
+        name = _qualified_name(lines, start, end) or "?"
+        level = gate.get("level")
+        if level is None:
+            yield start, name, ("уровень приходит распаковкой ** — сторож его не видит"
+                                if gate.get("**") else
+                                "нет level= — сработало бы умолчание api_view")
+            continue
+        if not isinstance(level, _Ref):
+            if problem := _level_problem(level):
+                yield start, name, problem
+            continue
+        if level in constants:
+            if problem := _level_problem(constants[level]):
+                yield start, name, problem
+            continue
+        owners = [fn for fn in functions if fn.lineno <= start <= fn.end_lineno]
+        factory = max(owners, key=lambda fn: fn.lineno, default=None)
+        default = _param_default(factory, level) if factory else None
+        if default is None:
+            yield start, name, (f"level={level} — не константа модуля и не "
+                                "параметр объемлющей фабрики")
+            continue
+        if default is not _REQUIRED:
+            literal = _literal(default, constants)
+            if literal is None:
+                yield start, name, (f"умолчание {level} в сигнатуре {factory.name} "
+                                    "— не литерал")
+                continue
+            if problem := _level_problem(literal):
+                yield start, name, problem
+                continue
+        if factory.name not in checked_factories:
+            checked_factories.add(factory.name)
+            yield from _factory_call_offenders(tree, factory, level, constants, lines)
+
+
+_CBV_SAMPLE = '''
+from htqweb.http import ApiView, api_view
+
+class SomeView(ApiView):
+    @method_decorator(api_view(methods=("GET",), auth="jwt", module="hr", level="read"))
+    def get(self, request):
+        return {}
+
+    def post(self, request):          # ← без декоратора: сторож обязан заметить
+        return {}
+'''
+
+
+def test_guard_sees_a_cbv_method_without_a_decorator():
+    found = {name for _lineno, name in _iter_undecorated_api_methods(_CBV_SAMPLE)}
+    assert found == {"SomeView.post"}
+
+
+_CBV_DERIVED_SAMPLE = '''
+from htqweb.http import ApiView, api_view
+
+read = method_decorator(api_view(methods=("GET",), auth="jwt", module="hr", level="read"))
+
+
+def write(method):
+    return method_decorator(api_view(methods=(method,), auth="jwt", module="hr", level="write"))
+
+
+class DomainView(ApiView):
+    def helper(self):
+        return 1
+
+
+class ItemView(DomainView):
+    @read
+    def get(self, request):
+        return {}
+
+    @write("POST")
+    def post(self, request):
+        return {}
+
+    @method_decorator(csrf_exempt)
+    def patch(self, request):
+        return {}
+
+    def delete(self, request):
+        return {}
+
+
+class LeafView(ItemView):
+    async def put(self, request):
+        return {}
+
+
+class NotAView:
+    def get(self):
+        return 1
+'''
+
+
+def test_guard_follows_view_base_classes_declared_in_the_file():
+    """Базовый класс домена (``DomainView(ApiView)``, как ``CompaniesView``/
+    ``AccessView``) и его наследники любой глубины — тоже вьюхи; декоратор,
+    не несущий ``api_view``, — не гейт; ``get`` у класса, не унаследованного
+    от вьюхи, — не ручка."""
+    found = {name for _lineno, name in _iter_undecorated_api_methods(_CBV_DERIVED_SAMPLE)}
+    assert found == {"ItemView.patch", "ItemView.delete", "LeafView.put"}
+
+
+_LEVELLESS_SAMPLE = '''
+@api_view(methods=("GET",), auth="jwt", module="hr")
+def some_handle(request):
+    return {}
+'''
+
+
+def test_guard_requires_level_next_to_module():
+    gates = [_gate_of(block) for _start, _end, block in _iter_api_view_calls(_LEVELLESS_SAMPLE)]
+    assert gates and gates[0].get("module") == "hr"
+    assert gates[0].get("level") is None
+    assert [name for _lineno, name, _why in _level_offenders(_LEVELLESS_SAMPLE)] == ["some_handle"]
+
+
+_FACTORY_SAMPLE = '''
+MODULE = "hr"
+LEVEL = "admin"
+
+
+def implicit(method):
+    return method_decorator(api_view(methods=(method,), auth="jwt", module=MODULE))
+
+
+def signature_default(method, level: str = "write"):
+    return method_decorator(api_view(methods=(method,), auth="jwt", module=MODULE,
+                                     level=level))
+
+
+def required(method, *, level):
+    return method_decorator(api_view(methods=(method,), auth="jwt", module=MODULE,
+                                     level=level))
+
+
+def passthrough(method, **gate):
+    return method_decorator(api_view(methods=(method,), auth="jwt", module=MODULE, **gate))
+
+
+def unknown_name(method):
+    return method_decorator(api_view(methods=(method,), auth="jwt", module=MODULE,
+                                     level=somewhere))
+
+
+def computed_default(method, level=pick_level()):
+    return method_decorator(api_view(methods=(method,), auth="jwt", module=MODULE,
+                                     level=level))
+
+
+def constant(method):
+    return method_decorator(api_view(methods=(method,), auth="jwt", module=MODULE,
+                                     level=LEVEL))
+
+
+def empty_gate(method):
+    return method_decorator(api_view(methods=(method,), auth="jwt", module=MODULE,
+                                     level="none"))
+
+
+class ItemView(ApiView):
+    @required("GET", level="read")
+    def get(self, request):
+        return {}
+
+    @required("POST", level="full")
+    def post(self, request):
+        return {}
+'''
+
+
+def test_guard_reads_the_level_out_of_a_factory():
+    """Фабрика засчитывается, только если уровень в ней объявлен явно:
+    литералом, константой модуля или параметром, чьё умолчание — литерал в
+    сигнатуре (либо обязательным параметром — тогда его литерал проверяется
+    у каждого вызова фабрики). Уровень, который ``api_view`` взял бы по
+    своему умолчанию, приехал через ``**`` или вычисляется, — нарушение;
+    ``"none"`` и прочее вне ``read/write/admin`` — тоже (гейт, который
+    ничего не требует)."""
+    offenders = {name for _lineno, name, _why in _level_offenders(_FACTORY_SAMPLE)}
+    assert offenders == {
+        "implicit", "passthrough", "unknown_name", "computed_default",
+        "empty_gate", "ItemView.post",
+    }
