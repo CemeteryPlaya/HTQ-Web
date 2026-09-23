@@ -226,10 +226,13 @@ permission_level(user, module, company) -> none | read | write | admin
 | lead | `admin` | company | `+ can_delete_employee`, управление учётками |
 
 — **выполнено иначе, чем предполагала таблица**, блоком I
-([план](plans/2026-09-17-block-i-single-rbac.md), задача 1,
-`backend/apps/access/migrations/0005_seed_hr_level_roles.py`): перевод сделан
-не парой «уровень модуля × область», а четырьмя системными РОЛЯМИ
-(`hr-junior…hr-lead`) с узловыми признаками `view/create/edit/delete`, и
+([план](plans/2026-09-17-block-i-single-rbac.md), задача 1 — роли,
+`backend/apps/access/migrations/0005_seed_hr_level_roles.py`; задача 2 —
+перенос должностей, `access_backfill_positions`): область из таблицы
+сохранена (`backend/apps/hr/legacy_roles.py::SCOPE_KINDS`: junior/middle —
+`department`, senior/lead — `company`); разошлись носитель прав — четыре
+системные РОЛИ (`hr-junior…hr-lead`) с узловыми признаками
+`view/create/edit/delete` вместо уровня модуля — и уровень модуля у senior:
 агрегат по модулю у `hr-senior` — тоже `admin` (узлы `hr.org`,
 `hr.production_calendar`, `hr.staffing` несут `delete`), а не `write`, как
 предполагала эта таблица: «уровень модуля не отличает senior от lead» —
@@ -296,25 +299,31 @@ permission_level(user, module, company) -> none | read | write | admin
 Статус на 23.09.2026 — пометки у пунктов.
 
 - `CompanyModule` и гейты модулей на компанию — подпроект 3 — **выполнено**
-  блоком A ([план](plans/2026-09-14-block-a-company-registry.md), commit `d6246ff`):
-  `backend/apps/companies/models.py::CompanyModule`, гейт —
-  `backend/apps/core/services.py::service_status`;
+  подпроектом 1 ([план](plans/2026-08-27-multi-company-tenancy-core.md)), до
+  блока A: модель `backend/apps/companies/models.py::CompanyModule`
+  (`d6246ff`, 27.08.2026), учёт в
+  `backend/apps/core/services.py::service_status` (`d2d2e33`, 27.08.2026);
+  HTTP-ручки модулей и экран — блок A
+  ([план](plans/2026-09-14-block-a-company-registry.md), `721dc85`, `79366c5`);
 - жизненный цикл компании, банкротство, преемник — подпроект 4 — **частично
   выполнено**: архивация/восстановление (`company_archive`/`company_restore`,
-  статус + пересборка сводок холдинга) — блок A (commit `9ae51d6`); банкротство
-  и перенос активов преемнику не реализованы, сознательно оставлено, см.
-  [roadmap §9](plans/2026-09-14-group-structure-roadmap.md#9-блок-i2--решения-по-ходу-исполнения-и-отложенное)
-  и §10;
+  статус + пересборка сводок холдинга) — `9ae51d6`, 29.08.2026, доработка
+  подпроекта 1 (до блока A); сервис жизненного цикла с гейтом последней
+  компании и HTTP — блок A ([план](plans/2026-09-14-block-a-company-registry.md),
+  `ec75959`, `44a00ad`); банкротство и перенос активов преемнику не
+  реализованы — поле `Company.successor` объявлено
+  (`backend/apps/companies/models.py:96`), логики нет; сознательно оставлено,
+  см. [roadmap §10](plans/2026-09-14-group-structure-roadmap.md#10-итог-рефакторинга-23092026);
 - «архив — только чтение» — подпроект 4 — **не выполнено** на 23.09.2026: архив
   по-прежнему закрывает 404 весь трафик компании
-  (`backend/htqweb/middleware/company_context.py`), сознательно оставлено, см.
-  [roadmap §9](plans/2026-09-14-group-structure-roadmap.md#9-блок-i2--решения-по-ходу-исполнения-и-отложенное)
-  и §10;
+  (`backend/htqweb/middleware/company_context.py:60`), сознательно оставлено,
+  см. [roadmap §10](plans/2026-09-14-group-structure-roadmap.md#10-итог-рефакторинга-23092026);
 - третий режим для `media_files` и `mail` (общая таблица, обязательный
   столбец-владелец, принудительный фильтр) — упомянут в подпроекте 1 как
   относящийся сюда, но требует модели доступа как предусловия;
   выносится в конец стадии отдельным шагом и первым идёт под нож при нехватке
-  объёма — **не выполнено** на 23.09.2026: `TENANT_APPS` в
-  `backend/htqweb/settings/base.py` — `("hr", "tasks", "contracts", "signoff")`,
-  `media_files`/`mail` в неё не входят; см.
-  [roadmap §9](plans/2026-09-14-group-structure-roadmap.md#9-блок-i2--решения-по-ходу-исполнения-и-отложенное).
+  объёма — **не выполнено** на 23.09.2026: столбца компании-владельца в
+  моделях нет — в `backend/apps/media_files/models.py:77` только
+  необязательный владелец-пользователь `owner_id` (`IntegerField(null=True)`),
+  в `backend/apps/mail/models.py` ни `company`, ни `owner` не встречается;
+  фильтровать принудительно не по чему.
