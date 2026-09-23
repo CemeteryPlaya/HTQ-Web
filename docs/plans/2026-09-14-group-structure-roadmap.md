@@ -358,8 +358,13 @@ API должностей, базовая роль из django-admin, сторо�
 Решения по ходу и отложенное — [§9](#9-блок-i2--решения-по-ходу-исполнения-и-отложенное).
 
 ### J. Документы (выполнено — план [2026-09-23-block-j-docs.md](2026-09-23-block-j-docs.md))
-`design.md`, `stage2-spec §1.6/§7`, `STRUCTURE.md`, `CLAUDE.md` — под новый
-состав группы и блоки A–I.
+[multi-company-tenancy-design.md](../multi-company-tenancy-design.md),
+[stage2-spec](2026-08-29-stage2-access-and-roles-spec.md) §1.6/§7,
+[multi-company-tenancy-stage2-design.md](../multi-company-tenancy-stage2-design.md),
+[multi-company-tenancy-followups.md](../multi-company-tenancy-followups.md),
+[STRUCTURE.md](../../STRUCTURE.md), [CLAUDE.md](../../CLAUDE.md),
+[API.md](../../API.md), [backend/README.md](../../backend/README.md) — под
+новый состав группы и блоки A–I.2; итоговая сверка — документ задачи 6.
 
 ## 6. Передача другому разработчику (contracts / signoff)
 
@@ -635,7 +640,7 @@ request.mark_paid`, `contracts.advance_payment.record_payment`,
 хвосты блока I и переход компаний на поддомены. Выполнен субагентами с ревью
 каждой задачи и финальным ревью ветки. Здесь записано то, что решалось по ходу
 без участия заказчика, и то, что сознательно оставлено: журнал исполнения
-(`.superpowers/sdd/…`) в git не хранится и удалён по закрытии блока.
+в git не хранится и удалён по закрытии блока.
 
 ### 9.1 Решения, принятые по ходу (что будет, если решение неверно)
 
