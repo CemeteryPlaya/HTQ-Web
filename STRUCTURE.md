@@ -43,7 +43,8 @@ HTQWeb1/
 │   └── certs/              # Локальные TLS (gitignored)
 ├── sfu/                  # Mediasoup SFU (Node.js, медиа-роутинг конференций)
 ├── webtransport/         # QUIC signalling proxy (Python aioquic) для SFU
-├── docs/                 # Архитектура, аудиты, ngrok/tunnel-инструкции
+├── docs/                 # Архитектура, аудиты, ngrok/tunnel-инструкции; deploy/subdomains-runbook.md —
+│                         #   чеклист перевода компаний на поддомены (DNS, сертификат, порядок окна выкатки)
 ├── scripts/              # PS/JS/bash-утилиты (TLS, firewall, туннели, monitoring traffic)
 ├── tools/                # Локальные бинари туннелей (gitignored)
 ├── docker-compose.yml       # Прод-стек (полный)
@@ -217,7 +218,7 @@ backend/htqweb/tenancy/       # Контекст компании и перев�
 └── tests/                        # контекст, БД, celery, middleware, claim company в JWT
 
 backend/apps/companies/        # Реестр компаний (схема public) — API_PREFIX=api/companies/v1/
-├── models.py                    # Company (дерево владения), CompanyServiceLink (граф ТМЗ),
+├── models.py                    # Company (дерево владения; subdomain — короткий адрес), CompanyServiceLink (граф ТМЗ),
 │                                #   CompanyMembership, CompanyModule (рубильник на уровне компании),
 │                                #   CompanySchemaVersion (факт/цель миграций по компании)
 ├── schemas.py                    # Pydantic DTO контракта api/companies/v1 (CompanyRead, CompanyTreeNode,
@@ -229,7 +230,9 @@ backend/apps/companies/        # Реестр компаний (схема publi
 │                                #   is_superuser. Заведения компании здесь нет (см. company_create)
 ├── urls.py                        # path() для views.py; companies/tree стоит ВЫШЕ companies/<slug>,
 │                                #   иначе <slug:slug> матчит и слово tree
-├── interface.py                  # get_company, active_company_slugs, user_company_slugs,
+├── interface.py                  # get_company, resolve_host_label (метка хоста → компания: псевдоним,
+│                                #   затем слаг компании без псевдонима), public_url (адрес компании для
+│                                #   ссылок наружу), active_company_slugs, user_company_slugs,
 │                                #   default_company_slug, module_enabled — точка входа соседей
 ├── admin.py                       # django-admin, под ServiceGatedAdminMixin
 ├── metrics.py                      # collect() — автодискавери apps/core/metrics.py
@@ -275,6 +278,8 @@ frontend/src/
 │   ├── routing/        # ⭐ routeDefinitions.ts, lazyPages.ts, prefetch.ts
 │   └── components/
 ├── pages/              # ⭐ Точки входа роутов (Index, Login, Admin*, HR*, Calendar, Email/, hr/, public/, requests/)
+│   ├── CompanyPicker.tsx  # /companies/choose — выбор компании на голом домене после входа (одна — сразу
+│   │                   #   редирект на её поддомен); RequireAuth ведёт сюда любой защищённый маршрут без компании
 │   ├── Email/          # OAuth callback, inbox, compose modal, settings panel
 │   ├── hr/             # HR-страницы (Departments, Employees, Vacancies, Tasks, Roadmap, …)
 │   └── companies/      # CompanyRegistry.tsx — «Компании группы»: дерево владения, карточка
@@ -299,7 +304,8 @@ frontend/src/
 │                       #   тонкая обёртка над usePermissions; сторож __tests__/useHRLevelImporters),
 │                       #   use-mobile, use-toast, useMyCompanies (переключатель компании), …
 ├── lib/
-│   ├── auth/           # profileStorage.ts, roles.ts (RBAC хелперы)
+│   ├── auth/           # profileStorage.ts, roles.ts (RBAC хелперы), companySwitch.ts (метка хоста ↔ компания,
+│   │                   #   переход на поддомен `subdomain ?? slug`)
 │   (app/navigation/hrNavAccess.ts — одна таблица «пункт кадрового меню → предикат по /me» для HRLayout и ProfileSidebar)
 │   ├── transport/      # IMediaTransport + WebRTCAdapter
 │   ├── webrtc/         # ⭐ MediaEngine, WebRTCManager, SignalingClient (WS+WebTransport), SdpMunger, BitrateController

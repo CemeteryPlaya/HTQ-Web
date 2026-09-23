@@ -186,8 +186,15 @@ Stated once here; the per-domain tables below do **not** repeat it per row.
 
 1. **JWT** (`Authorization: Bearer`) — every `/api/*` route unless marked
    *Public* / `auth=None`.
-2. **Company context** — `X-HTQ-Company: <slug>` (nginx sets it from the
-   subdomain; the SPA and any client on a subdomain gets it for free). The
+2. **Company context** — `X-HTQ-Company: <host label>` (nginx sets it from the
+   subdomain; the SPA and any client on a subdomain gets it for free). Since
+   block I.2 the label is the company's short alias `Company.subdomain`
+   (`htq`, `hts`, `keg`, `group`) or, for a company **without** an alias, its
+   slug — `apps.companies.interface.resolve_host_label`. Each company has one
+   canonical host: the slug-host of a company that has an alias answers
+   **404**, same as an unknown label. From there on everything uses the slug
+   (schema, token claim, role assignments). The bare domain carries no company:
+   the SPA sends a signed-in user to `/companies/choose` there. The
    token's `company` claim must equal the header's company, otherwise
    **403** — a subdomain is trivial to spoof, a signature is not. Switching
    company means logging in again on that subdomain (login refuses a company
@@ -227,7 +234,12 @@ reason: `self` (returns strictly the caller's own data, e.g.
 `scoped` (protected by its own non-role check — one's own department's files,
 being the approver of a given identity request; the platform operations of
 `companies` — archive, restore, revoking a membership — which only a
-superuser may call: `admin=True` plus `is_superuser` in the method). The
+superuser may call: `admin=True` plus `is_superuser` in the method). Those
+three share one decorator factory, `platform(...)` in
+`apps/companies/views.py`, and the registry lists the factory once
+(`"platform": "scoped"`) — so **any new route put on `@platform` becomes
+`scoped` automatically** and must call `deny_unless_platform_admin` first,
+like the three existing ones; the guard cannot tell it apart. The
 destructive `hr` routes that used to be open to anyone signed in
 (`DELETE /vacancies/{id}/`, `/applications/{id}/`,
 `/time-tracking/entries/{id}/`, `/documents/{id}/`) are gated at `hr: admin`
@@ -249,6 +261,32 @@ them through `PositionRole` (`PUT /api/access/v1/positions/{id}/roles`, or
 `manage.py access_backfill_positions` once, at rollout — a position whose
 old explicit key list replaced its level preset gets a named role
 `hr-custom-<slug>-<id>` instead of a level role).
+
+What the rollout moves over, and what it deliberately doesn't:
+
+- A named role belongs to its company (`Role.company_slug`, see
+  `apps.access` below). Its nodes are the union of the flags of every listed
+  key that maps to the node, so keys of one node **add up**: the role answers
+  "yes" to a neighbouring old key of the same node whose flags it covers —
+  the same property the level roles have.
+- **Deliberate exception #4 of block I:** a position whose list holds only
+  `contracts.*` keys gets no HR role at all. The old model let its holder
+  into HR routes gated by the bare level (`HRAccess.has_access` was "a level
+  OR any key"), though the list granted no HR key; the migration summary
+  prints such positions as «явный список без кадровых ключей», and
+  `contracts` keeps reading its keys from `Position.permissions` itself.
+- The holder's HR card is found by `user_id` and then by the token's email,
+  as the old resolver did. That cannot be used to claim someone else's card:
+  self-registration is moderated — the account stays `PENDING` until an
+  admin approves it (`/api/users/v1/pending-registrations/`), and login and
+  refresh issue tokens to `ACTIVE` accounts only.
+- Revoking a membership (`DELETE …/memberships/{user_id}`) leaves the user's
+  `PositionRole`/`RoleAssignment` rows in place (customer decision). They are
+  inert: without a membership neither login nor refresh issues a token for
+  that company (`apps.companies.interface.user_may_enter_company`).
+- A membership created in django-admin goes through
+  `membership_service.grant_membership` too, so it gets `employee-basic` like
+  every other path.
 
 ### Refresh token
 
@@ -1039,13 +1077,13 @@ the finer `depth` map, kept for routing and the `api_view(module=)` gate —
 |---|---|---|---|
 | `/api/access/v1/me` | GET | jwt | Caller's resolved permissions in the request's company — fields below |
 | `/api/access/v1/functions` | GET | access/read | Function-registry tree (`module → function → field`) + flat page list, for the roles/permissions editor |
-| `/api/access/v1/roles` | GET, POST | GET jwt (open); POST access/admin + superuser | Role catalog; global — one role acts the same in every company, so every catalog write is superuser-only |
+| `/api/access/v1/roles` | GET, POST | GET jwt (open); POST access/admin + superuser | Role catalog, `RoleRead.company_slug` included. A role with empty `company_slug` is shared by the group and acts the same in every company, so every catalog write is superuser-only. A role with `company_slug` set belongs to one company (block I.2 — today the named `hr-custom-*` roles of the rollout, migrations `access/0009`/`0010`): GET lists the shared roles plus those of the request's company; a superuser sees all |
 | `/api/access/v1/roles/{id}` | PATCH, DELETE | access/admin + superuser | 409 deleting an `is_system` role |
-| `/api/access/v1/roles/{id}/permissions` | GET, PUT | GET access/read; PUT access/admin + superuser | Depth flags per registry node for this role |
-| `/api/access/v1/roles/{id}/holders` | GET | jwt (access/read) | Who holds the role — `position` (via `PositionRole`, fix by editing the position) vs `personal` (`RoleAssignment`, fix by editing the assignment) — named so a role can actually be unassigned before deletion |
-| `/api/access/v1/roles/{id}/copy` | POST | access/admin + superuser | Duplicate a role's permission set under a new code/title |
-| `/api/access/v1/positions/{position_id}/roles` | GET, PUT | GET jwt (open); PUT access/admin + `admin=True` | Roles carried by a position — the normal path, including the cross-company one described below |
-| `/api/access/v1/assignments/{user_id}` | GET, PUT | GET access/read; PUT access/admin + `admin=True` | Personal role assignments — the exception path |
+| `/api/access/v1/roles/{id}/permissions` | GET, PUT | GET access/read; PUT access/admin + superuser | Depth flags per registry node for this role. GET of another company's role → 404, as if it didn't exist (PUT is superuser-only anyway) |
+| `/api/access/v1/roles/{id}/holders` | GET | jwt (access/read) | Who holds the role — `position` (via `PositionRole`, fix by editing the position) vs `personal` (`RoleAssignment`, fix by editing the assignment) — named so a role can actually be unassigned before deletion. Another company's role → 404 |
+| `/api/access/v1/roles/{id}/copy` | POST | access/admin + superuser | Duplicate a role's permission set under a new code/title; the copy keeps the source's `company_slug` |
+| `/api/access/v1/positions/{position_id}/roles` | GET, PUT | GET jwt (open); PUT access/admin + `admin=True` | Roles carried by a position — the normal path, including the cross-company one described below. 422 for a role of another company — refused on every path that grants a role: this service check, and `PositionRole.clean()`/`RoleAssignment.clean()` for django-admin |
+| `/api/access/v1/assignments/{user_id}` | GET, PUT | GET access/read; PUT access/admin + `admin=True` | Personal role assignments — the exception path. 422 for a role of another company, as above |
 
 **`GET /me` response** (`MeRead`):
 
@@ -1053,7 +1091,7 @@ the finer `depth` map, kept for routing and the `api_view(module=)` gate —
 |---|---|---|
 | `company` | `string \| null` | `null` outside a company context — transitional mode (roadmap §3), not an error |
 | `permissions` | `{module: {level, scope}}` | Module-level projection; drives routing and `api_view(module=)` |
-| `depth` | `{node: flags[]}` | Full picture by function-registry node; project fields/buttons by this, not by `permissions` |
+| `depth` | `{node: flags[]}` | Full picture by function-registry node; project fields/buttons by this, not by `permissions`. The client resolves a node by looking it up, then its ancestors — the first entry found is the answer (`frontend/src/lib/auth/permissions.ts::depthFor`). So the map carries a node only where its effective depth **differs** from what the client would inherit: an explicit role row equal to its ancestor's depth is left out, and a deny under a granted ancestor comes as an **empty list** (`hr.employees: ["view"]` + `hr.employees.salary: []`, the sub-node denies of `access/0008`) — the only case where `[]` means something; a node with no rights anywhere up the tree is simply absent. Sub-node `hr.employees.transfer` (transfer, change of position, dismissal — `edit` for `hr-senior`/`hr-lead`, deny for `hr-junior`/`hr-middle`) is one of those nodes |
 | `hidden_pages` | `string[]` | Pages the role explicitly vetoes; a page not listed here follows the ordinary rules regardless of depth |
 | `subordinate_companies` | `string[]` | Companies *below* this one in the ownership tree where the caller is manager by external hierarchy (`hr.Position.is_manager`/`external_hierarchy`, block B). Display only — doesn't filter data (stage2-spec §7) |
 | `inherited_from` | `string[]` | **New in block C.** Companies *above* this one whose serving position (`hr.Position.serves_subsidiaries`) contributed part of `permissions`/`depth` above. Sorted; empty for a superuser and for anyone inheritance gave nothing. Ancestors are not mutually exclusive (customer decision 7) — a serving grandparent and a serving parent both contribute, so this can carry more than one slug |
@@ -1116,11 +1154,11 @@ platform administrator only.**
 
 | Endpoint                                                | Method | Auth              | Notes |
 |----------------------------------------------------------|--------|-------------------|-------|
-| `/api/companies/v1/me`                                    | GET    | jwt               | Companies where the caller holds an active membership in an active company, ordered `-is_default, name`; no module gate — every signed-in user needs this to switch companies |
+| `/api/companies/v1/me`                                    | GET    | jwt               | Companies where the caller holds an active membership in an active company, ordered `-is_default, name`; `[{slug, subdomain, name, kind, is_default, is_current}]` — the SPA builds a company's host from `subdomain ?? slug` (switcher, `/companies/choose`); no module gate — every signed-in user needs this to switch companies |
 | `/api/companies/v1/companies`                              | GET    | jwt (companies/read)  | `?status=all\|active\|archived`, default `all` |
 | `/api/companies/v1/companies/tree`                         | GET    | jwt (companies/read)  | Active companies only, nested by `parent_slug`. A node whose parent got archived becomes a root instead of disappearing from the tree |
 | `/api/companies/v1/companies/{slug}`                       | GET    | jwt (companies/read)  | 404 `not_found` for an unknown slug |
-| `/api/companies/v1/companies/{slug}`                       | PATCH  | jwt (companies/write) + superuser | `{name?, kind?, country?, parent_slug?, show_external_holders?}` — `slug` itself never changes: it names both the Postgres schema and the subdomain. `parent_slug: null` clears the parent; omitting any key leaves it alone (`model_fields_set`, not a `None` check). 422 `parent_not_found` / `parent_cycle` / `invalid`. `deny_unless_platform_admin` inside the view — see the company-blind-gate note above |
+| `/api/companies/v1/companies/{slug}`                       | PATCH  | jwt (companies/write) + superuser | `{name?, kind?, country?, parent_slug?, show_external_holders?, subdomain?}` — `slug` itself never changes: it names the Postgres schema and is the company's value in tokens and role assignments. `subdomain` is the short host label (block I.2); `""`/`null` removes it (the company goes back to its slug-host), an omitted key leaves it alone; reserved labels (`www`, `api`, `admin`, `mail`, `static`, `cdn`, `grafana`, `media`, `sfu`, `ws`, `localhost`) and a label equal to another company's slug (or a slug equal to another's alias) are refused by `Company.clean()` → 422 `invalid`. A changed alias takes effect within the 5-second registry cache. `parent_slug: null` clears the parent; omitting any key leaves it alone (`model_fields_set`, not a `None` check). 422 `parent_not_found` / `parent_cycle` / `invalid`. `deny_unless_platform_admin` inside the view — see the company-blind-gate note above |
 | `/api/companies/v1/companies/{slug}/archive`               | POST   | admin (superuser)     | Idempotent. 409 `last_active` if this is the only company with `status=active` — see below. Rebuilds holding views |
 | `/api/companies/v1/companies/{slug}/restore`                | POST   | admin (superuser)     | Idempotent. Rebuilds holding views |
 | `/api/companies/v1/companies/{slug}/modules`                | GET    | jwt (companies/read), own company only | One row per `KNOWN_SERVICES` entry: `{app_label, enabled, message, is_core}`. No stored `CompanyModule` row means enabled. `deny_unless_own_company` inside the view — see the company-blind-gate note above |
@@ -1131,6 +1169,8 @@ platform administrator only.**
 | `/api/companies/v1/companies/{slug}/external-holders`         | GET    | jwt, own company only | Block C. Who from a company *above* this one in the ownership tree currently holds rights here through a serving position (`hr.Position.serves_subsidiaries` → `apps.access.services.inheritance`) — `[{full_name, home_company, position, modules: [{module, level}]}]`, exactly those four fields and nothing else (no email/phone/department — this is holding-staff data disclosed to the subsidiary). `deny_unless_own_company`, same as the membership roster. 403 with a body (not an empty list — an empty list would mean "nobody from outside holds rights here", which would be false) when `Company.show_external_holders` is off for this company |
 
 **`show_external_holders`** (`CompanyRead`/`CompanyPatch`, migration `companies/0004`, default `true`) is a per-company, platform-admin-only setting: it controls whether a subsidiary can *see* who from a parent company holds rights in it via the endpoint above — it does not control the access itself, and a subsidiary cannot turn it off for itself (customer decision 4, block C). Defaulting to on is deliberate: hiding it by default would hide the fact of access from the company whose data is actually being read.
+
+**`subdomain`** (`CompanyRead`, `MyCompany`, `CompanyPatch`; migrations `companies/0005` field, `0006` seeds `hi-tech-qazaqstan → htq`, `hi-tech-systems → hts`, `kazakhstan-engineering-group → keg`, `hi-tech-group → group`; CLI `company_create --subdomain`) is the company's short host label, `null` when the company lives on its slug. It decides only which host resolves to the company (see "Company context" in the authorization rule above); links that must open a company page from outside — HR share links — are built by `apps.companies.interface.public_url(slug)` as `https://<subdomain or slug>.<host of PUBLIC_BASE_URL>`. Rollout checklist (DNS, origin certificate, `SFU_ALLOWED_ORIGINS`, order of commands, checks): [docs/deploy/subdomains-runbook.md](docs/deploy/subdomains-runbook.md).
 
 **No HTTP company creation, on purpose.** `provision_company` runs a fresh
 schema plus four apps' worth of migrations (~1 minute) before it's done;
