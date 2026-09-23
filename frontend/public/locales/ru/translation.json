@@ -1211,7 +1211,6 @@
         "description": "Описание",
         "grade": "Грейд",
         "weight": "Вес",
-        "hrLevel": "Уровень HR-доступа",
         "searchPosition": "Поиск должности…",
         "noPositionFound": "Должность не найдена",
         "createPosition": "Создать новую должность",

@@ -29,7 +29,10 @@ import type { LevelThreshold, NextWeightForLevel } from '@/types/hr';
 type HRLevelKey = 'junior' | 'middle' | 'senior' | 'lead';
 
 interface PositionPermissions {
-  hr_level: HRLevelKey | null;
+  // hr_level снят с фронта (задача 10 блока I.2): API больше не пишет его
+  // из формы, а старые строки колонки бейджем в строке не показываются —
+  // значение больше не читается. `hr_levels`/`level_presets` каталога ниже
+  // не трогаем — это отдельный справочник permissions-catalog, вне scope.
   permissions: string[];
 }
 
@@ -1001,11 +1004,6 @@ const HRPositions = () => {
                                     {position.is_system && (
                                       <Badge variant="secondary" className="gap-1 text-[10px]" title={t('hr.positions.systemTitle')}>
                                         <Lock className="h-3 w-3" /> {t('hr.positions.system')}
-                                      </Badge>
-                                    )}
-                                    {position.permissions?.hr_level && (
-                                      <Badge variant="outline" className="text-[10px] uppercase">
-                                        {position.permissions.hr_level}
                                       </Badge>
                                     )}
                                   </div>

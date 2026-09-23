@@ -212,7 +212,31 @@ def test_create_roundtrips_permissions_matrix(admin_auth, dep):
         content_type="application/json", **admin_auth,
     )
     assert resp.status_code == 201
-    assert resp.json()["permissions"] == {"hr_level": "senior", "permissions": ["hr.employees.view"]}
+    # hr_level больше не пишется (задача 10 блока I.2, R4) — только список
+    # ключей. Присланный hr_level молча отброшен схемой (extra="ignore"),
+    # а не сохранён: ответ несёт None, см. test_position_api_ignores_hr_level.
+    assert resp.json()["permissions"] == {"hr_level": None, "permissions": ["hr.employees.view"]}
+
+
+@pytest.mark.django_db
+def test_position_api_ignores_hr_level(admin_auth, dep):
+    """hr_level больше не принимается: уровень живёт в ролях (блок I.2, R4).
+
+    Иначе значение, выставленное уже ПОСЛЕ переноса, подхватил бы повторный
+    access_backfill_positions.
+    """
+    resp = Client().post(
+        f"{BASE}/",
+        data={
+            "title": "Кадровик", "department_id": dep.id,
+            "permissions": {"hr_level": "lead", "permissions": []},
+        },
+        content_type="application/json", **admin_auth,
+    )
+
+    assert resp.status_code in (200, 201), resp.content
+    position = Position.objects.get(id=resp.json()["id"])
+    assert (position.permissions or {}).get("hr_level") is None
 
 
 @pytest.mark.django_db
@@ -348,7 +372,9 @@ def test_update_system_position_allows_weight_grade_permissions(admin_auth, dep)
     body = resp.json()
     assert body["grade"] == 5
     assert body["weight"] == 150
-    assert body["permissions"]["hr_level"] == "lead"
+    # hr_level в присланном permissions игнорируется схемой — не сохраняется
+    # даже у системной должности (задача 10 блока I.2, R4).
+    assert body["permissions"]["hr_level"] is None
 
 
 # ── DELETE /{id}/ ─────────────────────────────────────────────────────────

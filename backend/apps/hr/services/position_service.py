@@ -157,6 +157,11 @@ class LevelFull(Exception):
 # ── сериализаторы (формы из schemas/position.py) ─────────────────────────────
 
 def _serialize_permissions(raw: dict | None) -> dict | None:
+    # Задача 10 блока I.2: запись hr_level через API снята (см. докстринг
+    # schemas.PositionPermissions) — новые/правленные должности сюда его уже
+    # не кладут. raw.get("hr_level") читается только ради строк, записанных
+    # ДО этой задачи (или напрямую через ORM/сиды) — не удалять, пока такие
+    # строки могут существовать в БД.
     if raw is None:
         return None
     return {"hr_level": raw.get("hr_level"), "permissions": list(raw.get("permissions") or [])}

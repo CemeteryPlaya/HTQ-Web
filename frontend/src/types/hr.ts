@@ -29,8 +29,9 @@ export interface Position {
    * с чьими данными работает должность — роли распространяются на поддерево.
    */
   serves_subsidiaries?: boolean;
+  // hr_level снят с записи (задача 10 блока I.2) и нигде в этом типе больше
+  // не читается — уровень живёт только в ролях apps.access.
   permissions?: {
-    hr_level?: 'junior' | 'middle' | 'senior' | 'lead' | null;
     permissions?: string[];
   } | null;
 }

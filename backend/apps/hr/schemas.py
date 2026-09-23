@@ -46,27 +46,35 @@ class DepartmentUpdate(BaseModel):
 
 # ── positions — порт services/hr/app/schemas/position.py ────────────────────
 
-HRLevelLiteral = Literal["junior", "middle", "senior", "lead"]
 ExternalHierarchyLiteral = Literal["inherit", "none"]
 
 
 class PositionPermissions(BaseModel):
     """Матрица прав, прикреплённая к несистемной должности.
 
-    С задачи 9 блока I «Единая модель прав» ``permissions``/``hr_level``
-    здесь МЕРТВЫ для авторизации кадрового домена — права считает
-    ``apps.hr.rbac`` по узлам ``apps.access``, эту форму не читая. Запись
-    через API должностей остаётся намеренно (Ruling B, ``apps/hr/tests/
-    test_single_rbac_guards.py``): ``permissions`` — единственный оставшийся
-    путь, которым в колонку попадают ключи ``contracts.*`` (читает их
+    С задачи 9 блока I «Единая модель прав» ``permissions`` здесь МЕРТВО для
+    авторизации кадрового домена — права считает ``apps.hr.rbac`` по узлам
+    ``apps.access``, эту форму не читая. Запись через API должностей
+    остаётся намеренно (Ruling B, ``apps/hr/tests/test_single_rbac_guards.py``):
+    ``permissions`` — единственный оставшийся путь, которым в колонку
+    попадают ключи ``contracts.*`` (читает их
     ``apps.hr.interface.user_has_permission`` — контракт с ``apps.contracts``
-    до их перехода на узлы ``access``, roadmap §6.4). ``hr_level`` —
-    UI/миграционный пресет: выбор уровня заполняет ``permissions``
-    соответствующим пресетом (``apps.hr.permissions``); живёт как явный
-    оверрайд для эвристики переноса ``apps.hr.access.classify_hr_level``.
+    до их перехода на узлы ``access``, roadmap §6.4).
+
+    ``hr_level`` (задача 10 блока I.2) СНЯТО с записи: кадровый уровень
+    теперь живёт только в ролях ``apps.access`` (``hr-junior…hr-lead``), а
+    эта колонка — не второй источник истины для него. Поле намеренно не
+    объявлено здесь, а не объявлено с ``ge=...``/запретом: класс не задаёт
+    ``model_config`` (``extra`` не выставлен), поэтому у Pydantic v2 это
+    означает поведение по умолчанию ``extra="ignore"`` — лишний ключ
+    ``hr_level`` в теле запроса молча отбрасывается при парсинге, а не
+    роняет запрос 422. Это осознанный выбор (не ``extra="forbid"``): старый
+    клиент, ещё шлющий ``hr_level`` (например, закэшированный фронт), не
+    ломается — просто значение больше никуда не попадает, включая колонку
+    ``Position.permissions``. Ответ API продолжает отдавать ``hr_level`` из
+    старых строк — см. ``position_service._serialize_permissions``.
     """
 
-    hr_level: HRLevelLiteral | None = None
     permissions: list[str] = Field(default_factory=list)
 
 

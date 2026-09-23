@@ -666,8 +666,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     weight: string;
     grade: string;
     description: string;
-    hr_level: '' | 'junior' | 'middle' | 'senior' | 'lead';
-  }>({ title: '', department_id: '', weight: '100', grade: '1', description: '', hr_level: '' });
+  }>({ title: '', department_id: '', weight: '100', grade: '1', description: '' });
   const [newPositionError, setNewPositionError] = useState<string | null>(null);
 
   const createPositionMutation = useMutation({
@@ -679,9 +678,6 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
         grade: Number(newPositionForm.grade) || 1,
         description: newPositionForm.description || undefined,
       };
-      if (newPositionForm.hr_level) {
-        payload.permissions = { hr_level: newPositionForm.hr_level, permissions: [] };
-      }
       return createPosition(payload);
     },
     onSuccess: (created) => {
@@ -697,7 +693,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
           : (created.department_id ? String(created.department_id) : prev.department),
       }));
       setCreatePositionOpen(false);
-      setNewPositionForm({ title: '', department_id: '', weight: '100', grade: '1', description: '', hr_level: '' });
+      setNewPositionForm({ title: '', department_id: '', weight: '100', grade: '1', description: '' });
       setNewPositionError(null);
     },
     onError: (err) => setNewPositionError(
@@ -715,7 +711,6 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       weight: '100',
       grade: '1',
       description: '',
-      hr_level: '',
     });
     setCreatePositionOpen(true);
   };
@@ -1421,29 +1416,6 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                 />
               </label>
             </div>
-            <label className="grid gap-1.5 text-sm">
-              {t('hr.pages.employees.hrLevel', 'Уровень HR-доступа')}
-              <Select
-                value={newPositionForm.hr_level || 'none'}
-                onValueChange={(v) =>
-                  setNewPositionForm({
-                    ...newPositionForm,
-                    hr_level: v === 'none' ? '' : (v as typeof newPositionForm.hr_level),
-                  })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Без HR-доступа</SelectItem>
-                  <SelectItem value="junior">Junior — базовый просмотр</SelectItem>
-                  <SelectItem value="middle">Middle — редактирование своего отдела</SelectItem>
-                  <SelectItem value="senior">Senior — полный просмотр + создание</SelectItem>
-                  <SelectItem value="lead">Lead — полный доступ</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
             <label className="grid gap-1.5 text-sm">
               {t('hr.pages.employees.description', 'Описание')}
               <Textarea

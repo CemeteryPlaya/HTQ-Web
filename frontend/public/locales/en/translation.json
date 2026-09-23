@@ -763,7 +763,6 @@
         "description": "Description",
         "grade": "Grade",
         "weight": "Weight",
-        "hrLevel": "HR access level",
         "searchPosition": "Search positions…",
         "noPositionFound": "Position not found",
         "createPosition": "Create a new position",
