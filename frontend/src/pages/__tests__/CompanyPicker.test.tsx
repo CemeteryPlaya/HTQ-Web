@@ -71,13 +71,15 @@ describe('CompanyPicker', () => {
     vi.unstubAllGlobals();
   });
 
-  it('с одной компанией сразу уводит на её поддомен', async () => {
+  // Без `state.from` (прямой заход на экран выбора) цель — стартовая страница
+  // вошедшего, та же, что у Login после входа, а не публичный лендинг `/`.
+  it('с одной компанией сразу уводит на её поддомен, на стартовую страницу', async () => {
     const assign = stubBareHost();
     mockMyCompanies([HTQ]);
 
     render(<CompanyPicker />, { wrapper });
 
-    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://htq.htq.group/'));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://htq.htq.group/myprofile'));
   });
 
   it('с одной компанией возвращает туда, куда человек шёл по глубокой ссылке', async () => {
@@ -113,7 +115,7 @@ describe('CompanyPicker', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /HTS/ }));
 
-    expect(assign).toHaveBeenCalledWith('https://hts.htq.group/');
+    expect(assign).toHaveBeenCalledWith('https://hts.htq.group/myprofile');
   });
 
   it('без компаний говорит об этом прямо', async () => {

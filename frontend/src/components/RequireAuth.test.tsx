@@ -7,11 +7,14 @@
  * в отказ: иначе каждый заход на защищённую страницу выбрасывал бы на профиль
  * раньше, чем приедет ответ.
  */
-import { render, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AccessLevel } from '@/lib/auth/permissions';
+
+import { resetSessionRestoreForTests } from '@/lib/auth/sessionRestore';
 
 import RequireAuth from './RequireAuth';
 
@@ -24,6 +27,14 @@ const activeProfile = {
 
 const useActiveProfile = vi.fn();
 const permissionsSpy = vi.fn();
+const refreshSpy = vi.fn();
+
+// Обмен refresh → access — единственная функция интерцептора; здесь она
+// подменена, чтобы тест видел, сколько раз RequireAuth её позвал.
+vi.mock('@/api/client', () => ({
+  default: {},
+  refreshAccessToken: () => refreshSpy(),
+}));
 
 vi.mock('@/hooks/useActiveProfile', () => ({
   useActiveProfile: () => useActiveProfile(),
@@ -235,5 +246,113 @@ describe('RequireAuth — голый домен (блок I.2)', () => {
     renderAt('/gated');
 
     expect(screen.getByText('страница входа')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Переезд сессии на поддомен компании (блок I.2, A1). Вошёл на голом домене —
+ * на поддомене access-токена нет, но refresh-cookie родительского домена
+ * видна. RequireAuth обязан обменять её ДО редиректа на /login, иначе человек
+ * входит второй раз в каждой компании и теряет глубокую ссылку.
+ */
+describe('RequireAuth — восстановление сессии по refresh-cookie', () => {
+  let loggedIn = false;
+
+  const clearRefreshCookie = () => {
+    document.cookie = 'refresh=; Max-Age=0; Path=/';
+  };
+
+  beforeEach(() => {
+    loggedIn = false;
+    resetSessionRestoreForTests();
+    refreshSpy.mockReset();
+    window.localStorage.clear();
+    // На поддомене только refresh-cookie: access-токена нет ни в
+    // localStorage, ни в cookie этого origin.
+    document.cookie = 'refresh=refresh-from-parent-domain; Path=/';
+    permissionsSpy.mockReturnValue({ ...permissionsOf({ hr: 'write' }), pageHidden: () => false });
+    // Как настоящий useActiveProfile: «вошёл» — это наличие access-токена,
+    // который появляется только после успешного обмена.
+    useActiveProfile.mockImplementation(() => ({
+      activeProfile: loggedIn ? activeProfile : null,
+      isLoading: false,
+      error: null,
+      isLoggedIn: loggedIn,
+      clearAuthStorage: vi.fn(),
+      refetch: vi.fn(),
+    }));
+  });
+
+  afterEach(() => {
+    clearRefreshCookie();
+    useActiveProfile.mockReset();
+  });
+
+  const renderDeepLink = () =>
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/gated']}>
+          <Routes>
+            <Route
+              path="/gated"
+              element={
+                <RequireAuth page="/gated">
+                  <div>содержимое страницы</div>
+                </RequireAuth>
+              }
+            />
+            <Route path="/login" element={<div>страница входа</div>} />
+          </Routes>
+        </MemoryRouter>
+      </StrictMode>,
+    );
+
+  it('на поддомене с одной refresh-cookie обменивает её и открывает маршрут, а не /login', async () => {
+    stubHost('htq.localhost:3000');
+    refreshSpy.mockImplementation(async () => {
+      loggedIn = true;
+      return 'fresh-access';
+    });
+
+    renderDeepLink();
+
+    expect(await screen.findByText('содержимое страницы')).toBeInTheDocument();
+    expect(screen.queryByText('страница входа')).not.toBeInTheDocument();
+  });
+
+  it('неудачный обмен ведёт на /login', async () => {
+    stubHost('htq.localhost:3000');
+    refreshSpy.mockRejectedValue(new Error('refresh expired'));
+
+    renderDeepLink();
+
+    expect(await screen.findByText('страница входа')).toBeInTheDocument();
+    expect(screen.queryByText('содержимое страницы')).not.toBeInTheDocument();
+  });
+
+  it('обмен вызывается один раз на загрузку — и в StrictMode, и при повторном заходе после неудачи', async () => {
+    stubHost('htq.localhost:3000');
+    refreshSpy.mockRejectedValue(new Error('refresh expired'));
+
+    renderDeepLink();
+    expect(await screen.findByText('страница входа')).toBeInTheDocument();
+
+    // Повторный заход на защищённый маршрут в той же загрузке страницы:
+    // обмен не повторяется, цикла «обмен → /login → обмен» нет.
+    cleanup();
+    renderDeepLink();
+    expect(await screen.findByText('страница входа')).toBeInTheDocument();
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('без refresh-cookie обмена нет — сразу вход', () => {
+    stubHost('htq.localhost:3000');
+    clearRefreshCookie();
+
+    renderDeepLink();
+
+    expect(screen.getByText('страница входа')).toBeInTheDocument();
+    expect(refreshSpy).not.toHaveBeenCalled();
   });
 });

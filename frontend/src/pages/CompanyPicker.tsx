@@ -16,8 +16,16 @@ import { clearAuthStorage } from '@/lib/auth/profileStorage';
 const PICKER_PATH = '/companies/choose';
 
 /**
+ * Стартовая страница вошедшего — та же, куда ведёт `Login` после входа без
+ * `state.from` (pages/Login.tsx). Не `/`: это публичный лендинг, а не рабочее
+ * место.
+ */
+const HOME_PATH = '/myprofile';
+
+/**
  * Куда вести после выбора: туда, куда человек шёл до редиректа на этот экран
- * (`RequireAuth` кладёт исходное место в `state.from`), иначе на главную.
+ * (`RequireAuth` кладёт исходное место в `state.from`), иначе на стартовую
+ * страницу вошедшего (`HOME_PATH`).
  *
  * Путь приклеивается к чужому хосту строкой, поэтому берётся только настоящий
  * путь от корня: `//…` браузер прочёл бы как адрес другого хоста. Сам экран
@@ -27,7 +35,7 @@ const targetPath = (state: unknown): string => {
   const from = (state as { from?: Partial<Location> } | null)?.from;
   const pathname = from?.pathname;
   if (!pathname || !pathname.startsWith('/') || pathname.startsWith('//') || pathname === PICKER_PATH) {
-    return '/';
+    return HOME_PATH;
   }
   return `${pathname}${from.search ?? ''}${from.hash ?? ''}`;
 };

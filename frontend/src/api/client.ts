@@ -109,6 +109,26 @@ async function doTokenRefresh(): Promise<string> {
 }
 
 /**
+ * Обменять refresh-токен на новый access — ОДИН запрос на всех: если обмен уже
+ * идёт (параллельные 401 интерцептора или восстановление сессии в
+ * RequireAuth), вызывающий ждёт тот же промис, а не шлёт второй.
+ *
+ * Это единственная точка обмена в приложении; интерцептор ниже и
+ * `lib/auth/sessionRestore.ts` ходят через неё.
+ */
+export function refreshAccessToken(): Promise<string> {
+  if (_isRefreshing && _refreshPromise) {
+    return _refreshPromise;
+  }
+  _isRefreshing = true;
+  _refreshPromise = doTokenRefresh().finally(() => {
+    _isRefreshing = false;
+    _refreshPromise = null;
+  });
+  return _refreshPromise;
+}
+
+/**
  * Очищает авторизационные данные и выполняет одно перенаправление на /login.
  * Повторные вызовы игнорируются, если редирект уже происходит.
  */
@@ -234,14 +254,8 @@ client.interceptors.response.use(
       }
 
       // Запускаем единственный refresh-запрос
-      _isRefreshing = true;
-      _refreshPromise = doTokenRefresh().finally(() => {
-        _isRefreshing = false;
-        _refreshPromise = null;
-      });
-
       try {
-        const newToken = await _refreshPromise;
+        const newToken = await refreshAccessToken();
         const retryConfig = {
           ...config,
           headers: { ...config.headers, Authorization: `Bearer ${newToken}` },
