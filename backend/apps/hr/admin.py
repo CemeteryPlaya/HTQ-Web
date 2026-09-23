@@ -62,6 +62,26 @@ class PositionAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     search_fields = ("title",)
     readonly_fields = ("created_at", "updated_at")
 
+    def save_model(self, request, obj, form, change):
+        """Отбрасывает ``hr_level`` из ``permissions`` при сохранении.
+
+        Фикс-раунд 1 задачи 10 блока I.2 (находка Info-3 ревью): API
+        должностей с этой задачи hr_level не пишет вовсе, но django-admin
+        правит ``permissions`` сырым JSON-виджетом ``ModelAdmin`` — в обход
+        Pydantic-схемы целиком, единственный оставшийся путь записи. Именно
+        это било бы по обоснованию задачи из брифа («иначе значение,
+        выставленное уже ПОСЛЕ переноса, подхватил бы повторный
+        access_backfill_positions»). Ключи ``permissions`` (список, ради
+        ``contracts.*``) остаются редактируемыми как есть — ``readonly_fields``
+        закрыл бы и их, а это единственный оставшийся путь записи contracts.*
+        (см. докстринг ``apps/hr/schemas.py::PositionPermissions``).
+        """
+        if isinstance(obj.permissions, dict) and "hr_level" in obj.permissions:
+            obj.permissions = {
+                key: value for key, value in obj.permissions.items() if key != "hr_level"
+            }
+        super().save_model(request, obj, form, change)
+
 
 @admin.register(Employee)
 class EmployeeAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):

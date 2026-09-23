@@ -240,6 +240,54 @@ def test_position_api_ignores_hr_level(admin_auth, dep):
 
 
 @pytest.mark.django_db
+def test_update_permissions_key_wipes_inherited_hr_level(admin_auth, dep):
+    """PATCH, тронувший ``permissions``, стирает унаследованный hr_level.
+
+    Намеренное следствие (фикс-раунд 1, находка I-2 ревью): колонка
+    перезаписывается ЦЕЛИКОМ, а не мержится, и схема больше не умеет
+    принять hr_level обратно — см. докстринг position_service.update_position.
+    Ключ contracts.* при этом доезжает нетронутым.
+    """
+    contracts_key = "contracts.advance_payment.record_payment"
+    pos = _pos(
+        "Кадровик с наследием", dep, weight=40,
+        permissions={"hr_level": "lead", "permissions": [contracts_key]},
+    )
+
+    resp = Client().patch(
+        f"{BASE}/{pos.id}/",
+        data={"permissions": {"permissions": [contracts_key]}},
+        content_type="application/json", **admin_auth,
+    )
+
+    assert resp.status_code == 200
+    pos.refresh_from_db()
+    assert (pos.permissions or {}).get("hr_level") is None
+    assert pos.permissions["permissions"] == [contracts_key]
+
+
+@pytest.mark.django_db
+def test_update_without_permissions_key_keeps_inherited_hr_level(admin_auth, dep):
+    """PATCH, НЕ тронувший ``permissions``, унаследованный hr_level не трогает."""
+    contracts_key = "contracts.advance_payment.record_payment"
+    pos = _pos(
+        "Кадровик с наследием 2", dep, weight=41,
+        permissions={"hr_level": "senior", "permissions": [contracts_key]},
+    )
+
+    resp = Client().patch(
+        f"{BASE}/{pos.id}/",
+        data={"title": "Кадровик с наследием 2 (правлено)"},
+        content_type="application/json", **admin_auth,
+    )
+
+    assert resp.status_code == 200
+    pos.refresh_from_db()
+    assert pos.title == "Кадровик с наследием 2 (правлено)"
+    assert pos.permissions == {"hr_level": "senior", "permissions": [contracts_key]}
+
+
+@pytest.mark.django_db
 def test_create_without_permissions_is_null(admin_auth, dep):
     resp = Client().post(
         f"{BASE}/", data={"title": "Junior", "department_id": dep.id, "weight": 10},

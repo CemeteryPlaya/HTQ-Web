@@ -405,6 +405,22 @@ def create_position(data) -> Position:
 
 @transaction.atomic
 def update_position(id: int, data, *, actor_user_id: int | None = None) -> Position:
+    """PATCH/PUT должности.
+
+    ⚠️ Намеренное следствие задачи 10 блока I.2: ``patch["permissions"]``,
+    если ключ вообще прислан, — это ВЕСЬ ``PositionPermissions.model_dump()``
+    (поля ``hr_level`` там больше нет), и ``setattr`` ниже перезаписывает
+    JSON-колонку целиком, а не мержит её. Значит любой PATCH, тронувший
+    ``permissions`` (даже только чтобы поправить список ключей
+    ``contracts.*``), стирает унаследованный ``hr_level`` у должности,
+    заведённой до этой задачи, — и восстановить его через API уже нельзя
+    (схема его не принимает). Это СОЗНАТЕЛЬНО не смягчается merge'м: колонка
+    объявлена мёртвой для модели прав, а перенос ``access_backfill_positions``
+    штатно проходит ДО открытия трафика (docs/plans/
+    2026-09-14-group-structure-roadmap.md §7) — на момент, когда PATCH мог
+    бы стереть уже перенесённый уровень, обратной дороги в старую модель
+    всё равно нет.
+    """
     pos = get_position(id)
     patch = data.model_dump(exclude_none=True)
     next_weight = patch.pop("weight", None)

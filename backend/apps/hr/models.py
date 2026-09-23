@@ -158,10 +158,26 @@ class Position(HrBase):
     # колонку не читая. Живых читателей ровно два: apps.hr.interface.
     # user_has_permission (контракт с apps.contracts до их перехода на узлы
     # access) и эвристика переноса apps.hr.access.classify_hr_level (только
-    # ключ "hr_level", только для access_backfill_positions). Пишет её
-    # сегодня только API должностей (PositionIn.permissions) — см. докстринг
+    # ключ "hr_level", только для access_backfill_positions) — см. докстринг
     # apps/hr/tests/test_single_rbac_guards.py.
-    # Форма: {"hr_level": "junior|middle|senior|lead", "permissions": [str, ...]}
+    #
+    # Задача 10 блока I.2 закрыла запись hr_level: кадровый уровень доступа
+    # живёт ТОЛЬКО в ролях apps.access (hr-junior…hr-lead), эта колонка ему
+    # не второй источник истины. API должностей (apps/hr/schemas.py::
+    # PositionPermissions, PositionCreate/PositionUpdate.permissions) с этой
+    # задачи не объявляет поле hr_level вовсе — присланный ключ молча
+    # отбрасывается (Pydantic v2 default extra="ignore"), пишется только
+    # "permissions" (список ключей ради contracts.*). django-admin
+    # (apps/hr/admin.py::PositionAdmin) тем же приёмом отбрасывает hr_level
+    # при сохранении (фикс-раунд 1 той же задачи) — записать его через
+    # платформу больше негде. hr_level в строках, заведённых ДО задачи 10
+    # (или попавших в колонку напрямую через ORM/сид/ETL мимо обоих замков),
+    # остаётся READ-ONLY: отдаётся ответом API
+    # (position_service._serialize_permissions) и служит только эвристике
+    # переноса; PATCH/PUT, тронувший ключ "permissions", перезаписывает
+    # словарь ЦЕЛИКОМ и потому стирает унаследованный hr_level даже без
+    # намерения — см. докстринг position_service.update_position.
+    # Форма: {"hr_level": "junior|middle|senior|lead" | null, "permissions": [str, ...]}
     permissions = models.JSONField(null=True, blank=True)
 
     class Meta:
