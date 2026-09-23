@@ -31,6 +31,9 @@ class RoleRead(BaseModel):
     code: str
     title: str
     is_system: bool
+    #: Компания, которой принадлежит роль; ``None`` — роль общая для группы
+    #: (блок I.2, R2).
+    company_slug: str | None = None
 
 
 class RoleIn(BaseModel):

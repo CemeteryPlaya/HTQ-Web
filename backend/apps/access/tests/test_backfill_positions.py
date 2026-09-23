@@ -440,6 +440,9 @@ def test_probe_f1_list_without_level_gets_a_custom_role(company_schema, capsys):
     assert link.role.code == custom_role_code(slug, position.id)
     assert link.role.is_system is False
     assert link.scope_kind == ScopeKind.DEPARTMENT
+    # Блок I.2, R2: именная роль принадлежит компании, чья должность её
+    # породила — соседям её не видно в общем каталоге.
+    assert link.role.company_slug == slug
     assert _role_rows(link.role) == {
         "hr.employees": frozenset({"view"}),
         "hr.documents": frozenset({"view"}),
@@ -600,6 +603,9 @@ def test_custom_role_codes_do_not_collide_across_companies(two_company_schemas):
     assert role_a.id != role_b.id
     assert "hr.employees" in _role_rows(role_a)
     assert set(_role_rows(role_b)) == {"hr.documents"}
+    # Блок I.2, R2: каждая именная роль несёт СВОЮ компанию, а не общий каталог.
+    assert role_a.company_slug == slug_a
+    assert role_b.company_slug == slug_b
 
 
 @pytest.mark.django_db

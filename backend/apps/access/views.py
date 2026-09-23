@@ -36,6 +36,7 @@ module="access", level=…)`` на каждой ручке, кроме трёх,
 
 from __future__ import annotations
 
+from django.db.models import Q
 from django.http import JsonResponse
 from django.utils.decorators import method_decorator
 
@@ -52,6 +53,7 @@ from .services.errors import (
     RoleConflict,
     RoleInUse,
     RoleIsSystem,
+    RoleNotInCompany,
     ScopeInvalid,
     SystemRoleCodeLocked,
     UnknownModule,
@@ -60,9 +62,10 @@ from .services.errors import (
 
 # 422 — тело корректно по форме, но противоречит состоянию каталога.
 # Отдельно от 409: «нет такой роли» и «такого модуля не существует» — это
-# неверные ЗНАЧЕНИЯ, а не конфликт с состоянием данных.
+# неверные ЗНАЧЕНИЯ, а не конфликт с состоянием данных. RoleNotInCompany —
+# туда же: роль существует, но принадлежит другой компании (блок I.2, R2).
 INVALID = (RoleConflict, UnknownModule, UnknownRole, ScopeInvalid,
-           DepthNotApplicable)
+           DepthNotApplicable, RoleNotInCompany)
 
 #: Модуль реестра прав, к которому относятся ручки этой аппки
 #: (``apps/access/access_functions.py``, узлы ``access.*``).
@@ -162,8 +165,14 @@ class RoleCollectionView(AccessView):
 
     @method_decorator(api_view(methods=("GET",), auth="jwt"))
     def get(self, request):
-        return [schemas.RoleRead.model_validate(row)
-                for row in Role.objects.all()]
+        # Роль компании видна только в ней самой: её название — это название
+        # должности (блок I.2, R2). Общие роли (company_slug пуст) видны
+        # везде; платформенный администратор видит всё.
+        rows = Role.objects.all()
+        if not request.token.is_superuser:
+            company = current_company_or_none()
+            rows = rows.filter(Q(company_slug__isnull=True) | Q(company_slug=company))
+        return [schemas.RoleRead.model_validate(row) for row in rows]
 
     # Правка ОБЩЕГО каталога ролей — администрирование, ``admin`` (T4
     # финальной волны блока I): поведение не меняется — метод и так пускает

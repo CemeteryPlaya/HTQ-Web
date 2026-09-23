@@ -13,7 +13,20 @@ from django.db import transaction
 from apps.access.models import (
     POSITION_ROLE_SCOPE_KINDS, PositionRole, Role, RoleAssignment, ScopeKind,
 )
-from apps.access.services.errors import ScopeInvalid, UnknownRole
+from apps.access.services.errors import RoleNotInCompany, ScopeInvalid, UnknownRole
+
+
+def _assert_role_belongs(company: str, role: Role) -> None:
+    """Роль компании видна и выдаётся только в ней (блок I.2, R2).
+
+    Общая роль (``company_slug`` пуст) выдаётся в любой компании — проверка
+    для неё тривиальна. Именная роль другой компании (``hr-custom-*``, но не
+    только — поле общее для любой будущей роли одной компании) — нет.
+    """
+    if role.company_slug and role.company_slug != company:
+        raise RoleNotInCompany(
+            f"роль {role.code!r} принадлежит компании {role.company_slug!r}"
+        )
 
 
 def _check_roles_exist(role_ids: list[int]) -> None:
@@ -40,6 +53,8 @@ def set_position_roles(company: str, position_id: int, role_ids: list[int]) -> N
     """Замена набора ролей должности целиком (спека §4.3)."""
     unique_ids = list(dict.fromkeys(role_ids))
     _check_roles_exist(unique_ids)
+    for role in Role.objects.filter(id__in=unique_ids):
+        _assert_role_belongs(company, role)
     with transaction.atomic():
         PositionRole.objects.filter(
             company_slug=company, position_id=position_id).delete()
@@ -89,6 +104,7 @@ def ensure_position_role(company: str, position_id: int, role_code: str,
             f"системной роли {role_code!r} нет в реестре (миграции "
             f"access.0004/0005 не применены?)"
         )
+    _assert_role_belongs(company, role)
     _row, created = PositionRole.objects.get_or_create(
         company_slug=company, position_id=position_id, role=role,
         defaults={"scope_kind": scope_kind},
@@ -126,6 +142,9 @@ def ensure_basic_role(company: str, user_id: int) -> bool:
             f"системной роли {BASIC_ROLE_CODE!r} нет в реестре (миграция "
             f"access.0004 не применена?)"
         )
+    # Тривиально: employee-basic — общая роль (company_slug пуст). Проверка
+    # стоит ради единообразия со всеми остальными путями выдачи (блок I.2).
+    _assert_role_belongs(company, role)
     _row, created = RoleAssignment.objects.get_or_create(
         company_slug=company, user_id=user_id, role=role,
         scope_kind=ScopeKind.COMPANY, scope_id=None,
@@ -162,7 +181,10 @@ def set_user_assignments(company: str, user_id: int, items: list[dict]) -> None:
     """
     for item in items:
         _check_scope(item)
-    _check_roles_exist([i["role_id"] for i in items])
+    role_ids = [i["role_id"] for i in items]
+    _check_roles_exist(role_ids)
+    for role in Role.objects.filter(id__in=role_ids):
+        _assert_role_belongs(company, role)
 
     seen: set[tuple] = set()
     rows: list[RoleAssignment] = []

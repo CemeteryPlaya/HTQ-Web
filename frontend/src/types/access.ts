@@ -22,6 +22,12 @@ export interface Role {
   title: string;
   /** Служебная роль — удалять нельзя (409). */
   is_system: boolean;
+  /**
+   * Компания, которой принадлежит роль; `null`/отсутствует — роль общая для
+   * группы (блок I.2, R2). Именная роль должности (`hr-custom-<slug>-<id>`)
+   * несёт слаг своей компании — каталог соседям её не показывает.
+   */
+  company_slug?: string | null;
 }
 
 export interface RoleInput {

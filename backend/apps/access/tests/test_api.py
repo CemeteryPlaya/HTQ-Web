@@ -84,7 +84,8 @@ def test_list_roles(client, reader):
     assert resp.status_code == 200
     by_code = {row["code"]: row for row in resp.json()}
     assert by_code["a"] == {"id": Role.objects.get(code="a").id, "code": "a",
-                            "title": "Альфа", "is_system": False}
+                            "title": "Альфа", "is_system": False,
+                            "company_slug": None}
     assert by_code["platform-admin"]["is_system"] is True
 
 

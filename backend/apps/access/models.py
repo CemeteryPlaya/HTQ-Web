@@ -62,6 +62,11 @@ class Role(models.Model):
     title = models.CharField(max_length=255)
     # Служебные роли сидируются и не удаляются через API.
     is_system = models.BooleanField(default=False, db_default=False)
+    #: Компания, которой принадлежит роль; пусто — роль общая для группы.
+    #: Именные роли переноса (hr-custom-<slug>-<id>) несут название
+    #: должности своей компании, и соседям его видеть незачем (блок I.2).
+    company_slug = models.CharField(max_length=32, null=True, blank=True,
+                                    default=None, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

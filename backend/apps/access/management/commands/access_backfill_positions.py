@@ -79,7 +79,8 @@ resolve._position_role_ids`` читает ``PositionRole`` на каждом б�
 без ``hr_level`` она осталась бы без роли (сужение), с уровнем и суженным
 руками списком получила бы полный пресет (расширение). Поэтому должность с
 непустым списком получает ИМЕННУЮ роль ``hr-custom-<slug>-<position_id>``
-(``is_system=False``, «Кадры: должность <название> (<slug>)»): узлы —
+(``is_system=False``, ``company_slug=<slug>`` — блок I.2, R2 — «Кадры:
+должность <название>»): узлы —
 объединение ``KEY_TO_NODE`` по ключам списка (``apps.hr.interface.
 legacy_key_nodes``), плюс явный ЗАПРЕТ на каждом «ключевом» под-узле
 выданного узла, которого список не даёт, — иначе под-узел унаследовал бы
@@ -456,9 +457,15 @@ class Command(BaseCommand):
             return None
         with transaction.atomic():
             if role is None:
-                title = f"Кадры: должность {position['title']}"[:230]
                 role = Role.objects.create(
-                    code=entry.code, title=f"{title} ({slug})", is_system=False,
+                    code=entry.code,
+                    # 255 — предел Role.title; название должности длиннее
+                    # встречается (блок I.2, находка n7).
+                    title=f"Кадры: должность {position['title']}"[:255],
+                    is_system=False,
+                    # Роль принадлежит своей компании — соседям её не видно
+                    # в общем каталоге и выдать её нельзя (блок I.2, R2).
+                    company_slug=slug,
                 )
                 RolePermission.objects.bulk_create([
                     RolePermission(role=role, node=node, **{
