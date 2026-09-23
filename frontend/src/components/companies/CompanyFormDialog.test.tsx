@@ -63,7 +63,8 @@ describe('CompanyFormDialog', () => {
     );
     const input = screen.getByLabelText(/Короткий адрес/) as HTMLInputElement;
     expect(input.value).toBe('');
-    expect(screen.getByText(/латиница, цифры и дефис/i)).toBeInTheDocument();
+    // Подсказка называет правило валидатора целиком: строчные, первая — буква.
+    expect(screen.getByText(/строчные латинские буквы, цифры и дефис; первая — буква/i)).toBeInTheDocument();
 
     await userEvent.type(input, 'htq');
     await userEvent.click(screen.getByRole('button', { name: /Сохранить/ }));
