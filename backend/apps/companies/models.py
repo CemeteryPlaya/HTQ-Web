@@ -75,6 +75,7 @@ class Company(models.Model):
     #: Пусто — компания живёт по слагу (стенд, разработка на *.localhost).
     #: Форма та же, что у слага: её понимает регулярка server_name в nginx.
     subdomain = models.CharField(
+        "короткий адрес",
         max_length=32, unique=True, null=True, blank=True, default=None,
         validators=[SLUG_VALIDATOR],
     )

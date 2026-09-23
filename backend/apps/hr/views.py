@@ -2887,8 +2887,7 @@ def _share_link_public_url(request, raw_token: str, target_type: str = "org") ->
     path = _share_link_public_path(target_type)
     company = getattr(request, "company", None)
     if company:
-        from apps.companies import interface as companies_iface
-        base = companies_iface.public_url(company["slug"])
+        base = companies.public_url(company["slug"])
         if base:
             return f"{base}{path}{raw_token}"
 
@@ -2970,6 +2969,21 @@ def _public_consume_error(exc: Exception):
     raise exc
 
 
+def _public_link_without_company(request):
+    """Ответ на публичную ссылку, открытую без контекста компании, или None.
+
+    Таблицы ссылок живут в схеме компании (``co_<slug>``), а на голом домене
+    контекста нет: запрос ушёл бы в ``public``, где после ``tenancy_bootstrap``
+    таблицы ``hr_sharelink`` нет, — и падал бы 500. Так открываются ссылки,
+    выданные до перевода на поддомены (фронт строил их из адреса голого
+    домена). Для человека по ту сторону это та же недействительная ссылка,
+    поэтому и ответ тот же, что на неизвестный токен (блок I.2, B1).
+    """
+    if getattr(request, "company", None) is None:
+        return json_error("Link not found", 404)
+    return None
+
+
 def _public_json_response(result: dict) -> JsonResponse:
     # X-Robots-Tag/Cache-Control — порт заголовков роутера исходника
     # (защита от индексации + запрет кеширования). Возвращаем готовый
@@ -2983,6 +2997,8 @@ def _public_json_response(result: dict) -> JsonResponse:
 
 @api_view(methods=("GET",), auth=None)
 def public_org_view(request, token: str):
+    if (denied := _public_link_without_company(request)) is not None:
+        return denied
     try:
         result = share_link_svc.consume_link(request, token)
     except (
@@ -2998,6 +3014,8 @@ def public_org_view(request, token: str):
 
 @api_view(methods=("GET",), auth=None)
 def public_employee_view(request, token: str):
+    if (denied := _public_link_without_company(request)) is not None:
+        return denied
     try:
         result = share_link_svc.consume_employee_link(request, token)
     except (
@@ -3271,7 +3289,7 @@ def _get_identity_approver(request):
     return {"user_id": user_id, "user": brief}
 
 
-# level="write", а не "admin": узел ``hr.identity`` несёт признак edit, а
+# level="write", а не "admin": узел ``hr.identity_requests`` несёт признак edit, а
 # уровень модуля считается по всему поддереву hr.* — на admin поднимается
 # только роль с delete где-нибудь в кадрах. До блока I (1f69716) ручку
 # открывал любой кадровый доступ; admin здесь сузил бы её держателю именной
@@ -3311,7 +3329,7 @@ def _set_identity_approver(request):
 
 def identity_approver(request):
     """``GET`` — читать (открыто, без гейта), ``PUT`` — назначать (под
-    гейтом ``module="hr", level="admin"``). Один URL, два метода с РАЗНЫМ
+    гейтом ``module="hr", level="write"``). Один URL, два метода с РАЗНЫМ
     гейтингом — не может быть одним ``api_view(...)`` вызовом (гейт
     применяется ко ВСЕМ объявленным методам разом), поэтому расщеплено на
     пару, как и остальные ``_x_detail``/``x_collection`` диспетчеры этого

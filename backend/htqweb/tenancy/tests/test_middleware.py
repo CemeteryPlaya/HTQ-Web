@@ -99,7 +99,12 @@ def test_context_is_cleared_even_when_view_raises(kz, rf):
 
 @pytest.mark.django_db
 def test_middleware_resolves_alias_into_schema_of_its_company(client):
-    """Заголовок несёт псевдоним, а search_path встаёт по слагу."""
+    """Псевдоним в заголовке компанию НАХОДИТ: ответ — не 404 middleware.
+
+    Больше этот тест ничего не проверяет — ни ``search_path``, ни слаг в
+    контексте: «не 404» не отличит контекст на слаге от контекста на
+    псевдониме. Это делает шпион ``test_alias_sets_context_and_request_company_by_slug``.
+    """
     Company.objects.create(slug="hi-tech-qazaqstan", name="HTQ",
                            kind=CompanyKind.CONSTRUCTION, subdomain="htq",
                            status=CompanyStatus.ACTIVE)

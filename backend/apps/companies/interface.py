@@ -126,6 +126,11 @@ def public_url(slug: str) -> str | None:
     if company is None:
         return None
     parts = urlsplit(base)
+    # Без схемы (``htq.group``) urlsplit кладёт всё в path, и адрес вышел
+    # бы ``://acme.`` — такой ссылке лучше не быть вовсе: вызывающий
+    # откатится на прежний источник (блок I.2, B2).
+    if not parts.scheme or not parts.netloc:
+        return None
     label = company["subdomain"] or company["slug"]
     return f"{parts.scheme}://{label}.{parts.netloc}"
 

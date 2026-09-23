@@ -32,9 +32,9 @@ from .services import membership_service
 
 @admin.register(Company)
 class CompanyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("name", "slug", "kind", "status", "parent", "country")
+    list_display = ("name", "slug", "subdomain", "kind", "status", "parent", "country")
     list_filter = ("kind", "status")
-    search_fields = ("name", "slug")
+    search_fields = ("name", "slug", "subdomain")
     # slug задаёт имя схемы Postgres (co_<slug>, дефис заменяется на
     # подчёркивание — htqweb.tenancy.context.schema_for). Смена slug в этой
     # форме означала бы переименование уже существующей схемы, а эта форма

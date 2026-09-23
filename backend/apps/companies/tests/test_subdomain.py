@@ -156,3 +156,34 @@ def test_public_url_is_none_without_public_base_url(settings):
     settings.PUBLIC_BASE_URL = ""
     Company.objects.create(slug="acme", name="Acme", kind=CompanyKind.IT)
     assert interface.public_url("acme") is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("base", ["htq.group", "//htq.group", "https://"])
+def test_public_url_is_none_without_scheme_or_host(settings, base):
+    """``PUBLIC_BASE_URL`` без схемы или без хоста даёт ``None``, а не
+    ``"://acme."`` — вызывающий откатывается на прежний источник (блок I.2, B2)."""
+    from apps.companies import interface
+
+    settings.PUBLIC_BASE_URL = base
+    Company.objects.create(slug="acme", name="Acme", kind=CompanyKind.IT)
+    assert interface.public_url("acme") is None
+
+
+@pytest.mark.django_db
+def test_host_label_prefers_alias_over_another_companys_slug():
+    """Коллизия «псевдоним одной компании = слаг другой» (блок I.2, B4).
+
+    ``Company.clean()`` её запрещает, но миграция ``0006`` ставит псевдонимы
+    через ``.update()`` мимо валидации — поэтому порядок резолва должен
+    отвечать и за такое состояние: псевдоним побеждает, и метку ``htq``
+    получает компания B, а не A со слагом ``htq``.
+    """
+    from apps.companies import interface
+
+    Company.objects.create(slug="htq", name="A", kind=CompanyKind.IT)
+    b = Company.objects.create(slug="hi-tech-qazaqstan", name="B",
+                               kind=CompanyKind.CONSTRUCTION)
+    Company.objects.filter(pk=b.pk).update(subdomain="htq")
+
+    assert interface.resolve_host_label("htq")["slug"] == "hi-tech-qazaqstan"

@@ -101,6 +101,19 @@ def other_auth(db):
     return headers
 
 
+@pytest.fixture
+def public(company_row):
+    """Анонимный клиент на поддомене компании.
+
+    Публичная страница читает таблицы КОМПАНИИ, поэтому без её контекста
+    (голый домен) отвечает 404 — см. ``test_public_link_without_company_is_404``.
+    Ссылки и выдаются на поддомен (``public_url``), так что это и есть
+    штатный путь. ``company_row`` без схемы: в тестовой базе таблицы лежат в
+    ``public``, и ``search_path`` компании в неё проваливается.
+    """
+    return Client(HTTP_X_HTQ_COMPANY=company_row)
+
+
 # ── schema паритет ───────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
@@ -256,7 +269,7 @@ def test_audit_owner_only(auth, other_auth):
 # ── public consume: org ─────────────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_public_org_consume_no_auth_required(auth):
+def test_public_org_consume_no_auth_required(auth, public):
     _dep("ИТ", "it")
     created = Client().post(
         f"{BASE}/", data={"label": "x", "link_type": "permanent_with_expiry"},
@@ -264,7 +277,7 @@ def test_public_org_consume_no_auth_required(auth):
     ).json()
     token = created["token"]
 
-    resp = Client().get(f"{PUBLIC_ORG}/{token}")
+    resp = public.get(f"{PUBLIC_ORG}/{token}")
     assert resp.status_code == 200
     body = resp.json()
     assert "tree" in body
@@ -272,7 +285,7 @@ def test_public_org_consume_no_auth_required(auth):
 
 
 @pytest.mark.django_db
-def test_public_org_tree_edges_do_not_carry_relation_id(auth):
+def test_public_org_tree_edges_do_not_carry_relation_id(auth, public):
     """relation_id адресует /org/relations, /org/employee-relations — ручки
     правки, к которым у анонимного зрителя ссылки нет доступа (auth="jwt").
     Belt-and-braces: _strip_public_pii режет relation_id на уровне схемы, а
@@ -295,7 +308,7 @@ def test_public_org_tree_edges_do_not_carry_relation_id(auth):
     ).json()
     token = created["token"]
 
-    body = Client().get(f"{PUBLIC_ORG}/{token}").json()
+    body = public.get(f"{PUBLIC_ORG}/{token}").json()
     edges = body["tree"]["edges"]
     assert edges, "ожидалось хотя бы одно ребро в дереве"
     assert all("relation_id" not in e for e in edges)
@@ -303,7 +316,7 @@ def test_public_org_tree_edges_do_not_carry_relation_id(auth):
 
 
 @pytest.mark.django_db
-def test_public_org_one_time_link_used_once(auth):
+def test_public_org_one_time_link_used_once(auth, public):
     _dep("ИТ", "it")
     created = Client().post(
         f"{BASE}/", data={"label": "x", "link_type": "one_time"},
@@ -311,34 +324,34 @@ def test_public_org_one_time_link_used_once(auth):
     ).json()
     token = created["token"]
 
-    first = Client().get(f"{PUBLIC_ORG}/{token}")
+    first = public.get(f"{PUBLIC_ORG}/{token}")
     assert first.status_code == 200
 
-    second = Client().get(f"{PUBLIC_ORG}/{token}")
+    second = public.get(f"{PUBLIC_ORG}/{token}")
     assert second.status_code == 410
     assert "already been used" in second.json()["detail"]
 
 
 @pytest.mark.django_db
-def test_public_org_revoked_link_410(auth):
+def test_public_org_revoked_link_410(auth, public):
     created = Client().post(
         f"{BASE}/", data={"label": "x"}, content_type="application/json", **auth,
     ).json()
     Client().delete(f"{BASE}/{created['id']}", **auth)
 
-    resp = Client().get(f"{PUBLIC_ORG}/{created['token']}")
+    resp = public.get(f"{PUBLIC_ORG}/{created['token']}")
     assert resp.status_code == 410
     assert "revoked" in resp.json()["detail"]
 
 
 @pytest.mark.django_db
-def test_public_org_unknown_token_404():
-    resp = Client().get(f"{PUBLIC_ORG}/not-a-real-token")
+def test_public_org_unknown_token_404(public):
+    resp = public.get(f"{PUBLIC_ORG}/not-a-real-token")
     assert resp.status_code == 404
 
 
 @pytest.mark.django_db
-def test_public_org_expired_link_410(auth):
+def test_public_org_expired_link_410(auth, public):
     created = Client().post(
         f"{BASE}/",
         data={
@@ -348,13 +361,13 @@ def test_public_org_expired_link_410(auth):
         content_type="application/json", **auth,
     ).json()
 
-    resp = Client().get(f"{PUBLIC_ORG}/{created['token']}")
+    resp = public.get(f"{PUBLIC_ORG}/{created['token']}")
     assert resp.status_code == 410
     assert "expired" in resp.json()["detail"]
 
 
 @pytest.mark.django_db
-def test_public_org_employee_link_not_consumable_at_org_endpoint(auth):
+def test_public_org_employee_link_not_consumable_at_org_endpoint(auth, public):
     dep = _dep("ИТ", "it")
     pos = _pos("Инженер", dep, weight=50)
     emp = _emp(dep, pos, "a@htq.test")
@@ -364,14 +377,14 @@ def test_public_org_employee_link_not_consumable_at_org_endpoint(auth):
         content_type="application/json", **auth,
     ).json()
 
-    resp = Client().get(f"{PUBLIC_ORG}/{created['token']}")
+    resp = public.get(f"{PUBLIC_ORG}/{created['token']}")
     assert resp.status_code == 404
 
 
 # ── public consume: employee ─────────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_public_employee_consume_returns_card(auth):
+def test_public_employee_consume_returns_card(auth, public):
     dep = _dep("ИТ", "it")
     pos = _pos("Инженер", dep, weight=50)
     emp = _emp(dep, pos, "a@htq.test")
@@ -381,7 +394,7 @@ def test_public_employee_consume_returns_card(auth):
         content_type="application/json", **auth,
     ).json()
 
-    resp = Client().get(f"{PUBLIC_EMPLOYEE}/{created['token']}")
+    resp = public.get(f"{PUBLIC_EMPLOYEE}/{created['token']}")
     assert resp.status_code == 200
     body = resp.json()
     assert body["card"]["id"] == emp.id
@@ -389,18 +402,18 @@ def test_public_employee_consume_returns_card(auth):
 
 
 @pytest.mark.django_db
-def test_public_employee_org_link_not_consumable_at_employee_endpoint(auth):
+def test_public_employee_org_link_not_consumable_at_employee_endpoint(auth, public):
     _dep("ИТ", "it")
     created = Client().post(
         f"{BASE}/", data={"label": "x"}, content_type="application/json", **auth,
     ).json()
 
-    resp = Client().get(f"{PUBLIC_EMPLOYEE}/{created['token']}")
+    resp = public.get(f"{PUBLIC_EMPLOYEE}/{created['token']}")
     assert resp.status_code == 404
 
 
 @pytest.mark.django_db
-def test_public_employee_deleted_employee_gives_410(auth):
+def test_public_employee_deleted_employee_gives_410(auth, public):
     dep = _dep("ИТ", "it")
     pos = _pos("Инженер", dep, weight=50)
     emp = _emp(dep, pos, "a@htq.test")
@@ -412,20 +425,20 @@ def test_public_employee_deleted_employee_gives_410(auth):
     emp.is_deleted = True
     emp.save(update_fields=["is_deleted"])
 
-    resp = Client().get(f"{PUBLIC_EMPLOYEE}/{created['token']}")
+    resp = public.get(f"{PUBLIC_EMPLOYEE}/{created['token']}")
     assert resp.status_code == 410
 
 
 # ── audit trail rows written on every consume/deny ──────────────────────────
 
 @pytest.mark.django_db
-def test_public_consume_writes_audit_row(auth):
+def test_public_consume_writes_audit_row(auth, public):
     _dep("ИТ", "it")
     created = Client().post(
         f"{BASE}/", data={"label": "x", "link_type": "permanent_with_expiry"},
         content_type="application/json", **auth,
     ).json()
-    Client().get(f"{PUBLIC_ORG}/{created['token']}")
+    public.get(f"{PUBLIC_ORG}/{created['token']}")
 
     actions = list(
         ShareLinkAudit.objects.filter(link_id=created["id"]).values_list("action", flat=True)
@@ -465,3 +478,32 @@ def test_share_link_without_company_keeps_public_base_url(settings, auth):
 
     assert resp.status_code == 201, resp.content
     assert resp.json()["url"].startswith("https://htq.group/public/org/")
+
+
+# ── голый домен: ссылки, выданные до поддоменов (блок I.2, B1) ──────────────
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("endpoint", [PUBLIC_ORG, PUBLIC_EMPLOYEE])
+def test_public_link_without_company_is_404(auth, endpoint):
+    """Без контекста компании — 404 как на неизвестный токен, а не 500.
+
+    Таблицы ссылок живут в схеме компании; на голом домене запрос ушёл бы в
+    ``public``, где на бою таблицы ``hr_sharelink`` нет (после
+    ``tenancy_bootstrap``), и падал бы 500. Так открываются ссылки, выданные
+    до перевода на поддомены. В тестовой базе таблица в ``public`` ЕСТЬ,
+    поэтому ссылка здесь настоящая и действующая: без проверки контекста
+    ответ был бы 200/410, а не 404.
+    """
+    dep = _dep("ИТ", "it-bare")
+    pos = _pos("Инженер", dep, 50)
+    emp = _emp(dep, pos, "bare@htq.test")
+    data = {"label": "x", "link_type": "permanent_with_expiry"}
+    if endpoint == PUBLIC_EMPLOYEE:
+        data.update(target_type="employee", target_employee_id=emp.id)
+    created = Client().post(f"{BASE}/", data=data, content_type="application/json", **auth)
+    assert created.status_code == 201, created.content
+
+    resp = Client().get(f"{endpoint}/{created.json()['token']}")
+
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "Link not found"}

@@ -146,8 +146,8 @@ def test_deferred_key_is_a_programming_error():
 # ── Один расчёт ролей на запрос (задача 14 блока I.2, R8) ───────────────────
 #
 # Гейт ``api_view(module=, level=)`` считает роли, чтобы узнать уровень
-# модуля, и кладёт расчёт в ``request.access_resolution`` парой
-# (компания, контекст); ``NodeAccess`` той же ручки берёт его оттуда, а не
+# модуля, и кладёт расчёт в ``request.access_resolution`` тройкой
+# (компания, user_id, контекст); ``NodeAccess`` той же ручки берёт его оттуда, а не
 # считает второй раз. Без этого каждая кадровая ручка с узловой проверкой
 # платила за роли дважды — по три запроса и переключению схемы на
 # компании-предки каждый раз.
@@ -225,7 +225,8 @@ def test_cached_resolution_of_another_company_is_not_reused(company_row):
     assign(company_row, USER_ID, "hr.employees", "view")
     payload = _payload(company=company_row)
     foreign = access_interface.resolution(payload, "some-other-co")
-    request = SimpleNamespace(token=payload, access_resolution=("some-other-co", foreign))
+    request = SimpleNamespace(token=payload,
+                              access_resolution=("some-other-co", USER_ID, foreign))
     access = rbac.NodeAccess(payload, company_row, request=request)
     assert access.has(legacy.EMPLOYEES_VIEW)
 
@@ -236,10 +237,30 @@ def test_cached_resolution_of_the_same_company_is_reused(company_row):
     assign(company_row, USER_ID, "hr.employees", "view")
     payload = _payload(company=company_row)
     cached = access_interface.resolution(payload, company_row)
-    request = SimpleNamespace(token=payload, access_resolution=(company_row, cached))
+    request = SimpleNamespace(token=payload, access_resolution=(company_row, USER_ID, cached))
     patcher, calls = _counting(access_resolve, "resolve_for")
     with patcher:
         access = rbac.NodeAccess(payload, company_row, request=request)
         assert access.has(legacy.EMPLOYEES_VIEW)
         assert access.scope == ("company", None)
     assert calls == []
+
+
+@pytest.mark.django_db
+def test_cached_resolution_of_another_token_is_not_reused(company_row):
+    """Расчёт привязан и к токену (блок I.2, B3): ``NodeAccess`` с ДРУГИМ
+    токеном на том же запросе и в той же компании считает роли сам, а не
+    берёт чужие. Иначе проверка «от имени» другого пользователя внутри ручки
+    получила бы права вызывающего."""
+    assign(company_row, USER_ID, "hr.employees", "view")
+    caller = _payload(company=company_row)
+    cached = access_interface.resolution(caller, company_row)
+    request = SimpleNamespace(token=caller, access_resolution=(company_row, USER_ID, cached))
+
+    other = _payload(company=company_row, user_id=8, sub="8")
+    patcher, calls = _counting(access_resolve, "resolve_for")
+    with patcher:
+        access = rbac.NodeAccess(other, company_row, request=request)
+        # У пользователя 8 ролей нет: чужой расчёт открыл бы ему EMPLOYEES_VIEW.
+        assert not access.has(legacy.EMPLOYEES_VIEW)
+    assert len(calls) == 1, f"расчётов ролей: {len(calls)}"

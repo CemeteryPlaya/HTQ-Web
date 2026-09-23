@@ -234,6 +234,20 @@ def test_patch_subdomain_validation_errors_are_422(client, pair):
 
 
 @pytest.mark.django_db
+def test_patch_duplicate_subdomain_names_the_field_humanly(client, pair):
+    """Дубль псевдонима — 422, и в тексте поле названо по-человечески
+    («Короткий адрес», ``verbose_name``), а не ``Subdomain`` (блок I.2, B6)."""
+    holding, htq = pair
+    Company.objects.filter(pk=holding.pk).update(subdomain="grp")
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}", {"subdomain": "grp"},
+                     **auth(superuser_token()))
+    assert res.status_code == 422
+    assert "Короткий адрес" in res.json()["detail"], res.json()
+    htq.refresh_from_db()
+    assert htq.subdomain is None
+
+
+@pytest.mark.django_db
 def test_patch_subdomain_is_platform_admin_only(client, pair):
     """Правка псевдонима — та же проверка, что у остальных платформенных
     полей: write в своей компании не даёт её, 403 и поле не меняется."""

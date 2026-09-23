@@ -604,6 +604,34 @@ def test_list_equal_to_a_level_preset_gets_that_level_role(company_schema, capsy
     assert not Role.objects.filter(code__startswith="hr-custom-").exists()
 
 
+def test_list_equal_to_a_preset_but_wider_scope_is_not_that_level_role(company_schema, capsys):
+    """Список = пресет middle + ``hr.employees.view.all`` (блок I.2, B5).
+
+    ``view.all`` лежит на том же узле ``hr.employees`` с признаком view, что
+    и ``hr.employees.view`` пресета middle, — узлы роли совпадают с
+    ``hr-middle`` дословно. Различает их только ОБЛАСТЬ: старая модель по
+    ``view.all`` давала всю компанию, а ``hr-middle`` выдаётся с областью
+    отдела. Роль уровня сузила бы доступ — должность получает именную роль с
+    областью компании. Без сверки области (``SCOPE_KIND_BY_LEVEL[level] ==
+    scope_kind``) выдавалась бы ``hr-middle`` на отдел."""
+    _seed_all_roles()
+    slug = company_schema["slug"]
+    keys = sorted(legacy.LEVEL_PRESETS["middle"] | {legacy.EMPLOYEES_VIEW_ALL})
+    assert legacy.EMPLOYEES_VIEW_ALL not in legacy.LEVEL_PRESETS["middle"]
+    with use_company(slug):
+        dep = _department("Отдел кадров", "hr-wide")
+        position = _position("HR-специалист", dep, weight=46,
+                             permissions={"hr_level": "middle", "permissions": keys})
+
+    _run(company=slug)
+
+    links = list(PositionRole.objects.filter(company_slug=slug, position_id=position.id))
+    assert [link.role.code for link in links] == [custom_role_code(slug, position.id)]
+    assert links[0].scope_kind == ScopeKind.COMPANY
+    # Узлы — ровно как у hr-middle: различие только в области.
+    assert _role_rows(links[0].role) == _role_rows(Role.objects.get(code="hr-middle"))
+
+
 def test_list_without_hr_keys_gets_no_role_and_is_reported(company_schema, capsys):
     """Только ключ contracts: кадровых прав список не давал (а заменял
     пресет уровня) — роли нет, строка в сводке."""

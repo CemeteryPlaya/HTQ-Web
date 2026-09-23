@@ -786,9 +786,10 @@ def test_staff_without_roles_cannot_create_a_pmo(client, staff_without_roles):
 
 @pytest.mark.django_db
 def test_hr_lead_sets_identity_approver(client, lead_employee):
-    """``_set_identity_approver`` — ``module="hr", level="admin"`` ПОВЕРХ
-    ``hr.identity.manage``; ``hr-lead`` несёт оба (``_LEAD`` — единственный
-    пресет с ``IDENTITY_MANAGE``, см. ``apps/hr/permissions.py``)."""
+    """``_set_identity_approver`` — ``module="hr", level="write"`` ПОВЕРХ
+    ``hr.identity.manage`` (узел ``hr.identity_requests``, признак edit);
+    ``hr-lead`` несёт оба (``_LEAD`` — единственный пресет с
+    ``IDENTITY_MANAGE``, см. ``apps/hr/permissions.py``)."""
     emp, head = lead_employee
     resp = client.put(
         f"{BASE}/identity-approver/", data={"user_id": None},

@@ -427,10 +427,13 @@ def test_identity_approver_is_set_by_holder_of_the_identity_node(company_row):
     auth = {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user, company_slug=company_row)['access']}",
             "HTTP_X_HTQ_COMPANY": company_row}
 
+    # Тело — по схеме IdentityApproverRequest (``user_id``): неизвестное поле
+    # тихо отбрасывается, и запрос с ним ничего бы не назначал.
     resp = Client().put(
         APPROVER,
-        data=json.dumps({"employee_id": None}),
+        data=json.dumps({"user_id": user.id}),
         content_type="application/json", **auth,
     )
 
-    assert resp.status_code != 403, resp.content
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["user_id"] == user.id

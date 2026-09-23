@@ -58,7 +58,8 @@ class NodeAccess:
     company: str | None
     #: Запрос, если объект собран из него (``resolve(request)``): гейт
     #: ``api_view(module=, level=)`` уже посчитал роли и оставил их в
-    #: ``request.access_resolution`` — второй расчёт не нужен (блок I.2, R8).
+    #: ``request.access_resolution`` тройкой (компания, user_id, расчёт) —
+    #: второй расчёт не нужен (блок I.2, R8).
     request: object | None = field(default=None, repr=False)
     _resolution: object = field(default=None, repr=False)
     _resolved: bool = field(default=False, repr=False)
@@ -73,10 +74,13 @@ class NodeAccess:
             # самообслуживания — ``/employees/me/card``) пары не получают и
             # считают сами, как раньше.
             cached = getattr(self.request, "access_resolution", None)
-            # Расчёт годится только для той компании, для которой сделан,
-            # иначе роли одной компании ответили бы за другую.
-            if cached is not None and cached[0] == self.company:
-                self._resolution = cached[1]
+            # Расчёт годится только для той компании И того пользователя,
+            # для которых сделан: иначе роли одной компании ответили бы за
+            # другую, а роли вызывающего — за чужой токен, собранный на том
+            # же запросе (блок I.2, B3).
+            if (cached is not None and cached[0] == self.company
+                    and cached[1] == getattr(self.token, "user_id", None)):
+                self._resolution = cached[2]
             else:
                 self._resolution = access.resolution(self.token, self.company)
             self._resolved = True

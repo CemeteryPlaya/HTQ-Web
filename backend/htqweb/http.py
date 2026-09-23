@@ -139,8 +139,12 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                         # запросами (докстринг resolve.Resolution). Сам факт
                         # наличия атрибута значит «считали»: у суперпользователя
                         # расчёт — None, и это ответ, а не его отсутствие.
+                        # Тройка несёт и user_id токена: расчёт годится только
+                        # для той пары (компания, пользователь), для которой
+                        # сделан (блок I.2, B3).
                         resolution = access.resolution(request.token, company)
-                        request.access_resolution = (company, resolution)
+                        request.access_resolution = (
+                            company, request.token.user_id, resolution)
                         have = access.permission_level(
                             request.token, module, company, resolution=resolution)
                         if LEVEL_ORDER[have] < LEVEL_ORDER[level]:
