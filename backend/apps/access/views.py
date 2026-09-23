@@ -120,6 +120,26 @@ class AccessView(ApiView):
             )
         return None
 
+    def role_or_404(self, role_id: int) -> Role:
+        """Роль другой компании по id — 404, как несуществующая (спека R2, I-1).
+
+        ``GET roles`` уже прячет чужую именную роль из каталога; соседние
+        чтения (глубина роли, держатели) не должны сводить это сужение на
+        нет простым перебором id. Общие роли (``company_slug`` пуст) и
+        собственная роль компании отдаются как обычно; суперпользователь
+        видит всё (R2: «суперпользователь — все, с меткой компании»).
+        """
+        from django.http import Http404
+
+        try:
+            role = Role.objects.get(id=role_id)
+        except Role.DoesNotExist as exc:
+            raise Http404("Роль не найдена") from exc
+        if (role.company_slug and not self.request.token.is_superuser
+                and role.company_slug != current_company_or_none()):
+            raise Http404("Роль не найдена")
+        return role
+
 
 class FunctionsView(AccessView):
     """``GET functions`` — реестр функций деревом.
@@ -239,6 +259,7 @@ class RoleHoldersView(AccessView):
 
     @read
     def get(self, request, role_id: int):
+        self.role_or_404(role_id)
         return holders_svc.holders(role_id)
 
 
@@ -271,6 +292,7 @@ class RolePermissionsView(AccessView):
 
     @read
     def get(self, request, role_id: int):
+        self.role_or_404(role_id)
         return catalog.permissions_of(role_id)
 
     # Правка ОБЩЕГО каталога ролей — администрирование, ``admin`` (T4

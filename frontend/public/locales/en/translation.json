@@ -4967,5 +4967,8 @@
       "noneHint": "Company access is granted by an administrator — please contact them.",
       "loadError": "Could not load the list of companies."
     }
+  },
+  "access": {
+    "companyBadge": "Company: {{company}}"
   }
 }

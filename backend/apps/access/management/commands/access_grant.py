@@ -19,7 +19,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.access.models import Role, RoleAssignment, ScopeKind
-from apps.access.services.assignment import _assert_role_belongs
+from apps.access.services.assignment import assert_role_belongs
 from apps.access.services.errors import RoleNotInCompany
 
 
@@ -49,7 +49,7 @@ class Command(BaseCommand):
 
         self._check_company(opts["company_slug"])
         try:
-            _assert_role_belongs(opts["company_slug"], role)
+            assert_role_belongs(opts["company_slug"], role)
         except RoleNotInCompany as exc:
             raise CommandError(str(exc))
         scope_kind, scope_id = opts["scope_kind"], opts["scope_id"]

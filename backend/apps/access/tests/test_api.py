@@ -300,6 +300,18 @@ def test_put_position_roles_rejects_unknown_role(client, company, position):
 
 
 @pytest.mark.django_db
+def test_put_position_roles_rejects_another_companys_role(client, company, position):
+    """Фикс-раунд 1, M-3: HTTP-вход штатного пути выдачи — тоже 422 на чужую
+    роль (``RoleNotInCompany`` в ``INVALID``, блок I.2, R2)."""
+    role = Role.objects.create(code="hr-custom-other-7", title="Чужая",
+                               company_slug="other-company")
+    resp = put_json(client, f"{BASE}/positions/{position}/roles",
+                    {"role_ids": [role.id]},
+                    **headers(company, superuser_token(company=company)))
+    assert resp.status_code == 422
+
+
+@pytest.mark.django_db
 def test_unknown_position_is_404(client, company):
     resp = put_json(client, f"{BASE}/positions/999999/roles", {"role_ids": []},
                     **headers(company, superuser_token(company=company)))

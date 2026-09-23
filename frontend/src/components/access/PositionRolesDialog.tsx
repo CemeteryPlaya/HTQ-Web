@@ -154,6 +154,18 @@ export function PositionRolesDialog({
                     <span className="block truncate text-sm font-medium">{role.title}</span>
                     <span className="block truncate text-xs text-muted-foreground">
                       {role.code}
+                      {/* Именная роль другой компании: суперпользователь видит её
+                          здесь наравне с общими (спека R2), метка не даёт принять
+                          её за общую и получить 422 при сохранении. */}
+                      {role.company_slug && (
+                        <>
+                          {' · '}
+                          {t('access.companyBadge', {
+                            company: role.company_slug,
+                            defaultValue: 'Компания: {{company}}',
+                          })}
+                        </>
+                      )}
                     </span>
                   </label>
                 </li>

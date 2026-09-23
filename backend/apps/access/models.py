@@ -18,7 +18,30 @@
 Сторож — ``apps/access/tests/test_guards.py``.
 """
 
+from django.core.exceptions import ValidationError
 from django.db import models
+
+
+def _clean_role_company(company_slug: str, role) -> None:
+    """``Role.clean()``-общая проверка для django-admin (блок I.2, R2, I-2).
+
+    Django-admin — шестой путь выдачи роли (штатный API, сиды и ``access_grant``
+    уже несут проверку сервисного слоя), и правит строки НАПРЯМУЮ через
+    ``ModelForm``, минуя ``apps.access.services.assignment`` целиком. Вызов
+    заведён здесь, а не только во вьюхах/сервисе, чтобы его получил и админ:
+    ``ModelForm.full_clean()`` зовёт ``instance.clean()`` перед сохранением.
+    Импорт сервиса — ленивый: ``services.assignment`` импортирует модели этого
+    же модуля, прямой импорт на уровне модуля дал бы цикл.
+    """
+    if role is None:
+        return
+    from apps.access.services.assignment import assert_role_belongs
+    from apps.access.services.errors import RoleNotInCompany
+
+    try:
+        assert_role_belongs(company_slug, role)
+    except RoleNotInCompany as exc:
+        raise ValidationError(str(exc)) from exc
 
 
 class Level(models.TextChoices):
@@ -203,6 +226,10 @@ class PositionRole(models.Model):
         ]
         indexes = [models.Index(fields=["company_slug", "position_id"])]
 
+    def clean(self) -> None:
+        super().clean()
+        _clean_role_company(self.company_slug, self.role if self.role_id else None)
+
     def __str__(self) -> str:
         return f"{self.company_slug}/должность {self.position_id}: {self.role_id}"
 
@@ -251,6 +278,10 @@ class RoleAssignment(models.Model):
             ),
         ]
         indexes = [models.Index(fields=["company_slug", "user_id"])]
+
+    def clean(self) -> None:
+        super().clean()
+        _clean_role_company(self.company_slug, self.role if self.role_id else None)
 
     def __str__(self) -> str:
         return f"{self.company_slug}/пользователь {self.user_id}: {self.role_id}"
