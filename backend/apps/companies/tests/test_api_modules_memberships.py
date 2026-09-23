@@ -73,25 +73,36 @@ def test_modules_core_is_409_and_unknown_is_422(client, company):
 
 @pytest.mark.django_db
 def test_memberships_grant_list_revoke(client, company, user):
+    # Блок I.2, R7: суперпользователь — ЗАВЕДОМО не ``user``. ``superuser_token()``
+    # шьёт фиксированный ``user_id=9``, а id строки ``User`` выдаёт
+    # последовательность Postgres, которую откат транзакции теста НЕ
+    # отматывает: стоило соседним тестам создать ровно восемь пользователей
+    # до этого, и ``user.id`` становился 9 — снятие членства превращалось в
+    # «снять у себя» (409 ``self_revoke``) и тест падал от порядка прогона.
+    # id от ``user.id`` не совпадает с ним ни при каком порядке.
+    admin_id = user.id + 1
+    admin = auth(token(user_id=admin_id, sub=str(admin_id), is_staff=True,
+                       is_superuser=True, is_admin=True))
+
     res = post_json(client, f"{BASE}/companies/htq/memberships",
-                    {"user_id": user.id, "is_default": True}, **auth(superuser_token()))
+                    {"user_id": user.id, "is_default": True}, **admin)
     assert res.status_code == 201
     assert res.json()["username"] == "ivanov"
     assert res.json()["is_default"] is True
 
     # Повтор — 200, второй строки нет.
     res = post_json(client, f"{BASE}/companies/htq/memberships", {"user_id": user.id},
-                    **auth(superuser_token()))
+                    **admin)
     assert res.status_code == 200
     assert CompanyMembership.objects.filter(company=company).count() == 1
 
-    res = client.get(f"{BASE}/companies/htq/memberships", **auth(superuser_token()))
+    res = client.get(f"{BASE}/companies/htq/memberships", **admin)
     assert [m["user_id"] for m in res.json()] == [user.id]
 
-    res = client.delete(f"{BASE}/companies/htq/memberships/{user.id}", **auth(superuser_token()))
+    res = client.delete(f"{BASE}/companies/htq/memberships/{user.id}", **admin)
     assert res.status_code == 204
     assert client.delete(f"{BASE}/companies/htq/memberships/{user.id}",
-                         **auth(superuser_token())).status_code == 404
+                         **admin).status_code == 404
 
 
 @pytest.mark.django_db

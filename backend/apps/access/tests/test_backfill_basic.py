@@ -150,3 +150,21 @@ def test_all_active_companies_without_the_flag(db, capsys):
     out = capsys.readouterr().out
     assert "bb-first" in out and "bb-second" in out
     assert RoleAssignment.objects.filter(role__code=ROLE_CODE).count() == 2
+
+
+@pytest.mark.django_db
+def test_company_without_members_grants_nothing_and_says_so(company, capsys):
+    """Блок I.2, R7: компания без единого участника — команда не падает, не
+    пишет ни одного назначения и говорит об этом в сводке отдельной строкой
+    (без членства токен на поддомен не выпускается — «выдали 0» здесь не
+    успех, а симптом, который человек должен увидеть)."""
+    _user("stranger")  # учётка есть, членства нет — не участник
+
+    _run(company=SLUG)
+
+    assert not RoleAssignment.objects.filter(company_slug=SLUG).exists()
+    out = capsys.readouterr().out
+    assert f"Компания {SLUG}: участников с действующей учёткой 0" in out
+    assert "выдана сейчас 0" in out
+    assert "уже была у 0" in out
+    assert "участников с действующей учёткой нет" in out

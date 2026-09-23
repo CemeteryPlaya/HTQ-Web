@@ -187,6 +187,38 @@ def test_divergent_holder_levels_are_flagged_but_do_not_change_the_rule(
     assert "расхождений по держателям 1" in out
 
 
+def test_first_holder_without_level_skips_the_position_and_prints_divergence(
+        company_schema, capsys):
+    """Блок I.2, R7: зеркало предыдущего теста — ПЕРВЫЙ держатель по id
+    уровня не даёт, второй даёт ``middle``. Правило то же (первый по id), так
+    что должность пропущена, а не повышена по второму держателю; и именно
+    этот случай сводка обязана показать — иначе держатель, у которого права
+    были, молча остаётся без роли."""
+    _seed_roles()
+    slug = company_schema["slug"]
+    with use_company(slug):
+        dep_hr = _department("Отдел кадров", "hr-div-rev")    # "кадр" -> is_hr
+        dep_sales = _department("Продажи", "sales-div-rev")    # без HR-маркеров
+        position = _position("Специалист", dep_hr, weight=26)
+        # Первый по id — держатель из отдела без HR-маркеров -> level=None.
+        _employee(position, dep_sales, "rev1@htq.test", first="А", last="Первый")
+        # Второй по id — держатель из HR-отдела -> classify_hr_level="middle".
+        _employee(position, dep_hr, "rev2@htq.test", first="Б", last="Второй")
+
+    _run(company=slug)
+
+    assert not PositionRole.objects.filter(
+        company_slug=slug, position_id=position.id,
+    ).exists()
+    out = capsys.readouterr().out
+    assert "расхождение по держателям" in out
+    assert f"#{position.id}" in out
+    assert "middle, нет уровня" in out
+    assert "для роли взят нет уровня (должность пропущена)" in out
+    assert "пропущено 1" in out
+    assert "расхождений по держателям 1" in out
+
+
 def test_position_with_no_signal_gets_no_role(company_schema, capsys):
     """Должность без permissions и без держателя, по которому угадать —
     роли не получает. Перенос не выдумывает прав."""
@@ -544,7 +576,16 @@ def test_custom_role_dry_run_prints_the_line_and_writes_nothing(company_schema, 
 def test_list_equal_to_a_level_preset_gets_that_level_role(company_schema, capsys):
     """Форма должности сохраняла список = пресет выбранного уровня (+ ключ
     contracts галочкой). Именная роль вышла бы копией роли уровня — перенос
-    выдаёт саму роль уровня, каталог не зарастает копиями."""
+    выдаёт саму роль уровня, каталог не зарастает копиями.
+
+    Блок I.2, R7: ``hr_level`` должности — НЕ тот уровень, чей пресет лежит в
+    списке (junior против пресета middle). Пока они совпадали, тест был
+    зелёным и с выключенной обработкой списка вовсе (``if
+    position["explicit_list"]`` → ложь: роль бралась по ``hr_level``, и это
+    была та же ``hr-middle``) — то есть ветку «список = пресет» он не
+    отличал. Теперь три исхода различимы: ветка работает — ``hr-middle``
+    (права давал список, а он = пресет middle); ветка сравнения выключена —
+    именная ``hr-custom-…``; список проигнорирован — ``hr-junior``."""
     _seed_all_roles()
     slug = company_schema["slug"]
     keys = sorted(legacy.LEVEL_PRESETS["middle"]
@@ -552,13 +593,14 @@ def test_list_equal_to_a_level_preset_gets_that_level_role(company_schema, capsy
     with use_company(slug):
         dep = _department("Отдел кадров", "hr-preset")
         position = _position("HR-специалист", dep, weight=45,
-                             permissions={"hr_level": "middle", "permissions": keys})
+                             permissions={"hr_level": "junior", "permissions": keys})
 
     _run(company=slug)
 
-    link = PositionRole.objects.get(company_slug=slug, position_id=position.id)
-    assert link.role.code == "hr-middle"
-    assert link.scope_kind == ScopeKind.DEPARTMENT
+    links = list(PositionRole.objects.filter(company_slug=slug, position_id=position.id))
+    assert [link.role.code for link in links] == ["hr-middle"]
+    assert links[0].scope_kind == ScopeKind.DEPARTMENT
+    assert not Role.objects.filter(code=custom_role_code(slug, position.id)).exists()
     assert not Role.objects.filter(code__startswith="hr-custom-").exists()
 
 
