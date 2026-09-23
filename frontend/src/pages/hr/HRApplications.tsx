@@ -46,6 +46,9 @@ const HRApplications = () => {
   // признак (backend/apps/hr/legacy_roles.py, решение 1), поэтому здесь
   // `scope('hr')`, а не уровень.
   const companyWide = permissions.atLeast('hr', 'write') && permissions.scope('hr')?.kind === 'company';
+  // Удаление стоит под hr:admin на сервере (блок I, рулинг O): кнопка,
+  // видимая при write, вела бы в 403 у держателя именной роли.
+  const canDelete = permissions.atLeast('hr', 'admin');
   const { data: applications, isLoading, error } = useQuery({
     queryKey: ['hr-applications'],
     queryFn: async () => {
@@ -341,7 +344,7 @@ const HRApplications = () => {
                       {t('hr.pages.applications.step.next')}
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => startEdit(app)}>{t('hr.common.edit')}</Button>
-                    {companyWide && (
+                    {canDelete && (
                       <Button
                         size="sm"
                         variant="destructive"
