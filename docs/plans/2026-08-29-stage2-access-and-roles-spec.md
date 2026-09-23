@@ -378,12 +378,26 @@ permission_level(user, module, company) -> none | read | write | admin
 
 ### 1.6 Что остаётся за переработкой HR
 
+Статус на 23.09.2026 — пометки у пунктов.
+
 Исполнители стадии этих мест **не трогают**:
 
 - перевод `junior/middle/senior/lead` в роли, судьба `LevelThreshold`, удаление
-  адаптера `hr-level`;
+  адаптера `hr-level` — **частично выполнено** блоком I
+  ([план](2026-09-17-block-i-single-rbac.md), задача 9): перевод в роли —
+  `backend/apps/access/migrations/0005_seed_hr_level_roles.py` (четыре
+  системные роли `hr-junior…hr-lead`); адаптер `hr-level` снят —
+  `backend/apps/hr/urls.py` (маршрута нет). `LevelThreshold` — отдельная,
+  не связанная с этим модель (уровни оргструктуры N-1…N-4,
+  `backend/apps/hr/models.py`, существовала до стадии 2); её «судьба» никем
+  не решалась, блоками B/I/I.2 не затронута, продолжает жить как раньше;
 - внутренние проверки возможностей на страницах HR (`can_create_employee` и
-  прочие). `useHRLevel` остаётся жить.
+  прочие). `useHRLevel` остаётся жить — **выполнено** блоком I
+  ([план](2026-09-17-block-i-single-rbac.md), задача 10): кадровые экраны
+  переведены на `usePermissions` напрямую; `useHRLevel` сужен и оставлен
+  только для `src/pages/contracts/*` (сторож
+  `frontend/src/hooks/__tests__/useHRLevelImporters.test.ts`),
+  `frontend/src/hooks/useHRLevel.ts`.
 
 Поля `is_manager` и `external_hierarchy` на `hr.Position` (§1.4) сюда больше не
 входят: их завёл блок B дорожной карты структуры группы, отдельно от переработки
@@ -843,20 +857,47 @@ RoleAssignment        company_slug, user_id int, role FK, scope_kind, scope_id (
 
 ## 7. Чего стадия не делает
 
-- навешивание гейта на существующие ручки — после переработки HR;
-- перевод `junior/middle/senior/lead` на роли — там же (§1.6);
+Статус на 23.09.2026 — пометки у пунктов.
+
+- навешивание гейта на существующие ручки — после переработки HR — **выполнено**
+  блоком I ([план](2026-09-17-block-i-single-rbac.md), задачи 4–7):
+  `module="<аппка>", level=…` навешан на `access`/`users`/`hr`/`tasks`/
+  `companies`, перевёрнутый сторож — `backend/apps/access/tests/test_gate.py`;
+- перевод `junior/middle/senior/lead` на роли — там же (§1.6) — **выполнено**
+  блоком I ([план](2026-09-17-block-i-single-rbac.md), задача 9), см. пометку
+  в §1.6;
 - **фильтрация данных по внешней иерархии**: `subordinate_companies` теперь
   вычисляется на реальных полях `is_manager`/`external_hierarchy` (блок B
   дорожной карты структуры группы, §1.6), а не отдаётся заглушкой — но выборки
   поперёк компаний по нему по-прежнему не режутся. Это отдельный шаг масштаба
   объектной области, и делать его до того, как правило 4 обкатано на
-  отображении, преждевременно;
-- `CompanyModule` и гейты модулей на компанию — подпроект 3;
-- жизненный цикл компании, архив только для чтения — подпроект 4;
+  отображении, преждевременно — **не выполнено** на 23.09.2026: `subordinate_companies`
+  (`backend/apps/access/services/hierarchy.py`, `backend/apps/access/interface.py`)
+  используется только для отображения (`/me`, `inherited_from`), выборок `hr`/
+  `tasks` по нему в коде нет; см. [roadmap §9](2026-09-14-group-structure-roadmap.md#9-блок-i2--решения-по-ходу-исполнения-и-отложенное);
+- `CompanyModule` и гейты модулей на компанию — подпроект 3 — **выполнено**
+  блоком A ([план](2026-09-14-block-a-company-registry.md), commit `d6246ff`):
+  `backend/apps/companies/models.py::CompanyModule`, гейт —
+  `backend/apps/core/services.py::service_status`;
+- жизненный цикл компании, архив только для чтения — подпроект 4 — **частично
+  выполнено**: жизненный цикл (`company_archive`/`company_restore`, статус +
+  пересборка сводок холдинга) — блок A (commit `9ae51d6`); «архив — только
+  чтение» по-прежнему не сделано — архив закрывает 404 весь трафик компании
+  (`backend/htqweb/middleware/company_context.py`), сознательно оставлено, см.
+  [roadmap §9](2026-09-14-group-structure-roadmap.md#9-блок-i2--решения-по-ходу-исполнения-и-отложенное)
+  и §10;
 - третий режим для `media_files` и `mail` — конец стадии, первым под нож при
-  нехватке объёма;
+  нехватке объёма — **не выполнено** на 23.09.2026: `TENANT_APPS` в
+  `backend/htqweb/settings/base.py` — `("hr", "tasks", "contracts", "signoff")`,
+  `media_files`/`mail` в неё не входят; см.
+  [roadmap §9](2026-09-14-group-structure-roadmap.md#9-блок-i2--решения-по-ходу-исполнения-и-отложенное);
 - объектная область (`scope_kind=site`) хранится и отдаётся, но **фильтрация по
-  ней в домене задач не делается** — это отдельный шаг, самый дорогой в стадии.
+  ней в домене задач не делается** — это отдельный шаг, самый дорогой в стадии —
+  **не выполнено** на 23.09.2026: `backend/apps/access/models.py` явно исключает
+  `SITE` из `POSITION_ROLE_SCOPE_KINDS` («резолвер... умеет вычислять по
+  держателю только "свой отдел"»), в `backend/apps/tasks` `scope_kind`
+  встречается только в тесте гейта; см.
+  [roadmap §9](2026-09-14-group-structure-roadmap.md#9-блок-i2--решения-по-ходу-исполнения-и-отложенное).
 
 ---
 
