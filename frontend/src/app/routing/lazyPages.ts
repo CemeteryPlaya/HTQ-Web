@@ -95,7 +95,6 @@ export const lazyPages = {
   HRPMO: React.lazy(() => import('@/pages/hr/HRPMO')),
   HRShareLinks: React.lazy(() => import('@/pages/hr/HRShareLinks')),
   HRPositions: React.lazy(() => import('@/pages/hr/HRPositions')),
-  HRAccessLevels: React.lazy(() => import('@/pages/hr/HRAccessLevels')),
   // Каталог ролей (стадия 2 «Доступ и роли»). Плоский список, без диаграммы:
   // иерархию несёт должность, а не роль.
   AccessRoleCatalog: React.lazy(() => import('@/pages/access/RoleCatalog')),

@@ -172,10 +172,11 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/admin/users', component: lazyPages.AdminUsers, requiresAuth: true, requires: { module: 'users', level: 'admin' } },
   { path: '/admin/chats', component: lazyPages.AdminChats, requiresAuth: true, requires: { module: 'messenger', level: 'admin' } },
   { path: '/admin/mailboxes', component: lazyPages.AdminMailboxes, requiresAuth: true, requires: { module: 'mail', level: 'admin' } },
-  // Не путать с уровнями ДОЛЖНОСТЕЙ: это уровни HR-ДОСТУПА
-  // (junior/middle/senior/lead). Справочник уровней должностей раньше жил на
-  // соседнем /admin/levels, а теперь это вкладка на /hr/positions?tab=levels.
-  { path: '/admin/access-levels', component: lazyPages.HRAccessLevels, requiresAuth: true, requires: { module: 'hr', level: 'admin' } },
+  // Экран «Уровни доступа» (/admin/access-levels) снят задачей 11 блока I.2
+  // вместе со снятой эвристикой уровня по названию должности (R5, решение
+  // заказчика от 22.09.2026): он считал кадровый уровень копией эвристики и
+  // показывал неправду. Права теперь смотрят в редакторе ролей (/access/roles)
+  // и в диалоге ролей должности (/hr/positions).
   { path: '/admin/registrations', component: lazyPages.AdminRegistrations, requiresAuth: true, requires: { module: 'users', level: 'admin' } },
   { path: '/admin/infrastructure', component: lazyPages.AdminInfrastructure, requiresAuth: true, requires: { module: 'users', level: 'admin' } },
 
