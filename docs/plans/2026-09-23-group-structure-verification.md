@@ -12,11 +12,14 @@
 пятнадцати проверяемых требований руководства реализовано в коде и держится
 тестом или демо-стендом; расхождения, оставшиеся открытыми, — это ранее
 известные и явно задокументированные границы (передача второму разработчику,
-вопросы руководству, сознательно отложенное — §6 ниже), плюс четыре новых
-находки этой сверки (документ и код — небольшие неточности, не дефекты
-рефакторинга) и одна независимая находка о состоянии рабочего дерева
+вопросы руководству, сознательно отложенное — §6 ниже), плюс переданные ей на
+перепроверку расхождения (§6.4) — одно высокой важности: бизнес-метрики
+tenant-аппок не собираются, шесть правил алертинга на них не могут сработать
+(followups п. 3, без хозяина); остальные — неточности комментариев и
+документов, — и одна независимая находка о состоянии рабочего дерева
 (TIME_ZONE), которая на код рефакторинга не влияет, но объясняет 4 из 12
-упавших тестов полного прогона.
+упавших тестов полного прогона (атрибуция подтверждена прогоном на ревью,
+см. §4.1).
 
 ## 2. Требования → реализация → доказательство → статус
 
@@ -29,15 +32,15 @@ roadmap: для каждой строки ниже проверен файл р�
 | 1 | Холдинг и три ДО с видами (`kind`) и деревом владения (`parent`) — §1, §4, §5.A | `backend/apps/companies/models.py`: `CompanyKind` (строки 40–54: `HOLDING`, `CONSTRUCTION`, `IT`, `SERVICE`), `Company.parent`/`subdomain`/`status` (77–109) | `apps/companies/tests/*` (236 прошли, см. §4); стенд (§5): `hi-tech-group/None/holding`, `hi-tech-qazaqstan/hi-tech-group/construction`, `hi-tech-systems/hi-tech-group/it`, `kazakhstan-engineering-group/hi-tech-group/service` — все `active` | ✅ |
 | 2 | ОСУ — системная должность над ГД холдинга — §1, §5.F | `backend/apps/hr/services/participant_service.py::ensure_participant` (стр. 124+), `backend/apps/hr/interface.py::participant_position` (465+), `apps/hr/management/group_structures.py:163` | `apps/hr/tests/test_participant_service.py`, `test_interface_participant.py`, `test_group_structures.py::test_participant_is_the_only_system_post_and_sits_on_top`; стенд: `osu=True` только у `hi-tech-group` | ✅ |
 | 3 | Три дирекции холдинга (финансы/ПТО/операционная) — §1, §5.D | `apps/hr/management/group_structures.py:150-158` (`Unit("fin"/"pto"/"ops", …, "directorate")`), `apps/hr/models.py:36` (`UnitType.DIRECTORATE`) | `test_group_structures.py::test_holding_directorates_are_directorates`; стенд: `directorates=3` у `hi-tech-group`, `0` у трёх ДО (по структуре документа дирекции только в холдинге) | ✅ |
-| 4 | Уровни N-1…N-4, в холдинге N-3 пропущен — §1, §5.D | `apps/hr/migrations/0024_seed_level_thresholds.py` (`LEVELS`, диапазоны весов 0-99/100-299/300-599/600-1999); веса должностей холдинга в `group_structures.py:163-187` заполняют 0, 10, 110–187, 610–680 — диапазон 300-599 (N-3) не занят ни одной должностью холдинга | `test_group_structures.py::test_levels_match_the_migration_seed`, `test_levels_used_by_each_structure`; прямая проверка весов (см. выше) — N-3 действительно пуст у холдинга; стенд: `levelthresholds=4` в каждой из 4 схем | ✅ |
+| 4 | Уровни N-1…N-4, в холдинге N-3 пропущен — §1, §5.D | `apps/hr/migrations/0024_seed_level_thresholds.py` (`LEVELS`, диапазоны весов 0-99/100-299/300-599/600-1999); веса должностей холдинга в `group_structures.py:163-187` заполняют 0, 10, 110–130, 610–680 — диапазон 300-599 (N-3) не занят ни одной должностью холдинга | `test_group_structures.py::test_levels_match_the_migration_seed`, `test_levels_used_by_each_structure`; прямая проверка весов (см. выше) — N-3 действительно пуст у холдинга; стенд: `levelthresholds=4` в каждой из 4 схем | ✅ |
 | 5 | У ДО руководитель — «Директор», не «Генеральный директор» — §1, §5.D | `group_structures.py`: `Post("Директор", "upr", 10, 10, "lead", is_manager=True)` во всех трёх структурах ДО (строки 259, 279, 299) | `test_group_structures.py::test_subsidiary_heads_are_directors_not_general_directors` | ✅ |
 | 6 | Штатные единицы («1 шт. ед.») — §1, §5.D/H | `apps.hr.models.StaffingPosition`; добавлена в `apps/hr/holding.py::HOLDING_MODELS` (блок H, «штат против факта») | `apps/hr/tests/test_staffing_api.py`, `apps/hr/tests/test_holding_summary.py` | ✅ |
 | 7 | Пунктирные горизонтальные связи менеджеров дирекций — §1, §5.D | `ReportingRelation.functional` (модель `hr`), сеется в `group_structures.py` (`managers={...}`) | `test_group_structures.py::test_functional_links_are_exactly_the_dashed_lines` | ✅ |
-| 8 | Внешняя иерархия (правило 4) — §1, §5.B | `hr.Position.is_manager`/`external_hierarchy` (`apps/hr/models.py:131-147`), `apps/access/services/hierarchy.py::_is_external_manager`/`subordinate_companies` (50-75) | `apps/access/tests/test_hierarchy.py` (10 тестов), `test_hierarchy_integration.py` (3), `apps/hr/tests/test_position_external_hierarchy.py` | ✅ (оговорка сохраняется по §4: отметка «руководящая» — вручную, автобэкфилла по оргструктуре нет — задокументировано, не дефект) |
-| 9 | Права холдинга в ДО, `serves_subsidiaries` — §1, §5.C | `hr.Position.serves_subsidiaries` (`apps/hr/models.py:152`), `apps/access/services/inheritance.py` (`ancestors_of`, `inherit`, `inherited_role_scopes`) | `apps/access/tests/test_inheritance.py` — 10 тестов (наследование вниз, архивный предок, цикл в дереве, объединение с личными правами и др.) | ✅ (членство остаётся отдельным явным фактом — задокументировано в §4, не дефект) |
+| 8 | Внешняя иерархия (правило 4) — §1, §5.B | `hr.Position.is_manager`/`external_hierarchy` (`apps/hr/models.py:131-147`), `apps/access/services/hierarchy.py::_is_external_manager`/`subordinate_companies` (50-75) | `apps/access/tests/test_hierarchy.py` (12 тестов), `test_hierarchy_integration.py` (3), `apps/hr/tests/test_position_external_hierarchy.py` | ✅ (оговорка сохраняется по §4: отметка «руководящая» — вручную, автобэкфилла по оргструктуре нет — задокументировано, не дефект) |
+| 9 | Права холдинга в ДО, `serves_subsidiaries` — §1, §5.C | `hr.Position.serves_subsidiaries` (`apps/hr/models.py:152`), `apps/access/services/inheritance.py` (`ancestors_of`, `inherit`, `inherited_role_scopes`) | `apps/access/tests/test_inheritance.py` — 11 тестов (наследование вниз, архивный предок, цикл в дереве, объединение с личными правами и др.) | ✅ (членство остаётся отдельным явным фактом — задокументировано в §4, не дефект) |
 | 10 | Десять кадровых предметов согласования HR-FRM-004 строк 1–10 с фактами — §1, §5.G | `apps/hr/approval_hooks.py`: `SUBJECT_MODELS`/`SUBJECT_SPECS` (580–594, ровно 10 записей), регистрация из `HrConfig.ready()` | `apps/hr/tests/test_approval_subjects.py` — 23 теста, включая `test_every_matrix_row_has_its_subject_and_facts`, `test_every_subject_declares_fields_the_engine_accepts`, `test_only_the_personnel_order_has_an_automatic_effect` | ✅ |
-| 11 | Замещение ключевых должностей (HR-FRM-006) — §1, §5.E | `hr.Substitution` (`position`, `substitute_position`, `kind`, `basis`, `valid_from/to`), `apps/hr/services/substitution_service.py`, `apps.hr.interface.substitutes_for` (430+, ровно три ключа) | `test_substitution_model.py` (6), `test_substitution_service.py` (11), `test_substitutions_api.py`, `test_interface_substitutes.py`, `test_group_structures.py::test_substitution_matrix_matches_the_document` | ✅ (строка «Системный администратор → внутригрупповой ИТ-подрядчик» не сеется намеренно — задокументировано) |
-| 12 | Реестр/API/экраны компаний — §5.A | `apps/companies/{urls,views,schemas}.py`, `services/lifecycle.py`, `module_service.py`, `membership_service.py`; фронт `CompanySwitcher.tsx`, `pages/CompanyPicker.tsx`, `pages/Companies*` | `apps/companies/tests/*` — 236 тестов прошли (§4); файлы фронта подтверждены (`ls`) | ✅ |
+| 11 | Замещение ключевых должностей (HR-FRM-006) — §1, §5.E | `hr.Substitution` (`position`, `substitute_position`, `kind`, `basis`, `valid_from/to`), `apps/hr/services/substitution_service.py`, `apps.hr.interface.substitutes_for` (430+, ровно три ключа) | `test_substitution_model.py` (6), `test_substitution_service.py` (12), `test_substitutions_api.py`, `test_interface_substitutes.py`, `test_group_structures.py::test_substitution_matrix_matches_the_document` | ✅ (строка «Системный администратор → внутригрупповой ИТ-подрядчик» не сеется намеренно — задокументировано) |
+| 12 | Реестр/API/экраны компаний — §5.A | `apps/companies/{urls,views,schemas}.py`, `services/lifecycle.py`, `module_service.py`, `membership_service.py`; фронт `CompanySwitcher.tsx`, `pages/CompanyPicker.tsx`, `pages/companies/CompanyRegistry.tsx` | `apps/companies/tests/*` — 236 тестов прошли (§4); файлы фронта подтверждены (`ls`) | ✅ |
 | 13 | Сводки холдинга (`hr`, `tasks`) — §5.H | `apps/hr/holding_models.py`, `apps/tasks/holding_models.py` (managed=False, читают `holding.*` через `use_holding()`), `holding_service.py` в обоих доменах, ручки `GET hr/v1/holding/headcount`, `GET tasks/v1/holding/projects` | `apps/hr/tests/test_holding_api.py`, `test_holding_summary.py`; `apps/tasks/tests/*holding*` (в составе 717 тестов `apps/tasks`, §4) | ✅ (финансы `contracts` и согласования `signoff` — плитки-заглушки до читателей второго разработчика, задокументировано, не в этой зоне) |
 | 14 | Единая модель прав (`apps.access`, блок I/I.2) — §5.I, §5.I.2 | `api_view(module=, level=)` на каждой ручке `hr/users/companies/access/tasks`; `apps/access/self_service.py` (реестр исключений с причиной `self`\|`open`\|`scoped`); `apps/access/services/resolve.py`; `apps/access/legacy_roles.py::KEY_TO_NODE` | `apps/access/tests/test_gate.py` — 19 тестов (перевёрнутый сторож, `_OUT_OF_SCOPE_APPS = {signoff, contracts}`); `test_hr_level_roles_exact.py` | ✅ (contracts/signoff вне зоны блока I — сами в `_OUT_OF_SCOPE_APPS`, зона другого разработчика, §6) |
 | 15 | Поддомены компаний — §5.I.2 | `Company.subdomain`, `apps/companies/interface.py::resolve_host_label` (89–109, псевдоним → слаг без псевдонима, один канонический хост); `CompanyPicker.tsx`, `sessionRestore.ts`, `CompanySwitcher.tsx` | `apps/companies/tests/test_subdomain.py` (в составе 236 тестов `apps/companies`, §4) | ✅ |
@@ -47,33 +50,47 @@ roadmap: для каждой строки ниже проверен файл р�
 8, 9, 11, 13, 14 — это границы, уже названные в roadmap §4/§6/§9, а не
 пропуски этой сверки.
 
+⚠️ **RACI (HR-FRM-005, 14 процессов, roadmap §1) — вне этого периметра, не
+пропуск.** Матрицы полномочий (HR-FRM-004, строки 1–15 — требования 10 и
+§6.1) и замещения (HR-FRM-006 — требование 11) проверены построчно выше; RACI
+из того же пакета документов руководства платформой не моделируется:
+ответственность по процессам выражается маршрутами `signoff` (данные второго
+разработчика, roadmap §6) и ролями `apps.access`, а не отдельной сущностью
+«RACI». Единственный затронутый ею вопрос — HR ДО (RACI 12–13) — остаётся
+открытым руководству, roadmap §8 п. 5. Статус: организационный документ вне
+платформы, не требование к коду — в 15 требований минимума брифа не входит.
+Вердикт «выполнен с оговорками, 15/15» — с этой явной границей.
+
 ## 3. Блоки A–I.2: план → статус → коммиты
 
 Полные списки коммитов каждого блока — в его собственном плане (ссылки
 ниже); здесь — представительные коммиты, найденные `git log --oneline` по
 файлам и ключевым словам блока, достаточные, чтобы подтвердить, что блок
-действительно состоялся в истории, а не только в roadmap. Все восемь
-статусов «(выполнено)» в roadmap §5 подтверждены проверкой по коду в §2.
+действительно состоялся в истории, а не только в roadmap. Все одиннадцать
+статусов «(выполнено)» в roadmap §5 (A–I, I.2, J) подтверждены проверкой по коду в §2.
 
 | Блок | План | Статус (roadmap §5) | Представительные коммиты |
 |---|---|---|---|
-| A. Реестр компаний | [2026-09-14-block-a-company-registry.md](2026-09-14-block-a-company-registry.md) | выполнено | `d6246ff` реестр компаний группы, `e401d91` HTTP-API реестра, `44a00ad` архив/восстановление по HTTP, `0010486` `tenancy_status`, `41ed84d` виды компаний по утверждённой структуре |
+| A. Реестр компаний | [2026-09-14-block-a-company-registry.md](2026-09-14-block-a-company-registry.md) | выполнено | `e401d91` HTTP-API реестра, `44a00ad` архив/восстановление по HTTP, `721dc85` модули и членство по HTTP, `0010486` `tenancy_status`, `41ed84d` виды компаний (реестр и `CompanyModule` — подпроект 1, `d6246ff`, 27.08) |
 | B. Внешняя иерархия | [2026-09-15-block-b-external-hierarchy.md](2026-09-15-block-b-external-hierarchy.md) | выполнено | `a8d1c72` должность знает, руководящая ли она |
 | C. Права холдинга в ДО | [2026-09-15-block-c-holding-authority.md](2026-09-15-block-c-holding-authority.md) | выполнено | `8cc2ed9` признак «обслуживает дочерние компании», `ec37cac` видимость внешних держателей прав, `5946a7f` метрика разрыва «признак без членства» |
-| D. Уровни, дирекции, демо | (часть roadmap, без отдельного плана) | выполнено | `120e5d5` «Дирекция» — вид подразделения, `e53253a` новая схема рождается с уровнями N-1…N-4, `2a2bc95` матрица замещения — модель, `830c2e3` блок D закрыт |
-| E. Замещение (HR-FRM-006) | (часть roadmap D/E) | выполнено | `2a2bc95` модель `Substitution`, `b6c2da0` контракт `substitutes_for` |
-| F. ОСУ / «Участник» | (часть roadmap) | выполнено | `563ee07` контракт `participant_position`, `53f850b` команда `hr_participant` |
-| G. HR-субъекты согласования | (часть roadmap) | выполнено | `e4bcf2c` штатное расписание согласуется, `ced1556` кадровый приказ и `PersonnelHistory`, `1f4abdb` премия/взыскание, `f8e5e0c` отпуск/командировка, `713ff09` график отпусков |
-| H. Сводки холдинга | (часть roadmap) | выполнено | `e475074` сводка по людям и штату, `ec31c79` сводка по работам, `c6b78a9` закрытие обхода сторожа через `_base_manager` |
+| D. Уровни, дирекции, демо | [2026-09-15-block-d-levels-directorates-demo.md](2026-09-15-block-d-levels-directorates-demo.md) | выполнено | `120e5d5` «Дирекция» — вид подразделения, `e53253a` новая схема рождается с уровнями N-1…N-4, `830c2e3` блок D закрыт |
+| E. Замещение (HR-FRM-006) | [2026-09-16-block-e-substitution.md](2026-09-16-block-e-substitution.md) | выполнено | `2a2bc95` модель `Substitution`, `b6c2da0` контракт `substitutes_for` |
+| F. ОСУ / «Участник» | [2026-09-16-block-f-participant.md](2026-09-16-block-f-participant.md) | выполнено | `563ee07` контракт `participant_position`, `53f850b` команда `hr_participant` |
+| G. HR-субъекты согласования | [2026-09-16-block-g-hr-approval-subjects.md](2026-09-16-block-g-hr-approval-subjects.md) | выполнено | `e4bcf2c` штатное расписание согласуется, `ced1556` кадровый приказ и `PersonnelHistory`, `1f4abdb` премия/взыскание, `f8e5e0c` отпуск/командировка, `713ff09` график отпусков |
+| H. Сводки холдинга | [2026-09-17-block-h-holding-readers.md](2026-09-17-block-h-holding-readers.md) | выполнено | `e475074` сводка по людям и штату, `ec31c79` сводка по работам, `c6b78a9` закрытие обхода сторожа через `_base_manager` |
 | I. Единая модель прав | [2026-09-17-block-i-single-rbac.md](2026-09-17-block-i-single-rbac.md) (roadmap: `1f69716..9600982`) | выполнено | `82e88ee` companies под перевёрнутым сторожем, `af776ed` ручки под гейтом модуля, `f544bfb` сторож требует гейт у переведённых аппок, `afd07a2` документы блока I |
 | I.2. Хвосты блока I и поддомены | [2026-09-22-block-i2-spec.md](2026-09-22-block-i2-spec.md), [2026-09-22-block-i2.md](2026-09-22-block-i2.md) (roadmap: `f2d5077..2c747dc`, 25 коммитов) | выполнено | `d27837c` поле `subdomain`, `f75c0ad` псевдоним в реестре/API/команде, `80ea6c4` членство из админки выдаёт базовую роль, `87d66a0` сессия переезжает на поддомен без второго входа |
-| J. Документы | [2026-09-23-block-j-docs.md](2026-09-23-block-j-docs.md) | выполнено (задачи 1–5 закоммичены `9094596`…`a444667`; задача 6 — этот документ) | `8dd5c18` план блока J, `9094596`/`bbd444a` roadmap, `3b593bd`/`80bbccb` design.md, `1f69716`… |
+| J. Документы | [2026-09-23-block-j-docs.md](2026-09-23-block-j-docs.md) | выполнено (задачи 1–5 закоммичены `9094596`…`a444667`; задача 6 — этот документ) | `8dd5c18` план блока J, `9094596`/`bbd444a` roadmap, `3b593bd`/`80bbccb` design.md, `1f0e362`/`9b79a37` стадия 2, `a060eb0` followups, `a472478`/`a444667` живые документы |
 
-Оговорка честности: для блоков B, C, D, E, F, G, H в roadmap нет явного
-диапазона хэшей (в отличие от I и I.2) — коммиты выше найдены точечно по
-`git log --oneline --grep`/`-- <файл>` и подтверждают, что блок состоялся, а
-не служат исчерпывающим списком; исчерпывающий список — в плане блока по
-ссылке слева, где он есть.
+Оговорка честности: для блоков B–H в roadmap нет строки «План:» и нет явного
+диапазона хэшей (в отличие от I и I.2) — колонка «План» заполнена по факту
+существования отдельного файла плана каждого блока в `docs/plans/`
+(`git ls-files`), не по ссылке из самого roadmap §5 (там она отсутствует;
+корень расхождения — сам roadmap, не эта сверка). Коммиты в последней колонке
+найдены точечно по `git log --oneline --grep`/`-- <файл>` и подтверждают, что
+блок состоялся, а не служат исчерпывающим списком; исчерпывающий список — в
+плане блока по ссылке слева.
 
 ## 4. Прогоны — числа дословно
 
@@ -138,9 +155,12 @@ services/stats_rollup.py:46`: `day = timezone.localdate(instance.finalized_at)`)
 по UTC-дате. Ни один из четырёх тестов не упоминается в `ci-known-failures.txt`
 и ни один не относится к коду блоков A–I.2 (`apps.tasks` и `apps.approvals` —
 интерфейс конференций и статистика согласований формы, не структура группы).
-С `TIME_ZONE = "UTC"` (состояние до чужой правки) все четыре, по прочитанному
-коду, обязаны проходить — отдельно не перепроверялось откатом правки
-(инструкция задачи запрещает трогать этот файл).
+Атрибуция подтверждена прогоном на финальном ревью — без правки файла
+репозитория (инструкция запрещает его трогать): эти же четыре теста прогнаны
+дважды с временным модулем настроек вне репозитория, различающимся только
+`TIME_ZONE`. С `TIME_ZONE = "Asia/Almaty"` (значение из незакоммиченной
+правки) — 4 failed, ровно эти четыре. С `TIME_ZONE = "UTC"` (состояние до
+правки) — 4 passed. Файл `backend/htqweb/settings/base.py` не менялся.
 
 ### 4.2 Frontend
 
@@ -221,7 +241,7 @@ contracts, signoff)`, поэтому `PositionRole`/`RoleAssignment`/`Role` жи
 - `RoleAssignment.objects.count()` → **24**
 - `Role.objects.count()` → **7**
 
-Числа **дословно совпадают** с числами репетиции блока I, §3 roadmap («25
+Числа **дословно совпадают** с числами репетиции блока I (roadmap §7, «25
 `PositionRole`, 24 `RoleAssignment`») — то есть стенд, на котором проверялся
 блок I.2, и стенд, на котором сейчас снят слепок, — одно и то же состояние
 (демо на 4 компании / 25 должностей / 24 членства из отчёта задачи 11 блока I).
@@ -285,18 +305,22 @@ Hi-Tech Group LTD), канонический справочник должнос
 `_CONDITIONAL` — `mail`/`messenger`, не тенантные, не в счёт). Подтверждено
 число правил алертинга: ровно **6** правил в `infra/logging/grafana-provisioning/
 alerting/rules.yml` читают эти метрики и стоят с `noDataState: OK` — `htqweb-
-contracts-signoff-desync`, `htqweb-contracts-budget-lines-overspent` (обе на
-метрики `contracts_*`), одно на `hr_terminated_still_active`, одно на
-`signoff_routes_without_approvers`, `htqweb-contracts-awaiting-accounting`,
+contracts-signoff-desync`, `htqweb-contracts-budget-overspent` (обе на
+метрики `contracts_*`), `htqweb-hr-terminated-still-active` (на `hr_terminated_still_active`),
+`htqweb-signoff-route-dead-end` (на `signoff_routes_without_approvers`),
+`htqweb-contracts-awaiting-accounting`,
 `htqweb-signoff-pending-stale` — все шесть никогда не сработают, оставаясь
 «зелёными» вечно. `htqweb-business-metrics-stale` (`absent(htqweb_service_enabled)`)
 и `test_metrics_are_observed.py` этого действительно не ловят — они проверяют
 «метрика посчитана → она на дашборде», а не «метрика ДОЛЖНА считаться». Пункт
 без хозяина: `docs/multi-company-tenancy-followups.md` п.3 подтверждает
-(«Пункт ждёт хозяина»), docstring `apps/core/metrics.py:~30` и
-текст `logger.info` («до подпроекта 3») — устаревшая, но пока верная
-формулировка (подпроект 3 закрыт для `CompanyModule`, но НЕ для веера сбора
-метрик — это явно названо в `followups.md` п.3, тоже перепроверено, см. ниже).
+(«Пункт ждёт хозяина»). Три комментария кода устарели — ссылаются на
+подпроект 3, закрытый решением заказчика без этого веера, а не пропущены им:
+докстринг `apps/core/metrics.py:30` («сегодня это только `apps.tasks`» — уже
+неверно, `metrics.py` есть у всех четырёх tenant-аппок), `logger.info` того же
+файла, строка 107 («пропущена до подпроекта 3»), и комментарий
+`apps/core/tests/test_metrics_are_observed.py:110` («TODO: закрывается
+подпроектом 3»). Не чинится в этой волне — код, а не документ.
 **Важность высокая**: это тихий отказ алертинга по деньгам и просроченным
 задачам, а не просто пустой дашборд.
 
@@ -308,10 +332,13 @@ contracts-signoff-desync`, `htqweb-contracts-budget-lines-overspent` (обе н�
 `module="tasks", level="admin"` и объясняет, почему `is_elevated` недостаточен.
 Упоминание `is_elevated` на строке 2316 — внутри докстринга СОСЕДНЕЙ функции
 `_deny_unless_holding` (гейта по виду компании, не по уровню модуля) и
-используется как **гипотетический контрпример** («обычная проверка домена
-… знает только флаги вызывающего»), а не как описание фактического гейта
-ручки. Формально расхождение есть — при чтении ИЗОЛИРОВАННО от
-`holding_projects` абзац можно принять за описание текущего гейта; в
+называет `request.token.is_elevated` «обычной проверкой домена» — верно это
+было ДО блока I, когда доменные ручки действительно проверяли флаги токена
+напрямую; после блока I обычная проверка домена — гейт модуля
+(`api_view(module=, level=)`), а `is_elevated` остался только платформенным
+предикатом (`admin=True`). Формулировка устарела: расхождение есть — при
+чтении ИЗОЛИРОВАННО от `holding_projects` абзац можно принять за описание
+текущего гейта; в
 контексте файла (два докстринга рядом, второй явно всё объясняет) путаницы
 на практике не возникает. **Важность низкая** — это не искажающая
 документация, а неудачно расположенный контрпример; правка не требуется
@@ -331,24 +358,31 @@ backend-web (RUN_MIGRATIONS=1)`) противоречит объявлению 1
 при `RUN_MIGRATIONS=0`, если `RUN_BOOTSTRAP` не выставлен отдельно, — читатель
 комментария строки 374 этого не заподозрит).
 
-**4. Roadmap §9.2 — сошлись, без изменений.** Список «сознательно оставлено»
-блока I.2 (сторож гейтов, сторож колонки `permissions`, псевдоним компании без
-ограничения БД и др.) перепроверен построчно при чтении §9 (см. §6.3 выше) —
-расхождений с кодом не найдено, копировать не стал (roadmap уже содержит их).
+**4. Roadmap §9.2 — один пункт закрыт блоком J, остальные сошлись.** Список
+«сознательно оставлено» блока I.2 (сторож гейтов, сторож колонки
+`permissions`, псевдоним компании без ограничения БД и др.) перепроверен
+построчно при чтении §9 (см. §6.3 выше). Один пункт §9.2 (`roadmap.md:726-727`
+— «`CLAUDE.md` в разделе про мультикомпанейность упоминает несуществующий
+`.env.production`») на момент этой сверки уже закрыт блоком J (`a472478`,
+`git log -S".env.production" -- CLAUDE.md` подтверждает удаление упоминания);
+то же упоминание остаётся в `docs/multi-company-tenancy-design.md:345` (правка
+внесена этой же волной). Остальные пункты §9.2 расхождений с кодом не
+показали — копировать не стал (roadmap уже содержит их).
 
-**5. Мелкие неточности документов — три из пяти подтверждены, одна уже устранена, одна не оценивалась отдельно.**
+**5. Мелкие неточности документов — все пять подтверждены** (одна —
+`docs/multi-company-tenancy-design.md:7-10` — исправлена этой же волной
+финального ревью, см. ниже).
 
-- `docs/multi-company-tenancy-design.md:~8-10, ~140` («архивация — по плану
-  подпроекта 1» вместо «доработка подпроекта 1, 29.08») — **при повторной
-  проверке текста НЕ ПОДТВЕРЖДЕНО**: обе указанные строки уже содержат точную
-  дату (`«создание, архив и восстановление компании есть (company_create/
-  company_archive/company_restore — подпроект 1, 28–29.08.2026»)`, строка 143;
-  шапка на строке 7 — «Состояние на 23.09.2026» с явными ссылками на планы и
-  даты). Похоже, это было устранено более ранним раундом правок задачи 2
-  блока J (коммиты `3b593bd`, `80bbccb` — «дизайн мультикомпанейности —
-  состояние после блоков A–I.2», «раунд правок 1»), которые эта сверка не
-  переиграла заново, а прочитала уже готовый результат. Отмечаю как
-  **закрыто**, не переоткрываю.
+- `docs/multi-company-tenancy-design.md:7-10` («реестр компаний, схемы и
+  архивация — по плану подпроекта 1») — **подтверждено, исправлено волной
+  финального ревью**: план подпроекта 1
+  (`plans/2026-08-27-multi-company-tenancy-core.md`) заводит только реестр,
+  схемы и поле `status`/`archived_at` — команды `company_archive` в нём нет;
+  архивация — доработка подпроекта 1 (`9ae51d6`, 29.08.2026, до блока A).
+  Строка 143 (таблица §4, строка «Жизненный цикл») уже была точной
+  (`company_create`/`company_archive`/`company_restore` — подпроект 1,
+  28–29.08.2026), расхождение было только в шапке §«Состояние на 23.09.2026».
+  Правка шапки внесена этой же волной.
 - `docs/plans/2026-08-29-stage2-access-and-roles-spec.md:~873` («остаток гейта
   назван только contracts/signoff») — **подтверждено**: строка 873
   по-прежнему говорит «`contracts`/`signoff` — без гейта, их навешивает
@@ -391,9 +425,13 @@ backend-web (RUN_MIGRATIONS=1)`) противоречит объявлению 1
 
 ### 6.5 Ветка `sanzhar` разошлась с `origin/sanzhar` — условие выкатки
 
-`git rev-list --left-right --count sanzhar...origin/sanzhar` → **`187` / `9`**
-(187 коммитов только в локальной `sanzhar`, 9 — только в `origin/sanzhar`).
-Девять — это в точности то, что называет roadmap §9.3: слияния `main` в
+`git rev-list --left-right --count sanzhar...origin/sanzhar` → на момент
+коммита `12b7e55` (24.09.2026) — **`188` / `9`** (188 коммитов только в
+локальной `sanzhar`, 9 — только в `origin/sanzhar`). Число слева растёт с
+каждым новым коммитом в `sanzhar`, включая коммиты этой самой волны правок, —
+не переснимать его здесь заново при каждой правке документа: важна не точная
+цифра, а то, что девять коммитов справа не меняются. Девять — это в точности
+то, что называет roadmap §9.3: слияния `main` в
 удалённой ветке (PR #29, #30, 10–14.09.2026: парсер cashflow в `contracts`,
 правки аватаров в кадрах). **Перед пушем эти 9 коммитов необходимо влить** —
 без слияния пуш локальной ветки создаст конфликт или молча похоронит эти
@@ -464,8 +502,7 @@ roadmap. Первая попытка держать саму команду пр
 verification.md](2026-09-23-group-structure-verification.md)`) теперь
 разрешается — файл существует. Пояснение рядом со ссылкой в roadmap
 («документ появится в ходе блока J; на момент этой правки ссылка ещё не
-разрешается — ожидаемо») стало неточным ПОСЛЕ появления этого файла, но
-`roadmap.md` не входит в файлы задачи 6 (только создание этого документа) —
-правка предложения оставлена задаче, которая правит roadmap, или отдельным
-мелким коммитом по решению пользователя; здесь фиксирую как факт, не
-исправляю сама.
+разрешается — ожидаемо») стало неточным ПОСЛЕ появления этого файла;
+`roadmap.md` не входил в файлы задачи 6 (только создание этого документа), но
+входит в волну финального ревью блока J — исправлено там же (`roadmap.md`
+§10, эта же волна коммитов).

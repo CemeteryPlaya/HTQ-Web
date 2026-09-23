@@ -2,7 +2,8 @@
 
 **Дата:** 2026-09-14
 **Ветка:** `sanzhar`
-**Статус на 23.09.2026:** блоки A–I, I.2 выполнены; J — этот план; выкатка —
+**Статус на 23.09.2026:** блоки A–I, I.2 выполнены; J —
+[план](2026-09-23-block-j-docs.md), итог — [§10](#10-итог-рефакторинга-23092026); выкатка —
 §7 и [чеклист поддоменов](../deploy/subdomains-runbook.md).
 **Основание:** документы руководства от 10.09.2026 — «Обновлённый проект
 оргструктуры Группы» (комментарии К. Садыева) и «HR-FRM-004…006: Матрица
@@ -83,7 +84,7 @@
 
 | Тема | Есть | Расхождение |
 |---|---|---|
-| Реестр компаний, схемы, `search_path`, claim `company` | ✅ реестр, HTTP-API и экраны (блок A), короткие адреса `htq/hts/keg/group`, экран выбора компании на голом домене (блок I.2) | архив «только чтение» не выполнен — сегодня архив закрывает весь трафик компании 404 (`docs/multi-company-tenancy-design.md` §6) |
+| Реестр компаний, схемы, `search_path`, claim `company` | ✅ реестр (подпроект 1), HTTP-API и экраны (блок A), короткие адреса `htq/hts/keg/group`, экран выбора компании на голом домене (блок I.2) | архив «только чтение» не выполнен — сегодня архив закрывает весь трафик компании 404 (`docs/multi-company-tenancy-design.md` §6) |
 | Поддомены компаний | ✅ `Company.subdomain`, `companies.interface.resolve_host_label`, `CompanyPicker` | выкатка — одним окном с блоком I, чеклист |
 | Уровни N-1…N-4 | ✅ `LevelThreshold` + `UnitType.DIRECTORATE` | пороги сеются при заведении схемы компании (миграция `hr/0024`); на боевой БД no-op |
 | Внешняя иерархия (правило 4) | ✅ | поля `is_manager`/`external_hierarchy` есть, `subordinate_companies` считается по ним; отметку «руководящая» ставит кадровик вручную в карточке должности — автоматического бэкфилла по оргструктуре нет |
@@ -178,6 +179,7 @@
   его видимости).
 
 ### D. Уровни, дирекции, демо-данные (выполнено)
+План: [2026-09-15-block-d-levels-directorates-demo.md](2026-09-15-block-d-levels-directorates-demo.md).
 
 **Что сделано:**
 - `hr/0023_alter_department_unit_type` (choices для `UnitType.DIRECTORATE`);
@@ -195,6 +197,7 @@
 Пунктирные связи как `ReportingRelation.functional`. Пустой блок на N-4 HTQ (вопрос руководству §8.3) не сеется.
 
 ### E. Замещение (HR-FRM-006) — (выполнено)
+План: [2026-09-16-block-e-substitution.md](2026-09-16-block-e-substitution.md).
 
 **Что сделано:**
 - `hr.Substitution(position, substitute_position, kind=primary|reserve, basis, valid_from, valid_to, note)` (expand-миграция `hr/0025`) + сервис `substitution_service.py` (пересечения, валидация, история);
@@ -203,6 +206,7 @@
 - `PositionSubstitutions.tsx` на карточке должности; матрица документа в демо-стенде холдинга (10 строк). Строка «Системный администратор → внутригрупповой ИТ-подрядчик» не сеется: замещающий — внешний подрядчик, а не должность, и команда печатает об этом предупреждение.
 
 ### F. ОСУ / «Участник» — (выполнено)
+План: [2026-09-16-block-f-participant.md](2026-09-16-block-f-participant.md).
 
 **Что сделано:**
 - `hr.Position` системная должность «Участник (ОСУ)» (`is_system=True`, вес 0, подразделение `osu`) над генеральным директором холдинга;
@@ -213,6 +217,7 @@
 Маршруты signoff ссылаются на ОСУ обычным `position_id`, движку ничего нового для этого случая не нужно.
 
 ### G. HR-субъекты согласования (строки 1–10 матрицы) — моя половина (выполнено)
+План: [2026-09-16-block-g-hr-approval-subjects.md](2026-09-16-block-g-hr-approval-subjects.md).
 Десять моделей в `hr` наследуют `signoff.Approvable` с
 `SIGNOFF_SUBJECT_TYPE = "hr.<…>"`, регистрируются одной таблицей из
 `HrConfig.ready()` (`apps/hr/approval_hooks.py`), отправляются одной ручкой
@@ -235,6 +240,7 @@
 `test_only_the_personnel_order_has_an_automatic_effect`.
 
 ### H. Сводки холдинга — читатели для `hr` и `tasks` (выполнено)
+План: [2026-09-17-block-h-holding-readers.md](2026-09-17-block-h-holding-readers.md).
 
 **Что сделано:**
 - `managed=False`-модели `apps/hr/holding_models.py` (`HoldingEmployee`,
@@ -252,7 +258,8 @@
   (`migrate_companies` временно их сносит и пересобирает);
 - ручки `GET /api/hr/v1/holding/headcount` и `GET /api/tasks/v1/holding/projects`:
   503 на `HoldingViewsUnavailable`; доступ — обычная проверка своего домена
-  (HR-доступ / `is_elevated`) ПЛЮС отдельный гейт по виду компании — только
+  (HR-доступ / `is_elevated` на момент блока H; с блока I — гейт модуля, см.
+  CLAUDE.md «Сводное чтение холдинга») ПЛЮС отдельный гейт по виду компании — только
   поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`,
   новый предикат), платформенный администратор проходит всегда, с любого
   другого поддомена — 403;
@@ -365,7 +372,8 @@ API должностей, базовая роль из django-admin, сторо�
 [multi-company-tenancy-followups.md](../multi-company-tenancy-followups.md),
 [STRUCTURE.md](../../STRUCTURE.md), [CLAUDE.md](../../CLAUDE.md),
 [API.md](../../API.md), [backend/README.md](../../backend/README.md) — под
-новый состав группы и блоки A–I.2; итоговая сверка — документ задачи 6.
+новый состав группы и блоки A–I.2; итоговая сверка — документ задачи 6:
+[2026-09-23-group-structure-verification.md](2026-09-23-group-structure-verification.md).
 
 ## 6. Передача другому разработчику (contracts / signoff)
 
@@ -724,7 +732,9 @@ request.mark_paid`, `contracts.advance_payment.record_payment`,
   `provision_company` в `apps/companies/tests/test_subdomain.py` гоняют полное
   заведение схемы — медленно.
 - **`CLAUDE.md`** в разделе про мультикомпанейность упоминает
-  несуществующий `.env.production`.
+  несуществующий `.env.production` — **закрыто** блоком J (`a472478`); в
+  `docs/multi-company-tenancy-design.md:345` то же упоминание оставалось,
+  исправлено той же волной финального ревью блока J.
 
 ### 9.3 Вне блока, но касается выкатки
 
@@ -736,8 +746,8 @@ request.mark_paid`, `contracts.advance_payment.record_payment`,
 
 ## 10. Итог рефакторинга (23.09.2026)
 
-Построено: реестр компаний с HTTP-API и экранами, схемы Postgres на компанию,
-короткие адреса и поддомены (блок A, I.2); внешняя иерархия и права холдинга
+Построено: реестр и схемы Postgres на компанию (подпроект 1), HTTP-API и
+экраны реестра (блок A), короткие адреса и поддомены (блок I.2); внешняя иерархия и права холдинга
 в ДО (блоки B, C); уровни N-1…N-4, три дирекции холдинга, демо-структуры
 четырёх компаний (блок D); замещение ключевых должностей и системная
 должность «Участник (ОСУ)» (блоки E, F); десять кадровых предметов
@@ -761,7 +771,11 @@ request.mark_paid`, `contracts.advance_payment.record_payment`,
 бэкфилл внешней иерархии по оргструктуре и прочие границы блока I.2 —
 [§9](#9-блок-i2--решения-по-ходу-исполнения-и-отложенное).
 
+Открыто без хозяина — бизнес-метрики tenant-аппок (`hr`, `tasks`,
+`contracts`, `signoff`) сборщик не собирает (`backend/apps/core/metrics.py:103-110`),
+шесть правил алертинга на них не могут сработать —
+[followups п. 3](../multi-company-tenancy-followups.md), сверка §6.4 п. 1.
+
 Итоговая сверка требований руководства по коду и тестам — задача 6 блока J:
-[2026-09-23-group-structure-verification.md](2026-09-23-group-structure-verification.md)
-(документ появится в ходе блока J; на момент этой правки ссылка ещё не
-разрешается — ожидаемо).
+[2026-09-23-group-structure-verification.md](2026-09-23-group-structure-verification.md) —
+итог: выполнен с оговорками.

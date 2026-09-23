@@ -188,7 +188,7 @@ here is prefixed by hand the way the old PgBouncer-schema-per-service setup requ
 [STRUCTURE.md §10](../STRUCTURE.md) if you're wondering why old comments mention `hr_*`/`task_*`
 prefixes as if someone chose them deliberately — that was a different DB topology).
 
-### 7. JWT contract is unchanged from the FastAPI generation
+### 7. JWT contract — the FastAPI-era claims plus `company`
 
 Issuer is still `htqweb-auth` (`settings.JWT_ISSUER`), HS256, shared `JWT_SECRET`. `apps.users`
 now both issues (`htqweb/authn/jwt.py::issue_token_pair`, called from `apps.users.views`) and
