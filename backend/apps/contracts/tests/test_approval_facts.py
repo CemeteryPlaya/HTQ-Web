@@ -177,6 +177,19 @@ def test_agreement_amount_and_payment_type_are_branchable():
     assert "payment_type" in fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)
 
 
+def test_contract_type_is_branchable_as_payment_type():
+    """«Тип оплаты» для людей — «стандартный / открытый»: условие маршрута
+    с этой подписью обязано ветвить именно по ``contract_type``."""
+    agreement = make_agreement(line=make_line(), contract_type="framework")
+
+    facts = registry.facts_for(Agreement.SIGNOFF_SUBJECT_TYPE, agreement.pk)
+    field = fields_by_key(Agreement.SIGNOFF_SUBJECT_TYPE)["contract_type"]
+
+    assert facts["contract_type"] == "framework"
+    assert field["label"] == "Тип оплаты"
+    assert {"value": "framework", "label": "Открытый"} in field["options"]
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Контрагент
 # ═══════════════════════════════════════════════════════════════════════

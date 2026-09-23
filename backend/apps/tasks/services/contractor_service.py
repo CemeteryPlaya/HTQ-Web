@@ -13,13 +13,29 @@ senior) уже хранятся и уже показываются в интер
 Единица привлечения — пара «организация + объект»: именно в ней
 сформулировано право senior «видеть все задачи своей организации по
 объекту», так что скоуп видимости вырастет отсюда без изменения схемы.
+
+**Связь с «Договорами».** Партнёр — это контрагент (``contracts.
+Counterparty``) в роли исполнителя на объектах, привлечение — работа по
+договору (``contracts.Agreement``). Обе ссылки — голые id (междоменный FK
+запрещён), поэтому целостность держится здесь, через
+``apps.contracts.interface``: контрагент существует, БИН/ИИН у пары один,
+договор привлечения заключён с контрагентом ЭТОГО партнёра. На записи
+выключенные «Договоры» — честный 503 (``ServiceDisabled`` не глушится: он
+решает, допустима ли связь), на чтении — карточка без реквизитов
+контрагента, а не упавший список партнёров.
 """
 
 from __future__ import annotations
 
+import re
+
+from django.db import transaction
 from django.db.models import Q
 
+from apps.contracts import interface as contracts
+from apps.core.services import ServiceDisabled
 from htqweb import date_rules
+from htqweb.fallback import fallback
 from django.http import Http404
 
 from ..models import (
@@ -29,6 +45,17 @@ from ..models import (
     Equipment,
     Task,
 )
+
+# Форма БИН/ИИН, которую принимает партнёр (``schemas.ContractorCreate``).
+# У контрагента поле шире — иностранный номер другой формы, — и такой номер
+# партнёру не переносится: ему некуда лечь.
+_KZ_BIN = re.compile(r"\d{12}")
+
+
+class CounterpartyLinkConflict(Exception):
+    """Связь с «Договорами» противоречит данным: контрагент уже у другого
+    партнёра, БИН/ИИН пары расходится, договор заключён с другим
+    контрагентом. Вьюха отдаёт 409 с этим текстом."""
 
 
 class ContractorInUse(Exception):
@@ -70,15 +97,105 @@ def get_contractor(contractor_id: int) -> Contractor:
 
 
 def create_contractor(payload: dict) -> Contractor:
-    return Contractor.objects.create(**payload)
+    row = Contractor(**payload)
+    _check_counterparty_link(row)
+    row.save(force_insert=True)
+    return row
 
 
 def update_contractor(contractor_id: int, changes: dict) -> Contractor:
     row = get_contractor(contractor_id)
+    previous_counterparty = row.counterparty_id
+    changed = _changed_fields(row, changes)
     for field, value in changes.items():
         setattr(row, field, value)
-    row.save()
+    # БИН сверяется и при его собственной правке: иначе связанному партнёру
+    # можно было бы вписать чужой номер, и пара разошлась бы после связывания.
+    if {"counterparty_id", "bin_iin"} & changed:
+        _check_counterparty_link(row)
+    with transaction.atomic():
+        row.save()
+        if row.counterparty_id != previous_counterparty:
+            # Договор привлечения — договор С КОНТРАГЕНТОМ этого партнёра.
+            # Сменился контрагент — старые ссылки больше не про него. Номер
+            # в ``contract_no`` остаётся: история привлечения не теряется.
+            ContractorEngagement.objects.filter(
+                contractor=row, agreement_id__isnull=False,
+            ).update(agreement_id=None)
     return row
+
+
+def _changed_fields(row, changes: dict) -> set[str]:
+    """Поля, которые PATCH действительно меняет.
+
+    Форма шлёт карточку целиком, и реагировать на «поле пришло» значило бы
+    ходить в «Договоры» при каждой правке телефона — а при выключенном
+    модуле отвечать на неё 503, хотя связи правка не касается.
+    """
+    return {field for field, value in changes.items()
+            if getattr(row, field) != value}
+
+
+def link_counterparty(contractor_id: int, counterparty_id: int) -> Contractor:
+    """Связать партнёра с контрагентом — вход со стороны «Договоров»
+    (карточка контрагента, заведённая «из партнёра»).
+
+    В отличие от правки карточки партнёра, молча ПЕРЕвязать нельзя: из
+    «Договоров» не видно, что партнёр уже числится за другим контрагентом,
+    и перепривязка отняла бы его у того без следа.
+    """
+    row = get_contractor(contractor_id)
+    if row.counterparty_id not in (None, counterparty_id):
+        raise CounterpartyLinkConflict(
+            f"Партнёр «{row.name}» уже связан с другим контрагентом")
+    return update_contractor(contractor_id, {"counterparty_id": counterparty_id})
+
+
+def unlink_counterparty(counterparty_id: int) -> None:
+    """Контрагента удалили в «Договорах» — у партнёра не должно остаться
+    ссылки в пустоту. Договоров у удалённого контрагента быть не могло
+    (``PROTECT``), так что привлечения не трогаем."""
+    Contractor.objects.filter(counterparty_id=counterparty_id).update(
+        counterparty_id=None)
+
+
+def _check_counterparty_link(row: Contractor) -> None:
+    """Проверить связь с контрагентом и довести пару до согласованного вида.
+
+    БИН/ИИН — идентичность организации, поэтому у связанной пары он один:
+    разные номера — конфликт, а не «чей-то правее». Пустой БИН партнёра
+    заполняется номером контрагента (если тот казахстанской формы).
+    Остальные реквизиты НЕ навязываются: их подтягивает форма по кнопке, а
+    дальше партнёр ведёт свои контакты сам — прораб на объекте не обязан
+    совпадать с генеральным директором из договорной карточки.
+    """
+    if row.counterparty_id is None:
+        return
+    found = contracts.get_counterparties_brief([row.counterparty_id])
+    if not found:
+        raise Http404("Контрагент не найден в модуле «Договоры»")
+    counterparty = found[0]
+
+    taken = (Contractor.objects.filter(counterparty_id=row.counterparty_id)
+             .exclude(pk=row.pk).first())
+    if taken is not None:
+        raise CounterpartyLinkConflict(
+            f"Контрагент «{counterparty['name']}» уже связан с партнёром "
+            f"«{taken.name}»")
+
+    cp_bin = (counterparty["bin_iin"] or "").strip()
+    if row.bin_iin:
+        if row.bin_iin != cp_bin:
+            raise CounterpartyLinkConflict(
+                f"БИН/ИИН партнёра ({row.bin_iin}) не совпадает с БИН/ИИН "
+                f"контрагента «{counterparty['name']}» ({cp_bin})")
+    elif _KZ_BIN.fullmatch(cp_bin):
+        clash = (Contractor.objects.filter(bin_iin=cp_bin)
+                 .exclude(pk=row.pk).first())
+        if clash is not None:
+            raise CounterpartyLinkConflict(
+                f"БИН/ИИН {cp_bin} уже указан у партнёра «{clash.name}»")
+        row.bin_iin = cp_bin
 
 
 def delete_contractor(contractor_id: int) -> None:
@@ -170,17 +287,22 @@ def get_engagement(engagement_id: int) -> ContractorEngagement:
 
 
 def create_engagement(payload: dict) -> ContractorEngagement:
-    get_contractor(payload["contractor_id"])
+    contractor = get_contractor(payload["contractor_id"])
     if not (payload.get("project_id") or payload.get("site_id")
             or payload.get("roadmap_id")):
         # Дублирует CHECK в БД сознательно: сообщение здесь человеческое, а
         # IntegrityError дал бы 500 вместо 400.
         raise ValueError("Укажите проект, объект или роудмап (хотя бы одно)")
-    return ContractorEngagement.objects.create(**payload)
+    row = ContractorEngagement(**payload)
+    row.contractor = contractor
+    _check_agreement_link(row)
+    row.save(force_insert=True)
+    return row
 
 
 def update_engagement(engagement_id: int, changes: dict) -> ContractorEngagement:
     row = get_engagement(engagement_id)
+    changed = _changed_fields(row, changes)
     for field, value in changes.items():
         setattr(row, field, value)
     if row.project_id is None and row.site_id is None and row.roadmap_id is None:
@@ -189,8 +311,37 @@ def update_engagement(engagement_id: int, changes: dict) -> ContractorEngagement
     # одна дата, вторая лежит в строке. Без этой проверки нарушение
     # доходит до CheckConstraint и возвращается как 500.
     date_rules.assert_instance_ordered(row)
+    # И при правке одного ``contract_no``: у привязанного договора номер —
+    # его, иначе в списке показывался бы один номер, а ссылка вела на другой.
+    if {"agreement_id", "contract_no"} & changed:
+        _check_agreement_link(row)
     row.save()
     return row
+
+
+def _check_agreement_link(row: ContractorEngagement) -> None:
+    """Договор привлечения — договор с контрагентом ЭТОГО партнёра.
+
+    Номер договора ложится в ``contract_no``: так он виден в списках без
+    похода в «Договоры» и переживает выключение модуля. Снятие ссылки
+    (``agreement_id=None``) номер не стирает — это история привлечения.
+    """
+    if row.agreement_id is None:
+        return
+    counterparty_id = row.contractor.counterparty_id
+    if counterparty_id is None:
+        raise CounterpartyLinkConflict(
+            f"Партнёр «{row.contractor.name}» не связан с контрагентом из "
+            f"«Договоров» — сначала укажите контрагента в карточке партнёра")
+    found = contracts.get_agreements_brief([row.agreement_id])
+    if not found:
+        raise Http404("Договор не найден в модуле «Договоры»")
+    agreement = found[0]
+    if agreement["counterparty_id"] != counterparty_id:
+        raise CounterpartyLinkConflict(
+            f"Договор {agreement['number']} заключён с другим контрагентом, "
+            f"не с «{row.contractor.name}»")
+    row.contract_no = agreement["number"]
 
 
 def delete_engagement(engagement_id: int) -> None:
@@ -284,21 +435,65 @@ def engagement_site_ids(contractor_id: int) -> list[int]:
 
 # ── ответы ──────────────────────────────────────────────────────────────
 
+def _contracts_briefs(fetch, ids: set[int], *, site: str, what: str) -> dict[int, dict]:
+    """Реквизиты из «Договоров» для подписи в ответе — батчем, с деградацией.
+
+    Выключенный модуль стоит подписи, а не ответа: список партнёров нужен
+    и компании без «Договоров». Это предусмотренная деградация
+    (``expected=True``), а не сбой — такая компания штатно живёт без модуля.
+    Проверки на записи (``_check_*``) ``ServiceDisabled`` НЕ глушат.
+    """
+    if not ids:
+        return {}
+    try:
+        return {brief["id"]: brief for brief in fetch(ids)}
+    except ServiceDisabled as exc:
+        return fallback(site, {}, reason=f"модуль «Договоры» выключен — {what}",
+                        expected=True, exc=exc)
+
+
+def _counterparty_ref(brief: dict | None) -> dict | None:
+    if brief is None:
+        return None
+    return {key: brief[key] for key in
+            ("id", "name", "bin_iin", "status", "approval_state")}
+
+
+def build_contractors(rows) -> list[dict]:
+    """Карточки партнёров одним проходом: контрагенты — одним вызовом
+    ``contracts.get_counterparties_brief`` на весь список, а не по строке."""
+    rows = list(rows)
+    counterparties = _contracts_briefs(
+        contracts.get_counterparties_brief,
+        {row.counterparty_id for row in rows if row.counterparty_id},
+        site="tasks.contractors.counterparty_brief",
+        what="партнёры без реквизитов контрагента")
+    return [
+        {
+            "id": row.id,
+            "name": row.name,
+            "short_name": row.short_name,
+            "bin_iin": row.bin_iin,
+            "contact_person": row.contact_person,
+            "phone": row.phone,
+            "email": row.email,
+            "address": row.address,
+            "notes": row.notes,
+            "status": str(row.status),
+            "counterparty_id": row.counterparty_id,
+            # ``None`` при заполненном ``counterparty_id`` — «Договоры»
+            # выключены: связь есть, показать её нечем.
+            "counterparty": _counterparty_ref(
+                counterparties.get(row.counterparty_id)),
+            "created_at": str(row.created_at),
+            "updated_at": str(row.updated_at),
+        }
+        for row in rows
+    ]
+
+
 def build_contractor(row: Contractor) -> dict:
-    return {
-        "id": row.id,
-        "name": row.name,
-        "short_name": row.short_name,
-        "bin_iin": row.bin_iin,
-        "contact_person": row.contact_person,
-        "phone": row.phone,
-        "email": row.email,
-        "address": row.address,
-        "notes": row.notes,
-        "status": str(row.status),
-        "created_at": str(row.created_at),
-        "updated_at": str(row.updated_at),
-    }
+    return build_contractors([row])[0]
 
 
 def build_worker(row: ContractorWorker) -> dict:
@@ -321,35 +516,57 @@ def build_worker(row: ContractorWorker) -> dict:
     }
 
 
+def build_engagements(rows) -> list[dict]:
+    """Привлечения одним проходом — договоры одним вызовом на весь список."""
+    rows = list(rows)
+    agreements = _contracts_briefs(
+        contracts.get_agreements_brief,
+        {row.agreement_id for row in rows if row.agreement_id},
+        site="tasks.contractors.agreement_brief",
+        what="привлечения без карточки договора")
+    out = []
+    for row in rows:
+        agreement = agreements.get(row.agreement_id)
+        out.append({
+            "id": row.id,
+            "contractor_id": row.contractor_id,
+            "contractor_name": row.contractor.name,
+            "project_id": row.project_id,
+            "project_name": row.project.name if row.project else None,
+            "site_id": row.site_id,
+            "site_name": row.site.name if row.site else None,
+            "roadmap_id": row.roadmap_id,
+            "roadmap_name": row.roadmap.name if row.roadmap else None,
+            "contract_no": row.contract_no,
+            "agreement_id": row.agreement_id,
+            "agreement": (
+                {key: agreement[key] for key in
+                 ("id", "number", "name", "status", "approval_state")}
+                if agreement is not None else None),
+            "scope": row.scope,
+            "start_date": str(row.start_date) if row.start_date else None,
+            "end_date": str(row.end_date) if row.end_date else None,
+            "is_active": row.is_active,
+            "created_at": str(row.created_at),
+            "updated_at": str(row.updated_at),
+        })
+    return out
+
+
 def build_engagement(row: ContractorEngagement) -> dict:
-    return {
-        "id": row.id,
-        "contractor_id": row.contractor_id,
-        "contractor_name": row.contractor.name,
-        "project_id": row.project_id,
-        "project_name": row.project.name if row.project else None,
-        "site_id": row.site_id,
-        "site_name": row.site.name if row.site else None,
-        "roadmap_id": row.roadmap_id,
-        "roadmap_name": row.roadmap.name if row.roadmap else None,
-        "contract_no": row.contract_no,
-        "scope": row.scope,
-        "start_date": str(row.start_date) if row.start_date else None,
-        "end_date": str(row.end_date) if row.end_date else None,
-        "is_active": row.is_active,
-        "created_at": str(row.created_at),
-        "updated_at": str(row.updated_at),
-    }
+    return build_engagements([row])[0]
 
 
 __all__ = [
-    "ContractorInUse",
+    "ContractorInUse", "CounterpartyLinkConflict",
     "list_contractors", "get_contractor", "create_contractor",
     "update_contractor", "delete_contractor",
+    "link_counterparty", "unlink_counterparty",
     "list_workers", "get_worker", "create_worker", "update_worker",
     "delete_worker",
     "list_engagements", "get_engagement", "create_engagement",
     "update_engagement", "delete_engagement", "engagement_site_ids",
     "effective_contractors",
-    "build_contractor", "build_worker", "build_engagement",
+    "build_contractor", "build_contractors", "build_worker",
+    "build_engagement", "build_engagements",
 ]

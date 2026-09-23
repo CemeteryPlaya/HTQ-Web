@@ -25,13 +25,20 @@ import { DateInput } from '@/components/ui/date-input';
 import { contractsApi } from '@/api/contracts';
 import { fetchEmployees } from '@/api/hr';
 import { reportApiError } from '@/lib/apiError';
+import {
+  CONTRACT_DATE_AHEAD_DAYS,
+  CONTRACT_DATE_MIN,
+  INVALID_DATE,
+  VALID_UNTIL_BEFORE_DATE,
+  contractDateProblem,
+  datesOutOfOrder,
+  todayIso,
+} from '@/lib/validation';
 import type {
   AgreementDirection,
   AgreementKind,
-  AgreementStatus,
   AgreementType,
   BudgetLineFlat,
-  PaymentType,
 } from '@/types/contracts';
 import { useTranslation } from 'react-i18next';
 
@@ -69,10 +76,6 @@ const AgreementCreate = () => {
     queryKey: ['contracts', 'counterparties', ''],
     queryFn: () => contractsApi.listCounterparties().then((r) => r.data),
   });
-  const { data: enums } = useQuery({
-    queryKey: ['contracts', 'enums'],
-    queryFn: () => contractsApi.getEnums().then((r) => r.data),
-  });
   const { data: employees = [] } = useQuery({
     queryKey: ['hr', 'employees', 'all'],
     queryFn: () => fetchEmployees(),
@@ -108,6 +111,14 @@ const AgreementCreate = () => {
   const [managerName, setManagerName] = useState('');
   const [managerUserId, setManagerUserId] = useState<number | null>(null);
 
+  // «Дата договора» (по документу, обязательна, по умолчанию сегодня) и
+  // «Срок действия по» (необязателен, не раньше даты договора; после него
+  // новые оплаты по договору не заводятся — BR-036).
+  const [contractDate, setContractDate] = useState(() => todayIso());
+  const [validUntil, setValidUntil] = useState('');
+  const [brokenDates, setBrokenDates] = useState({ contract: false, until: false });
+  const validUntilBeforeDate = datesOutOfOrder(contractDate, validUntil);
+
   // Финансы и НДС
   const [hasVat, setHasVat] = useState<boolean>(true);
   const [vatRate, setVatRate] = useState<string>('12');
@@ -122,13 +133,9 @@ const AgreementCreate = () => {
   const [retentionRate, setRetentionRate] = useState('0');
   const [retentionAmount, setRetentionAmount] = useState('');
 
-  // Сроки, тип оплаты и статус
-  const [paymentType, setPaymentType] = useState<PaymentType>('postpayment');
-  const [signedDate, setSignedDate] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [termComment, setTermComment] = useState('');
-  const [status, setStatus] = useState<AgreementStatus>('draft');
+  // Файл. Статуса, дат и комментария к сроку в форме нет: договор всегда
+  // заводится черновиком (дальше его ведёт согласование), а предоплату /
+  // постоплату / поэтапно бэкенд выводит из аванса (`payment_type_from_advance`).
   const [file, setFile] = useState<File | null>(null);
 
   const [errors, setErrors] = useState<Errors>({});
@@ -169,16 +176,12 @@ const AgreementCreate = () => {
   const amountKopecks =
     amount.trim() && AMOUNT_RE.test(amount.trim()) ? toKopecks(amount.trim()) : null;
 
-  const committingStatuses = enums?.committing_statuses ?? [
-    'on_review',
-    'approved',
-    'signed',
-    'executed',
-  ];
-  const willCommit = committingStatuses.includes(status);
+  // Черновик бюджет не занимает, но на согласование договор уйдёт только в
+  // пределах остатка (переход в `on_review` проверяет лимит) — предупреждаем
+  // сразу. Открытый договор суммой бюджет не занимает никогда.
   const overBudget =
     direction === 'expense' &&
-    willCommit &&
+    contractType !== 'framework' &&
     remainingKopecks !== null &&
     amountKopecks !== null &&
     amountKopecks > remainingKopecks;
@@ -300,6 +303,13 @@ const AgreementCreate = () => {
     else if (!lineId) next.budget = t('contracts.agreementForm.errors.budget');
     if (!counterpartyId) next.counterparty = t('contracts.agreementForm.errors.counterparty');
     if (!number.trim()) next.number = t('contracts.agreementForm.errors.number');
+    if (brokenDates.contract) next.contractDate = INVALID_DATE;
+    else {
+      const problem = contractDateProblem(contractDate);
+      if (problem) next.contractDate = problem;
+    }
+    if (brokenDates.until) next.validUntil = INVALID_DATE;
+    else if (validUntilBeforeDate) next.validUntil = VALID_UNTIL_BEFORE_DATE;
     if (!name.trim()) next.name = t('contracts.agreementForm.errors.name');
     if (!amount.trim()) next.amount = t('contracts.agreementForm.errors.amount');
     else if (!AMOUNT_RE.test(amount.trim())) {
@@ -319,7 +329,6 @@ const AgreementCreate = () => {
           budget_line_id: Number(lineId),
           counterparty_id: Number(counterpartyId),
           amount: amount.trim().replace(',', '.'),
-          payment_type: paymentType,
           direction,
           kind,
           contract_type: contractType,
@@ -336,12 +345,9 @@ const AgreementCreate = () => {
           advance_amount_planned: hasAdvance && advanceAmountPlanned.trim() ? advanceAmountPlanned.trim().replace(',', '.') : null,
           retention_rate: retentionRate.trim() || '0',
           retention_amount: retentionAmount.trim() ? retentionAmount.trim().replace(',', '.') : null,
-          start_date: startDate || null,
-          end_date: endDate || null,
-          term_comment: termComment.trim(),
+          signed_date: contractDate,
+          end_date: validUntil || null,
           currency: selectedLine!.currency,
-          signed_date: signedDate || null,
-          status,
           request_id: linkedRequest.linked?.id ?? null,
         })
         .then((r) => r.data);
@@ -555,8 +561,10 @@ const AgreementCreate = () => {
               <CardTitle>{t('contracts.agreement.title')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Направление, Вид, Тип */}
-              <div className="grid gap-4 sm:grid-cols-3">
+              {/* Направление и Вид. Тип («стандартный / открытый») — в блоке
+                  «Оплата и файл», под подписью «Тип оплаты»: так его зовёт
+                  заказчик. */}
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <Label htmlFor="direction">{t('contracts.agreementForm.directionLabel')}</Label>
                   <Select
@@ -588,23 +596,6 @@ const AgreementCreate = () => {
                       <SelectItem value="services">{t('contracts.agreementForm.kindServices')}</SelectItem>
                       <SelectItem value="lease">{t('contracts.agreementForm.kindLease')}</SelectItem>
                       <SelectItem value="other">{t('contracts.agreementForm.kindOther')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label htmlFor="contract-type">{t('contracts.agreementForm.contractTypeLabel')}</Label>
-                  <Select
-                    value={contractType}
-                    onValueChange={(val) => setContractType(val as AgreementType)}
-                  >
-                    <SelectTrigger id="contract-type">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="standard">{t('contracts.agreementForm.contractTypeStandard')}</SelectItem>
-                      <SelectItem value="non_standard">{t('contracts.agreementForm.contractTypeNonStandard')}</SelectItem>
-                      <SelectItem value="framework">{t('contracts.agreementForm.contractTypeFramework')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -656,6 +647,53 @@ const AgreementCreate = () => {
                     </SelectContent>
                   </Select>
                   {fieldError('counterparty')}
+                </div>
+              </div>
+
+              {/* Дата договора и срок действия. Дата входит в уникальность
+                  договора (контрагент + номер + дата) — бэкенд не даст завести
+                  тот же договор второй раз. */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="contract-date">{t('contracts.agreementForm.contractDateLabel')}</Label>
+                  <DateInput
+                    id="contract-date"
+                    value={contractDate}
+                    onChange={setContractDate}
+                    min={CONTRACT_DATE_MIN}
+                    max={todayIso(CONTRACT_DATE_AHEAD_DAYS)}
+                    invalid={Boolean(errors.contractDate) || brokenDates.contract}
+                    onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, contract: bad }))}
+                  />
+                  {fieldError('contractDate') ?? (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {t('contracts.agreementForm.contractDateHint')}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <Label htmlFor="valid-until">
+                    {t('contracts.agreementForm.validUntilLabel')}{' '}
+                    <span className="text-muted-foreground">{t('common.optionalParen')}</span>
+                  </Label>
+                  <DateInput
+                    id="valid-until"
+                    value={validUntil}
+                    onChange={setValidUntil}
+                    min={contractDate || undefined}
+                    invalid={Boolean(errors.validUntil) || brokenDates.until || validUntilBeforeDate}
+                    onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, until: bad }))}
+                  />
+                  {fieldError('validUntil') ?? (
+                    validUntilBeforeDate ? (
+                      <p className="text-sm text-destructive mt-1">{VALID_UNTIL_BEFORE_DATE}</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {t('contracts.agreementForm.validUntilHint')}
+                      </p>
+                    )
+                  )}
                 </div>
               </div>
 
@@ -897,105 +935,34 @@ const AgreementCreate = () => {
             </CardContent>
           </Card>
 
-          {/* ─── 4. Сроки, статус и файл ───────────────────────────────── */}
+          {/* ─── 4. Оплата и файл ──────────────────────────────────────── */}
           <Card>
             <CardHeader>
               <CardTitle>{t('contracts.agreementForm.termsSectionTitle')}</CardTitle>
+              <CardDescription>{t('contracts.agreementForm.draftDoesNot')}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                {/* «Тип оплаты» — так заказчик зовёт `contract_type`. Только
+                    два значения: «нетиповой» остаётся лишь у старых договоров. */}
                 <div>
-                  <Label htmlFor="payment-type">{t('contracts.columns.paymentType')}</Label>
+                  <Label htmlFor="contract-type">{t('contracts.columns.paymentType')}</Label>
                   <Select
-                    value={paymentType}
-                    onValueChange={(value) => setPaymentType(value as PaymentType)}
+                    value={contractType}
+                    onValueChange={(val) => setContractType(val as AgreementType)}
                   >
-                    <SelectTrigger id="payment-type">
+                    <SelectTrigger id="contract-type">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {(enums?.payment_type ?? []).map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label htmlFor="signed-date">{t('contracts.columns.signedAt')}</Label>
-                  <DateInput
-                    id="signed-date"
-                    value={signedDate}
-                    onChange={setSignedDate}
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="start-date">{t('contracts.agreementForm.startDateLabel')}</Label>
-                  <DateInput
-                    id="start-date"
-                    value={startDate}
-                    onChange={setStartDate}
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="end-date">{t('contracts.agreementForm.endDateLabel')}</Label>
-                  <DateInput
-                    id="end-date"
-                    value={endDate}
-                    onChange={setEndDate}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <Label htmlFor="term-comment">{t('contracts.agreementForm.termCommentLabel')}</Label>
-                <Input
-                  id="term-comment"
-                  value={termComment}
-                  onChange={(e) => setTermComment(e.target.value)}
-                  placeholder={t('contracts.agreementForm.termCommentPlaceholder')}
-                />
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2 pt-2 border-t">
-                <div>
-                  <Label htmlFor="status">{t('contracts.columns.status')}</Label>
-                  <Select
-                    value={status}
-                    onValueChange={(value) => setStatus(value as AgreementStatus)}
-                  >
-                    <SelectTrigger id="status">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(enums?.agreement_status ?? [])
-                        // `executed`/`terminated` — терминальные, заводить в
-                        // них нечего. `on_review` убран по другой причине:
-                        // его ставит согласование, и договор, созданный в
-                        // нём, расходится со своим `approval_state`
-                        // (`agreement_service.create_agreement` отвечает на
-                        // такой запрос 409).
-                        .filter(
-                          (option) =>
-                            !['executed', 'terminated', 'on_review'].includes(
-                              option.value,
-                            ),
-                        )
-                        .map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
+                      <SelectItem value="standard">{t('contracts.agreementForm.contractTypeStandard')}</SelectItem>
+                      <SelectItem value="framework">{t('contracts.agreementForm.contractTypeFramework')}</SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {willCommit && direction === 'expense'
-                      ? t('contracts.agreementForm.statusConsumes')
-                      : t('contracts.agreementForm.draftDoesNot')}
+                    {contractType === 'framework'
+                      ? t('contracts.agreementForm.contractTypeOpenHint')
+                      : t('contracts.agreementForm.contractTypeStandardHint')}
                   </p>
                 </div>
 

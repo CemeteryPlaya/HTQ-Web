@@ -71,7 +71,7 @@ export default function GoodsInvoiceCreate() {
           <p className="text-muted-foreground">{isLoadingAgreement ? 'Загрузка реквизитов…' : agreementStatusLabel}</p>
         </div>
         <div className="grid gap-x-6 gap-y-4 py-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div><p className="text-xs text-muted-foreground">Сумма договора</p><p className="mt-1 font-medium tabular-nums">{selected.contract_type === 'framework' ? 'Рамочный договор' : formatMoney(selected.amount, selected.currency)}</p></div>
+          <div><p className="text-xs text-muted-foreground">Сумма договора</p><p className="mt-1 font-medium tabular-nums">{selected.contract_type === 'framework' ? 'Открытый договор' : formatMoney(selected.amount, selected.currency)}</p></div>
           <div><p className="text-xs text-muted-foreground">Предоплачено</p><p className="mt-1 tabular-nums">{formatMoney(selected.advance_paid_amount, selected.currency)}</p></div>
           <div><p className="text-xs text-muted-foreground">Оплачено по договору</p><p className="mt-1 tabular-nums">{formatMoney(selected.contract_paid_amount, selected.currency)}</p></div>
           <div><p className="text-xs text-muted-foreground">Доступно к оплате</p><p className="mt-1 font-semibold tabular-nums">{formatRemaining(selected.remaining_amount, selected.currency)}</p></div>

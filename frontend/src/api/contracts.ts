@@ -196,7 +196,8 @@ export const contractsApi = {
     budget_line_id: number;
     counterparty_id: number;
     amount: string;
-    payment_type: string;
+    /** Не передан — бэкенд выводит из аванса (предоплата/постоплата/поэтапно). */
+    payment_type?: string;
     direction?: string;
     kind?: string;
     contract_type?: string;

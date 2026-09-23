@@ -137,6 +137,9 @@ def create_contract_payment(*, administrator_id: int, agreement_id: int, amount,
                             invoice_data: bytes, invoice_filename: str, invoice_mime: str,
                             created_by: int | None = None) -> ContractPayment:
     agreement = _eligible_agreement(agreement_id)
+    expired = agreement.term_expired_message()
+    if expired:
+        raise ContractPaymentRuleViolation(expired)
     administrator = Administrator.objects.filter(pk=administrator_id, is_active=True).first()
     if administrator is None:
         raise ContractPaymentRuleViolation("Администратор не найден или отключён")

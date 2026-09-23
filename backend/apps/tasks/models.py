@@ -354,6 +354,16 @@ class Contractor(models.Model):
     ``Employee.position`` — ``FK PROTECT NOT NULL``, а у сварщика внешнего
     партнёра нет ни отдела, ни штатной должности. Синтетические записи
     испортили бы оргструктуру и все HR-отчёты, которые эти колонки читают.
+
+    ``counterparty_id`` — та же организация в «Договорах» (``contracts.
+    Counterparty``): партнёр — это контрагент в роли исполнителя на объектах.
+    Слить их в одну таблицу нельзя (междоменный FK запрещён, а у партнёра
+    своя оперативная жизнь — люди, техника, привлечения), поэтому здесь
+    голый id, а целостность держит ``contractor_service`` через
+    ``apps.contracts.interface``. Связь необязательная: партнёра заводят и
+    без контрагента — модуль «Договоры» у компании может быть выключен, а
+    бригаду ставят на объект раньше, чем карточка контрагента согласована.
+    ``unique`` — одна организация не может числиться двумя партнёрами.
     """
 
     name = models.CharField(max_length=255, unique=True)
@@ -370,6 +380,7 @@ class Contractor(models.Model):
         default=ContractorStatus.ACTIVE, db_default=ContractorStatus.ACTIVE,
         db_index=True,
     )
+    counterparty_id = models.IntegerField(null=True, blank=True, unique=True)
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
@@ -812,6 +823,14 @@ class ContractorEngagement(models.Model):
     (``is_active=False``), а не теряют молча вместе со справочной строкой.
     ``CASCADE`` на проекте — ``project_service.delete_project`` делает
     жёсткое удаление, и привлечение к удалённому проекту смысла не имеет.
+
+    ``agreement_id`` — договор из «Договоров», по которому партнёр привлечён;
+    голый id по той же причине, что ``Contractor.counterparty_id``. Договор
+    обязан быть заключён с контрагентом ЭТОГО партнёра — проверяет сервис.
+    ``contract_no`` при этом не выбрасывается: при выборе договора туда
+    ложится его номер (ширина колонки — как у ``Agreement.number``), а у
+    привлечений, чьего договора в системе нет, это по-прежнему свободный
+    текст. Так номер виден и тогда, когда модуль «Договоры» выключен.
     """
 
     contractor = models.ForeignKey(Contractor, on_delete=models.PROTECT,
@@ -827,7 +846,8 @@ class ContractorEngagement(models.Model):
     roadmap = models.ForeignKey("Roadmap", on_delete=models.CASCADE,
                                 null=True, blank=True,
                                 related_name="contractor_engagements")
-    contract_no = models.CharField(max_length=64, null=True, blank=True)
+    contract_no = models.CharField(max_length=100, null=True, blank=True)
+    agreement_id = models.IntegerField(null=True, blank=True, db_index=True)
     scope = models.TextField(default="", blank=True, db_default="")
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)

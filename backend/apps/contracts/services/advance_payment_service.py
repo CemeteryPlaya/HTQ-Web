@@ -144,6 +144,9 @@ def list_advance_payments(*, agreement_id: int | None = None,
 @transaction.atomic
 def create_advance_payment(*, agreement_id: int, amount, created_by: int | None = None):
     agreement = _approved_agreement(agreement_id)
+    expired = agreement.term_expired_message()
+    if expired:
+        raise AdvancePaymentRuleViolation(expired)
     if AdvancePayment.objects.filter(agreement_id=agreement.pk).exists():
         raise AdvancePaymentRuleViolation(
             f"По договору {agreement.number} уже создана предоплата"

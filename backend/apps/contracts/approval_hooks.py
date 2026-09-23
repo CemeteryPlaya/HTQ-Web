@@ -56,6 +56,7 @@ from .models import (
     AdvancePaymentStatus,
     Agreement,
     AgreementStatus,
+    AgreementType,
     Budget,
     Counterparty,
     CompletionAct,
@@ -754,6 +755,7 @@ def _agreement_facts(subject_id: int) -> dict:
         "amount": agreement.amount,
         "currency": agreement.currency,
         "payment_type": agreement.payment_type,
+        "contract_type": agreement.contract_type,
     }
 
 
@@ -768,7 +770,16 @@ def _agreement_fact_fields() -> list[dict]:
          "type": "choice", "options": _program_options()},
         {"key": "amount", "label": "Сумма договора", "type": "number"},
         {"key": "currency", "label": "Валюта", "type": "string"},
-        {"key": "payment_type", "label": "Тип оплаты", "type": "choice",
+        # «Тип оплаты» для людей — «стандартный / открытый» (``contract_type``,
+        # так его зовёт заказчик и так он подписан в форме договора).
+        # Предоплата / постоплата / поэтапно — отдельный факт, выводимый из
+        # аванса; ключ ``payment_type`` сохранён, чтобы не сломать уже
+        # настроенные условия, сменилась только подпись.
+        {"key": "contract_type", "label": "Тип оплаты", "type": "choice",
+         "options": [{"value": value, "label": label}
+                     for value, label in AgreementType.choices]},
+        {"key": "payment_type", "label": "Порядок оплаты (по авансу)",
+         "type": "choice",
          "options": [{"value": value, "label": label}
                      for value, label in PaymentType.choices]},
     ]

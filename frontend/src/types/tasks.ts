@@ -19,6 +19,24 @@ export type ContractorStatus = 'active' | 'suspended' | 'blacklisted' | 'archive
  */
 export type ContractorLevel = 'junior' | 'middle' | 'senior';
 
+/** Та же организация в «Договорах» — бейдж со ссылкой на карточку. */
+export interface ContractorCounterpartyRef {
+  id: number;
+  name: string;
+  bin_iin: string;
+  status: string;
+  approval_state: string;
+}
+
+/** Договор из «Договоров», по которому партнёр привлечён. */
+export interface EngagementAgreementRef {
+  id: number;
+  number: string;
+  name: string;
+  status: string;
+  approval_state: string;
+}
+
 export interface Contractor {
   id: number;
   name: string;
@@ -30,6 +48,11 @@ export interface Contractor {
   address: string | null;
   notes: string;
   status: ContractorStatus;
+  /** Связь с контрагентом из «Договоров» (необязательна). */
+  counterparty_id: number | null;
+  /** `null` при заполненном `counterparty_id` — «Договоры» выключены или
+   *  контрагент удалён: связь есть, показать её нечем. */
+  counterparty: ContractorCounterpartyRef | null;
   /** См. API: количество активных работников и привлечений. */
   workers_count?: number;
   engagements_count?: number;
@@ -67,7 +90,10 @@ export interface ContractorEngagement {
   /** Привлечение на один пакет работ: «развозку отдали партнёру». */
   roadmap_id: number | null;
   roadmap_name: string | null;
+  /** Номер договора. При выбранном `agreement` — его номер (ставит бэкенд). */
   contract_no: string | null;
+  agreement_id: number | null;
+  agreement: EngagementAgreementRef | null;
   scope: string;
   start_date: string | null;
   end_date: string | null;

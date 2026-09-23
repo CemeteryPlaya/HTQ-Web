@@ -127,12 +127,17 @@ class AgreementType(models.TextChoices):
     ``open`` в перечислении нет намеренно: это одно и то же понятие под двумя
     именами, и два значения на него разошлись бы по данным — часть договоров
     легла бы в ``open``, часть в ``framework``, а проверка «сумма не обязана
-    быть» читала бы только одно из них.
+    быть» читала бы только одно из них. По той же причине ПОДПИСЬ — словом
+    заказчика: значение ``framework`` осталось, а люди видят «Открытый».
+
+    В интерфейсе это поле подписано «Тип оплаты» (так его зовёт заказчик) и
+    предлагает только «Стандартный / Открытый». ``NON_STANDARD`` остаётся
+    ради уже заведённых договоров, новым его не выбирают.
     """
 
     STANDARD = "standard", "Стандартный"
     NON_STANDARD = "non_standard", "Нетиповой"
-    FRAMEWORK = "framework", "Рамочный"
+    FRAMEWORK = "framework", "Открытый"
 
 
 class AgreementStatus(models.TextChoices):
@@ -558,7 +563,12 @@ class Agreement(signoff.Approvable, models.Model):
 
     SIGNOFF_SUBJECT_TYPE = "contracts.agreement"
 
-    number = models.CharField(max_length=100, unique=True)
+    # Номер ПО ДОКУМЕНТУ контрагента, а не сквозной номер платформы: у двух
+    # поставщиков свой «Договор № 1» бывает сплошь и рядом. Поэтому
+    # уникальность — тройка «контрагент + номер + дата договора»
+    # (``uq_contracts_agr_cp_number_date``, ТЗ BR-032), а не один номер, как
+    # было. Индекс остаётся: по номеру договор ищут.
+    number = models.CharField(max_length=100, db_index=True)
     name = models.CharField(max_length=300)
     budget_line = models.ForeignKey(BudgetLine, on_delete=models.PROTECT,
                                     related_name="agreements")
@@ -692,10 +702,14 @@ class Agreement(signoff.Approvable, models.Model):
         blank=True,
         verbose_name="Дата начала",
     )
+    # «Срок действия по» (ТЗ 9.2): после этой даты новые оплаты по договору не
+    # заводятся (BR-036, ``term_expired_message`` ниже). Колонка
+    # прежняя — раньше её подписывали «Срок исполнения», смысл тот же: до
+    # какого дня договор работает.
     end_date = models.DateField(
         null=True,
         blank=True,
-        verbose_name="Срок исполнения",
+        verbose_name="Срок действия по",
     )
     term_comment = models.CharField(
         max_length=255,
@@ -707,7 +721,12 @@ class Agreement(signoff.Approvable, models.Model):
     amount = models.DecimalField(max_digits=18, decimal_places=2)
     currency = models.CharField(max_length=3, default="KZT", db_default="KZT")
     file_id = models.CharField(max_length=64, null=True, blank=True)
-    signed_date = models.DateField(null=True, blank=True)
+    # «Дата договора» — дата ПО ДОКУМЕНТУ. Входит в уникальность договора
+    # (вместе с контрагентом и номером). Nullable только ради старых записей
+    # и импорта: новый договор через API без даты не заводится — схема
+    # подставляет сегодняшнюю (``AgreementCreate.signed_date``).
+    signed_date = models.DateField(null=True, blank=True,
+                                   verbose_name="Дата договора")
     status = models.CharField(max_length=20, choices=AgreementStatus.choices,
                               default=AgreementStatus.DRAFT,
                               db_default=AgreementStatus.DRAFT)
@@ -757,6 +776,14 @@ class Agreement(signoff.Approvable, models.Model):
             models.UniqueConstraint(fields=["external_id"],
                                     condition=~models.Q(external_id=""),
                                     name="uq_contracts_agr_external_id"),
+            # BR-032: один и тот же договор не заводят дважды. ``nulls_distinct
+            # =False`` — у старых записей даты нет, и без него два договора с
+            # тем же контрагентом и номером «без даты» прошли бы как разные
+            # (в SQL NULL ≠ NULL). Сервис проверяет то же заранее, чтобы
+            # отказ был текстом, а не IntegrityError.
+            models.UniqueConstraint(fields=["counterparty", "number", "signed_date"],
+                                    nulls_distinct=False,
+                                    name="uq_contracts_agr_cp_number_date"),
             # Доля аванса — именно ДОЛЯ. Без этой проверки в колонку рано
             # или поздно попадут проценты (70 вместо 0.7), и сумма аванса
             # молча вырастет в сто раз.
@@ -781,6 +808,84 @@ class Agreement(signoff.Approvable, models.Model):
     @property
     def has_fixed_amount(self) -> bool:
         return self.contract_type != AgreementType.FRAMEWORK
+
+    def term_expired_message(self, on_date=None) -> str | None:
+        """BR-036: после «Срока действия по» новые оплаты по договору не
+        заводятся. ``None`` — можно (срок не задан или не истёк).
+
+        Живёт на модели, а не в ``agreement_service``: спрашивают его
+        сервисы оплат, а ``agreement_service`` сам импортирует один из них —
+        проверка в сервисе замкнула бы импорты в кольцо. Уже заведённые
+        оплаты правило не трогает: оно про НОВЫЕ документы.
+        """
+        from django.utils import timezone
+
+        day = on_date or timezone.localdate()
+        if self.end_date is None or day <= self.end_date:
+            return None
+        return (f"Срок действия договора {self.number} истёк "
+                f"{self.end_date:%d.%m.%Y} — новые оплаты по нему не заводятся")
+
+
+class AgreementItem(models.Model):
+    """Позиция договора — что именно покупается и на сколько (ТЗ 9.2).
+
+    Две разновидности строки, и различает их ``request_item_key``:
+
+    * **из заявки** — ключ позиции заявки конструктора «Запросы», по которой
+      заключён договор (``Agreement.request_id``), вида
+      ``"<ключ повторяемой группы>:<номер строки>"``. Наименование и единица
+      берутся из заявки, а количество не может превысить её ОСТАТОК —
+      плановое количество минус уже законтрактованное другими договорами
+      (``agreement_service.request_items``). Отдельной таблицы «План
+      закупок» в платформе нет: план — это одобренные заявки, и позиция
+      плана адресуется своей строкой заявки;
+    * **ручная** — ключ пустой. Договор без заявки тоже бывает (импорт
+      реестра, договор, заведённый до появления заявок), и позиции у него
+      вписывают руками.
+
+    ``amount`` nullable: у ОТКРЫТОГО договора суммы нет по существу — ни у
+    договора, ни у позиций (ТЗ 9.3 п. 2). У стандартного она обязательна, и
+    сумма всех позиций обязана совпасть с суммой договора (BR-033) —
+    проверяет сервис, при сохранении и перед отправкой на согласование.
+
+    Позиции живут и умирают вместе с договором (``CASCADE``): удаляется
+    договор только черновиком, а у черновика история позиций никому не нужна.
+    """
+
+    agreement = models.ForeignKey(Agreement, on_delete=models.CASCADE,
+                                  related_name="items")
+    line_no = models.PositiveIntegerField()
+    request_item_key = models.CharField(max_length=100, blank=True, default="",
+                                        db_default="")
+    name = models.CharField(max_length=500)
+    unit = models.CharField(max_length=50, blank=True, default="", db_default="")
+    quantity = models.DecimalField(max_digits=15, decimal_places=3)
+    amount = models.DecimalField(max_digits=18, decimal_places=2,
+                                 null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        ordering = ("agreement", "line_no")
+        constraints = [
+            models.UniqueConstraint(fields=["agreement", "line_no"],
+                                    name="uq_contracts_agr_item_line"),
+            # Одна строка заявки — одна позиция договора: иначе её количество
+            # раздвоилось бы внутри одного документа мимо проверки остатка.
+            models.UniqueConstraint(fields=["agreement", "request_item_key"],
+                                    condition=~models.Q(request_item_key=""),
+                                    name="uq_contracts_agr_item_request"),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0),
+                                   name="ck_contracts_agr_item_qty"),
+            models.CheckConstraint(
+                condition=models.Q(amount__isnull=True) | models.Q(amount__gt=0),
+                name="ck_contracts_agr_item_amount"),
+        ]
+        verbose_name = "Позиция договора"
+        verbose_name_plural = "Позиции договора"
+
+    def __str__(self) -> str:
+        return f"{self.line_no}. {self.name}"
 
 
 class Invoice(signoff.Approvable, models.Model):

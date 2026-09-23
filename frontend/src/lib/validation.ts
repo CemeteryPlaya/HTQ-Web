@@ -41,6 +41,36 @@ export function datesOutOfOrder(
   return start > end;
 }
 
+/** Сегодняшняя дата `YYYY-MM-DD` по часам браузера (не UTC: иначе вечером
+ *  в Алматы «сегодня» было бы уже завтра). */
+export function todayIso(offsetDays = 0): string {
+  const day = new Date();
+  day.setDate(day.getDate() + offsetDays);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+}
+
+/** Границы «Даты договора» (ТЗ 9.2) — те же, что проверяет бэкенд
+ *  (`CONTRACT_DATE_MIN` / `CONTRACT_DATE_AHEAD` в `apps/contracts/schemas.py`). */
+export const CONTRACT_DATE_MIN = '2020-01-01';
+export const CONTRACT_DATE_AHEAD_DAYS = 30;
+
+/** Текст совпадает с бэкендом (`htqweb/date_rules.py`). */
+export const VALID_UNTIL_BEFORE_DATE = 'Срок действия договора раньше даты договора';
+
+/** Что не так с датой договора; `null` — всё в порядке. Пустая — ошибка:
+ *  дата обязательна, по ней проверяется уникальность договора. */
+export function contractDateProblem(value: string | null | undefined): string | null {
+  if (!value) return 'Укажите дату договора';
+  if (value < CONTRACT_DATE_MIN) return 'Дата договора не может быть раньше 01.01.2020';
+  const latest = todayIso(CONTRACT_DATE_AHEAD_DAYS);
+  if (value > latest) {
+    const [y, m, d] = latest.split('-');
+    return `Дата договора не может быть позже ${d}.${m}.${y} (сегодня + ${CONTRACT_DATE_AHEAD_DAYS} дней)`;
+  }
+  return null;
+}
+
 /** Сумма из поля ввода: запятая и точка равноправны, пусто — `null`. */
 export function parseAmount(raw: string | null | undefined): number | null {
   const text = (raw ?? '').trim().replace(',', '.');
