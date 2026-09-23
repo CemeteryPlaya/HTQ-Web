@@ -470,6 +470,15 @@ access-токен, обменивает refresh-cookie на новый access д
 - **Wildcard-сертификат.** Certbot настроен на `--webroot`, то есть HTTP-01, а он
   wildcard не выдаёт. Требуется переход на DNS-01 и доступ к API DNS-провайдера.
   Это блокирующая внешняя зависимость, единственная в подпроекте.
+
+  **На 23.09.2026** выбран другой путь: Cloudflare — запись `*` с
+  проксированием, Origin Certificate на `htq.group` и `*.htq.group`,
+  Universal SSL, режим «Full (strict)» — см. [чеклист
+  поддоменов](deploy/subdomains-runbook.md). Сервис `certbot` в
+  `docker-compose.yml` (профиль `production`) остаётся настроен на
+  HTTP-01/webroot, но его сертификат в активную конфигурацию nginx не
+  подключён: все серверные блоки `infra/nginx/default.conf`, включая
+  `htq.group`, используют Origin Certificate.
 - **nginx** — `server_name` с регуляркой поддомена, проброс `X-HTQ-Company`.
   Домен `htqweb.kz` в примерах этого документа взят условно: боевое имя в
   репозитории не зафиксировано (`server_name _`), его нужно подставить при
