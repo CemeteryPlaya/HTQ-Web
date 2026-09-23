@@ -34,7 +34,8 @@
    ключей, третий источник старой модели, тоже только для переноса
    (Ruling K финальной волны); ``admin.PositionAdmin.save_model`` — читает
    ``obj.permissions`` только чтобы вырезать ``hr_level`` перед сохранением,
-   не для авторизации (Ruling L, фикс-раунд 1 задачи 10 блока I.2).
+   не для авторизации (рулинг R2 блока I.2 «админка должности без
+   hr_level», фикс-раунд 1 задачи 10).
 3. ``Position.permissions`` никто не ПИШЕТ — сиды, ``participant_service``,
    ``group_structures`` перестали. Форму колонки (``"hr_level"``) называют
    только те же три функции плюс ``list_positions_hr_levels`` (отдаёт
@@ -43,9 +44,10 @@
    должностей (``PositionIn.permissions`` → ``position_service``, Ruling B)
    закрыт задачей 10 блока I.2 (схема больше не принимает ``hr_level``): он
    не называет колонку по имени (``model_dump()``), сторожу не виден и
-   намеренно не ловится. ``admin.PositionAdmin.save_model`` (Ruling L) пишет
-   ``obj.permissions`` — но ТОЛЬКО чтобы вырезать ``hr_level``, никогда чтобы
-   его туда положить: последний путь записи, закрытый фикс-раундом 1.
+   намеренно не ловится. ``admin.PositionAdmin.save_model`` (рулинг R2 блока
+   I.2 «админка должности без hr_level») пишет ``obj.permissions`` — но
+   ТОЛЬКО чтобы вырезать ``hr_level``, никогда чтобы его туда положить:
+   последний путь записи, закрытый фикс-раундом 1.
 4. Ручка ``employees/hr-level`` удалена (единственный потребитель снят
    задачей 8; отдавать её из ролей значило бы второй источник правды рядом
    с ``/api/access/v1/me``) — 404 по обоим написаниям пути.
@@ -86,10 +88,11 @@ COLUMN_READERS_ALLOWED: dict[str, frozenset[str]] = {
     "services/position_service.py": frozenset({"serialize"}),     # Ruling B
     # Ruling C; Ruling K (финальная волна) — явный список ключей для переноса.
     "access.py": frozenset({"_level_from_permissions", "_explicit_keys_from_permissions"}),
-    # Ruling L (фикс-раунд 1 задачи 10 блока I.2, находка Info-3 ревью):
-    # django-admin — единственный оставшийся путь записи hr_level (правит
-    # permissions сырым JSON-виджетом, в обход Pydantic-схемы). save_model
-    # ЧИТАЕТ обj.permissions только чтобы вырезать ключ hr_level перед
+    # Рулинг R2 блока I.2 «админка должности без hr_level» (фикс-раунд 1
+    # задачи 10 блока I.2, находка Info-3 ревью): django-admin —
+    # единственный оставшийся путь записи hr_level (правит permissions
+    # сырым JSON-виджетом, в обход Pydantic-схемы). save_model ЧИТАЕТ
+    # обj.permissions только чтобы вырезать ключ hr_level перед
     # сохранением — не для авторизации.
     "admin.py": frozenset({"save_model"}),
 }
@@ -100,8 +103,9 @@ COLUMN_SHAPE_ALLOWED: dict[str, frozenset[str]] = {
     "interface.py": frozenset({"user_has_permission", "list_positions_hr_levels"}),
     "services/position_service.py": frozenset({"serialize", "_serialize_permissions"}),
     "access.py": frozenset({"_level_from_permissions"}),
-    # Ruling L — см. COLUMN_READERS_ALLOWED: save_model ПИШЕТ obj.permissions,
-    # но только чтобы ВЫРЕЗАТЬ hr_level, никогда чтобы его туда положить.
+    # Рулинг R2 блока I.2 «админка должности без hr_level» — см.
+    # COLUMN_READERS_ALLOWED: save_model ПИШЕТ obj.permissions, но только
+    # чтобы ВЫРЕЗАТЬ hr_level, никогда чтобы его туда положить.
     "admin.py": frozenset({"save_model"}),
 }
 
