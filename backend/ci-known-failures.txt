@@ -13,8 +13,9 @@
 #
 # Формат: один pytest nodeid в строке; # — комментарий.
 # Проверено 2026-09-02: все девять падают и на чистом дереве, без правок
-# наблюдаемости (сверено через git stash). С тех пор одна строка снята (см.
-# блок contracts) — сейчас в списке ВОСЕМЬ nodeid.
+# наблюдаемости (сверено через git stash). С тех пор снято три строки: одна —
+# см. блок contracts, две кадровые (карточка Т-2 — тесты проверяли секцию
+# certs, снятую миграцией hr/0016) — сейчас в списке ШЕСТЬ nodeid.
 
 # ── signoff: кворум «достаточно одного» ──────────────────────────────────────
 # TODO: похоже на настоящий баг в движке, а не на устаревший тест — этап с
@@ -49,9 +50,3 @@ apps/signoff/tests/test_processes_api.py::test_returning_a_running_process_for_r
 # владельцы `apps/contracts` не починят тест (или сервис); «внезапно прошёл»
 # от шага полного прогона для этого nodeid — не повод её снимать.
 apps/contracts/tests/test_accountable_funds_requests_api.py::test_approved_advance_reports_are_computed_and_close_the_request
-
-# ── hr: карточка сотрудника ──────────────────────────────────────────────────
-# TODO: EmployeeCard не создаётся при создании/правке сотрудника «с карточкой».
-# К signoff отношения не имеет — отдельная задача.
-apps/hr/tests/test_employees_api.py::test_create_employee_with_card_t2_writes_card
-apps/hr/tests/test_employees_api.py::test_update_employee_with_card_t2_applies_both

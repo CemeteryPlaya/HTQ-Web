@@ -1211,7 +1211,6 @@ def test_create_employee_with_card_t2_writes_card(admin_auth, hr_dep):
         data=_create_body(hr_dep, pos, "with-t2@htq.test", card_t2={
             "financial": {"salary": "450000", "bonus": "50000", "bank_account": "KZ42"},
             "personal": {"citizenship": "KZ", "birth_date": "1990-05-05"},
-            "certs": {"sro_permit_number": "СРО-11"},
         }),
         content_type="application/json", **admin_auth,
     )
@@ -1222,7 +1221,6 @@ def test_create_employee_with_card_t2_writes_card(admin_auth, hr_dep):
     assert str(card.salary) == "450000.00"
     assert card.citizenship == "KZ"
     assert card.birth_date == datetime.date(1990, 5, 5)
-    assert card.sro_permit_number == "СРО-11"
 
 
 @pytest.mark.django_db
@@ -1277,19 +1275,21 @@ def test_create_employee_rolls_back_on_invalid_decimal(admin_auth, hr_dep):
 
 @pytest.mark.django_db
 def test_update_employee_with_card_t2_applies_both(admin_auth, hr_dep):
+    """Правка сотрудника с секцией Т-2 меняет и сотрудника, и карточку —
+    карточка заводится, если её ещё не было."""
     pos = _pos("Инженер-5", hr_dep, weight=314)
     target = _emp(hr_dep, pos, "upd-t2@htq.test", phone="+7700")
 
     resp = Client().put(
         f"{BASE}/{target.id}/",
-        data={"phone": "+77012345678", "card_t2": {"certs": {"sro_permit_number": "СРО-88"}}},
+        data={"phone": "+77012345678", "card_t2": {"personal": {"citizenship": "KZ"}}},
         content_type="application/json", **admin_auth,
     )
     assert resp.status_code == 200, resp.content
 
     target.refresh_from_db()
     assert target.phone == "+77012345678"
-    assert EmployeeCard.objects.get(employee_id=target.id).sro_permit_number == "СРО-88"
+    assert EmployeeCard.objects.get(employee_id=target.id).citizenship == "KZ"
 
 
 @pytest.mark.django_db
