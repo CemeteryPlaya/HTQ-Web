@@ -44,6 +44,8 @@ templates:
       {{- if eq .Status "firing" }}🔴{{ else }}✅{{ end }} {{ .Status | toUpper }} — {{ .CommonLabels.alertname }}
       {{ range .Alerts }}
       {{ .Annotations.summary }}
+      {{- if .Labels.company }}
+      Компания: {{ .Labels.company }}{{ end }}
       Сейчас: {{ template "htqweb.value" . }}{{ template "htqweb.threshold" . }}
       {{- if .Annotations.description }}
 
@@ -65,6 +67,8 @@ templates:
       {{- if eq .Status "firing" }}📌{{ else }}✔️{{ end }} {{ .CommonLabels.alertname }}
       {{ range .Alerts }}
       {{ .Annotations.summary }}
+      {{- if .Labels.company }}
+      Компания: {{ .Labels.company }}{{ end }}
       Сейчас: {{ template "htqweb.value" . }}{{ template "htqweb.threshold" . }}
       {{- if .Annotations.description }}
 

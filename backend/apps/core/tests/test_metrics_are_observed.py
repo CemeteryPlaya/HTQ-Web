@@ -258,3 +258,97 @@ def test_dashboards_use_provisioned_datasource_uids():
         "datasource uid не совпадает с провижиненными (см. "
         "grafana-provisioning/datasources/): %s" % sorted(set(bad))
     )
+
+
+#: Условные метрики tenant-аппок: на пустой схеме их нет в сборе, но панели
+#: и правила на них — такие же tenant-метрики и обязаны следовать компании.
+_CONDITIONAL_TENANT = {
+    PREFIX + "daily_report_staleness_days",        # apps/tasks/metrics.py
+    PREFIX + "signoff_oldest_pending_seconds",     # apps/signoff/metrics.py
+}
+
+
+def _tenant_metric_names() -> set[str]:
+    """Метрики tenant-аппок — их сборщик размечает компанией (веер).
+
+    Отбор по АППКЕ, а не по наличию метки ``company``: нетенантная аппка
+    вправе нести свою метку с тем же именем (``access`` считает разрыв
+    «признак есть, членства нет» по компаниям сам), и её панели сводить по
+    компании незачем.
+    """
+    tenant_apps = set(settings.TENANT_APPS)
+    return {
+        PREFIX + name
+        for app, app_values in metrics.collect_all().items() if app in tenant_apps
+        for name in app_values
+    } | _CONDITIONAL_TENANT
+
+
+def _dashboard_targets():
+    """(файл, dashboard, заголовок панели, expr) по всем панелям, включая вложенные."""
+    for path in sorted(DASHBOARDS.glob("*.json")):
+        dash = json.loads(path.read_text(encoding="utf-8"))
+
+        def walk(panels):
+            for panel in panels:
+                for target in panel.get("targets") or []:
+                    if target.get("expr"):
+                        yield path.name, dash, panel.get("title", "?"), target["expr"]
+                yield from walk(panel.get("panels") or [])
+
+        yield from walk(dash.get("panels") or [])
+
+
+_COMPANY_FILTER = r'\{[^}]*company=~"\$company"'
+_FOLDED = re.compile(r"\b(sum|max|min|avg)\s+without\s*\(\s*company\s*\)")
+
+
+def test_tenant_metrics_on_dashboards_follow_the_company_variable(company_schema):
+    """Панель tenant-метрики фильтрует по переменной «Компания» и сводит
+    компании в одну цифру: при «All» — число по группе, как до веера, а не
+    по серии на компанию."""
+    _skip_without_infra()
+    tenant = _tenant_metric_names()
+    assert tenant, "веер не собрал ни одной tenant-метрики — сломан сам сбор"
+
+    bad = []
+    for file, dash, title, expr in _dashboard_targets():
+        names = set(_METRIC_RE.findall(expr)) & tenant
+        if not names:
+            continue
+        variables = {v.get("name") for v in dash.get("templating", {}).get("list", [])}
+        if "company" not in variables:
+            bad.append(f"{file}: нет переменной company, а панель «{title}» её требует")
+        for name in sorted(names):
+            if not re.search(re.escape(name) + _COMPANY_FILTER, expr):
+                bad.append(f'{file} «{title}»: {name} без {{company=~"$company"}}')
+        if not _FOLDED.search(expr):
+            bad.append(f"{file} «{title}»: не сведено sum/max without (company)")
+    assert bad == [], bad
+
+
+_AGGREGATION = re.compile(r"\b(sum|max|min|avg|count)\b")
+_BY = re.compile(r"\bby\s*\(([^)]*)\)")
+
+
+def test_alert_rules_keep_the_company_of_tenant_metrics(company_schema):
+    """Правило на tenant-метрике либо не агрегирует вовсе (серия на
+    компанию), либо агрегирует ``by (company, …)`` — иначе уведомление не
+    назовёт компанию, ради чего метка и заведена."""
+    _skip_without_infra()
+    yaml = pytest.importorskip("yaml")
+    tenant = _tenant_metric_names()
+
+    bad = []
+    for group in yaml.safe_load(RULES.read_text(encoding="utf-8"))["groups"]:
+        for rule in group["rules"]:
+            for query in rule.get("data") or []:
+                expr = (query.get("model") or {}).get("expr") or ""
+                if not set(_METRIC_RE.findall(expr)) & tenant:
+                    continue
+                if _AGGREGATION.search(expr) and not any(
+                    "company" in [part.strip() for part in by.split(",")]
+                    for by in _BY.findall(expr)
+                ):
+                    bad.append(f"{rule['uid']}: {expr}")
+    assert bad == [], bad

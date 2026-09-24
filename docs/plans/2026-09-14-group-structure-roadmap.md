@@ -771,10 +771,9 @@ request.mark_paid`, `contracts.advance_payment.record_payment`,
 бэкфилл внешней иерархии по оргструктуре и прочие границы блока I.2 —
 [§9](#9-блок-i2--решения-по-ходу-исполнения-и-отложенное).
 
-Открыто без хозяина — бизнес-метрики tenant-аппок (`hr`, `tasks`,
-`contracts`, `signoff`) сборщик не собирает (`backend/apps/core/metrics.py:103-110`),
-шесть правил алертинга на них не могут сработать —
-[followups п. 3](../multi-company-tenancy-followups.md), сверка §6.4 п. 1.
+Бизнес-метрики tenant-аппок — закрыто блоком K
+([план](2026-09-24-post-refactoring-leftovers.md)): веер по компаниям с
+меткой `company`.
 
 Итоговая сверка требований руководства по коду и тестам — задача 6 блока J:
 [2026-09-23-group-structure-verification.md](2026-09-23-group-structure-verification.md) —
