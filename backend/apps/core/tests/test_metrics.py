@@ -104,47 +104,126 @@ def test_business_metrics_are_discovered_across_apps():
     # Список жёсткий намеренно: дискавери рефлективное, и «аппка перестала
     # отдавать метрики» выглядит для него ровно так же, как «аппки нет» —
     # то есть молча. Заводите metrics.py — дописывайте сюда. Тенантных
-    # (settings.TENANT_APPS) здесь нет и быть не должно: их сборщик
-    # пропускает явно, см. два теста ниже.
+    # (settings.TENANT_APPS) здесь нет: без компаний со схемой их сборщик не
+    # зовёт — см. test_tenant_apps_without_companies_export_nothing.
     assert {"approvals", "mail", "conference", "cms", "media_files",
             "messenger", "users"} <= set(collected)
 
 
+def _hr_employee(slug: str, *, user_id=None) -> None:
+    """Сотрудник в схеме компании ``slug`` (минимальный набор полей)."""
+    import datetime as dt
+
+    from apps.hr.models import Department, Employee, Position
+    from htqweb.tenancy.db import use_company
+
+    with use_company(slug):
+        dep = Department.objects.create(name="Отдел", path="otdel")
+        pos = Position.objects.create(title="Инженер", department=dep, weight=300)
+        Employee.objects.create(
+            first_name="Т", last_name="Тестов", email=f"t@{slug}.test",
+            department=dep, position=pos, hire_date=dt.date(2024, 1, 9),
+            user_id=user_id,
+        )
+
+
+def _by_company(collected: dict, app: str, name: str) -> dict:
+    """``{slug: сумма по сериям}`` одной метрики tenant-аппки."""
+    spec = collected[app][name]
+    assert spec["labels"][0] == "company"
+    out: dict = {}
+    for labels, number in spec["values"]:
+        out[labels[0]] = out.get(labels[0], 0) + number
+    return out
+
+
 @pytest.mark.django_db
-def test_tenant_apps_are_not_collected():
-    """Правка: тенантные аппки (settings.TENANT_APPS) сборщик пропускает
-    явно, вместо падения на модели без контекста компании (см. докстринг
-    apps/core/metrics.py). Сегодня metrics.py среди тенантных аппок есть
-    только у tasks, но правило проверяется по TENANT_APPS, а не по имени."""
+def test_tenant_apps_without_companies_export_nothing():
+    """Компаний нет — tenant-метрик нет вовсе (а не нули): «не из чего
+    считать» и «ноль» обязаны выглядеть по-разному."""
     from django.conf import settings
 
     from apps.core import metrics as business
 
     collected = business.collect_all()
     assert set(settings.TENANT_APPS) & set(collected) == set()
-    assert "tasks" not in collected
 
 
-@pytest.mark.django_db
-def test_tenant_apps_are_skipped_without_calling_collect(monkeypatch, caplog):
-    """Пропуск — до вызова collect(), не после её падения: tasks.metrics.collect
-    вообще не должен быть вызван, а в логе должна остаться внятная запись,
-    не fallback."""
-    import logging
+def test_tenant_metrics_are_collected_per_company_with_a_company_label(two_company_schemas):
+    """Веер: collect() каждой tenant-аппки зовётся в схеме КАЖДОЙ компании,
+    серия несёт слаг первой меткой, цифры одной компании не видны в другой."""
+    from django.conf import settings
 
     from apps.core import metrics as business
-    from apps.tasks import metrics as tasks_metrics
+
+    alpha, beta = two_company_schemas
+    _hr_employee(alpha)                         # без учётной записи
+
+    collected = business.collect_all()
+
+    assert set(settings.TENANT_APPS) <= set(collected)
+    assert _by_company(collected, "hr", "hr_active_without_account") == {alpha: 1, beta: 0}
+    assert collected["hr"]["hr_employees"]["labels"] == ["company", "status"]
+    assert _by_company(collected, "hr", "hr_employees") == {alpha: 1}
+    for app in settings.TENANT_APPS:
+        for name, spec in collected[app].items():
+            assert spec["labels"][0] == business.COMPANY_LABEL, (app, name)
+
+
+def test_company_without_schema_is_skipped_not_duplicated(two_company_schemas, company_row):
+    """Строка реестра без схемы: search_path в несуществующую схему
+    проваливается в public, и без проверки «компания» отдала бы чужие цифры
+    под своим именем. Её нет в сериях вовсе."""
+    from apps.core import metrics as business
+
+    collected = business.collect_all()
+    assert set(_by_company(collected, "hr", "hr_active_without_account")) == set(two_company_schemas)
+
+
+def test_archived_company_is_not_collected(two_company_schemas):
+    from apps.companies.models import Company, CompanyStatus
+    from apps.core import metrics as business
+
+    alpha, beta = two_company_schemas
+    Company.objects.filter(slug=beta).update(status=CompanyStatus.ARCHIVED)
+
+    collected = business.collect_all()
+    assert set(_by_company(collected, "hr", "hr_active_without_account")) == {alpha}
+
+
+def test_one_failing_company_does_not_take_the_others_down(
+        two_company_schemas, monkeypatch, fallback_log_mode):
+    from apps.core import metrics as business
+    from apps.hr import metrics as hr_metrics
+    from htqweb.tenancy.context import current_company
+
+    alpha, beta = two_company_schemas
+    real = hr_metrics.collect
+
+    def flaky():
+        if current_company() == alpha:
+            raise RuntimeError("подсчёт кадров упал")
+        return real()
+
+    monkeypatch.setattr(hr_metrics, "collect", flaky)
+    collected = business.collect_all()
+
+    assert set(_by_company(collected, "hr", "hr_active_without_account")) == {beta}
+    assert "tasks" in collected and "approvals" in collected
+
+
+def test_a_failing_company_is_loud_for_developers(two_company_schemas, monkeypatch):
+    from apps.core import metrics as business
+    from apps.hr import metrics as hr_metrics
+    from htqweb.fallback import FallbackNotAllowed
 
     def boom():
-        raise AssertionError("collect() тенантной аппки не должен вызываться")
+        raise RuntimeError("подсчёт кадров упал")
 
-    monkeypatch.setattr(tasks_metrics, "collect", boom)
-    with caplog.at_level(logging.INFO, logger="apps.core.metrics"):
-        collected = business.collect_all()
-
-    assert "tasks" not in collected
-    assert any("tasks" in record.message and "тенант" in record.message
-               for record in caplog.records)
+    monkeypatch.setattr(hr_metrics, "collect", boom)
+    with pytest.raises(FallbackNotAllowed) as info:
+        business.collect_all()
+    assert isinstance(info.value.__cause__, RuntimeError)
 
 
 @pytest.mark.django_db

@@ -93,44 +93,6 @@ _KNOWN_UNOBSERVED: set[str] = {
     PREFIX + "company_schemas_behind",
 }
 
-# Обратная дыра, и она серьёзнее предыдущей: панели и правила ЕСТЬ, а метрик
-# под ними НЕТ.
-#
-# ``collect_all()`` пропускает тенантные аппки (``settings.TENANT_APPS`` —
-# hr, tasks, contracts, signoff): без веера по компаниям их ``collect()``
-# вызывать нечем, см. докстринг ``apps/core/metrics.py``. Дашборды и правила
-# на эти метрики при этом написаны и лежат в infra/logging.
-#
-# Чем это опасно на проде: у всех зависящих правил стоит ``noDataState: OK``,
-# то есть «просроченные задачи», «уволенные с активным доступом», «перерасход
-# бюджета» и «маршруты без согласующих» будут ВЕЧНО ЗЕЛЁНЫМИ. Не шторм
-# алертов, а тишина, неотличимая от порядка, — ровно то, против чего написан
-# этот файл.
-#
-# TODO: закрывается подпроектом 3 (веер сбора метрик по компаниям). Удалять
-# панели и правила до тех пор НЕ надо: они станут верными в тот же день, когда
-# появится веер, а снятые придётся писать заново.
-_BLOCKED_ON_TENANT_FANOUT = {
-    PREFIX + name for name in (
-        "contracts_accountable_funds_outstanding",
-        "contracts_agreements",
-        "contracts_awaiting_accounting",
-        "contracts_awaiting_accounting_amount",
-        "contracts_budget_lines_overspent",
-        "contracts_signoff_desync",
-        "daily_reports_today",
-        "hr_active_without_account",
-        "hr_employees",
-        "hr_terminated_still_active",
-        "projects_active",
-        "signoff_pending_stale",
-        "signoff_processes",
-        "signoff_routes_without_approvers",
-        "tasks",
-        "tasks_overdue",
-    )
-}
-
 
 def _infra_text() -> str:
     """Всё, что Grafana реально читает: дашборды и файл правил, одной строкой."""
@@ -149,8 +111,7 @@ def _skip_without_infra():
         pytest.skip("infra/logging не смонтирован (запуск не с хоста)")
 
 
-@pytest.mark.django_db
-def test_every_collected_metric_is_observed():
+def test_every_collected_metric_is_observed(company_schema):
     """Каждая считаемая метрика попадает на дашборд или в правило алерта."""
     _skip_without_infra()
 
@@ -172,8 +133,7 @@ def test_every_collected_metric_is_observed():
     )
 
 
-@pytest.mark.django_db
-def test_every_referenced_metric_exists_in_code():
+def test_every_referenced_metric_exists_in_code(company_schema):
     """Каждая упомянутая в конфигах метрика существует в коде.
 
     Опечатка или переименование оставляют панель пустой навсегда, и пустая
@@ -189,7 +149,6 @@ def test_every_referenced_metric_exists_in_code():
         }
         | _DEFINED_OUTSIDE_APPS
         | _CONDITIONAL
-        | _BLOCKED_ON_TENANT_FANOUT
     )
 
     referenced = set(_METRIC_RE.findall(_infra_text()))
