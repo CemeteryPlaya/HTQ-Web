@@ -57,6 +57,9 @@ test_tenant_app_tasks_use_company_task_or_are_marked_dispatchers``. У
 Сбой постановки одной компании не должен обрывать веер по остальным —
 ``fan_out_to_companies`` ловит исключение на каждой компании отдельно,
 логирует его и идёт дальше.
+
+Задача архивной компании не выполняется вовсе (``is_archived`` в обёртке
+``company_task``) — архив только для чтения.
 """
 
 from __future__ import annotations
@@ -93,6 +96,18 @@ def company_task(fn):
                 "Если аргумент передан — проверьте, что он ИМЕНОВАННЫЙ, а не позиционный: "
                 "декоратор читает только kwargs."
             )
+        # Архив — только чтение и для фона (спека архива §8.2): задача,
+        # поставленная до архивации, не должна дописать данные. Веер
+        # (fan_out_to_companies) архив и так не ставит — это для задач уже в
+        # очереди. Пропуск штатный, поэтому logger.info, а не fallback().
+        # Импорт ленивый — как в fan_out_to_companies ниже.
+        from apps.companies.interface import is_archived
+
+        if is_archived(slug):
+            logger.info("company_task %s.%s skipped: company %s is archived",
+                        fn.__module__, fn.__qualname__, slug)
+            return None
+
         with use_company(slug):
             return fn(*args, **kwargs)
 

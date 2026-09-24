@@ -11,9 +11,10 @@
 русском, потому что уходят пользователю как есть.
 
 Гейт ``LastActiveCompany`` — требование режима перехода
-(docs/plans/2026-09-14-group-structure-roadmap.md, §3 п.4): архив = 404 на
-весь трафик компании, и пока компания одна, это 404 на contracts/signoff
-целиком. Гейт стоит здесь, а не во вьюхе, чтобы действовать и для CLI.
+(docs/plans/2026-09-14-group-structure-roadmap.md, §3 п.4): архив — только
+чтение (docs/plans/2026-09-25-archive-read-only-spec.md), и без действующей
+компании платформе негде писать — contracts/signoff живут только в схемах
+компаний. Гейт стоит здесь, а не во вьюхе, чтобы действовать и для CLI.
 """
 
 from __future__ import annotations
@@ -222,8 +223,9 @@ def archive_company(slug: str) -> tuple[Company, bool]:
     others = Company.objects.filter(status=CompanyStatus.ACTIVE).exclude(pk=company.pk)
     if not others.exists():
         raise LastActiveCompany(
-            f"{slug} — единственная действующая компания: её архив закрыл бы "
-            "404-м весь трафик платформы, включая contracts и signoff."
+            f"{slug} — единственная действующая компания: в архиве она "
+            "закрылась бы на запись, и платформе негде было бы работать — "
+            "contracts и signoff живут только в схемах компаний."
         )
     company.status = CompanyStatus.ARCHIVED
     company.archived_at = timezone.now()

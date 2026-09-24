@@ -8,6 +8,7 @@ from django.test import Client
 from apps.access.models import Level, PositionRole, Role, RoleAssignment, ScopeKind
 from apps.access.tests.helpers import BASE, auth, superuser_token, token
 from apps.access.tests.helpers import grant
+from apps.companies.models import Company, CompanyStatus
 
 
 @pytest.fixture
@@ -27,7 +28,7 @@ def test_me_without_company_is_not_an_error(client):
     assert resp.status_code == 200
     assert resp.json() == {"company": None, "permissions": {}, "depth": {},
                            "hidden_pages": [], "subordinate_companies": [],
-                           "inherited_from": []}
+                           "inherited_from": [], "company_archived": False}
 
 
 @pytest.mark.django_db
@@ -51,6 +52,7 @@ def test_me_returns_permissions_of_the_request_company(client, company_schema):
         "hidden_pages": [],
         "subordinate_companies": [],
         "inherited_from": [],
+        "company_archived": False,
     }
 
 
@@ -204,3 +206,36 @@ def test_roles_for_still_returns_three_values(django_user_model):
     assert roles_for(user) == ["staff"]
     user.is_superuser = True
     assert roles_for(user) == ["admin"]
+
+
+@pytest.mark.django_db
+def test_me_in_archived_company_caps_everything_at_read(client, company_schema):
+    """Архив — только чтение (спека архива §7.1): сюда доходит только
+    суперпользователь, и его ``admin`` везде понижается до ``read`` — кнопки,
+    скрытые по usePermissions, исчезают сами. Сервер на уровень не опирается:
+    запись закрыта middleware."""
+    slug = company_schema["slug"]
+    Company.objects.filter(slug=slug).update(status=CompanyStatus.ARCHIVED)
+
+    resp = client.get(f"{BASE}/me", HTTP_X_HTQ_COMPANY=slug,
+                      **auth(superuser_token(company=slug)))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["company_archived"] is True
+    assert body["permissions"], "у суперпользователя модули есть всегда"
+    assert {entry["level"] for entry in body["permissions"].values()} == {"read"}
+    assert body["depth"]
+    assert all(flags == ["view"] for flags in body["depth"].values())
+
+
+@pytest.mark.django_db
+def test_me_in_active_company_is_not_capped(client, company_schema):
+    slug = company_schema["slug"]
+
+    resp = client.get(f"{BASE}/me", HTTP_X_HTQ_COMPANY=slug,
+                      **auth(superuser_token(company=slug)))
+
+    body = resp.json()
+    assert body["company_archived"] is False
+    assert {entry["level"] for entry in body["permissions"].values()} == {"admin"}

@@ -18,12 +18,14 @@ module-scoped фикстуры ``two_company_schemas`` из корневого c
 чтобы представления одного теста не наследовались следующим.
 """
 
+import io
+
 import pytest
 from django.core.management import CommandError, call_command
 from django.db import connection
 
 from apps.companies.models import Company, CompanyStatus
-from apps.companies.services import holding_views
+from apps.companies.services import holding_views, lifecycle
 
 
 def _drop_holding_schema() -> None:
@@ -126,3 +128,42 @@ def test_restoring_an_already_active_company_is_idempotent(two_companies):
     # Компания уже активна — восстановление ничего не ломает.
     call_command("company_restore", "--company", alpha)
     assert Company.objects.get(slug=alpha).status == CompanyStatus.ACTIVE
+
+
+@pytest.mark.django_db
+def test_migrate_companies_includes_archived_schema(two_companies):
+    """Схема архива идёт в ногу с кодом (спека архива §8.1): иначе после
+    первой новой миграции её не прочесть и не восстановить."""
+    live, dead = list(two_companies)
+    Company.objects.filter(slug=dead).update(status=CompanyStatus.ARCHIVED)
+    out = io.StringIO()
+
+    call_command("migrate_companies", "--plan", stdout=out)
+
+    assert f"{dead}:" in out.getvalue()
+    assert f"{live}:" in out.getvalue()
+
+
+@pytest.mark.django_db
+def test_migrate_companies_migrates_archived_and_restore_succeeds(two_companies, monkeypatch):
+    """Настоящий прогон, а не --plan: схема архива мигрируется, после чего
+    восстановление пересобирает сводки без ошибки. Сами миграции подменены —
+    тем же приёмом, что в test_holding_views.py (схемы пула уже на текущей
+    версии, а настоящий migrate_company внутри транзакции теста не нужен)."""
+    from apps.companies.services import migration_service
+
+    live, dead = list(two_companies)
+    lifecycle.archive_company(dead)
+    migrated = []
+
+    def fake_migrate(slug, *, app_label=None, target=None, plan=False):
+        migrated.append(slug)
+        return {"applied": {}, "planned": []}
+
+    monkeypatch.setattr(migration_service, "migrate_company", fake_migrate)
+    call_command("migrate_companies", stdout=io.StringIO())
+
+    assert sorted(migrated) == sorted([live, dead])
+    company, changed = lifecycle.restore_company(dead)
+    assert changed is True
+    assert Company.objects.get(slug=dead).status == CompanyStatus.ACTIVE

@@ -41,10 +41,12 @@ from django.http import JsonResponse
 from django.utils.decorators import method_decorator
 
 from htqweb.http import ApiView, api_view, json_error
+from htqweb.tenancy import archive
 from htqweb.tenancy.context import current_company_or_none
 
 from . import schemas
-from .models import Role
+from .models import Level, LEVEL_ORDER, Role
+from apps.access import depth as depth_flags
 from apps.access import registry
 from .services import assignment, catalog, holders as holders_svc, resolve
 from .services import hierarchy
@@ -395,11 +397,28 @@ class MeView(AccessView):
         company = self.company
         resolution = (None if request.token.is_superuser
                       else resolve.resolve_for(request.token, company))
+        permissions = resolve.permissions_for(request.token, company,
+                                              resolution=resolution)
+        depth_map = resolve.depth_map(request.token, company, resolution=resolution)
+        archived = archive.is_archived(getattr(request, "company", None))
+        if archived:
+            # Архив — только чтение (спека архива §7.1). Понижение — ТОЛЬКО в
+            # ответе: сервер на уровень не опирается, запись в архив закрыта
+            # CompanyContextMiddleware для всех. Сюда доходит лишь
+            # суперпользователь (api_view), но правило не завязано на это.
+            permissions = {
+                module: ({**entry, "level": Level.READ}
+                         if LEVEL_ORDER[entry["level"]] > LEVEL_ORDER[Level.READ]
+                         else entry)
+                for module, entry in permissions.items()
+            }
+            depth_map = {node: [depth_flags.VIEW]
+                         for node, flags in depth_map.items()
+                         if depth_flags.VIEW in flags}
         return schemas.MeRead(
             company=company,
-            permissions=resolve.permissions_for(request.token, company,
-                                                resolution=resolution),
-            depth=resolve.depth_map(request.token, company, resolution=resolution),
+            permissions=permissions,
+            depth=depth_map,
             hidden_pages=[
                 row["route"] for row in registry.page_nodes()
                 if resolve.page_hidden(request.token, row["route"], company,
@@ -412,4 +431,5 @@ class MeView(AccessView):
             # наследуются, поэтому [] и без обращения к resolution.
             inherited_from=(list(resolution.inherited_from)
                             if resolution is not None else []),
+            company_archived=archived,
         )
