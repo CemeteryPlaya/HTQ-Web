@@ -126,7 +126,7 @@ from __future__ import annotations
 #: Блок L (docs/plans/2026-09-24-block-l-gate-remaining-apps.md) добавляет по
 #: одной аппке на задачу; у ``media_files`` модуль прав называется ``media``.
 TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies",
-                                             "media_files", "conference"})
+                                             "media_files", "conference", "messenger"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -467,4 +467,22 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
     # ``auth=None`` (подпись ``?sig=&exp=`` / общий секрет SFU) — в реестр
     # не вносятся.
     "conference": {},
+    # messenger (блок L, задача 6). Сотруднику — module="messenger" (read для
+    # чтения и отправки, write для правки комнат, состава и своих сообщений;
+    # employee-basic агрегируется в write, access/0011: messenger.rooms без
+    # delete), модерация /admin/* — level="admin" (бывшие admin=True).
+    # Участие в комнате и авторство сообщения режет не гейт, а сервисы
+    # (messenger_service/membership_service/attachment_service).
+    # serve_attachment/serve_attachment_thumb — auth=None с подписью
+    # ?sig=&exp= — в реестр не вносятся.
+    "messenger": {
+        # бейдж шапки: msg_svc.unread_total(request.token.user_id) — свой
+        # счётчик, без параметра; зовётся и с голого домена (Header), где
+        # гейта модуля быть не может — компании нет.
+        "unread_count": "self",
+        # свои E2EE-ключи: device_id и ключ пишутся под request.token.user_id.
+        "upload_keys": "self",
+        # users/me — свой профиль в мессенджере по request.token.user_id.
+        "me": "self",
+    },
 }

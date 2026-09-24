@@ -27,8 +27,8 @@ import pytest
 from django.test import Client
 
 from apps.messenger.models import Message, Room, RoomParticipant
+from apps.messenger.tests.helpers import auth_header
 from apps.users.models import User, UserStatus
-from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/messenger/v1/messages"
 
@@ -51,12 +51,12 @@ def other_user(db):
 
 @pytest.fixture
 def auth(user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    return auth_header(user)
 
 
 @pytest.fixture
 def other_auth(other_user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(other_user)['access']}"}
+    return auth_header(other_user)
 
 
 @pytest.fixture
@@ -105,7 +105,7 @@ def test_send_message_403_when_sender_not_participant(db):
     )
     stranger.set_password("S3cret!Pass1")
     stranger.save()
-    stranger_auth = {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(stranger)['access']}"}
+    stranger_auth = auth_header(stranger)
 
     other = User.objects.create(
         username="msg2-owner", email="msg2-owner@htq.test", password="x", status=UserStatus.ACTIVE,

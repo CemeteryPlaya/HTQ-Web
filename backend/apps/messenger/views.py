@@ -11,8 +11,10 @@ key_service}.py``.
 исключение — ``GET /attachments/file/{id}``/``.../thumb`` (``get_optional_user``
 исходника: браузер не может передать ``Authorization`` внутри ``<img src>``,
 поэтому JWT опционален, а sig/exp — обязательный публичный контракт; см.
-``serve_attachment``/``serve_attachment_thumb`` ниже). Никакого ``admin=True``
-эндпойнта в messenger нет — участие в комнате (``RoomParticipant``) сужает
+``serve_attachment``/``serve_attachment_thumb`` ниже). С блока L каждая
+ручка сотрудника стоит под ``module="messenger", level="read"|"write"``, а
+три ``/admin/*`` — под ``level="admin"`` вместо прежнего ``admin=True``
+(``apps/access/self_service.py``, три ``self``). Участие в комнате (``RoomParticipant``) сужает
 видимость, СТРОГИЙ participant-scoping воспроизведён от исходника буквально,
 включая порядок проверок (см. ``messenger_service.py``/``attachment_service.py``).
 
@@ -33,8 +35,8 @@ app/api/v1/read.py`` регистрирует ТОТ ЖЕ итоговый пу�
 ``keys.py`` (``upload_keys``/``get_user_keys``).
 
 Плюс workers/admin под-задача (PLAN.md §6.5, последняя под-задача messenger):
-``admin.py`` (3 эндпойнта, ``require_admin`` исходника -> ``api_view(auth=
-"jwt", admin=True)``), ``users.py`` (4 регистрации роутов — ``me``×2 +
+``admin.py`` (3 эндпойнта, ``require_admin`` исходника; с блока L —
+``api_view(module="messenger", level="admin")``), ``users.py`` (4 регистрации роутов — ``me``×2 +
 ``search``×2, Р2 у обоих — см. докстринги секций ниже).
 
 ``internal.py`` (S2S ``/internal/bot-message``, общий секрет
@@ -100,12 +102,12 @@ def _datetime_query(request, name: str) -> datetime.datetime | None:
 
 # ── /rooms/ (rooms.py, 4 эндпойнта) ────────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="messenger", level="read")
 def _list_rooms(request):
     return msg_svc.list_rooms(request.token.user_id)
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.RoomCreateRequest, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.RoomCreateRequest, status=201, module="messenger", level="write")
 def _create_room(request, data: schemas.RoomCreateRequest):
     try:
         return msg_svc.create_room(request.token.user_id, data)
@@ -121,7 +123,7 @@ def rooms_collection(request):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="messenger", level="read")
 def _get_room(request, room_id: int):
     try:
         return msg_svc.get_room(request.token.user_id, room_id)
@@ -131,7 +133,7 @@ def _get_room(request, room_id: int):
         return json_error(str(exc), 404)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.RoomUpdateRequest)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.RoomUpdateRequest, module="messenger", level="write")
 def _update_room(request, room_id: int, data: schemas.RoomUpdateRequest):
     try:
         return msg_svc.update_room(request.token.user_id, room_id, data)
@@ -145,7 +147,7 @@ def _update_room(request, room_id: int, data: schemas.RoomUpdateRequest):
         return json_error(str(exc), 400)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="messenger", level="write")
 def _delete_room(request, room_id: int):
     """``DELETE /rooms/{id}`` — роут, которого не было ни у FastAPI-источника,
     ни в первом порте, хотя фронт звал его с самого начала
@@ -207,7 +209,7 @@ def _membership_error(exc: Exception):
     raise exc
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.ParticipantsAddRequest, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.ParticipantsAddRequest, status=201, module="messenger", level="write")
 def add_participants(request, room_id: int, data: schemas.ParticipantsAddRequest):
     try:
         added = membership_service.add_participants(
@@ -218,7 +220,7 @@ def add_participants(request, room_id: int, data: schemas.ParticipantsAddRequest
     return {"added": added}
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="messenger", level="write")
 def _remove_participant(request, room_id: int, user_id: int):
     try:
         membership_service.remove_participant(request, request.token.user_id, room_id, user_id)
@@ -227,7 +229,7 @@ def _remove_participant(request, room_id: int, user_id: int):
     return HttpResponse(status=204)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.ParticipantRoleRequest)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.ParticipantRoleRequest, module="messenger", level="write")
 def _set_participant_role(request, room_id: int, user_id: int, data: schemas.ParticipantRoleRequest):
     try:
         membership_service.set_role(request, request.token.user_id, room_id, user_id, data.role)
@@ -244,7 +246,7 @@ def participant_detail(request, room_id: int, user_id: int):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="messenger", level="read")
 def users_presence(request):
     """GET /users/presence?ids=1,2,3 — онлайн-статусы пачкой (Redis, см.
     services/presence.py). Отдаётся любому залогиненному: присутствие в
@@ -267,7 +269,7 @@ def users_presence(request):
 # ── /messages/* (messages.py, 4 эндпойнта — 4-й, mark_message_read,
 # поглощает read.py::mark_read, см. докстринг модуля выше) ─────────────────
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.MessageCreateRequest, status=201)
+@api_view(methods=("POST",), auth="jwt", body=schemas.MessageCreateRequest, status=201, module="messenger", level="read")
 def send_message(request, data: schemas.MessageCreateRequest):
     try:
         return msg_svc.send_message(request.token.user_id, data)
@@ -284,7 +286,7 @@ def send_message(request, data: schemas.MessageCreateRequest):
         return json_error(str(exc), 400)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.MessageUpdateRequest)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.MessageUpdateRequest, module="messenger", level="write")
 def _edit_message(request, message_id: uuid.UUID, data: schemas.MessageUpdateRequest):
     """PATCH /messages/{id} — редактирование своего сообщения (see
     ``messenger_service.edit_message``: is_edited + прежний текст в аудит +
@@ -299,7 +301,7 @@ def _edit_message(request, message_id: uuid.UUID, data: schemas.MessageUpdateReq
         return json_error(str(exc), 403)
 
 
-@api_view(methods=("DELETE",), auth="jwt")
+@api_view(methods=("DELETE",), auth="jwt", module="messenger", level="write")
 def _delete_message(request, message_id: uuid.UUID):
     """DELETE /messages/{id} — тумбстоун для участников, полная видимость у
     админ-выдачи (``messenger_service.delete_message``)."""
@@ -329,7 +331,7 @@ def unread_count(request):
     return {"total": msg_svc.unread_total(request.token.user_id)}
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="messenger", level="read")
 def list_messages(request, room_id: int):
     if not RoomParticipant.objects.filter(room_id=room_id, user_id=request.token.user_id).exists():
         return json_error("Not a participant", 403)
@@ -352,7 +354,7 @@ def list_messages(request, room_id: int):
     )
 
 
-@api_view(methods=("POST",), auth="jwt")
+@api_view(methods=("POST",), auth="jwt", module="messenger", level="read")
 def mark_message_read(request, room_id: int, message_id: uuid.UUID):
     try:
         msg_svc.mark_read(request.token.user_id, room_id, message_id)
@@ -361,7 +363,7 @@ def mark_message_read(request, room_id: int, message_id: uuid.UUID):
     return HttpResponse(status=204)
 
 
-@api_view(methods=("POST",), auth="jwt")
+@api_view(methods=("POST",), auth="jwt", module="messenger", level="read")
 def publish_typing(request, room_id: int):
     """Порт ``messages.py::publish_typing``. Socket.IO-вещание
     (``user_typing``) — Р2/Socket.IO-под-задача, НЕ портируется здесь, см.
@@ -374,7 +376,7 @@ def publish_typing(request, room_id: int):
 
 # ── /attachments/* (attachments.py, 3 эндпойнта) ────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt", status=201)
+@api_view(methods=("POST",), auth="jwt", status=201, module="messenger", level="read")
 def upload_attachment(request):
     """Порт ``attachments.py::upload_attachment`` (multipart/form-data:
     ``room_id`` + ``file``)."""
@@ -476,7 +478,7 @@ def upload_keys(request, data: schemas.UserKeyUploadRequest):
     return key_service.serialize_key(key)
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="messenger", level="read")
 def get_user_keys(request, user_id: int):
     """Порт ``keys.py::get_user_keys``."""
     keys = key_service.get_user_keys(user_id)
@@ -488,9 +490,10 @@ def get_user_keys(request, user_id: int):
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Авторизация: ``require_admin`` исходника -> ``api_view(auth="jwt",
-# admin=True)`` (единый платформенный admin-гейт, см. htqweb/http.py). Ни
-# один из трёх не участвует в participant-scoping — это модерация/аудит,
-# admin видит ВСЁ.
+# module="messenger", level="admin")`` (блок L; до него — ``admin=True``:
+# ``is_staff`` без роли модерацию больше не открывает, открывает роль
+# ``services-admin``). Ни один из трёх не участвует в participant-scoping —
+# это модерация/аудит, admin видит ВСЁ.
 #
 # Ни один из трёх эндпойнтов исходника не объявляет ``response_model`` —
 # FastAPI-сторона сериализует «сырые» ORM-объекты как есть, без
@@ -584,7 +587,7 @@ def _serialize_message_admin(message: Message, sender: dict | None = None) -> di
     }
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="messenger", level="admin")
 def admin_list_rooms(request):
     """Порт ``admin.py::list_all_rooms`` — GET /admin/rooms (``limit``/
     ``offset`` query, буквальные границы источника: ``limit`` 1..500
@@ -605,7 +608,7 @@ def admin_list_rooms(request):
     ]
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="messenger", level="admin")
 def admin_list_room_messages(request, room_id: int):
     """Порт ``admin.py::list_messages_in_room`` — GET /admin/rooms/{id}/messages.
 
@@ -634,7 +637,7 @@ def admin_list_room_messages(request, room_id: int):
     ]
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True)
+@api_view(methods=("POST",), auth="jwt", module="messenger", level="admin")
 def admin_trigger_history_archive(request):
     """Порт ``admin.py::trigger_history_archive`` — POST /admin/history/archive
     (``days`` query, 1..90, по умолчанию 7). Ручной backfill/re-run —
@@ -693,7 +696,7 @@ def me(request):
     }
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="messenger", level="read")
 def search_users(request):
     """Порт ``users.py::search_users`` — GET /users/search (оба написания).
 

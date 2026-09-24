@@ -18,8 +18,8 @@ import pytest
 from django.test import Client
 
 from apps.messenger.models import UserKey
+from apps.messenger.tests.helpers import auth_header
 from apps.users.models import User, UserStatus
-from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/messenger/v1/keys"
 
@@ -42,12 +42,12 @@ def other_user(db):
 
 @pytest.fixture
 def auth(user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    return auth_header(user)
 
 
 @pytest.fixture
 def other_auth(other_user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(other_user)['access']}"}
+    return auth_header(other_user)
 
 
 def _payload(**overrides):
