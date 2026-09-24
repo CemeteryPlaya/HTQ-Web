@@ -1155,7 +1155,8 @@ def _exempt_return_offenders(views_text: str, names):
                              f"ручку — {why} (строка {node.lineno})")
 
 
-def _url_view_offenders(urls_text: str, views_text: str):
+def _url_view_offenders(urls_text: str, views_text: str,
+                        siblings: dict[str, str] | None = None):
     """(имя, причина) для каждой вьюхи-функции из ``urls.py``, у которой нет
     декоратора с ``api_view`` и которая не читается как ДИСПЕТЧЕР по
     ``request.method`` (``_is_dispatcher``) — тело, состоящее только из
@@ -1195,6 +1196,16 @@ def _url_view_offenders(urls_text: str, views_text: str):
         if view is None:
             continue
         if isinstance(view, ast.Call) and _base_name(view.func) in {"as_view", "include"}:
+            continue
+        if (isinstance(view, ast.Attribute) and isinstance(view.value, ast.Name)
+                and view.value.id in (siblings or {})):
+            # Вьюха соседнего модуля аппки (``webhooks.gmail_push`` у mail,
+            # блок L): обязана нести декоратор с ``api_view`` в СВОЁМ файле;
+            # гейт или ``auth=None`` дальше — забота сторожей выше, не этого.
+            _functions, sibling_gated = _module_functions(
+                ast.parse(siblings[view.value.id]))
+            if view.attr not in sibling_gated:
+                yield ast.unparse(view), "функция соседнего модуля без api_view"
             continue
         if isinstance(view, ast.Attribute) and isinstance(view.value, ast.Name) \
                 and view.value.id == "views":
@@ -1257,7 +1268,11 @@ def test_every_url_view_of_translated_apps_carries_api_view():
         views_text = (backend / "apps" / app / "views.py").read_text(encoding="utf-8")
         exempt = _DISPATCHERS_WITH_OWN_LOGIC.get(app, {})
         seen: set[str] = set()
-        for name, why in _url_view_offenders(urls.read_text(encoding="utf-8"), views_text):
+        siblings = {path.stem: path.read_text(encoding="utf-8")
+                    for path in (backend / "apps" / app).glob("*.py")
+                    if path.stem not in {"views", "urls", "__init__"}}
+        for name, why in _url_view_offenders(urls.read_text(encoding="utf-8"), views_text,
+                                             siblings):
             seen.add(name)
             if name in exempt:
                 continue
@@ -1507,3 +1522,143 @@ def test_guard_checks_every_return_of_an_exempt_dispatcher():
                                           {"own_logic_ok", "own_logic_bad"}))
     assert [name for name, _why in found] == ["own_logic_bad"]
     assert found[0][1].startswith("исключение: own_logic_bad возвращает не гейтированную ручку")
+
+
+# ── Блок L: имя модуля и инвариант L1 ──────────────────────────────────────
+
+from htqweb.middleware.service_gate import APP_LABEL_TO_SERVICE
+
+#: Аппки блока L (каталог аппки → модуль прав). Проверяются, как только
+#: аппка попала в TRANSLATED_APPS (задачи 4–9 плана блока L).
+BLOCK_L_APPS = ("media_files", "conference", "messenger", "mail", "cms", "approvals")
+
+#: Уровень employee-basic в модуле (спека блока L §4) — выписан руками.
+EMPLOYEE_BASIC_LEVEL = {
+    "media": "write", "conference": "read", "messenger": "write",
+    "mail": "read", "cms": "read", "approvals": "write",
+}
+
+#: Ручки, бывшие admin=True до блока L (спека §6). Их уровень обязан быть
+#: строго выше уровня employee-basic в модуле — иначе агрегат базовой роли
+#: открыл бы их всем.
+FORMER_ADMIN_HANDLES = {
+    "media_files": {"list_files"},
+    "messenger": {"admin_list_rooms", "admin_list_room_messages",
+                  "admin_trigger_history_archive"},
+    "mail": {"_list_mailboxes", "_create_mailbox", "_get_mailbox", "_update_mailbox",
+             "_delete_mailbox", "reset_mailbox_password", "archive_mailbox",
+             "restore_mailbox", "mailbox_status", "mailbox_lookup",
+             "_get_mail_settings", "_put_mail_settings", "test_mail_connection",
+             "mailbox_coverage", "_reconcile_report", "_reconcile_apply",
+             "_list_aliases", "_create_alias", "delete_alias", "set_forwarding"},
+    "cms": {"_list_contact_requests", "contact_request_stats", "_get_contact_request",
+            "_update_contact_request", "_delete_contact_request", "reply_contact_request",
+            "_create_news", "_update_news", "_delete_news", "translate_news",
+            "_create_category", "_update_category", "_delete_category",
+            "_create_tag", "_update_tag", "_delete_tag",
+            "_list_home_sections_admin", "_create_home_section", "_delete_home_section",
+            "_update_home_section", "home_sections_reorder", "home_items_collection",
+            "home_items_reorder", "_update_home_item", "_delete_home_item"},
+    "approvals": {"_create_project", "_delete_project", "create_source",
+                  "update_source", "delete_source", "add_row", "delete_row"},
+}
+
+_LEVEL_RANK = {"none": 0, "read": 1, "write": 2, "admin": 3}
+
+
+def _module_of(app: str) -> str:
+    return APP_LABEL_TO_SERVICE.get(app, app)
+
+
+def _string_constants(text: str) -> dict[str, str]:
+    tree = ast.parse(text)
+    return {
+        target.id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+        for target in node.targets if isinstance(target, ast.Name)
+    }
+
+
+def _gates(text: str):
+    """(lineno, имя ручки, module, level) для каждого api_view с module=.
+
+    module/level — литералы; имя-ссылка разрешается через строковые
+    константы модуля, иначе остаётся ``None`` (сторож уровня выше это уже
+    ловит)."""
+    lines = text.splitlines()
+    constants = _string_constants(text)
+    for start, end, block in _iter_api_view_calls(text):
+        gate = _gate_of(block)
+        if "module" not in gate:
+            continue
+        module, level = gate["module"], gate.get("level")
+        if isinstance(module, _Ref):
+            module = constants.get(module)
+        if isinstance(level, _Ref):
+            level = constants.get(level)
+        yield start, _qualified_name(lines, start, end) or "?", module, level
+
+
+def _translated_block_l_apps():
+    return [app for app in BLOCK_L_APPS if app in self_service.TRANSLATED_APPS]
+
+
+def test_module_name_matches_the_app():
+    """module= в аппке равен имени её модуля прав: у media_files это media,
+    и module="media_files" молча дал бы уровень none всем."""
+    offenders = []
+    for app in sorted(self_service.TRANSLATED_APPS):
+        expected = _module_of(app)
+        for path in _app_modules(app):
+            for lineno, name, module, _level in _gates(path.read_text(encoding="utf-8")):
+                if module is not None and module != expected:
+                    offenders.append(f"{path.name}:{lineno} {name}: module={module!r}, "
+                                     f"ожидался {expected!r}")
+    assert offenders == [], offenders
+
+
+def test_employee_basic_passes_every_non_admin_handle():
+    """Перенести как есть: ручка, не бывшая admin=True, пускает держателя
+    одной employee-basic."""
+    offenders = []
+    for app in _translated_block_l_apps():
+        basic = _LEVEL_RANK[EMPLOYEE_BASIC_LEVEL[_module_of(app)]]
+        for path in _app_modules(app):
+            for lineno, name, _module, level in _gates(path.read_text(encoding="utf-8")):
+                if name in FORMER_ADMIN_HANDLES.get(app, set()) or level is None:
+                    continue
+                if _LEVEL_RANK[level] > basic:
+                    offenders.append(f"{app}:{path.name}:{lineno} {name}: level={level}")
+    assert offenders == [], offenders
+
+
+def test_no_former_admin_handle_is_open_to_employee_basic():
+    """Инвариант L1: бывшая admin=True требует уровень выше базовой роли."""
+    offenders = []
+    for app in _translated_block_l_apps():
+        basic = _LEVEL_RANK[EMPLOYEE_BASIC_LEVEL[_module_of(app)]]
+        seen = set()
+        for path in _app_modules(app):
+            for lineno, name, _module, level in _gates(path.read_text(encoding="utf-8")):
+                if name not in FORMER_ADMIN_HANDLES.get(app, set()):
+                    continue
+                seen.add(name)
+                if level is None or _LEVEL_RANK[level] <= basic:
+                    offenders.append(f"{app}:{lineno} {name}: level={level}")
+        missing = FORMER_ADMIN_HANDLES.get(app, set()) - seen
+        offenders += [f"{app}: {name} — бывшая admin=True без гейта" for name in sorted(missing)]
+    assert offenders == [], offenders
+
+
+_WRONG_MODULE_SAMPLE = '''
+@api_view(methods=("GET",), module="media_files", level="read")
+def some_handle(request):
+    return {}
+'''
+
+
+def test_guard_reads_the_module_of_a_gate():
+    assert [(name, module) for _l, name, module, _lv in _gates(_WRONG_MODULE_SAMPLE)] \
+        == [("some_handle", "media_files")]
