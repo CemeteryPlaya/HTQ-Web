@@ -39,7 +39,10 @@ def _view(**gate):
 def _request(tok: str, company: str | None = None):
     request = RequestFactory().get("/probe", **auth(tok))
     if company is not None:
-        request.company = {"slug": company}
+        # как словарь реестра из CompanyContextMiddleware
+        # (companies.interface._serialize) — api_view читает is_active для
+        # архивного режима.
+        request.company = {"slug": company, "is_active": True}
     return request
 
 

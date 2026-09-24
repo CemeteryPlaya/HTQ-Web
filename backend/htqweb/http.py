@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 from apps.core.services import ServiceDisabled, disabled_payload
 from htqweb.authn.jwt import AuthError, decode_token
 from htqweb.authn.rbac import require_admin
+from htqweb.tenancy import archive
 
 
 def json_error(detail, status: int) -> JsonResponse:
@@ -111,6 +112,14 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                     current = getattr(request, "company", None)
                     if current is not None and payload.company != current["slug"]:
                         return json_error("Forbidden", 403)
+                    # Архив — только чтение, и читает его только
+                    # суперпользователь (htqweb/tenancy/archive.py). Запись
+                    # сюда уже не доходит — её отбил CompanyContextMiddleware.
+                    # Стоит после сверки claim, но до admin=True и гейта
+                    # модуля: суперпользователь их проходит и так, остальным
+                    # считать права в архиве незачем.
+                    if archive.is_archived(current) and not payload.is_superuser:
+                        return archive.not_found_response()
                     # Single platform admin-gate seam (R1): every admin route
                     # goes through this one predicate — htqweb.authn.rbac.
                     # require_admin — instead of each app keeping its own
@@ -150,6 +159,13 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                         if LEVEL_ORDER[have] < LEVEL_ORDER[level]:
                             return json_error("Forbidden", 403)
                 else:
+                    # Анонимные ручки на поддомене архива не отвечают: кто
+                    # пришёл, не узнать, а читать архив может только
+                    # суперпользователь. Кроме выдачи токена — без неё он
+                    # архив не прочтёт вовсе.
+                    if (archive.is_archived(getattr(request, "company", None))
+                            and request.path not in archive.TOKEN_PATHS):
+                        return archive.not_found_response()
                     request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
                 if body is not None:
                     try:
