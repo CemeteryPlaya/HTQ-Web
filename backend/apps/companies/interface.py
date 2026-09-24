@@ -174,6 +174,35 @@ def active_company_slugs(*, fresh: bool = False) -> list[str]:
     return _cached("company:active", produce)
 
 
+def migratable_company_slugs(*, fresh: bool = False) -> list[str]:
+    """Slug'и всех компаний реестра — действующих И архивных, по алфавиту.
+
+    Для ``migrate_companies``: схема архивной компании обязана идти в ногу с
+    кодом, иначе после первой же новой миграции её нельзя ни прочесть
+    (архив — только чтение), ни восстановить (``restore_company`` упадёт на
+    пересборке сводок). Сводки холдинга по-прежнему только по действующим —
+    ``active_company_slugs``.
+    """
+    def produce():
+        return sorted(Company.objects.values_list("slug", flat=True))
+
+    if fresh:
+        return produce()
+    return _cached("company:migratable", produce)
+
+
+def is_archived(slug: str) -> bool:
+    """Компания этого слага в архиве. Незаведённый slug — ``False``.
+
+    Для ``@company_task`` (``htqweb/tenancy/celery.py``): задача архивной
+    компании не выполняется. Незаведённый slug — не архив намеренно: молча
+    пропустить опечатку значило бы спрятать её; её уронит тот, кто полезет
+    в схему.
+    """
+    company = get_company(slug)
+    return bool(company) and not company["is_active"]
+
+
 def user_company_slugs(user_id: int) -> list[str]:
     """Компании, в которых пользователь имеет право работать."""
     return _cached(
@@ -228,14 +257,29 @@ def user_may_enter_company(user_id: int, slug: str) -> bool:
     носитель прав) и механизм для не-сотрудников, это тело обрастёт
     условиями, а сигнатура и место вызова останутся прежними — вызывающему
     не придётся ничего переписывать.
+
+    Архивную компанию (спека docs/plans/2026-09-25-archive-read-only-spec.md
+    §6.1) читает только суперпользователь, и членство ему для этого не
+    нужно: заводить его в архив некому и незачем. Участникам архива — нет.
     """
+    company = get_company(slug)
+    if company is None:
+        return False
+    if not company["is_active"]:
+        from apps.users import interface as users
+
+        return users.is_superuser(user_id)
     return slug in user_company_slugs(user_id)
 
 
 def default_company_slug(user_id: int) -> str | None:
-    """Компания, куда пользователя пускать сразу после входа."""
+    """Компания, куда пользователя пускать сразу после входа.
+
+    Только действующая: архивная по умолчанию увела бы человека после входа
+    в 404 (спека архива §6.2).
+    """
     row = (CompanyMembership.objects
-           .filter(user_id=user_id)
+           .filter(user_id=user_id, company__status=CompanyStatus.ACTIVE)
            .order_by("-is_default", "company__slug")
            .values_list("company__slug", flat=True)
            .first())

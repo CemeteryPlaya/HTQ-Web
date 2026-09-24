@@ -233,6 +233,20 @@ def staff_user_ids() -> list[int]:
     )
 
 
+def is_superuser(user_id: int) -> bool:
+    """Пользователь — суперпользователь с ДЕЙСТВУЮЩЕЙ учёткой.
+
+    Единственный потребитель — ``apps.companies.interface.
+    user_may_enter_company``: архивную компанию читает только
+    суперпользователь (спека docs/plans/2026-09-25-archive-read-only-spec.md
+    §6.1). Неактивная учётка — ``False`` по той же причине, что в
+    ``staff_user_ids``: токена ей всё равно не выдадут.
+    """
+    require_service("users")
+    return User.objects.filter(pk=user_id, is_superuser=True,
+                               status=UserStatus.ACTIVE).exists()
+
+
 def list_users_brief(search: str | None = None, limit: int = 100) -> list[dict]:
     """Users as picker options — ``{id, username, email, first_name,
     last_name, full_name, is_active}`` — for hr's ``/employees/users/`` GET

@@ -93,7 +93,10 @@ class CompaniesView(ApiView):
 
 class MyCompaniesView(ApiView):
     """``GET me`` — компании, где у пользователя есть членство. Без гейта модуля:
-    это то, что нужно КАЖДОМУ вошедшему, чтобы переключиться."""
+    это то, что нужно КАЖДОМУ вошедшему, чтобы переключиться.
+
+    Суперпользователю — плюс архивные компании реестра с ``is_archived``.
+    """
 
     @method_decorator(api_view(methods=("GET",), auth="jwt"))
     def get(self, request):
@@ -104,7 +107,7 @@ class MyCompaniesView(ApiView):
             .select_related("company")
             .order_by("-is_default", "company__name")
         )
-        return [
+        result = [
             schemas.MyCompany(
                 slug=m.company.slug, subdomain=m.company.subdomain,
                 name=m.company.name, kind=m.company.kind,
@@ -112,6 +115,19 @@ class MyCompaniesView(ApiView):
             )
             for m in rows
         ]
+        # Архив читает только суперпользователь, и членство ему не нужно
+        # (спека архива §6.3) — поэтому все архивные компании реестра, а не
+        # его членства; после действующих, компанией по умолчанию не бывают.
+        if request.token.is_superuser:
+            archived = Company.objects.filter(status=CompanyStatus.ARCHIVED).order_by("name")
+            result += [
+                schemas.MyCompany(
+                    slug=c.slug, subdomain=c.subdomain, name=c.name, kind=c.kind,
+                    is_default=False, is_current=(c.slug == current), is_archived=True,
+                )
+                for c in archived
+            ]
+        return result
 
 
 # ── Реестр ───────────────────────────────────────────────────────────────

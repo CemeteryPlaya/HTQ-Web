@@ -4,6 +4,7 @@ from apps.companies import interface
 from apps.companies.models import (
     Company, CompanyKind, CompanyMembership, CompanyModule, CompanyStatus,
 )
+from apps.users.models import User, UserStatus
 
 
 @pytest.fixture
@@ -142,3 +143,81 @@ def test_is_holding_unknown_slug_is_false_not_an_exception():
     спрашивающий уже получил компанию из контекста запроса, и «такой
     компании нет» значит для него ровно «не холдинг» — не повод падать."""
     assert interface.is_holding("нет-такой-компании") is False
+
+
+def _company(slug, status=CompanyStatus.ACTIVE):
+    return Company.objects.create(slug=slug, name=slug, kind=CompanyKind.SERVICE,
+                                  status=status)
+
+
+def _user(username, *, superuser=False, status=UserStatus.ACTIVE):
+    return User.objects.create(username=username, email=f"{username}@htq.test",
+                               password="x", status=status, is_superuser=superuser)
+
+
+@pytest.mark.django_db
+def test_superuser_enters_archived_company_without_membership():
+    _company("dead", CompanyStatus.ARCHIVED)
+    root = _user("root", superuser=True)
+    assert interface.user_may_enter_company(root.id, "dead") is True
+
+
+@pytest.mark.django_db
+def test_member_does_not_enter_archived_company():
+    dead = _company("dead", CompanyStatus.ARCHIVED)
+    alice = _user("alice")
+    CompanyMembership.objects.create(user_id=alice.id, company=dead, is_default=True)
+    assert interface.user_may_enter_company(alice.id, "dead") is False
+
+
+@pytest.mark.django_db
+def test_inactive_superuser_does_not_enter_archived_company():
+    _company("dead", CompanyStatus.ARCHIVED)
+    root = _user("root", superuser=True, status=UserStatus.SUSPENDED)
+    assert interface.user_may_enter_company(root.id, "dead") is False
+
+
+@pytest.mark.django_db
+def test_superuser_still_needs_membership_in_active_company():
+    """Асимметрия намеренная (спека §13 п. 2): в действующую компанию —
+    как прежде, по членству."""
+    _company("live")
+    root = _user("root", superuser=True)
+    assert interface.user_may_enter_company(root.id, "live") is False
+
+
+@pytest.mark.django_db
+def test_default_company_skips_archived():
+    dead = _company("a-dead", CompanyStatus.ARCHIVED)
+    live = _company("b-live")
+    alice = _user("alice")
+    CompanyMembership.objects.create(user_id=alice.id, company=dead, is_default=True)
+    CompanyMembership.objects.create(user_id=alice.id, company=live)
+    assert interface.default_company_slug(alice.id) == "b-live"
+
+
+@pytest.mark.django_db
+def test_default_company_is_none_when_every_membership_is_archived():
+    dead = _company("dead", CompanyStatus.ARCHIVED)
+    alice = _user("alice")
+    CompanyMembership.objects.create(user_id=alice.id, company=dead, is_default=True)
+    assert interface.default_company_slug(alice.id) is None
+
+
+@pytest.mark.django_db
+def test_is_archived():
+    _company("dead", CompanyStatus.ARCHIVED)
+    _company("live")
+    assert interface.is_archived("dead") is True
+    assert interface.is_archived("live") is False
+    # Незаведённый slug — не архив: спрятать опечатку пропуском нельзя,
+    # её уронит тот, кто полезет в схему.
+    assert interface.is_archived("no-such") is False
+
+
+@pytest.mark.django_db
+def test_migratable_company_slugs_include_archived():
+    _company("b-dead", CompanyStatus.ARCHIVED)
+    _company("a-live")
+    assert interface.migratable_company_slugs(fresh=True) == ["a-live", "b-dead"]
+    assert interface.active_company_slugs(fresh=True) == ["a-live"]

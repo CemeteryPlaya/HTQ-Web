@@ -41,9 +41,11 @@ def test_me_lists_active_memberships_and_marks_current(client, group):
     assert res.status_code == 200
     assert res.json() == [
         {"slug": "hi-tech-qazaqstan", "subdomain": None, "name": "Hi-Tech Qazaqstan",
-         "kind": "construction", "is_default": True, "is_current": True},
+         "kind": "construction", "is_default": True, "is_current": True,
+         "is_archived": False},
         {"slug": "hi-tech-group", "subdomain": None, "name": "Hi-Tech Group",
-         "kind": "holding", "is_default": False, "is_current": False},
+         "kind": "holding", "is_default": False, "is_current": False,
+         "is_archived": False},
     ]
 
 
@@ -53,6 +55,33 @@ def test_me_without_company_header_marks_nothing_current(client, group):
     res = client.get(f"{BASE}/me", **auth(token()))
     assert res.status_code == 200
     assert res.json()[0]["is_current"] is False
+
+
+@pytest.mark.django_db
+def test_me_adds_archived_companies_for_superuser(client, group):
+    """Суперпользователю — все архивные компании реестра, без членства, после
+    действующих; компанией по умолчанию архив не бывает."""
+    CompanyMembership.objects.create(company=group["htq"], user_id=9, is_default=True)
+
+    res = client.get(f"{BASE}/me", **headers(
+        "hi-tech-qazaqstan", superuser_token(company="hi-tech-qazaqstan")))
+
+    assert res.status_code == 200
+    assert [(c["slug"], c["is_archived"], c["is_default"]) for c in res.json()] == [
+        ("hi-tech-qazaqstan", False, True),
+        ("keg", True, False),
+    ]
+
+
+@pytest.mark.django_db
+def test_me_on_archived_subdomain_marks_it_current(client, group):
+    res = client.get(f"{BASE}/me", **headers("keg", superuser_token(company="keg")))
+
+    assert res.status_code == 200
+    assert res.json() == [
+        {"slug": "keg", "subdomain": None, "name": "KEG", "kind": "service",
+         "is_default": False, "is_current": True, "is_archived": True},
+    ]
 
 
 # ── Реестр ───────────────────────────────────────────────────────────────

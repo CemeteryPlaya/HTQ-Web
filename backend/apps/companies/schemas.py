@@ -44,6 +44,7 @@ class MyCompany(BaseModel):
     kind: str
     is_default: bool
     is_current: bool
+    is_archived: bool = False
 
 
 class CompanyPatch(BaseModel):
