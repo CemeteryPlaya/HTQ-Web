@@ -970,20 +970,65 @@ def _mentions_request_method(node: ast.AST) -> bool:
     )
 
 
+def _rooted_in_request(node: ast.AST) -> bool:
+    """``True``, если выражение — цепочка атрибутов/индексов/вызовов, в
+    основании которой имя ``request`` (``request.method``,
+    ``request.content_type.lower()``)."""
+    while True:
+        if isinstance(node, ast.Name):
+            return node.id == "request"
+        if isinstance(node, (ast.Attribute, ast.Subscript)):
+            node = node.value
+        elif isinstance(node, ast.Call):
+            node = node.func
+        else:
+            return False
+
+
+def _is_request_method_call(call: ast.Call) -> bool:
+    """Вызов метода над выражением, укоренённым в ``request``
+    (``request.method.upper()``, ``request.content_type.startswith(...)``),
+    но не вызов самого ``request.<что-то>()`` верхнего уровня как функции
+    чужого модуля: получатель метода обязан быть не голым ``request``."""
+    func = call.func
+    return (isinstance(func, ast.Attribute)
+            and not isinstance(func.value, ast.Name)
+            and _rooted_in_request(func.value))
+
+
+def _is_plain_argument(node: ast.AST) -> bool:
+    """Аргумент, который ничего не выполняет: имя или ``*имя``."""
+    if isinstance(node, ast.Starred):
+        node = node.value
+    return isinstance(node, ast.Name)
+
+
 def _is_405_or_gated_call(value: ast.AST, gated: set[str]) -> tuple[bool, str | None]:
     """``value`` — вызов гейтированной ручки того же файла либо ответ 405
-    (``json_error(…, 405)`` или имя, содержащее ``method_not_allowed``)."""
+    (``json_error(…, 405)`` или имя, содержащее ``method_not_allowed``).
+
+    Аргументы вычисляются ДО входа в вызываемую функцию, то есть до гейта:
+    у ответа 405 в них не бывает вызовов, у гейтированной ручки — только
+    имена, ``*args``/``**kwargs`` и именованные аргументы с именем
+    (``return _list(request, id=id)``). ``_list(request, wipe())`` — нарушение
+    «вызов до гейта в диспетчере»."""
     if not isinstance(value, ast.Call):
         return False, "return — не вызов функции"
     name = _base_name(value.func)
+    arguments = (*value.args, *(kw.value for kw in value.keywords))
+    if any(isinstance(sub, ast.Call) for arg in arguments for sub in ast.walk(arg)):
+        return False, (f"вызов до гейта в диспетчере: в аргументах "
+                       f"return {name or '?'}(…) вызов — выполнится раньше гейта")
     if name and "method_not_allowed" in name:
         return True, None
     if name == "json_error" and any(
-        isinstance(arg, ast.Constant) and arg.value == 405
-        for arg in (*value.args, *(kw.value for kw in value.keywords))
+        isinstance(arg, ast.Constant) and arg.value == 405 for arg in arguments
     ):
         return True, None
     if name in gated:
+        if not all(_is_plain_argument(arg) for arg in arguments):
+            return False, (f"вызов до гейта в диспетчере: return {name}(…) — "
+                           f"аргумент не имя, а выражение")
         return True, None
     return False, f"return {name or '?'}(…) — не гейтированная ручка того же файла и не 405"
 
@@ -998,9 +1043,17 @@ def _dispatch_branch_ok(stmts: list, gated: set[str]) -> tuple[bool, str | None]
 def _dispatch_if_ok(node: ast.If, gated: set[str]) -> tuple[bool, str | None]:
     """``if``, чьё условие упоминает ``request.method``, тело — один
     гейтированный/405 ``return``; ``elif`` — тот же разбор рекурсивно;
-    голый ``else`` — та же проверка ветки, что и у ``if``."""
+    голый ``else`` — та же проверка ветки, что и у ``if``.
+
+    Условие вычисляется до гейта, поэтому вызовы в нём допустимы только
+    как методы над выражением, укоренённым в ``request``
+    (``request.method.upper()``); ``if request.method == "GET" and
+    services.wipe():`` — нарушение «вызов до гейта в диспетчере»."""
     if not _mentions_request_method(node.test):
         return False, "условие if не про request.method"
+    if any(isinstance(sub, ast.Call) and not _is_request_method_call(sub)
+           for sub in ast.walk(node.test)):
+        return False, "вызов до гейта в диспетчере: в условии if вызов не над request"
     ok, reason = _dispatch_branch_ok(node.body, gated)
     if not ok:
         return False, reason
@@ -1062,6 +1115,46 @@ def _is_dispatcher(fn, gated: set[str]) -> tuple[bool, str | None]:
     return True, None
 
 
+def _module_functions(views_tree: ast.Module) -> tuple[dict, set[str]]:
+    """Функции верхнего уровня модуля по имени и имена тех из них, что
+    несут декоратор с ``api_view`` (напрямую или через фабрику файла)."""
+    gate_names = _gate_decorator_names(views_tree)
+    functions = {node.name: node for node in views_tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    gated = {
+        name for name, fn in functions.items()
+        if any(_is_gate_decorator(d, gate_names) for d in fn.decorator_list)
+    }
+    return functions, gated
+
+
+def _exempt_return_offenders(views_text: str, names):
+    """(имя, причина) для функции из исключения
+    ``_DISPATCHERS_WITH_OWN_LOGIC``, у которой хоть один ``return`` в теле
+    (``ast.walk`` — на любой глубине ветвления) возвращает не вызов
+    гейтированной функции того же файла и не 405 — по тем же правилам
+    аргументов, что у строгого диспетчера. Исключение снимает только
+    требование «ветвиться лишь по ``request.method``», а не проверку, куда
+    ведут ветки: иначе новый ``return _purge(request)`` без гейта в
+    исключённой ручке прошёл бы молча."""
+    functions, gated = _module_functions(ast.parse(views_text))
+    for name in sorted(names):
+        fn = functions.get(name)
+        if fn is None:
+            continue
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Return):
+                continue
+            if node.value is None:
+                yield name, (f"исключение: {name} возвращает не гейтированную "
+                             f"ручку — голый return (строка {node.lineno})")
+                continue
+            ok, why = _is_405_or_gated_call(node.value, gated)
+            if not ok:
+                yield name, (f"исключение: {name} возвращает не гейтированную "
+                             f"ручку — {why} (строка {node.lineno})")
+
+
 def _url_view_offenders(urls_text: str, views_text: str):
     """(имя, причина) для каждой вьюхи-функции из ``urls.py``, у которой нет
     декоратора с ``api_view`` и которая не читается как ДИСПЕТЧЕР по
@@ -1082,13 +1175,7 @@ def _url_view_offenders(urls_text: str, views_text: str):
     считается гейтированной целиком.
     """
     views_tree = ast.parse(views_text)
-    gate_names = _gate_decorator_names(views_tree)
-    functions = {node.name: node for node in views_tree.body
-                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    gated_functions = {
-        name for name, fn in functions.items()
-        if any(_is_gate_decorator(d, gate_names) for d in fn.decorator_list)
-    }
+    functions, gated_functions = _module_functions(views_tree)
     factory_bound: set[str] = set()
     for node in views_tree.body:
         if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
@@ -1134,6 +1221,8 @@ def _url_view_offenders(urls_text: str, views_text: str):
 #: ``request.method`` и поэтому не проходят строгий признак диспетчера, но
 #: чьи ветки ведут только в гейтированные ручки — проверено глазами, с
 #: причиной. Запись, которую сторож больше не находит, — устарела и валит тест.
+#: Исключение снимает только требование строгого диспетчера: каждый ``return``
+#: такой функции сторож всё равно проверяет (``_exempt_return_offenders``).
 _DISPATCHERS_WITH_OWN_LOGIC: dict[str, dict[str, str]] = {
     "hr": {
         "documents_collection": "POST разветвляется по Content-Type между "
@@ -1156,22 +1245,27 @@ def test_every_url_view_of_translated_apps_carries_api_view():
     ведут только в гейтированные функции. Запись оттуда, для которой сторож
     в этом прогоне не нашёл ни одной находки с тем же именем, — устарела
     (ручку переписали/удалили, а исключение забыли снять) и тоже нарушение,
-    ровно тем же приёмом, что ``stale`` у ``self_service`` выше."""
+    ровно тем же приёмом, что ``stale`` у ``self_service`` выше.
+
+    Исключение не снимает проверку целиком: каждый ``return`` в теле
+    исключённой функции обязан вернуть вызов гейтированной функции того же
+    файла или 405 (``_exempt_return_offenders``)."""
     backend = pathlib.Path(__file__).resolve().parents[3]
     offenders = []
     for app in sorted(self_service.TRANSLATED_APPS):
         urls = backend / "apps" / app / "urls.py"
-        views = backend / "apps" / app / "views.py"
+        views_text = (backend / "apps" / app / "views.py").read_text(encoding="utf-8")
         exempt = _DISPATCHERS_WITH_OWN_LOGIC.get(app, {})
         seen: set[str] = set()
-        for name, why in _url_view_offenders(urls.read_text(encoding="utf-8"),
-                                             views.read_text(encoding="utf-8")):
+        for name, why in _url_view_offenders(urls.read_text(encoding="utf-8"), views_text):
             seen.add(name)
             if name in exempt:
                 continue
             offenders.append(f"apps/{app}/urls.py: {name} — {why}")
         for name in sorted(set(exempt) - seen):
             offenders.append(f"исключение устарело: {app}.{name}")
+        for name, why in _exempt_return_offenders(views_text, set(exempt) & seen):
+            offenders.append(f"apps/{app}/views.py: {why}")
     assert offenders == [], offenders
 
 
@@ -1259,6 +1353,11 @@ urlpatterns = [
     path("made-a/", views.made_a),
     path("made-b/", views.made_b),
     path("plain-a/", views.plain_a),
+    path("upper/<int:id>/", views.upper_dispatch),
+    path("argcall/", views.argcall_dispatch),
+    path("testcall/", views.testcall_dispatch),
+    path("own-ok/", views.own_logic_ok),
+    path("own-bad/", views.own_logic_bad),
 ]
 '''
 
@@ -1326,6 +1425,47 @@ def else_dispatch(request):
         return json_error("Method Not Allowed", 405)
 
 
+def upper_dispatch(request, id):
+    """Метод над request в условии и имена в аргументах — допустимы."""
+    if request.method.upper() == "GET":
+        return _list(request, id=id)
+    return json_error("Method Not Allowed", 405)
+
+
+def argcall_dispatch(request):
+    """Побочный эффект в аргументе выполнится до гейта (M1 финального ревью)."""
+    if request.method == "GET":
+        return _list(request, services.wipe_everything())
+    return json_error("Method Not Allowed", 405)
+
+
+def testcall_dispatch(request):
+    """Побочный эффект в условии выполнится до гейта (M1 финального ревью)."""
+    if request.method == "GET" and services.wipe_everything():
+        return _list(request)
+    return json_error("Method Not Allowed", 405)
+
+
+def own_logic_ok(request):
+    """Исключение: ветвится по Content-Type, но все return — гейт или 405."""
+    if request.method == "POST":
+        kind = (request.content_type or "").lower()
+        if kind.startswith("multipart/"):
+            return _create(request)
+        return _list(request)
+    return json_error("Method Not Allowed", 405)
+
+
+def own_logic_bad(request):
+    """Исключение, в которое дописали ручку без гейта (M3 финального ревью)."""
+    if request.method == "POST":
+        kind = (request.content_type or "").lower()
+        if kind.startswith("multipart/"):
+            return _unauthorized(request)
+        return _create(request)
+    return json_error("Method Not Allowed", 405)
+
+
 def gated_factory(kind):
     @api_view(methods=("GET",), module="hr", level="read")
     def _inner_list(request):
@@ -1352,6 +1492,18 @@ plain_a = plain_factory()
 
 
 def test_guard_sees_a_url_view_without_api_view():
-    problems = {name for name, _why in _url_view_offenders(_URLS_SAMPLE, _FUNCTION_VIEWS_SAMPLE)}
-    assert problems == {"sneaky_handle", "make_view()", "bad_dispatch", "busy_dispatch",
-                         "half_dispatch", "plain_a"}
+    problems = dict(_url_view_offenders(_URLS_SAMPLE, _FUNCTION_VIEWS_SAMPLE))
+    assert set(problems) == {"sneaky_handle", "make_view()", "bad_dispatch", "busy_dispatch",
+                             "half_dispatch", "plain_a", "argcall_dispatch",
+                             "testcall_dispatch", "own_logic_ok", "own_logic_bad"}
+    assert "вызов до гейта в диспетчере" in problems["argcall_dispatch"]
+    assert "вызов до гейта в диспетчере" in problems["testcall_dispatch"]
+
+
+def test_guard_checks_every_return_of_an_exempt_dispatcher():
+    """Исключение ``_DISPATCHERS_WITH_OWN_LOGIC`` снимает только требование
+    строгого диспетчера, а не проверку, куда ведут ветки (M3)."""
+    found = list(_exempt_return_offenders(_FUNCTION_VIEWS_SAMPLE,
+                                          {"own_logic_ok", "own_logic_bad"}))
+    assert [name for name, _why in found] == ["own_logic_bad"]
+    assert found[0][1].startswith("исключение: own_logic_bad возвращает не гейтированную ручку")

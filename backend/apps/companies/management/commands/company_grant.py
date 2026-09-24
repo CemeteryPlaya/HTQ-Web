@@ -88,8 +88,8 @@ class Command(BaseCommand):
                 created = membership_service.grant_membership(company, user_id)
             except UnknownRole as exc:
                 raise CommandError(
-                    f"{exc}. Примените миграции access (manage.py migrate_shared) "
-                    f"и повторите — уже выданные членства ({granted}) сохранены."
+                    f"Базовая роль не засеяна: {exc} Примените миграции access "
+                    f"(manage.py migrate_shared) и повторите команду."
                 ) from exc
             if created:
                 granted += 1

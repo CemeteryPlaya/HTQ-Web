@@ -17,6 +17,9 @@
 # была бы вежливым враньём. Сам адрес строится из GF_SERVER_ROOT_URL, который
 # в проде берётся из PUBLIC_BASE_URL (см. docker-compose.yml): при дефолтном
 # `%(domain)s` он указывал на localhost и был бесполезен с телефона.
+# Экземпляру с меткой `company` ссылка добавляет `&var-company=<слаг>` —
+# график открывается на этой компании, а не на «All». `&`, а не `?`: адрес
+# Grafana уже несёт query (`?orgId=…`, у панели ещё `viewPanel=…`).
 
 apiVersion: 1
 
@@ -51,8 +54,8 @@ templates:
 
       {{ .Annotations.description }}{{ end }}
       {{- if .PanelURL }}
-      График: {{ .PanelURL }}{{ else if .DashboardURL }}
-      Дашборд: {{ .DashboardURL }}{{ end }}
+      График: {{ .PanelURL }}{{ if .Labels.company }}&var-company={{ .Labels.company }}{{ end }}{{ else if .DashboardURL }}
+      Дашборд: {{ .DashboardURL }}{{ if .Labels.company }}&var-company={{ .Labels.company }}{{ end }}{{ end }}
       {{- if .SilenceURL }}
       Заглушить: {{ .SilenceURL }}{{ end }}
       {{ end }}
@@ -74,6 +77,6 @@ templates:
 
       {{ .Annotations.description }}{{ end }}
       {{- if .DashboardURL }}
-      Подробности: {{ .DashboardURL }}{{ end }}
+      Подробности: {{ .DashboardURL }}{{ if .Labels.company }}&var-company={{ .Labels.company }}{{ end }}{{ end }}
       {{ end }}
       {{- end }}

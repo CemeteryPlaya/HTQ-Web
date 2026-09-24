@@ -532,7 +532,7 @@ git commit -m "feat(monitoring): дашборды и правила tenant-ме�
 
 ---
 
-### Task 3: «Сегодня» на платформе — одна точка, `timezone.localdate()`
+### Task 3: «Сегодня» в поясе `TIME_ZONE` — одна точка, `timezone.localdate()`
 
 **Files:**
 - Create: `backend/apps/core/tests/test_platform_today.py`

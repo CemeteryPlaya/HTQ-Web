@@ -310,8 +310,10 @@ H](plans/2026-09-17-block-h-holding-readers.md). Читают только вн�
 `apps/tasks/tests/test_project_staff_reports_api.py::test_board_defaults_to_today_and_rejects_a_malformed_date`.
 
 **Состояние на 24.09.2026 — закрыто блоком K (задача 3, `675ddaf`):**
-«сегодня» на платформе одно — `timezone.localdate()`, сторож
-`apps/core/tests/test_platform_today.py`; оба теста досок закреплены на
+«сегодня» в `hr`/`tasks`/`approvals` одно — `timezone.localdate()` (пояс
+`TIME_ZONE`, в проде UTC; конференции считают сутки в `PLATFORM_TIME_ZONE` —
+`apps/conference/services/platform_time.py`, свести их — отдельное решение,
+roadmap §9.2), сторож `apps/core/tests/test_platform_today.py`; оба теста досок закреплены на
 границе суток при `UTC` и `Asia/Almaty`.
 
 Причина установлена и к мультикомпанейности отношения не имеет:
