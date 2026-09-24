@@ -90,6 +90,9 @@ def reseed_basic_role_for_transactional_tests(request):
     видят базу сразу после миграций. Поэтому пересев — только для
     транзакционных, тем же условием, что у плагина, и сидом самой миграции,
     а не копией её данных.
+
+    С блока L пересеваются и ``0011`` (узлы базовой роли под гейт шести
+    аппок), и ``0012`` (``services-admin``).
     """
     from pytest_django.plugin import validate_django_db
 
@@ -105,6 +108,10 @@ def reseed_basic_role_for_transactional_tests(request):
         request.getfixturevalue("transactional_db")
         importlib.import_module(
             "apps.access.migrations.0004_seed_employee_role").seed(django_apps, None)
+        importlib.import_module(
+            "apps.access.migrations.0011_employee_basic_block_l").seed(django_apps, None)
+        importlib.import_module(
+            "apps.access.migrations.0012_seed_services_admin_role").seed(django_apps, None)
     yield
 
 
