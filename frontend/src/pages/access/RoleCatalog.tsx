@@ -362,7 +362,7 @@ const RoleCatalog = () => {
                     onClick={() => saveMutation.mutate()}
                   >
                     <Save className="h-4 w-4" />
-                    {t('access.catalog.save', 'Сохранить права')}
+                    {t('access.catalog.savePermissions', 'Сохранить права')}
                   </Button>
                 )}
               </header>
