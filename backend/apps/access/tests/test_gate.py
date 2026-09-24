@@ -448,11 +448,13 @@ def test_every_view_method_of_translated_apps_is_decorated():
     backend = pathlib.Path(__file__).resolve().parents[3]
     offenders = []
     for app in sorted(self_service.TRANSLATED_APPS):
-        path = backend / "apps" / app / "views.py"
+        roots = _app_view_roots(app)
         exempt = self_service.SELF_SERVICE.get(app, {})
-        for lineno, name in _iter_undecorated_api_methods(path.read_text(encoding="utf-8")):
-            if name not in exempt:
-                offenders.append(f"apps/{app}/views.py:{lineno} ({name})")
+        for path in _app_modules(app):
+            for lineno, name in _iter_undecorated_api_methods(
+                    path.read_text(encoding="utf-8"), roots):
+                if name not in exempt:
+                    offenders.append(f"{path.relative_to(backend).as_posix()}:{lineno} ({name})")
     assert offenders == [], f"ручка класса-вьюхи без api_view: {offenders}"
 
 
@@ -556,11 +558,18 @@ def _is_gate_decorator(decorator, gate_names: set[str]) -> bool:
     return isinstance(head, ast.Name) and head.id in gate_names
 
 
-def _view_classes(tree: ast.Module) -> list[ast.ClassDef]:
+def _view_classes(tree: ast.Module, extra_roots: frozenset[str] = frozenset()) -> list[ast.ClassDef]:
     """Классы файла, унаследованные (прямо или через другой класс файла) от
-    корня ``_VIEW_ROOTS``."""
+    корня ``_VIEW_ROOTS`` или от ``extra_roots`` — вьюх, объявленных в
+    соседних модулях аппки. Имя, под которым корень импортирован
+    (``from htqweb.http import ApiView as _Base``), — тоже корень."""
     classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
-    known = set(_VIEW_ROOTS)
+    known = set(_VIEW_ROOTS) | set(extra_roots)
+    known |= {
+        alias.asname
+        for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        for alias in node.names if alias.asname and alias.name in known
+    }
     views: dict[str, ast.ClassDef] = {}
     changed = True
     while changed:
@@ -573,7 +582,29 @@ def _view_classes(tree: ast.Module) -> list[ast.ClassDef]:
     return sorted(views.values(), key=lambda cls: cls.lineno)
 
 
-def _iter_undecorated_api_methods(text: str):
+def _roots_of_sources(sources: list[str]) -> frozenset[str]:
+    """Имена классов-вьюх, объявленных в любом из исходников (модули одной
+    аппки): база, объявленная в ``_base.py``, — корень и для ``views.py``."""
+    trees = [ast.parse(text) for text in sources]
+    names: set[str] = set()
+    while True:
+        found = {cls.name for tree in trees for cls in _view_classes(tree, frozenset(names))}
+        if found <= names:
+            return frozenset(names)
+        names |= found
+
+
+def _app_modules(app: str) -> list[pathlib.Path]:
+    backend = pathlib.Path(__file__).resolve().parents[3]
+    return [path for path in sorted((backend / "apps" / app).rglob("*.py"))
+            if "tests" not in path.parts and "migrations" not in path.parts]
+
+
+def _app_view_roots(app: str) -> frozenset[str]:
+    return _roots_of_sources([p.read_text(encoding="utf-8") for p in _app_modules(app)])
+
+
+def _iter_undecorated_api_methods(text: str, extra_roots: frozenset[str] = frozenset()):
     """(lineno, ``Класс.метод``) для каждой ручки класса-вьюхи без гейта-декоратора.
 
     Сторож полноты читает вызовы ``api_view(``; метод CBV без декоратора он
@@ -584,10 +615,12 @@ def _iter_undecorated_api_methods(text: str):
     внутри или имя из ``_gate_decorator_names`` — ``@method_decorator(
     csrf_exempt)`` гейтом не считается. Ручка, заведённая присваиванием в
     теле класса (``post = get``), декоратора не имеет вовсе — нарушение.
+
+    ``extra_roots`` — вьюхи из соседних модулей аппки (``_app_view_roots``).
     """
     tree = ast.parse(text)
     gate_names = _gate_decorator_names(tree)
-    for cls in _view_classes(tree):
+    for cls in _view_classes(tree, extra_roots):
         for item in cls.body:
             if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if item.name in _HANDLER_METHODS and not any(
@@ -667,6 +700,12 @@ def _factory_call_offenders(tree, factory, param: str, constants, lines):
         if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
                 and call.func.id == factory.name):
             continue
+        if any(kw.arg is None for kw in call.keywords) or any(
+                isinstance(arg, ast.Starred) for arg in call.args):
+            yield (call.lineno,
+                   _qualified_name(lines, call.lineno, call.end_lineno) or factory.name,
+                   f"{factory.name}(…) получает аргументы распаковкой — уровень не прочитать")
+            continue
         value = next((kw.value for kw in call.keywords if kw.arg == param), None)
         if value is None and index is not None and len(call.args) > index:
             value = call.args[index]
@@ -729,6 +768,16 @@ def _level_offenders(text: str):
         if default is None:
             yield start, name, (f"level={level} — не константа модуля и не "
                                 "параметр объемлющей фабрики")
+            continue
+        reassigned = next((
+            node for node in ast.walk(factory)
+            if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign))
+            and any(isinstance(t, ast.Name) and t.id == level
+                    for t in (node.targets if isinstance(node, ast.Assign) else [node.target]))
+        ), None)
+        if reassigned is not None:
+            yield start, name, (f"{level} переприсваивается в теле {factory.name} "
+                                f"(строка {reassigned.lineno}) — сторож видит только сигнатуру")
             continue
         if default is not _REQUIRED:
             literal = _literal(default, constants)
@@ -895,3 +944,414 @@ def test_guard_reads_the_level_out_of_a_factory():
         "implicit", "passthrough", "unknown_name", "computed_default",
         "empty_gate", "ItemView.post",
     }
+
+
+# ── Блок K: три известных обхода сторожа (roadmap §9.2) ────────────────────
+#
+# (а) база вьюхи под псевдонимом импорта (``ApiView as _Base``) или
+#     объявленная в соседнем модуле аппки — ``_view_classes`` раньше
+#     сравнивала только имя базы в том же файле;
+# (б) ``level = "none"`` в теле фабрики после параметра и ``**{"level":
+#     "none"}`` на вызове фабрики — раньше сторож видел лишь умолчание
+#     сигнатуры и именованный аргумент;
+# (в) функция-ручка без ``@api_view`` вовсе — сторож полноты идёт от
+#     найденных вызовов ``api_view(`` и такую ручку не видит: список ручек
+#     должен идти от ``urls.py``, а не от текста ``views.py``.
+
+
+def _mentions_request_method(node: ast.AST) -> bool:
+    """``True``, если где-то внутри выражения встречается ``request.method``
+    (атрибут ``method`` у имени ``request``) — признак условия диспетчера,
+    а не что оно означает буквально (``==``/``in``/``not in`` — любое)."""
+    return any(
+        isinstance(sub, ast.Attribute) and sub.attr == "method"
+        and isinstance(sub.value, ast.Name) and sub.value.id == "request"
+        for sub in ast.walk(node)
+    )
+
+
+def _is_405_or_gated_call(value: ast.AST, gated: set[str]) -> tuple[bool, str | None]:
+    """``value`` — вызов гейтированной ручки того же файла либо ответ 405
+    (``json_error(…, 405)`` или имя, содержащее ``method_not_allowed``)."""
+    if not isinstance(value, ast.Call):
+        return False, "return — не вызов функции"
+    name = _base_name(value.func)
+    if name and "method_not_allowed" in name:
+        return True, None
+    if name == "json_error" and any(
+        isinstance(arg, ast.Constant) and arg.value == 405
+        for arg in (*value.args, *(kw.value for kw in value.keywords))
+    ):
+        return True, None
+    if name in gated:
+        return True, None
+    return False, f"return {name or '?'}(…) — не гейтированная ручка того же файла и не 405"
+
+
+def _dispatch_branch_ok(stmts: list, gated: set[str]) -> tuple[bool, str | None]:
+    """Ветка диспетчера — РОВНО один ``return <вызов>``, ничего больше."""
+    if len(stmts) != 1 or not isinstance(stmts[0], ast.Return) or stmts[0].value is None:
+        return False, "ветка диспетчера — не единственный return вызова"
+    return _is_405_or_gated_call(stmts[0].value, gated)
+
+
+def _dispatch_if_ok(node: ast.If, gated: set[str]) -> tuple[bool, str | None]:
+    """``if``, чьё условие упоминает ``request.method``, тело — один
+    гейтированный/405 ``return``; ``elif`` — тот же разбор рекурсивно;
+    голый ``else`` — та же проверка ветки, что и у ``if``."""
+    if not _mentions_request_method(node.test):
+        return False, "условие if не про request.method"
+    ok, reason = _dispatch_branch_ok(node.body, gated)
+    if not ok:
+        return False, reason
+    if not node.orelse:
+        return True, None
+    if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
+        return _dispatch_if_ok(node.orelse[0], gated)
+    return _dispatch_branch_ok(node.orelse, gated)
+
+
+def _if_chain_is_exhaustive(node: ast.If) -> bool:
+    """``True``, если ``if``/``elif``-цепочка заканчивается ``else`` (в т.ч.
+    через вложенный ``elif``) — то есть закрывает ВСЕ пути, а не только
+    условия, которые сама перечисляет. Пустой ``orelse`` — цепочка обрывается
+    без покрытия остальных методов."""
+    if not node.orelse:
+        return False
+    if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
+        return _if_chain_is_exhaustive(node.orelse[0])
+    return True
+
+
+def _is_dispatcher(fn, gated: set[str]) -> tuple[bool, str | None]:
+    """``fn`` — диспетчер по ``request.method``, если тело (после
+    необязательного докстринга) состоит ТОЛЬКО из ``if``/``elif``/``else`` по
+    ``request.method`` с однострочным гейтированным/405 ``return`` в каждой
+    ветке и завершающего такого же ``return`` — он обязателен, если последняя
+    цепочка ``if`` не закрыта ``else`` (иначе остальные методы ушли бы в
+    неявный ``return None`` мимо гейта и 405). Любой другой оператор
+    (присваивание, вызов сервиса, ``try``, …) — не диспетчер."""
+    body = fn.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+            and isinstance(body[0].value.value, str):
+        body = body[1:]
+    if not body:
+        return False, "не диспетчер: пустое тело"
+    for index, stmt in enumerate(body):
+        if isinstance(stmt, ast.If):
+            ok, reason = _dispatch_if_ok(stmt, gated)
+            if not ok:
+                return False, reason
+        elif index == len(body) - 1 and isinstance(stmt, ast.Return):
+            ok, reason = _dispatch_branch_ok([stmt], gated)
+            if not ok:
+                return False, reason
+        else:
+            return False, ("не диспетчер: тело несёт не только if по "
+                            "request.method и return")
+    # Полнота: последний оператор тела обязан закрывать ВСЕ методы, а не
+    # только совпавшие условия — иначе несовпавший метод проваливается в
+    # неявный ``return None`` мимо гейта и 405. Оператор ``return`` на
+    # верхнем уровне закрывает их безусловно (уже проверено выше); последний
+    # ``if`` обязан завершаться ``else`` (в т.ч. через ``elif``-цепочку) —
+    # каждая ветка которого, в свою очередь, уже проверена как ``return``
+    # гейтированной ручки или 405 циклом выше.
+    last = body[-1]
+    if isinstance(last, ast.If) and not _if_chain_is_exhaustive(last):
+        return False, "диспетчер не закрывает все методы: неявный return None"
+    return True, None
+
+
+def _url_view_offenders(urls_text: str, views_text: str):
+    """(имя, причина) для каждой вьюхи-функции из ``urls.py``, у которой нет
+    декоратора с ``api_view`` и которая не читается как ДИСПЕТЧЕР по
+    ``request.method`` (``_is_dispatcher``) — тело, состоящее только из
+    ``if``/``elif``/``else`` по ``request.method``, где каждая ветка
+    возвращает вызов гейтированной ручки того же файла либо ответ 405, а
+    все пути закрыты (``else`` или завершающий ``return``); это
+    легитимный, задокументированный в самом коде приём (один URL — несколько
+    методов — раздельный гейтинг), а не дыра. Классы (``.as_view()``)
+    проверяет сторож методов; ``include(...)`` — чужой список путей; всё,
+    что не читается как ``views.<имя>`` или голое имя, — нарушение: молча
+    пропущенная форма и была бы следующим слепым пятном.
+
+    Имя, присвоенное на уровне модуля распаковкой из вызова фабрики того же
+    файла (``a, b = _reference_endpoints(...)``), засчитывается, если тело
+    ФАБРИКИ где-то зовёт ``api_view`` (``_calls_api_view``) — ВНУТРЕННИЕ
+    диспетчеры самой фабрики этот разбор не проверяет отдельно, фабрика
+    считается гейтированной целиком.
+    """
+    views_tree = ast.parse(views_text)
+    gate_names = _gate_decorator_names(views_tree)
+    functions = {node.name: node for node in views_tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    gated_functions = {
+        name for name, fn in functions.items()
+        if any(_is_gate_decorator(d, gate_names) for d in fn.decorator_list)
+    }
+    factory_bound: set[str] = set()
+    for node in views_tree.body:
+        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)):
+            continue
+        factory = functions.get(node.value.func.id)
+        if factory is None or not _calls_api_view(factory):
+            continue
+        for target in node.targets:
+            names = target.elts if isinstance(target, (ast.Tuple, ast.List)) else [target]
+            factory_bound.update(n.id for n in names if isinstance(n, ast.Name))
+    for call in ast.walk(ast.parse(urls_text)):
+        if not (isinstance(call, ast.Call) and _base_name(call.func) in {"path", "re_path"}):
+            continue
+        view = call.args[1] if len(call.args) > 1 else next(
+            (kw.value for kw in call.keywords if kw.arg == "view"), None)
+        if view is None:
+            continue
+        if isinstance(view, ast.Call) and _base_name(view.func) in {"as_view", "include"}:
+            continue
+        if isinstance(view, ast.Attribute) and isinstance(view.value, ast.Name) \
+                and view.value.id == "views":
+            fn_name = view.attr
+        elif isinstance(view, ast.Name):
+            fn_name = view.id
+        else:
+            yield ast.unparse(view), "вьюха задана выражением, которое сторож не читает"
+            continue
+        if fn_name in factory_bound:
+            continue
+        fn = functions.get(fn_name)
+        if fn is None:
+            yield fn_name, "не найдена среди функций views.py"
+            continue
+        if fn_name in gated_functions:
+            continue
+        ok, reason = _is_dispatcher(fn, gated_functions)
+        if not ok:
+            yield fn_name, reason
+
+
+#: Функции-ручки из ``urls.py``, которые разветвляются не только по
+#: ``request.method`` и поэтому не проходят строгий признак диспетчера, но
+#: чьи ветки ведут только в гейтированные ручки — проверено глазами, с
+#: причиной. Запись, которую сторож больше не находит, — устарела и валит тест.
+_DISPATCHERS_WITH_OWN_LOGIC: dict[str, dict[str, str]] = {
+    "hr": {
+        "documents_collection": "POST разветвляется по Content-Type между "
+                                "_upload_document_multipart и _upload_document "
+                                "(обе под api_view)",
+    },
+}
+
+
+def test_every_url_view_of_translated_apps_carries_api_view():
+    """Функция-ручка ``hr``/``users``/``tasks`` вовсе без ``@api_view``
+    невидима для сторожа полноты — у неё нет вызова ``api_view(``, который
+    он читает. Список ручек даёт ``urls.py``: каждая зарегистрированная
+    функция обязана нести декоратор с ``api_view`` (гейт или его отсутствие
+    дальше проверяют сторожа выше и реестр самообслуживания).
+
+    ``_DISPATCHERS_WITH_OWN_LOGIC`` — именной реестр ручек, которые
+    разветвляются не только по ``request.method`` (строгий признак
+    диспетчера, ``_is_dispatcher``, их не видит), но проверены глазами и
+    ведут только в гейтированные функции. Запись оттуда, для которой сторож
+    в этом прогоне не нашёл ни одной находки с тем же именем, — устарела
+    (ручку переписали/удалили, а исключение забыли снять) и тоже нарушение,
+    ровно тем же приёмом, что ``stale`` у ``self_service`` выше."""
+    backend = pathlib.Path(__file__).resolve().parents[3]
+    offenders = []
+    for app in sorted(self_service.TRANSLATED_APPS):
+        urls = backend / "apps" / app / "urls.py"
+        views = backend / "apps" / app / "views.py"
+        exempt = _DISPATCHERS_WITH_OWN_LOGIC.get(app, {})
+        seen: set[str] = set()
+        for name, why in _url_view_offenders(urls.read_text(encoding="utf-8"),
+                                             views.read_text(encoding="utf-8")):
+            seen.add(name)
+            if name in exempt:
+                continue
+            offenders.append(f"apps/{app}/urls.py: {name} — {why}")
+        for name in sorted(set(exempt) - seen):
+            offenders.append(f"исключение устарело: {app}.{name}")
+    assert offenders == [], offenders
+
+
+_ALIASED_BASE_SAMPLE = '''
+from htqweb.http import ApiView as _Base
+
+class SneakyView(_Base):
+    def post(self, request):
+        return {}
+'''
+
+
+def test_guard_resolves_an_aliased_view_base():
+    found = {name for _lineno, name in _iter_undecorated_api_methods(_ALIASED_BASE_SAMPLE)}
+    assert found == {"SneakyView.post"}
+
+
+_BASE_MODULE_SAMPLE = '''
+from htqweb.http import ApiView
+
+class HrApiView(ApiView):
+    pass
+'''
+
+_VIEWS_ON_FOREIGN_BASE_SAMPLE = '''
+from ._base import HrApiView
+
+class ItemView(HrApiView):
+    def delete(self, request):
+        return {}
+'''
+
+
+def test_guard_follows_a_view_base_from_a_sibling_module():
+    roots = _roots_of_sources([_BASE_MODULE_SAMPLE, _VIEWS_ON_FOREIGN_BASE_SAMPLE])
+    assert "HrApiView" in roots
+    found = {name for _lineno, name in
+             _iter_undecorated_api_methods(_VIEWS_ON_FOREIGN_BASE_SAMPLE, roots)}
+    assert found == {"ItemView.delete"}
+
+
+_REASSIGNED_LEVEL_SAMPLE = '''
+MODULE = "hr"
+
+
+def write(method, *, level="write"):
+    level = "none"
+    return method_decorator(api_view(methods=(method,), auth="jwt",
+                                     module=MODULE, level=level))
+
+
+def read(method, *, level="read"):
+    return method_decorator(api_view(methods=(method,), auth="jwt",
+                                     module=MODULE, level=level))
+
+
+class ItemView(ApiView):
+    @read("GET", **{"level": "none"})
+    def get(self, request):
+        return {}
+'''
+
+
+def test_guard_sees_a_level_hidden_in_the_factory():
+    """Уровень, переприсвоенный в теле фабрики, и уровень, пришедший
+    распаковкой на её вызове, сторож прочитать не может — нарушение."""
+    offenders = {name for _lineno, name, _why in _level_offenders(_REASSIGNED_LEVEL_SAMPLE)}
+    assert offenders == {"write", "ItemView.get"}
+
+
+_URLS_SAMPLE = '''
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("gated/", views.gated_handle),
+    path("sneaky/", views.sneaky_handle),
+    path("items/", views.ItemView.as_view()),
+    path("odd/", make_view()),
+    path("good/", views.good_dispatch),
+    path("bad/", views.bad_dispatch),
+    path("busy/", views.busy_dispatch),
+    path("half/", views.half_dispatch),
+    path("else/", views.else_dispatch),
+    path("made-a/", views.made_a),
+    path("made-b/", views.made_b),
+    path("plain-a/", views.plain_a),
+]
+'''
+
+_FUNCTION_VIEWS_SAMPLE = '''
+@api_view(methods=("GET",), module="hr", level="read")
+def gated_handle(request):
+    return {}
+
+
+def sneaky_handle(request):
+    return {}
+
+
+@api_view(methods=("GET",), module="hr", level="read")
+def _list(request):
+    return {}
+
+
+@api_view(methods=("POST",), module="hr", level="write")
+def _create(request):
+    return {}
+
+
+def _unauthorized(request):
+    return {}
+
+
+@csrf_exempt
+def good_dispatch(request):
+    """Диспетчер — декоратор, не несущий api_view (csrf_exempt), не мешает:
+    признак диспетчера — тело, а не декораторы."""
+    if request.method == "GET":
+        return _list(request)
+    if request.method == "POST":
+        return _create(request)
+    return json_error("Method Not Allowed", 405)
+
+
+def bad_dispatch(request):
+    if request.method == "GET":
+        return _list(request)
+    if request.method == "POST":
+        return _unauthorized(request)
+    return json_error("Method Not Allowed", 405)
+
+
+def busy_dispatch(request):
+    log_call(request)
+    if request.method == "GET":
+        return _list(request)
+    return json_error("Method Not Allowed", 405)
+
+
+def half_dispatch(request):
+    """Единственный if без продолжения — остальные методы проваливаются в
+    неявный return None мимо гейта и 405 (раунд 3: находка валидатора)."""
+    if request.method == "GET":
+        return _list(request)
+
+
+def else_dispatch(request):
+    if request.method == "GET":
+        return _list(request)
+    else:
+        return json_error("Method Not Allowed", 405)
+
+
+def gated_factory(kind):
+    @api_view(methods=("GET",), module="hr", level="read")
+    def _inner_list(request):
+        return {}
+
+    def collection(request):
+        return _inner_list(request)
+
+    return collection, collection
+
+
+made_a, made_b = gated_factory("kind")
+
+
+def plain_factory():
+    def collection(request):
+        return {}
+
+    return collection
+
+
+plain_a = plain_factory()
+'''
+
+
+def test_guard_sees_a_url_view_without_api_view():
+    problems = {name for name, _why in _url_view_offenders(_URLS_SAMPLE, _FUNCTION_VIEWS_SAMPLE)}
+    assert problems == {"sneaky_handle", "make_view()", "bad_dispatch", "busy_dispatch",
+                         "half_dispatch", "plain_a"}
