@@ -116,3 +116,10 @@ docker-compose.override.yml
 db_schema.csv
 table_data.csv
 existing_models.py
+.zed/rules.md
+.github/copilot-instructions.md
+.cursor/mcp.json
+.codebase-memory/config.json
+.codebase-memory/.gitignore
+.github/instructions/codebase-workflow.instructions.md
+.zed/settings.json
