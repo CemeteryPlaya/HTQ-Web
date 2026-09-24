@@ -266,3 +266,26 @@ for c in Company.objects.order_by('slug'):
   выбора компании и уведёт на `http://<метка>.localhost:3000/...`;
 - сразу на `http://<метка-или-слаг>.localhost:3000/login` — у компаний
   на свежем стенде псевдонимов нет, поэтому метка совпадает со слагом.
+
+## Блок L: гейт на шесть аппок платформы
+
+Источник: [`docs/plans/2026-09-24-block-l-gate-remaining-apps-spec.md`](../plans/2026-09-24-block-l-gate-remaining-apps-spec.md)
+§11. Блок L переводит `media_files` (модуль `media`), `conference`,
+`messenger`, `mail`, `cms` и `approvals` под гейт `api_view(module=,
+level=)`, снимая `admin=True`.
+
+**Не раньше поддоменов: гейт считает уровень только в контексте компании**
+— то же условие, что у гейтов блока I выше: без `X-HTQ-Company`
+`permission_level` отвечает `none` всем, кроме суперпользователя.
+
+1. `manage.py migrate_shared` — применяет `access/0011`, `access/0012`
+   (`access` — общая аппка, `migrate_companies` не нужен).
+2. `manage.py access_backfill_services_admin --dry-run` — прочитать
+   сводку: сколько администраторов, в каких компаниях, кто без членства.
+3. `manage.py access_backfill_services_admin`.
+4. Открыть трафик. Проверить: сотрудник — мессенджер, почта, заявки,
+   файлы; администратор — `/admin/chats`, `/admin/mailboxes`,
+   `/manage/news`, `/requests/projects`.
+
+Откат — предыдущий образ; строки `employee-basic` и роль `services-admin`
+безвредны для старого кода (он их не спрашивает).

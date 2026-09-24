@@ -875,7 +875,8 @@ RoleAssignment        company_slug, user_id int, role FK, scope_kind, scope_id (
   `approvals`, `cms`, `conference`, `core`, `mail`, `media_files`,
   `messenger` — гейт тоже не запланирован (сторож
   `test_gate.py::test_gate_is_not_hung_on_apps_without_a_translation_plan`) —
-  непокрытых доменов девять, а не два;
+  непокрытых доменов девять, а не два — закрыто блоком L для шести аппок;
+  `core` не модуль прав;
 - перевод `junior/middle/senior/lead` на роли — там же (§1.6) — **выполнено**
   блоком I ([план](2026-09-17-block-i-single-rbac.md), задачи 1–2), см.
   пометку в §1.6;
