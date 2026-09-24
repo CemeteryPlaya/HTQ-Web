@@ -26,12 +26,21 @@ Mailboxes (mailboxes-под-задача, mail-mailboxes-brief.md — порт
 (``service=True``, для user-service hook на создание пользователя). PLAN.md
 Р3 ("без S2S", строка 142/322 — снос S2S-механики монолитом) убирает вторую
 ветку: у нас один Django-процесс, S2S-вызов между "сервисами" не существует
-как класс задач. Остаётся первая ветка — тот же ``is_elevated`` предикат,
-что и ``require_hr_write`` в apps/hr (positions/org и т.п.) →
-``api_view(auth="jwt", admin=True)``, единый платформенный admin-гейт (R1,
-htqweb/http.py). 3 пути ("/mailboxes/", "/mailboxes/{id}/",
-"/mailboxes/aliases/") обслуживают больше одного HTTP-метода — те же
-диспетчеры, что в apps/hr/views.py (staffing_lines_collection и т.п.).
+как класс задач. Первая ветка долго была ``api_view(admin=True)``
+(``is_staff``/``is_superuser``/``is_admin`` из токена); с блока L это гейт
+модуля ``api_view(module="mail", level="admin")`` — ящики и реквизиты
+сервера отдаёт роль (``services-admin``), а не флаг учётки. 3 пути
+("/mailboxes/", "/mailboxes/{id}/", "/mailboxes/aliases/") обслуживают
+больше одного HTTP-метода — те же диспетчеры, что в apps/hr/views.py
+(staffing_lines_collection и т.п.).
+
+Гейт модуля (блок L): личная почта — accounts/*, oauth/*, письма — гейта НЕ
+несёт и стоит в реестре самообслуживания (``apps/access/self_service.py``,
+причина ``self``): каждая такая ручка работает строго по
+``request.token.user_id``, а чужой id сервис превращает в 404. Единственная
+ручка accounts/* под гейтом — подсказка настроек IMAP
+(``_imap_connect_hint``, ``mail:read``): она не читает ничьих строк, а
+отдаёт настройки сервера по введённому адресу.
 """
 from __future__ import annotations
 
@@ -330,7 +339,7 @@ def corporate_connect(request):
 # ящик пользователя, а не ресурс платформы.
 
 
-@api_view(methods=("GET",), auth="jwt")
+@api_view(methods=("GET",), auth="jwt", module="mail", level="read")
 def _imap_connect_hint(request):
     """Предзаполнение формы по адресу — чтобы не гадать над портами."""
     return imap_account_service.suggest_settings(request.GET.get("address", ""))
@@ -487,8 +496,8 @@ def save_draft(request, data: schemas.DraftIn):
 
 # ── /mailboxes/* (mailboxes-под-задача, порт api/v1/mailboxes.py) ─────────
 #
-# Все 12 — ``api_view(auth="jwt", admin=True)`` (require_mailbox_admin, см.
-# докстринг модуля выше). "/mailboxes/" и "/mailboxes/{id}/" обслуживают
+# Все — ``api_view(auth="jwt", module="mail", level="admin")`` (бывший
+# admin=True, см. докстринг модуля выше). "/mailboxes/" и "/mailboxes/{id}/" обслуживают
 # больше одного HTTP-метода — диспетчер (как staffing_lines_collection в
 # apps/hr/views.py) вызывает приватную ``api_view``-обёрнутую функцию per
 # метод, чтобы у GET/POST/PATCH/DELETE были свои коды/тела ответов.
@@ -496,7 +505,7 @@ def save_draft(request, data: schemas.DraftIn):
 
 # ── /mailboxes/ ─────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="mail", level="admin")
 def _list_mailboxes(request):
     try:
         include_deleted = _bool_query(request, "include_deleted", default=False)
@@ -505,7 +514,7 @@ def _list_mailboxes(request):
     return [mbx_svc.serialize(mb) for mb in mbx_svc.list_mailboxes(include_deleted=include_deleted)]
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.MailboxCreateRequest, status=201)
+@api_view(methods=("POST",), auth="jwt", module="mail", level="admin", body=schemas.MailboxCreateRequest, status=201)
 def _create_mailbox(request, data: schemas.MailboxCreateRequest):
     """Завести ящик — со сверкой «а такого ящика уже нет?».
 
@@ -555,7 +564,7 @@ def mailboxes_collection(request):
 
 # ── /mailboxes/{mailbox_id}/ ────────────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="mail", level="admin")
 def _get_mailbox(request, mailbox_id: int):
     try:
         return mbx_svc.serialize(mbx_svc.get_by_id(mailbox_id))
@@ -563,7 +572,7 @@ def _get_mailbox(request, mailbox_id: int):
         return json_error("Mailbox not found", 404)
 
 
-@api_view(methods=("PATCH",), auth="jwt", admin=True, body=schemas.MailboxUpdateRequest)
+@api_view(methods=("PATCH",), auth="jwt", module="mail", level="admin", body=schemas.MailboxUpdateRequest)
 def _update_mailbox(request, mailbox_id: int, data: schemas.MailboxUpdateRequest):
     try:
         mb = mbx_svc.update(mailbox_id, data)
@@ -574,7 +583,7 @@ def _update_mailbox(request, mailbox_id: int, data: schemas.MailboxUpdateRequest
     return mbx_svc.serialize(mb)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", module="mail", level="admin")
 def _delete_mailbox(request, mailbox_id: int):
     """Stage 2 — only allowed if mailbox is currently in `archived` state."""
     try:
@@ -598,7 +607,7 @@ def mailbox_detail(request, mailbox_id: int):
 
 # ── /mailboxes/{mailbox_id}/reset-password|archive|restore/ ────────────────
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.MailboxResetPasswordRequest)
+@api_view(methods=("POST",), auth="jwt", module="mail", level="admin", body=schemas.MailboxResetPasswordRequest)
 def reset_mailbox_password(request, mailbox_id: int, data: schemas.MailboxResetPasswordRequest):
     try:
         mb, generated_password = mbx_svc.reset_password(mailbox_id, data)
@@ -613,7 +622,7 @@ def reset_mailbox_password(request, mailbox_id: int, data: schemas.MailboxResetP
     return {**mbx_svc.serialize(mb), "generated_password": generated_password}
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True)
+@api_view(methods=("POST",), auth="jwt", module="mail", level="admin")
 def archive_mailbox(request, mailbox_id: int):
     try:
         mb = mbx_svc.archive(mailbox_id)
@@ -624,7 +633,7 @@ def archive_mailbox(request, mailbox_id: int):
     return mbx_svc.serialize(mb)
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True)
+@api_view(methods=("POST",), auth="jwt", module="mail", level="admin")
 def restore_mailbox(request, mailbox_id: int):
     try:
         mb = mbx_svc.restore(mailbox_id)
@@ -642,7 +651,7 @@ def restore_mailbox(request, mailbox_id: int):
 # создания в админке читает это, чтобы не обещать невозможного.
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="mail", level="admin")
 def mailbox_status(request):
     return provisioning.describe()
 
@@ -655,7 +664,7 @@ def mailbox_status(request):
 # показанный вердикт и фактическое поведение не могут разойтись.
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="mail", level="admin")
 def mailbox_lookup(request):
     """``?address=`` — готовый адрес, либо поля формы: ``?local_part=``,
     ``?email=`` (корпоративный email пользователя — он же адрес ящика),
@@ -695,12 +704,12 @@ def mailbox_lookup(request):
 # POST /settings/test/ — прогнать ту же цепочку проверок, что и mail_check.
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="mail", level="admin")
 def _get_mail_settings(request):
     return settings_service.serialize()
 
 
-@api_view(methods=("PUT",), auth="jwt", admin=True, body=schemas.MailSettingsRequest)
+@api_view(methods=("PUT",), auth="jwt", module="mail", level="admin", body=schemas.MailSettingsRequest)
 def _put_mail_settings(request, data: schemas.MailSettingsRequest):
     return settings_service.update(data, user_id=request.token.user_id)
 
@@ -713,7 +722,7 @@ def mail_settings(request):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.MailConnectionTestRequest)
+@api_view(methods=("POST",), auth="jwt", module="mail", level="admin", body=schemas.MailConnectionTestRequest)
 def test_mail_connection(request, data: schemas.MailConnectionTestRequest):
     """Проверка «на месте»: та же логика, что у ``manage.py mail_check``.
 
@@ -740,7 +749,7 @@ def test_mail_connection(request, data: schemas.MailConnectionTestRequest):
 # POST — применить решение (direction=pull|push|both), тело — ReconcileRequest.
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="mail", level="admin")
 def mailbox_coverage(request):
     """``GET /mailboxes/coverage/`` — кто из сотрудников без рабочей почты.
 
@@ -761,12 +770,12 @@ def mailbox_coverage(request):
     }
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="mail", level="admin")
 def _reconcile_report(request):
     return reconcile_service.reconcile(apply=False).to_dict()
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.ReconcileRequest)
+@api_view(methods=("POST",), auth="jwt", module="mail", level="admin", body=schemas.ReconcileRequest)
 def _reconcile_apply(request, data: schemas.ReconcileRequest):
     return reconcile_service.reconcile(apply=data.apply, direction=data.direction).to_dict()
 
@@ -782,7 +791,7 @@ def reconcile_mailboxes(request):
 # ── /mailboxes/aliases/* (проксируется живьём в Mailcow, локально не
 # зеркалируется) ────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="mail", level="admin")
 def _list_aliases(request):
     try:
         return MailcowClient().list_aliases()
@@ -790,7 +799,7 @@ def _list_aliases(request):
         return json_error(f"Mailcow error: {exc}", 502)
 
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.AliasCreateRequest, status=201)
+@api_view(methods=("POST",), auth="jwt", module="mail", level="admin", body=schemas.AliasCreateRequest, status=201)
 def _create_alias(request, data: schemas.AliasCreateRequest):
     try:
         return MailcowClient().add_alias(
@@ -808,7 +817,7 @@ def aliases_collection(request):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", module="mail", level="admin")
 def delete_alias(request, alias_id: int):
     try:
         MailcowClient().delete_alias(alias_id)
@@ -819,7 +828,7 @@ def delete_alias(request, alias_id: int):
 
 # ── /mailboxes/{mailbox_id}/forwarding/ ────────────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt", admin=True, body=schemas.ForwardingSetRequest, status=201)
+@api_view(methods=("POST",), auth="jwt", module="mail", level="admin", body=schemas.ForwardingSetRequest, status=201)
 def set_forwarding(request, mailbox_id: int, data: schemas.ForwardingSetRequest):
     try:
         mb = mbx_svc.get_by_id(mailbox_id)

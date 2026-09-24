@@ -17,8 +17,10 @@ mail-mailboxes-brief.md, 12 эндпойнтов):
 
 Авторизация (``require_mailbox_admin`` исходника — см. apps/mail/views.py
 докстринг): user-JWT с is_staff/is_superuser/is_admin. S2S-ветка исходника
-не переносится (PLAN.md Р3, "без S2S") -> ``api_view(auth="jwt",
-admin=True)``, тот же ``is_elevated``-предикат, что и apps/hr positions/org.
+не переносится (PLAN.md Р3, "без S2S"). Долго это был ``api_view(auth="jwt",
+admin=True)``; с блока L — гейт модуля ``mail:admin`` (роль, а не флаг
+учётки): администратор в фикстурах несёт ``{"mail": "full"}``, рядовой —
+``{"mail": "read"}`` (уровень ``employee-basic``), и его 403 даёт гейт.
 
 Живая сеть в Mailcow нигде не участвует: aliases/forwarding монkeypatch'ят
 ``apps.mail.views.MailcowClient`` (тот же модуль, что инстанцирует его
@@ -32,7 +34,7 @@ from django.test import Client, override_settings
 
 from apps.mail.models import MailboxStatus, ProvisionedMailbox
 from apps.users.models import User, UserStatus
-from htqweb.authn.jwt import issue_token_pair
+from .conftest import gate_auth
 
 BASE = "/api/email/v1/mailboxes"
 
@@ -57,12 +59,12 @@ def admin_user(db):
 
 @pytest.fixture
 def auth(user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    return gate_auth(user, "read")
 
 
 @pytest.fixture
 def admin_auth(admin_user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(admin_user)['access']}"}
+    return gate_auth(admin_user, "full")
 
 
 def _mailbox(**kw) -> ProvisionedMailbox:

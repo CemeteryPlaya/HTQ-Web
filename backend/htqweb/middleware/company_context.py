@@ -23,6 +23,7 @@ WS-путей — отдельная, ещё не решённая задача.
 
 from __future__ import annotations
 
+from django.db import connection
 from django.http import JsonResponse
 
 from apps.companies.interface import resolve_host_label
@@ -70,4 +71,13 @@ class CompanyContextMiddleware:
             return self.get_response(request)
         finally:
             reset_company(token)
-            apply_search_path(None)
+            # Внешняя транзакция сломана (IntegrityError внутри atomic — в
+            # тестах это вся транзакция теста; ATOMIC_REQUESTS у нас нет):
+            # до ROLLBACK запрещён любой SQL, и SET подменил бы уже готовый
+            # ответ TransactionManagementError'ом. SET этой же транзакции
+            # откатится вместе с ней — сбрасывать нечего. Тот же приём, что у
+            # автофикстуры conftest.py. Всплыло с блоком L: ручки почты
+            # получили заголовок компании, а их тест на 500 от IntegrityError
+            # — этот путь.
+            if not connection.needs_rollback:
+                apply_search_path(None)

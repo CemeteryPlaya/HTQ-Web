@@ -126,7 +126,7 @@ from __future__ import annotations
 #: Блок L (docs/plans/2026-09-24-block-l-gate-remaining-apps.md) добавляет по
 #: одной аппке на задачу; у ``media_files`` модуль прав называется ``media``.
 TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies",
-                                             "media_files", "conference", "messenger"})
+                                             "media_files", "conference", "messenger", "mail"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -484,5 +484,72 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         "upload_keys": "self",
         # users/me — свой профиль в мессенджере по request.token.user_id.
         "me": "self",
+    },
+    # mail (блок L, задача 7): личная почта — аккаунт, OAuth и письма
+    # привязаны к ``request.token.user_id``, сервис отвечает 404
+    # (``AccountNotFound``/``EmailNotFound``) на чужой id (докстринг
+    # ``apps/mail/views.py``). Ящики и реквизиты сервера (20 бывших
+    # ``admin=True``) — под ``mail:admin``; подсказка настроек IMAP
+    # (``_imap_connect_hint``) — под ``mail:read``: она читает не строки
+    # пользователя, а настройки сервера по введённому адресу.
+    # ``oauth_callback`` и ``apps/mail/webhooks.py`` — ``auth=None``, в реестр
+    # не входят.
+    "mail": {
+        # GET accounts/ — account_service.list_accounts:
+        # EmailAccount.filter(user_id=user_id), параметра-подмены нет.
+        "accounts_collection": "self",
+        # POST accounts/<id>/set-default/ — _get_owned(user_id, id): чужой
+        # аккаунт -> AccountNotFound (404); сброс default — тоже по user_id.
+        "account_set_default": "self",
+        # POST accounts/<id>/sync/ — тот же _get_owned -> 404 на чужой id.
+        "account_sync": "self",
+        # PATCH accounts/<id>/signature/ — update_signature через _get_owned.
+        "account_signature": "self",
+        # DELETE accounts/<id>/ — disconnect_account через _get_owned.
+        "account_detail": "self",
+        # GET accounts/connect-corporate/ — свой ящик
+        # (ProvisionedMailbox.filter(user_id=...)) и свой адрес
+        # (users.interface.get_user_brief(user_id)); из настроек сервера —
+        # только домен и флаг самоподключения, без адресов хостов.
+        "corporate_connect_info": "self",
+        # POST accounts/connect-corporate/ — self_service.connect_own_mailbox:
+        # ящик привязывается к user_id токена; чужой ящик ->
+        # MailboxTakenByAnotherUser (409), владение доказывает живой вход.
+        "_corporate_connect": "self",
+        # DELETE accounts/connect-corporate/ — disconnect_own_mailbox:
+        # ProvisionedMailbox.filter(user_id=user_id); нет своего -> 404.
+        "_corporate_disconnect": "self",
+        # POST accounts/connect-imap/ — imap_account_service.connect: аккаунт
+        # создаётся на user_id токена, дубль своего адреса -> 409.
+        "_imap_connect": "self",
+        # POST accounts/<id>/imap-password/ — update_password:
+        # filter(id=account_id, user_id=user_id) -> DoesNotExist (404).
+        "imap_account_password": "self",
+        # GET oauth/status — OAuthToken.filter(user_id=user_id).
+        "oauth_status": "self",
+        # GET oauth/accounts — OAuthToken.filter(user_id=user_id).
+        "oauth_accounts": "self",
+        # POST oauth/connect/<provider> — state-нонс в кэше несёт user_id
+        # токена; callback привяжет аккаунт только к нему.
+        "oauth_connect": "self",
+        # DELETE oauth/disconnect — disconnect_all(user_id): удаляет лишь
+        # свои личные аккаунты и токены.
+        "oauth_disconnect": "self",
+        # GET folder/<folder> — email_service.list_emails:
+        # EmailMessage.filter(user_id=user_id, ...); account_id сужает ту же
+        # выборку, а не расширяет её.
+        "list_emails": "self",
+        # GET unread-counts/ — оба COUNT по filter(user_id=user_id).
+        "unread_counts": "self",
+        # GET <uuid> — filter(id=message_id, user_id=user_id) -> EmailNotFound (404).
+        "get_email": "self",
+        # POST send — чужой account_id -> AccountNotFound (404); письмо
+        # создаётся с user_id токена.
+        "send_email": "self",
+        # POST <uuid>/read — UPDATE ... filter(id=, user_id=): чужое письмо
+        # не меняется (204 без проверки rowcount — буквальный порт исходника).
+        "mark_as_read": "self",
+        # POST draft — черновик создаётся с user_id токена, параметра-id нет.
+        "save_draft": "self",
     },
 }
