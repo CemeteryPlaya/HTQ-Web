@@ -123,7 +123,10 @@ from __future__ import annotations
 #: комментарий у ``SELF_SERVICE["tasks"]`` ниже). Финальная волна блока I
 #: (рулинг J) добавила "companies": её ручки гейт несли с рождения аппки
 #: (``_GATE_ALLOWLIST`` сторожа), теперь это требование, а не декларация.
-TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies"})
+#: Блок L (docs/plans/2026-09-24-block-l-gate-remaining-apps.md) добавляет по
+#: одной аппке на задачу; у ``media_files`` модуль прав называется ``media``.
+TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies",
+                                             "media_files"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -444,4 +447,13 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         # ``@platform`` обязана звать ту же проверку.
         "platform": "scoped",
     },
+    # media_files (блок L, задача 4): строго своих ручек нет — загрузка
+    # (``upload_file``) и подпись (``issue_signed_url``) стоят под
+    # ``module="media", level="write"`` (уровень employee-basic: узел
+    # ``media.files`` с view+create, access/0011), общий список файлов
+    # (``list_files``, бывший admin=True) — под ``level="admin"``; чтение
+    # (``download_file``, ``download_variant``, ``serve_raw_key``) —
+    # ``auth=None`` с подписью ``?sig=&exp=`` и в реестр не входит вовсе
+    # (см. докстринг модуля про ``auth=None``).
+    "media_files": {},
 }
