@@ -38,6 +38,7 @@ function permissionsOf(permissions: PermissionMap, depth: DepthMap): Permissions
     pageHidden: () => false,
     subordinateCompanies: [],
     inheritedFrom: [],
+    companyArchived: false,
     isLoading: false,
     isError: false,
     refetch: () => {},

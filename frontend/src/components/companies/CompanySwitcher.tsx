@@ -44,7 +44,9 @@ export function CompanySwitcher({ enabled = true }: { enabled?: boolean }) {
       </SelectTrigger>
       <SelectContent>
         {companies.map((c) => (
-          <SelectItem key={c.slug} value={hostLabelOf(c)}>{c.name}</SelectItem>
+          <SelectItem key={c.slug} value={hostLabelOf(c)}>
+            {c.is_archived ? `${c.name} · ${t('companies.archiveMode.badge', 'архив')}` : c.name}
+          </SelectItem>
         ))}
       </SelectContent>
     </Select>

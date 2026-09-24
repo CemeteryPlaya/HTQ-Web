@@ -4889,6 +4889,12 @@
       "subdomain": "Short address"
     },
     "subdomainHint": "Lowercase Latin letters, digits and hyphens; must start with a letter; empty — address by slug.",
+    "archiveMode": {
+      "banner": "This company is archived — read only",
+      "badge": "archived",
+      "writeRefused": "Cannot change: the company is archived — read only",
+      "restoreElsewhere": "Restore the company from the registry on an active company's subdomain."
+    },
     "picker": {
       "title": "Choose a company",
       "subtitle": "You have access to several companies of the group. Choose the one to work in.",

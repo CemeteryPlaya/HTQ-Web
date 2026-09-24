@@ -160,4 +160,6 @@ export interface AccessMe {
    * платформы.
    */
   inherited_from: string[];
+  /** Компания запроса в архиве: уровни уже понижены до `read` (спека архива §7.1). */
+  company_archived?: boolean;
 }

@@ -6,6 +6,7 @@ import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
 import { splitForHeader, visibleNavItems, type NavItem } from '@/app/navigation/navItems';
 import { CompanySwitcher } from '@/components/companies/CompanySwitcher';
+import { ArchivedCompanyBanner } from '@/components/companies/ArchivedCompanyBanner';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -364,6 +365,8 @@ export const Header = () => {
           </div>
         </>
       )}
+
+      {isLoggedIn && <ArchivedCompanyBanner />}
 
       {isLoggedIn && (
         <Suspense fallback={null}>

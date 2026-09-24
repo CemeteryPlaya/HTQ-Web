@@ -31,6 +31,10 @@ const roles = vi.fn<[], string[]>();
 vi.mock('@/hooks/useActiveProfile', () => ({
   useActiveProfile: () => ({ activeProfile: { roles: roles() }, isLoggedIn: true }),
 }));
+const companyArchived = vi.fn(() => false);
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({ companyArchived: companyArchived() }),
+}));
 vi.mock('@/components/Header', () => ({ Header: () => null }));
 vi.mock('@/components/Footer', () => ({ Footer: () => null }));
 
@@ -53,6 +57,7 @@ describe('CompanyRegistry', () => {
     list.mockResolvedValue({ data: LIST });
     archive.mockReset();
     toastError.mockReset();
+    companyArchived.mockReturnValue(false);
   });
 
   it('рисует дерево владения и говорит, что создание — командой', async () => {
@@ -83,5 +88,15 @@ describe('CompanyRegistry', () => {
     await userEvent.click(screen.getByRole('button', { name: /В архив/ }));
     await userEvent.click(await screen.findByRole('button', { name: /Подтвердить/ }));
     expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/единственная действующая/));
+  });
+
+  it('на поддомене архива не даёт ничего менять и подсказывает, где восстановить', async () => {
+    roles.mockReturnValue(['admin']);
+    companyArchived.mockReturnValue(true);
+    renderWithProviders(<CompanyRegistry />);
+    await userEvent.click(await screen.findByText('Hi-Tech Qazaqstan'));
+    expect(screen.queryByRole('button', { name: /В архив/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Изменить/ })).toBeNull();
+    expect(screen.getByText(/Восстановить компанию можно из реестра/)).toBeInTheDocument();
   });
 });

@@ -49,6 +49,8 @@ export interface MyCompany {
   kind: CompanyKind;
   is_default: boolean;
   is_current: boolean;
+  /** Компания в архиве — только чтение; приходит только суперпользователю. */
+  is_archived?: boolean;
 }
 
 /**

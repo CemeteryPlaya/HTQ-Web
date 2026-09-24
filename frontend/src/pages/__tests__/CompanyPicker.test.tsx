@@ -35,6 +35,7 @@ const mockMyCompanies = (companies: MyCompany[]) => {
 
 const HTQ: MyCompany = { slug: 'hi-tech-qazaqstan', subdomain: 'htq', name: 'HTQ', kind: 'construction', is_default: true, is_current: false };
 const HTS: MyCompany = { slug: 'hi-tech-systems', subdomain: 'hts', name: 'HTS', kind: 'it', is_default: false, is_current: false };
+const KEG_ARCHIVED: MyCompany = { slug: 'keg', subdomain: 'keg', name: 'KEG', kind: 'service', is_default: false, is_current: false, is_archived: true };
 
 const wrapperAt = (entry: string | { pathname: string; state?: unknown }) => {
   const queryClient = createTestQueryClient();
@@ -116,6 +117,28 @@ describe('CompanyPicker', () => {
     await userEvent.click(await screen.findByRole('button', { name: /HTS/ }));
 
     expect(assign).toHaveBeenCalledWith('https://hts.htq.group/myprofile');
+  });
+
+  it('единственную архивную компанию не открывает сам, а показывает с меткой', async () => {
+    const assign = stubBareHost();
+    mockMyCompanies([KEG_ARCHIVED]);
+
+    render(<CompanyPicker />, { wrapper });
+
+    expect(await screen.findByText('KEG')).toBeInTheDocument();
+    expect(screen.getByText('архив')).toBeInTheDocument();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('с действующей и архивной — список, без автоперехода', async () => {
+    const assign = stubBareHost();
+    mockMyCompanies([HTQ, KEG_ARCHIVED]);
+
+    render(<CompanyPicker />, { wrapper });
+
+    expect(await screen.findByText('HTQ')).toBeInTheDocument();
+    expect(screen.getByText('KEG')).toBeInTheDocument();
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it('без компаний говорит об этом прямо', async () => {

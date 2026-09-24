@@ -57,9 +57,13 @@ export default function CompanyPicker() {
   const { companies, isLoading, isError } = useMyCompanies();
   const target = targetPath(location.state);
 
+  // Сам уводит только в единственную ДЕЙСТВУЮЩУЮ компанию: архив (его видит
+  // только суперпользователь) — только по явному выбору (спека архива §7.2).
+  const autoTarget = companies.length === 1 && !companies[0].is_archived ? companies[0] : null;
+
   useEffect(() => {
-    if (!isLoading && companies.length === 1) switchCompany(companies[0], target);
-  }, [isLoading, companies, target]);
+    if (!isLoading && autoTarget) switchCompany(autoTarget, target);
+  }, [isLoading, autoTarget, target]);
 
   // Тот же выход, что в профиле и настройках (MyProfile/Settings).
   const logout = async () => {
@@ -107,7 +111,7 @@ export default function CompanyPicker() {
         </CardContent>
       </>
     );
-  } else if (companies.length === 1) {
+  } else if (autoTarget) {
     body = (
       <CardContent className="flex items-center gap-3 py-8 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin text-primary" />
@@ -136,6 +140,7 @@ export default function CompanyPicker() {
                     <span className="block font-mono text-xs text-muted-foreground">{hostLabelOf(c)}</span>
                   </span>
                   {c.is_default && <Badge variant="secondary">{t('companies.picker.default')}</Badge>}
+                  {c.is_archived && <Badge variant="outline">{t('companies.archiveMode.badge', 'архив')}</Badge>}
                   <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                 </button>
               </li>

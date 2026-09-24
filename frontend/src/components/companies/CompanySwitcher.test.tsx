@@ -72,4 +72,13 @@ describe('CompanySwitcher', () => {
     await userEvent.click(await screen.findByRole('option', { name: /Hi-Tech Systems/ }));
     expect(switchCompany).toHaveBeenCalledWith(hts);
   });
+
+  it('помечает архивную компанию', async () => {
+    const dead: MyCompany = { slug: 'keg', name: 'KEG', kind: 'service', is_default: false, is_current: false, is_archived: true };
+    companyFromHost.mockReturnValue('hi-tech-qazaqstan');
+    myCompanies.mockResolvedValue({ data: [htq, dead] });
+    renderWithProviders(<CompanySwitcher />);
+    await userEvent.click(await screen.findByRole('combobox'));
+    expect(await screen.findByRole('option', { name: /KEG · архив/ })).toBeInTheDocument();
+  });
 });

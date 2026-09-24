@@ -65,6 +65,12 @@ export interface Permissions {
    * обязаны быть объяснимы — этот список и есть объяснение.
    */
   inheritedFrom: string[];
+  /**
+   * Компания запроса в архиве — только чтение. Уровни в `level`/`atLeast` уже
+   * понижены сервером; флаг — для баннера и кнопок, которые идут не по уровню
+   * (платформенные операции реестра).
+   */
+  companyArchived: boolean;
   isLoading: boolean;
   /**
    * Права НЕ УДАЛОСЬ получить — это не то же самое, что «прав нет».
@@ -108,6 +114,7 @@ export function usePermissions(): Permissions {
       pageHidden: (route) => hiddenPages.includes(route),
       subordinateCompanies: data?.subordinate_companies ?? [],
       inheritedFrom: data?.inherited_from ?? [],
+      companyArchived: data?.company_archived ?? false,
       isLoading,
       isError,
       refetch: () => { void refetch(); },

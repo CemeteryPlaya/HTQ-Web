@@ -14,6 +14,7 @@ import { Header } from '@/components/Header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 import { isPlatformAdmin } from '@/lib/auth/roles';
 import { COMPANY_KIND_LABELS, type Company, type CompanyTreeNode } from '@/types/companies';
@@ -47,6 +48,11 @@ const CompanyRegistry = () => {
   const queryClient = useQueryClient();
   const { activeProfile } = useActiveProfile({ retry: false });
   const platformAdmin = isPlatformAdmin(activeProfile?.roles);
+  // На поддомене архива запись закрыта всем (403 company_archived), включая
+  // платформенные операции — они идут по суперпользователю, не по уровню,
+  // и сами не спрячутся (спека архива §7.2).
+  const { companyArchived } = usePermissions();
+  const canWrite = platformAdmin && !companyArchived;
 
   const [selected, setSelected] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<'archive' | 'restore' | null>(null);
@@ -138,7 +144,7 @@ const CompanyRegistry = () => {
                   <dt className="text-muted-foreground">{t('companies.field.parent', 'Вышестоящая')}</dt><dd>{company.parent_slug ?? '—'}</dd>
                 </dl>
 
-                {platformAdmin && (
+                {canWrite && (
                   <div className="flex flex-wrap gap-2">
                     <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
                       <Pencil className="mr-1 h-4 w-4" />{t('companies.edit', 'Изменить')}
@@ -155,11 +161,17 @@ const CompanyRegistry = () => {
                   </div>
                 )}
 
+                {platformAdmin && companyArchived && (
+                  <p className="text-sm text-muted-foreground">
+                    {t('companies.archiveMode.restoreElsewhere', 'Восстановить компанию можно из реестра на поддомене действующей компании.')}
+                  </p>
+                )}
+
                 {confirm && (
                   <div role="alertdialog" className="rounded-lg border border-amber-300/70 bg-amber-50/70 p-3 text-sm dark:border-amber-800/70 dark:bg-amber-950/30">
                     <p>
                       {confirm === 'archive'
-                        ? t('companies.confirmArchive', 'Архив закрывает весь трафик компании: её поддомен ответит 404. Данные остаются на месте.')
+                        ? t('companies.confirmArchive', 'Архив закрывает компанию на запись: её поддомен откроется только администратору платформы и только на чтение. Данные остаются на месте.')
                         : t('companies.confirmRestore', 'Компания снова станет доступна на своём поддомене и войдёт в сводки холдинга.')}
                     </p>
                     <div className="mt-2 flex gap-2">
@@ -181,8 +193,8 @@ const CompanyRegistry = () => {
                     ))}
                   </div>
                   {panel === 'modules'
-                    ? <CompanyModulesPanel slug={company.slug} canEdit={platformAdmin} />
-                    : <CompanyMembersPanel slug={company.slug} canEdit={platformAdmin} canRevoke={platformAdmin}
+                    ? <CompanyModulesPanel slug={company.slug} canEdit={canWrite} />
+                    : <CompanyMembersPanel slug={company.slug} canEdit={canWrite} canRevoke={canWrite}
                         showExternalHolders={company.show_external_holders} />}
                 </div>
               </div>
