@@ -32,6 +32,7 @@ import datetime
 
 import pytest
 from django.test import Client
+from django.utils import timezone
 
 from apps.hr.models import Application, Department, Document, Employee, Position, Vacancy
 from apps.users.models import User, UserStatus
@@ -255,7 +256,7 @@ def test_vacancy_delete_closes_not_removes(hr_admin_auth, dep, pos):
     v.refresh_from_db()
     assert Vacancy.objects.filter(id=v.id).exists()
     assert v.status == "closed"
-    assert v.closed_at == datetime.date.today()
+    assert v.closed_at == timezone.localdate()
 
 
 @pytest.mark.django_db

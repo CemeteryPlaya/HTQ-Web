@@ -52,6 +52,7 @@ import datetime as dt
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.utils import timezone
 
 from apps.hr.management import group_structures as gs
 from apps.hr.models import (
@@ -444,7 +445,7 @@ class Command(BaseCommand):
     def _seed_employees(self, structure, positions) -> dict[str, Employee]:
         self.stdout.write("Сотрудники...")
         out: dict[str, Employee] = {}
-        hire_base = dt.date.today() - dt.timedelta(days=900)
+        hire_base = timezone.localdate() - dt.timedelta(days=900)
         for index, person in enumerate(structure.people):
             position = positions[person.post]
             employee, _ = Employee.objects.update_or_create(

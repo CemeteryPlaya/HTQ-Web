@@ -47,7 +47,7 @@ def _disable_tasks():
 
 @pytest.mark.django_db(transaction=True)
 def test_deadline_reminder_notifies_assignees_due_today_and_tomorrow(company_context):
-    today = dt.date.today()
+    today = timezone.localdate()
     due_today = _mk_task(due_date=today, assignee_id=11)
     due_tomorrow = _mk_task(due_date=today + dt.timedelta(days=1),
                             assignee_id=12)
@@ -64,7 +64,7 @@ def test_deadline_reminder_notifies_assignees_due_today_and_tomorrow(company_con
 
 @pytest.mark.django_db(transaction=True)
 def test_deadline_reminder_skips_closed_deleted_and_unassigned(company_context):
-    today = dt.date.today()
+    today = timezone.localdate()
     _mk_task(due_date=today, assignee_id=11, status=Status.DONE)
     _mk_task(due_date=today, assignee_id=12, status=Status.CANCELLED)
     _mk_task(due_date=today, assignee_id=13, is_deleted=True)

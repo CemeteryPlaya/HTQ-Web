@@ -548,7 +548,7 @@ _PROJECT_STATUSES = ("draft", "pending", "approved", "rejected", "cancelled", "r
 
 
 def _default_from(days: int) -> dt.date:
-    return timezone.now().date() - dt.timedelta(days=days)
+    return timezone.localdate() - dt.timedelta(days=days)
 
 
 def _date_param(request, name: str):
@@ -573,7 +573,7 @@ def stats_overview(request):
     if err is not None:
         return err
     frm = frm or _default_from(30)
-    end = to or timezone.now().date()
+    end = to or timezone.localdate()
 
     rows = (RequestInstance.objects.filter(submitted_at__isnull=False)
             .values("status")
@@ -731,7 +731,7 @@ def stats_heatmap(request):
     if err is not None:
         return err
     frm = frm or _default_from(30)
-    end = to or timezone.now().date()
+    end = to or timezone.localdate()
 
     rows = (RequestStatsDaily.objects.filter(date__range=(frm, end))
             .values("date")

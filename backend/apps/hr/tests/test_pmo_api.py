@@ -37,6 +37,7 @@ import pytest
 from django.db import connection
 from django.db.utils import IntegrityError
 from django.test import Client
+from django.utils import timezone
 
 from apps.hr.models import Department, Employee, PMO, PMODepartment, PMOMember, PMOPosition, Position
 from apps.users.models import User, UserStatus
@@ -44,7 +45,7 @@ from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/hr/v1/pmo"
 EBASE = "/api/hr/v1/employees"
-TODAY = datetime.date.today()
+TODAY = timezone.localdate()
 
 
 @pytest.fixture

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from django.utils import timezone
+
 from apps.core.services import require_service
 
 from apps.hr.models import Department, Employee, EmployeeStatus, Position
@@ -455,7 +457,7 @@ def substitutes_for(position_id: int, on_date: date | None = None) -> list[dict]
     require_service("hr")
     from apps.hr.services import substitution_service
 
-    rows = substitution_service.active_for_position(position_id, on_date or date.today())
+    rows = substitution_service.active_for_position(position_id, on_date or timezone.localdate())
     return [{"position_id": row.substitute_position_id,
              "kind": row.kind,
              "basis": row.basis}

@@ -2073,7 +2073,7 @@ def resource_gantt(request):
 def project_plan_fact(request, project_id: int):
     """Дерево проект → площадки → блоки → роудмапы на отчётную дату."""
     try:
-        on = _date_param(request, "date") or date.today()
+        on = _date_param(request, "date") or timezone.localdate()
     except _ParamError as exc:
         return exc.response
     employee_scope, department_id = project_service.scope_for(request.token)
@@ -2087,7 +2087,7 @@ def project_plan_fact(request, project_id: int):
 def roadmap_plan_fact(request, roadmap_id: int):
     """То же для пакета работ + его задачи и серии по дням."""
     try:
-        on = _date_param(request, "date") or date.today()
+        on = _date_param(request, "date") or timezone.localdate()
     except _ParamError as exc:
         return exc.response
     employee_scope, department_id = roadmap_service.scope_for(request.token)
@@ -2107,7 +2107,7 @@ def equipment_usage(request):
     полного скана.
     """
     try:
-        target_date = _date_param(request, "date") or date.today()
+        target_date = _date_param(request, "date") or timezone.localdate()
         date_from = _date_param(request, "date_from") or target_date
         date_to = _date_param(request, "date_to") or target_date
         category_id = _int_param(request, "category_id")
@@ -2151,7 +2151,7 @@ def _bounded_range(request, start_key: str, end_key: str):
     """
     start = _date_param(request, start_key)
     end = _date_param(request, end_key)
-    start = start or date.today().replace(day=1)
+    start = start or timezone.localdate().replace(day=1)
     end = end or (start + timedelta(days=31))
     if start > end:
         raise _ParamError(json_error(

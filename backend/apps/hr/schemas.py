@@ -582,7 +582,7 @@ class TimeDailyReportQuery(BaseModel):
     """Порт Query(employee_id, date) роутера ``GET /time-tracking/reports/daily``.
 
     ``date`` опционален (default_factory=date.today в исходнике) — здесь
-    ``None`` и подстановка ``date.today()`` в вьюхе, тот же эффект.
+    ``None`` и подстановка ``timezone.localdate()`` в вьюхе, тот же эффект.
 
     ``report_date``/``alias="date"`` — та же защита от самозатеняющегося
     поля под postponed evaluation, что и TimeEntryUpdate.entry_date выше."""

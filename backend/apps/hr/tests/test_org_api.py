@@ -47,6 +47,7 @@ import pytest
 from django.db import connection
 from django.db.utils import IntegrityError
 from django.test import Client
+from django.utils import timezone
 
 from apps.hr.models import Department, Employee, Position, ReportingRelation
 from apps.users.models import User, UserStatus
@@ -403,7 +404,7 @@ def test_add_relation_defaults_relation_type_direct_and_effective_from_today(adm
     assert resp.status_code == 201
     body = resp.json()
     assert body["relation_type"] == "direct"
-    assert body["effective_from"] == datetime.date.today().isoformat()
+    assert body["effective_from"] == timezone.localdate().isoformat()
 
 
 @pytest.mark.django_db

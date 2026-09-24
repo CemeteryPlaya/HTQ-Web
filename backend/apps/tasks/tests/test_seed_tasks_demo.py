@@ -24,12 +24,11 @@
 """
 from __future__ import annotations
 
-import datetime as dt
-
 import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
+from django.utils import timezone
 
 from apps.hr.models import Department, Employee, Position
 from apps.tasks.models import (
@@ -394,7 +393,7 @@ def test_work_date_is_not_the_date_the_report_was_typed_in(hr_data):
     """Ключевое различие всего модуля: отчёт за пятницу заполняют в
     понедельник, и S-кривая обязана положить его на пятницу."""
     _seed()
-    today = dt.date.today()
+    today = timezone.localdate()
     assert DailyReport.objects.filter(work_date__lt=today).count() > 20
     assert not DailyReport.objects.filter(work_date__gt=today).exists()
 
@@ -486,7 +485,7 @@ def test_company_option_writes_into_the_company_schema(company_schema):
 def test_staff_report_dates_are_never_in_the_future(hr_data):
     """Дата ВЫХОДА людей: отчитаться за завтра нельзя."""
     _seed()
-    today = dt.date.today()
+    today = timezone.localdate()
     assert not ProjectStaffReport.objects.filter(
         work_date__gt=today).exists()
     assert ProjectStaffReport.objects.filter(work_date=today).exists()
@@ -517,7 +516,7 @@ def test_a_stopped_site_has_no_recent_staffing(hr_data):
     """Кандыагаш «встал»: план на сегодня есть, людей нет. Ради этой строки
     на доске и видно отставание, а не ровные нули везде."""
     _seed()
-    today = dt.date.today()
+    today = timezone.localdate()
     stopped = SiteBlock.objects.get(name="Участок 12–19")
     assert not ProjectStaffReport.objects.filter(
         site_block=stopped, work_date=today).exists()
@@ -548,7 +547,7 @@ def test_plan_fact_shows_a_package_that_is_behind(hr_data):
     roadmap = Roadmap.objects.select_related("project").get(
         name="Развозка валов трекерных конструкций",
         site_block__name="Блок I")
-    node = plan_fact_service.roadmap_plan_fact(roadmap, dt.date.today())
+    node = plan_fact_service.roadmap_plan_fact(roadmap, timezone.localdate())
 
     # 68.1, а не 200/250 = 80 %: процент пакета — это взвешенное среднее
     # процентов задач с весом по плановой длительности, а не отношение сумм.
@@ -572,7 +571,7 @@ def test_plan_fact_shows_a_package_that_has_stalled(hr_data):
     _seed()
     roadmap = Roadmap.objects.select_related("project").get(
         name="Замена опор на участке 12–19")
-    node = plan_fact_service.roadmap_plan_fact(roadmap, dt.date.today())
+    node = plan_fact_service.roadmap_plan_fact(roadmap, timezone.localdate())
 
     assert node["fact_pct"] == pytest.approx(26.5, abs=0.5)
     assert node["forecast_end"] is None
@@ -584,7 +583,7 @@ def test_plan_fact_shows_a_package_that_is_ahead(hr_data):
     _seed()
     roadmap = Roadmap.objects.select_related("project").get(
         name="Монтаж металлоконструкций ОРУ")
-    node = plan_fact_service.roadmap_plan_fact(roadmap, dt.date.today())
+    node = plan_fact_service.roadmap_plan_fact(roadmap, timezone.localdate())
 
     assert node["spi"] > 1.05
     assert "ahead" in node["flags"]
@@ -596,7 +595,7 @@ def test_a_package_that_has_not_started_reports_none_not_zero(hr_data):
     _seed()
     roadmap = Roadmap.objects.select_related("project").get(
         name="Монтаж трекерных конструкций")
-    node = plan_fact_service.roadmap_plan_fact(roadmap, dt.date.today())
+    node = plan_fact_service.roadmap_plan_fact(roadmap, timezone.localdate())
 
     assert node["plan_pct"] == 0.0
     assert node["spi"] is None

@@ -23,6 +23,7 @@ import json
 from django.conf import settings as django_settings
 from django.db import transaction
 from django.http import HttpResponse, JsonResponse
+from django.utils import timezone
 from pydantic import ValidationError
 
 from htqweb import date_rules
@@ -1831,7 +1832,7 @@ def time_daily_report(request):
         query = schemas.TimeDailyReportQuery.model_validate(dict(request.GET.items()))
     except ValidationError as exc:
         return _query_error(exc)
-    day = query.report_date or datetime.date.today()
+    day = query.report_date or timezone.localdate()
     return time_svc.daily_report(query.employee_id, day)
 
 

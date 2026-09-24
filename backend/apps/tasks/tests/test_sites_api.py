@@ -366,10 +366,12 @@ def test_stats_can_be_narrowed_to_one_site():
 
 @pytest.mark.django_db
 def test_resource_gantt_can_be_narrowed_to_one_site():
-    from datetime import date, timedelta
+    from datetime import timedelta
+
+    from django.utils import timezone
 
     site = _site("Алга")
-    today = date.today()
+    today = timezone.localdate()
     window = {"from": str(today - timedelta(days=1)),
               "to": str(today + timedelta(days=30))}
     _task(site=site, assignee_id=USER, start_date=today,

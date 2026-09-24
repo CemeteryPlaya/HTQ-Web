@@ -16,6 +16,7 @@ import datetime as dt
 
 import pytest
 from django.test import Client
+from django.utils import timezone
 
 from apps.tasks.models import (DailyReport, DailyReportRevision, Project,
                                ProjectSite, Roadmap, Site, SiteBlock, Task,
@@ -26,6 +27,10 @@ from .helpers import (BASE, admin_token, auth, patch_json, post_json, token)
 D = dt.date
 ME = 7          # user_id обычного токена
 OTHER = 555
+
+# 21:30 UTC — в Алматы уже 02:30 следующего дня: «сегодня» в поясе платформы
+# и в UTC здесь разные дни.
+BOUNDARY = dt.datetime(2026, 9, 24, 21, 30, tzinfo=dt.timezone.utc)
 
 
 @pytest.fixture
@@ -351,10 +356,12 @@ def test_board_lists_my_reportable_tasks_with_plan_and_fact(task, valy):
     assert [r["quantity"] for r in body[0]["reports"]] == [20.0]
 
 
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Almaty"])
 @pytest.mark.django_db
-def test_board_defaults_to_today(task, valy):
+def test_board_defaults_to_today(task, valy, tz, pinned_clock):
+    pinned_clock(BOUNDARY, tz)
     DailyReport.objects.create(task=task, volume_type=valy,
-                               work_date=dt.date.today(), quantity=15)
+                               work_date=timezone.localdate(), quantity=15)
     body = Client().get(f"{BASE}/daily-reports/board", **auth()).json()
     assert [r["quantity"] for r in body[0]["reports"]] == [15.0]
 

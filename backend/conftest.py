@@ -119,6 +119,24 @@ def fallback_log_mode(settings):
     return settings
 
 
+# Часы платформы, закреплённые на моменте, и её пояс. Нужны тестам границы
+# суток: «сегодня» в поясе платформы и «сегодня» в UTC расходятся несколько
+# часов в сутки, и без закрепления такой тест краснеет только ночью.
+# Подменяется django.utils.timezone.now — через него идут timezone.localdate(),
+# auto_now-поля и сервисы; JWT считает время сам (datetime.now), поэтому
+# выданные токены остаются действительными.
+@pytest.fixture
+def pinned_clock(settings, monkeypatch):
+    from django.utils import timezone as dj_timezone
+
+    def pin(moment, tz: str):
+        settings.TIME_ZONE = tz
+        monkeypatch.setattr(dj_timezone, "now", lambda: moment)
+        return moment
+
+    return pin
+
+
 # ---------------------------------------------------------------------------
 # Фикстуры компаний-схем (задача 14). Общие для тестов ЛЮБОЙ будущей аппки,
 # которой понадобится работать в контексте компании — поэтому живут здесь, а

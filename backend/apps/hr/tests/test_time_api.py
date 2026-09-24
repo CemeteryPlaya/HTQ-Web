@@ -32,6 +32,7 @@ import datetime
 
 import pytest
 from django.test import Client
+from django.utils import timezone
 
 from apps.hr.models import Department, Employee, Position, TimeEntry
 from apps.users.models import User, UserStatus
@@ -272,7 +273,7 @@ def test_daily_report_sums_minutes_minus_break(auth, emp):
 
 @pytest.mark.django_db
 def test_daily_report_defaults_to_today_when_date_omitted(auth, emp):
-    today = datetime.date.today()
+    today = timezone.localdate()
     _entry(emp, today, datetime.time(9, 0), datetime.time(10, 0))
     resp = Client().get(f"{BASE}/reports/daily?employee_id={emp.id}", **auth)
     assert resp.status_code == 200

@@ -45,6 +45,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.hr import interface as hr_interface
 from apps.tasks.models import (
@@ -94,7 +95,7 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1", "db", "::1", ""}
 SYSTEM_TASK_TYPES = import_module(
     "apps.tasks.migrations.0002_seed_system_task_types").SEED_TYPES
 
-TODAY = date.today()
+TODAY = timezone.localdate()
 
 
 def _d(offset: int) -> date:

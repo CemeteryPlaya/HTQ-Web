@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from django.utils import timezone
 
 from apps.core.services import ServiceDisabled
 from apps.hr import interface
@@ -49,7 +50,7 @@ def test_primary_comes_first(matrix):
 
 def test_date_defaults_to_today(matrix):
     assert interface.substitutes_for(matrix["ceo"].id) == \
-        interface.substitutes_for(matrix["ceo"].id, dt.date.today())
+        interface.substitutes_for(matrix["ceo"].id, timezone.localdate())
 
 
 def test_position_without_rules_returns_empty_list(matrix):

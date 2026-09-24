@@ -34,7 +34,7 @@ repositories/base_repo.py в части, которую он использов�
 """
 from __future__ import annotations
 
-from datetime import date
+from django.utils import timezone
 
 from apps.hr.models import Application, Document, Vacancy
 
@@ -134,7 +134,7 @@ def update_vacancy(id: int, data) -> Vacancy:
 def close_vacancy(id: int) -> None:
     vacancy = get_vacancy(id)
     vacancy.status = "closed"
-    vacancy.closed_at = date.today()
+    vacancy.closed_at = timezone.localdate()
     vacancy.save()
 
 
