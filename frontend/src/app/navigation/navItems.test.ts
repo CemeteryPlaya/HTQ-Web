@@ -13,8 +13,15 @@ import {
   type NavAbilities,
 } from './navItems';
 
-const FULL: NavAbilities = { isEditor: true, isHr: true, hasTasks: true, hasDepartment: true };
-const PLAIN: NavAbilities = { isEditor: false, isHr: false, hasTasks: false, hasDepartment: false };
+const FULL: NavAbilities = {
+  isEditor: true, isHr: true, hasTasks: true, hasDepartment: true,
+  hasMessenger: true, hasMail: true,
+};
+const PLAIN: NavAbilities = {
+  isEditor: false, isHr: false, hasTasks: false, hasDepartment: false,
+  hasMessenger: true, hasMail: true,
+};
+const NO_COMMS: NavAbilities = { ...PLAIN, hasMessenger: false, hasMail: false };
 
 describe('navItems', () => {
   it('идентификаторы уникальны', () => {
@@ -38,6 +45,12 @@ describe('navItems', () => {
     expect(ids).not.toContain('manage-news');  // требует editor
     expect(ids).not.toContain('tasks');        // требует tasks
     expect(ids).not.toContain('files');        // требует отдела
+  });
+
+  it('без доступа к мессенджеру и почте их пунктов нет (иначе клик — 403)', () => {
+    const ids = visibleNavItems(NO_COMMS).map((i) => i.id);
+    expect(ids).not.toContain('messenger');
+    expect(ids).not.toContain('email');
   });
 
   it('мобильная панель — подмножество разделов шапки (наборы не расходятся)', () => {

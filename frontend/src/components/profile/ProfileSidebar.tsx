@@ -249,6 +249,9 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
     const admin = permissions.atLeast('users', 'admin');
     const elevated = permissions.atLeast('tasks', 'admin');
     const hasTasksAccess = permissions.atLeast('tasks', 'read');
+    const hasMessenger = permissions.atLeast('messenger', 'read');
+    const hasConference = permissions.atLeast('conference', 'read');
+    const hasMail = permissions.atLeast('mail', 'read');
     // Кадровые пункты — по тому же правилу, что и навигация самого HR-модуля
     // (`HRLayout`): `hrNavVisible` читает права из `usePermissions`, а не
     // кадровый уровень (задача 10 блока I). Администратор платформы видит
@@ -271,17 +274,19 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
     ], [t]);
 
     const communicationItems: ItemConfig[] = useMemo(() => [
-        { id: 'messenger', to: '/messenger', icon: MessageSquare, label: t('profile.sidebar.messenger', 'Мессенджер') },
-        { id: 'conference', to: '/conference', icon: Video, label: t('profile.sidebar.conference', 'Видеоконференция'), onClick: gateService('conference') },
-        { id: 'conference-history', to: '/conference/history', icon: History, label: t('profile.sidebar.conferenceHistory', 'История конференций'), onClick: gateService('conference') },
-        { id: 'email', to: '/email', icon: Mail, label: t('profile.sidebar.email', 'Почта') },
+        ...(hasMessenger ? [{ id: 'messenger', to: '/messenger', icon: MessageSquare, label: t('profile.sidebar.messenger', 'Мессенджер') }] : []),
+        ...(hasConference ? [
+            { id: 'conference', to: '/conference', icon: Video, label: t('profile.sidebar.conference', 'Видеоконференция'), onClick: gateService('conference') },
+            { id: 'conference-history', to: '/conference/history', icon: History, label: t('profile.sidebar.conferenceHistory', 'История конференций'), onClick: gateService('conference') },
+        ] : []),
+        ...(hasMail ? [{ id: 'email', to: '/email', icon: Mail, label: t('profile.sidebar.email', 'Почта') }] : []),
         // `isDisabled` В ЗАВИСИМОСТЯХ ОБЯЗАТЕЛЕН. Без него мемо считался один раз,
         // на первом рендере — когда ответ реестра ещё не пришёл и действовал
         // локальный фолбэк. Обработчик клика застывал на том состоянии и
         // блокировал раздел навсегда, даже после успешного ответа: именно так
         // «Видеоконференция» показывала «Функция временно отключена» при
         // включённом сервисе.
-    ], [t, isDisabled]);
+    ], [t, isDisabled, hasMessenger, hasConference, hasMail]);
 
     const workItems: ItemConfig[] = useMemo(() => {
         const items: ItemConfig[] = [

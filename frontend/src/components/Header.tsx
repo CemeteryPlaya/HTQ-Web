@@ -123,6 +123,8 @@ export const Header = () => {
     isHr: permissions.atLeast('hr', 'read'),
     hasTasks: permissions.atLeast('tasks', 'read'),
     hasDepartment: Boolean(activeProfile?.department),
+    hasMessenger: permissions.atLeast('messenger', 'read'),
+    hasMail: permissions.atLeast('mail', 'read'),
   });
 
   // Вкладок стало больше, чем помещается в один ряд: держим в ряду первые
