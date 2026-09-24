@@ -207,6 +207,29 @@ def get_users_brief(user_ids: Iterable[int]) -> list[dict]:
     return [_brief_from_values(row) for row in rows]
 
 
+def staff_user_ids() -> list[int]:
+    """Id пользователей с ``is_staff=True``, кроме суперпользователей, с
+    ДЕЙСТВУЮЩЕЙ учёткой.
+
+    Единственный потребитель — перенос блока L
+    (``manage.py access_backfill_services_admin``): до гейта модуля шесть
+    экранов (media/conference/messenger/mail/cms/approvals) пускали по
+    ``is_staff`` напрямую (``admin=True``), и «перенести как есть» значит
+    найти именно этих людей, а не всех активных пользователей платформы.
+    Суперпользователь исключён — он проходит гейт модуля сам, ему выдавать
+    роль незачем; неактивная учётка (``status`` не ``ACTIVE``) исключена по
+    той же причине, по которой её исключает ``active_member_ids`` соседней
+    аппки — отключённому или ещё не подтверждённому пользователю токена всё
+    равно не выдадут.
+    """
+    require_service("users")
+    return list(
+        User.objects
+        .filter(is_staff=True, is_superuser=False, status=UserStatus.ACTIVE)
+        .values_list("id", flat=True)
+    )
+
+
 def list_users_brief(search: str | None = None, limit: int = 100) -> list[dict]:
     """Users as picker options — ``{id, username, email, first_name,
     last_name, full_name, is_active}`` — for hr's ``/employees/users/`` GET
