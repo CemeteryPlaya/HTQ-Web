@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from apps.access.services import assignment, hierarchy, holders, resolve
+from apps.access.services.errors import UnknownRole
 from apps.access.services.identity import identity
 from apps.core.services import require_service
 
@@ -174,4 +175,4 @@ def ensure_basic_role(company_slug: str, user_id: int) -> bool:
 
 __all__ = ["ensure_basic_role", "ensure_position_role", "external_holders", "flags_for",
            "permission_level", "permissions_for", "resolution", "serving_holders",
-           "subordinate_companies"]
+           "subordinate_companies", "UnknownRole"]

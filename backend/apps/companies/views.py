@@ -33,6 +33,7 @@ from __future__ import annotations
 from django.http import HttpResponse, JsonResponse
 from django.utils.decorators import method_decorator
 
+from apps.access.interface import UnknownRole
 from apps.users.interface import get_user_brief
 from htqweb.http import ApiView, api_view, json_error
 from htqweb.tenancy.context import current_company_or_none
@@ -302,9 +303,16 @@ class CompanyMembershipsView(CompaniesView):
             return self.lifecycle_error(exc)
         if get_user_brief(data.user_id) is None:
             return json_error(f"Пользователь {data.user_id} не найден", 422)
-        created = membership_service.grant_membership(
-            company, data.user_id, is_default=data.is_default,
-        )
+        try:
+            created = membership_service.grant_membership(
+                company, data.user_id, is_default=data.is_default,
+            )
+        except UnknownRole as exc:
+            # Базовая роль не засеяна — выкатка не завершена (миграции access),
+            # а не ошибка клиента и не падение сервера. Членство откатилось
+            # вместе с неудачной выдачей (одна транзакция в grant_membership).
+            return JsonResponse({"detail": str(exc), "code": "access_not_seeded"},
+                                status=503)
         row = next(m for m in membership_service.list_memberships(company)
                    if m["user_id"] == data.user_id)
         return JsonResponse(schemas.MembershipRead(**row).model_dump(mode="json"),

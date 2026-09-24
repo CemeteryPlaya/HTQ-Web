@@ -103,3 +103,13 @@ def test_repeated_run_does_not_duplicate(company, active_user):
     assert CompanyMembership.objects.filter(
         company=company, user_id=active_user.id,
     ).count() == 1
+
+
+@pytest.mark.django_db
+def test_missing_basic_role_is_a_command_error_not_a_traceback(company, active_user):
+    from apps.access.models import Role
+
+    Role.objects.filter(code="employee-basic").delete()
+    with pytest.raises(CommandError, match="employee-basic"):
+        call_command("company_grant", company_slug=company.slug, user=str(active_user.id))
+    assert not CompanyMembership.objects.filter(company=company).exists()

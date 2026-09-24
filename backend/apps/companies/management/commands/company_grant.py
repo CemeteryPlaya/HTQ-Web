@@ -30,7 +30,7 @@
 
 from django.core.management.base import BaseCommand, CommandError
 
-from apps.access.interface import serving_holders
+from apps.access.interface import UnknownRole, serving_holders
 from apps.companies.models import Company
 from apps.companies.services import membership_service
 
@@ -84,7 +84,14 @@ class Command(BaseCommand):
         granted = 0
         already = 0
         for user_id in user_ids:
-            if membership_service.grant_membership(company, user_id):
+            try:
+                created = membership_service.grant_membership(company, user_id)
+            except UnknownRole as exc:
+                raise CommandError(
+                    f"{exc}. Примените миграции access (manage.py migrate_shared) "
+                    f"и повторите — уже выданные членства ({granted}) сохранены."
+                ) from exc
+            if created:
                 granted += 1
             else:
                 already += 1

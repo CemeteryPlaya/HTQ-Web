@@ -113,6 +113,20 @@ def test_membership_grant_rejects_unknown_user(client, company):
 
 
 @pytest.mark.django_db
+def test_membership_grant_without_the_basic_role_is_503_not_500(client, company, user):
+    """Базовая роль не засеяна (миграции access не применены) — это
+    незавершённая выкатка, а не падение сервера: 503 с кодом и причиной,
+    членство не создано."""
+    Role.objects.filter(code="employee-basic").delete()
+    res = post_json(client, f"{BASE}/companies/htq/memberships",
+                    {"user_id": user.id}, **auth(superuser_token()))
+    assert res.status_code == 503
+    assert res.json()["code"] == "access_not_seeded"
+    assert "employee-basic" in res.json()["detail"]
+    assert not CompanyMembership.objects.filter(company=company, user_id=user.id).exists()
+
+
+@pytest.mark.django_db
 def test_cannot_revoke_own_membership(client, company):
     CompanyMembership.objects.create(company=company, user_id=9)  # 9 = superuser_token
     res = client.delete(f"{BASE}/companies/htq/memberships/9", **auth(superuser_token()))
