@@ -6,36 +6,26 @@
 """
 import json
 
-import jwt as pyjwt
 import pytest
-from django.conf import settings
 from django.test import Client
 
 from apps.cms.models import HomeSection, HomeSectionItem
+from apps.cms.tests.helpers import admin_token, auth_header, token
 
 BASE = "/api/cms/v1/home"
 
 
-def _token(**over):
-    claims = {
-        "user_id": 7, "username": "u", "email": "u@htq.test",
-        "is_staff": False, "is_superuser": False, "is_admin": False,
-        "token_type": "access", "iat": 1, "exp": 9_999_999_999,
-        "iss": "htqweb-auth", "sub": "7",
-        **over,
-    }
-    return pyjwt.encode(claims, settings.JWT_SECRET, algorithm="HS256")
+@pytest.fixture
+def auth(db):
+    """Обычный залогиненный пользователь — не редактор (``cms:read``, уровень
+    ``employee-basic``: 403 на запись даёт гейт модуля, блок L)."""
+    return auth_header(token())
 
 
 @pytest.fixture
-def auth():
-    """Обычный залогиненный пользователь — не редактор."""
-    return {"HTTP_AUTHORIZATION": f"Bearer {_token()}"}
-
-
-@pytest.fixture
-def admin_auth():
-    return {"HTTP_AUTHORIZATION": f"Bearer {_token(user_id=9, sub='9', is_admin=True)}"}
+def admin_auth(db):
+    """Редактор контента — ``cms:full`` (до блока L хватало ``is_admin``)."""
+    return auth_header(admin_token())
 
 
 @pytest.fixture

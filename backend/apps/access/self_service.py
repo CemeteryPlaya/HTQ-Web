@@ -126,7 +126,8 @@ from __future__ import annotations
 #: Блок L (docs/plans/2026-09-24-block-l-gate-remaining-apps.md) добавляет по
 #: одной аппке на задачу; у ``media_files`` модуль прав называется ``media``.
 TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies",
-                                             "media_files", "conference", "messenger", "mail"})
+                                             "media_files", "conference", "messenger", "mail",
+                                             "cms"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -552,4 +553,20 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         # POST draft — черновик создаётся с user_id токена, параметра-id нет.
         "save_draft": "self",
     },
+    # cms (блок L, задача 8). Записей самообслуживания нет: контент (новости,
+    # категории/теги, блоки главной, обращения — 25 бывших admin=True) стоит
+    # под module="cms", level="write" — уровня, которого employee-basic не
+    # несёт (её уровень в cms — read, инвариант L1: у неё только cms.news:view
+    # из access/0004, задача 8 не добавляла ей новых узлов). Конфиг конференции
+    # и все четыре ручки приглашений — level="read" (уровень employee-basic),
+    # но приглашения защищены не гейтом модуля, а
+    # conference_invite_service.may_manage_invites: организатор календарного
+    # события комнаты (apps.tasks.interface.get_conference_event_for_room),
+    # автор ссылки (ConferenceInvite.created_by_id) или cms:admin — спека
+    # блока L §7. _create_conference_invite остаётся открытой любому
+    # сотруднику ("перенести как есть", §12 вопрос 2 спеки). Публичные ручки
+    # (создание обращения, чтение новостей/категорий/тегов/блоков главной,
+    # публичная страница приглашения и выдача гостевого токена) — auth=None,
+    # в реестр не входят.
+    "cms": {},
 }

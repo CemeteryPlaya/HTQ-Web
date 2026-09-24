@@ -38,6 +38,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from apps.cms.models import ConferenceInvite
+from apps.tasks import interface as tasks_interface
 from htqweb.authn.jwt import issue_guest_token
 
 log = logging.getLogger(__name__)
@@ -165,6 +166,42 @@ def issue_guest_access(invite: ConferenceInvite, *, display_name: str) -> dict:
         # без него интерфейс откатился бы на язык браузера при входе в комнату.
         "locale": normalize_locale(invite.locale),
     }
+
+
+def may_manage_invites(token, room_id: str, invite: ConferenceInvite | None = None) -> bool:
+    """Управлять ссылками встречи: организатор события, автор ссылки или cms:admin.
+
+    Блок L, спека §7. До этой проверки список ссылок комнаты (с токенами
+    входа), отзыв и рассылка были доступны любому вошедшему. Организатор —
+    creator_id календарного события комнаты; комнаты без события (кнопка
+    «Создать комнату») обслуживает автор ссылки. Выключенный у компании
+    tasks не роняет проверку: условие организатора просто ложно.
+    """
+    from apps.access import interface as access
+    from apps.core.services import ServiceDisabled
+    from htqweb.fallback import fallback
+    from htqweb.tenancy.context import current_company_or_none
+
+    if token.is_superuser:
+        return True
+    if access.permission_level(token, "cms", current_company_or_none()) == "admin":
+        return True
+    if token.user_id is None:
+        # Без user_id не с чем сравнивать автора и организатора: ссылка
+        # без автора (``created_by_id=None``) не должна совпасть с «никем».
+        return False
+    if invite is not None and invite.created_by_id == token.user_id:
+        return True
+    try:
+        event = tasks_interface.get_conference_event_for_room(room_id)
+    except ServiceDisabled as exc:
+        # Предусмотренная деградация (как conference.access.calendar_unavailable):
+        # календарь выключен — организатора не узнать, остаются автор ссылки
+        # и cms:admin. expected=True — strict режим её не роняет.
+        event = fallback("cms.invites.calendar_unavailable", None,
+                         reason="календарь недоступен — организатор встречи не определён",
+                         expected=True, exc=exc)
+    return bool(event) and event.get("creator_id") == token.user_id
 
 
 def revoke(invite_id: int) -> ConferenceInvite:
