@@ -309,9 +309,10 @@ H](plans/2026-09-17-block-h-holding-readers.md). Читают только вн�
 `apps/tasks/tests/test_daily_reports_api.py::test_board_defaults_to_today` и
 `apps/tasks/tests/test_project_staff_reports_api.py::test_board_defaults_to_today_and_rejects_a_malformed_date`.
 
-**Состояние на 23.09.2026 — не исправлено:** в закоммиченном коде
-`TIME_ZONE = "UTC"`, вьюхи досок берут `timezone.localdate()`
-(`apps/tasks/views.py:892`, `:981`), оба теста — `dt.date.today()`.
+**Состояние на 24.09.2026 — закрыто блоком K (задача 3, `675ddaf`):**
+«сегодня» на платформе одно — `timezone.localdate()`, сторож
+`apps/core/tests/test_platform_today.py`; оба теста досок закреплены на
+границе суток при `UTC` и `Asia/Almaty`.
 
 Причина установлена и к мультикомпанейности отношения не имеет:
 
