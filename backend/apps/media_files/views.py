@@ -165,7 +165,8 @@ def files_collection(request, *args, **kwargs):
 
 @api_view(methods=("GET",), auth="jwt", module="media", level="admin")
 def list_files(request):
-    """``GET /api/media/v1/files/`` (admin only).
+    """``GET /api/media/v1/files/`` — ``module="media", level="admin"`` по роли
+    (блок L; до него ``admin=True``).
 
     Ported from the source's ``list_files`` — ``limit``/``offset`` query
     params, same bounds (``1<=limit<=500``, ``offset>=0``), soft-deleted

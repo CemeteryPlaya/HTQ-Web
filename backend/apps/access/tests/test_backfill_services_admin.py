@@ -60,3 +60,26 @@ def test_dry_run_writes_nothing_and_rerun_is_idempotent(company):
     assert RoleAssignment.objects.filter(
         company_slug=company.slug, user_id=staff.id,
         role__code="services-admin").count() == 1
+
+
+def test_company_option_limits_the_grant_and_names_the_company(company):
+    """``--company``: роль — только в этой компании; держатель членства в
+    другой печатается «нет членства в <slug>», а не «нет членства» вообще
+    (финальное ревью блока L, M-9)."""
+    other = Company.objects.create(slug="t-sa-other", name="SA2", kind=CompanyKind.SERVICE)
+    here = _user("here", staff=True)
+    elsewhere = _user("elsewhere", staff=True)
+    CompanyMembership.objects.create(company=company, user_id=here.id)
+    CompanyMembership.objects.create(company=other, user_id=here.id)
+    CompanyMembership.objects.create(company=other, user_id=elsewhere.id)
+    out = _run("--company", company.slug)
+    assert _holders(company.slug) == {here.id}
+    assert _holders(other.slug) == set()
+    assert f"пользователь {elsewhere.id}: нет членства в {company.slug}" in out
+
+
+def test_unknown_company_is_an_error(company):
+    from django.core.management.base import CommandError
+
+    with pytest.raises(CommandError):
+        _run("--company", "no-such-company")

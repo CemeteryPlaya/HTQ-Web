@@ -3,8 +3,10 @@
 Не синтетические роли тестов, а ``employee-basic`` и ``services-admin`` из
 миграций ``access``: правка контента (бывшие ``admin=True``) — под
 ``cms:write``, которого у базовой роли нет (её уровень в ``cms`` — ``read``,
-инвариант L1); приглашения и конфиг конференции — под ``cms:read``, чужие
-ссылки закрывает ``conference_invite_service.may_manage_invites`` (спека §7).
+инвариант L1); приглашения — под ``cms:read``, чужие ссылки закрывает
+``conference_invite_service.may_manage_invites`` (спека §7). Конфиг
+конференции гейта модуля не несёт — ``open`` в реестре самообслуживания
+(финальное ревью блока L, I-1).
 """
 import pytest
 from django.test import Client
@@ -46,14 +48,30 @@ def test_staff_without_a_role_may_not_edit_news():
 
 @pytest.mark.django_db
 def test_services_admin_edits_news():
-    resp = post_json(Client(), f"{BASE}/news/", {"title": "x"}, **_as("services-admin", 343))
-    assert resp.status_code != 403
+    # Тело валидно (``slug`` обязателен в ``NewsCreate``): точный 201, а не
+    # «не 403» — иначе 422/500 прошли бы за успех (финальное ревью, M-7).
+    resp = post_json(Client(), f"{BASE}/news/", {"title": "x", "slug": "gate-roles-news"},
+                     **_as("services-admin", 343))
+    assert resp.status_code == 201
 
 
 @pytest.mark.django_db
 def test_employee_basic_reads_conference_config():
     assert Client().get(f"{BASE}/conference/config",
-                        **_as("employee-basic", 344)).status_code != 403
+                        **_as("employee-basic", 344)).status_code == 200
+
+
+@pytest.mark.django_db
+def test_employee_on_bare_domain_reads_conference_config():
+    """Комната ``/room/<id>`` открывается и на голом домене — туда ведёт
+    ссылка-приглашение. Без ``X-HTQ-Company`` гейт модуля дал бы ``none`` и
+    403 (звонок без TURN), поэтому конфиг — ``open`` в реестре
+    самообслуживания (финальное ревью блока L, I-1). Токен голого домена —
+    без claim'а ``company`` и без ролей."""
+    resp = Client().get(f"{BASE}/conference/config",
+                        HTTP_AUTHORIZATION=f"Bearer {token(user_id=346, sub='346')}")
+    assert resp.status_code == 200
+    assert isinstance(resp.json()["ice_servers"], list)
 
 
 def _invite(room_id="room-x", author=350) -> ConferenceInvite:
@@ -129,3 +147,25 @@ def test_meeting_organizer_manages_links_he_did_not_create(monkeypatch):
     assert [row["id"] for row in listed] == [invite.id]
     resp = Client().delete(f"{BASE}/conference/invites/{invite.id}", **organizer)
     assert resp.status_code == 204
+
+
+@pytest.mark.django_db
+def test_invite_list_asks_calendar_once_per_request(monkeypatch):
+    """Все ссылки списка — одной комнаты: календарь (и при выключенном
+    ``tasks`` — запись FALLBACK) спрашивается один раз на запрос, а не на
+    каждую ссылку (финальное ревью блока L, M-5)."""
+    from apps.cms.services import conference_invite_service as svc
+
+    calls = []
+
+    def event_of(room_id):
+        calls.append(room_id)
+        return {"id": 1, "creator_id": 357, "conference_room_id": room_id}
+
+    monkeypatch.setattr(svc.tasks_interface, "get_conference_event_for_room", event_of)
+    first, second = _invite(author=350), _invite(author=358)
+
+    listed = Client().get(f"{BASE}/conference/invites?room_id=room-x",
+                          **_as("employee-basic", 357)).json()
+    assert sorted(row["id"] for row in listed) == sorted([first.id, second.id])
+    assert calls == ["room-x"]

@@ -226,6 +226,9 @@ def staff_user_ids() -> list[int]:
     return list(
         User.objects
         .filter(is_staff=True, is_superuser=False, status=UserStatus.ACTIVE)
+        # Порядок детерминирован: сводка переноса сверяется между --dry-run и
+        # боевым прогоном глазами (финальное ревью блока L, M-9).
+        .order_by("id")
         .values_list("id", flat=True)
     )
 

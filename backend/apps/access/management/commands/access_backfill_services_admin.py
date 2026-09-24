@@ -52,8 +52,12 @@ class Command(BaseCommand):
             if only:
                 slugs = [s for s in slugs if s == only]
             if not slugs:
+                # С --company членства может не быть именно в ней, а в других —
+                # есть: «нет членства» без имени компании читалось бы как «нет
+                # нигде» (финальное ревью блока L, M-9).
+                where = f" в {only}" if only else ""
                 self.stdout.write(self.style.WARNING(
-                    f"{prefix}пользователь {user_id}: нет членства — роль выдавать некуда"))
+                    f"{prefix}пользователь {user_id}: нет членства{where} — роль выдавать некуда"))
                 continue
             for slug in slugs:
                 exists = RoleAssignment.objects.filter(

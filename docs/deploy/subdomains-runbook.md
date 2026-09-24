@@ -278,8 +278,62 @@ level=)`, снимая `admin=True`.
 — то же условие, что у гейтов блока I выше: без `X-HTQ-Company`
 `permission_level` отвечает `none` всем, кроме суперпользователя.
 
+**Образ с гейтом не пускать под трафик до шага 3**: гейт действует с
+первого запроса, а роль `services-admin` администраторам выдаёт только
+шаг 3 — в промежутке `/admin/chats`, `/admin/mailboxes`, `/manage/*`,
+`/requests/projects` ответят им 403.
+
 1. `manage.py migrate_shared` — применяет `access/0011`, `access/0012`
    (`access` — общая аппка, `migrate_companies` не нужен).
+
+   1а. Сразу после — три проверки на боевой БД (только чтение):
+
+   ```bash
+   cd backend
+   ../.venv/Scripts/python.exe manage.py shell -c "
+   from django.db.models import Q
+   from apps.access.models import RoleAssignment, RolePermission
+   from apps.companies.models import CompanyMembership
+   # (а) членства без employee-basic: такой сотрудник после выкатки теряет
+   #     мессенджер, файлы, заявки, историю встреч (личная почта остаётся —
+   #     её ручки самообслуживание). Лечение — access_backfill_basic.
+   basic = set(RoleAssignment.objects.filter(role__code='employee-basic')
+               .values_list('company_slug', 'user_id'))
+   missing = [(m.company.slug, m.user_id) for m in CompanyMembership.objects
+              .filter(company__status='active').select_related('company')
+              if (m.company.slug, m.user_id) not in basic]
+   print('(а) членств без employee-basic:', len(missing), missing[:50])
+   # (б) роли из редактора с узлами шести модулей: заведённые ДО блока L,
+   #     они начинают действовать в момент выкатки (могут открыть кому-то
+   #     cms:write или admin модуля). Просмотреть каждую строку.
+   q = Q()
+   for m in ('media', 'conference', 'messenger', 'mail', 'cms', 'approvals'):
+       q |= Q(node=m) | Q(node__startswith=m + '.')
+   for r in (RolePermission.objects.filter(q)
+             .exclude(role__code__in=('employee-basic', 'services-admin'))
+             .select_related('role').order_by('role__code', 'node')):
+       flags = ''.join(f for f, on in (('V', r.can_view), ('C', r.can_create),
+                                      ('E', r.can_edit), ('D', r.can_delete)) if on)
+       print('(б)', r.role.code, r.role.company_slug or '-', r.node, flags)
+   # (в) employee-basic, правленная на бою в редакторе: 0011 только ДОБАВЛЯЕТ
+   #     строки (get_or_create) и уже существующую строку с меньшими
+   #     признаками не поднимет. Каждое расхождение — поправить в редакторе.
+   want = {'media.files': 'VC', 'messenger.rooms': 'VCE',
+           'conference.history': 'V', 'conference.transcripts': 'V',
+           'approvals.projects': 'V', 'approvals.templates': 'V',
+           'approvals.reference': 'V'}
+   have = {r.node: ''.join(f for f, on in (('V', r.can_view), ('C', r.can_create),
+                                           ('E', r.can_edit), ('D', r.can_delete)) if on)
+           for r in RolePermission.objects.filter(role__code='employee-basic', node__in=want)}
+   for node, flags in want.items():
+       if have.get(node) != flags:
+           print('(в) employee-basic', node, 'на бою:', have.get(node), 'ожидалось:', flags)
+   "
+   ```
+
+   Пустые (б) и (в) и ноль в (а) — можно дальше. Иначе: (а) —
+   `manage.py access_backfill_basic`; (б) — решить по каждой роли до
+   открытия трафика; (в) — выровнять строку роли в редакторе ролей.
 2. `manage.py access_backfill_services_admin --dry-run` — прочитать
    сводку: сколько администраторов, в каких компаниях, кто без членства.
 3. `manage.py access_backfill_services_admin`.
@@ -289,3 +343,9 @@ level=)`, снимая `admin=True`.
 
 Откат — предыдущий образ; строки `employee-basic` и роль `services-admin`
 безвредны для старого кода (он их не спрашивает).
+
+После выкатки: `services-admin` открывает экраны, но внутренние проверки
+`is_elevated` в сервисах остались (спека §10) — новому администратору
+сервисов, пока они не перенесены на узлы, нужен и `is_staff`, иначе часть
+действий внутри экрана (правка проекта заявок, глобальные шаблоны, чужие
+встречи в истории) ответит 403.

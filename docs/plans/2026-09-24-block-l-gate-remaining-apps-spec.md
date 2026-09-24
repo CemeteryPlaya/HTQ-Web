@@ -194,7 +194,8 @@
 
 ### 6.5 `cms`
 - `write` (было `admin=True`; фронт `/manage/*` требует `cms:write`): обращения — `_list_contact_requests`, `contact_request_stats`, `_get_contact_request`, `_update_contact_request`, `_delete_contact_request`, `reply_contact_request`; новости и таксономия — `_create_news`, `_update_news`, `_delete_news`, `translate_news`, `_create_category`, `_update_category`, `_delete_category`, `_create_tag`, `_update_tag`, `_delete_tag`; главная — `_list_home_sections_admin`, `_create_home_section`, `_delete_home_section`, `_update_home_section`, `home_sections_reorder`, `home_items_collection`, `home_items_reorder`, `_update_home_item`, `_delete_home_item`.
-- `read`: `conference_config`; приглашения — `_create_conference_invite`, `_list_conference_invites`, `conference_invite_revoke`, `conference_invite_send` (инвариант L1: `write` в `cms` занят контентом; защищает их проверка §7).
+- `read`: приглашения — `_create_conference_invite`, `_list_conference_invites`, `conference_invite_revoke`, `conference_invite_send` (инвариант L1: `write` в `cms` занят контентом; защищает их проверка §7).
+- `open` (реестр самообслуживания, без гейта): `conference_config` — финальное ревью I-1, см. §9.3 (в исходной редакции спеки стоял в `read`).
 - `auth=None`: `_create_contact_request`, `_list_news`, `news_by_slug`, `_get_news`, `_list_categories`, `_list_tags`, `home_sections_public`, `conference_invite_public`, `conference_invite_guest_token`.
 
 ### 6.6 `approvals`
@@ -270,8 +271,24 @@
    `ProfileSidebar.tsx`) — показывать по `atLeast('messenger'|'mail', 'read')`:
    после блока доступ к ним снимается ролью, и пункт без доступа вёл бы на 403.
 3. Голый домен (`/login`, `/join/<token>`, `/companies/choose`, лендинг `/`)
-   ручек под новым гейтом не зовёт: единственный вызов — бейдж
-   `messenger.unread_count`, он в `self` (§6.3). Изменений не нужно.
+   ручек под новым гейтом не зовёт, кроме бейджа `messenger.unread_count` —
+   он в `self` (§6.3). ⚠️ Исходная формулировка («изменений не нужно») была
+   неверной (финальное ревью, I-1): `/join/<token>` уводит сотрудника в
+   `/room/<id>` **того же** голого домена (ссылка строится от
+   `PUBLIC_BASE_URL`, маршрут комнаты публичный — в нём бывает гость), а
+   комната звала `cms.conference_config`, `conference.overview`,
+   `conference.sessions` и ручки приглашений — без компании гейт дал 403,
+   звонок стартовал без TURN/WebTransport. Закрыто так: `conference_config`
+   снят с гейта и записан в `SELF_SERVICE["cms"]` с причиной `open`
+   (рантайм-конфиг без данных пользователя, до блока — без проверок кроме
+   входа); `ConferencePage.tsx` на голом домене (`companyFromHost(host) ===
+   null`) не запрашивает сводку и историю встреч и не показывает кнопку
+   «Пригласить по ссылке». Увод сотрудника на хост компании отвергнут:
+   `/room` — публичный маршрут, `RequireAuth` с обменом refresh-cookie на
+   нём не работает, и сотрудник на новом поддомене попал бы на `/login`.
+   Сторожа: `cms/tests/test_gate_roles.py::
+   test_employee_on_bare_domain_reads_conference_config`,
+   `pages/__tests__/ConferencePageCompanyContext.test.tsx`.
 4. Проверки фронта: `tsc` не хуже базы, `vitest` не больше известных падений,
    `lint` не больше 376 проблем.
 

@@ -99,3 +99,42 @@ describe('ProfileSidebar — разделы меню', () => {
     expect(container.querySelector('a[href="/hr/employees"]')).not.toBeNull();
   });
 });
+
+// Финальное ревью блока L, M-3: ссылки модерации чатов и ящиков — по уровню
+// ИХ модулей (как маршруты /admin/chats и /admin/mailboxes), не по users:admin.
+describe('ProfileSidebar — ссылки модерации сервисов', () => {
+  const withLevels = (next: Record<string, string>) => {
+    const saved = { ...levels };
+    Object.keys(levels).forEach((k) => delete levels[k]);
+    Object.assign(levels, next);
+    return () => {
+      Object.keys(levels).forEach((k) => delete levels[k]);
+      Object.assign(levels, saved);
+    };
+  };
+
+  it('держатель services-admin без users:admin видит чаты и ящики', () => {
+    const restore = withLevels({ messenger: 'admin', mail: 'admin' });
+    try {
+      const { container } = renderSidebar();
+      expect(container.querySelector('a[href="/admin/chats"]')).not.toBeNull();
+      expect(container.querySelector('a[href="/admin/mailboxes"]')).not.toBeNull();
+      expect(container.querySelector('a[href="/admin/users"]')).toBeNull();
+      expect(container.querySelector('a[href="/holding"]')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it('users:admin без messenger:admin/mail:admin ссылок модерации не видит', () => {
+    const restore = withLevels({ users: 'admin', messenger: 'write', mail: 'read' });
+    try {
+      const { container } = renderSidebar();
+      expect(container.querySelector('a[href="/admin/users"]')).not.toBeNull();
+      expect(container.querySelector('a[href="/admin/chats"]')).toBeNull();
+      expect(container.querySelector('a[href="/admin/mailboxes"]')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+});

@@ -39,6 +39,7 @@ import {
   LivePanel, SessionRow, TodayPanel,
 } from '@/components/conference/OverviewPanels';
 import { fetchOverview, listSessions } from '@/api/conference';
+import { companyFromHost } from '@/lib/auth/companySwitch';
 import { useTranslation } from 'react-i18next';
 import i18next from '@/i18n';
 import { copyText } from '@/lib/clipboard';
@@ -710,6 +711,14 @@ export const ConferencePage = () => {
   }, [roomIdFromUrl]);
   const isGuest = Boolean(guest) && !token;
   const signalingToken = () => (isGuest ? guest!.token : getAccessToken());
+  // Есть ли у запросов контекст компании. Комната открывается и на ГОЛОМ
+  // домене: ссылка-приглашение строится от него, и ConferenceJoin уводит
+  // сотрудника в /room/<id> того же origin. Там компании нет, и гейт модуля
+  // отвечает 403 на всё под ним — историю и сводку встреч, ссылки-приглашения
+  // (финальное ревью блока L, I-1). Конфиг звонка гейта не несёт (open в
+  // реестре самообслуживания), поэтому сам звонок работает и здесь; ручки под
+  // гейтом на голом домене не зовём вовсе, а не показываем их ошибку.
+  const hasCompanyContext = companyFromHost(window.location.host) !== null;
 
   // Язык приглашения — только для гостя, и только здесь: сотрудник со своим
   // токеном не попадает в ветку `isGuest`, а значит, чужой выбор языка на
@@ -769,7 +778,7 @@ export const ConferencePage = () => {
   } = useQuery({
     queryKey: ['conference-overview'],
     queryFn: fetchOverview,
-    enabled: !!token,
+    enabled: !!token && hasCompanyContext,
     refetchInterval: 30_000,
   });
 
@@ -782,7 +791,7 @@ export const ConferencePage = () => {
   } = useQuery({
     queryKey: ['conference-recent'],
     queryFn: () => listSessions({ page: 1, limit: 5 }),
-    enabled: !!token,
+    enabled: !!token && hasCompanyContext,
   });
   const recentSessions = recentPage?.items ?? [];
 
@@ -2796,8 +2805,10 @@ export const ConferencePage = () => {
                           включая ручку создания приглашений, — рабочая
                           лобби-ветка и так не рендерится для гостя, но
                           проверка оставлена рядом с кнопкой на случай,
-                          если её когда-нибудь вынесут в общий блок. */}
-                      {!isGuest && (
+                          если её когда-нибудь вынесут в общий блок. На голом
+                          домене её тоже нет: ручки приглашений под гейтом
+                          модуля cms, а компании там нет — был бы 403. */}
+                      {!isGuest && hasCompanyContext && (
                         <Button
                           variant="secondary"
                           className="rounded-xl"

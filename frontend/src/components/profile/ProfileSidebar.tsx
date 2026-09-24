@@ -252,6 +252,13 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
     const hasMessenger = permissions.atLeast('messenger', 'read');
     const hasConference = permissions.atLeast('conference', 'read');
     const hasMail = permissions.atLeast('mail', 'read');
+    // Ссылки модерации — по уровню ИХ модулей, ровно как требуют маршруты
+    // /admin/chats (messenger:admin) и /admin/mailboxes (mail:admin), а не по
+    // users:admin: держатель services-admin без users:admin иначе ссылок не
+    // видел бы, а users:admin без services-admin получал бы 403 (финальное
+    // ревью блока L, M-3).
+    const chatsAdmin = permissions.atLeast('messenger', 'admin');
+    const mailboxesAdmin = permissions.atLeast('mail', 'admin');
     // Кадровые пункты — по тому же правилу, что и навигация самого HR-модуля
     // (`HRLayout`): `hrNavVisible` читает права из `usePermissions`, а не
     // кадровый уровень (задача 10 блока I). Администратор платформы видит
@@ -362,7 +369,7 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
         // в списке — то же, что и раньше (внутри adminItems, между
         // «Компании группы» и «Роли и права»): меняется условие показа, а не
         // местоположение.
-        if (!admin && !hrManager) return [];
+        if (!admin && !hrManager && !chatsAdmin && !mailboxesAdmin) return [];
         const items: ItemConfig[] = [];
         if (admin) {
             items.push(
@@ -370,16 +377,26 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
                 { id: 'companies', to: '/companies', icon: Building2, label: t('profile.sidebar.companies', 'Компании группы') },
             );
         }
-        items.push({ id: 'holding', to: '/holding', icon: LayoutDashboard, label: t('profile.sidebar.holding', 'Сводка группы') });
+        if (admin || hrManager) {
+            items.push({ id: 'holding', to: '/holding', icon: LayoutDashboard, label: t('profile.sidebar.holding', 'Сводка группы') });
+        }
+        if (admin) {
+            items.push(
+                // Каталог ролей. Страница существовала с самой стадии 2, но ссылки
+                // на неё не было нигде — до неё можно было добраться только набрав
+                // адрес руками, то есть для всех, кроме автора, её не существовало.
+                { id: 'access-roles', to: '/access/roles', icon: ShieldCheck, label: t('profile.sidebar.accessRoles', 'Роли и права') },
+                { id: 'admin-registrations', to: '/admin/registrations', icon: UserPlus, label: t('profile.sidebar.registrations'), badge: <PendingRegistrationsBadge /> },
+            );
+        }
+        if (chatsAdmin) {
+            items.push({ id: 'admin-chats', to: '/admin/chats', icon: MessagesSquare, label: t('profile.sidebar.manageChats', 'Управление чатами') });
+        }
+        if (mailboxesAdmin) {
+            items.push({ id: 'admin-mailboxes', to: '/admin/mailboxes', icon: MailIcon, label: t('profile.sidebar.manageMailboxes', 'Корпоративные ящики') });
+        }
         if (!admin) return items;
         items.push(
-            // Каталог ролей. Страница существовала с самой стадии 2, но ссылки
-            // на неё не было нигде — до неё можно было добраться только набрав
-            // адрес руками, то есть для всех, кроме автора, её не существовало.
-            { id: 'access-roles', to: '/access/roles', icon: ShieldCheck, label: t('profile.sidebar.accessRoles', 'Роли и права') },
-            { id: 'admin-registrations', to: '/admin/registrations', icon: UserPlus, label: t('profile.sidebar.registrations'), badge: <PendingRegistrationsBadge /> },
-            { id: 'admin-chats', to: '/admin/chats', icon: MessagesSquare, label: t('profile.sidebar.manageChats', 'Управление чатами') },
-            { id: 'admin-mailboxes', to: '/admin/mailboxes', icon: MailIcon, label: t('profile.sidebar.manageMailboxes', 'Корпоративные ящики') },
             { id: 'admin-infra', to: '/admin/infrastructure', icon: ServerCog, label: t('profile.sidebar.infrastructure', 'Инфраструктура') },
             {
                 id: 'admin-django',
@@ -391,7 +408,7 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
             },
         );
         return items;
-    }, [t, admin, hrManager]);
+    }, [t, admin, hrManager, chatsAdmin, mailboxesAdmin]);
 
     const monitoringItems: ItemConfig[] = useMemo(() => {
         if (!admin) return [];

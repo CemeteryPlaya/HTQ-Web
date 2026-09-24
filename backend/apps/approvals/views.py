@@ -535,8 +535,9 @@ def preview_template(request, data: schemas.PreviewRequest):
 # Statistics — /stats/*  (see the original's spec §6 for the five cuts)
 # ─────────────────────────────────────────────────────────────────────────
 #
-# Ported from ``services/requests/app/api/v1/stats.py``. Read-only, any
-# authenticated user (no admin gate in the original either). NOTE the two
+# Ported from ``services/requests/app/api/v1/stats.py``. Read-only, gated
+# ``module="approvals", level="read"`` (block L; the original had no admin
+# gate either, only authentication). NOTE the two
 # quirks carried over byte-for-byte from the source: ``overview`` and
 # ``by-actor`` both compute a ``from``/``to`` default window but never
 # actually apply it as a filter on the underlying query -- only ``heatmap``
@@ -812,10 +813,11 @@ def remove_member(request, project_id: int, user_id: int):
 # ─────────────────────────────────────────────────────────────────────────
 #
 # Ported from ``services/requests/app/api/v1/reference.py``. Management
-# (create/update/delete a source, add/remove rows) is platform-admin only
-# (``admin=True`` -- ``htqweb.authn.rbac.require_admin``, i.e. ``is_elevated``,
-# the same predicate the original's own ``_require_admin`` checked); reading
-# a source's metadata/rows and ``options`` needs only authentication.
+# (create/update/delete a source, add/remove rows) is gated
+# ``module="approvals", level="admin"`` by role (block L; before it --
+# ``admin=True``, i.e. ``is_elevated``, the predicate the original's own
+# ``_require_admin`` checked); reading a source's metadata/rows and
+# ``options`` is ``module="approvals", level="read"``.
 #
 # A template's auto-maintained data table (``template_id`` set) is the one
 # exception: its rows, and the ``my-data-tables``/``access`` endpoints, are

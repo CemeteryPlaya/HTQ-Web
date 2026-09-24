@@ -6,8 +6,9 @@ in ``apps.cms.services.{contact_requests_service,news_service,
 taxonomy_service}``.
 
 Several URLs are shared by more than one HTTP method with *different* auth
-requirements (e.g. ``POST /news/`` is admin-only, ``GET /news/`` is public;
-the ``{id}`` detail URLs are GET-public/PATCH-admin/DELETE-admin) —
+requirements (e.g. ``POST /news/`` is gated ``module="cms", level="write"``
+— block L, formerly ``admin=True`` — while ``GET /news/`` is public; the
+``{id}`` detail URLs are GET-public / PATCH and DELETE ``cms:write``) —
 ``htqweb.http.api_view`` binds one auth mode per decorated function, so each
 shared URL gets a small plain dispatcher that picks the right decorated
 function by ``request.method`` and falls back to a 405 envelope, matching
@@ -195,8 +196,15 @@ def reply_contact_request(request, contact_id: int, data: schemas.ContactRequest
 
 
 # ── GET /conference/config (+ /conference/config/ alias) ────────────────────
+#
+# Без гейта модуля намеренно (SELF_SERVICE["cms"]["conference_config"] =
+# "open", финальное ревью блока L, I-1): рантайм-конфиг звонка (ICE/TURN,
+# адрес и отпечаток WebTransport) без данных пользователя, и до блока L у
+# него не было проверок, кроме входа. Его зовёт комната /room/<id>, которая
+# открывается и на голом домене — туда ведёт ссылка-приглашение, — а без
+# компании гейт дал бы none и 403: звонок без TURN.
 
-@api_view(methods=("GET",), auth="jwt", module="cms", level="read")
+@api_view(methods=("GET",), auth="jwt")
 def conference_config(request):
     return conference_service.get_conference_config(request)
 
@@ -716,12 +724,22 @@ def _list_conference_invites(request):
     if not room_id:
         return json_error("room_id is required", 422)
     # Фильтр, а не 403: список организатора — его ссылки и ссылки его
-    # встречи; чужие (с токенами входа) в ответ не попадают.
+    # встречи; чужие (с токенами входа) в ответ не попадают. Права и
+    # календарь считаются один раз на запрос (manageable_invites), роли —
+    # те, что гейт уже положил в request.access_resolution.
+    from htqweb.tenancy.context import current_company_or_none
+
+    cached = getattr(request, "access_resolution", None)
+    resolution = (cached[2] if cached is not None
+                  and cached[0] == current_company_or_none()
+                  and cached[1] == request.token.user_id else None)
+    invites = conference_invite_service.manageable_invites(
+        request.token, room_id, conference_invite_service.list_for_room(room_id),
+        resolution=resolution)
     return [
         schemas.ConferenceInviteRead.model_validate(
             conference_invite_service.serialize(inv, base_url=_origin(request)))
-        for inv in conference_invite_service.list_for_room(room_id)
-        if conference_invite_service.may_manage_invites(request.token, room_id, inv)
+        for inv in invites
     ]
 
 
