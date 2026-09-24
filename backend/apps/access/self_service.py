@@ -127,7 +127,7 @@ from __future__ import annotations
 #: одной аппке на задачу; у ``media_files`` модуль прав называется ``media``.
 TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies",
                                              "media_files", "conference", "messenger", "mail",
-                                             "cms"})
+                                             "cms", "approvals"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -569,4 +569,17 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
     # публичная страница приглашения и выдача гостевого токена) — auth=None,
     # в реестр не входят.
     "cms": {},
+    # approvals (блок L, задача 9): заявка — общий объект (инициатор,
+    # согласующие, наблюдатели): своё над ней — write/read + собственные
+    # проверки, не self. Чтение/подача/действия над заявкой стоят под
+    # module="approvals" (read для чтения и для approve/reject/
+    # request_changes/recall/batch_approve — сами по себе они не решают, кто
+    # согласующий, это делает request_runtime.act; write для create/update/
+    # submit/cancel), кто именно может действовать — по-прежнему решают
+    # request_runtime.act/.cancel/.recall (Forbidden -> 403) и
+    # permissions.ensure_can_manage_project/_template, а доступ к
+    # авто-таблице шаблона — template_data_table.can_view_/
+    # can_manage_data_table. Заведение проекта и справочников (бывшие
+    # admin=True) — под level="admin". Записей самообслуживания нет.
+    "approvals": {},
 }

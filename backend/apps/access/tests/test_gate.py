@@ -1242,6 +1242,18 @@ _DISPATCHERS_WITH_OWN_LOGIC: dict[str, dict[str, str]] = {
     },
 }
 
+#: Ручки из ``urls.py``, которые намеренно живут вне ``api_view`` целиком (не
+#: диспетчеры): у каждой своя аутентификация и причина. Проверка ``return``
+#: к ним не применяется — ветвления там нет; запись, которую сторож больше не
+#: находит, устарела и валит тест.
+_URL_VIEWS_OUTSIDE_API_VIEW: dict[str, dict[str, str]] = {
+    "approvals": {
+        "stream": "SSE: EventSource не шлёт заголовков — асинхронная вьюха, "
+                  "JWT из ?token= вручную (services/sse.py), отдаёт только "
+                  "свои события; вне блока L (спека §10)",
+    },
+}
+
 
 def test_every_url_view_of_translated_apps_carries_api_view():
     """Функция-ручка ``hr``/``users``/``tasks`` вовсе без ``@api_view``
@@ -1267,6 +1279,7 @@ def test_every_url_view_of_translated_apps_carries_api_view():
         urls = backend / "apps" / app / "urls.py"
         views_text = (backend / "apps" / app / "views.py").read_text(encoding="utf-8")
         exempt = _DISPATCHERS_WITH_OWN_LOGIC.get(app, {})
+        outside = _URL_VIEWS_OUTSIDE_API_VIEW.get(app, {})
         seen: set[str] = set()
         siblings = {path.stem: path.read_text(encoding="utf-8")
                     for path in (backend / "apps" / app).glob("*.py")
@@ -1274,10 +1287,10 @@ def test_every_url_view_of_translated_apps_carries_api_view():
         for name, why in _url_view_offenders(urls.read_text(encoding="utf-8"), views_text,
                                              siblings):
             seen.add(name)
-            if name in exempt:
+            if name in exempt or name in outside:
                 continue
             offenders.append(f"apps/{app}/urls.py: {name} — {why}")
-        for name in sorted(set(exempt) - seen):
+        for name in sorted((set(exempt) | set(outside)) - seen):
             offenders.append(f"исключение устарело: {app}.{name}")
         for name, why in _exempt_return_offenders(views_text, set(exempt) & seen):
             offenders.append(f"apps/{app}/views.py: {why}")

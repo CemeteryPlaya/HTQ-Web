@@ -19,13 +19,15 @@ from apps.approvals.models import (
 
 BASE = "/api/requests/v1"
 
+COMPANY = "t-approvals-gate"
+
 
 def token(**over) -> str:
     claims = {
         "user_id": 7, "username": "u", "email": "u@htq.test",
         "is_staff": False, "is_superuser": False, "is_admin": False,
         "token_type": "access", "iat": 1, "exp": 9_999_999_999,
-        "iss": "htqweb-auth", "sub": "7",
+        "iss": "htqweb-auth", "sub": "7", "company": COMPANY,
         **over,
     }
     return pyjwt.encode(claims, settings.JWT_SECRET, algorithm="HS256")
@@ -36,7 +38,25 @@ def admin_token(**over) -> str:
 
 
 def auth(tok: str | None = None) -> dict:
-    return {"HTTP_AUTHORIZATION": f"Bearer {tok or token()}"}
+    from apps.access.tests.helpers import gate_company
+
+    # Каждый id, на котором тесты аппки проверяют СОБСТВЕННУЮ проверку (не
+    # гейт модуля), получает тот же уровень, что рядовой сотрудник —
+    # согласующий 11 (``simple_workflow``) и второй согласующий 12
+    # (all-mode), «посторонний» 42 (стрелки cancel/act), 77 и 5 (чужой /
+    # приглашённый читатель data-table в test_reference_api.py) — иначе 403
+    # даёт гейт, а не проверка, которую заявляет тест. 9 — admin_token().
+    gate_company(COMPANY, {
+        7: {"approvals": "write"},
+        9: {"approvals": "full"},
+        11: {"approvals": "write"},
+        12: {"approvals": "write"},
+        42: {"approvals": "write"},
+        77: {"approvals": "write"},
+        5: {"approvals": "write"},
+    })
+    return {"HTTP_AUTHORIZATION": f"Bearer {tok or token()}",
+            "HTTP_X_HTQ_COMPANY": COMPANY}
 
 
 def post_json(client: Client, path: str, body: dict, **extra):
