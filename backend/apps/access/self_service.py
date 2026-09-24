@@ -126,7 +126,7 @@ from __future__ import annotations
 #: Блок L (docs/plans/2026-09-24-block-l-gate-remaining-apps.md) добавляет по
 #: одной аппке на задачу; у ``media_files`` модуль прав называется ``media``.
 TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies",
-                                             "media_files"})
+                                             "media_files", "conference"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -456,4 +456,15 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
     # ``auth=None`` с подписью ``?sig=&exp=`` и в реестр не входит вовсе
     # (см. докстринг модуля про ``auth=None``).
     "media_files": {},
+    # conference (блок L, задача 5). Записей самообслуживания нет: все пять
+    # ручек чтения встреч (overview, sessions, session_detail, session_events,
+    # session_transcript) стоят под ``conference:read`` — уровень, который
+    # несёт ``employee-basic`` (``access/0011``: ``conference.history``,
+    # ``conference.transcripts`` — VIEW). Видимость конкретной встречи режет
+    # не гейт, а ``apps/conference/services/access.py::may_view`` (участник,
+    # автор, приглашённый из календаря, администратор; иначе 404, а не 403).
+    # ``session_recording``/``session_poster`` и ``internal_*`` объявлены
+    # ``auth=None`` (подпись ``?sig=&exp=`` / общий секрет SFU) — в реестр
+    # не вносятся.
+    "conference": {},
 }

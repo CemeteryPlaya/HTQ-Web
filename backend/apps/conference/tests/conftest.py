@@ -14,9 +14,26 @@ from htqweb.authn.jwt import issue_token_pair
 INTERNAL_TOKEN = "test-internal-secret"
 BASE = "/api/conference/v1"
 
+#: Компания тестов ручек под гейтом ``module="conference"`` (блок L). Своя,
+#: а не общая: строка заводится лениво из ``auth_header``, чтобы не
+#: попадать в ``active_company_slugs()`` тестов веера по компаниям.
+COMPANY = "t-conference-gate"
+
 
 def auth_header(user: User) -> dict:
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    """Заголовки вызывающего: токен с компанией, заголовок компании и роль.
+
+    Рядовому — ``conference:read`` (уровень ``employee-basic``), в том числе
+    «постороннему»: его отказ обязан давать ``may_view`` (404), а не гейт
+    (403). ``is_staff`` — ``full``. ``issue_token_pair`` членства не
+    проверяет (см. его докстринг), поэтому ``CompanyMembership`` не нужен.
+    """
+    from apps.access.tests.helpers import gate_company
+
+    level = "full" if user.is_staff else "read"
+    gate_company(COMPANY, {user.id: {"conference": level}})
+    access = issue_token_pair(user, company_slug=COMPANY)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {access}", "HTTP_X_HTQ_COMPANY": COMPANY}
 
 
 @pytest.fixture
