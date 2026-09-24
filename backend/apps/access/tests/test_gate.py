@@ -154,14 +154,14 @@ def test_gate_is_not_hung_on_apps_without_a_translation_plan():
     """Гейт не навешивается на ручку аппки, для которой это ещё не решено.
 
     Продолжение того же инварианта, что был раньше («гейт нигде»), но уже
-    не «нигде» — а «нигде за пределами пяти аппок блока I и параллельной
-    ветки signoff/contracts»: у первых своя, перевёрнутая проверка ниже
-    (``test_gate_covers_every_handle_of_translated_apps``), у вторых —
-    работа другого разработчика, в которую этот файл не вмешивается.
-    Для всех ОСТАЛЬНЫХ аппок (``approvals``, ``cms``, ``conference``,
-    ``core``, ``mail``, ``media_files``, ``messenger``) ретрофит гейта
-    по-прежнему не спланирован — преждевременный ``module=`` там ловится
-    здесь же, как и раньше.
+    не «нигде» — а «нигде за пределами переведённых аппок и параллельной
+    ветки signoff/contracts»: у первых (``self_service.TRANSLATED_APPS`` —
+    пять аппок блока I и шесть блока L) своя, перевёрнутая проверка ниже
+    (``test_gate_covers_every_handle_of_translated_apps``), у вторых
+    (``_OUT_OF_SCOPE_APPS``) — работа другого разработчика, в которую этот
+    файл не вмешивается. После блока L вне перевода остаётся только
+    ``core`` — общий фундамент, а не модуль прав: ``module=`` на его ручке
+    ловится здесь же, как и раньше.
 
     Список исключений (``_GATE_ALLOWLIST``) обязан быть коротким и содержать
     только аппки, где есть уверенность, что все существующие ручки правильно
@@ -318,8 +318,48 @@ def _qualified_name(lines: list[str], start_lineno: int, end_lineno: int) -> str
     return None
 
 
+def _coverage_offenders(texts: dict[str, str], exempt, label: str = "?"):
+    """(missing, stale, unknown_exempt) сторожа полноты по модулям ОДНОЙ аппки.
+
+    ``texts`` — путь модуля (для сообщения) → его исходник; ``exempt`` —
+    ``self_service.SELF_SERVICE[app]``. Ручки собираются со ВСЕХ модулей, и
+    ``unknown_exempt`` считается по их объединению: запись реестра находит
+    свою ручку, в каком бы модуле аппки та ни лежала. ``label`` — имя аппки
+    для сообщения о записи, не нашедшей ручки нигде.
+    """
+    missing: list[str] = []
+    stale: list[str] = []
+    seen: set[str] = set()
+    for rel, text in texts.items():
+        lines = text.splitlines()
+        for start_lineno, end_lineno, block in _iter_api_view_calls(text):
+            if "auth=None" in block:
+                continue  # без JWT гейт module= структурно не выполнится (htqweb/http.py)
+            name = _qualified_name(lines, start_lineno, end_lineno)
+            if name:
+                seen.add(name)
+            location = f"{rel}:{start_lineno}" + (f" ({name})" if name else "")
+            is_exempt = name in exempt
+            has_gate = "module=" in block
+            if is_exempt and has_gate:
+                stale.append(location)
+            elif not is_exempt and not has_gate:
+                missing.append(location)
+    unknown_exempt = [f"apps/{label}: {name}" for name in sorted(set(exempt) - seen)]
+    return missing, stale, unknown_exempt
+
+
 def test_gate_covers_every_handle_of_translated_apps():
     """Переведённая аппка: у каждой её ручки — ``module=``, кроме self_service.
+
+    Читаются ВСЕ модули аппки (``_app_modules``: каждый ``.py`` кроме
+    ``tests/`` и ``migrations/``), а не только ``views.py``: ручка
+    ``api_view(auth="jwt")`` без ``module=`` в соседнем модуле (как
+    ``apps/mail/webhooks.py``) иначе не попала бы ни в ``missing``, ни в
+    реестр — сторож её просто не видел. Записи ``SELF_SERVICE`` сверяются с
+    объединением ручек всех модулей аппки (ключ — голое имя ручки, без
+    модуля; двух ручек с одним именем в разных модулях одной аппки сегодня
+    нет).
 
     Падает в ОБЕ стороны:
     - ``missing`` — ручка без ``module=``, которой нет в ``SELF_SERVICE``:
@@ -329,9 +369,14 @@ def test_gate_covers_every_handle_of_translated_apps():
       действительно нужен), либо гейт навешан по ошибке на то, что должно
       остаться открытым без единой роли;
     - ``unknown_exempt`` — запись ``SELF_SERVICE`` не находит соответствующей
-      ручки в файле вовсе (переименовали функцию, либо, для class-based
-      ручек ``access``, self-service-ручку не выделили в отдельный вызов
-      ``api_view(...)`` — см. докстринг ``apps.access.self_service``).
+      ручки ни в одном модуле аппки (переименовали функцию, либо, для
+      class-based ручек ``access``, self-service-ручку не выделили в
+      отдельный вызов ``api_view(...)`` — см. докстринг
+      ``apps.access.self_service``).
+
+    Ручки ``auth=None`` (вебхуки ``mail``, плеер записи и ``internal/*``
+    ``conference``) не
+    считаются: без JWT гейт модуля структурно не выполнится.
 
     Аппка, которой ещё нет в ``TRANSLATED_APPS``, не проверяется вовсе —
     задача 5 осознанно гейтирует часть ``hr`` до того, как эта запись
@@ -345,25 +390,12 @@ def test_gate_covers_every_handle_of_translated_apps():
     for app, exempt in self_service.SELF_SERVICE.items():
         if app not in self_service.TRANSLATED_APPS:
             continue
-        path = backend / "apps" / app / "views.py"
-        text = path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        seen: set[str] = set()
-        for start_lineno, end_lineno, block in _iter_api_view_calls(text):
-            if "auth=None" in block:
-                continue  # без JWT гейт module= структурно не выполнится (htqweb/http.py)
-            name = _qualified_name(lines, start_lineno, end_lineno)
-            if name:
-                seen.add(name)
-            location = f"apps/{app}/views.py:{start_lineno}" + (f" ({name})" if name else "")
-            is_exempt = name in exempt
-            has_gate = "module=" in block
-            if is_exempt and has_gate:
-                stale.append(location)
-            elif not is_exempt and not has_gate:
-                missing.append(location)
-        for name in sorted(set(exempt) - seen):
-            unknown_exempt.append(f"apps/{app}/views.py: {name}")
+        texts = {path.relative_to(backend).as_posix(): path.read_text(encoding="utf-8")
+                 for path in _app_modules(app)}
+        app_missing, app_stale, app_unknown = _coverage_offenders(texts, exempt, app)
+        missing += app_missing
+        stale += app_stale
+        unknown_exempt += app_unknown
 
     assert not missing, f"ручкам не хватает гейта модуля: {missing}"
     assert not stale, f"self_service устарел — гейт есть у объявленного самообслуживания: {stale}"
@@ -371,6 +403,51 @@ def test_gate_covers_every_handle_of_translated_apps():
         "self_service ссылается на несуществующую ручку (переименовали "
         f"функцию, либо не выделили её в отдельный api_view(...)): {unknown_exempt}"
     )
+
+
+_SIBLING_VIEWS_SAMPLE = '''
+@api_view(methods=("GET",), auth="jwt", module="mail", level="read")
+def inbox(request):
+    return {}
+
+
+@api_view(methods=("GET",), auth="jwt")
+def my_settings(request):
+    return {}
+'''
+
+_SIBLING_MODULE_SAMPLE = '''
+@api_view(methods=("POST",), auth="jwt")
+def push_hook(request):
+    return {}
+'''
+
+_SIBLING_MODULE_OPEN_SAMPLE = '''
+@api_view(methods=("POST",), auth=None)
+def push_hook(request):
+    return {}
+'''
+
+
+def test_coverage_guard_reads_sibling_modules():
+    """Ручка без ``module=`` в соседнем модуле аппки (не ``views.py``) —
+    нарушение; ``auth=None`` там же — нет; запись реестра находит ручку
+    соседнего модуля (``unknown_exempt`` — по объединению модулей)."""
+    missing, stale, unknown = _coverage_offenders(
+        {"apps/x/views.py": _SIBLING_VIEWS_SAMPLE, "apps/x/webhooks.py": _SIBLING_MODULE_SAMPLE},
+        {"my_settings": "self"}, "x")
+    assert missing == ["apps/x/webhooks.py:2 (push_hook)"]
+    assert stale == [] and unknown == []
+
+    missing, stale, unknown = _coverage_offenders(
+        {"apps/x/views.py": _SIBLING_VIEWS_SAMPLE, "apps/x/webhooks.py": _SIBLING_MODULE_OPEN_SAMPLE},
+        {"my_settings": "self"}, "x")
+    assert missing == [] and stale == [] and unknown == []
+
+    missing, stale, unknown = _coverage_offenders(
+        {"apps/x/views.py": _SIBLING_VIEWS_SAMPLE, "apps/x/webhooks.py": _SIBLING_MODULE_SAMPLE},
+        {"my_settings": "self", "push_hook": "open"}, "x")
+    assert missing == [] and stale == [] and unknown == []
 
 
 def test_self_service_reasons_are_declared():

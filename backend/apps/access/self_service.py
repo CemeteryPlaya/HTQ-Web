@@ -145,8 +145,11 @@ TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "
 REASONS: frozenset[str] = frozenset({"self", "open", "scoped"})
 
 #: аппка -> {имя ручки: причина из REASONS} (см. докстринг модуля). Ключи —
-#: "access", "users", "hr", "tasks", "companies" всегда присутствуют (даже с
-#: пустым словарём), чтобы сторож проверял все пять аппок единообразно.
+#: все одиннадцать аппок TRANSLATED_APPS ("access", "users", "hr", "tasks",
+#: "companies", "media_files", "conference", "messenger", "mail", "cms",
+#: "approvals") — всегда присутствуют (даже с пустым словарём), чтобы сторож
+#: проверял их единообразно. Имя ручки — голое, без модуля: сторож собирает
+#: ручки со всех модулей аппки, не только из views.py.
 SELF_SERVICE: dict[str, dict[str, str]] = {
     "access": {
         # /me — права ТЕКУЩЕГО пользователя, посчитанные по его
