@@ -15,17 +15,31 @@
 чтение (docs/plans/2026-09-25-archive-read-only-spec.md), и без действующей
 компании платформе негде писать — contracts/signoff живут только в схемах
 компаний. Гейт стоит здесь, а не во вьюхе, чтобы действовать и для CLI.
+
+``bankrupt_company`` (спека docs/plans/2026-09-26-company-bankruptcy-spec.md) —
+банкротство с преемником: переносит ТОЛЬКО членства (каждый участник с
+действующей учёткой получает членство в преемнике и базовую роль
+``employee-basic`` через ``membership_service.grant_membership``), затем
+архивирует компанию. Карточки ``hr``, техника и договоры преемнику не
+передаются — они остаются в архиве закрытой компании. Идемпотентно для той
+же пары «банкрот → преемник»; ``restore_company`` снимает связь с
+преемником, не отзывая уже выданные членства.
 """
 
 from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
 
 from django.core.exceptions import ValidationError
 from django.db import ProgrammingError, transaction
 from django.utils import timezone
 
-from apps.companies.models import Company, CompanyKind, CompanyStatus
-from apps.companies.services import holding_views, migration_service, schema_service
+from apps.companies.models import Company, CompanyKind, CompanyMembership, CompanyStatus
+from apps.companies.services import holding_views, membership_service, migration_service, schema_service
 from apps.companies.services.migration_service import _cleanup
+
+logger = logging.getLogger(__name__)
 
 #: Маркер «аргумент не передан» для необязательных полей правки: ``None`` у
 #: ``parent_slug`` — законное значение («без родителя»), и путать его с
@@ -78,6 +92,16 @@ class ParentCycle(LifecycleError):
 class LastActiveCompany(LifecycleError):
     status = 409
     code = "last_active"
+
+
+class SuccessorInvalid(LifecycleError):
+    status = 422
+    code = "successor_invalid"
+
+
+class SuccessorConflict(LifecycleError):
+    status = 409
+    code = "successor_conflict"
 
 
 class HoldingViewsStale(LifecycleError):
@@ -241,6 +265,79 @@ def restore_company(slug: str) -> tuple[Company, bool]:
         return company, False
     company.status = CompanyStatus.ACTIVE
     company.archived_at = None
-    company.save(update_fields=["status", "archived_at", "updated_at"])
+    # Восстановленная компания живёт сама по себе — связь с преемником
+    # теряет смысл; выданные преемнику членства не отзываются (спека §3).
+    company.successor = None
+    company.save(update_fields=["status", "archived_at", "successor", "updated_at"])
     _rebuild_or_raise(f"Компания {slug} возвращена из архива")
     return company, True
+
+
+@dataclass(frozen=True)
+class BankruptcyResult:
+    company: Company
+    successor: Company
+    members_total: int
+    members_granted: int
+    members_already: int
+    archived: bool
+    dry_run: bool
+
+
+def bankrupt_company(slug: str, successor_slug: str, *,
+                     dry_run: bool = False) -> BankruptcyResult:
+    """Закрыть компанию с преемником (спека docs/plans/2026-09-26-company-bankruptcy-spec.md).
+
+    Переносится только членство (решение заказчика 26.09): каждый участник с
+    ДЕЙСТВУЮЩЕЙ учёткой получает членство в преемнике через
+    ``grant_membership`` — единственную точку логики членства, она же выдаёт
+    новому членству ``employee-basic``. Карточки ``hr``, техника и договоры
+    остаются в архиве банкрота. Флаг «по умолчанию» переезжает: иначе после
+    входа человека вело бы по алфавиту.
+
+    Идемпотентно для той же пары: повтор довыдаёт недостающие членства (сбой
+    на середине не требует ручной уборки). Уже архивную компанию без
+    преемника закрыть можно — архив мог случиться раньше решения о
+    преемнике; с ДРУГИМ преемником — ``SuccessorConflict``.
+    """
+    from apps.companies.interface import active_member_ids
+
+    company = get_company_or_raise(slug)
+    successor = get_company_or_raise(successor_slug)
+    if successor.pk == company.pk:
+        raise SuccessorInvalid("Компания не может быть собственным преемником")
+    if successor.status != CompanyStatus.ACTIVE:
+        raise SuccessorInvalid("Преемник должен быть действующей компанией")
+    if company.successor_id is not None and company.successor_id != successor.pk:
+        raise SuccessorConflict(
+            f"У компании {slug} уже есть преемник {company.successor.slug}")
+
+    member_ids = active_member_ids(slug)
+    already = set(CompanyMembership.objects
+                  .filter(company=successor, user_id__in=member_ids)
+                  .values_list("user_id", flat=True))
+    to_grant = [uid for uid in member_ids if uid not in already]
+
+    if dry_run:
+        return BankruptcyResult(company, successor, len(member_ids), len(to_grant),
+                                len(already), archived=False, dry_run=True)
+
+    defaults = set(CompanyMembership.objects
+                   .filter(company=company, user_id__in=to_grant, is_default=True)
+                   .values_list("user_id", flat=True))
+    with transaction.atomic():
+        for uid in to_grant:
+            membership_service.grant_membership(successor, uid,
+                                                is_default=uid in defaults)
+        if company.successor_id != successor.pk:
+            company.successor = successor
+            company.save(update_fields=["successor", "updated_at"])
+    # Архив — после переноса и вне транзакции переноса: он пересобирает
+    # сводки холдинга (DDL), и его сбой не должен откатывать уже выданные
+    # доступы — повтор той же пары довершит работу. Гейт LastActiveCompany
+    # не сработает: преемник действующий.
+    company, archived = archive_company(slug)
+    logger.info("company_bankrupt slug=%s successor=%s granted=%d already=%d",
+                slug, successor.slug, len(to_grant), len(already))
+    return BankruptcyResult(company, successor, len(member_ids), len(to_grant),
+                            len(already), archived=archived, dry_run=False)
