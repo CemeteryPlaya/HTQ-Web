@@ -83,6 +83,11 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
         raise ValueError("api_view(admin=True) requires auth='jwt'")
 
     def deco(fn):
+        # Один раз при декорировании, а не на каждый запрос: модуль ручки не
+        # меняется, а на поддомене архива от него зависит, отвечает ли
+        # анонимная ручка (htqweb/tenancy/archive.py::anonymous_blocked).
+        blocks_in_archive = archive.anonymous_blocked(fn.__module__)
+
         @csrf_exempt
         @wraps(fn)
         def view(request, *args, **kwargs):
@@ -159,11 +164,18 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                         if LEVEL_ORDER[have] < LEVEL_ORDER[level]:
                             return json_error("Forbidden", 403)
                 else:
-                    # Анонимные ручки на поддомене архива не отвечают: кто
-                    # пришёл, не узнать, а читать архив может только
-                    # суперпользователь. Кроме выдачи токена — без неё он
-                    # архив не прочтёт вовсе.
-                    if (archive.is_archived(getattr(request, "company", None))
+                    # Анонимные ручки ТЕНАНТНЫХ аппок на поддомене архива не
+                    # отвечают: они читают схему компании, кто пришёл — не
+                    # узнать, а читать архив может только суперпользователь.
+                    # Анонимные ручки общих аппок (подписанные файлы,
+                    # вложения, аватары, записи) отвечают: они читают public
+                    # и защищены подписью, закрыть их здесь — только отнять
+                    # файлы у суперпользователя (archive.anonymous_blocked).
+                    # TOKEN_PATHS принадлежат apps.users, не тенантной, и под
+                    # условие не попадают и так; исключение оставлено явным —
+                    # без выдачи токена суперпользователь архив не прочтёт.
+                    if (blocks_in_archive
+                            and archive.is_archived(getattr(request, "company", None))
                             and request.path not in archive.TOKEN_PATHS):
                         return archive.not_found_response()
                     request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError

@@ -216,8 +216,24 @@ def test_is_archived():
 
 
 @pytest.mark.django_db
-def test_migratable_company_slugs_include_archived():
+def test_migratable_company_slugs_include_archived(monkeypatch):
+    # Заводить настоящую схему ради одного списка дорого; архив берётся в
+    # список по факту схемы, поэтому факт и подменяется.
+    monkeypatch.setattr(interface, "schema_exists", lambda slug: slug == "b-dead")
     _company("b-dead", CompanyStatus.ARCHIVED)
     _company("a-live")
     assert interface.migratable_company_slugs(fresh=True) == ["a-live", "b-dead"]
     assert interface.active_company_slugs(fresh=True) == ["a-live"]
+
+
+@pytest.mark.django_db
+def test_migratable_company_slugs_skip_archived_without_schema():
+    """Схем в тесте нет ни у кого: архивная строка без схемы из списка
+    выпадает (мигрировать нечего, а падение после сноса сводок оставило бы
+    холдинг без них), действующая — остаётся, чтобы migrate_companies
+    громко упал на ней, как и до архива."""
+    _company("b-dead", CompanyStatus.ARCHIVED)
+    _company("a-live")
+    assert interface.schema_exists("b-dead") is False
+    assert interface.schema_exists("a-live") is False
+    assert interface.migratable_company_slugs(fresh=True) == ["a-live"]

@@ -27,6 +27,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { messengerApi } from './api/messengerApi';
 import { useMessengerSocket, type PresenceMap } from './hooks/useMessengerSocket';
 import { decodeMessageText } from './messageContent';
+import { shouldAutoMarkRead } from './autoMarkRead';
+import { usePermissions } from '@/hooks/usePermissions';
 import type { DecodedMessage } from './messageContent';
 import type { ChatRoom, ChatMessage, ChatUser } from './types';
 
@@ -1366,18 +1368,25 @@ const MessengerPage: React.FC = () => {
     // Telegram-style: opening a chat or receiving a message while it's open
     // both clear the unread badge. Fire-and-forget — failures recover the
     // next time the user opens the chat.
+    // Не на поддомене архива: там POST отбивается 403 company_archived, и
+    // интерцептор показал бы тост «Нельзя изменить» суперпользователю, который
+    // ничего не менял (autoMarkRead.ts).
+    const { companyArchived, isLoading: permissionsLoading } = usePermissions();
     const lastMessageId = orderedMessages.length
         ? orderedMessages[orderedMessages.length - 1]?.id
         : null;
     useEffect(() => {
         if (!activeRoomId || !lastMessageId) return;
+        if (!shouldAutoMarkRead({
+            roomId: activeRoomId, lastMessageId, companyArchived, permissionsLoading,
+        })) return;
         messengerApi
             .markRead(activeRoomId, String(lastMessageId))
             .then(() => {
                 queryClient.invalidateQueries({ queryKey: ['messenger-rooms'] });
             })
             .catch(() => { /* ignore — best-effort */ });
-    }, [activeRoomId, lastMessageId, queryClient]);
+    }, [activeRoomId, lastMessageId, companyArchived, permissionsLoading, queryClient]);
 
     // --- Mutations ---
     const sendMutation = useMutation({

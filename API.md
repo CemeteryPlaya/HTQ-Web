@@ -186,7 +186,10 @@ anymore):
 `is_admin = is_staff OR is_superuser`. `company` is the slug of the company
 the token was issued for — the request's company (`X-HTQ-Company`;
 membership required, otherwise login/refresh answer 403 and issue no
-token); without the header — the user's default company
+token — with one exception: an archived company issues a token to a
+superuser only, membership or not, and to nobody else, members included;
+see [the archive spec](docs/plans/2026-09-25-archive-read-only-spec.md));
+without the header — the user's default active company
 (`apps/users/views.py::_company_slug_for_token`,
 `htqweb/authn/jwt.py::_base_claims`). A refresh token carries only `sub`,
 `user_id`, `iss` plus the type/time claims. `apps.users` (`htqweb/authn/jwt.py`)
@@ -1163,8 +1166,13 @@ instead: `api_view(admin=True)` (staff-or-superuser) plus an explicit
 plain staff token gets 403. Archive/restore/revoke are irreversible-ish
 enough (archive turns every write on the company's subdomain into a 403
 `company_archived` — for everyone, superuser included, except `GET`/`HEAD`/
-`OPTIONS` and the token endpoints — and every read on it into a 404 for
-anyone but a superuser; `django-admin` doesn't get even that exception and
+`OPTIONS` and the token endpoints — and every read of the company's data on
+it into a 404 for anyone but a superuser: anonymous (`auth=None`) handlers of
+the tenant apps (`hr`, `tasks`, `contracts`, `signoff`, e.g. HR share links)
+404 too, while anonymous handlers of shared apps — signed file URLs,
+messenger attachments, avatars, meeting recordings — keep answering, since
+they read `public`, not the company's schema, and are signature-protected;
+`django-admin` doesn't get even that exception and
 404s regardless of who's asking, because the check runs before Django's own
 session/auth middleware can tell; revoke locks someone out) that "elevated"
 isn't a high enough bar.

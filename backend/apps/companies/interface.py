@@ -175,16 +175,29 @@ def active_company_slugs(*, fresh: bool = False) -> list[str]:
 
 
 def migratable_company_slugs(*, fresh: bool = False) -> list[str]:
-    """Slug'и всех компаний реестра — действующих И архивных, по алфавиту.
+    """Slug'и компаний, чьи схемы доводит ``migrate_companies``, по алфавиту:
+    все действующие и архивные со схемой (спека архива §8.1).
 
-    Для ``migrate_companies``: схема архивной компании обязана идти в ногу с
+    Архивные — потому что схема архивной компании обязана идти в ногу с
     кодом, иначе после первой же новой миграции её нельзя ни прочесть
     (архив — только чтение), ни восстановить (``restore_company`` упадёт на
     пересборке сводок). Сводки холдинга по-прежнему только по действующим —
     ``active_company_slugs``.
+
+    Архивная строка без схемы пропускается: мигрировать в ней нечего, а
+    ``SchemaMissing`` на ней уронил бы ``migrate_companies`` ПОСЛЕ сноса
+    представлений ``holding`` — и группа осталась бы без сводок из-за
+    строки, которую оператор как раз спрятал архивом (осиротевшая строка
+    после отката ``company_create``). Действующая без схемы — наоборот,
+    остаётся в списке: для неё громкое падение команды и есть нужный сигнал,
+    как и до архива.
     """
     def produce():
-        return sorted(Company.objects.values_list("slug", flat=True))
+        rows = Company.objects.values_list("slug", "status")
+        return sorted(
+            slug for slug, status in rows
+            if status == CompanyStatus.ACTIVE or schema_exists(slug)
+        )
 
     if fresh:
         return produce()

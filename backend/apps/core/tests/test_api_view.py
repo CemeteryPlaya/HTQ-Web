@@ -354,9 +354,24 @@ def whoami_view(request):
     return {"user_id": request.token.user_id}
 
 
-@api_view(methods=("GET",), auth=None)
-def anonymous_view(request):
-    return {"ok": True}
+def _anonymous_view_of(module: str):
+    """Анонимная ручка, «живущая» в модуле ``module``.
+
+    ``api_view`` решает, закрыта ли анонимная ручка на архиве, по
+    ``fn.__module__`` в момент декорирования, поэтому модуль выставляется ДО
+    обёртки: присвоенный после, он не повлиял бы ни на что. Модуль самого
+    теста (``apps.core.tests…``) не тенантный и проверить ветку не дал бы.
+    """
+    def view(request):
+        return {"ok": True}
+    view.__module__ = module
+    return api_view(methods=("GET",), auth=None)(view)
+
+
+# Кадровые share-ссылки — тенантная аппка: читают схему компании.
+tenant_anonymous_view = _anonymous_view_of("apps.hr.views")
+# Подписанные файлы — общая аппка: читают public и защищены подписью.
+shared_anonymous_view = _anonymous_view_of("apps.media_files.views")
 
 
 # Ровно те ключи словаря реестра, которые читает api_view: слаг для сверки
@@ -406,17 +421,39 @@ def test_foreign_company_token_is_still_403_in_archive():
     assert resp.status_code == 403
 
 
-def test_anonymous_view_is_404_in_archive():
-    resp = _get_in(anonymous_view, _ARCHIVED)
+def test_tenant_anonymous_view_is_404_in_archive():
+    resp = _get_in(tenant_anonymous_view, _ARCHIVED)
     assert resp.status_code == 404
     assert json.loads(resp.content) == {"detail": "Компания не найдена"}
 
 
-def test_anonymous_view_passes_in_active_company():
-    assert _get_in(anonymous_view, _ACTIVE).status_code == 200
+def test_shared_anonymous_view_answers_in_archive():
+    """Финальное ревью I1: подписанный файл, вложение, аватар читают public,
+    а не схему компании, — 404 на хосте архива ничего не закрывал бы, но
+    отнимал бы документы у суперпользователя на экранах архива."""
+    assert _get_in(shared_anonymous_view, _ARCHIVED).status_code == 200
+
+
+@pytest.mark.parametrize("view", [tenant_anonymous_view, shared_anonymous_view])
+def test_anonymous_views_pass_in_active_company(view):
+    assert _get_in(view, _ACTIVE).status_code == 200
 
 
 @pytest.mark.parametrize("path", ["/api/users/v1/token/",
                                   "/api/users/v1/token/refresh/"])
 def test_token_paths_stay_open_in_archive(path):
-    assert _get_in(anonymous_view, _ARCHIVED, path=path).status_code == 200
+    """Исключение проверяется на тенантной ручке — на общей оно не нужно."""
+    assert _get_in(tenant_anonymous_view, _ARCHIVED, path=path).status_code == 200
+
+
+@pytest.mark.parametrize("module, blocked", [
+    ("apps.hr.views", True),
+    ("apps.hr.subpkg.views", True),
+    ("apps.tasks.views", True),
+    ("apps.media_files.views", False),
+    ("apps.users.views", False),
+    ("htqweb.something", False),
+])
+def test_anonymous_blocked_only_for_tenant_apps(module, blocked):
+    from htqweb.tenancy import archive
+    assert archive.anonymous_blocked(module) is blocked

@@ -24,7 +24,7 @@ import pytest
 from django.core.management import CommandError, call_command
 from django.db import connection
 
-from apps.companies.models import Company, CompanyStatus
+from apps.companies.models import Company, CompanyKind, CompanyStatus
 from apps.companies.services import holding_views, lifecycle
 
 
@@ -142,6 +142,24 @@ def test_migrate_companies_includes_archived_schema(two_companies):
 
     assert f"{dead}:" in out.getvalue()
     assert f"{live}:" in out.getvalue()
+
+
+@pytest.mark.django_db
+def test_migrate_companies_skips_archived_row_without_schema(two_companies):
+    """Архивная строка без схемы (осиротевшая после отката company_create и
+    спрятанная архивом) не роняет прогон: мигрировать в ней нечего, а
+    SchemaMissing после сноса представлений оставил бы холдинг без сводок
+    (спека архива §8.1 — «со схемой», финальное ревью I2)."""
+    live, dead = list(two_companies)
+    Company.objects.create(slug="t-orphan", name="Сирота", kind=CompanyKind.SERVICE,
+                           status=CompanyStatus.ARCHIVED)
+    out = io.StringIO()
+
+    call_command("migrate_companies", "--plan", stdout=out)
+
+    assert "t-orphan" not in out.getvalue()
+    assert f"{live}:" in out.getvalue()
+    assert f"{dead}:" in out.getvalue()
 
 
 @pytest.mark.django_db
