@@ -366,6 +366,32 @@ class UserAssignmentsView(AccessView):
         return assignment.user_assignments(company, user_id)
 
 
+def cap_for_archive(permissions: dict, depth_map: dict) -> tuple[dict, dict]:
+    """Архив — только чтение (спека архива §7.1): понижает права в ОТВЕТЕ.
+
+    Сервер на уровень не опирается — запись в архив закрыта
+    ``CompanyContextMiddleware`` для всех; это лишь то, что видит интерфейс.
+
+    ``permissions``: ``admin``/``write`` → ``read``, ``read`` без изменений;
+    ``scope`` каждой записи сохраняется как есть.
+
+    ``depth_map``: узел с ``view`` → ``[view]``; узел БЕЗ ``view`` (явный
+    запрет узла) остаётся с пустым списком, а не выбрасывается — фронт
+    (``depthFor``) трактует отсутствующий ключ как «взять права предка», а
+    пустой список — как явный запрет; выбросить ключ здесь значило бы
+    превратить запрет в наследование.
+    """
+    permissions = {
+        module: ({**entry, "level": Level.READ}
+                 if LEVEL_ORDER[entry["level"]] > LEVEL_ORDER[Level.READ]
+                 else entry)
+        for module, entry in permissions.items()
+    }
+    depth_map = {node: ([depth_flags.VIEW] if depth_flags.VIEW in flags else [])
+                 for node, flags in depth_map.items()}
+    return permissions, depth_map
+
+
 class MeView(AccessView):
     """``GET me`` — права текущего пользователя (§4.5).
 
@@ -402,19 +428,9 @@ class MeView(AccessView):
         depth_map = resolve.depth_map(request.token, company, resolution=resolution)
         archived = archive.is_archived(getattr(request, "company", None))
         if archived:
-            # Архив — только чтение (спека архива §7.1). Понижение — ТОЛЬКО в
-            # ответе: сервер на уровень не опирается, запись в архив закрыта
-            # CompanyContextMiddleware для всех. Сюда доходит лишь
+            # Архив — только чтение (спека архива §7.1). Сюда доходит лишь
             # суперпользователь (api_view), но правило не завязано на это.
-            permissions = {
-                module: ({**entry, "level": Level.READ}
-                         if LEVEL_ORDER[entry["level"]] > LEVEL_ORDER[Level.READ]
-                         else entry)
-                for module, entry in permissions.items()
-            }
-            depth_map = {node: [depth_flags.VIEW]
-                         for node, flags in depth_map.items()
-                         if depth_flags.VIEW in flags}
+            permissions, depth_map = cap_for_archive(permissions, depth_map)
         return schemas.MeRead(
             company=company,
             permissions=permissions,

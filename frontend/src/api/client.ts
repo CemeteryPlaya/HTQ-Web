@@ -46,6 +46,12 @@ const AUTH_ENDPOINTS = [
   apiPath('users', 'register/'),
 ];
 
+/**
+ * Метка на ошибке 403 `company_archived`: тост уже показан интерцептором
+ * ниже. `reportApiError` (`lib/apiError.ts`) проверяет её и не дублирует тост.
+ */
+type ArchivedReportedError = { archivedReported: true };
+
 const client = axios.create({
   baseURL: API_BASE,
   withCredentials: true,
@@ -277,7 +283,10 @@ client.interceptors.response.use(
       if (data?.code === 'company_archived') {
         toast.error(i18next.t('companies.archiveMode.writeRefused',
           'Нельзя изменить: компания в архиве — только чтение'));
-        return Promise.reject(error);
+        // Помечаем, что тост уже показан здесь: большинство вызывающих ловят
+        // ошибку через `reportApiError` (`lib/apiError.ts`), у которой на 403
+        // свой текст сервера — без метки пользователь увидел бы тост дважды.
+        return Promise.reject(Object.assign(error, { archivedReported: true } satisfies ArchivedReportedError));
       }
     }
 

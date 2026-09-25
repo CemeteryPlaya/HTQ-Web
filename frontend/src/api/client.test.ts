@@ -10,6 +10,7 @@ const toastError = vi.fn();
 vi.mock('sonner', () => ({ toast: { error: (m: string) => toastError(m) } }));
 
 import api from './client';
+import { REFRESH_TOKEN_KEY } from '@/lib/auth/profileStorage';
 
 describe('API Client', () => {
   it('должен быть экземпляром axios с перехватчиками', () => {
@@ -26,8 +27,13 @@ describe('API Client', () => {
   });
 
   it('403 company_archived — без обновления токена и повтора, с тостом', async () => {
+    // Токен-рефреш должен быть В НАЛИЧИИ: иначе `doTokenRefresh` бросил бы
+    // ДО обращения к `axios.post` по совсем другой причине («нет
+    // refresh-токена»), и тест прошёл бы даже без раннего выхода на
+    // company_archived — не доказывая ничего (ревью задачи 5, п.d).
+    window.localStorage.setItem(REFRESH_TOKEN_KEY, 'test-refresh-token');
     const calls: string[] = [];
-    const refresh = vi.spyOn(axios, 'post');
+    const refresh = vi.spyOn(axios, 'post').mockResolvedValue({ data: { access: 'new' } });
     const original = api.defaults.adapter;
     api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
       calls.push(config.url ?? '');
@@ -44,6 +50,7 @@ describe('API Client', () => {
     } finally {
       api.defaults.adapter = original;
       refresh.mockRestore();
+      window.localStorage.removeItem(REFRESH_TOKEN_KEY);
     }
   });
 });

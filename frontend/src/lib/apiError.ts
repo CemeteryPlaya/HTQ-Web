@@ -53,6 +53,11 @@ interface ApiErrorShape {
   status?: number;
   isServerError?: boolean;
   message?: string;
+  /**
+   * 403 `company_archived`: `api/client.ts` уже показал тост об отказе записи
+   * в архив — второй тост здесь был бы дублем того же объяснения.
+   */
+  archivedReported?: boolean;
 }
 
 /** Текст `detail`, если бэкенд прислал именно текст. */
@@ -132,6 +137,7 @@ export function reportApiError(
   fallback: string,
   options?: ExternalToast,
 ): void {
+  if ((error as ApiErrorShape)?.archivedReported) return;
   const detail = explainedDetail(error);
   if (detail && PERMISSION_GATE_DETAIL.some((pattern) => pattern.test(detail))) {
     toast.error(

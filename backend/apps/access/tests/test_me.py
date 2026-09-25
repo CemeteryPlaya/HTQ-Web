@@ -8,6 +8,7 @@ from django.test import Client
 from apps.access.models import Level, PositionRole, Role, RoleAssignment, ScopeKind
 from apps.access.tests.helpers import BASE, auth, superuser_token, token
 from apps.access.tests.helpers import grant
+from apps.access.views import cap_for_archive
 from apps.companies.models import Company, CompanyStatus
 
 
@@ -236,6 +237,34 @@ def test_me_in_active_company_is_not_capped(client, company_schema):
     resp = client.get(f"{BASE}/me", HTTP_X_HTQ_COMPANY=slug,
                       **auth(superuser_token(company=slug)))
 
+    assert resp.status_code == 200
     body = resp.json()
     assert body["company_archived"] is False
     assert {entry["level"] for entry in body["permissions"].values()} == {"admin"}
+
+
+def test_cap_for_archive_keeps_explicit_node_denial_empty():
+    """Узел без ``view`` — явный запрет, а не наследование (ревью задачи 5a).
+
+    ``depthFor`` на фронте (``lib/auth/permissions.ts``) трактует
+    ОТСУТСТВУЮЩИЙ ключ как «взять права предка», а пустой список — как явный
+    запрет. Выбрасывать такие узлы из карты (как было раньше) значило бы
+    превращать запрет в наследование прав предка в архиве.
+    """
+    depth = {"hr": ["view", "edit"], "hr.employees.salary": [], "hr.x": ["create"]}
+    _, capped_depth = cap_for_archive({}, depth)
+    assert capped_depth == {"hr": ["view"], "hr.employees.salary": [], "hr.x": []}
+
+
+def test_cap_for_archive_lowers_permission_levels_to_read():
+    permissions = {
+        "hr": {"level": "admin", "scope": {"kind": "company", "id": None}},
+        "tasks": {"level": "write", "scope": {"kind": "department", "id": 3}},
+        "mail": {"level": "read", "scope": {"kind": "company", "id": None}},
+    }
+    capped_permissions, _ = cap_for_archive(permissions, {})
+    assert capped_permissions == {
+        "hr": {"level": "read", "scope": {"kind": "company", "id": None}},
+        "tasks": {"level": "read", "scope": {"kind": "department", "id": 3}},
+        "mail": {"level": "read", "scope": {"kind": "company", "id": None}},
+    }

@@ -1161,8 +1161,13 @@ domain. Archive, restore and membership revocation are **platform-level**
 instead: `api_view(admin=True)` (staff-or-superuser) plus an explicit
 `is_superuser` check inside the view (`deny_unless_platform_admin`) — a
 plain staff token gets 403. Archive/restore/revoke are irreversible-ish
-enough (archive 404s a company's whole traffic; revoke locks someone out)
-that "elevated" isn't a high enough bar.
+enough (archive turns every write on the company's subdomain into a 403
+`company_archived` — for everyone, superuser included, except `GET`/`HEAD`/
+`OPTIONS` and the token endpoints — and every read on it into a 404 for
+anyone but a superuser; `django-admin` doesn't get even that exception and
+404s regardless of who's asking, because the check runs before Django's own
+session/auth middleware can tell; revoke locks someone out) that "elevated"
+isn't a high enough bar.
 
 ⚠️ **The module gate alone is company-blind.** `api_view(module=…)` resolves
 the caller's level in *the caller's own company* (`current_company_or_none()`)
@@ -1183,7 +1188,7 @@ platform administrator only.**
 
 | Endpoint                                                | Method | Auth              | Notes |
 |----------------------------------------------------------|--------|-------------------|-------|
-| `/api/companies/v1/me`                                    | GET    | jwt               | Companies where the caller holds an active membership in an active company, ordered `-is_default, name`; `[{slug, subdomain, name, kind, is_default, is_current}]` — the SPA builds a company's host from `subdomain ?? slug` (switcher, `/companies/choose`); no module gate — every signed-in user needs this to switch companies |
+| `/api/companies/v1/me`                                    | GET    | jwt               | Companies where the caller holds an active membership in an active company, ordered `-is_default, name`; `[{slug, subdomain, name, kind, is_default, is_current}]` — the SPA builds a company's host from `subdomain ?? slug` (switcher, `/companies/choose`); no module gate — every signed-in user needs this to switch companies. A superuser additionally gets every archived company in the registry appended, membership or not, each row carrying `is_archived: true` (`false` on every other row). An archived company is read-only: any method there but `GET`/`HEAD`/`OPTIONS` (the token endpoints excepted) is refused with 403 `company_archived` for everyone, and of the safe methods only a superuser gets through to read it — see [the archive spec](docs/plans/2026-09-25-archive-read-only-spec.md) |
 | `/api/companies/v1/companies`                              | GET    | jwt (companies/read)  | `?status=all\|active\|archived`, default `all` |
 | `/api/companies/v1/companies/tree`                         | GET    | jwt (companies/read)  | Active companies only, nested by `parent_slug`. A node whose parent got archived becomes a root instead of disappearing from the tree |
 | `/api/companies/v1/companies/{slug}`                       | GET    | jwt (companies/read)  | 404 `not_found` for an unknown slug |
@@ -1211,9 +1216,11 @@ because they're a status flip and a view rebuild, not DDL.
 `archive_company` returns 409 `last_active` when the target is the only
 company with `status=active`: for as long as the transition mode holds
 (`docs/plans/2026-09-14-group-structure-roadmap.md` §3 — currently one
-live company, "Hi-Tech Qazaqstan"), archiving it would 404 every route on
-the platform, `contracts`/`signoff` included, since they resolve their
-schema from the company on the request.
+live company, "Hi-Tech Qazaqstan"), archiving it would leave the platform
+with no active company to write to — every route on it, `contracts`/
+`signoff` included, resolves its schema from the company on the request,
+and a schema only a superuser can read (and nobody can write) isn't a
+schema the platform can run on.
 
 ---
 
@@ -1314,7 +1321,7 @@ change:
 | 400      | Validation / malformed request (`SuspiciousOperation`)               |
 | 401      | Missing or invalid JWT                                               |
 | 403      | Authenticated but not authorised (e.g. non-admin on admin route, module level below the route's, token `company` claim ≠ the request's company), or `django-admin` `PermissionDenied` |
-| 404      | Resource (or route) not found — see the routing table above; also `{"detail": "Компания не найдена"}` from `CompanyContextMiddleware` for a request to an unknown or archived company's host |
+| 404      | Resource (or route) not found — see the routing table above; also `{"detail": "Компания не найдена"}` from `CompanyContextMiddleware` for a request to an unknown company's host, from `django-admin` on an archived company's host, or from `api_view` for anyone but a superuser reading an archived company (see the archive spec) |
 | 409      | Conflict (e.g. duplicate email on register)                          |
 | 422      | Pydantic validation error (`body=` schema on `api_view`)              |
 | 429      | Rate limit exceeded (nginx prod only)                                |
