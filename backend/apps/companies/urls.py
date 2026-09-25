@@ -19,6 +19,8 @@ urlpatterns = [
     path("companies/<slug:slug>/archive/", views.CompanyArchiveView.as_view()),
     path("companies/<slug:slug>/restore", views.CompanyRestoreView.as_view()),
     path("companies/<slug:slug>/restore/", views.CompanyRestoreView.as_view()),
+    path("companies/<slug:slug>/bankrupt", views.CompanyBankruptView.as_view()),
+    path("companies/<slug:slug>/bankrupt/", views.CompanyBankruptView.as_view()),
     path("companies/<slug:slug>/modules/<str:app_label>", views.CompanyModuleItemView.as_view()),
     path("companies/<slug:slug>/modules/<str:app_label>/", views.CompanyModuleItemView.as_view()),
     path("companies/<slug:slug>/modules", views.CompanyModulesView.as_view()),

@@ -102,7 +102,7 @@ def test_superuser_lists_all_by_default_and_filters_by_status(client, group):
     assert htq == {"id": group["htq"].id, "slug": "hi-tech-qazaqstan", "subdomain": None,
                    "name": "Hi-Tech Qazaqstan",
                    "kind": "construction", "status": "active", "country": "KZ",
-                   "parent_slug": "hi-tech-group", "archived_at": None,
+                   "parent_slug": "hi-tech-group", "successor_slug": None, "archived_at": None,
                    # Задача 7 блока C: включено по умолчанию (решение заказчика 4).
                    "show_external_holders": True}
 

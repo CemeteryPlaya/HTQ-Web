@@ -123,6 +123,11 @@ class Company(models.Model):
         """Slug вышестоящей компании — для схем ответа (``from_attributes``)."""
         return self.parent.slug if self.parent_id else None
 
+    @property
+    def successor_slug(self) -> str | None:
+        """Slug компании-преемника — для схем ответа (``from_attributes``)."""
+        return self.successor.slug if self.successor_id else None
+
     def clean(self):
         """Метка адреса уникальна по ВСЕМ хостам, а не только по своей колонке.
 

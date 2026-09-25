@@ -24,8 +24,24 @@ class CompanyRead(BaseModel):
     status: str
     country: str
     parent_slug: str | None
+    successor_slug: str | None = None
     archived_at: datetime | None
     show_external_holders: bool
+
+
+class BankruptRequest(BaseModel):
+    successor: str
+    dry_run: bool = False
+
+
+class BankruptResponse(BaseModel):
+    company: CompanyRead
+    successor: CompanyRead
+    members_total: int
+    members_granted: int
+    members_already: int
+    archived: bool
+    dry_run: bool
 
 
 class CompanyTreeNode(BaseModel):

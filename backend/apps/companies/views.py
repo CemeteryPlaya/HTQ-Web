@@ -238,6 +238,33 @@ class CompanyRestoreView(CompaniesView):
         return schemas.CompanyRead.model_validate(company)
 
 
+class CompanyBankruptView(CompaniesView):
+    """Банкротство с преемником — платформенная операция (спека
+    docs/plans/2026-09-26-company-bankruptcy-spec.md). Фабрика ``@platform``
+    стоит в реестре самообслуживания одной записью ``scoped`` — поэтому первой
+    строкой ``deny_unless_platform_admin``, как у архива и восстановления."""
+
+    @platform("POST", body=schemas.BankruptRequest)
+    def post(self, request, slug: str, data: schemas.BankruptRequest):
+        denied = self.deny_unless_platform_admin()
+        if denied is not None:
+            return denied
+        try:
+            result = lifecycle.bankrupt_company(slug, data.successor,
+                                                dry_run=data.dry_run)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        return schemas.BankruptResponse(
+            company=schemas.CompanyRead.model_validate(result.company),
+            successor=schemas.CompanyRead.model_validate(result.successor),
+            members_total=result.members_total,
+            members_granted=result.members_granted,
+            members_already=result.members_already,
+            archived=result.archived,
+            dry_run=result.dry_run,
+        )
+
+
 # ── Модули компании ─────────────────────────────────────────────────────
 
 class CompanyModulesView(CompaniesView):

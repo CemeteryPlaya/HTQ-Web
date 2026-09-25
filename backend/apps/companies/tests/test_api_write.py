@@ -8,7 +8,7 @@ from apps.access.models import Role, RoleAssignment, ScopeKind
 from apps.access.tests.helpers import grant as grant_permission
 from apps.companies.models import Company, CompanyKind, CompanyStatus
 from apps.companies.tests.api_helpers import (
-    BASE, auth, headers, patch_json, staff_token, superuser_token, token,
+    BASE, auth, headers, patch_json, post_json, staff_token, superuser_token, token,
 )
 
 
@@ -258,3 +258,40 @@ def test_patch_subdomain_is_platform_admin_only(client, pair):
     assert res.status_code == 403
     htq.refresh_from_db()
     assert htq.subdomain is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_bankrupt_is_a_platform_operation(client, two_companies):
+    dead, heir = two_companies
+    body = {"successor": heir}
+    assert post_json(client, f"{BASE}/companies/{dead}/bankrupt", body,
+                     **auth(staff_token())).status_code == 403
+
+    res = post_json(client, f"{BASE}/companies/{dead}/bankrupt",
+                    {"successor": heir, "dry_run": True}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["dry_run"] is True
+    assert Company.objects.get(slug=dead).status == CompanyStatus.ACTIVE
+
+    res = post_json(client, f"{BASE}/companies/{dead}/bankrupt", body,
+                    **auth(superuser_token()))
+    assert res.status_code == 200
+    data = res.json()
+    assert data["company"]["status"] == "archived"
+    assert data["company"]["successor_slug"] == heir
+    assert data["successor"]["slug"] == heir
+    assert {"members_total", "members_granted", "members_already", "archived"} <= data.keys()
+    assert data["archived"] is True
+
+
+@pytest.mark.django_db
+def test_bankrupt_errors_keep_the_envelope(client, pair):
+    holding, htq = pair
+    res = post_json(client, f"{BASE}/companies/{htq.slug}/bankrupt",
+                    {"successor": htq.slug}, **auth(superuser_token()))
+    assert res.status_code == 422
+    assert res.json()["code"] == "successor_invalid"
+
+    res = post_json(client, f"{BASE}/companies/no-such/bankrupt",
+                    {"successor": htq.slug}, **auth(superuser_token()))
+    assert res.status_code == 404
