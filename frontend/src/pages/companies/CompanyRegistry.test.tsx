@@ -3,7 +3,7 @@
  * /companies/tree, подпись «создание — командой», архив как платформенная
  * операция и читаемый отказ 409 last_active.
  */
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -119,6 +119,27 @@ describe('CompanyRegistry', () => {
     expect(await screen.findByText(/2 сотрудник/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /Подтвердить банкротство/ }));
     expect(bankrupt).toHaveBeenLastCalledWith('hi-tech-qazaqstan', { successor: 'hi-tech-group', dry_run: false });
+  });
+
+  it('после ошибки банкротства список компаний перезапрашивается (409 holding_stale)', async () => {
+    // holding_stale: компания уже в архиве, упала только пересборка сводок —
+    // без перезапроса экран показывал бы её действующей.
+    roles.mockReturnValue(['admin']);
+    bankrupt.mockImplementation((_slug: string, body: { dry_run?: boolean }) => (body.dry_run
+      ? Promise.resolve({ data: {
+        company: { ...LIST[1], successor_slug: null }, successor: LIST[0],
+        members_total: 1, members_granted: 1, members_already: 0, archived: false, dry_run: true,
+      } })
+      : Promise.reject({ response: { status: 409, data: { detail: 'сводки не пересобраны', code: 'holding_stale' } } })));
+    renderWithProviders(<CompanyRegistry />);
+    await userEvent.click(await screen.findByText('Hi-Tech Qazaqstan'));
+    await userEvent.click(screen.getByRole('button', { name: /Банкротство/ }));
+    await userEvent.selectOptions(screen.getByLabelText(/Преемник/), 'hi-tech-group');
+    await userEvent.click(screen.getByRole('button', { name: /Проверить/ }));
+    const listCalls = list.mock.calls.length;
+    await userEvent.click(await screen.findByRole('button', { name: /Подтвердить банкротство/ }));
+    expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/сводки не пересобраны/));
+    await waitFor(() => expect(list.mock.calls.length).toBeGreaterThan(listCalls));
   });
 
   it('показывает преемника у закрытой компании', async () => {

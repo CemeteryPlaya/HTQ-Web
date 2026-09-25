@@ -153,6 +153,36 @@ def test_other_successor_is_a_conflict(pair):
 
 
 @pytest.mark.django_db
+def test_successor_set_after_first_check_is_a_conflict(pair, monkeypatch):
+    """Гонка двух банкротств: другой преемник появился МЕЖДУ проверкой по
+    незаблокированной строке и транзакцией выдачи. Настоящую гонку в тесте
+    не воспроизвести, поэтому второе банкротство «успевает» внутри
+    ``active_member_ids`` — его зовут после первой проверки и до блокировки.
+    Повторная проверка по заблокированной строке обязана отказать ДО выдачи."""
+    from apps.companies import interface
+
+    dead, heir = pair
+    kate = _user("kate")
+    _member(dead, kate)
+    third = Company.objects.create(slug="t-third", name="t-third", kind="service")
+    original = interface.active_member_ids
+
+    def rival_wins(slug):
+        Company.objects.filter(slug=dead).update(successor=third)
+        return original(slug)
+
+    monkeypatch.setattr(interface, "active_member_ids", rival_wins)
+
+    with pytest.raises(lifecycle.SuccessorConflict) as exc:
+        lifecycle.bankrupt_company(dead, heir)
+
+    assert (exc.value.status, exc.value.code) == (409, "successor_conflict")
+    assert _member_ids(heir) == set()
+    company = Company.objects.get(slug=dead)
+    assert company.status == CompanyStatus.ACTIVE and company.successor_id == third.pk
+
+
+@pytest.mark.django_db
 def test_repeat_with_same_successor_is_idempotent(pair):
     """Повтор после сбоя на середине: та же пара довыдаёт недостающее."""
     dead, heir = pair

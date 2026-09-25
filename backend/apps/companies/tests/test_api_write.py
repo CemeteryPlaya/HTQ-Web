@@ -295,3 +295,21 @@ def test_bankrupt_errors_keep_the_envelope(client, pair):
     res = post_json(client, f"{BASE}/companies/no-such/bankrupt",
                     {"successor": htq.slug}, **auth(superuser_token()))
     assert res.status_code == 404
+
+
+@pytest.mark.django_db
+def test_bankrupt_with_other_successor_is_a_conflict(client, pair):
+    """Спека §7: другой преемник — 409 ``successor_conflict``. Схемы компаний
+    не нужны: проверка конфликта стоит раньше подсчёта участников и архива,
+    до пересборки сводок вызов не доходит."""
+    holding, htq = pair
+    third = Company.objects.create(slug="t-third", name="Third", kind=CompanyKind.SERVICE)
+    Company.objects.filter(pk=htq.pk).update(successor=holding)
+
+    res = post_json(client, f"{BASE}/companies/{htq.slug}/bankrupt",
+                    {"successor": third.slug}, **auth(superuser_token()))
+
+    assert res.status_code == 409
+    assert res.json()["code"] == "successor_conflict"
+    htq.refresh_from_db()
+    assert htq.successor_id == holding.pk and htq.status == CompanyStatus.ACTIVE

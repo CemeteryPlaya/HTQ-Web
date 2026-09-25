@@ -85,17 +85,21 @@ const CompanyRegistry = () => {
     setPreview(null);
   };
 
+  // Реестр перезапрашивается и после ошибки: ответ 409 `holding_stale`
+  // значит, что статус компании уже сменился и упала только пересборка
+  // сводок. Обновление лишь в onSuccess оставило бы на экране прежний
+  // статус и кнопки, которые к нему больше не относятся.
   const archiveMut = useMutation({
     mutationFn: (slug: string) => companiesApi.archive(slug),
-    onSuccess: () => { toast.success(t('companies.archived', 'Компания переведена в архив')); invalidate(); },
+    onSuccess: () => toast.success(t('companies.archived', 'Компания переведена в архив')),
     onError: (e) => reportApiError(e, t('companies.archiveFailed', 'Не удалось архивировать')),
-    onSettled: () => setConfirm(null),
+    onSettled: () => { setConfirm(null); invalidate(); },
   });
   const restoreMut = useMutation({
     mutationFn: (slug: string) => companiesApi.restore(slug),
-    onSuccess: () => { toast.success(t('companies.restored', 'Компания возвращена из архива')); invalidate(); },
+    onSuccess: () => toast.success(t('companies.restored', 'Компания возвращена из архива')),
     onError: (e) => reportApiError(e, t('companies.restoreFailed', 'Не удалось восстановить')),
-    onSettled: () => setConfirm(null),
+    onSettled: () => { setConfirm(null); invalidate(); },
   });
   const previewMut = useMutation({
     mutationFn: (slug: string) => companiesApi.bankrupt(slug, { successor, dry_run: true }),
@@ -104,9 +108,9 @@ const CompanyRegistry = () => {
   });
   const bankruptMut = useMutation({
     mutationFn: (slug: string) => companiesApi.bankrupt(slug, { successor, dry_run: false }),
-    onSuccess: () => { toast.success(t('companies.bankruptcy.done', 'Компания закрыта, дела переданы преемнику')); invalidate(); },
+    onSuccess: () => toast.success(t('companies.bankruptcy.done', 'Компания закрыта, дела переданы преемнику')),
     onError: (e) => reportApiError(e, t('companies.bankruptcy.failed', 'Не удалось провести банкротство')),
-    onSettled: () => { setConfirm(null); setPreview(null); setSuccessor(''); },
+    onSettled: () => { setConfirm(null); setPreview(null); setSuccessor(''); invalidate(); },
   });
 
   return (

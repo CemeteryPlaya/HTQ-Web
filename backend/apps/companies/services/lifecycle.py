@@ -326,6 +326,18 @@ def bankrupt_company(slug: str, successor_slug: str, *,
                    .filter(company=company, user_id__in=to_grant, is_default=True)
                    .values_list("user_id", flat=True))
     with transaction.atomic():
+        # Проверка преемника выше шла по строке без блокировки: два
+        # суперпользователя, закрывающие одну компанию с разными преемниками,
+        # прошли бы её оба и выдали членства и в Y, и в Z, а ``successor``
+        # достался бы последнему — выданные доступы не отзываются. Строка
+        # компании блокируется до выдачи, и проверка повторяется по ней:
+        # второй вызов ждёт первый и видит уже выставленного преемника.
+        # Первую проверку не убираем — она нужна ``dry_run`` и отказывает
+        # сразу, не считая участников.
+        company = Company.objects.select_for_update().get(pk=company.pk)
+        if company.successor_id is not None and company.successor_id != successor.pk:
+            raise SuccessorConflict(
+                f"У компании {slug} уже есть преемник {company.successor.slug}")
         for uid in to_grant:
             membership_service.grant_membership(successor, uid,
                                                 is_default=uid in defaults)

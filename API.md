@@ -1163,9 +1163,9 @@ for the `companies` module (`apps.access`), same mechanism as every other
 domain. Archive, restore, bankruptcy and membership revocation are **platform-level**
 instead: `api_view(admin=True)` (staff-or-superuser) plus an explicit
 `is_superuser` check inside the view (`deny_unless_platform_admin`) — a
-plain staff token gets 403. Archive/restore/revoke are irreversible-ish
-enough (archive turns every write on the company's subdomain into a 403
-`company_archived` — for everyone, superuser included, except `GET`/`HEAD`/
+plain staff token gets 403. Archive/restore/bankruptcy/revoke are
+irreversible-ish enough (archive turns every write on the company's
+subdomain into a 403 `company_archived` — for everyone, superuser included, except `GET`/`HEAD`/
 `OPTIONS` and the token endpoints — and every read of the company's data on
 it into a 404 for anyone but a superuser: anonymous (`auth=None`) handlers of
 the tenant apps (`hr`, `tasks`, `contracts`, `signoff`, e.g. HR share links)
@@ -1174,7 +1174,9 @@ messenger attachments, avatars, meeting recordings — keep answering, since
 they read `public`, not the company's schema, and are signature-protected;
 `django-admin` doesn't get even that exception and
 404s regardless of who's asking, because the check runs before Django's own
-session/auth middleware can tell; revoke locks someone out) that "elevated"
+session/auth middleware can tell; bankruptcy does all that and also hands
+every member a membership in the successor, which restore does not take
+back; revoke locks someone out) that "elevated"
 isn't a high enough bar.
 
 ⚠️ **The module gate alone is company-blind.** `api_view(module=…)` resolves
@@ -1213,7 +1215,7 @@ platform administrator only.**
 
 **`show_external_holders`** (`CompanyRead`/`CompanyPatch`, migration `companies/0004`, default `true`) is a per-company, platform-admin-only setting: it controls whether a subsidiary can *see* who from a parent company holds rights in it via the endpoint above — it does not control the access itself, and a subsidiary cannot turn it off for itself (customer decision 4, block C). Defaulting to on is deliberate: hiding it by default would hide the fact of access from the company whose data is actually being read.
 
-**`successor_slug`** (`CompanyRead`, read-only; a model property like `parent_slug`) is the slug of the company that took over a bankrupt one, `null` otherwise. It is set only by `POST …/bankrupt` / `manage.py company_bankrupt` and cleared by restore; the registry screen shows it as «Преемник: …» on the company card.
+**`successor_slug`** (`CompanyRead`, read-only; a model property like `parent_slug`) is the slug of the company that took over a bankrupt one, `null` otherwise. It is set only by `POST …/bankrupt` / `manage.py company_bankrupt` and cleared by restore; the registry screen shows it on the company card as a «Преемник» row with the successor company's name.
 
 **`subdomain`** (`CompanyRead`, `MyCompany`, `CompanyPatch`; migrations `companies/0005` field, `0006` seeds `hi-tech-qazaqstan → htq`, `hi-tech-systems → hts`, `kazakhstan-engineering-group → keg`, `hi-tech-group → group`; CLI `company_create --subdomain`) is the company's short host label, `null` when the company lives on its slug. It decides only which host resolves to the company (see "Company context" in the authorization rule above); links that must open a company page from outside — HR share links — are built by `apps.companies.interface.public_url(slug)` as `https://<subdomain or slug>.<host of PUBLIC_BASE_URL>`. Rollout checklist (DNS, origin certificate, `SFU_ALLOWED_ORIGINS`, order of commands, checks): [docs/deploy/subdomains-runbook.md](docs/deploy/subdomains-runbook.md).
 

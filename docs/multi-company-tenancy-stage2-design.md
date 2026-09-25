@@ -314,6 +314,7 @@ permission_level(user, module, company) -> none | read | write | admin
   реализованы — поле `Company.successor` объявлено
   (`backend/apps/companies/models.py:96`), логики нет; сознательно оставлено,
   см. [roadmap §10](plans/2026-09-14-group-structure-roadmap.md#10-итог-рефакторинга-23092026);
+  **26.09.2026:** банкротство с преемником реализовано — [спека](plans/2026-09-26-company-bankruptcy-spec.md);
 - «архив — только чтение» — подпроект 4 — **не выполнено** на 23.09.2026: архив
   по-прежнему закрывает 404 весь трафик компании
   (`backend/htqweb/middleware/company_context.py:60`), сознательно оставлено,
