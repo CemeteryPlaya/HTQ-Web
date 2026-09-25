@@ -91,8 +91,9 @@ class Company(models.Model):
         default=CompanyStatus.ACTIVE, db_default=CompanyStatus.ACTIVE.value,
         db_index=True,
     )
-    # Заполняется при банкротстве (подпроект 4). Здесь только объявлено,
-    # чтобы схема не менялась вторично, когда до него дойдут руки.
+    # Преемник банкрота (подпроект 4): заполняется
+    # ``lifecycle.bankrupt_company`` (команда ``company_bankrupt``, ручка
+    # ``POST companies/<slug>/bankrupt``), снимается ``restore_company``.
     successor = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="predecessors",

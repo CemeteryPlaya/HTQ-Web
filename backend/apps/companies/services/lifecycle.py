@@ -334,8 +334,12 @@ def bankrupt_company(slug: str, successor_slug: str, *,
             company.save(update_fields=["successor", "updated_at"])
     # Архив — после переноса и вне транзакции переноса: он пересобирает
     # сводки холдинга (DDL), и его сбой не должен откатывать уже выданные
-    # доступы — повтор той же пары довершит работу. Гейт LastActiveCompany
-    # не сработает: преемник действующий.
+    # доступы. Повтор той же пары довыдаст недостающие членства, но
+    # пересборку сводок НЕ повторит: если упала именно она
+    # (HoldingViewsStale), статус ARCHIVED уже сохранён, и archive_company
+    # на повторе вернётся сразу — сводки после такого сбоя доводит
+    # ``manage.py migrate_companies``. Гейт LastActiveCompany не сработает:
+    # преемник действующий.
     company, archived = archive_company(slug)
     logger.info("company_bankrupt slug=%s successor=%s granted=%d already=%d",
                 slug, successor.slug, len(to_grant), len(already))

@@ -242,7 +242,7 @@ backend/apps/companies/        # Реестр компаний (схема publi
 │   ├── schema_service.py             # CREATE/DROP SCHEMA co_<slug>
 │   ├── migration_service.py           # migrate_company() — прогон по схеме одной компании,
 │   │                                   #   advisory-lock, BackwardsMigrationRefused/SchemaMissing
-│   ├── lifecycle.py                    # жизненный цикл компании (заведение/правка/архив/восстановление) —
+│   ├── lifecycle.py                    # жизненный цикл компании (заведение/правка/архив/восстановление/банкротство) —
 │   │                                   #   единственная точка оркестрации для management-команд И HTTP-вьюх;
 │   │                                   #   гейт LastActiveCompany (архив — только чтение: без последней действующей компании платформе негде писать)
 │   ├── module_service.py                # модули ОДНОЙ компании (CompanyModule) — компанейский слой
@@ -258,7 +258,10 @@ backend/apps/companies/        # Реестр компаний (схема publi
     │                                     #   или всем активным, идемпотентно
     ├── company_archive.py                 # архивировать компанию: status + пересборка сводок
     │                                     #   холдинга одной операцией, идемпотентно
-    ├── company_restore.py                 # вернуть компанию из архива — симметрично company_archive
+    ├── company_restore.py                 # вернуть компанию из архива — симметрично company_archive;
+    │                                     #   снимает преемника (выданные ему членства не отзываются)
+    ├── company_bankrupt.py                # банкротство с преемником: членства участников → преемник,
+    │                                     #   компания → архив, successor; --dry-run — сводка без изменений
     ├── migrate_companies.py              # довести схемы компаний до текущей версии (снос/сборка
     │                                     #   сводок холдинга вокруг прогона)
     ├── migrate_shared.py                  # migrate только нетенантных аппок — этим стартует
