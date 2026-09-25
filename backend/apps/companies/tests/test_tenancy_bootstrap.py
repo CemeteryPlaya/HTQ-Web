@@ -368,3 +368,29 @@ def test_dry_run_reports_all_ok_on_clean_base():
     printed = out.getvalue()
     assert "ОШИБКА" not in printed
     assert printed.count("[ок]") == 4
+
+
+@pytest.mark.django_db
+def test_tenant_table_list_has_no_duplicates_and_still_names_the_real_tables():
+    """Читатели холдинга (``apps/hr/holding_models.py``,
+    ``apps/tasks/holding_models.py``) — модели с ``managed=False``, чей
+    ``db_table`` НАМЕРЕННО совпадает с таблицей компании (представление
+    называется по таблице). Без фильтра по ``managed`` они попадали в список
+    к переносу вторым разом, и второй ``ALTER TABLE public.hr_employee SET
+    SCHEMA …`` падал на боевой команде переноса.
+
+    Две проверки, и вторая обязательна: одно лишь «нет дублей» прошло бы и
+    на пустом списке. Дубли ловятся сравнением длин, а НЕ дедупликацией в
+    самой команде: ``set()`` там спрятал бы и будущий случай двух
+    managed-моделей на одной таблице, который сам по себе баг.
+    """
+    # ``django_db`` нужен не самому тесту (реестр моделей БД не трогает), а
+    # autouse-фикстуре ``cleanup``, которая в teardown спрашивает БД про схему.
+    tables = tenancy_bootstrap.Command()._tenant_tables()
+    duplicates = sorted({t for t in tables if tables.count(t) > 1})
+    assert duplicates == [], f"таблицы к переносу перечислены дважды: {duplicates}"
+    assert len(tables) == len(set(tables))
+    for real in ("hr_employee", "tasks_task", "tasks_dailyreport",
+                 "tasks_task_labels", "contracts_budget",
+                 "signoff_approvalprocess"):
+        assert real in tables, real

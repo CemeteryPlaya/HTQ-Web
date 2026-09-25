@@ -11,12 +11,15 @@ app/services/translation_service.py (build_translated_org_tree — перено�
 
 Авторизация — writes на ``POST/DELETE /relations`` ИЗМЕНЕНА относительно
 исходного порта: было ``admin=True`` (require_hr_write исходника =
-is_elevated), стало — ключ прав ``hr.org.edit`` через ``_require_permission``
-(доступен HR senior/lead, см. ``apps.hr.permissions``/``apps.hr.access``).
-``admin_auth`` (is_staff=True) доступ сохраняет — ``resolve_hr_access``
-коротит elevated-токены в ``HRAccess(permissions={"*"})``. Персональные связи
-сотрудников (``/org/employee-relations``) и руководитель отдела
-(``/org/departments/{id}/manager``) — новые ручки, см.
+is_elevated), стало — узел ``hr.org``, все четыре признака
+(``legacy_roles.KEY_TO_NODE[ORG_EDIT]``) через ``_require_permission``
+(доступен HR senior/lead, см. ``apps.hr.permissions``/``apps.hr.rbac``). ``admin_auth`` (is_staff=True)
+доступ сохраняет — до задачи 9 блока I за это отвечал резолвер
+(``resolve_hr_access`` коротил elevated-токены в ``HRAccess(
+permissions={"*"})``); сегодня ``is_staff`` сам по себе гейт модуля НЕ
+проходит, поэтому фикстура выдаёт роль ``hr-lead`` явно (см. её докстринг
+ниже). Персональные связи сотрудников (``/org/employee-relations``) и
+руководитель отдела (``/org/departments/{id}/manager``) — новые ручки, см.
 ``test_org_employee_relations_api.py``/``test_org_department_manager_api.py``.
 ``PUT /org/settings/deletion-strategy`` НАМЕРЕННО остался ``admin=True`` —
 эту задачу не переносили.
@@ -44,6 +47,7 @@ import pytest
 from django.db import connection
 from django.db.utils import IntegrityError
 from django.test import Client
+from django.utils import timezone
 
 from apps.hr.models import Department, Employee, Position, ReportingRelation
 from apps.users.models import User, UserStatus
@@ -55,6 +59,26 @@ BASE = "/api/hr/v1/org"
 @pytest.fixture
 def dep(db):
     return Department.objects.create(name="ИТ", path="it")
+
+
+def _grant_seeded_role(company_slug: str, user_id: int, code: str) -> None:
+    """Назначить УЖЕ засеянную роль (``access/migrations/0005``) пользователю.
+
+    Блок I задача 5: writes ``/org/*`` теперь стоят ещё и под ``module="hr",
+    level=…`` (гейт добавлен ПОВЕРХ ``_require_permission(ORG_EDIT)``, не
+    вместо). Фикстуры ниже уже собирают OLD-системный уровень через
+    Employee/Position (эвристика ``classify_hr_level``) — этого одного
+    больше не хватает: НОВЫЙ гейт читает роли ``apps.access``, а не
+    ``hr.access``, две модели не связаны автоматически. Используются РЕАЛЬНЫЕ
+    засеянные роли (``hr-middle``/``hr-senior``/``hr-lead``), а не
+    выдуманные — как того требует бриф задачи 5.
+    """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    RoleAssignment.objects.create(
+        company_slug=company_slug, user_id=user_id, role=Role.objects.get(code=code),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
 
 
 @pytest.fixture
@@ -69,15 +93,24 @@ def auth(db):
 
 
 @pytest.fixture
-def admin_auth(db):
-    """is_staff=True — elevated, требуется для writes (require_hr_write)."""
+def admin_auth(db, company_row):
+    """is_staff=True — elevated, требуется для writes (require_hr_write).
+
+    ``is_staff`` сам по себе НОВЫЙ гейт модуля не проходит (единственный
+    бесплатный обход там — ``is_superuser``) — роль ``hr-lead`` выдана
+    явно, чтобы существующие ``admin_auth``-тесты (писавшиеся против
+    ``admin=True``/``require_hr_write``) не начали падать на гейте раньше,
+    чем на самой вьюхе.
+    """
     user = User.objects.create(
         username="org-admin", email="org-admin@htq.test", password="x", status=UserStatus.ACTIVE,
         is_staff=True,
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    _grant_seeded_role(company_row, user.id, "hr-lead")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 @pytest.fixture
@@ -89,9 +122,17 @@ def hr_dep(db):
 
 
 @pytest.fixture
-def middle_auth(db, hr_dep):
+def middle_auth(db, hr_dep, company_row):
     """middle level (LEVEL_PRESETS._MIDDLE) НЕ включает hr.org.edit —
-    появляется только с senior (apps/hr/permissions.py::_SENIOR)."""
+    появляется только с senior (apps/hr/permissions.py::_SENIOR).
+
+    Роль ``hr-middle`` выдана НА НОВОЙ модели тоже: агрегированный уровень
+    модуля ``hr`` у неё — ``write`` (``hr.documents: FULL`` в
+    ``access/migrations/0005``), гейт ``module="hr", level="write"`` на
+    ``add_reporting_relation`` его пропускает — иначе тест упирался бы в
+    гейт раньше, чем в СТАРУЮ проверку ``hr.org.edit``, которую он и должен
+    проверять.
+    """
     pos = _pos("HR Manager", hr_dep, weight=920)
     user = User.objects.create(
         username="org-middle", email="org-middle@htq.test", password="x", status=UserStatus.ACTIVE,
@@ -102,11 +143,13 @@ def middle_auth(db, hr_dep):
         first_name="И", last_name="И", email="org-middle@htq.test",
         department=hr_dep, position=pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
     )
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    _grant_seeded_role(company_row, user.id, "hr-middle")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 @pytest.fixture
-def senior_auth(db, hr_dep):
+def senior_auth(db, hr_dep, company_row):
     """senior level -> LEVEL_PRESETS._SENIOR включает hr.org.edit."""
     pos = _pos("Senior HR Manager", hr_dep, weight=921)
     user = User.objects.create(
@@ -118,7 +161,9 @@ def senior_auth(db, hr_dep):
         first_name="И", last_name="И", email="org-senior@htq.test",
         department=hr_dep, position=pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
     )
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    _grant_seeded_role(company_row, user.id, "hr-senior")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 def _pos(title, dep, weight, **kw):
@@ -230,8 +275,16 @@ def test_add_relation_requires_jwt_at_all():
 
 @pytest.mark.django_db
 def test_add_relation_forbidden_for_non_admin_jwt_user(auth, dep):
-    """Пользователь без Employee-профиля вообще -> HRAccess() пустой,
-    permissions={} -> 403 с точным detail _require_permission."""
+    """Пользователь без Employee-профиля и без единой роли ``apps.access`` —
+    403.
+
+    Блок I задача 5: без роли на модуль ``hr`` (``auth`` не несёт ни одной)
+    ``module="hr", level="write"`` отказывает РАНЬШЕ, чем запрос доходит до
+    ``_require_permission(ORG_EDIT)`` — точный detail теперь "Forbidden" от
+    гейта, а не "Missing permission: hr.org.edit" от тела вьюхи (тот же
+    приём уже задокументирован в ``apps/users/tests/test_module_gate.py::
+    test_moderation_of_registrations_stays_platform_only``).
+    """
     a = _pos("A", dep, weight=10)
     b = _pos("B", dep, weight=20)
     resp = Client().post(
@@ -240,7 +293,6 @@ def test_add_relation_forbidden_for_non_admin_jwt_user(auth, dep):
         content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Missing permission: hr.org.edit"
 
 
 @pytest.mark.django_db
@@ -275,12 +327,14 @@ def test_add_relation_allowed_for_senior_hr_without_admin(senior_auth, dep):
 
 @pytest.mark.django_db
 def test_remove_relation_forbidden_for_non_admin(auth, dep):
+    """Без роли на модуль ``hr`` гейт (``level="admin"`` — удаление)
+    отказывает раньше тела вьюхи — см. ``test_add_relation_forbidden_for_
+    non_admin_jwt_user`` про смену detail на "Forbidden"."""
     a = _pos("A", dep, weight=10)
     b = _pos("B", dep, weight=20)
     rel = _rel(a, b)
     resp = Client().delete(f"{BASE}/relations/{rel.id}", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Missing permission: hr.org.edit"
 
 
 @pytest.mark.django_db
@@ -305,7 +359,7 @@ def test_deletion_strategy_put_forbidden_for_non_admin(auth):
 def test_deletion_strategy_put_still_forbidden_for_senior_hr(senior_auth):
     """Пин: PUT /org/settings/deletion-strategy НЕ переносили на
     hr.org.edit — это глобальная политика удаления отделов, остаётся
-    admin=True (require_admin), а не HRAccess."""
+    admin=True (require_admin), а не проверка узла ``apps.hr.rbac``."""
     resp = Client().put(
         f"{BASE}/settings/deletion-strategy", data={"deletion_strategy": "cascade"},
         content_type="application/json", **senior_auth,
@@ -350,7 +404,7 @@ def test_add_relation_defaults_relation_type_direct_and_effective_from_today(adm
     assert resp.status_code == 201
     body = resp.json()
     assert body["relation_type"] == "direct"
-    assert body["effective_from"] == datetime.date.today().isoformat()
+    assert body["effective_from"] == timezone.localdate().isoformat()
 
 
 @pytest.mark.django_db
@@ -823,6 +877,8 @@ def test_set_superior_replacing_old_parent_is_not_a_false_cycle(admin_auth, dep)
 
 @pytest.mark.django_db
 def test_set_superior_forbidden_without_permission(auth, dep):
+    """См. ``test_add_relation_forbidden_for_non_admin_jwt_user`` про смену
+    detail на "Forbidden" — гейт модуля отказывает раньше тела вьюхи."""
     a = _pos("A", dep, weight=10)
     b = _pos("B", dep, weight=20)
     resp = Client().put(
@@ -831,7 +887,6 @@ def test_set_superior_forbidden_without_permission(auth, dep):
         content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Missing permission: hr.org.edit"
 
 
 # ── PATCH /org/relations/{id} — смена типа связи ─────────────────────────────

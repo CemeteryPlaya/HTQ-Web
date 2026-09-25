@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { DateInput } from '@/components/ui/date-input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 
 interface HistoryRecord {
   id: number;
@@ -63,7 +63,20 @@ const EVENT_COLORS: Record<string, string> = {
 const HRHistory = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Удаление записи кадровой истории — на бэкенде под
+  // `admin=True` + `module="hr", level="admin"` (apps/hr/views.py), поэтому
+  // кнопки показываются по уровню модуля `hr`, который проверяет сервер.
+  // Старый `isSenior` (write + область company) был шире и показывал кнопку
+  // тому, кому сервер ответил бы 403.
+  // ⚠️ Паритет с сервером — только по УРОВНЮ МОДУЛЯ. Те же ручки стоят ещё и
+  // под `admin=True` (`token.is_elevated`: is_staff/is_admin/is_superuser,
+  // htqweb/http.py), а этого флага в `usePermissions` нет — hr-lead без
+  // платформенного admin увидит кнопки и получит 403. Дыра pre-existing
+  // (старый `isSenior` её не закрывал) и здесь честно не закрыта: зеркала
+  // `is_elevated` во фронтовых правах нет, тянуть `useActiveProfile` ради
+  // него — отдельное решение (ревью задачи 10, minor 2).
+  const hrAdmin = permissions.atLeast('hr', 'admin');
 
   const { data: records, isLoading, error } = useQuery({
     queryKey: ['hr-personnel-history'],
@@ -382,7 +395,7 @@ const HRHistory = () => {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
                       <Button size="sm" variant="outline" onClick={() => startEdit(rec)}>{t('hr.common.edit')}</Button>
-                      {isSenior && (
+                      {hrAdmin && (
                         <Button
                           size="sm"
                           variant="destructive"

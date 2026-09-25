@@ -5,7 +5,6 @@ import { AlertTriangle, ArrowLeft, FileText, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
-import { DateInput } from '@/components/ui/date-input';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,9 +21,19 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { formatAmount } from '@/components/contracts/format';
+import { DateInput } from '@/components/ui/date-input';
 import { contractsApi } from '@/api/contracts';
 import { fetchEmployees } from '@/api/hr';
 import { reportApiError } from '@/lib/apiError';
+import {
+  CONTRACT_DATE_AHEAD_DAYS,
+  CONTRACT_DATE_MIN,
+  INVALID_DATE,
+  VALID_UNTIL_BEFORE_DATE,
+  contractDateProblem,
+  datesOutOfOrder,
+  todayIso,
+} from '@/lib/validation';
 import { isPlatformAdmin } from '@/lib/auth/roles';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import type {
@@ -35,7 +44,6 @@ import type {
   BudgetLineFlat,
   ContractsEnums,
   Counterparty,
-  PaymentType,
 } from '@/types/contracts';
 
 /**
@@ -176,12 +184,20 @@ const AgreementEditForm = ({ agreement, lines, counterparties, enums }: FormProp
   const [retentionRate, setRetentionRate] = useState(agreement.retention_rate ?? '0');
   const [retentionAmount, setRetentionAmount] = useState(agreement.retention_amount ?? '');
 
-  // Сроки и тип оплаты
-  const [paymentType, setPaymentType] = useState<PaymentType>(agreement.payment_type);
-  const [signedDate, setSignedDate] = useState(agreement.signed_date ?? '');
-  const [startDate, setStartDate] = useState(agreement.start_date ?? '');
-  const [endDate, setEndDate] = useState(agreement.end_date ?? '');
-  const [termComment, setTermComment] = useState(agreement.term_comment ?? '');
+  // «Дата договора» и «Срок действия по». Уходят на сервер и проверяются,
+  // только если их поменяли: у договоров из импорта даты бывает нет или она
+  // старше 2020 года, и правка опечатки в названии не должна требовать
+  // сначала «исправить» дату реестра. «Дата начала» и комментарий к сроку
+  // в форме не нужны — PATCH их не трогает. Предоплату / постоплату /
+  // поэтапно бэкенд выводит из аванса, когда аванс меняют.
+  const originalContractDate = agreement.signed_date ?? '';
+  const originalValidUntil = agreement.end_date ?? '';
+  const [contractDate, setContractDate] = useState(originalContractDate);
+  const [validUntil, setValidUntil] = useState(originalValidUntil);
+  const [brokenDates, setBrokenDates] = useState({ contract: false, until: false });
+  const contractDateChanged = contractDate !== originalContractDate;
+  const validUntilChanged = validUntil !== originalValidUntil;
+  const validUntilBeforeDate = datesOutOfOrder(contractDate, validUntil);
 
   const [errors, setErrors] = useState<Errors>({});
 
@@ -359,6 +375,17 @@ const AgreementEditForm = ({ agreement, lines, counterparties, enums }: FormProp
     else if (!lineId) next.budget = 'Выберите бюджетный год';
     if (!counterpartyId) next.counterparty = 'Выберите контрагента';
     if (!number.trim()) next.number = 'Укажите номер договора';
+    if (brokenDates.contract) next.contractDate = INVALID_DATE;
+    else if (contractDateChanged) {
+      const problem = contractDateProblem(contractDate);
+      if (problem) next.contractDate = problem;
+    }
+    if (brokenDates.until) next.validUntil = INVALID_DATE;
+    else if (validUntilChanged && !validUntil && originalValidUntil) {
+      next.validUntil = 'Срок действия нельзя очистить — укажите дату';
+    } else if ((contractDateChanged || validUntilChanged) && validUntilBeforeDate) {
+      next.validUntil = VALID_UNTIL_BEFORE_DATE;
+    }
     if (!name.trim()) next.name = 'Укажите наименование договора';
     if (!amount.trim()) next.amount = 'Укажите сумму договора';
     else if (!AMOUNT_RE.test(amount.trim())) {
@@ -378,7 +405,6 @@ const AgreementEditForm = ({ agreement, lines, counterparties, enums }: FormProp
           budget_line_id: Number(lineId),
           counterparty_id: Number(counterpartyId),
           amount: amount.trim().replace(',', '.'),
-          payment_type: paymentType,
           direction,
           kind,
           contract_type: contractType,
@@ -395,11 +421,9 @@ const AgreementEditForm = ({ agreement, lines, counterparties, enums }: FormProp
           advance_amount_planned: hasAdvance && advanceAmountPlanned.trim() ? advanceAmountPlanned.trim().replace(',', '.') : null,
           retention_rate: retentionRate.trim() || '0',
           retention_amount: retentionAmount.trim() ? retentionAmount.trim().replace(',', '.') : null,
-          start_date: startDate || null,
-          end_date: endDate || null,
-          term_comment: termComment.trim(),
           currency: selectedLine!.currency,
-          signed_date: signedDate || null,
+          ...(contractDateChanged && contractDate ? { signed_date: contractDate } : {}),
+          ...(validUntilChanged && validUntil ? { end_date: validUntil } : {}),
         })
         .then((r) => r.data),
     onSuccess: (row) => {
@@ -555,7 +579,7 @@ const AgreementEditForm = ({ agreement, lines, counterparties, enums }: FormProp
           <CardTitle>Договор</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <Label htmlFor="direction">Направление</Label>
               <Select
@@ -587,23 +611,6 @@ const AgreementEditForm = ({ agreement, lines, counterparties, enums }: FormProp
                   <SelectItem value="services">Услуги</SelectItem>
                   <SelectItem value="lease">Аренда</SelectItem>
                   <SelectItem value="other">Прочее</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <Label htmlFor="contract-type">Тип договора</Label>
-              <Select
-                value={contractType}
-                onValueChange={(val) => setContractType(val as AgreementType)}
-              >
-                <SelectTrigger id="contract-type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="standard">Стандартный</SelectItem>
-                  <SelectItem value="non_standard">Нетиповой</SelectItem>
-                  <SelectItem value="framework">Рамочный</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -653,6 +660,45 @@ const AgreementEditForm = ({ agreement, lines, counterparties, enums }: FormProp
                 </SelectContent>
               </Select>
               {fieldError('counterparty')}
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="contract-date">Дата договора</Label>
+              <DateInput
+                id="contract-date"
+                value={contractDate}
+                onChange={setContractDate}
+                min={CONTRACT_DATE_MIN}
+                max={todayIso(CONTRACT_DATE_AHEAD_DAYS)}
+                invalid={Boolean(errors.contractDate) || brokenDates.contract}
+                onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, contract: bad }))}
+              />
+              {fieldError('contractDate') ?? (
+                <p className="text-xs text-muted-foreground mt-1">
+                  По документу. Вместе с контрагентом и номером не должна повторяться.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <Label htmlFor="valid-until">
+                Срок действия по <span className="text-muted-foreground">(необязательно)</span>
+              </Label>
+              <DateInput
+                id="valid-until"
+                value={validUntil}
+                onChange={setValidUntil}
+                min={contractDate || undefined}
+                invalid={Boolean(errors.validUntil) || brokenDates.until}
+                onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, until: bad }))}
+              />
+              {fieldError('validUntil') ?? (
+                <p className="text-xs text-muted-foreground mt-1">
+                  После этой даты новые оплаты по договору не заводятся.
+                </p>
+              )}
             </div>
           </div>
 
@@ -879,68 +925,38 @@ const AgreementEditForm = ({ agreement, lines, counterparties, enums }: FormProp
         </CardContent>
       </Card>
 
-      {/* ─── 4. Сроки и условия исполнения ─────────────────────────── */}
+      {/* ─── 4. Оплата ─────────────────────────────────────────────── */}
+      {/* «Тип оплаты» — так заказчик зовёт `contract_type`. Файл договора
+          меняется в карточке, поэтому здесь его нет. */}
       <Card>
         <CardHeader>
-          <CardTitle>Сроки и условия исполнения</CardTitle>
+          <CardTitle>Оплата</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-4">
-            <div>
-              <Label htmlFor="payment-type">Тип оплаты</Label>
-              <Select
-                value={paymentType}
-                onValueChange={(value) => setPaymentType(value as PaymentType)}
-              >
-                <SelectTrigger id="payment-type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {enums.payment_type.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <Label htmlFor="signed-date">Дата подписания</Label>
-              <DateInput
-                id="signed-date"
-                value={signedDate}
-                onChange={setSignedDate}
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="start-date-edit">Дата начала</Label>
-              <DateInput
-                id="start-date-edit"
-                value={startDate}
-                onChange={setStartDate}
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="end-date-edit">Срок исполнения</Label>
-              <DateInput
-                id="end-date-edit"
-                value={endDate}
-                onChange={setEndDate}
-              />
-            </div>
-          </div>
-
-          <div>
-            <Label htmlFor="term-comment-edit">Срок исполнения (комментарий)</Label>
-            <Input
-              id="term-comment-edit"
-              value={termComment}
-              onChange={(e) => setTermComment(e.target.value)}
-              placeholder="например, уточнить"
-            />
+        <CardContent>
+          <div className="sm:w-1/2">
+            <Label htmlFor="contract-type">Тип оплаты</Label>
+            <Select
+              value={contractType}
+              onValueChange={(val) => setContractType(val as AgreementType)}
+            >
+              <SelectTrigger id="contract-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="standard">Стандартный</SelectItem>
+                <SelectItem value="framework">Открытый</SelectItem>
+                {/* Новым договорам «нетиповой» не предлагается, но у старых
+                    он есть — без пункта Select показал бы пустое значение. */}
+                {agreement.contract_type === 'non_standard' && (
+                  <SelectItem value="non_standard">Нетиповой</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">
+              {contractType === 'framework'
+                ? 'Сумма не фиксирована: бюджет расходуется оплатами и актами.'
+                : 'Бюджет занимает сумма договора.'}
+            </p>
           </div>
         </CardContent>
       </Card>

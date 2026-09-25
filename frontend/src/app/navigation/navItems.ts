@@ -28,7 +28,8 @@ import {
 } from 'lucide-react';
 
 /** Какое право нужно, чтобы раздел был виден. */
-export type NavRequirement = 'always' | 'editor' | 'hr' | 'tasks' | 'department';
+export type NavRequirement =
+  'always' | 'editor' | 'hr' | 'tasks' | 'department' | 'messenger' | 'mail';
 
 export interface NavItem {
   /** Стабильный ключ для React и тестов. */
@@ -46,8 +47,8 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { id: 'tasks', href: '/tasks', icon: CheckSquare, labelKey: 'profile.sidebar.tasks', labelFallback: 'Задачи', requires: 'tasks', inBottomNav: true },
   { id: 'calendar', href: '/calendar', icon: Calendar, labelKey: 'hr.nav.calendar', labelFallback: 'Календарь', requires: 'always', inBottomNav: true },
-  { id: 'messenger', href: '/messenger', icon: MessageCircle, labelKey: 'nav.messenger', labelFallback: 'Чаты', requires: 'always', inBottomNav: true },
-  { id: 'email', href: '/email', icon: Mail, labelKey: 'nav.email', labelFallback: 'Почта', requires: 'always', inBottomNav: true },
+  { id: 'messenger', href: '/messenger', icon: MessageCircle, labelKey: 'nav.messenger', labelFallback: 'Чаты', requires: 'messenger', inBottomNav: true },
+  { id: 'email', href: '/email', icon: Mail, labelKey: 'nav.email', labelFallback: 'Почта', requires: 'mail', inBottomNav: true },
   { id: 'contracts', href: '/contracts', icon: FileSignature, labelKey: 'contracts.nav.title', labelFallback: 'Договоры', requires: 'always' },
   { id: 'signoff', href: '/signoff', icon: Stamp, labelKey: 'signoff.nav.title', labelFallback: 'Согласования', requires: 'always' },
   { id: 'employees', href: '/hr/employees', icon: Users, labelKey: 'profile.sidebar.employees', labelFallback: 'Сотрудники', requires: 'hr', inBottomNav: true },
@@ -61,6 +62,8 @@ export interface NavAbilities {
   isHr: boolean;
   hasTasks: boolean;
   hasDepartment: boolean;
+  hasMessenger: boolean;
+  hasMail: boolean;
 }
 
 const allowed = (item: NavItem, a: NavAbilities): boolean => {
@@ -70,6 +73,8 @@ const allowed = (item: NavItem, a: NavAbilities): boolean => {
     case 'hr': return a.isHr;
     case 'tasks': return a.hasTasks;
     case 'department': return a.hasDepartment;
+    case 'messenger': return a.hasMessenger;
+    case 'mail': return a.hasMail;
     default: return false;
   }
 };

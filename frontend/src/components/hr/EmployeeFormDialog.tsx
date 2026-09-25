@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
@@ -15,6 +15,7 @@ import {
   fetchPositions,
   fetchUserPrefill,
   updateEmployeeWithCard,
+  type CardT2Section,
 } from '@/api/hr';
 import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { DateInput } from '@/components/ui/date-input';
@@ -31,10 +32,10 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { cn } from '@/lib/utils';
 import { withSuggestedEmail } from '@/lib/translit';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { Employee, relationId } from '@/components/hr/employeeCommon';
 import {
-  SECTION_FIELDS, SECTION_TITLE, T2_SECTIONS,
+  SECTION_FIELDS, SECTION_NODE, SECTION_TITLE, T2_SECTIONS,
   buildCardT2Payload, emptyT2Form, isT2SectionDirty, t2FormFromServer, validateT2Money,
   type T2FormState,
 } from '@/components/hr/cardT2Fields';
@@ -155,14 +156,21 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   const navigate = useNavigate();
   const editing = employee;
 
-  const {
-    canWriteBasic,
-    canCreateEmployee,
-    canTransferEmployee,
-    canListUserOptions,
-    canManageUserOptions,
-    hasPerm,
-  } = useHRLevel();
+  // Права — по узлам реестра функций через `usePermissions` (задача 10
+  // блока I), теми же узлами и признаками, что проверяет бэкенд на ручках
+  // сотрудника (`backend/apps/hr/legacy_roles.py::KEY_TO_NODE`):
+  // правка карточки — `hr.employees: edit`, создание — `hr.employees:
+  // create`, перевод/увольнение/смена должности — ОТДЕЛЬНЫЙ под-узел
+  // `hr.employees.transfer` (фикс-раунд 1 задачи 9: у middle на нём явный
+  // запрет, иначе он переводил бы той же кнопкой, что и правил), выбор
+  // учётной записи — `hr.accounts: view` (USERS_LIST), заведение новой —
+  // `hr.accounts: create` (USERS_MANAGE).
+  const permissions = usePermissions();
+  const canWriteBasic = permissions.can('hr.employees', 'edit');
+  const canCreateEmployee = permissions.can('hr.employees', 'create');
+  const canTransferEmployee = permissions.can('hr.employees.transfer', 'edit');
+  const canListUserOptions = permissions.can('hr.accounts', 'view');
+  const canManageUserOptions = permissions.can('hr.accounts', 'create');
 
   // Запросы включаются только когда диалог открыт, чтобы не дёргать API на
   // каждом рендере страницы-списка.
@@ -185,6 +193,10 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   });
 
   const [form, setForm] = useState(blankForm());
+  // Форма, какой её заполнили из карточки при открытии на редактирование —
+  // эталон для сборки PATCH (T10-A финальной волны блока I): отдел,
+  // должность, статус и дата увольнения уходят, только если их поменяли.
+  const initialFormRef = useRef<ReturnType<typeof blankForm> | null>(null);
   const [prefillOpen, setPrefillOpen] = useState(false);
 
   const [formError, setFormError] = useState<string | null>(null);
@@ -205,10 +217,18 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
   t2FormRef.current = t2Form;
   t2InitialRef.current = t2Initial;
 
-  /** Секции, которые вообще показываем: нужен view. */
+  /** Секции, которые вообще показываем: нужен view на узле секции
+   *  (`SECTION_NODE`; у секции без узла прав нет — она не показывается). */
+  const sectionAllows = useCallback(
+    (section: CardT2Section, flag: 'view' | 'edit'): boolean => {
+      const node = SECTION_NODE[section];
+      return node !== undefined && permissions.can(node, flag);
+    },
+    [permissions],
+  );
   const visibleSections = useMemo(
-    () => T2_SECTIONS.filter((s) => hasPerm(`hr.card.${s}.view`)),
-    [hasPerm],
+    () => T2_SECTIONS.filter((s) => sectionAllows(s, 'view')),
+    [sectionAllows],
   );
 
   const { data: cardT2 } = useQuery({
@@ -229,8 +249,8 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
    *  отработал (или упал) — иначе пользователь печатал бы поверх пустого
    *  снимка и стёр бы то, чего не видел. */
   const editableSections = useMemo(
-    () => (t2Loaded ? visibleSections.filter((s) => hasPerm(`hr.card.${s}.edit`)) : []),
-    [visibleSections, hasPerm, t2Loaded],
+    () => (t2Loaded ? visibleSections.filter((s) => sectionAllows(s, 'edit')) : []),
+    [visibleSections, sectionAllows, t2Loaded],
   );
 
   // Заполняем секции при открытии — и повторно, если пришли более свежие
@@ -319,6 +339,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     setFormError(null);
     setFieldErrors({});
     if (!employee) {
+      initialFormRef.current = null;
       setForm(blankForm());
       return;
     }
@@ -328,7 +349,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     const userId = employee.user_id ?? (typeof employee.user === 'number' ? employee.user : null);
     const positionId = employee.position_id ?? relationId(employee.position);
     const departmentId = employee.department_id ?? relationId(employee.department);
-    setForm({
+    const filled = {
       ...blankForm(),
       user: userId ? String(userId) : 'none',
       position: positionId ? String(positionId) : 'none',
@@ -343,7 +364,9 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       middle_name: employee.middle_name || '',
       email: employee.email || '',
       avatar_url: employee.avatar_url || '',
-    });
+    };
+    initialFormRef.current = filled;
+    setForm(filled);
   }, [open, employee]);
 
   const saveMutation = useMutation({
@@ -353,8 +376,16 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
 
       if (editing) {
         // EmployeeUpdate — every field optional. Only send what changed.
+        // Отдел, должность, статус и дата увольнения — только если их
+        // поменяли (T10-A финальной волны блока I): бэкенд
+        // (apps/hr/views.py::_update_employee) требует права перевода при
+        // ЛЮБОМ присланном department_id/position_id/termination_date и
+        // статусе «уволен/приостановлен», и middle, сохранивший карточку с
+        // нетронутыми полями, получал бы 403 за то, чего не менял.
+        const initial = initialFormRef.current;
+        const changed = (key: 'status' | 'position' | 'department' | 'date_dismissed') =>
+          !initial || form[key] !== initial[key];
         const patch: Record<string, unknown> = {
-          status: backendStatus,
           phone: form.phone || undefined,
           bio: form.notes || undefined,
           first_name: form.first_name || undefined,
@@ -363,9 +394,10 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
           email: form.email || undefined,
           avatar_url: form.avatar_url || undefined,
         };
-        if (form.position !== 'none') patch.position_id = Number(form.position);
-        if (form.department !== 'none') patch.department_id = Number(form.department);
-        if (form.date_dismissed) patch.termination_date = form.date_dismissed;
+        if (changed('status')) patch.status = backendStatus;
+        if (changed('position') && form.position !== 'none') patch.position_id = Number(form.position);
+        if (changed('department') && form.department !== 'none') patch.department_id = Number(form.department);
+        if (changed('date_dismissed') && form.date_dismissed) patch.termination_date = form.date_dismissed;
         if (cardT2) patch.card_t2 = cardT2;
         // card_t2 может нести зарплату/паспорт/ИИН — в консоль их не пишем,
         // только какие секции ушли (см. заголовок «Финансовые данные
@@ -634,8 +666,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
     weight: string;
     grade: string;
     description: string;
-    hr_level: '' | 'junior' | 'middle' | 'senior' | 'lead';
-  }>({ title: '', department_id: '', weight: '100', grade: '1', description: '', hr_level: '' });
+  }>({ title: '', department_id: '', weight: '100', grade: '1', description: '' });
   const [newPositionError, setNewPositionError] = useState<string | null>(null);
 
   const createPositionMutation = useMutation({
@@ -647,9 +678,6 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
         grade: Number(newPositionForm.grade) || 1,
         description: newPositionForm.description || undefined,
       };
-      if (newPositionForm.hr_level) {
-        payload.permissions = { hr_level: newPositionForm.hr_level, permissions: [] };
-      }
       return createPosition(payload);
     },
     onSuccess: (created) => {
@@ -665,7 +693,7 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
           : (created.department_id ? String(created.department_id) : prev.department),
       }));
       setCreatePositionOpen(false);
-      setNewPositionForm({ title: '', department_id: '', weight: '100', grade: '1', description: '', hr_level: '' });
+      setNewPositionForm({ title: '', department_id: '', weight: '100', grade: '1', description: '' });
       setNewPositionError(null);
     },
     onError: (err) => setNewPositionError(
@@ -683,7 +711,6 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
       weight: '100',
       grade: '1',
       description: '',
-      hr_level: '',
     });
     setCreatePositionOpen(true);
   };
@@ -888,14 +915,28 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
               )}
               <label className="grid gap-2 text-sm">
                 {t('hr.pages.employees.fields.status')}
-                <Select value={form.status} onValueChange={(value) => setForm({ ...form, status: value })} disabled={!canWriteBasic}>
+                {/* При создании статус — часть новой карточки: тот же признак,
+                    что у отдела и должности (T10-B финальной волны блока I). */}
+                <Select value={form.status} onValueChange={(value) => setForm({ ...form, status: value })} disabled={editing ? !canWriteBasic : !canCreateEmployee}>
                   <SelectTrigger>
                     <SelectValue placeholder={t('hr.pages.employees.placeholders.selectStatus')} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="active">{t('hr.pages.employees.status.active')}</SelectItem>
                     <SelectItem value="inactive">{t('hr.pages.employees.status.inactive', 'Неактивен')}</SelectItem>
-                    <SelectItem value="terminated">{t('hr.pages.employees.status.terminated', 'Уволен')}</SelectItem>
+                    {/* Увольнение — это перевод, а не правка карточки: бэкенд
+                        (apps/hr/views.py::_update_employee) требует
+                        EMPLOYEES_TRANSFER для status ∈ {terminated, suspended,
+                        rejected}, поэтому пункт закрыт тем же признаком, что
+                        отдел и должность (`disabled`, как принято в этом
+                        диалоге для недоступных полей), а не общим
+                        `canWriteBasic` — иначе middle выбирал бы «уволен» и
+                        получал 403. При создании транспорт другой
+                        (`EMPLOYEES_CREATE`, без проверки статуса), там пункт
+                        открыт как раньше. */}
+                    <SelectItem value="terminated" disabled={editing ? !canTransferEmployee : false}>
+                      {t('hr.pages.employees.status.terminated', 'Уволен')}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </label>
@@ -1375,29 +1416,6 @@ export function EmployeeFormDialog({ open, employee, onOpenChange }: Props) {
                 />
               </label>
             </div>
-            <label className="grid gap-1.5 text-sm">
-              {t('hr.pages.employees.hrLevel', 'Уровень HR-доступа')}
-              <Select
-                value={newPositionForm.hr_level || 'none'}
-                onValueChange={(v) =>
-                  setNewPositionForm({
-                    ...newPositionForm,
-                    hr_level: v === 'none' ? '' : (v as typeof newPositionForm.hr_level),
-                  })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Без HR-доступа</SelectItem>
-                  <SelectItem value="junior">Junior — базовый просмотр</SelectItem>
-                  <SelectItem value="middle">Middle — редактирование своего отдела</SelectItem>
-                  <SelectItem value="senior">Senior — полный просмотр + создание</SelectItem>
-                  <SelectItem value="lead">Lead — полный доступ</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
             <label className="grid gap-1.5 text-sm">
               {t('hr.pages.employees.description', 'Описание')}
               <Textarea

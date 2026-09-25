@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from apps.contracts.models import (
     Administrator, AdvancePayment, AdvancePaymentStatus, Agreement, AgreementStatus,
-    CompletionAct, ContractPayment,
+    CompletionAct, ContractPayment, GoodsInvoice,
 )
 from apps.contracts.services import budget_calc
 from apps.media_files import interface as media
@@ -73,7 +73,10 @@ def paid_amount_for_agreement(agreement_id: int) -> Decimal:
     acts = (CompletionAct.objects
             .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
             .aggregate(total=Sum("amount"))["total"] or ZERO)
-    return advance + payments + acts
+    invoices = (GoodsInvoice.objects
+               .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
+               .aggregate(total=Sum("amount"))["total"] or ZERO)
+    return advance + payments + acts + invoices
 
 
 def check_agreement_capacity(agreement: Agreement, amount) -> None:
@@ -134,6 +137,9 @@ def create_contract_payment(*, administrator_id: int, agreement_id: int, amount,
                             invoice_data: bytes, invoice_filename: str, invoice_mime: str,
                             created_by: int | None = None) -> ContractPayment:
     agreement = _eligible_agreement(agreement_id)
+    expired = agreement.term_expired_message()
+    if expired:
+        raise ContractPaymentRuleViolation(expired)
     administrator = Administrator.objects.filter(pk=administrator_id, is_active=True).first()
     if administrator is None:
         raise ContractPaymentRuleViolation("Администратор не найден или отключён")
@@ -153,7 +159,9 @@ def submit_for_approval(payment_id: int, *, actor_id: int | None = None) -> dict
     payment = get_contract_payment_or_404(payment_id, lock=True)
     agreement = _eligible_agreement(payment.agreement_id)
     if payment.status != AdvancePaymentStatus.DRAFT:
-        raise ContractPaymentRuleViolation("На согласование можно отправить только черновик оплаты")
+        raise ContractPaymentRuleViolation(
+            f"На согласование отправляется черновик; оплата в статусе "
+            f"«{payment.get_status_display()}»")
     check_agreement_capacity(agreement, payment.amount)
     if payment.approval_state not in signoff.ApprovalState.editable():
         payment.assert_editable()

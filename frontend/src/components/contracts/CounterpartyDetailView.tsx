@@ -13,10 +13,11 @@
 
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Building2, Pencil } from 'lucide-react';
+import { Building2, HardHat, Pencil } from 'lucide-react';
 
 import { DetailSkeleton, Field } from '@/components/contracts/detail';
 import { formatAmount, formatMoment } from '@/components/contracts/format';
+import { counterpartySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
@@ -144,6 +145,7 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
               subjectId={counterparty.id}
               state={counterparty.approval_state}
               submit={contractsApi.submitCounterparty}
+              blockedReason={counterpartySubmitBlock(counterparty.status)}
               invalidate={[
                 ['contracts', 'counterparties'],
                 ['contracts', 'counterparty', counterpartyId],
@@ -174,6 +176,22 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
                 </Field>
                 <Field label="Страна">{countryName}</Field>
                 <Field label="НДС">{counterparty.vat_label}</Field>
+                {/* Та же организация в модуле задач. Связь заводится с обеих
+                    сторон: в карточке партнёра или «из партнёра» при
+                    создании контрагента. */}
+                <Field label="Партнёр на объектах">
+                  {counterparty.contractor ? (
+                    <Link
+                      to={`/tasks/contractors?id=${counterparty.contractor.id}`}
+                      className="inline-flex items-center gap-1.5 hover:underline underline-offset-2"
+                    >
+                      <HardHat className="h-3.5 w-3.5 text-muted-foreground" />
+                      {counterparty.contractor.name}
+                    </Link>
+                  ) : (
+                    '—'
+                  )}
+                </Field>
               </dl>
             </section>
             <section className="border-t pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">

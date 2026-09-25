@@ -8,11 +8,33 @@ employee_groups_service.py (education/experience/relatives — единстве�
 (_visible_employee роутера исходника: require_hr_access + can_see_department
 -> 404 "Employee not found" для скрытого отдела).
 
+Блок I, задача 6: обе ручки (GET card/t2, GET card/groups) — под
+``module="hr", level="read"``; обе ручки записи (PATCH card/t2, PUT
+card/groups) — под ``level="write"``, ПОВЕРХ ``_visible_access``/
+секционных Т-2/groups-ключей (задача 6 их не заменяла; задача 9 блока I
+сняла из ``_visible_access`` только отдельную «есть ли HR-доступ вообще» —
+секционные ключи остались узловой проверкой ``apps.hr.rbac`` внутри тела
+вьюхи). Фикстуры ниже получили ``X-HTQ-Company`` + засеянную роль
+``apps.access`` СООТВЕТСТВУЮЩЕЙ силы (``admin_auth`` -> ``hr-lead``,
+``junior`` -> ``hr-junior``, ``middle`` -> ``hr-middle``, ``senior`` ->
+``hr-senior``, ``financial_edit_only`` (пишет) -> ``hr-middle``) — без
+контекста компании гейт отвечал бы 403 "Forbidden" РАНЬШЕ секционной
+проверки. ``junior`` — READ-уровень (``hr-junior`` -> ``read``), поэтому её
+GET-тесты по-прежнему решает секционная проверка (текст не менялся), а
+ЕДИНСТВЕННЫЙ PUT-тест на этой фикстуре (``test_card_groups_put_requires_
+edit_key`` — ``write``-ручка) получает 403 от ГЕЙТА раньше секционного
+"Missing permission: hr.card.groups.edit" — см. комментарий на месте.
+``auth`` (ни одной привилегии) аналогично: её 403 — от гейта, узловая
+проверка тела вьюхи до неё не доходит вовсе.
+
 Зафиксированные ловушки паритета (проверяются тестами ниже):
-  * auth — ТА ЖЕ пара require_hr_access + _require_visible_employee, что и
-    history/documents/pmos (apps/hr/views.py::_visible_access, переиспользуется
-    буквально, не дублируется) — 403 "HR access required" без HR-доступа
-    вообще, 404 "Employee not found" за скрытый отдел;
+  * auth — та же ``_visible_access`` (apps/hr/views.py), что и у
+    history/documents/pmos, переиспользуется буквально, не дублируется —
+    404 "Employee not found" за скрытый отдел. Без единой роли ``hr.*``
+    задача 9 сняла отдельную проверку «есть ли HR-доступ вообще»
+    (``require_hr_access``, 403 "HR access required") — её работу теперь
+    делает модульный гейт вызывающей вьюхи, детальнее см. докстринг модуля
+    выше;
   * t2 GET — секция ПОЛНОСТЬЮ отсутствует в ответе (не null-значения) без
     соответствующего view-ключа;
   * t2 PATCH — 403 "Missing permission: hr.card.<section>.edit" за секцию без
@@ -35,6 +57,7 @@ import pytest
 from django.test import Client
 
 from apps.hr.models import Department, Employee, EmployeeCard, EmployeeGroups, Position
+from apps.hr.tests.test_employees_api import _grant_custom_role, _grant_seeded_role
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
@@ -56,14 +79,23 @@ def _emp(dep, pos, email, **kw):
     return Employee.objects.create(email=email, department=dep, position=pos, **kw)
 
 
-def _user_auth(email, *, is_staff=False):
+def _user_auth(email, *, is_staff=False, company_slug=None):
     user = User.objects.create(
         username=email.split("@")[0], email=email, password="x", status=UserStatus.ACTIVE,
         is_staff=is_staff,
     )
     user.set_password("S3cret!Pass1")
     user.save()
-    return user, {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    token = issue_token_pair(user, company_slug=company_slug)["access"]
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+    if company_slug:
+        headers["HTTP_X_HTQ_COMPANY"] = company_slug
+    return user, headers
+
+
+# ``_grant_seeded_role``/``_grant_custom_role`` — из ``test_employees_api.py``
+# (задача 9 блока I: там же объяснена область DEPARTMENT для junior/middle и
+# почему запрет узла обязан лежать в той же роли, что и право на предка).
 
 
 @pytest.fixture
@@ -77,62 +109,83 @@ def other_dep(db):
 
 
 @pytest.fixture
-def auth(db):
-    """Обычный вошедший без Employee-профиля — нет HR-доступа вообще."""
-    _user, headers = _user_auth("plain-card@htq.test")
+def auth(db, company_row):
+    """Обычный вошедший без Employee-профиля — нет HR-доступа вообще, и
+    (задача 6) ни единой роли ``apps.access`` — гейт отказывает раньше
+    старой проверки (см. изменённые ассерты)."""
+    _user, headers = _user_auth("plain-card@htq.test", company_slug=company_row)
     return headers
 
 
 @pytest.fixture
-def admin_auth(db):
-    """is_staff=True — elevated -> HRAccess(level='lead', permissions={'*'})."""
-    _user, headers = _user_auth("card-admin@htq.test", is_staff=True)
+def admin_auth(db, company_row):
+    """``is_staff=True`` — до задачи 9 elevated коротился безусловно в
+    ``HRAccess(level='lead', permissions={'*'})``; сегодня гейт сам по себе
+    голый ``is_staff`` не пропускает. Задача 6: + роль ``hr-lead`` (агрегат
+    модуля ``hr`` — ``admin``)."""
+    user, headers = _user_auth("card-admin@htq.test", is_staff=True, company_slug=company_row)
+    _grant_seeded_role(company_row, user.id, "hr-lead")
     return headers
 
 
 @pytest.fixture
-def junior(db, hr_dep):
-    """Без единого hr.card.* ключа."""
+def junior(db, hr_dep, company_row):
+    """Без единого hr.card.* ключа. Задача 6: + роль ``hr-junior`` (агрегат
+    модуля ``hr`` — ``read``) — хватает на GET-ручки этого файла (решение
+    остаётся у старой секционной проверки), НЕ хватает на write-ручки
+    (``card/groups`` PUT — см. ``test_card_groups_put_requires_edit_key``)."""
     pos = _pos("HR Assistant", hr_dep, weight=210)
-    user, headers = _user_auth("card-junior@htq.test")
+    user, headers = _user_auth("card-junior@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "card-junior@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-junior", department_id=hr_dep.id)
     return emp, headers
 
 
 @pytest.fixture
-def middle(db, hr_dep):
-    """certs.view/edit + groups.view/edit — БЕЗ financial/personal."""
+def middle(db, hr_dep, company_row):
+    """certs.view/edit + groups.view/edit — БЕЗ financial/personal. Задача 6:
+    + роль ``hr-middle`` (агрегат модуля ``hr`` — ``write``)."""
     pos = _pos("HR Manager", hr_dep, weight=220)
-    user, headers = _user_auth("card-middle@htq.test")
+    user, headers = _user_auth("card-middle@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "card-middle@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-middle", department_id=hr_dep.id)
     return emp, headers
 
 
 @pytest.fixture
-def senior(db, hr_dep):
-    """Все 8 hr.card.* ключей (наследует middle + financial/personal)."""
+def senior(db, hr_dep, company_row):
+    """Все 8 hr.card.* ключей (наследует middle + financial/personal).
+    Задача 6: + роль ``hr-senior`` (агрегат модуля ``hr`` — ``admin``)."""
     pos = _pos("Senior HR Manager", hr_dep, weight=230)
-    user, headers = _user_auth("card-senior@htq.test")
+    user, headers = _user_auth("card-senior@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "card-senior@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-senior")
     return emp, headers
 
 
 @pytest.fixture
-def financial_edit_only(db, hr_dep):
-    """Явная матрица permissions (position.permissions.permissions) —
-    ТОЛЬКО hr.card.financial.view/edit, НИ personal, НИ certs. Нужна, чтобы
+def financial_edit_only(db, hr_dep, company_row):
+    """ТОЛЬКО финансы карточки (view+edit), НИ personal. Нужна, чтобы
     проверить partial-failure atomicity PATCH (ни один пресет не расщепляет
-    financial и personal по отдельности — оба садятся вместе на senior)."""
-    pos = _pos(
-        "Custom Financial Clerk", hr_dep, weight=240,
-        permissions={"permissions": ["hr.employees.view", "hr.card.financial.view", "hr.card.financial.edit"]},
-    )
-    user, headers = _user_auth("card-fin-only@htq.test")
+    financial и personal по отдельности — оба садятся вместе на senior).
+
+    До задачи 9 блока I — явная матрица ``Position.permissions`` под ролью
+    ``hr-middle`` для гейта. Теперь — ОДНА синтетическая роль:
+    ``hr.employees: view`` (видимость карточки), ``hr.employees.salary: edit``
+    (агрегат модуля ``hr`` — ``write``, PATCH проходит гейт) и ЯВНЫЙ запрет
+    ``hr.employees.passport: none`` — без него узел паспорта унаследовал бы
+    ``view`` от ``hr.employees`` (``resolve._nearest``), а сам тест — про
+    ОТСУТСТВИЕ права на personal."""
+    pos = _pos("Custom Financial Clerk", hr_dep, weight=240)
+    user, headers = _user_auth("card-fin-only@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "card-fin-only@htq.test", user_id=user.id)
+    _grant_custom_role(company_row, user.id, "t-financial-edit-only", {
+        "hr.employees": "view", "hr.employees.salary": "edit", "hr.employees.passport": "none",
+    })
     return emp, headers
 
 
-# ── auth: require_hr_access + _require_visible_employee (t2) ────────────────
+# ── auth: модульный гейт + _require_visible_employee (t2) ───────────────────
 
 @pytest.mark.django_db
 def test_card_t2_requires_jwt():
@@ -141,10 +194,13 @@ def test_card_t2_requires_jwt():
 
 @pytest.mark.django_db
 def test_card_t2_forbidden_without_any_hr_access(auth, hr_dep):
+    """Задача 6: ``auth`` не несёт ни единой роли ``apps.access`` — гейт
+    ``module="hr", level="read"`` отказывает, задача 9 сняла отдельную
+    проверку «есть ли HR-доступ вообще» (``require_hr_access``), поэтому
+    detail — общий "Forbidden" от гейта."""
     target = _emp(hr_dep, _pos("A", hr_dep, weight=201), "t2-target1@htq.test")
     resp = Client().get(f"{BASE}/{target.id}/card/t2", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -284,13 +340,15 @@ def test_card_t2_patch_partial_failure_persists_nothing(financial_edit_only):
 
 @pytest.mark.django_db
 def test_card_t2_patch_requires_visible_employee(auth, hr_dep):
+    """Задача 6: ``auth`` не несёт ни единой роли — гейт ``module="hr",
+    level="write"`` отказывает (задача 9 сняла отдельную проверку «есть ли
+    HR-доступ вообще», ``require_hr_access``), detail общий "Forbidden"."""
     target = _emp(hr_dep, _pos("V", hr_dep, weight=205), "t2-visible@htq.test")
     resp = Client().patch(
         f"{BASE}/{target.id}/card/t2", data={"personal": {"citizenship": "X"}},
         content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -320,14 +378,19 @@ def test_card_groups_get_empty_lists_when_no_data(middle):
 @pytest.mark.django_db
 def test_card_groups_put_requires_edit_key(junior, hr_dep):
     """junior не имеет ни view, ни edit — 403 на PUT происходит на ПРОВЕРКЕ
-    edit-ключа (groups.edit), а не позже — та же 403-точка, что и GET."""
+    edit-ключа (groups.edit), а не позже — та же 403-точка, что и GET.
+
+    Задача 6: в отличие от GET-тестов этой фикстуры, здесь роль ``junior``
+    несёт (``hr-junior`` -> агрегат ``read``) НЕДОСТАТОЧНА для ``level=
+    "write"`` этой ручки — 403 теперь от ГЕЙТА, раньше старой проверки
+    edit-ключа, поэтому detail общий "Forbidden", а не точная старая
+    строка."""
     emp, headers = junior
     resp = Client().put(
         f"{BASE}/{emp.id}/card/groups", data={"education": []},
         content_type="application/json", **headers,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Missing permission: hr.card.groups.edit"
 
 
 @pytest.mark.django_db

@@ -80,14 +80,14 @@ def _bool_param(request, name: str, default: bool = False) -> bool:
 # ── Публичные маршруты ─────────────────────────────────────────────────────
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="conference", level="read")
 def overview(request):
     """Сегодняшние и идущие сейчас встречи этого пользователя."""
     require_service("conference")
     return overview_service.build(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="conference", level="read")
 def sessions(request):
     """История встреч, доступных этому пользователю."""
     require_service("conference")
@@ -107,14 +107,14 @@ def sessions(request):
     )
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="conference", level="read")
 def session_detail(request, session_id: int):
     require_service("conference")
     session = access.get_visible_session(session_id, request)
     return history_service.session_detail(session)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="conference", level="read")
 def session_events(request, session_id: int):
     require_service("conference")
     session = access.get_visible_session(session_id, request)
@@ -122,7 +122,7 @@ def session_events(request, session_id: int):
             for event in session.events.all()]
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="conference", level="read")
 def session_transcript(request, session_id: int):
     """Протокол: JSON для интерфейса, txt/md — для выгрузки."""
     require_service("conference")

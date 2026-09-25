@@ -80,11 +80,20 @@ def copy_role(role_id: int, code: str, title: str) -> Role:
     Копия НЕ системная, даже если исходная такая: ``is_system`` защищает
     засеянную роль-минимум от удаления, и наследовать эту защиту вместе с
     правами значило бы плодить неудаляемые роли.
+
+    Копия НАСЛЕДУЕТ ``company_slug`` источника (блок I.2, R2, M-2): роль
+    компании остаётся ролью этой же компании после копирования — иначе
+    суперпользователь, скопировав именную роль ``hr-custom-<slug>-<id>``
+    (название которой несёт название чужой должности), одним действием
+    опубликовал бы это название всей группе, превратив копию в общую роль.
+    Копия ОБЩЕЙ роли (``company_slug`` пуст) остаётся общей — то же правило,
+    без исключения для этого случая.
     """
     source = Role.objects.get(id=role_id)
     with transaction.atomic():
         try:
-            clone = Role.objects.create(code=code, title=title)
+            clone = Role.objects.create(code=code, title=title,
+                                        company_slug=source.company_slug)
         except IntegrityError as exc:
             raise RoleConflict(code) from exc
         RolePermission.objects.bulk_create([

@@ -19,6 +19,8 @@ from apps.mail.services.crypto import crypto_service
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
+from .conftest import gate_auth
+
 CONNECT = "/api/email/v1/accounts/connect-imap/"
 SECRET = "S3cret!Pass"
 
@@ -73,7 +75,10 @@ def user(db):
 
 @pytest.fixture
 def auth(user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    """Подсказка настроек (``GET connect-imap``) — под гейтом ``mail:read``
+    (блок L), поэтому рядовому нужны компания и уровень ``employee-basic``;
+    подключение и смена пароля — самообслуживание, заголовок им не мешает."""
+    return gate_auth(user, "read")
 
 
 BODY = {

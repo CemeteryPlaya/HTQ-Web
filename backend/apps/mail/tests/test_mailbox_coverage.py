@@ -16,7 +16,8 @@ from django.test import Client, override_settings
 from apps.mail.models import MailboxStatus, ProvisionedMailbox
 from apps.mail.services.crypto import crypto_service
 from apps.users.models import User, UserStatus
-from htqweb.authn.jwt import issue_token_pair
+
+from .conftest import gate_auth
 
 URL = "/api/email/v1/mailboxes/coverage/"
 
@@ -41,7 +42,9 @@ def _admin_auth() -> dict:
     # Адрес НЕ корпоративный намеренно: админ с @htq.group и без ящика попал
     # бы в собственный список, и каждый тест пришлось бы писать с оговоркой.
     admin = _user("cov-admin@htq.local", is_staff=True, is_superuser=True)
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(admin)['access']}"}
+    # Гейт ``mail:admin`` (блок L) суперпользователя пропускает и так, но
+    # роль выдаётся явно: тест проверяет список, а не обход гейта.
+    return gate_auth(admin, "full")
 
 
 def _mailbox(address: str, **kw) -> ProvisionedMailbox:
@@ -177,10 +180,10 @@ def test_ordinary_user_cannot_read_the_list():
     """Список — это карта того, у кого почта не защищена паролем платформы.
     Обычному сотруднику её видеть незачем."""
     user = _user("ruslan.amirov@htq.group")
+    # Уровень ``employee-basic`` в ``mail`` (``read``): 403 даёт гейт
+    # ``mail:admin`` (блок L), а не отсутствие компании или роли.
     with override_settings(**MAILCOW_ENV):
-        resp = Client().get(
-            URL, HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(user)['access']}",
-        )
+        resp = Client().get(URL, **gate_auth(user, "read"))
     assert resp.status_code == 403
 
 

@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { BackToProfile } from '@/components/BackToProfile';
-import { type HRLevel, useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
+import { hrNavVisible } from '@/app/navigation/hrNavAccess';
 import { Input } from '@/components/ui/input';
 import { HRQuickActionsBar } from './HRQuickActionsBar';
 import { cn } from '@/lib/utils';
@@ -30,37 +31,41 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
+/* Кому виден пункт — решает `hrNavVisible` по маршруту (`app/navigation/
+ * hrNavAccess.ts`): правило одно на `HRLayout` и `ProfileSidebar`, и оно
+ * читает права из `usePermissions`, а не кадровый уровень (задача 10 блока
+ * I). Поэтому у пункта нет поля `levels`: список уровней здесь был второй,
+ * параллельной моделью прав. */
 type HRNavItem = {
   to: string;
   icon: LucideIcon;
   labelKey: string;
-  levels: Array<'junior' | 'middle' | 'senior' | 'lead'>;
   category: 'people' | 'org' | 'tracking' | 'admin';
 };
 
 const navItems: HRNavItem[] = [
   // ── Персонал
-  { to: '/hr/employees', icon: Users, labelKey: 'hr.nav.employees', levels: ['junior', 'middle', 'senior', 'lead'], category: 'people' },
-  { to: '/hr/accounts', icon: IdCard, labelKey: 'hr.nav.accounts', levels: ['lead'], category: 'people' },
-  { to: '/hr/identity-requests', icon: IdCard, labelKey: 'hr.nav.identityRequests', levels: ['senior', 'lead'], category: 'people' },
-  { to: '/hr/recruitment', icon: ClipboardList, labelKey: 'hr.nav.recruitment', levels: ['middle', 'senior', 'lead'], category: 'people' },
-  { to: '/hr/archive', icon: Archive, labelKey: 'hr.nav.archive', levels: ['senior', 'lead'], category: 'people' },
+  { to: '/hr/employees', icon: Users, labelKey: 'hr.nav.employees', category: 'people' },
+  { to: '/hr/accounts', icon: IdCard, labelKey: 'hr.nav.accounts', category: 'people' },
+  { to: '/hr/identity-requests', icon: IdCard, labelKey: 'hr.nav.identityRequests', category: 'people' },
+  { to: '/hr/recruitment', icon: ClipboardList, labelKey: 'hr.nav.recruitment', category: 'people' },
+  { to: '/hr/archive', icon: Archive, labelKey: 'hr.nav.archive', category: 'people' },
 
   // ── Организация
-  { to: '/hr/departments', icon: Building2, labelKey: 'hr.nav.structure', levels: ['middle', 'senior', 'lead'], category: 'org' },
-  { to: '/hr/positions', icon: Briefcase, labelKey: 'hr.nav.positions', levels: ['middle', 'senior', 'lead'], category: 'org' },
-  { to: '/hr/org-chart', icon: Network, labelKey: 'hr.nav.orgChart', levels: ['junior', 'middle', 'senior', 'lead'], category: 'org' },
-  { to: '/hr/pmo', icon: Handshake, labelKey: 'hr.nav.pmo', levels: ['senior', 'lead'], category: 'org' },
+  { to: '/hr/departments', icon: Building2, labelKey: 'hr.nav.structure', category: 'org' },
+  { to: '/hr/positions', icon: Briefcase, labelKey: 'hr.nav.positions', category: 'org' },
+  { to: '/hr/org-chart', icon: Network, labelKey: 'hr.nav.orgChart', category: 'org' },
+  { to: '/hr/pmo', icon: Handshake, labelKey: 'hr.nav.pmo', category: 'org' },
 
   // ── Учёт и Время
-  { to: '/hr/time-tracking', icon: Clock, labelKey: 'hr.nav.timeTracking', levels: ['middle', 'senior', 'lead'], category: 'tracking' },
-  { to: '/hr/production-calendar', icon: CalendarDays, labelKey: 'hr.nav.productionCalendar', levels: ['junior', 'middle', 'senior', 'lead'], category: 'tracking' },
-  { to: '/hr/staffing', icon: Wallet, labelKey: 'hr.nav.staffing', levels: ['senior', 'lead'], category: 'tracking' },
-  { to: '/hr/documents', icon: FileText, labelKey: 'hr.nav.documents', levels: ['junior', 'middle', 'senior', 'lead'], category: 'tracking' },
+  { to: '/hr/time-tracking', icon: Clock, labelKey: 'hr.nav.timeTracking', category: 'tracking' },
+  { to: '/hr/production-calendar', icon: CalendarDays, labelKey: 'hr.nav.productionCalendar', category: 'tracking' },
+  { to: '/hr/staffing', icon: Wallet, labelKey: 'hr.nav.staffing', category: 'tracking' },
+  { to: '/hr/documents', icon: FileText, labelKey: 'hr.nav.documents', category: 'tracking' },
 
   // ── История и Сервис
-  { to: '/hr/share-links', icon: Link2, labelKey: 'hr.nav.shareLinks', levels: ['senior', 'lead'], category: 'admin' },
-  { to: '/hr/history', icon: History, labelKey: 'hr.nav.history', levels: ['senior', 'lead'], category: 'admin' },
+  { to: '/hr/share-links', icon: Link2, labelKey: 'hr.nav.shareLinks', category: 'admin' },
+  { to: '/hr/history', icon: History, labelKey: 'hr.nav.history', category: 'admin' },
 ];
 
 /* Карта уровня модуля: `t` из хука здесь недоступен, а подставить перевод в
@@ -85,12 +90,13 @@ interface Props {
 export const HRLayout: React.FC<Props> = ({ title, subtitle, children }) => {
   const { t } = useTranslation();
   const location = useLocation();
-  const { level } = useHRLevel();
+  const permissions = usePermissions();
   const [searchQuery, setSearchQuery] = useState('');
 
-  const visibleNavItems = useMemo(() => {
-    return navItems.filter((item) => level && item.levels.includes(level as Exclude<HRLevel, null>));
-  }, [level]);
+  const visibleNavItems = useMemo(
+    () => navItems.filter((item) => hrNavVisible(permissions, item.to)),
+    [permissions],
+  );
 
   const filteredNavItems = useMemo(() => {
     if (!searchQuery.trim()) return visibleNavItems;

@@ -18,6 +18,7 @@ import logging
 
 from apps.signoff.models import (
     ApprovalProcess,
+    ApprovalProcessStage,
     ApprovalTask,
     StageState,
     TaskState,
@@ -44,10 +45,12 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
             name_ids.append(process.initiator_id)
         names = _name_map(name_ids)
 
+    requirement_labels = _requirement_labels(process)
     card = {
         "id": process.pk,
         "subject_type": process.subject_type,
         "subject_id": process.subject_id,
+        "scope": process.scope,
         "state": process.state,
         "initiator_id": process.initiator_id,
         "current_order": process.current_order,
@@ -65,8 +68,12 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "matched_by": stage.matched_by,
                 "approver_kind": stage.approver_kind,
                 "role_ids": stage.role_ids or [],
+                "user_ids": stage.user_ids or [],
+                "approver_key": stage.approver_key or "",
                 "requires_attachment": stage.requires_attachment,
                 "requires_comment": stage.requires_comment,
+                "requirement_key": stage.requirement_key or "",
+                "requirement_label": requirement_labels.get(stage.requirement_key or ""),
                 "decided_at": stage.decided_at,
                 "tasks": [
                     serialize_task(task, names=names, urls=enrich)
@@ -139,6 +146,11 @@ def list_inbox(user_id: int) -> list[dict]:
         (task.stage.process.subject_type, task.stage.process.subject_id)
         for task in tasks
     ])
+    stage_counts = _stage_counts({task.stage.process_id for task in tasks})
+    requirement_labels_by_process = {
+        task.stage.process.pk: _requirement_labels(task.stage.process)
+        for task in tasks if task.stage.requirement_key
+    }
 
     rows = []
     for task in tasks:
@@ -152,16 +164,58 @@ def list_inbox(user_id: int) -> list[dict]:
             "subject_title": info.get("title"),
             "subject_url": info.get("url"),
             "stage_name": task.stage.name,
+            # Где этот шаг в маршруте — чтобы очередь показывала «этап 2 из 4».
+            # Нужно тому, у кого в маршруте НЕСКОЛЬКО этапов подряд (чек-лист
+            # закупщика): без этого три задачи по одной заявке выглядят
+            # одинаково, и не видно, что дело движется. Считается по снимку
+            # этапов процесса — маршрут могли перекроить после запуска.
+            "stage_order": task.stage.order,
+            "stage_count": stage_counts.get(process.pk, 0),
             "quorum": task.stage.quorum,
             # Чтобы в очереди было видно, что решение потребует документа или
             # пояснения, — до того, как человек откроет диалог и упрётся в отказ.
             "requires_attachment": task.stage.requires_attachment,
             "requires_comment": task.stage.requires_comment,
+            # Что шаг требует от объекта — подписью, чтобы в очереди было
+            # видно «нужно: Поставщик», а не только в отказе на решении.
+            "requirement_label": (
+                requirement_labels_by_process.get(process.pk, {})
+                .get(task.stage.requirement_key or "")
+                if task.stage.requirement_key else None),
             "file_id": task.file_id or None,
             "initiator_id": process.initiator_id,
             "created_at": process.created_at,
         })
     return rows
+
+
+def _requirement_labels(process) -> dict[str, str]:
+    """Подписи требований этапов — по области процесса. Оформление:
+    сломанный колбэк аппки даёт пустой словарь, карточка не падает."""
+    try:
+        return {row["key"]: row["label"]
+                for row in registry.requirement_fields_for(process.subject_type,
+                                                           process.scope)}
+    except Exception:
+        return {}
+
+
+def _stage_counts(process_ids: set[int]) -> dict[int, int]:
+    """``{process_id: число этапов}`` одним запросом на всю очередь.
+
+    Считаются ВСЕ этапы снимка, включая пропущенные по условию: «этап 2 из
+    4» должен совпадать с нумерацией в «Ходе согласования», а там
+    пропущенные показаны.
+    """
+    if not process_ids:
+        return {}
+    from django.db.models import Count
+
+    return dict(ApprovalProcessStage.objects
+                .filter(process_id__in=process_ids)
+                .values_list("process_id")
+                .annotate(n=Count("id"))
+                .values_list("process_id", "n"))
 
 
 def describe_many(pairs) -> dict[tuple[str, int], dict]:

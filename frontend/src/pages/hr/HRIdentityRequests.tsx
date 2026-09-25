@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { errorDetail, reportApiError } from '@/lib/apiError';
 
 const STATUS_LABEL: Record<IdentityRequestStatus | 'all', string> = {
@@ -35,8 +35,11 @@ const STATUS_LABEL: Record<IdentityRequestStatus | 'all', string> = {
 const HRIdentityRequests = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { hasPerm } = useHRLevel();
-  const canManageApprover = hasPerm('hr.identity.manage');
+  // Назначение подтверждающего — `IDENTITY_MANAGE` → `hr.identity_requests:
+  // edit` (backend/apps/hr/legacy_roles.py; заявка заводится владельцем
+  // аккаунта, кадровик её только ведёт, поэтому EDIT, а не полный CRUD).
+  const permissions = usePermissions();
+  const canManageApprover = permissions.can('hr.identity_requests', 'edit');
 
   const [status, setStatus] = useState<IdentityRequestStatus | 'all'>('pending');
   const [openId, setOpenId] = useState<number | null>(null);

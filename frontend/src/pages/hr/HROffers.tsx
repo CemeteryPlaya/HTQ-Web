@@ -4,7 +4,7 @@ import api from '@/api/client';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 
 interface Application {
   id: number;
@@ -19,7 +19,14 @@ interface Application {
 const HROffers = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Решение по офферу — кадровику с правом писать по ВСЕЙ компании, а не в своём
+  // отделе (старый senior/lead): узла в ролях у подбора нет
+  // (`hr.recruitment`), ручка /applications/{id}/status по узлу не гейтится.
+  // Разница middle/senior в старой модели — область выдачи роли, не
+  // признак (backend/apps/hr/legacy_roles.py, решение 1), поэтому здесь
+  // `scope('hr')`, а не уровень.
+  const companyWide = permissions.atLeast('hr', 'write') && permissions.scope('hr')?.kind === 'company';
 
   const { data: applications = [], isLoading, error } = useQuery({
     queryKey: ['hr-offers'],
@@ -112,8 +119,8 @@ const HROffers = () => {
                         size="sm"
                         variant="outline"
                         onClick={() => updateStatusMutation.mutate({ id: app.id, status: 'offered' })}
-                        disabled={!isSenior || updateStatusMutation.isPending}
-                        title={!isSenior ? t('hr.pages.offers.seniorOnly') : ''}
+                        disabled={!companyWide || updateStatusMutation.isPending}
+                        title={!companyWide ? t('hr.pages.offers.seniorOnly') : ''}
                       >
                         {t('hr.pages.offers.actions.return')}
                       </Button>
@@ -121,8 +128,8 @@ const HROffers = () => {
                     <Button
                       size="sm"
                       onClick={() => updateStatusMutation.mutate({ id: app.id, status: 'hired' })}
-                      disabled={app.status !== 'offered' || updateStatusMutation.isPending || !isSenior}
-                      title={!isSenior ? t('hr.pages.offers.seniorOnly') : ''}
+                      disabled={app.status !== 'offered' || updateStatusMutation.isPending || !companyWide}
+                      title={!companyWide ? t('hr.pages.offers.seniorOnly') : ''}
                     >
                       {t('hr.pages.offers.actions.accept')}
                     </Button>
@@ -130,8 +137,8 @@ const HROffers = () => {
                       size="sm"
                       variant="destructive"
                       onClick={() => updateStatusMutation.mutate({ id: app.id, status: 'rejected' })}
-                      disabled={app.status !== 'offered' || updateStatusMutation.isPending || !isSenior}
-                      title={!isSenior ? t('hr.pages.offers.seniorOnly') : ''}
+                      disabled={app.status !== 'offered' || updateStatusMutation.isPending || !companyWide}
+                      title={!companyWide ? t('hr.pages.offers.seniorOnly') : ''}
                     >
                       {t('hr.pages.offers.actions.reject')}
                     </Button>

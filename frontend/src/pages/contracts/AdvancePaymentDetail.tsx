@@ -9,6 +9,7 @@ import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { BackLink, DetailSkeleton, Field, FieldGrid } from '@/components/contracts/detail';
 import { formatAmount, formatMoment } from '@/components/contracts/format';
 import { reportApiError } from '@/lib/apiError';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
@@ -54,9 +55,14 @@ const AdvancePaymentDetail = () => {
   if (isLoading) return <ContractsShell><BackLink to="/contracts/advance-payments">К предоплатам</BackLink><DetailSkeleton /></ContractsShell>;
   if (isError || !payment) return <ContractsShell><BackLink to="/contracts/advance-payments">К предоплатам</BackLink><p className="text-destructive">Предоплата не найдена или недоступна.</p></ContractsShell>;
   const completed = payment.status === 'closed';
+  // Одна подпись статуса на бейдж и на причину запрета отправки: разойдутся
+  // — пользователь увидит два разных названия одного состояния на одном экране.
+  const statusText = completed ? 'Закрыт'
+    : payment.status === 'awaiting_accounting' ? 'Ожидает бухгалтера'
+    : payment.status === 'on_review' ? 'На согласовании' : 'Черновик';
 
   return <ContractsShell><BackLink to="/contracts/advance-payments">К предоплатам</BackLink><div className="space-y-6">
-    <div className="flex flex-wrap items-start justify-between gap-4"><div><div className="flex items-center gap-2"><FileCheck2 className="h-7 w-7 text-muted-foreground" /><h1 className="text-3xl font-bold">Предоплата</h1></div><p className="mt-1 text-sm text-muted-foreground">На основании договора {payment.agreement_number}</p></div><div className="flex gap-2"><Badge variant={payment.approval_state === 'approved' ? 'default' : 'secondary'}>{payment.approval_state === 'approved' ? 'Согласовано' : payment.approval_state === 'pending' ? 'На согласовании' : payment.approval_state === 'draft' ? 'Черновик' : payment.approval_state}</Badge><Badge variant={completed ? 'default' : 'secondary'}>{completed ? 'Закрыт' : payment.status === 'awaiting_accounting' ? 'Ожидает бухгалтера' : payment.status === 'on_review' ? 'На согласовании' : 'Черновик'}</Badge></div></div>
+    <div className="flex flex-wrap items-start justify-between gap-4"><div><div className="flex items-center gap-2"><FileCheck2 className="h-7 w-7 text-muted-foreground" /><h1 className="text-3xl font-bold">Предоплата</h1></div><p className="mt-1 text-sm text-muted-foreground">На основании договора {payment.agreement_number}</p></div><div className="flex gap-2"><Badge variant={payment.approval_state === 'approved' ? 'default' : 'secondary'}>{payment.approval_state === 'approved' ? 'Согласовано' : payment.approval_state === 'pending' ? 'На согласовании' : payment.approval_state === 'draft' ? 'Черновик' : payment.approval_state}</Badge><Badge variant={completed ? 'default' : 'secondary'}>{statusText}</Badge></div></div>
     <BudgetOverrunNotice overrun={payment.budget_overrun} currency={payment.currency} />
     <Card><CardHeader><CardTitle>Основание</CardTitle></CardHeader><CardContent><FieldGrid><Field label="Договор"><Link className="hover:underline" to={`/contracts/agreements/${payment.agreement_id}`}>{payment.agreement_number} — {payment.agreement_name}</Link></Field><Field label="Контрагент">{payment.counterparty_name}</Field><Field label="Сумма"><span className="tabular-nums">{formatAmount(payment.amount)} {payment.currency}</span></Field><Field label="Статус документа">{completed ? 'Закрыт' : payment.status === 'awaiting_accounting' ? 'Ожидает оформления бухгалтерией' : payment.status === 'on_review' ? 'На согласовании' : 'Черновик'}</Field><Field label="Создана">{formatMoment(payment.created_at)}</Field></FieldGrid></CardContent></Card>
     <Card><CardHeader><CardTitle>Оформление бухгалтерией</CardTitle><CardDescription>{completed ? 'Предоплата проведена.' : payment.approval_state === 'approved' ? 'После согласования бухгалтер прикладывает платёжное поручение и указывает номер проводки.' : 'Станет доступно после согласования предоплаты.'}</CardDescription></CardHeader><CardContent>
@@ -65,7 +71,7 @@ const AdvancePaymentDetail = () => {
           : canRecord ? <div className="grid gap-4 sm:max-w-xl"><div><Label htmlFor="posting-number">Номер проводки</Label><Input id="posting-number" value={postingNumber} onChange={(event) => setPostingNumber(event.target.value)} /></div><div><Label htmlFor="payment-order">Файл платёжного поручения</Label><Input ref={fileInput} id="payment-order" type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />{file && <p className="mt-1 text-xs text-muted-foreground">{file.name}</p>}</div><Button className="w-fit" disabled={!file || !postingNumber.trim() || record.isPending} onClick={() => record.mutate()}>{record.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}Оформить платёж</Button></div>
             : <p className="text-sm text-muted-foreground">Ожидает оформления бухгалтерией.</p>}
     </CardContent></Card>
-    <SubmitForApproval subjectType="contracts.advance_payment" subjectId={payment.id} state={payment.approval_state} submit={contractsApi.submitAdvancePayment} invalidate={[["contracts", "advance-payments"]]} />
+    <SubmitForApproval subjectType="contracts.advance_payment" subjectId={payment.id} state={payment.approval_state} submit={contractsApi.submitAdvancePayment} blockedReason={draftOnlySubmitBlock(payment.status, statusText, 'предоплата')} invalidate={[["contracts", "advance-payments"]]} />
     <SubjectProcesses subjectType="contracts.advance_payment" subjectId={payment.id} />
   </div></ContractsShell>;
 };

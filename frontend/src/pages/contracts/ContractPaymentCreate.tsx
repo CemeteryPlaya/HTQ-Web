@@ -56,7 +56,7 @@ export default function ContractPaymentCreate() {
       <div><Label>Договор</Label><Select value={agreementId} onValueChange={setAgreementId} disabled={!administratorId}><SelectTrigger><SelectValue placeholder="Выберите договор" /></SelectTrigger><SelectContent>{eligible.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.number} — {a.name}</SelectItem>)}</SelectContent></Select>
         <PrerequisiteNotice variant="inline" items={[{ when: Boolean(administratorId) && !agreementsLoading && eligible.length === 0 && !noAgreements && !nothingApproved, text: 'У этого администратора нет согласованных действующих договоров — выберите другого администратора или', to: '/contracts/agreements', linkText: 'проверьте статус договора' }]} />
       </div>
-      {selected && <p className="rounded-md border bg-muted/40 p-3 text-sm">Доступно к оплате: <strong>{formatRemaining(selected.remaining_amount, selected.currency)}</strong>{selected.remaining_amount === null && <span className="text-muted-foreground"> — рамочный договор</span>}</p>}
+      {selected && <p className="rounded-md border bg-muted/40 p-3 text-sm">Доступно к оплате: <strong>{formatRemaining(selected.remaining_amount, selected.currency)}</strong>{selected.remaining_amount === null && <span className="text-muted-foreground"> — открытый договор</span>}</p>}
       <div><Label>Сумма</Label><Input inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="100000.00" /></div>
       {selected && <BudgetOverrunNotice overrun={budgetOverrun} currency={selected.currency} />}
       <div><Label>Счёт</Label><Input type="file" onChange={e => setInvoice(e.target.files?.[0] ?? null)} />{invoice && <p className="mt-1 text-xs text-muted-foreground">{invoice.name}</p>}</div>

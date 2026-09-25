@@ -18,8 +18,12 @@ class PermissionInline(admin.TabularInline):
 
 @admin.register(Role)
 class RoleAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("code", "title", "is_system")
-    list_filter = ("is_system",)
+    # ``company_slug`` в списке/фильтре — чтобы платформенный администратор
+    # видел с ходу, какая роль общая, а какая принадлежит одной компании
+    # (блок I.2, R2/I-2): значение редактируемо прямо в форме модели, и без
+    # этого в списке роль другой компании неотличима от общей.
+    list_display = ("code", "title", "company_slug", "is_system")
+    list_filter = ("is_system", "company_slug")
     search_fields = ("code", "title")
     inlines = [PermissionInline]
 

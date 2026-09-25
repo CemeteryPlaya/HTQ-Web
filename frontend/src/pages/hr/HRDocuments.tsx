@@ -18,7 +18,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 
 /**
@@ -64,7 +64,10 @@ const employeeName = (emp?: EmployeeOption): string => {
 const HRDocuments = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Удаление стоит под hr:admin на сервере (блок I, рулинг O): кнопка,
+  // видимая при write, вела бы в 403 у держателя именной роли.
+  const canDelete = permissions.atLeast('hr', 'admin');
 
   const { data: documents, isLoading, error } = useQuery({
     queryKey: ['hr-documents'],
@@ -333,7 +336,7 @@ const HRDocuments = () => {
                     >
                       {t('hr.common.download')}
                     </Button>
-                    {isSenior && (
+                    {canDelete && (
                       <Button
                         size="sm"
                         variant="destructive"

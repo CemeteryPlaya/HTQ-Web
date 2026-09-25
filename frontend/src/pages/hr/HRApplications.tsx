@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { PhoneInput } from '@/components/ui/phone-input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 
 interface Application {
   id: number;
@@ -37,7 +37,10 @@ interface Vacancy {
 const HRApplications = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Удаление стоит под hr:admin на сервере (блок I, рулинг O): кнопка,
+  // видимая при write, вела бы в 403 у держателя именной роли.
+  const canDelete = permissions.atLeast('hr', 'admin');
   const { data: applications, isLoading, error } = useQuery({
     queryKey: ['hr-applications'],
     queryFn: async () => {
@@ -333,7 +336,7 @@ const HRApplications = () => {
                       {t('hr.pages.applications.step.next')}
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => startEdit(app)}>{t('hr.common.edit')}</Button>
-                    {isSenior && (
+                    {canDelete && (
                       <Button
                         size="sm"
                         variant="destructive"

@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models.functions import Now
@@ -26,11 +27,33 @@ SLUG_VALIDATOR = RegexValidator(
     "не заканчивается дефисом; до 32 символов; \"www\" зарезервирован.",
 )
 
+#: Метки, которые компанией быть не могут. "www" уже запрещён самим
+#: SLUG_VALIDATOR и регуляркой nginx; остальные — технические имена, под
+#: которые поддомены заводят чаще всего (комментарий над server_name в
+#: infra/nginx/default.conf называет это известным пробелом регулярки).
+RESERVED_SUBDOMAINS = frozenset({
+    "www", "api", "admin", "mail", "static", "cdn",
+    "grafana", "media", "sfu", "ws", "localhost",
+})
+
 
 class CompanyKind(models.TextChoices):
+    """Вид компании по утверждённой оргструктуре группы (10.09.2026).
+
+    Холдинг владеет долями, ДО — строительная (Hi-Tech Qazaqstan), IT
+    (Hi-Tech Systems) и сервисная (Kazakhstan Engineering Group).
+    """
+
     HOLDING = "holding", "Холдинг"
-    REGIONAL = "regional", "Региональная"
+    CONSTRUCTION = "construction", "Строительная"
+    IT = "it", "IT-компания"
     SERVICE = "service", "Сервисная"
+    # Значение первой редакции дизайна (региональные компании UZ/KG, которых в
+    # утверждённой структуре нет). Принимается, пока строка с ним есть в бою:
+    # единственная компания получает kind правкой через API блока A, после
+    # чего значение снимается отдельным contract-шагом. Убрать его сейчас —
+    # значит уронить валидацию существующей строки реестра.
+    REGIONAL = "regional", "Региональная (устар.)"
 
 
 class CompanyStatus(models.TextChoices):
@@ -48,6 +71,14 @@ class Company(models.Model):
     """
 
     slug = models.CharField(max_length=32, unique=True, validators=[SLUG_VALIDATOR])
+    #: Короткий адрес компании: htq.htq.group вместо hi-tech-qazaqstan.htq.group.
+    #: Пусто — компания живёт по слагу (стенд, разработка на *.localhost).
+    #: Форма та же, что у слага: её понимает регулярка server_name в nginx.
+    subdomain = models.CharField(
+        "короткий адрес",
+        max_length=32, unique=True, null=True, blank=True, default=None,
+        validators=[SLUG_VALIDATOR],
+    )
     name = models.CharField(max_length=255)
     kind = models.CharField(max_length=16, choices=CompanyKind.choices)
     country = models.CharField(max_length=2, blank=True, default="", db_default="")
@@ -60,13 +91,23 @@ class Company(models.Model):
         default=CompanyStatus.ACTIVE, db_default=CompanyStatus.ACTIVE.value,
         db_index=True,
     )
-    # Заполняется при банкротстве (подпроект 4). Здесь только объявлено,
-    # чтобы схема не менялась вторично, когда до него дойдут руки.
+    # Преемник банкрота (подпроект 4): заполняется
+    # ``lifecycle.bankrupt_company`` (команда ``company_bankrupt``, ручка
+    # ``POST companies/<slug>/bankrupt``), снимается ``restore_company``.
     successor = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="predecessors",
     )
     archived_at = models.DateTimeField(null=True, blank=True)
+    # Задача 7 блока C, решение заказчика 4: видимость списка внешних
+    # держателей прав (сотрудников вышестоящих компаний, чья обслуживающая
+    # должность несёт им права здесь) — настройка КОМПАНИИ, а не выбор её
+    # собственного администратора и не «всегда показывать». Правит её только
+    # платформенный администратор — тем же гейтом, что и остальные поля
+    # реестра (``CompanyItemView.patch::deny_unless_platform_admin``), новый
+    # гейт не заводится. Включено по умолчанию: скрывать по умолчанию значило
+    # бы прятать сам факт доступа от той компании, чьи данные читают.
+    show_external_holders = models.BooleanField(default=True, db_default=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
@@ -77,6 +118,47 @@ class Company(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+    @property
+    def parent_slug(self) -> str | None:
+        """Slug вышестоящей компании — для схем ответа (``from_attributes``)."""
+        return self.parent.slug if self.parent_id else None
+
+    @property
+    def successor_slug(self) -> str | None:
+        """Slug компании-преемника — для схем ответа (``from_attributes``)."""
+        return self.successor.slug if self.successor_id else None
+
+    def clean(self):
+        """Метка адреса уникальна по ВСЕМ хостам, а не только по своей колонке.
+
+        Один хост обязан резолвиться в одну компанию, поэтому псевдоним не
+        может совпасть со слагом другой компании, а слаг — с чужим
+        псевдонимом. Своя же пара (slug == subdomain) — один и тот же хост,
+        это допустимо.
+        """
+        super().clean()
+        errors = {}
+        if self.subdomain:
+            if self.subdomain in RESERVED_SUBDOMAINS:
+                errors["subdomain"] = (
+                    f"{self.subdomain!r} — зарезервированная метка: "
+                    f"{', '.join(sorted(RESERVED_SUBDOMAINS))}."
+                )
+            elif (Company.objects.filter(slug=self.subdomain)
+                  .exclude(pk=self.pk).exists()):
+                errors["subdomain"] = (
+                    f"{self.subdomain!r} — слаг другой компании; один хост не "
+                    "может вести в две компании."
+                )
+        if self.slug and (Company.objects.filter(subdomain=self.slug)
+                          .exclude(pk=self.pk).exists()):
+            errors["slug"] = (
+                f"{self.slug!r} — псевдоним другой компании; один хост не "
+                "может вести в две компании."
+            )
+        if errors:
+            raise ValidationError(errors)
 
 
 class CompanyServiceLink(models.Model):

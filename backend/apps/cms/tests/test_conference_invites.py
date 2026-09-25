@@ -21,6 +21,21 @@ from htqweb.authn.jwt import decode_token, issue_guest_token
 from htqweb.http import _authenticate_jwt
 
 BASE = "/api/cms/v1/conference"
+COMPANY = "t-cms-gate"
+
+
+def _auth(user) -> dict:
+    """Заголовки сотрудника под гейтом ``module="cms"`` (блок L): токен с
+    компанией, заголовок компании и ``cms:read`` — уровень ``employee-basic``.
+    Приглашения стоят под ``read``; чужие ссылки закрывает не гейт, а
+    ``may_manage_invites``, поэтому «посторонний» получает тот же уровень —
+    иначе 403 дал бы гейт, а не проверка организатора."""
+    from apps.access.tests.helpers import gate_company
+    from htqweb.authn.jwt import issue_token_pair
+
+    gate_company(COMPANY, {user.id: {"cms": "read"}})
+    access = issue_token_pair(user, company_slug=COMPANY)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {access}", "HTTP_X_HTQ_COMPANY": COMPANY}
 
 
 @pytest.fixture
@@ -29,8 +44,16 @@ def host(db):
         username="host", email="host@htq.test", password="x",
         status=UserStatus.ACTIVE,
     )
-    from htqweb.authn.jwt import issue_token_pair
-    return user, {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    return user, _auth(user)
+
+
+@pytest.fixture
+def stranger(db):
+    user = User.objects.create(
+        username="stranger", email="stranger@htq.test", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    return user, _auth(user)
 
 
 def _invite(**kw) -> ConferenceInvite:
@@ -241,8 +264,8 @@ def test_revoked_link_refuses_the_guest_token():
 def test_sending_an_invite_by_email(host):
     from django.core import mail
 
-    _, auth = host
-    invite = _invite(title="Приёмка")
+    user, auth = host
+    invite = _invite(title="Приёмка", created_by_id=user.id)
 
     resp = Client().post(
         f"{BASE}/invites/{invite.id}/send",
@@ -260,8 +283,8 @@ def test_sending_an_invite_by_email(host):
 
 @pytest.mark.django_db
 def test_sending_notifies_employees_in_the_messenger(host, monkeypatch):
-    _, auth = host
-    invite = _invite()
+    user, auth = host
+    invite = _invite(created_by_id=user.id)
     sent: list[tuple] = []
 
     from apps.messenger import interface as messenger
@@ -286,8 +309,8 @@ def test_one_broken_channel_does_not_cancel_the_other(host, monkeypatch):
     честно говорит, что именно не дошло."""
     from django.core import mail
 
-    _, auth = host
-    invite = _invite()
+    user, auth = host
+    invite = _invite(created_by_id=user.id)
 
     from apps.messenger import interface as messenger
 
@@ -309,8 +332,55 @@ def test_one_broken_channel_does_not_cancel_the_other(host, monkeypatch):
 
 @pytest.mark.django_db
 def test_sending_to_nobody_is_a_validation_error(host):
-    _, auth = host
-    invite = _invite()
+    user, auth = host
+    invite = _invite(created_by_id=user.id)
     resp = Client().post(f"{BASE}/invites/{invite.id}/send", data={},
                          content_type="application/json", **auth)
     assert resp.status_code == 422
+
+
+# ── чужие ссылки (блок L, спека §7) ──────────────────────────────────────
+#
+# До блока L тесты рассылки выше шли от сотрудника, не имевшего к ссылке
+# никакого отношения (``created_by_id=None``), — то есть закрепляли дыру:
+# любой вошедший рассылал чужое приглашение. Теперь ссылка в них — своя, а
+# чужая отвечает 404, как несуществующая.
+
+@pytest.mark.django_db
+def test_stranger_cannot_send_someone_elses_invite(host, stranger):
+    from django.core import mail
+
+    user, _ = host
+    _, auth = stranger
+    invite = _invite(created_by_id=user.id)
+
+    resp = Client().post(
+        f"{BASE}/invites/{invite.id}/send",
+        data={"emails": ["client@example.com"]},
+        content_type="application/json", **auth,
+    )
+
+    assert resp.status_code == 404
+    assert len(mail.outbox) == 0
+
+
+@pytest.mark.django_db
+def test_stranger_sees_no_tokens_of_someone_elses_room(host, stranger):
+    user, host_auth = host
+    _, auth = stranger
+    _invite(room_id="board-1", created_by_id=user.id)
+
+    assert Client().get(f"{BASE}/invites?room_id=board-1", **auth).json() == []
+    own = Client().get(f"{BASE}/invites?room_id=board-1", **host_auth).json()
+    assert len(own) == 1 and own[0]["token"]
+
+
+@pytest.mark.django_db
+def test_stranger_cannot_revoke_someone_elses_invite(host, stranger):
+    user, _ = host
+    _, auth = stranger
+    invite = _invite(created_by_id=user.id)
+
+    assert Client().delete(f"{BASE}/invites/{invite.id}", **auth).status_code == 404
+    invite.refresh_from_db()
+    assert invite.revoked_at is None

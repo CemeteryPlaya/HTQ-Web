@@ -262,4 +262,8 @@ urlpatterns = [
     # because the route is part of the published contract.
     path("sequences/<str:project_prefix>/next", views.next_task_key),
     path("sequences/<str:project_prefix>/next/", views.next_task_key),
+
+    # ── holding — сводка по группе (блок H) ──────────────────────────────────
+    path("holding/projects", views.holding_projects),
+    path("holding/projects/", views.holding_projects),
 ]

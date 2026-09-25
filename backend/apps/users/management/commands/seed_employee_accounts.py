@@ -50,6 +50,11 @@ class Command(BaseCommand):
             help="Завести учётки только первым N сотрудникам (0 — всем).",
         )
         parser.add_argument(
+            "--company", dest="company", default=None,
+            help="slug компании: учётки читаются из её схемы. Без флага — "
+                 "текущий search_path (режим перехода).",
+        )
+        parser.add_argument(
             "--force-remote", action="store_true",
             help="Осознанно разрешить неместную БД.",
         )
@@ -73,9 +78,24 @@ class Command(BaseCommand):
             f"локальной среды. Если это осознанно — --force-remote."
         )
 
-    @transaction.atomic
     def handle(self, *args, **options):
         self._assert_local(options["force_remote"])
+        slug = options["company"]
+        if slug is None:
+            self._run(options)
+            return
+        from apps.companies import interface as companies
+        from htqweb.tenancy.db import use_company
+
+        if companies.get_company(slug) is None:
+            raise CommandError(f"Компания {slug!r} не найдена в реестре.")
+        if not companies.schema_exists(slug):
+            raise CommandError(f"У компании {slug!r} нет схемы Postgres.")
+        with use_company(slug):
+            self._run(options)
+
+    @transaction.atomic
+    def _run(self, options) -> None:
         password = options["password"]
 
         employees = hr_interface.list_employees_brief()

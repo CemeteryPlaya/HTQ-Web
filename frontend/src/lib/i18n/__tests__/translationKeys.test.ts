@@ -110,6 +110,26 @@ function present(key: string, dict: Set<string>): boolean {
   return ['_one', '_few', '_many', '_other', '_zero'].some((s) => dict.has(key + s));
 }
 
+/** Экраны, чьи ключи обязаны быть в словаре даже с запасным текстом в коде:
+ *  запасной текст — только русский, и в английском интерфейсе он всплыл бы
+ *  как есть. Список расширяется по мере перевода экранов. */
+const STRICT_PREFIXES = ['access.'];
+
+function collectStrictKeys(): Array<{ key: string; where: string }> {
+  const used: Array<{ key: string; where: string }> = [];
+  for (const file of sourceFiles(SRC)) {
+    const text = fs.readFileSync(file, 'utf-8');
+    const rel = path.relative(FRONTEND, file).split(path.sep).join('/');
+    const lineOf = (idx: number) => text.slice(0, idx).split('\n').length;
+    for (const m of text.matchAll(T_CALL)) {
+      const key = m[2];
+      if (!KEYISH.test(key) || !STRICT_PREFIXES.some((p) => key.startsWith(p))) continue;
+      used.push({ key, where: rel + ':' + lineOf(m.index ?? 0) });
+    }
+  }
+  return used;
+}
+
 describe('i18n: ключи из кода существуют в словаре', () => {
   const ru = loadLocale('ru');
   const en = loadLocale('en');
@@ -129,6 +149,23 @@ describe('i18n: ключи из кода существуют в словаре'
   it('те же ключи есть в en — иначе в англ. интерфейсе всплывёт русский текст', () => {
     const missing = used
       .filter(({ key }) => present(key, ru) && !present(key, en))
+      .map(({ key, where }) => `${where}  ${key}`);
+    expect([...new Set(missing)].sort()).toEqual([]);
+  });
+});
+
+describe('i18n: переведённые экраны не держатся на запасном тексте', () => {
+  const ru = loadLocale('ru');
+  const en = loadLocale('en');
+  const strict = collectStrictKeys();
+
+  it('находит ключи экранов прав', () => {
+    expect(strict.length).toBeGreaterThan(90);
+  });
+
+  it('каждый ключ access.* есть и в ru, и в en', () => {
+    const missing = strict
+      .filter(({ key }) => !present(key, ru) || !present(key, en))
       .map(({ key, where }) => `${where}  ${key}`);
     expect([...new Set(missing)].sort()).toEqual([]);
   });

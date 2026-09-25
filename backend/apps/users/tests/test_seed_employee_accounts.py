@@ -170,3 +170,29 @@ def test_guard_runs_before_any_account_is_created(employees, monkeypatch):
     with pytest.raises(CommandError, match="не похож на локальную"):
         _run()
     assert User.objects.filter(email__endswith="@htq.test").count() == 0
+
+
+# ── опция --company ────────────────────────────────────────────────────────
+
+def test_company_option_reads_employees_from_that_schema(company_schema):
+    """Сотрудники лежат в схеме компании; без входа в неё команда увидела бы
+    пустой public и отказалась."""
+    from htqweb.tenancy.db import use_company
+
+    with use_company(company_schema["slug"]):
+        department = Department.objects.create(name="Строительство", path="stroy")
+        position = Position.objects.create(title="Инженер", department=department, weight=1000)
+        Employee.objects.create(
+            first_name="Имя", last_name="Фамилия", email="tenant@htq.test",
+            department=department, position=position, hire_date="2024-01-09")
+
+    _run(company=company_schema["slug"])
+
+    user = User.objects.get(email="tenant@htq.test")
+    with use_company(company_schema["slug"]):
+        assert Employee.objects.get(email="tenant@htq.test").user_id == user.id
+
+
+def test_company_option_rejects_unknown_company(db):
+    with pytest.raises(CommandError, match="не найдена"):
+        _run(company="t-no-such-company")

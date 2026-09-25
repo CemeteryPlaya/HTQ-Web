@@ -142,6 +142,26 @@ def attach(task_id: int, *, actor_id: int, data: bytes, filename: str,
     return task
 
 
+def file_brief(file_id: str | None) -> dict | None:
+    """``{file_id, url, filename}`` приложенного документа — или ``None``.
+
+    Нужен там, где человек должен УВИДЕТЬ, что именно приложено, прежде чем
+    закрыть шаг: «документ приложен» без имени и ссылки не даёт заметить,
+    что ушёл не тот счёт. Имя берётся у media отдельным вызовом, и его
+    отсутствие не отменяет ссылку — показать «Документ» со ссылкой всё
+    равно полезнее, чем ничего.
+    """
+    if not file_id:
+        return None
+    filename = ""
+    try:
+        meta = media.get_file_meta(file_id) or {}
+        filename = str(meta.get("filename") or "")
+    except ServiceDisabled:
+        logger.info("signoff: media выключен, имя документа не прочитано")
+    return {"file_id": str(file_id), "url": file_url(file_id), "filename": filename}
+
+
 def file_url(file_id: str | None) -> str | None:
     """Подписанная ссылка на приложенный документ (scope приватный).
 

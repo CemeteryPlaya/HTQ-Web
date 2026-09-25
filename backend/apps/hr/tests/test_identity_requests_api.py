@@ -15,13 +15,34 @@ from apps.hr.models import (
 )
 from apps.hr.services import identity_request_service as svc
 from apps.hr.tests.conftest import auth_headers, make_user
+from apps.users.models import User, UserStatus
+from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/hr/v1/identity-requests"
 APPROVER = "/api/hr/v1/identity-approver/"
 
 
-def _hr_auth(title: str, weight: int, email: str):
-    """HR-сотрудник нужного уровня: уровень считается из должности."""
+def _grant_seeded_role(company_slug: str, user_id: int, code: str) -> None:
+    """Блок I задача 5 — ``module="hr", level=…`` стоит ПОВЕРХ старой
+    Employee/Position-эвристики (тот же приём, что в
+    ``test_employees_api.py::_grant_seeded_role``)."""
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    RoleAssignment.objects.create(
+        company_slug=company_slug, user_id=user_id, role=Role.objects.get(code=code),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+
+
+def _hr_auth(title: str, weight: int, email: str, *, company_slug=None, role_code=None):
+    """HR-сотрудник нужного уровня.
+
+    ``role_code`` — засеянная роль (``access/migrations/0005``) на модуль
+    ``hr``, добавленная блоком I задачей 5; с задачи 9 это ЕДИНСТВЕННЫЙ
+    источник его прав (должность и отдел ниже — карточка, не права).
+    """
+    from htqweb.authn.jwt import issue_token_pair
+
     dep = Department.objects.create(name=f"HR-{weight}", path=f"hr{weight}")
     pos = Position.objects.create(title=title, department=dep, weight=weight)
     user = make_user(email)
@@ -29,17 +50,25 @@ def _hr_auth(title: str, weight: int, email: str):
         email=email, department=dep, position=pos, user_id=user.id,
         hire_date=datetime.date(2024, 1, 9), first_name="Х", last_name="Р",
     )
+    if company_slug is not None:
+        if role_code is not None:
+            _grant_seeded_role(company_slug, user.id, role_code)
+        token = issue_token_pair(user, company_slug=company_slug)["access"]
+        headers = {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_slug}
+        return user, headers
     return user, auth_headers(user)
 
 
 @pytest.fixture
-def senior_auth(db):
-    return _hr_auth("Senior HR Manager", 30, "hr-senior-api@htq.test")[1]
+def senior_auth(db, company_row):
+    return _hr_auth("Senior HR Manager", 30, "hr-senior-api@htq.test",
+                    company_slug=company_row, role_code="hr-senior")[1]
 
 
 @pytest.fixture
-def lead_auth(db):
-    return _hr_auth("HR Director", 40, "hr-lead-api@htq.test")[1]
+def lead_auth(db, company_row):
+    return _hr_auth("HR Director", 40, "hr-lead-api@htq.test",
+                    company_slug=company_row, role_code="hr-lead")[1]
 
 
 @pytest.fixture
@@ -272,33 +301,49 @@ def test_update_of_non_identity_field_has_no_request_key(
 
 # ── право менять напрямую (hr.identity.force) ───────────────────────────────
 
-def _force_auth(email: str = "hr-force@htq.test"):
-    """HR-должность с явно выданным правом обхода подтверждения."""
+def _force_auth(company_slug: str, email: str = "hr-force@htq.test"):
+    """Кадровик с ЯВНО выданным правом обхода подтверждения.
+
+    До задачи 9 блока I право лежало в явной матрице ``Position.permissions``
+    (``hr.identity.force``) под ролью ``hr-middle`` для гейта. Теперь право —
+    узел ``hr.employees.identity`` с признаком ``edit`` (``legacy_roles.
+    KEY_TO_NODE[IDENTITY_FORCE]``), и он выдаётся отдельной синтетической
+    ролью через ``apps.access.tests.helpers.assign`` — «отдельной галкой», как
+    и задумано у ключа. ``hr-middle`` (область — вся компания) остаётся ради
+    гейта ``level="write"``, права правки карточки и видимости чужого отдела:
+    без неё сотрудник другого отдела просто не находится, и тест падал бы на
+    404, ничего не сказав о самом праве обхода.
+
+    ``hr-middle`` несёт на ``hr.employees.identity`` явный ЗАПРЕТ
+    (``access/migrations/0008`` — раньше узел наследовал ``edit`` от
+    ``hr.employees``, фикс-раунд 1 задачи 9 это закрыл); запрет действует
+    только внутри той же роли, а признаки объединяются по всем ролям
+    вызывающего (``resolve.flags_for``), поэтому отдельная роль с ``edit``
+    на этом узле право даёт — ровно так «отдельная галка» и должна работать.
+    """
     dep = Department.objects.create(name="HR-force", path="hrforce")
-    pos = Position.objects.create(
-        title="Кадровик с правом обхода", department=dep, weight=35,
-        # Полный набор для правки чужой карточки: без view/view.all сотрудник
-        # другого отдела просто не находится, и тест падал бы на 404, ничего не
-        # сказав о самом праве обхода.
-        permissions={"hr_level": "senior",
-                     "permissions": ["hr.employees.view", "hr.employees.view.all",
-                                     "hr.employees.edit", "hr.identity.force"]},
-    )
+    pos = Position.objects.create(title="Кадровик с правом обхода", department=dep, weight=35)
     user = make_user(email)
     Employee.objects.create(
         email=email, department=dep, position=pos, user_id=user.id,
         hire_date=datetime.date(2024, 1, 9), first_name="Ф", last_name="О",
     )
-    return auth_headers(user)
+    from apps.access.tests.helpers import assign
+    from htqweb.authn.jwt import issue_token_pair
+
+    _grant_seeded_role(company_slug, user.id, "hr-middle")
+    assign(company_slug, user.id, "hr.employees.identity", "edit")
+    token = issue_token_pair(user, company_slug=company_slug)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_slug}
 
 
 @pytest.mark.django_db
 def test_force_permission_writes_identity_straight_to_the_card(
-        employee, approver_auth, fallback_log_mode):
+        employee, approver_auth, fallback_log_mode, company_row):
     res = Client().put(
         f"/api/hr/v1/employees/{employee.id}/",
         data=json.dumps({"phone": "+7 777 000-11-22"}),
-        content_type="application/json", **_force_auth(),
+        content_type="application/json", **_force_auth(company_row),
     )
 
     assert res.status_code == 200
@@ -311,14 +356,14 @@ def test_force_permission_writes_identity_straight_to_the_card(
 
 @pytest.mark.django_db
 def test_force_edit_supersedes_a_pending_request(
-        employee, approver_auth, fallback_log_mode):
+        employee, approver_auth, fallback_log_mode, company_row):
     """Иначе подтверждение старой заявки вернуло бы прежнее значение поверх нового."""
     svc.capture(employee, {"phone": "+7 700 111-11-11"}, actor_id=1)
 
     Client().put(
         f"/api/hr/v1/employees/{employee.id}/",
         data=json.dumps({"phone": "+7 777 000-11-22"}),
-        content_type="application/json", **_force_auth(),
+        content_type="application/json", **_force_auth(company_row),
     )
 
     request = IdentityChangeRequest.objects.get(employee=employee)
@@ -328,14 +373,14 @@ def test_force_edit_supersedes_a_pending_request(
 
 @pytest.mark.django_db
 def test_force_edit_leaves_other_pending_fields_alone(
-        employee, approver_auth, fallback_log_mode):
+        employee, approver_auth, fallback_log_mode, company_row):
     """Снимается только то поле, которое записали напрямую."""
     svc.capture(employee, {"phone": "+7 700 111-11-11", "bio": "Прораб"}, actor_id=1)
 
     Client().put(
         f"/api/hr/v1/employees/{employee.id}/",
         data=json.dumps({"phone": "+7 777 000-11-22"}),
-        content_type="application/json", **_force_auth(),
+        content_type="application/json", **_force_auth(company_row),
     )
 
     request = IdentityChangeRequest.objects.get(employee=employee)
@@ -360,3 +405,35 @@ def test_force_key_is_not_part_of_any_level():
     from apps.hr.permissions import IDENTITY_FORCE, LEVEL_PRESETS
 
     assert not any(IDENTITY_FORCE in preset for preset in LEVEL_PRESETS.values())
+
+
+@pytest.mark.django_db
+def test_identity_approver_is_set_by_holder_of_the_identity_node(company_row):
+    """Право назначать подтверждающего — узел hr.identity_requests, а не агрегат модуля.
+
+    До блока I ручка требовала кадрового доступа любого уровня. Уровень
+    ``admin`` на модуле её сузил: именная роль (hr-custom-*) с одним ключом
+    ``hr.identity.manage`` агрегируется в ``write`` и получала 403.
+    """
+    from apps.access.tests.helpers import assign
+
+    user = User.objects.create(
+        username="identity-manager", email="im@htq.test", password="x",
+        status=UserStatus.ACTIVE,
+    )
+    user.set_password("S3cret!Pass1")
+    user.save()
+    assign(company_row, user.id, "hr.identity_requests", "edit")
+    auth = {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user, company_slug=company_row)['access']}",
+            "HTTP_X_HTQ_COMPANY": company_row}
+
+    # Тело — по схеме IdentityApproverRequest (``user_id``): неизвестное поле
+    # тихо отбрасывается, и запрос с ним ничего бы не назначал.
+    resp = Client().put(
+        APPROVER,
+        data=json.dumps({"user_id": user.id}),
+        content_type="application/json", **auth,
+    )
+
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["user_id"] == user.id

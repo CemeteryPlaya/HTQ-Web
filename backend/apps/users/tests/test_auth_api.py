@@ -12,7 +12,7 @@ import pytest
 from django.conf import settings
 from django.test import Client
 
-from apps.companies.models import Company, CompanyKind, CompanyMembership
+from apps.companies.models import Company, CompanyKind, CompanyMembership, CompanyStatus
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import decode_token, issue_token_pair
 
@@ -313,3 +313,63 @@ def test_refresh_without_company_header_keeps_default_company_behaviour(active_u
     assert resp.status_code == 200
     new_payload = decode_token(resp.json()["access"])
     assert new_payload.company == "htq-kz"
+
+
+# ── Архивная компания — токен только суперпользователю (спека архива §6.1) ──
+
+
+@pytest.fixture
+def archived(db):
+    return Company.objects.create(slug="dead", name="Архив", kind=CompanyKind.SERVICE,
+                                  status=CompanyStatus.ARCHIVED)
+
+
+@pytest.mark.django_db
+def test_superuser_logs_in_on_archived_subdomain(superuser, archived):
+    resp = Client().post(f"{BASE}/token/", data={
+        "email": "root@htq.test", "password": "Adm1n!Pass",
+    }, content_type="application/json", HTTP_X_HTQ_COMPANY="dead")
+
+    assert resp.status_code == 200
+    assert decode_token(resp.json()["access"]).company == "dead"
+
+
+@pytest.mark.django_db
+def test_member_login_on_archived_subdomain_403(active_user, archived):
+    CompanyMembership.objects.create(user_id=active_user.id, company=archived,
+                                     is_default=True)
+
+    resp = Client().post(f"{BASE}/token/", data={
+        "email": "alice@htq.test", "password": "S3cret!",
+    }, content_type="application/json", HTTP_X_HTQ_COMPANY="dead")
+
+    assert resp.status_code == 403
+    assert resp.json() == {"detail": "Forbidden"}
+
+
+@pytest.mark.django_db
+def test_superuser_refresh_on_archived_subdomain(superuser, archived):
+    pair = issue_token_pair(superuser)
+
+    resp = Client().post(f"{BASE}/token/refresh/", data={
+        "refresh": pair["refresh"],
+    }, content_type="application/json", HTTP_X_HTQ_COMPANY="dead")
+
+    assert resp.status_code == 200
+    assert decode_token(resp.json()["access"]).company == "dead"
+
+
+@pytest.mark.django_db
+def test_member_refresh_on_archived_subdomain_403(active_user, archived):
+    """Refresh-cookie после перезагрузки страницы на поддомене архива: токен
+    архива участнику не выдаётся — иначе он прочёл бы архив, пока токен жив."""
+    CompanyMembership.objects.create(user_id=active_user.id, company=archived,
+                                     is_default=True)
+    pair = issue_token_pair(active_user)
+
+    resp = Client().post(f"{BASE}/token/refresh/", data={
+        "refresh": pair["refresh"],
+    }, content_type="application/json", HTTP_X_HTQ_COMPANY="dead")
+
+    assert resp.status_code == 403
+    assert resp.json() == {"detail": "Forbidden"}

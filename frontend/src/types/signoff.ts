@@ -36,7 +36,30 @@ export type Quorum = 'any' | 'all';
  * предметной модели и разрешает того, кто нажал «на согласование». В
  * contracts это один и тот же человек по бизнес-процессу.
  */
-export type ApproverKind = 'position' | 'initiator';
+/** `users` — согласующие названы поимённо (`user_ids`); `subject` —
+ *  согласующих называет сам объект по ключу `approver_key` из
+ *  `approver_fields` его типа (поле формы, администраторы проекта…). */
+export type ApproverKind = 'position' | 'initiator' | 'users' | 'subject';
+
+export interface StageUser {
+  user_id: number;
+  full_name: string;
+  is_active: boolean;
+}
+
+/** Ключ «назначает объект» — что предметная аппка умеет спросить у объекта. */
+export interface ApproverField {
+  key: string;
+  label: string;
+}
+
+/** Область внутри типа (`ApprovalRoute.scope`): у конструктора форм —
+ *  шаблон. Пустая область — маршрут на весь тип. */
+export interface SubjectScope {
+  scope: string;
+  label: string;
+  has_active_route: boolean;
+}
 
 /**
  * Чем кончился круг согласования.
@@ -178,15 +201,36 @@ export interface RouteStage {
    *  от названного согласующего. На отказ/доработку не влияет. */
   requires_comment: boolean;
   roles: RouteRole[];
+  /** `users`: люди поимённо (с именами для редактора). */
+  user_ids: number[];
+  users: StageUser[];
+  /** `subject`: ключ из `approver_fields` типа и его подпись. */
+  approver_key: string;
+  approver_label: string | null;
+  /** Что этап требует от ОБЪЕКТА, прежде чем закрыться (ключ из
+   *  `requirement_fields` типа): заполнено поле, приложен скан. Третье
+   *  требование рядом с документом и пояснением, но к объекту, а не к
+   *  решению. Пусто — ничего не требует. */
+  requirement_key: string;
+  requirement_label: string | null;
 }
 
 export interface ApprovalRoute {
   id: number;
   subject_type: string;
+  /** Область внутри типа; `''` — весь тип. Активный маршрут ровно один на
+   *  пару `(subject_type, scope)`. */
+  scope: string;
+  scope_label: string | null;
   name: string;
   /** Активный маршрут на тип ровно один — частичный уникальный индекс. */
   is_active: boolean;
   stages: RouteStage[];
+  /** Только в карточке ОДНОГО маршрута: схема его области — факты для
+   *  условий и ключи «назначает объект». */
+  fields?: SubjectField[];
+  approver_fields?: ApproverField[];
+  requirement_fields?: ApproverField[];
   /** Только в карточке ОДНОГО маршрута (`GET /routes/:id`); в списке
    *  маршрутов поля нет — считать его на каждую строку слишком дорого. */
   coverage_gaps?: CoverageGap[];
@@ -207,6 +251,11 @@ export interface Subject {
   has_active_route: boolean;
   /** Пусто — тип не поддерживает ветвление, условия ему не показываем. */
   fields: SubjectField[];
+  /** Области типа; пусто — маршрут заводится на весь тип. */
+  scopes: SubjectScope[];
+  approver_fields: ApproverField[];
+  /** Что этап может требовать от объекта; пусто — тип ничего такого не умеет. */
+  requirement_fields: ApproverField[];
 }
 
 // ─── Процессы ────────────────────────────────────────────────────────────
@@ -244,8 +293,12 @@ export interface ProcessStage {
   approver_kind: ApproverKind;
   /** HR-должности, по которым этот снимок маршрута разрешил задачи. */
   role_ids: number[];
+  user_ids: number[];
+  approver_key: string;
   requires_attachment: boolean;
   requires_comment: boolean;
+  requirement_key: string;
+  requirement_label: string | null;
   decided_at: string | null;
   tasks: ProcessTask[];
 }
@@ -254,6 +307,8 @@ export interface ApprovalProcess {
   id: number;
   subject_type: string;
   subject_id: number;
+  /** Область маршрута, по которому шёл процесс (снимок). */
+  scope: string;
   state: ProcessState;
   initiator_id: number | null;
   /** Какая группа этапов сейчас на рассмотрении. */
@@ -283,11 +338,17 @@ export interface InboxItem {
   subject_title: string | null;
   subject_url: string | null;
   stage_name: string;
+  /** Положение шага в маршруте («этап 2 из 4») — прогресс для того, у кого
+   *  несколько этапов подряд (чек-лист закупщика). */
+  stage_order: number;
+  stage_count: number;
   quorum: Quorum;
   /** Решение потребует PDF и/или пояснения — видно уже в очереди, а не
    *  только в диалоге. */
   requires_attachment: boolean;
   requires_comment: boolean;
+  /** Подпись требования шага к объекту («Заполнено «Поставщик»»). */
+  requirement_label: string | null;
   file_id: string | null;
   initiator_id: number | null;
   created_at: string;
@@ -316,8 +377,11 @@ export interface StageInput {
   condition?: Condition;
   is_fallback?: boolean;
   approver_kind?: ApproverKind;
+  user_ids?: number[];
+  approver_key?: string;
   requires_attachment?: boolean;
   requires_comment?: boolean;
+  requirement_key?: string;
 }
 
 /** PATCH этапа: `position_ids` заменяет список ЦЕЛИКОМ, а его отсутствие
@@ -336,8 +400,17 @@ export interface StageUpdateInput {
    *  присылать вместе с ним пустой `approver_ids` не нужно (а непустой
    *  бэкенд отвергнет как противоречие). */
   approver_kind?: ApproverKind;
+  user_ids?: number[];
+  approver_key?: string;
   requires_attachment?: boolean;
   requires_comment?: boolean;
+  requirement_key?: string;
+}
+
+export interface BatchDecisionResult {
+  task_id: number;
+  ok: boolean;
+  error?: string | null;
 }
 
 export interface DecisionInput {

@@ -562,7 +562,9 @@ def test_a_rejected_object_stays_locked(client):
     locked = patch_json(client, f"{BASE}/budgets/{line.budget_id}",
                         {"period_year": 2035}, **auth(admin_token()))
     assert locked.status_code == 409, locked.content
-    assert "отклонён" in locked.json()["detail"]
+    # Текст замка безличен (подпись модели подставляется перед ним, а род у
+    # неё разный — «Договор», «Заявка»), поэтому проверяется решение.
+    assert "отклонено" in locked.json()["detail"]
 
 
 def test_an_approved_object_is_not_editable(client):

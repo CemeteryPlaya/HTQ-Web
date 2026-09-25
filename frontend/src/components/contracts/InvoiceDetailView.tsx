@@ -31,6 +31,7 @@ import { Download, Loader2, Paperclip, Pencil, Receipt, Upload } from 'lucide-re
 import { toast } from 'sonner';
 
 import { DetailSkeleton, Field } from '@/components/contracts/detail';
+import { LinkedRequestBadge } from '@/components/contracts/LinkedRequestPicker';
 import {
   formatAmount,
   formatMoment,
@@ -38,6 +39,7 @@ import {
   remainingTone,
 } from '@/components/contracts/format';
 import { reportApiError } from '@/lib/apiError';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
@@ -199,6 +201,11 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
               subjectId={invoice.id}
               state={invoice.approval_state}
               submit={contractsApi.submitInvoice}
+              blockedReason={draftOnlySubmitBlock(
+                invoice.status,
+                statusLabel(invoice.status),
+                'счёт',
+              )}
               // На момент отправки счёт ещё не уменьшает остаток; это случится
               // после одобрения, когда откроется карточка согласования.
               invalidate={[
@@ -268,6 +275,11 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
               <Field label="Администратор">{invoice.administrator_name}</Field>
               <Field label="Программа">{invoice.program_name}</Field>
               <Field label="Статья расходов">{invoice.expense_item}</Field>
+              {invoice.request_id != null && (
+                <Field label="По заявке на закуп" className="sm:col-span-2">
+                  <LinkedRequestBadge requestId={invoice.request_id} />
+                </Field>
+              )}
             </dl>
             {line && (
               <div className="rounded-md border bg-muted/40 p-4 text-sm">

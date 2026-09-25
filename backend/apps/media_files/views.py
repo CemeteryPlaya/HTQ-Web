@@ -68,7 +68,7 @@ def _parse_is_public(raw: str | None) -> bool | None:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-@api_view(methods=("POST",), auth="jwt", status=201)
+@api_view(methods=("POST",), auth="jwt", status=201, module="media", level="write")
 def upload_file(request):
     """``POST /api/media/v1/files/`` (multipart/form-data).
 
@@ -163,9 +163,10 @@ def files_collection(request, *args, **kwargs):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="media", level="admin")
 def list_files(request):
-    """``GET /api/media/v1/files/`` (admin only).
+    """``GET /api/media/v1/files/`` — ``module="media", level="admin"`` по роли
+    (блок L; до него ``admin=True``).
 
     Ported from the source's ``list_files`` — ``limit``/``offset`` query
     params, same bounds (``1<=limit<=500``, ``offset>=0``), soft-deleted
@@ -195,10 +196,12 @@ def _can_access_private(user, meta: FileMetadata) -> bool:
     concept (decision Р3, same omission as ``upload_service``'s dropped
     ``X-User-Id`` path).
 
-    Uses ``is_elevated`` (the one platform admin predicate, see R1 — also
-    what ``api_view(admin=True)``/``htqweb.authn.rbac.require_admin`` check)
-    rather than the raw ``is_admin`` claim, so media's private-file access
-    and its admin gate agree on the same flag."""
+    Uses ``is_elevated`` (the platform admin predicate, see R1) rather than
+    the raw ``is_admin`` claim. Since block L the file LIST is role-based
+    (``module="media", level="admin"``) while private-file access here
+    still rides on ``is_elevated`` — a ``services-admin`` holder without
+    ``is_staff`` sees the list but cannot sign someone else's private file.
+    Deliberate: in-service ``is_elevated`` checks stay (spec §10)."""
     if user is None:
         return False
     if user.is_elevated:
@@ -400,7 +403,7 @@ def download_variant(request, file_id, variant):
 # ─── Signed URL ─────────────────────────────────────────────────────────────
 
 
-@api_view(methods=("POST",), auth="jwt")
+@api_view(methods=("POST",), auth="jwt", module="media", level="write")
 def issue_signed_url(request, file_id):
     """``POST /api/media/v1/files/{file_id}/sign?variant=original&ttl=3600``.
 

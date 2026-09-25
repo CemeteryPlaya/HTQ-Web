@@ -5,14 +5,25 @@
 apps/hr/services/document_service.py.
 
 Авторизация (docs/plans/2026-07-20-hr-domain.md, под-модуль hr-docs):
-  * /documents/* — БУКВАЛЬНО ``get_current_user`` исходника на всех
-    портированных эндпойнтах, включая POST/DELETE (исходник НЕ зовёт
+  * /documents/* GET/DELETE (список, чтение, удаление) — БУКВАЛЬНО
+    ``get_current_user`` исходника, включая DELETE (исходник НЕ зовёт
     require_hr_write в documents.py — странность, не баг порта, как у
     recruiting/time-core);
   * сверх порта: multipart-загрузка и PATCH карточки требуют HR-права на
     запись — они ручаются за запись в restricted-скоуп media (решение Д1)
     и правят карточку, которой у исходника не было вовсе;
-  * /employees/{id}/documents — require_hr_access + _require_visible_employee
+  * ⚠️ POST /documents/ (JSON-ветка, ``_upload_document``) — раунд правок 1
+    задачи 6 блока I: ``module="hr", level="write"`` добавлен И СЮДА тоже,
+    хотя исходник её не гейтил. Причина — обе ветки (`_upload_document`/
+    `_upload_document_multipart`) это ОДНА ручка `POST /documents/`,
+    диспетчеризуемая по `Content-Type` (`documents_collection`); гейт
+    только на multipart-ветке снимался бы простой сменой заголовка на
+    JSON — обоснование см. комментарий над `_upload_document` в
+    `apps/hr/views.py`, тот же приём, что запись отделов в задаче 5.
+    DELETE с финальной волны блока I (рулинг O, сознательное исключение
+    №3) — под ``module="hr", level="admin"``: открытой записи на
+    `/documents/*` не осталось.
+  * /employees/{id}/documents — модульный гейт + _require_visible_employee
     (та же пара, что history), НЕ admin=True.
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
@@ -72,16 +83,37 @@ def auth(db):
 
 
 @pytest.fixture
-def admin_auth(db):
-    """is_staff=True — elevated: нужен для /employees/{id}/documents
-    (require_hr_access) и для правок карточки документа (PATCH/загрузка)."""
+def admin_auth(db, company_row):
+    """is_staff=True — elevated: нужен для /employees/{id}/documents и для
+    правок карточки документа (PATCH/загрузка).
+
+    Блок I задача 5: ``GET employees/{id}/documents`` стоит под
+    ``module="hr", level="read"`` — роль выдана явно, потому что
+    ``is_staff`` сам по себе НОВЫЙ гейт не проходит (единственный
+    бесплатный обход там — ``is_superuser``). ``/documents/*`` (сама
+    коллекция) этой задачей НЕ гейтируется — её протокол не менялся.
+
+    Задача 11: роль СИНТЕТИЧЕСКАЯ (``assign(…, "hr", "full")``), а не
+    засеянная ``Role.objects.get(code="hr-lead")``. Эту фикстуру берёт
+    ``test_upload_document_invalid_employee_id_500`` с ``transaction=True``;
+    pytest-django гонит транзакционные тесты ПОСЛЕДНИМИ, а более ранние
+    транзакционные тесты ``apps/access``/``apps/companies`` делают flush и
+    стирают роли, засеянные миграциями, — в полном прогоне ``hr-lead`` уже
+    нет и setup падал ``DoesNotExist``. ``assign()`` пересоздаёт свою роль
+    идемпотентно на каждом вызове, поэтому flush ей не страшен; глубина
+    ``full`` на корне ``hr`` — тот же «полный доступ», что и у ``hr-lead``.
+    """
+    from apps.access.tests.helpers import assign
+
     user = User.objects.create(
         username="doc-admin", email="doc-admin@htq.test", password="x", status=UserStatus.ACTIVE,
         is_staff=True,
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    assign(company_row, user.id, "hr", "full")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 def _doc(emp, **kw):
@@ -128,12 +160,18 @@ def test_documents_list_paginated_envelope(auth, emp):
 
 
 @pytest.mark.django_db
-def test_upload_document_plain_jwt_user_can_write(auth, emp):
-    """Странность исходника: обычный jwt-пользователь БЕЗ HR-роли может
-    создавать документы — documents.py нигде не зовёт require_hr_write."""
+def test_upload_document_with_write_role_can_write(admin_auth, emp):
+    """Раунд правок 1 задачи 6: JSON-ветка теперь под ``module="hr",
+    level="write"`` (см. докстринг модуля) — переименовано из
+    ``..._plain_jwt_user_can_write``: старое имя утверждало то, что
+    сегодня уже неверно (обычный jwt БЕЗ роли эту ветку больше не
+    проходит, см. ``test_upload_document_json_denied_without_hr_write``
+    ниже). Старая проверка `documents.py`/`document_service.py`
+    по-прежнему НЕ зовёт `require_hr_write` — обе двери работают И-И,
+    просто вторая появилась только сейчас."""
     resp = Client().post(
         f"{BASE}/", data=_create_payload(emp, metadata={"k": "v"}),
-        content_type="application/json", **auth,
+        content_type="application/json", **admin_auth,
     )
     assert resp.status_code == 201
     body = resp.json()
@@ -157,12 +195,24 @@ def test_upload_document_requires_jwt_at_all(emp):
 
 
 @pytest.mark.django_db
-def test_upload_document_metadata_alias_accepts_wire_key(auth, emp):
+def test_upload_document_json_denied_without_hr_write(auth, emp):
+    """Раунд правок 1 задачи 6: зеркало ``test_multipart_upload_denied_
+    without_hr_write`` для JSON-ветки — обе ветки одной ручки `POST
+    /documents/` теперь требуют ``module="hr", level="write"`` разом,
+    иначе гейт снимался бы сменой Content-Type."""
+    resp = Client().post(
+        f"{BASE}/", data=_create_payload(emp), content_type="application/json", **auth,
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_upload_document_metadata_alias_accepts_wire_key(admin_auth, emp):
     """DocumentCreate.metadata_ — alias "metadata" (populate_by_name) —
     буквальный порт: клиент шлёт JSON-ключ "metadata", не "metadata_"."""
     resp = Client().post(
         f"{BASE}/", data=_create_payload(emp, metadata={"issued_by": "HR"}),
-        content_type="application/json", **auth,
+        content_type="application/json", **admin_auth,
     )
     assert resp.status_code == 201
     assert resp.json()["metadata"] == {"issued_by": "HR"}
@@ -184,20 +234,27 @@ def test_get_document_returns_full_shape(auth, emp):
 
 
 @pytest.mark.django_db
-def test_delete_document_plain_jwt_user_can_delete(auth, emp):
+def test_delete_document_hr_admin_deletes(hr_admin_auth, auth, emp):
     doc = _doc(emp)
-    resp = Client().delete(f"{BASE}/{doc.id}/", **auth)
+    resp = Client().delete(f"{BASE}/{doc.id}/", **hr_admin_auth)
     assert resp.status_code == 204
     assert Client().get(f"{BASE}/{doc.id}/", **auth).status_code == 404
 
 
 @pytest.mark.django_db
-def test_delete_document_not_found(auth):
-    assert Client().delete(f"{BASE}/999999/", **auth).status_code == 404
+def test_delete_document_plain_jwt_user_is_denied(auth, emp):
+    doc = _doc(emp)
+    assert Client().delete(f"{BASE}/{doc.id}/", **auth).status_code == 403
+    assert Document.objects.filter(id=doc.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_document_not_found(hr_admin_auth):
+    assert Client().delete(f"{BASE}/999999/", **hr_admin_auth).status_code == 404
 
 
 @pytest.mark.django_db(transaction=True)
-def test_upload_document_invalid_employee_id_500(auth, emp):
+def test_upload_document_invalid_employee_id_500(admin_auth, emp):
     """Контракт, не баг: ни documents.py, ни BaseRepository.create исходника
     не проверяют существование employee_id/uploaded_by заранее — невалидный
     FK падает в IntegrityError необработанным -> api_view отдаёт 500.
@@ -210,10 +267,14 @@ def test_upload_document_invalid_employee_id_500(auth, emp):
     вьюха работает в autocommit, INSERT коммитится, отложенный FK срабатывает
     сразу -> IntegrityError -> 500, ровно как в проде и в исходнике (там FK
     немедленный). UNIQUE-констрейнты, в отличие от FK, немедленные — поэтому
-    test_create_duplicate_entry_500 (time) ловит 500 и без transaction=True."""
+    test_create_duplicate_entry_500 (time) ловит 500 и без transaction=True.
+
+    ``admin_auth``, не ``auth``: раунд правок 1 задачи 6 загейтил JSON-ветку
+    (``module="hr", level="write"``) — без роли запрос не дошёл бы до
+    INSERT вовсе (403 раньше)."""
     resp = Client().post(
         f"{BASE}/", data=_create_payload(emp, employee_id=999999),
-        content_type="application/json", **auth,
+        content_type="application/json", **admin_auth,
     )
     assert resp.status_code == 500
 
@@ -273,14 +334,24 @@ def fake_media_storage(monkeypatch):
 
 
 @pytest.fixture
-def hr_uploader_auth(db, dep, pos):
+def hr_uploader_auth(db, dep, pos, company_row):
     """HR-сотрудник с правом записи (is_staff) И карточкой Employee.
 
     Оба условия обязательны: скоуп ``hr_doc`` в media — restricted, поэтому
     вьюха сначала проверяет HR-доступ, а ``Document.uploaded_by`` — NOT NULL
     FK на Employee, поэтому загрузить документ от лица пользователя без
     карточки некуда.
+
+    Блок I, задача 6: ``_upload_document_multipart`` теперь ещё и под
+    ``module="hr", level="write"`` — до задачи 9 поверх узловой проверки
+    ``EMPLOYEES_EDIT`` (которую эта фикстура уже проходила через
+    ``is_staff``, коротившийся в ней безусловно); без ``X-HTQ-Company`` +
+    засеянной роли гейт отвечал бы 403 раньше той проверки. Глубина
+    ``full`` на корне ``hr`` выбрана как "full access", соответствующий
+    имени и духу фикстуры (та же роль, что ``admin_auth`` в этом файле).
     """
+    from apps.access.tests.helpers import assign
+
     user = User.objects.create(
         username="doc-uploader", email="doc-uploader@htq.test", password="x",
         status=UserStatus.ACTIVE, is_staff=True,
@@ -291,7 +362,11 @@ def hr_uploader_auth(db, dep, pos):
         first_name="Загрузчик", last_name="Кадровик", email="doc-uploader@htq.test",
         department=dep, position=pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
     )
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    # Синтетическая роль, как в ``admin_auth`` выше (задача 11): файл содержит
+    # транзакционный тест, после которого засеянных ролей может не быть.
+    assign(company_row, user.id, "hr", "full")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 @pytest.mark.django_db
@@ -377,8 +452,11 @@ def test_multipart_upload_without_employee_card_succeeds(admin_auth, emp, fake_m
 
 @pytest.mark.django_db
 def test_multipart_upload_denied_without_hr_write(auth, emp, fake_media_storage):
-    """Обычный пользователь: JSON-ветка ему открыта (странность исходника),
-    но за запись в restricted-скоуп media вьюха ручается только при HR-праве."""
+    """Обычный пользователь без HR-роли: за запись в restricted-скоуп media
+    вьюха ручается только при HR-праве. ⚠️ С раунда правок 1 задачи 6
+    JSON-ветка ему БОЛЬШЕ НЕ открыта тоже (см. ``test_upload_document_json_
+    denied_without_hr_write`` выше) — старый комментарий здесь про
+    "странность исходника" описывал состояние ДО этого раунда."""
     resp = Client().post(
         f"{BASE}/",
         data={
@@ -457,10 +535,13 @@ def test_patch_document_requires_hr_write(auth, emp):
 
 
 @pytest.mark.django_db
-def test_json_contract_still_works_alongside_multipart(auth, emp):
-    """Ветка выбирается по Content-Type — портированный JSON-путь не задет."""
+def test_json_contract_still_works_alongside_multipart(admin_auth, emp):
+    """Ветка выбирается по Content-Type — портированный JSON-путь не задет
+    добавлением multipart-ветки рядом. ``admin_auth``, не ``auth``: раунд
+    правок 1 задачи 6 требует HR-роль на ОБЕИХ ветках одинаково (см.
+    докстринг модуля)."""
     resp = Client().post(
-        f"{BASE}/", data=_create_payload(emp), content_type="application/json", **auth,
+        f"{BASE}/", data=_create_payload(emp), content_type="application/json", **admin_auth,
     )
     assert resp.status_code == 201
     assert resp.json()["file_path"] == "/files/order.pdf"

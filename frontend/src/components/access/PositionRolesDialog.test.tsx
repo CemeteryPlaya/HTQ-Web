@@ -154,6 +154,27 @@ describe('UserAssignmentsDialog', () => {
     ]));
   });
 
+  /**
+   * Именная роль другой компании (спека R2) видна суперпользователю в
+   * каталоге наравне с общими. Без метки её не отличить от общей — и выбор
+   * заканчивается 422 при сохранении. Метка та же, что в RoleCatalog и
+   * PositionRolesDialog.
+   */
+  it('помечает компанией именную роль — и в выборе, и в списке назначений', async () => {
+    listRoles.mockResolvedValue({
+      data: [...ROLES, { id: 30, code: 'hr-custom-acme-1', title: 'Кадровик Acme', is_system: false,
+        company_slug: 'acme' }],
+    });
+    getAssignments.mockResolvedValue({ data: [{ role_id: 30, scope_kind: 'company', scope_id: null }] });
+    open();
+
+    expect(await screen.findByRole('option', { name: 'Кадровик Acme · Компания: acme' })).toBeInTheDocument();
+    // Общая роль метку не получает.
+    expect(screen.getByRole('option', { name: 'Администратор кадров' })).toBeInTheDocument();
+    // Уже выданное назначение тоже помечено.
+    expect(await screen.findByText(/вся компания · Компания: acme/)).toBeInTheDocument();
+  });
+
   it('объектной области в выборе нет: фильтра по ней стадия не делает', async () => {
     open();
     const scope = await screen.findByLabelText(/Область/i);

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 from apps.core.services import ServiceDisabled, disabled_payload
 from htqweb.authn.jwt import AuthError, decode_token
 from htqweb.authn.rbac import require_admin
+from htqweb.tenancy import archive
 
 
 def json_error(detail, status: int) -> JsonResponse:
@@ -82,54 +83,108 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
         raise ValueError("api_view(admin=True) requires auth='jwt'")
 
     def deco(fn):
+        # Один раз при декорировании, а не на каждый запрос: модуль ручки не
+        # меняется, а на поддомене архива от него зависит, отвечает ли
+        # анонимная ручка (htqweb/tenancy/archive.py::anonymous_blocked).
+        blocks_in_archive = archive.anonymous_blocked(fn.__module__)
+
         @csrf_exempt
         @wraps(fn)
         def view(request, *args, **kwargs):
             if request.method not in methods:
                 return json_error("Method Not Allowed", 405)
-            if auth is not None:
-                payload = _AUTHENTICATORS[auth](request)
-                if payload is None:
-                    return json_error("Not authenticated", 401)
-                request.token = payload
-                # Поддомен подменяется тривиально, подпись токена — нет.
-                # Токен, выпущенный для одной компании, не должен работать
-                # в другой, даже если у пользователя есть членство в обеих:
-                # переключение обязано пройти через выдачу нового токена.
-                current = getattr(request, "company", None)
-                if current is not None and payload.company != current["slug"]:
-                    return json_error("Forbidden", 403)
-                # Single platform admin-gate seam (R1): every admin route
-                # goes through this one predicate — htqweb.authn.rbac.
-                # require_admin — instead of each app keeping its own
-                # private _require_admin copy.
-                if admin and not require_admin(request.token):
-                    return json_error("Forbidden", 403)
-                # Прикладной гейт «модуль × уровень» (стадия 2 «Доступ и роли»).
-                # Стоит ПОСЛЕ сверки компании: уровень считается в её контексте,
-                # и проверять права по токену чужой компании бессмысленно.
-                #
-                # Импорт ленивый, внутри функции, и это не стилистика: вьюхи
-                # самой apps.access декорированы этим же api_view, поэтому
-                # импорт на уровне модуля даёт циклический импорт на старте.
-                if module is not None:
-                    from apps.access import interface as access
-                    from apps.access.models import LEVEL_ORDER
-                    from htqweb.tenancy.context import current_company_or_none
-
-                    have = access.permission_level(
-                        request.token, module, current_company_or_none())
-                    if LEVEL_ORDER[have] < LEVEL_ORDER[level]:
-                        return json_error("Forbidden", 403)
-            else:
-                request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
-            if body is not None:
-                try:
-                    kwargs["data"] = body.model_validate_json(request.body or b"{}")
-                except ValidationError as exc:
-                    return JsonResponse({"detail": validation_detail(exc)},
-                                        status=422)
+            # try открыт ДО авторизации, а не только вокруг вызова вьюхи, и
+            # это несёт нагрузку: гейт модуля ниже ходит в базу (реестр
+            # ServiceStatus, роли, назначения) через apps.access.interface, а
+            # тот первой строкой зовёт require_service("access"). Пока try
+            # начинался после гейта, ServiceDisabled от выключенного домена
+            # доступа — и любая другая ошибка гейта, вплоть до обрыва
+            # соединения с БД, — уходила из api_view наружу целиком: не 503,
+            # не конверт {"detail": …}, даже не строка лога. Клиент получал
+            # голый 500 Django, одинаковый для «домен прав выключен» и «вьюха
+            # упала». Раунд правок 1 задачи 4 блока I: гейт стоит ВНУТРИ того
+            # же конверта, что и вьюха, и отвечает теми же кодами.
             try:
+                if auth is not None:
+                    payload = _AUTHENTICATORS[auth](request)
+                    if payload is None:
+                        return json_error("Not authenticated", 401)
+                    request.token = payload
+                    # Поддомен подменяется тривиально, подпись токена — нет.
+                    # Токен, выпущенный для одной компании, не должен работать
+                    # в другой, даже если у пользователя есть членство в обеих:
+                    # переключение обязано пройти через выдачу нового токена.
+                    current = getattr(request, "company", None)
+                    if current is not None and payload.company != current["slug"]:
+                        return json_error("Forbidden", 403)
+                    # Архив — только чтение, и читает его только
+                    # суперпользователь (htqweb/tenancy/archive.py). Запись
+                    # сюда уже не доходит — её отбил CompanyContextMiddleware.
+                    # Стоит после сверки claim, но до admin=True и гейта
+                    # модуля: суперпользователь их проходит и так, остальным
+                    # считать права в архиве незачем.
+                    if archive.is_archived(current) and not payload.is_superuser:
+                        return archive.not_found_response()
+                    # Single platform admin-gate seam (R1): every admin route
+                    # goes through this one predicate — htqweb.authn.rbac.
+                    # require_admin — instead of each app keeping its own
+                    # private _require_admin copy.
+                    if admin and not require_admin(request.token):
+                        return json_error("Forbidden", 403)
+                    # Прикладной гейт «модуль × уровень» (стадия 2 «Доступ и роли»).
+                    # Стоит ПОСЛЕ сверки компании: уровень считается в её контексте,
+                    # и проверять права по токену чужой компании бессмысленно.
+                    #
+                    # Импорт ленивый, внутри функции, и это не стилистика: вьюхи
+                    # самой apps.access декорированы этим же api_view, поэтому
+                    # импорт на уровне модуля даёт циклический импорт на старте.
+                    if module is not None:
+                        from apps.access import interface as access
+                        from apps.access.models import LEVEL_ORDER
+                        from htqweb.tenancy.context import current_company_or_none
+
+                        company = current_company_or_none()
+                        # Расчёт ролей стоит нескольких запросов и переключения
+                        # схемы на компании-предки, а вьюха с узловыми
+                        # проверками (apps.hr.rbac.NodeAccess) спрашивает его
+                        # сразу после гейта. Кладём в запрос парой (компания,
+                        # расчёт) — явно, а не в contextvar: состояние,
+                        # пережившее вызов, пришлось бы сбрасывать между
+                        # запросами (докстринг resolve.Resolution). Сам факт
+                        # наличия атрибута значит «считали»: у суперпользователя
+                        # расчёт — None, и это ответ, а не его отсутствие.
+                        # Тройка несёт и user_id токена: расчёт годится только
+                        # для той пары (компания, пользователь), для которой
+                        # сделан (блок I.2, B3).
+                        resolution = access.resolution(request.token, company)
+                        request.access_resolution = (
+                            company, request.token.user_id, resolution)
+                        have = access.permission_level(
+                            request.token, module, company, resolution=resolution)
+                        if LEVEL_ORDER[have] < LEVEL_ORDER[level]:
+                            return json_error("Forbidden", 403)
+                else:
+                    # Анонимные ручки ТЕНАНТНЫХ аппок на поддомене архива не
+                    # отвечают: они читают схему компании, кто пришёл — не
+                    # узнать, а читать архив может только суперпользователь.
+                    # Анонимные ручки общих аппок (подписанные файлы,
+                    # вложения, аватары, записи) отвечают: они читают public
+                    # и защищены подписью, закрыть их здесь — только отнять
+                    # файлы у суперпользователя (archive.anonymous_blocked).
+                    # TOKEN_PATHS принадлежат apps.users, не тенантной, и под
+                    # условие не попадают и так; исключение оставлено явным —
+                    # без выдачи токена суперпользователь архив не прочтёт.
+                    if (blocks_in_archive
+                            and archive.is_archived(getattr(request, "company", None))
+                            and request.path not in archive.TOKEN_PATHS):
+                        return archive.not_found_response()
+                    request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
+                if body is not None:
+                    try:
+                        kwargs["data"] = body.model_validate_json(request.body or b"{}")
+                    except ValidationError as exc:
+                        return JsonResponse({"detail": validation_detail(exc)},
+                                            status=422)
                 result = fn(request, *args, **kwargs)
                 if isinstance(result, BaseModel):
                     return JsonResponse(result.model_dump(mode="json"), status=status)

@@ -48,6 +48,10 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/manage/projects', component: lazyPages.HRProjects, requiresAuth: true, requires: { module: 'hr', level: 'read' } },
 
   // ─── Personal / messenger / tasks (any logged-in user) ────────────────
+  // Экран выбора компании на голом домене (блок I.2): сюда RequireAuth уводит
+  // любой защищённый маршрут, пока в хосте нет поддомена компании. Гейта
+  // модуля нет намеренно — без компании уровня модуля нет ни у кого.
+  { path: '/companies/choose', component: lazyPages.CompanyPicker, requiresAuth: true },
   { path: '/myprofile', component: lazyPages.MyProfile, requiresAuth: true },
   { path: '/employee/me', component: lazyPages.MyEmployeeCard, requiresAuth: true },
   { path: '/settings', component: lazyPages.Settings, requiresAuth: true },
@@ -133,6 +137,9 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/contracts/completion-acts', component: lazyPages.ContractsCompletionActList, requiresAuth: true },
   { path: '/contracts/completion-acts/new', component: lazyPages.ContractsCompletionActCreate, requiresAuth: true },
   { path: '/contracts/completion-acts/:id', component: lazyPages.ContractsCompletionActDetail, requiresAuth: true },
+  { path: '/contracts/goods-invoices', component: lazyPages.ContractsGoodsInvoiceList, requiresAuth: true },
+  { path: '/contracts/goods-invoices/new', component: lazyPages.ContractsGoodsInvoiceCreate, requiresAuth: true },
+  { path: '/contracts/goods-invoices/:id', component: lazyPages.ContractsGoodsInvoiceDetail, requiresAuth: true },
 
   // ─── Signoff (универсальное согласование, apps.signoff) ───────────────
   // Очередь и карточки открыты любому сотруднику: решает НАЗВАННЫЙ в
@@ -168,10 +175,11 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/admin/users', component: lazyPages.AdminUsers, requiresAuth: true, requires: { module: 'users', level: 'admin' } },
   { path: '/admin/chats', component: lazyPages.AdminChats, requiresAuth: true, requires: { module: 'messenger', level: 'admin' } },
   { path: '/admin/mailboxes', component: lazyPages.AdminMailboxes, requiresAuth: true, requires: { module: 'mail', level: 'admin' } },
-  // Не путать с уровнями ДОЛЖНОСТЕЙ: это уровни HR-ДОСТУПА
-  // (junior/middle/senior/lead). Справочник уровней должностей раньше жил на
-  // соседнем /admin/levels, а теперь это вкладка на /hr/positions?tab=levels.
-  { path: '/admin/access-levels', component: lazyPages.HRAccessLevels, requiresAuth: true, requires: { module: 'hr', level: 'admin' } },
+  // Экран «Уровни доступа» (/admin/access-levels) снят задачей 11 блока I.2
+  // вместе со снятой эвристикой уровня по названию должности (R5, решение
+  // заказчика от 22.09.2026): он считал кадровый уровень копией эвристики и
+  // показывал неправду. Права теперь смотрят в редакторе ролей (/access/roles)
+  // и в диалоге ролей должности (/hr/positions).
   { path: '/admin/registrations', component: lazyPages.AdminRegistrations, requiresAuth: true, requires: { module: 'users', level: 'admin' } },
   { path: '/admin/infrastructure', component: lazyPages.AdminInfrastructure, requiresAuth: true, requires: { module: 'users', level: 'admin' } },
 
@@ -204,4 +212,19 @@ export const protectedRoutes: RouteConfig[] = [
   // серверной проверки: страница сама скрывает правку у неплатформенного
   // администратора.
   { path: '/access/roles', component: lazyPages.AccessRoleCatalog, requiresAuth: true, requires: { module: 'access', level: 'admin' } },
+
+  // ─── Реестр компаний группы ───────────────────────────────────────────
+  // read — минимум для входа; архив/восстановление страница показывает только
+  // платформенному администратору, сервер отвечает 403 остальным.
+  { path: '/companies', component: lazyPages.CompanyRegistry, requiresAuth: true, requires: { module: 'companies', level: 'read' } },
+
+  // ─── Сводка по группе (блок H) ─────────────────────────────────────────
+  // Экран сводит два домена (`hr` + `tasks`) в одну таблицу по компаниям
+  // холдинга, но `RouteRequirement` допускает ровно один модуль — гейт ниже
+  // называет `hr` просто как самый близкий по смыслу минимум для входа.
+  // Настоящее ограничение экрана — «только с поддомена холдинга» — здесь не
+  // выражается вовсе: оно живёт на сервере (сводные читалки холдинга),
+  // подделке через бандл не поддаётся, и поэтому не нуждается в клиентском
+  // гейте. Не решайте по этой строке, что гейт неполон по недосмотру.
+  { path: '/holding', component: lazyPages.GroupSummary, requiresAuth: true, requires: { module: 'hr', level: 'read' } },
 ];

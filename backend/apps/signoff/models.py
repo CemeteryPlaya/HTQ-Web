@@ -70,10 +70,25 @@ class ApproverKind(models.TextChoices):
     за границей аппки), а у процесса инициатор есть всегда. В contracts эти
     двое совпадают по бизнес-процессу — договор отправляет на согласование
     его автор, — но название честно говорит, что именно движок разрешает.
+
+    ``USERS`` — согласующие названы поимённо (``ApprovalRouteStage.user_ids``),
+    без HR-должности. Нужен формам конструктора «Запросы», где маршрут
+    настраивает владелец шаблона и указывает конкретных людей; для
+    договоров по-прежнему уместнее должность — она переживает кадровые
+    перестановки.
+
+    ``SUBJECT`` — согласующих называет САМ ОБЪЕКТ: движок спрашивает у
+    предметной аппки ``Subject.approvers(subject_id, key)``, где ``key`` —
+    один из ключей, которые аппка объявила в ``approver_fields`` («поле
+    формы „Руководитель“», «администраторы проекта», «администратор
+    бюджета»). Тот же приём, что у фактов для ветвления: движок не знает,
+    что значит ключ, и лишь передаёт его владельцу объекта.
     """
 
     POSITION = "position", "По должности"
     INITIATOR = "initiator", "Инициатор согласования"
+    USERS = "users", "Конкретные сотрудники"
+    SUBJECT = "subject", "Назначает объект"
 
 
 class ProcessState(models.TextChoices):
@@ -215,16 +230,23 @@ class Approvable(models.Model):
     # трёх случаях РАЗНОЕ — дождаться решения, вернуть на доработку, снова
     # вернуть на доработку. Формулировки без слова «нельзя»: система не
     # отказывает, а сообщает, чего не хватает.
+    #
+    # Безличные обороты, а не согласованные с подписью прилагательные: перед
+    # текстом подставляется ``verbose_name`` предметной модели, и род у него
+    # разный («Договор согласован», но «Заявка согласована»). Заводить
+    # грамматику на каждый согласуемый тип ради одной фразы не стоит — это
+    # то же решение, что уже принято в ``engine._assert_submittable``.
     _LOCK_REASONS = {
         ApprovalState.PENDING:
-            "находится на согласовании и не редактируется — дождитесь "
-            "решения или отзовите согласование",
+            "на согласовании и не редактируется — дождитесь решения или "
+            "отзовите согласование",
         ApprovalState.APPROVED:
-            "согласован и не редактируется — чтобы изменить его, верните "
-            "его на доработку в карточке согласования",
+            "не редактируется: решение уже принято (согласовано) — чтобы "
+            "внести правки, верните объект на доработку в карточке "
+            "согласования",
         ApprovalState.REJECTED:
-            "отклонён и не редактируется — чтобы доработать его, верните "
-            "его на доработку в карточке согласования",
+            "не редактируется: решение уже принято (отклонено) — чтобы "
+            "доработать, верните объект на доработку в карточке согласования",
     }
 
     @property
@@ -327,10 +349,22 @@ class ApprovalRoute(models.Model):
     Неактивные остаются в таблице как история: процессы, запущенные по
     старому маршруту, ссылаются на него ``route_id``, и удалять его значило
     бы стереть ответ на вопрос «по какому маршруту это согласовывали».
+
+    ``scope`` — ОБЛАСТЬ внутри типа, для которой маршрут настроен. Пустая
+    строка — «весь тип» (так живут договоры: один маршрут на все договоры).
+    Непустая — подмножество объектов, которое предметная аппка сама
+    вычисляет по объекту (``Subject.scope_of``): у конструктора «Запросы» это
+    шаблон формы (``template:<id>``) — у отпуска и у закупа маршруты разные,
+    хотя тип объекта один. Уникальность активного маршрута — на пару
+    ``(subject_type, scope)``. Область — часть типа, а не отдельный тип:
+    реестр ``Subject`` и примесь ``Approvable`` привязаны к модели, и заводить
+    по псевдотипу на каждый шаблон значило бы регистрировать их на лету.
     """
 
     subject_type = models.CharField(max_length=64, db_index=True,
                                     verbose_name="Тип объекта")
+    scope = models.CharField(max_length=64, default="", db_default="", blank=True,
+                             db_index=True, verbose_name="Область")
     name = models.CharField(max_length=200, verbose_name="Название")
     is_active = models.BooleanField(default=True, db_default=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
@@ -340,7 +374,7 @@ class ApprovalRoute(models.Model):
         ordering = ("subject_type", "-is_active", "name")
         constraints = [
             models.UniqueConstraint(
-                fields=["subject_type"], condition=Q(is_active=True),
+                fields=["subject_type", "scope"], condition=Q(is_active=True),
                 name="uq_signoff_active_route_per_subject",
             ),
         ]
@@ -348,7 +382,8 @@ class ApprovalRoute(models.Model):
         verbose_name_plural = "Маршруты согласования"
 
     def __str__(self) -> str:
-        return f"{self.name} ({self.subject_type})"
+        where = f"{self.subject_type}/{self.scope}" if self.scope else self.subject_type
+        return f"{self.name} ({where})"
 
 
 class ApprovalRouteStage(models.Model):
@@ -414,6 +449,15 @@ class ApprovalRouteStage(models.Model):
         help_text="«Инициатор» — список согласующих не заполняется, "
                   "решение принимает отправивший объект на согласование",
     )
+    # Для ``ApproverKind.USERS``: id учётных записей платформы. JSON, а не
+    # дочерняя таблица, как ``role_ids`` в снимке: список короткий, правится
+    # целиком, а на запуске всё равно разворачивается в ``ApprovalTask``.
+    user_ids = models.JSONField(default=list, blank=True,
+                                verbose_name="Согласующие поимённо")
+    # Для ``ApproverKind.SUBJECT``: ключ из ``Subject.approver_fields`` —
+    # что именно спросить у объекта («field:manager», «project_admins»).
+    approver_key = models.CharField(max_length=64, default="", db_default="",
+                                    blank=True, verbose_name="Ключ согласующих объекта")
     requires_attachment = models.BooleanField(
         default=False, db_default=False,
         verbose_name="Требуется документ",
@@ -423,6 +467,19 @@ class ApprovalRouteStage(models.Model):
         default=False, db_default=False,
         verbose_name="Требуется пояснение",
         help_text="Согласовать этап можно только с непустым комментарием",
+    )
+    # Третье требование этапа — к САМОМУ ОБЪЕКТУ, а не к решению. Документ и
+    # пояснение приносит согласующий вместе с решением; здесь же этап ждёт,
+    # чтобы на объекте что-то БЫЛО СДЕЛАНО: у заявки на закуп заполнен
+    # поставщик, у договора приложен скан. Что именно и выполнено ли —
+    # знает только предметная аппка (``Subject.requirement_fields`` /
+    # ``check_requirement``); движок хранит ключ и спрашивает её перед
+    # записью решения. Так шаг «Поиск поставщика» закрывается результатом,
+    # а не галочкой.
+    requirement_key = models.CharField(
+        max_length=64, default="", db_default="", blank=True,
+        verbose_name="Этап требует от объекта",
+        help_text="Ключ из Subject.requirement_fields предметной аппки",
     )
 
     class Meta:
@@ -467,7 +524,8 @@ class ApprovalRouteStage(models.Model):
             return
         try:
             conditions.validate(self.condition,
-                                registry.fields_for(self.route.subject_type))
+                                registry.fields_for(self.route.subject_type,
+                                                    self.route.scope))
         except (conditions.ConditionError, registry.UnknownSubject) as exc:
             raise ValidationError({"condition": str(exc)}) from exc
 
@@ -519,6 +577,11 @@ class ApprovalProcess(models.Model):
 
     subject_type = models.CharField(max_length=64, verbose_name="Тип объекта")
     subject_id = models.IntegerField(verbose_name="Объект")
+    # Область, по маршруту которой шёл процесс (см. ``ApprovalRoute.scope``).
+    # Часть снимка: объект может сменить область (заявку перевели в другой
+    # шаблон), а ответ «по какому маршруту согласовывали» обязан остаться.
+    scope = models.CharField(max_length=64, default="", db_default="", blank=True,
+                             db_index=True, verbose_name="Область")
     route_id = models.IntegerField(null=True, blank=True,
                                    verbose_name="Маршрут (справочно)")
     state = models.CharField(max_length=16, choices=ProcessState.choices,
@@ -607,11 +670,18 @@ class ApprovalProcessStage(models.Model):
     # Сотрудник на должности может смениться завтра; карточка старого процесса
     # всё равно должна объяснять, какую именно роль он подписывал.
     role_ids = models.JSONField(default=list, blank=True)
+    # Та же роль для двух других видов: кого назвал маршрут поимённо и по
+    # какому ключу объект назвал согласующих. Справочные, как ``role_ids``.
+    user_ids = models.JSONField(default=list, blank=True)
+    approver_key = models.CharField(max_length=64, default="", db_default="",
+                                    blank=True)
     # А это в снимке РАБОЧИЕ поля: их читает ``engine.act`` на каждом
     # решении. Снять галочку в маршруте посреди идущего согласования не
     # должно избавлять от документа (или пояснения) тех, кто ещё не решил.
     requires_attachment = models.BooleanField(default=False, db_default=False)
     requires_comment = models.BooleanField(default=False, db_default=False)
+    requirement_key = models.CharField(max_length=64, default="", db_default="",
+                                       blank=True)
     decided_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

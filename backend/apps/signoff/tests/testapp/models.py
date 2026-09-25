@@ -41,6 +41,12 @@ class ProbeDoc(signoff.Approvable, models.Model):
     zone = models.IntegerField(null=True, blank=True)
     amount = models.IntegerField(default=0)
     urgent = models.BooleanField(default=False)
+    # Область маршрута (``ApprovalRoute.scope``): у конструктора форм это
+    # шаблон; здесь — произвольная строка, чтобы проверить сам механизм.
+    scope = models.CharField(max_length=64, default="", blank=True)
+    # «Владелец» — согласующий, которого называет сам объект
+    # (``ApproverKind.SUBJECT``, ключ ``owner``).
+    owner_id = models.IntegerField(null=True, blank=True)
 
     def __str__(self) -> str:
         return self.title

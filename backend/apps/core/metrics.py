@@ -26,26 +26,19 @@
   чтобы показать нули. Ноль задач и «сборщик умер» на графике обязаны
   выглядеть по-разному.
 
-**Тенантные аппки (``settings.TENANT_APPS``) сборщик пропускает явно.**
-``collect()`` тенантной аппки (сегодня это только ``apps.tasks``, см.
-``apps/tasks/metrics.py``) читает её модели напрямую — а после переноса в
-схемы компаний (``co_<slug>``) у процесса, который вызывает ``collect_all()``
-из Celery-задачи без контекста компании, эти модели просто не резолвятся:
-запрос ушёл бы в ``public`` (или туда, куда указывает текущий
-``search_path``), нашёл бы чужие/никакие таблицы и упал бы. Без явного
-пропуска это падение ловил бы ``fallback`` как обычную поломку одной
-аппки — в проде (``FALLBACK_MODE=log``) метрики домена молча исчезли бы с
-дашборда НАВСЕГДА, оставляя по строке ``FALLBACK`` в Loki раз в минуту.
-Здесь вместо этого — один явный ``logger.info`` на аппку: не подмена
-значения (ей нечего подменять, метрики домена в принципе не считаются), а
-осознанное решение сборщика, поэтому не через ``htqweb.fallback``.
+**Тенантные аппки (``settings.TENANT_APPS``) собираются веером по компаниям.**
+Их ``collect()`` читает модели напрямую, а модели живут в схеме компании
+(``co_<slug>``): вне контекста компании запрос ушёл бы в ``public``. Поэтому
+сборщик зовёт ``collect()`` tenant-аппки внутри ``use_company(slug)`` для
+КАЖДОЙ действующей компании и размечает её серии меткой ``company`` (слаг) —
+решение заказчика 24.09.2026: алерт обязан называть компанию. Дашборды сводят
+серии ``sum/max without (company)`` с переменной «Компания».
 
-Полная форма — веер по компаниям (посчитать ``collect()`` в контексте
-КАЖДОЙ действующей компании и разметить результат её slug'ом) — не
-делается здесь: она требует того же решения, что и per-company гейты
-модулей (``apps.companies.models.CompanyModule``), и оба вопроса решаются
-вместе в подпроекте 3. До этого момента у tenant-метрик правильный ответ —
-явное «не считаем», а не тихое падение.
+Компания без физической схемы пропускается (``logger.info``, не
+``fallback``): ``search_path`` в несуществующую схему молча проваливается в
+``public``, и такая «компания» отдала бы цифры ``public`` под своим именем —
+на стенде до ``tenancy_bootstrap`` каждая из них. Падение ``collect()`` в
+одной компании — ``fallback`` на эту компанию, остальные собираются.
 """
 from __future__ import annotations
 
@@ -81,17 +74,17 @@ DIGEST_BASELINE_TTL = 3 * 24 * 3600     # переживает один проп
 # удобно фильтровать «наше предметное» против «технического».
 PREFIX = "htqweb"
 
+# Метка компании у серий tenant-аппок. Значение — слаг (не псевдоним
+# поддомена): по слагу живут схема, claim токена и роли.
+COMPANY_LABEL = "company"
 
-def _metric_modules() -> list[tuple[str, object]]:
-    """``[(app_label, модуль metrics)]`` для аппок, которые его объявили.
+
+def _metric_modules() -> list[tuple[str, object, bool]]:
+    """``[(app_label, модуль metrics, тенантная ли аппка)]`` для аппок,
+    которые его объявили.
 
     Тот же приём автодискавери, что у ``API_PREFIX`` в ``htqweb/urls.py``:
     добавление метрик новой аппке не требует правок здесь.
-
-    Тенантные аппки (``settings.TENANT_APPS``) пропускаются ДО импорта их
-    ``metrics.py`` — см. докстринг модуля: их ``collect()`` без контекста
-    компании не имеет смысла вызывать вовсе, а не «вызвать и поймать
-    исключение».
     """
     found = []
     tenant_apps = set(settings.TENANT_APPS)
@@ -100,19 +93,11 @@ def _metric_modules() -> list[tuple[str, object]]:
             continue
         if config.label == "core":          # свои метрики core не собирает
             continue
-        if config.label in tenant_apps:
-            logger.info(
-                "business metrics: %r — тенантная аппка, метрики требуют "
-                "веера по компаниям (см. докстринг apps/core/metrics.py); "
-                "пропущена до подпроекта 3",
-                config.label,
-            )
-            continue
         if not module_has_submodule(config.module, "metrics"):
             continue
         module = __import__(f"{config.name}.metrics", fromlist=["metrics"])
         if callable(getattr(module, "collect", None)):
-            found.append((config.label, module))
+            found.append((config.label, module, config.label in tenant_apps))
             continue
         # Модуль есть, а функции нет — это опечатка в имени или недописанный
         # файл, и молча пропустить его значит потерять метрики целой аппки
@@ -121,6 +106,54 @@ def _metric_modules() -> list[tuple[str, object]]:
                  reason="apps/<домен>/metrics.py без функции collect()",
                  app=config.label)
     return found
+
+
+def _metric_companies() -> list[str]:
+    """Слаги действующих компаний, у которых есть схема (см. докстринг модуля)."""
+    from apps.companies.interface import active_company_slugs, schema_exists
+
+    slugs = []
+    for slug in active_company_slugs():
+        if schema_exists(slug):
+            slugs.append(slug)
+        else:
+            logger.info(
+                "business metrics: у компании %r нет схемы — её tenant-метрики "
+                "не считаются (штатно до tenancy_bootstrap; после — осиротевшая "
+                "строка реестра)", slug,
+            )
+    return slugs
+
+
+def _add_company(merged: dict, name: str, spec, slug: str) -> None:
+    """Дописать серии одной компании в общую метрику, метка ``company`` — первой."""
+    if isinstance(spec, (int, float)):
+        spec = {"values": [((), spec)]}
+    target = merged.setdefault(name, {
+        "help": spec.get("help"),
+        "labels": [COMPANY_LABEL, *spec.get("labels", [])],
+        "values": [],
+    })
+    target["values"].extend(((slug, *labels), number)
+                            for labels, number in spec.get("values", []))
+
+
+def _collect_tenant(label: str, module, slugs: list[str]) -> dict:
+    from htqweb.tenancy.db import use_company
+
+    merged: dict = {}
+    for slug in slugs:
+        try:
+            with use_company(slug):
+                values = module.collect()
+        except Exception as exc:
+            fallback("core.metrics.tenant_collect_failed", None,
+                     reason="сбор бизнес-метрик тенантной аппки в компании упал",
+                     exc=exc, app=label, company=slug)
+            continue
+        for name, spec in (values or {}).items():
+            _add_company(merged, name, spec, slug)
+    return merged
 
 
 def _core_metrics() -> dict:
@@ -146,21 +179,28 @@ def _core_metrics() -> dict:
 def collect_all() -> dict[str, dict]:
     """Опросить все аппки. Вызывается из Celery-задачи, не из экспорта.
 
-    Падение одной аппки не должно уносить метрики остальных: сбор — это
-    диагностика, и «нет ничего, потому что в задачах ошибка» — худший из
-    возможных исходов. В строгом режиме (машина разработчика, тесты) эта
-    терпимость намеренно снимается — ``fallback`` поднимет исключение, и
-    сломанный сборщик будет видно сразу, а не по дырке на графике.
+    Падение одной аппки (или одной компании у tenant-аппки) не должно
+    уносить метрики остальных: сбор — это диагностика, и «нет ничего,
+    потому что в задачах ошибка» — худший из возможных исходов. В строгом
+    режиме (машина разработчика, тесты) эта терпимость намеренно снимается —
+    ``fallback`` поднимет исключение, и сломанный сборщик будет видно сразу,
+    а не по дырке на графике.
     """
     result: dict[str, dict] = {"core": _core_metrics()}
-    for label, module in _metric_modules():
-        try:
-            values = module.collect()
-        except Exception as exc:
-            fallback("core.metrics.app_collect_failed", None,
-                     reason="сбор бизнес-метрик аппки упал",
-                     exc=exc, app=label)
-            continue
+    slugs: list[str] | None = None
+    for label, module, tenant in _metric_modules():
+        if tenant:
+            if slugs is None:
+                slugs = _metric_companies()
+            values = _collect_tenant(label, module, slugs)
+        else:
+            try:
+                values = module.collect()
+            except Exception as exc:
+                fallback("core.metrics.app_collect_failed", None,
+                         reason="сбор бизнес-метрик аппки упал",
+                         exc=exc, app=label)
+                continue
         if values:
             result[label] = values
     return result

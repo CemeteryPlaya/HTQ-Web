@@ -99,8 +99,18 @@ BASE = "/api/tasks/v1"
 
 
 def _auth() -> dict:
-    from apps.tasks.tests.helpers import admin_token
-    return {"HTTP_AUTHORIZATION": f"Bearer {admin_token()}"}
+    """Заголовки вызывающего для ``POST /api/tasks/v1/tasks/``.
+
+    Блок I, задача 7: ручка стоит под ``api_view(module="tasks",
+    level="write")``, и гейт отвечает 403 РАНЬШЕ, чем Pydantic — 422. Голый
+    ``admin_token()`` без компании и роли до валидации тела больше не
+    доходит (``is_admin`` сам по себе модуль не открывает), поэтому здесь
+    ``apps.tasks.tests.helpers.auth()`` — она даёт и ``X-HTQ-Company``, и
+    роль в этой компании. Тестам конверта ошибок нужна ЛЮБАЯ ручка с телом;
+    ассерты ниже к правам отношения не имеют и не менялись.
+    """
+    from apps.tasks.tests.helpers import admin_token, auth
+    return auth(admin_token())
 
 
 @pytest.mark.django_db

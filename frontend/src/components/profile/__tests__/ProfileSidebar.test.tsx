@@ -14,14 +14,13 @@ vi.mock('@/api/client', () => ({
   default: { get: vi.fn(() => Promise.reject(new Error('offline'))) },
 }));
 
-vi.mock('@/hooks/useHRLevel', () => ({
-  useHRLevel: () => ({ level: null, hasHrAccess: false }),
-}));
-
 // Предмет теста — раскрытие разделов, а не выдача прав, поэтому права
 // подставляются напрямую. Со стадии 2 HR-раздел открывает уровень `hr:read`,
 // а НЕ флаг `staff`: прежде `staff` входил в HR-ведро мёртвого словаря ролей
-// и попадал в раздел даром.
+// и попадал в раздел даром. С задачи 10 блока I кадровые пункты тоже читают
+// `usePermissions` (узлы через `can`, область через `scope`), а не
+// `useHRLevel` — здесь их нет: `hr:read` без единого узла открывает ровно
+// пункты «для любого кадрового доступа» (сотрудники, оргсхема, документы).
 const levels: Record<string, string> = { hr: 'read' };
 const order = ['none', 'read', 'write', 'admin'];
 vi.mock('@/hooks/usePermissions', () => ({
@@ -31,6 +30,8 @@ vi.mock('@/hooks/usePermissions', () => ({
     atLeast: (m: string, req: string) =>
       order.indexOf(levels[m] ?? 'none') >= order.indexOf(req),
     scope: () => null,
+    depth: () => [],
+    can: () => false,
     subordinateCompanies: [],
     isLoading: false,
   }),
@@ -96,5 +97,44 @@ describe('ProfileSidebar — разделы меню', () => {
 
     expect(hrHeader()).toHaveAttribute('aria-expanded', 'true');
     expect(container.querySelector('a[href="/hr/employees"]')).not.toBeNull();
+  });
+});
+
+// Финальное ревью блока L, M-3: ссылки модерации чатов и ящиков — по уровню
+// ИХ модулей (как маршруты /admin/chats и /admin/mailboxes), не по users:admin.
+describe('ProfileSidebar — ссылки модерации сервисов', () => {
+  const withLevels = (next: Record<string, string>) => {
+    const saved = { ...levels };
+    Object.keys(levels).forEach((k) => delete levels[k]);
+    Object.assign(levels, next);
+    return () => {
+      Object.keys(levels).forEach((k) => delete levels[k]);
+      Object.assign(levels, saved);
+    };
+  };
+
+  it('держатель services-admin без users:admin видит чаты и ящики', () => {
+    const restore = withLevels({ messenger: 'admin', mail: 'admin' });
+    try {
+      const { container } = renderSidebar();
+      expect(container.querySelector('a[href="/admin/chats"]')).not.toBeNull();
+      expect(container.querySelector('a[href="/admin/mailboxes"]')).not.toBeNull();
+      expect(container.querySelector('a[href="/admin/users"]')).toBeNull();
+      expect(container.querySelector('a[href="/holding"]')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it('users:admin без messenger:admin/mail:admin ссылок модерации не видит', () => {
+    const restore = withLevels({ users: 'admin', messenger: 'write', mail: 'read' });
+    try {
+      const { container } = renderSidebar();
+      expect(container.querySelector('a[href="/admin/users"]')).not.toBeNull();
+      expect(container.querySelector('a[href="/admin/chats"]')).toBeNull();
+      expect(container.querySelector('a[href="/admin/mailboxes"]')).toBeNull();
+    } finally {
+      restore();
+    }
   });
 });

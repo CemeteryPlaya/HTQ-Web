@@ -56,11 +56,13 @@ from .models import (
     AdvancePaymentStatus,
     Agreement,
     AgreementStatus,
+    AgreementType,
     Budget,
     Counterparty,
     CompletionAct,
     ContractPayment,
     Country,
+    GoodsInvoice,
     Invoice,
     InvoiceStatus,
     PaymentType,
@@ -505,6 +507,66 @@ def _completion_act_fact_fields() -> list[dict]:
     return _advance_payment_fact_fields()
 
 
+def _goods_invoice_to(subject_id: int, status: str) -> None:
+    from .services import goods_invoice_service as gi_svc
+
+    invoice = GoodsInvoice.objects.filter(pk=subject_id).first()
+    if invoice is not None and invoice.status != status:
+        gi_svc.change_status(subject_id, status)
+
+
+def _goods_invoice_on_started(subject_id: int) -> None:
+    _goods_invoice_to(subject_id, AdvancePaymentStatus.ON_REVIEW)
+
+
+def _goods_invoice_on_approved(subject_id: int) -> None:
+    _goods_invoice_to(subject_id, AdvancePaymentStatus.AWAITING_ACCOUNTING)
+
+
+def _goods_invoice_on_rejected(subject_id: int) -> None:
+    _goods_invoice_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _goods_invoice_on_rework(subject_id: int) -> None:
+    _goods_invoice_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _goods_invoice_on_cancelled(subject_id: int) -> None:
+    _goods_invoice_to(subject_id, AdvancePaymentStatus.DRAFT)
+
+
+def _describe_goods_invoice(subject_id: int) -> dict | None:
+    invoice = (GoodsInvoice.objects.select_related("agreement", "agreement__counterparty")
+              .filter(pk=subject_id).first())
+    if invoice is None:
+        return None
+    return {
+        "title": f"Товарная накладная по договору {invoice.agreement.number} "
+                 f"({invoice.amount} {invoice.agreement.currency})",
+        "url": f"/contracts/goods-invoices/{invoice.pk}",
+    }
+
+
+def _goods_invoice_facts(subject_id: int) -> dict:
+    invoice = (GoodsInvoice.objects
+              .select_related("agreement__budget_line__budget__administrator", "agreement__counterparty")
+              .filter(pk=subject_id).first())
+    if invoice is None:
+        return {}
+    agreement = invoice.agreement
+    return {
+        "admin_country_id": agreement.budget_line.budget.administrator.country_id,
+        "counterparty_country_id": agreement.counterparty.country_id,
+        "program_id": agreement.budget_line.program_id,
+        "amount": invoice.amount,
+        "currency": agreement.currency,
+    }
+
+
+def _goods_invoice_fact_fields() -> list[dict]:
+    return _advance_payment_fact_fields()
+
+
 def _invoice_facts(subject_id: int) -> dict:
     invoice = (Invoice.objects
                .select_related("budget_line__budget__administrator",
@@ -693,6 +755,7 @@ def _agreement_facts(subject_id: int) -> dict:
         "amount": agreement.amount,
         "currency": agreement.currency,
         "payment_type": agreement.payment_type,
+        "contract_type": agreement.contract_type,
     }
 
 
@@ -707,7 +770,16 @@ def _agreement_fact_fields() -> list[dict]:
          "type": "choice", "options": _program_options()},
         {"key": "amount", "label": "Сумма договора", "type": "number"},
         {"key": "currency", "label": "Валюта", "type": "string"},
-        {"key": "payment_type", "label": "Тип оплаты", "type": "choice",
+        # «Тип оплаты» для людей — «стандартный / открытый» (``contract_type``,
+        # так его зовёт заказчик и так он подписан в форме договора).
+        # Предоплата / постоплата / поэтапно — отдельный факт, выводимый из
+        # аванса; ключ ``payment_type`` сохранён, чтобы не сломать уже
+        # настроенные условия, сменилась только подпись.
+        {"key": "contract_type", "label": "Тип оплаты", "type": "choice",
+         "options": [{"value": value, "label": label}
+                     for value, label in AgreementType.choices]},
+        {"key": "payment_type", "label": "Порядок оплаты (по авансу)",
+         "type": "choice",
          "options": [{"value": value, "label": label}
                      for value, label in PaymentType.choices]},
     ]
@@ -816,4 +888,17 @@ def register() -> None:
         describe=_describe_completion_act,
         facts=_completion_act_facts,
         fact_fields=_completion_act_fact_fields,
+    )
+    signoff.register_subject(
+        GoodsInvoice.SIGNOFF_SUBJECT_TYPE,
+        label="Товарная накладная",
+        model=GoodsInvoice,
+        on_started=_goods_invoice_on_started,
+        on_approved=_goods_invoice_on_approved,
+        on_rejected=_goods_invoice_on_rejected,
+        on_rework=_goods_invoice_on_rework,
+        on_cancelled=_goods_invoice_on_cancelled,
+        describe=_describe_goods_invoice,
+        facts=_goods_invoice_facts,
+        fact_fields=_goods_invoice_fact_fields,
     )

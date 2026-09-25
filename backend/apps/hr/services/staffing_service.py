@@ -75,6 +75,11 @@ def update_line(line_id: int, data: dict) -> StaffingPosition:
     line = StaffingPosition.objects.filter(id=line_id).first()
     if line is None:
         raise StaffingLineNotFound
+    # Замок согласования: строка на маршруте (или уже решённая) не правится —
+    # семантика в signoff.Approvable.assert_editable. Движок сам перехватить
+    # запись не может (нет доступа к чужим таблицам), поэтому сторожит
+    # владелец таблицы, здесь и в delete_line.
+    line.assert_editable()
     if "position_id" in data or "department_id" in data:
         _assert_fk(
             data.get("position_id", line.position_id),
@@ -95,6 +100,8 @@ def delete_line(line_id: int) -> None:
     line = StaffingPosition.objects.filter(id=line_id).first()
     if line is None:
         raise StaffingLineNotFound
+    # Тот же замок, что в update_line — см. комментарий там.
+    line.assert_editable()
     line.delete()
 
 

@@ -10,29 +10,13 @@ learn that from the same config fetch it already makes for
 ``ConferencePage.tsx``.
 """
 
-import jwt as pyjwt
 import pytest
-from django.conf import settings
 from django.test import Client
 
 from apps.core.models import ServiceStatus
+from apps.cms.tests.helpers import auth_header as _auth_header, token as _token
 
 BASE = "/api/cms/v1/conference/config"
-
-
-def _token(**over):
-    claims = {
-        "user_id": 7, "username": "u", "email": "u@htq.test",
-        "is_staff": False, "is_superuser": False, "is_admin": False,
-        "token_type": "access", "iat": 1, "exp": 9_999_999_999,
-        "iss": "htqweb-auth", "sub": "7",
-        **over,
-    }
-    return pyjwt.encode(claims, settings.JWT_SECRET, algorithm="HS256")
-
-
-def _auth_header(token: str) -> dict:
-    return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
 
 # ── shape: matches the FastAPI ConferenceConfig field-for-field ─────────────

@@ -191,6 +191,52 @@ def test_depth_map_lists_only_granted_nodes(user):
     assert resolve.depth_map(user, COMPANY) == {"hr.employees": ["view"]}
 
 
+def _frontend_depth_for(depth_map: dict[str, list[str]], node: str) -> frozenset[str]:
+    """Дословно ``frontend/src/lib/auth/permissions.ts::depthFor``: узел, затем
+    предки; первое найденное значение — ответ, пустой список — запрет."""
+    for candidate in registry.self_and_ancestors(node):
+        if candidate in depth_map:
+            return frozenset(depth_map[candidate])
+    return frozenset()
+
+
+@pytest.mark.django_db
+def test_depth_map_carries_an_explicit_ban_under_a_granted_ancestor(user):
+    """Фикс-раунд 1 задачи 9 блока I. Запрет под-узла при праве на предке
+    (``access/migrations/0008``: ``hr.employees: view`` + ``hr.employees.
+    salary: {}``) обязан доехать до фронта ПУСТЫМ списком — иначе его
+    ``depthFor`` унаследует ``view`` от ``hr.employees`` и интерфейс покажет
+    зарплату, которую сервер не отдаст. Раньше карта строилась объединением
+    строк «только с флагами», и запрет молча выпадал."""
+    role = _role_for(user, "r8")
+    grant(role, "hr.employees", "view")
+    grant(role, "hr.employees.salary", "none")
+
+    assert resolve.depth_map(user, COMPANY) == {
+        "hr.employees": ["view"],
+        "hr.employees.salary": [],
+    }
+
+
+@pytest.mark.django_db
+def test_depth_map_is_exactly_what_the_frontend_rule_reconstructs(user):
+    """Контракт карты: восстановленная по правилу фронта глубина КАЖДОГО узла
+    реестра равна ``flags_for`` сервера — в том числе при двух ролях, где
+    запрет одной не отменяет права другой (объединение по ролям)."""
+    banned = _role_for(user, "r9a")
+    grant(banned, "hr.employees", "edit")
+    grant(banned, "hr.employees.salary", "none")
+    other = _role_for(user, "r9b")
+    grant(other, "hr.employees.salary", "view")
+    grant(other, "hr.documents", "delete")
+
+    depth_map = resolve.depth_map(user, COMPANY)
+    for node in registry.paths():
+        assert _frontend_depth_for(depth_map, node) == resolve.flags_for(user, node, COMPANY), node
+    # И ровно то, что должно: запрет одной роли не съел view другой.
+    assert _frontend_depth_for(depth_map, "hr.employees.salary") == {"view"}
+
+
 @pytest.mark.django_db
 def test_superuser_gets_every_flag_everywhere(superuser):
     assert resolve.flags_for(superuser, "hr.employees.salary", None) == frozenset(depth.FLAGS)

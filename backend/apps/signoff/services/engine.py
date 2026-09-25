@@ -177,6 +177,19 @@ class AttachmentRequired(SignoffError):
     """
 
 
+class SubjectRequirementUnmet(SignoffError):
+    """Этап требует от объекта результата, которого на нём ещё нет.
+
+    Третий гейт рядом с документом и пояснением, но о другом: те два — про
+    решение (что принёс согласующий), этот — про ОБЪЕКТ (что на нём должно
+    быть сделано: заполнен поставщик, приложен скан). Выполнено ли, знает
+    предметная аппка — движок лишь спрашивает её по ключу этапа и отдаёт её
+    объяснение человеку как есть. Тоже только на согласовании: отказать и
+    вернуть на доработку можно и с незаполненным объектом — ровно так и
+    возвращают.
+    """
+
+
 class CommentRequired(SignoffError):
     """Этап требует пояснение к решению, а комментарий пуст.
 
@@ -199,16 +212,25 @@ def _now() -> datetime:
 
 @transaction.atomic
 def start(*, subject_type: str, subject_id: int,
-          initiator_id: int | None = None) -> ApprovalProcess:
-    """Запустить согласование объекта по активному маршруту его типа."""
+          initiator_id: int | None = None,
+          scope: str | None = None) -> ApprovalProcess:
+    """Запустить согласование объекта по активному маршруту его типа.
+
+    ``scope`` — область маршрута; по умолчанию её называет сама предметная
+    аппка (``Subject.scope_of``), явный аргумент — для операторского запуска.
+    """
     subject = registry.get_subject(subject_type)  # UnknownSubject → 409/422
+    if scope is None:
+        scope = registry.scope_for(subject_type, subject_id)
 
     route = (ApprovalRoute.objects
-             .filter(subject_type=subject_type, is_active=True)
+             .filter(subject_type=subject_type, scope=scope, is_active=True)
              .prefetch_related("stages__roles").first())
     if route is None:
+        where = registry.scope_label(subject_type, scope) if scope else None
         raise RouteNotConfigured(
-            f"Для «{subject.label}» не настроен маршрут согласования"
+            f"Для «{subject.label}»{f' ({where})' if where else ''} не настроен "
+            f"маршрут согласования"
         )
 
     stages = list(route.stages.all())
@@ -223,11 +245,12 @@ def start(*, subject_type: str, subject_id: int,
     # ветвления не касаются.
     facts = registry.facts_for(subject_type, subject_id)
     selected = _select_stages(stages, facts, subject=subject, route=route)
-    plan = _resolve_stages(selected, initiator_id=initiator_id)
+    plan = _resolve_stages(selected, initiator_id=initiator_id,
+                           subject_type=subject_type, subject_id=subject_id)
 
     try:
         process = ApprovalProcess.objects.create(
-            subject_type=subject_type, subject_id=subject_id,
+            subject_type=subject_type, subject_id=subject_id, scope=scope,
             route_id=route.pk, initiator_id=initiator_id,
             state=ProcessState.PENDING, subject_facts=facts,
         )
@@ -245,8 +268,13 @@ def start(*, subject_type: str, subject_id: int,
             approver_kind=stage.approver_kind,
             role_ids=([row.position_id for row in stage.roles.all()]
                       if stage.approver_kind == ApproverKind.POSITION else []),
+            user_ids=(list(stage.user_ids or [])
+                      if stage.approver_kind == ApproverKind.USERS else []),
+            approver_key=(stage.approver_key
+                          if stage.approver_kind == ApproverKind.SUBJECT else ""),
             requires_attachment=stage.requires_attachment,
             requires_comment=stage.requires_comment,
+            requirement_key=stage.requirement_key or "",
             state=StageState.ACTIVE if order == first_order else StageState.WAITING,
         )
         ApprovalTask.objects.bulk_create([
@@ -343,8 +371,9 @@ def _facts_hint(facts: dict) -> str:
         or "у объекта нет фактов для ветвления"
 
 
-def _resolve_stages(selected, *,
-                    initiator_id: int | None) -> list[tuple[int, object, str, dict[int | None, list[int]]]]:
+def _resolve_stages(selected, *, initiator_id: int | None,
+                    subject_type: str, subject_id: int,
+                    ) -> list[tuple[int, object, str, dict[int | None, list[int]]]]:
     """Проверить исполнимость отобранных этапов и развернуть согласующих.
 
     Возвращает ``(order, stage, matched_by, {position_id: user_ids})``.
@@ -364,7 +393,9 @@ def _resolve_stages(selected, *,
     all_ids: set[int] = set()
     for item in selected:
         stage = item.stage
-        approvers_by_position = _approver_ids(stage, initiator_id=initiator_id)
+        approvers_by_position = _approver_ids(
+            stage, initiator_id=initiator_id,
+            subject_type=subject_type, subject_id=subject_id)
         all_ids.update(
             user_id for user_ids in approvers_by_position.values()
             for user_id in user_ids
@@ -394,15 +425,20 @@ def _resolve_stages(selected, *,
     return plan
 
 
-def _approver_ids(stage, *, initiator_id: int | None) -> dict[int | None, list[int]]:
-    """Кому адресовать запросы этого этапа.
+def _approver_ids(stage, *, initiator_id: int | None,
+                  subject_type: str, subject_id: int) -> dict[int | None, list[int]]:
+    """Кому адресовать запросы этого этапа — по виду согласующих.
 
-    Названные поимённо согласующие берутся из маршрута; этап
-    ``ApproverKind.INITIATOR`` разворачивается в одного инициатора процесса.
-    Названные согласующие у такого этапа игнорируются намеренно, а не
-    объединяются со инициатором: сочетание запрещено настройкой
-    (``route_service._check_approver_kind``), и молча исполнить то, чего
-    администратор не мог задать через интерфейс, — худший из вариантов.
+    Должности берутся из маршрута и разворачиваются через HR; этап
+    ``INITIATOR`` — один инициатор процесса; ``USERS`` — список из маршрута
+    как есть; ``SUBJECT`` — то, что назвал объект по ключу этапа. Ключ
+    группировки — должность; у трёх остальных видов её нет (``None``), и
+    кворум считается по всему этапу.
+
+    Настройки, которых у вида быть не может (должности у инициатора), не
+    объединяются, а запрещены на сохранении (``route_service``): молча
+    исполнить то, чего администратор не мог задать через интерфейс, — худший
+    из вариантов.
     """
     if stage.approver_kind == ApproverKind.INITIATOR:
         if initiator_id is None:
@@ -411,6 +447,23 @@ def _approver_ids(stage, *, initiator_id: int | None) -> dict[int | None, list[i
                 f"запущено без инициатора"
             )
         return {None: [initiator_id]}
+
+    if stage.approver_kind == ApproverKind.USERS:
+        user_ids = [int(uid) for uid in dict.fromkeys(stage.user_ids or [])]
+        if not user_ids:
+            raise RouteUnusable(
+                f"На этапе «{stage.name}» не назван ни один согласующий")
+        return {None: user_ids}
+
+    if stage.approver_kind == ApproverKind.SUBJECT:
+        user_ids = registry.approvers_for(subject_type, subject_id, stage.approver_key)
+        if not user_ids:
+            raise RouteUnusable(
+                f"На этапе «{stage.name}» объект не назвал ни одного "
+                f"согласующего («{stage.approver_key}») — заполните его в "
+                f"объекте или измените этап маршрута"
+            )
+        return {None: user_ids}
 
     position_ids = [row.position_id for row in stage.roles.all()]
     if not position_ids:
@@ -503,6 +556,16 @@ def act(*, task_id: int, actor_id: int, decision: str,
             f"На этапе «{stage.name}» согласование возможно только с "
             f"пояснением — напишите комментарий к решению"
         )
+    # Требование к объекту — по тем же правилам: только на согласовании и
+    # ДО записи. Что именно не сделано, объясняет предметная аппка — её
+    # текст и уходит человеку.
+    if decision == APPROVE and stage.requirement_key:
+        process = stage.process
+        reason = registry.check_requirement_for(
+            process.subject_type, process.subject_id, stage.requirement_key)
+        if reason:
+            raise SubjectRequirementUnmet(
+                f"На этапе «{stage.name}» сначала нужно: {reason}")
 
     task.state = (TaskState.APPROVED if decision == APPROVE
                   else _DECISION_OUTCOME[decision][0])
@@ -516,6 +579,8 @@ def act(*, task_id: int, actor_id: int, decision: str,
                   # основании чего согласовано», и искать его в другом месте
                   # журнала не должно быть нужно.
                   "file_id": task.file_id or None})
+    _emit(process, "task_decided", {"task_id": task.pk, "decision": decision,
+                                    "actor_id": actor_id, "stage": stage.name})
 
     if decision != APPROVE:
         _close_by_decision(process, stage, decision=decision,
@@ -828,9 +893,14 @@ def _notify_active_stages(process: ApprovalProcess) -> None:
         "title": described.get("title"),
         "url": described.get("url"),
     })
+    _emit(process, "stage_activated", {"user_ids": user_ids,
+                                       "order": process.current_order})
 
 
 def _notify_initiator(process: ApprovalProcess) -> None:
+    # Событие итога уходит владельцу объекта и без инициатора: свои ленты и
+    # SSE предметная аппка ведёт по объекту, а не по человеку.
+    _emit(process, str(process.state), {"initiator_id": process.initiator_id})
     if process.initiator_id is None:
         return
     described = _describe(process)
@@ -842,6 +912,30 @@ def _notify_initiator(process: ApprovalProcess) -> None:
         "title": described.get("title"),
         "url": described.get("url"),
     })
+
+
+def _emit(process: ApprovalProcess, kind: str, payload: dict) -> None:
+    """Событие процесса — колбэку ``Subject.on_event`` предметной аппки.
+
+    Те же правила, что у ``_notify``: после коммита (событие об откатившемся
+    переходе — ложь) и best-effort (SSE или чужая лента не должны ронять
+    согласование). Виды: ``stage_activated``, ``task_decided`` и итоговые
+    состояния процесса (``approved``/``rejected``/``rework``/``cancelled``).
+    """
+    subject = registry.get_subject(process.subject_type)
+    if subject.on_event is None:
+        return
+    body = {"process_id": process.pk, "state": str(process.state), **payload}
+    subject_id = process.subject_id
+
+    def send() -> None:
+        try:
+            subject.on_event(subject_id, kind, body)
+        except Exception:
+            logger.warning("signoff: on_event(%s) для %s#%s упал",
+                           kind, process.subject_type, subject_id, exc_info=True)
+
+    transaction.on_commit(send)
 
 
 def _describe(process: ApprovalProcess) -> dict:

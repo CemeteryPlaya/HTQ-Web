@@ -32,6 +32,7 @@ import {
   formatMoney,
   remainingTone,
 } from '@/components/contracts/format';
+import { budgetSubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Badge } from '@/components/ui/badge';
@@ -178,6 +179,7 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
               subjectId={budget.id}
               state={budget.approval_state}
               submit={contractsApi.submitBudget}
+              blockedReason={budgetSubmitBlock(budget.status, budget.lines?.length)}
               invalidate={[
                 ['contracts', 'budgets'],
                 ['contracts', 'budget', budgetId],

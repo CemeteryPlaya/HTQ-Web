@@ -1,0 +1,90 @@
+import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+
+import { renderWithProviders } from '@/test/renderWithProviders';
+import type { Company } from '@/types/companies';
+
+import { CompanyFormDialog } from './CompanyFormDialog';
+
+const patch = vi.fn();
+vi.mock('@/api/companies', () => ({ companiesApi: { patch: (s: string, b: unknown) => patch(s, b) } }));
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
+const group: Company = { id: 1, slug: 'hi-tech-group', name: 'Hi-Tech Group', kind: 'holding', status: 'active', country: '', parent_slug: null, archived_at: null, show_external_holders: true };
+const htq: Company = { id: 2, slug: 'hi-tech-qazaqstan', name: 'Hi-Tech Qazaqstan', kind: 'regional', status: 'active', country: '', parent_slug: null, archived_at: null, show_external_holders: true };
+
+describe('CompanyFormDialog', () => {
+  it('отправляет PATCH только с изменёнными полями, parent_slug — явно', async () => {
+    patch.mockResolvedValue({ data: { ...htq, kind: 'construction', parent_slug: 'hi-tech-group', country: 'KZ' } });
+    const onSaved = vi.fn();
+    renderWithProviders(
+      <CompanyFormDialog company={htq} candidates={[group, htq]} open onOpenChange={() => {}} onSaved={onSaved} />,
+    );
+    await userEvent.selectOptions(screen.getByLabelText(/Вид/), 'construction');
+    await userEvent.selectOptions(screen.getByLabelText(/Вышестоящая/), 'hi-tech-group');
+    await userEvent.type(screen.getByLabelText(/Страна/), 'KZ');
+    await userEvent.click(screen.getByRole('button', { name: /Сохранить/ }));
+
+    expect(patch).toHaveBeenCalledWith('hi-tech-qazaqstan',
+      { kind: 'construction', parent_slug: 'hi-tech-group', country: 'KZ' });
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it('не предлагает саму компанию в качестве родителя', () => {
+    renderWithProviders(
+      <CompanyFormDialog company={htq} candidates={[group, htq]} open onOpenChange={() => {}} onSaved={() => {}} />,
+    );
+    const options = Array.from((screen.getByLabelText(/Вышестоящая/) as HTMLSelectElement).options).map((o) => o.value);
+    expect(options).toEqual(['', 'hi-tech-group']);
+  });
+
+  it('переключатель видимости внешних держателей отражает состояние компании и уходит в PATCH', async () => {
+    patch.mockResolvedValue({ data: { ...htq, show_external_holders: false } });
+    const onSaved = vi.fn();
+    renderWithProviders(
+      <CompanyFormDialog company={htq} candidates={[group, htq]} open onOpenChange={() => {}} onSaved={onSaved} />,
+    );
+    const toggle = screen.getByRole('switch', { name: /внешних держателей/i });
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole('button', { name: /Сохранить/ }));
+
+    expect(patch).toHaveBeenCalledWith('hi-tech-qazaqstan', { show_external_holders: false });
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it('поле «Короткий адрес» показывает псевдоним и уходит в PATCH как есть', async () => {
+    patch.mockReset();
+    patch.mockResolvedValue({ data: { ...htq, subdomain: 'htq' } });
+    renderWithProviders(
+      <CompanyFormDialog company={htq} candidates={[group, htq]} open onOpenChange={() => {}} onSaved={() => {}} />,
+    );
+    const input = screen.getByLabelText(/Короткий адрес/) as HTMLInputElement;
+    expect(input.value).toBe('');
+    // Подсказка называет правило валидатора целиком: строчные, первая — буква.
+    expect(screen.getByText(/строчные латинские буквы, цифры и дефис; первая — буква/i)).toBeInTheDocument();
+
+    await userEvent.type(input, 'htq');
+    await userEvent.click(screen.getByRole('button', { name: /Сохранить/ }));
+
+    expect(patch).toHaveBeenCalledWith('hi-tech-qazaqstan', { subdomain: 'htq' });
+  });
+
+  it('очищенный короткий адрес уходит пустой строкой — снять псевдоним', async () => {
+    patch.mockReset();
+    const aliased: Company = { ...htq, subdomain: 'htq' };
+    patch.mockResolvedValue({ data: { ...htq, subdomain: null } });
+    renderWithProviders(
+      <CompanyFormDialog company={aliased} candidates={[group, aliased]} open onOpenChange={() => {}} onSaved={() => {}} />,
+    );
+    const input = screen.getByLabelText(/Короткий адрес/) as HTMLInputElement;
+    expect(input.value).toBe('htq');
+
+    await userEvent.clear(input);
+    await userEvent.click(screen.getByRole('button', { name: /Сохранить/ }));
+
+    expect(patch).toHaveBeenCalledWith('hi-tech-qazaqstan', { subdomain: '' });
+  });
+});

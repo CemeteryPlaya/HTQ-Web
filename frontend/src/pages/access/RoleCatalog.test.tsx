@@ -233,6 +233,23 @@ describe('RoleCatalog', () => {
     ]);
   });
 
+  it('роль другой компании несёт метку — суперпользователь видит, что она чужая (R2)', async () => {
+    // Каталог показывает суперпользователю ВСЕ роли, включая именные роли
+    // других компаний (company_slug заполнен) — без метки их не отличить от
+    // общих, и попытка выдать такую должности отвалится 422 без объяснения.
+    listRoles.mockResolvedValue({
+      data: [...ROLES,
+        { id: 7, code: 'hr-custom-other-9', title: 'Кадры: должность Z',
+          is_system: false, company_slug: 'other-company' }],
+    });
+    renderWithProviders(<RoleCatalog />);
+
+    await screen.findByText('Кадры: должность Z');
+    expect(screen.getByText(/Компания: other-company/i)).toBeInTheDocument();
+    // Общая роль (company_slug пуст) метку не получает.
+    expect(screen.queryByText(/Компания: hr-admin/i)).not.toBeInTheDocument();
+  });
+
   it('занятый код роли объясняется, а не выглядит общей ошибкой', async () => {
     createRole.mockRejectedValue({ response: { status: 422 } });
     renderWithProviders(<RoleCatalog />);

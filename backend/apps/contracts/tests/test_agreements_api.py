@@ -158,6 +158,40 @@ def test_duplicate_number_is_409_not_500():
 # ── Смена статуса ────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
+def test_agreement_cannot_be_created_on_review():
+    """«На согласовании» при заведении — 409, «Согласован» — нет.
+
+    Договор, созданный сразу в ``on_review``, разводит две оси: процесса
+    согласования не существует, поэтому ``approval_state`` остаётся
+    ``draft``, интерфейс по нему рисует кнопку «На согласование», а
+    ``submit_for_approval`` отбивает её 409 «отправляется черновик». Тупик
+    ровно из-за того, что статус объявили вместо того, чтобы его заслужить.
+
+    ``approved``/``signed`` проверяются тем же тестом и остаются
+    разрешёнными: это заведение задним числом договора, который согласовали
+    и подписали вне системы, и запрещать его было бы другой ошибкой.
+    """
+    line = make_line(amount="5000000.00")
+    counterparty = make_counterparty(country=line.budget.administrator.country)
+    client = Client()
+
+    resp = post_json(client, f"{BASE}/agreements",
+                     _agreement_body(line, counterparty,
+                                     status=AgreementStatus.ON_REVIEW.value),
+                     **auth(admin_token()))
+    assert resp.status_code == 409, resp.content
+    assert "согласование" in resp.json()["detail"]
+    assert not Agreement.objects.exists()
+
+    ok = post_json(client, f"{BASE}/agreements",
+                   _agreement_body(line, counterparty,
+                                   status=AgreementStatus.APPROVED.value),
+                   **auth(admin_token()))
+    assert ok.status_code == 201, ok.content
+    assert Agreement.objects.get().status == AgreementStatus.APPROVED
+
+
+@pytest.mark.django_db
 def test_status_transition_follows_the_allowed_table():
     line = make_line()
     agreement = make_agreement(line=line, amount="1000.00",
@@ -486,3 +520,65 @@ def test_partial_patch_of_one_date_still_checks_the_stored_one():
                       {"end_date": "2026-01-01"}, **auth(admin_token()))
     assert resp.status_code == 422, resp.content
     assert Agreement.objects.get(pk=agreement_id).end_date.isoformat() == "2026-12-31"
+
+
+# ── Тип оплаты выводится из аванса ──────────────────────────────────────
+#
+# Форма договора «предоплата / постоплата / поэтапно» больше не спрашивает:
+# «тип оплаты» для людей — «стандартный / открытый» (``contract_type``). А
+# ``payment_type`` нужен маршрутам согласования и импорту, поэтому следует
+# за авансом — тем же правилом, что импорт выводит его из доли аванса.
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("advance, expected", [
+    ({"has_advance": False}, "postpayment"),
+    ({"has_advance": True, "advance_percentage": "30"}, "staged"),
+    ({"has_advance": True}, "staged"),
+    ({"has_advance": True, "advance_percentage": "100"}, "prepayment"),
+])
+def test_payment_type_follows_the_advance_when_not_sent(advance, expected):
+    line = make_line()
+    counterparty = make_counterparty(country=line.budget.administrator.country)
+    body = _agreement_body(line, counterparty, status=None, **advance)
+    del body["payment_type"]
+
+    resp = post_json(Client(), f"{BASE}/agreements", body, **auth(token()))
+
+    assert resp.status_code == 201, resp.content
+    assert resp.json()["payment_type"] == expected
+    assert resp.json()["status"] == "draft"
+
+
+@pytest.mark.django_db
+def test_editing_an_imported_agreement_keeps_its_payment_type():
+    """У договора из импорта тип выведен из ``advance_share``, а
+    ``has_advance`` не выставлен. Форма шлёт условия аванса при КАЖДОЙ
+    правке — пересчёт без реального изменения аванса превратил бы
+    «поэтапно» в «постоплату» на правке опечатки в названии."""
+    line = make_line()
+    agreement = make_agreement(line=line, status="draft",
+                               advance_share=Decimal("0.3"), has_advance=False)
+    # Фабрика пишет «постоплату» жёстко; импорт вывел бы из доли «поэтапно».
+    Agreement.objects.filter(pk=agreement.pk).update(payment_type="staged")
+
+    resp = patch_json(Client(), f"{BASE}/agreements/{agreement.pk}",
+                      {"name": "Исправленное название", "has_advance": False},
+                      **auth(admin_token()))
+
+    assert resp.status_code == 200, resp.content
+    agreement.refresh_from_db()
+    assert agreement.payment_type == "staged"
+
+
+@pytest.mark.django_db
+def test_switching_the_advance_on_recomputes_payment_type():
+    line = make_line()
+    agreement = make_agreement(line=line, status="draft")
+
+    resp = patch_json(Client(), f"{BASE}/agreements/{agreement.pk}",
+                      {"has_advance": True, "advance_percentage": "100"},
+                      **auth(admin_token()))
+
+    assert resp.status_code == 200, resp.content
+    agreement.refresh_from_db()
+    assert agreement.payment_type == "prepayment"

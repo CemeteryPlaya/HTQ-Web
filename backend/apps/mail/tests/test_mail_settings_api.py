@@ -18,7 +18,8 @@ from apps.mail.models import EmailAccount, MailServerConfig, ProvisionedMailbox
 from apps.mail.services import mail_config
 from apps.mail.services.crypto import crypto_service
 from apps.users.models import User, UserStatus
-from htqweb.authn.jwt import issue_token_pair
+
+from .conftest import gate_auth
 
 SETTINGS_URL = "/api/email/v1/mailboxes/settings/"
 TEST_URL = "/api/email/v1/mailboxes/settings/test/"
@@ -43,18 +44,20 @@ def _user(db, **kw) -> User:
     return u
 
 
-def _auth(user) -> dict:
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
-
-
 @pytest.fixture
 def admin_auth(db):
-    return _auth(_user(db, username="cfg-admin", email="cfg-admin@htq.test", is_staff=True))
+    """Реквизиты сервера — под гейтом ``mail:admin`` (блок L): администратору
+    нужна роль, ``is_staff`` сам по себе больше не пускает."""
+    return gate_auth(_user(db, username="cfg-admin", email="cfg-admin@htq.test", is_staff=True),
+                     "full")
 
 
 @pytest.fixture
 def user_auth(db):
-    return _auth(_user(db, username="cfg-user", email="cfg-user@htq.test"))
+    """Рядовой сотрудник — уровень ``employee-basic`` в ``mail`` (``read``):
+    на реквизитах его 403 даёт гейт, а самоподключение ящика — ручка
+    самообслуживания, гейта у неё нет."""
+    return gate_auth(_user(db, username="cfg-user", email="cfg-user@htq.test"), "read")
 
 
 def _put(admin_auth, **body):

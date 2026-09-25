@@ -44,6 +44,25 @@ def headers(slug: str, tok: str) -> dict:
     return {"HTTP_X_HTQ_COMPANY": slug, **auth(tok)}
 
 
+@pytest.fixture
+def reader(company):
+    """Заголовки обычного читателя каталога прав.
+
+    С задачи 4 блока I «Единая модель прав» GET-ручки аппки стоят под
+    ``api_view(module="access", level="read")``, то есть требуют компанию
+    запроса и роль с глубиной на узел ``access``. Раньше их читал любой
+    вошедший, и тесты ниже обходились голым ``token()``; поведение самого
+    гейта (403 без права, 200 с правом) проверяет ``test_module_gate.py``, а
+    здесь он только обставляется, чтобы проверять контракт ручек, а не
+    авторизацию.
+    """
+    role = Role.objects.create(code="access-reader", title="Читатель прав")
+    grant(role, "access", "view")
+    RoleAssignment.objects.create(company_slug=company, user_id=7, role=role,
+                                  scope_kind=ScopeKind.COMPANY, scope_id=None)
+    return headers(company, token(company=company))
+
+
 # ── Каталог ролей (§4.1) ──────────────────────────────────────────────────
 
 
@@ -53,7 +72,7 @@ def test_roles_require_authentication(client):
 
 
 @pytest.mark.django_db
-def test_list_roles(client):
+def test_list_roles(client, reader):
     """В каталоге уже есть засеянная platform-admin — проверяем состав, а не длину.
 
     Роль-минимум приходит миграцией 0002 и существует в любой базе: без неё
@@ -61,19 +80,19 @@ def test_list_roles(client):
     отсутствие этого засева, а не работу ручки.
     """
     Role.objects.create(code="a", title="Альфа")
-    resp = client.get(f"{BASE}/roles", **auth(token()))
+    resp = client.get(f"{BASE}/roles", **reader)
     assert resp.status_code == 200
     by_code = {row["code"]: row for row in resp.json()}
     assert by_code["a"] == {"id": Role.objects.get(code="a").id, "code": "a",
-                            "title": "Альфа", "is_system": False}
+                            "title": "Альфа", "is_system": False,
+                            "company_slug": None}
     assert by_code["platform-admin"]["is_system"] is True
 
 
 @pytest.mark.django_db
-def test_both_spellings_answer_the_same(client):
-    tok = auth(token())
-    assert (client.get(f"{BASE}/roles", **tok).status_code
-            == client.get(f"{BASE}/roles/", **tok).status_code == 200)
+def test_both_spellings_answer_the_same(client, reader):
+    assert (client.get(f"{BASE}/roles", **reader).status_code
+            == client.get(f"{BASE}/roles/", **reader).status_code == 200)
 
 
 @pytest.mark.django_db
@@ -161,10 +180,10 @@ def test_delete_system_role_is_409(client):
 
 
 @pytest.mark.django_db
-def test_get_role_permissions(client):
+def test_get_role_permissions(client, reader):
     role = Role.objects.create(code="r", title="Роль")
     grant(role, "hr", "write")
-    resp = client.get(f"{BASE}/roles/{role.id}/permissions", **auth(token()))
+    resp = client.get(f"{BASE}/roles/{role.id}/permissions", **reader)
     assert resp.status_code == 200
     assert resp.json() == [{"node": "hr", "flags": ["create", "edit", "view"],
                             "preset": "edit"}]
@@ -214,8 +233,8 @@ def test_preset_and_flags_together_are_422(client):
 
 
 @pytest.mark.django_db
-def test_functions_registry_is_readable(client):
-    resp = client.get(f"{BASE}/functions", **auth(token()))
+def test_functions_registry_is_readable(client, reader):
+    resp = client.get(f"{BASE}/functions", **reader)
     assert resp.status_code == 200
     body = resp.json()
     modules = {row["path"] for row in body["tree"]}
@@ -281,6 +300,18 @@ def test_put_position_roles_rejects_unknown_role(client, company, position):
 
 
 @pytest.mark.django_db
+def test_put_position_roles_rejects_another_companys_role(client, company, position):
+    """Фикс-раунд 1, M-3: HTTP-вход штатного пути выдачи — тоже 422 на чужую
+    роль (``RoleNotInCompany`` в ``INVALID``, блок I.2, R2)."""
+    role = Role.objects.create(code="hr-custom-other-7", title="Чужая",
+                               company_slug="other-company")
+    resp = put_json(client, f"{BASE}/positions/{position}/roles",
+                    {"role_ids": [role.id]},
+                    **headers(company, superuser_token(company=company)))
+    assert resp.status_code == 422
+
+
+@pytest.mark.django_db
 def test_unknown_position_is_404(client, company):
     resp = put_json(client, f"{BASE}/positions/999999/roles", {"role_ids": []},
                     **headers(company, superuser_token(company=company)))
@@ -289,8 +320,16 @@ def test_unknown_position_is_404(client, company):
 
 @pytest.mark.django_db
 def test_position_roles_without_company_context_are_404(client, position):
-    """Вне компании привязки не существует — это 404, а не 400."""
-    resp = client.get(f"{BASE}/positions/{position}/roles", **auth(token()))
+    """Вне компании привязки не существует — это 404, а не 400.
+
+    Токен платформенного администратора здесь не украшение: с задачи 4 блока I
+    ручка стоит под гейтом модуля, а он вне компании отвечает 403 ВСЕМ, кроме
+    суперпользователя (прав вне компании не бывает — ``resolve.permissions_for``).
+    Проверять «404, а не 400» поэтому можно только на том, кто до вьюхи
+    доходит; сам отказ гейта проверяет ``test_module_gate.py``.
+    """
+    resp = client.get(f"{BASE}/positions/{position}/roles",
+                      **auth(superuser_token()))
     assert resp.status_code == 404
 
 

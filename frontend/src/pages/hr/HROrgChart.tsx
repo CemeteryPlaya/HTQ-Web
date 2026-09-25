@@ -19,7 +19,8 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
+import { DEPTH_FLAGS } from '@/lib/auth/permissions';
 import { useTranslation } from 'react-i18next';
 
 type Mode = 'positions' | 'employees' | 'both';
@@ -40,8 +41,16 @@ const HROrgChart = () => {
   // и потому только для чтения — правка в ней невозможна по построению.
   const [hierarchy, setHierarchy] = useState<HierarchyKind>('internal');
 
-  const { isSeniorOrAbove, isLoading: levelLoading } = useHRLevel();
-  const canEdit = isSeniorOrAbove && !levelLoading;
+  // Правка связей подчинения — узел `hr.org` со ВСЕМИ четырьмя признаками:
+  // ровно это проверяет бэкенд (`ORG_EDIT` → `("hr.org", DELETE)`,
+  // apps/hr/legacy_roles.py; `_require_permission(request, ORG_EDIT)` на
+  // add/remove/change relation в apps/hr/views.py). Старый
+  // `isSeniorOrAbove` совпадал с этим только потому, что hr-senior/hr-lead
+  // несут `hr.org: ADMIN`; роль с правом на оргструктуру, но без
+  // «senior»-области, была бы отрезана зря, и наоборот.
+  const permissions = usePermissions();
+  const orgDepth = permissions.depth('hr.org');
+  const canEdit = !permissions.isLoading && DEPTH_FLAGS.every((flag) => orgDepth.includes(flag));
   const editable = editMode && canEdit && mode !== 'both' && hierarchy === 'internal';
 
   useEffect(() => {

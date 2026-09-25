@@ -156,7 +156,8 @@ def submit_for_approval(request_id: int, *, actor_id: int | None = None) -> dict
         )
     if request.status != AccountableFundsRequestStatus.DRAFT:
         raise AccountableFundsRequestRuleViolation(
-            "На согласование можно отправить только заявку в статусе «Черновик»"
+            f"На согласование отправляется черновик; заявка в статусе "
+            f"«{request.get_status_display()}»"
         )
     if request.approval_state not in signoff.ApprovalState.editable():
         request.assert_editable()

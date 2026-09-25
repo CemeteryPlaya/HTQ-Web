@@ -18,7 +18,30 @@
 Сторож — ``apps/access/tests/test_guards.py``.
 """
 
+from django.core.exceptions import ValidationError
 from django.db import models
+
+
+def _clean_role_company(company_slug: str, role) -> None:
+    """``Role.clean()``-общая проверка для django-admin (блок I.2, R2, I-2).
+
+    Django-admin — шестой путь выдачи роли (штатный API, сиды и ``access_grant``
+    уже несут проверку сервисного слоя), и правит строки НАПРЯМУЮ через
+    ``ModelForm``, минуя ``apps.access.services.assignment`` целиком. Вызов
+    заведён здесь, а не только во вьюхах/сервисе, чтобы его получил и админ:
+    ``ModelForm.full_clean()`` зовёт ``instance.clean()`` перед сохранением.
+    Импорт сервиса — ленивый: ``services.assignment`` импортирует модели этого
+    же модуля, прямой импорт на уровне модуля дал бы цикл.
+    """
+    if role is None:
+        return
+    from apps.access.services.assignment import assert_role_belongs
+    from apps.access.services.errors import RoleNotInCompany
+
+    try:
+        assert_role_belongs(company_slug, role)
+    except RoleNotInCompany as exc:
+        raise ValidationError(str(exc)) from exc
 
 
 class Level(models.TextChoices):
@@ -39,6 +62,18 @@ class ScopeKind(models.TextChoices):
     SITE = "site", "Объект"
 
 
+#: Области, которые роль ДОЛЖНОСТИ (``PositionRole.scope_kind``) вправе
+#: нести сегодня — подмножество ``ScopeKind``, а не весь набор (раунд правок
+#: 1 ревью задачи 1b). ``SITE`` исключён: резолвер (``apps.access.services.
+#: resolve``) умеет вычислять по держателю только «свой отдел», а «свой
+#: объект» — нет (кадровая карточка не несёт ``site_id``). Расширять список
+#: — осознанное решение вместе с резолвером, а не побочный эффект того, что
+#: ``ScopeKind`` — общий enum с ``RoleAssignment``, которому нужны все три.
+POSITION_ROLE_SCOPE_KINDS = tuple(
+    (kind, label) for kind, label in ScopeKind.choices if kind != ScopeKind.SITE
+)
+
+
 class Role(models.Model):
     """Набор прав, действующий во всех компаниях группы (правила 1 и 3).
 
@@ -50,6 +85,11 @@ class Role(models.Model):
     title = models.CharField(max_length=255)
     # Служебные роли сидируются и не удаляются через API.
     is_system = models.BooleanField(default=False, db_default=False)
+    #: Компания, которой принадлежит роль; пусто — роль общая для группы.
+    #: Именные роли переноса (hr-custom-<slug>-<id>) несут название
+    #: должности своей компании, и соседям его видеть незачем (блок I.2).
+    company_slug = models.CharField(max_length=32, null=True, blank=True,
+                                    default=None, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -118,7 +158,49 @@ class RolePermission(models.Model):
 
 
 class PositionRole(models.Model):
-    """Роль, выданная должности компании — штатный путь выдачи прав (правило 2)."""
+    """Роль, выданная должности компании — штатный путь выдачи прав (правило 2).
+
+    ``scope_kind`` (задача 1b блока I) — область роли ДОЛЖНОСТИ, и она
+    принципиально другая вещь, чем область личного назначения
+    (``RoleAssignment.scope_kind``/``scope_id``). У назначения область
+    ФИКСИРУЕТСЯ В МОМЕНТ ВЫДАЧИ: конкретный ``scope_id`` записывается в
+    строку и держится, пока назначение не перевыдадут заново. У роли
+    должности область, наоборот, ВЫЧИСЛЯЕТСЯ на каждый запрос — по
+    ДЕРЖАТЕЛЮ, а не по самой должности: «свой отдел» — это отдел ТЕКУЩЕГО
+    сотрудника на этой должности (``apps.hr.interface.get_employee_brief`` →
+    ``department_id``), и при смене сотрудника область меняется вместе с ним,
+    без единой правки этой таблицы. Именно поэтому здесь НЕТ поля
+    ``scope_id`` — заведи его, и «свой отдел» превратился бы в «отдел N,
+    записанный такого-то числа», то есть в точности в личное назначение,
+    которое эта модель штатно и не является (см. докстринг ``RoleAssignment``
+    о том, зачем оно вообще существует отдельно). Разбор строки
+    ``scope_kind`` в реальную область — ``apps.access.services.resolve``
+    (``_position_role_ids``/``_role_scopes``), единственное место, которое
+    читает кадровую карточку держателя ради этого поля.
+
+    ``COMPANY`` (по умолчанию) — область не сужается вовсе, как до этой
+    задачи. ``DEPARTMENT`` — резолвер подставляет отдел держателя; без
+    кадровой карточки (следовательно, без известного отдела) роль этой
+    должности у пользователя просто не действует — молча выдать ``COMPANY``
+    в этом случае было бы ровно тем расширением доступа, ради устранения
+    которого поле и заведено.
+
+    ⚠️ ``choices`` — ``POSITION_ROLE_SCOPE_KINDS`` НИЖЕ, а не полный
+    ``ScopeKind.choices`` (раунд правок 1 ревью задачи 1b). ``SITE``
+    намеренно исключён: резолвер сегодня не умеет вычислять «свой объект»
+    держателя — кадровая карточка не несёт ``site_id`` (см. ``resolve.py::
+    _position_role_ids``), — а полный ``ScopeKind`` без сужения ``choices``
+    позволял бы выставить его через ``/django-admin/``: ``PositionRoleAdmin``
+    не задаёт ``fields``/``fieldsets`` и рендерит форму по всем полям модели,
+    а штатный API (``apps.access.services.assignment.set_position_roles``)
+    ``scope_kind`` вообще не принимает — админка была ЕДИНСТВЕННЫМ живым
+    путём выставить недоступное резолверу значение, и делала это молча
+    (запрос просто терял роль без единой записи в логе). Если значение вне
+    ``POSITION_ROLE_SCOPE_KINDS`` всё же окажется в таблице в обход
+    ``choices`` (прямой SQL, будущее расширение ``ScopeKind`` без синхронного
+    расширения этого списка) — резолвер об этом кричит через
+    ``fallback(..., expected=False)``, а не молчит (``resolve.py``).
+    """
 
     company_slug = models.CharField(max_length=32, db_index=True)
     # Мягкая ссылка в apps.hr: должность лежит в схеме компании, FK поперёк
@@ -127,6 +209,10 @@ class PositionRole(models.Model):
     # поэтому company_slug — обязательная часть ключа, а не уточнение.
     position_id = models.IntegerField()
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="position_links")
+    scope_kind = models.CharField(
+        max_length=16, choices=POSITION_ROLE_SCOPE_KINDS,
+        default=ScopeKind.COMPANY, db_default=ScopeKind.COMPANY.value,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -139,6 +225,10 @@ class PositionRole(models.Model):
             ),
         ]
         indexes = [models.Index(fields=["company_slug", "position_id"])]
+
+    def clean(self) -> None:
+        super().clean()
+        _clean_role_company(self.company_slug, self.role if self.role_id else None)
 
     def __str__(self) -> str:
         return f"{self.company_slug}/должность {self.position_id}: {self.role_id}"
@@ -188,6 +278,10 @@ class RoleAssignment(models.Model):
             ),
         ]
         indexes = [models.Index(fields=["company_slug", "user_id"])]
+
+    def clean(self) -> None:
+        super().clean()
+        _clean_role_company(self.company_slug, self.role if self.role_id else None)
 
     def __str__(self) -> str:
         return f"{self.company_slug}/пользователь {self.user_id}: {self.role_id}"

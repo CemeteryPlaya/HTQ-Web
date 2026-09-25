@@ -35,13 +35,41 @@ export type FormFieldType =
   | 'text' | 'number' | 'money' | 'amount' | 'date' | 'dropdown' | 'checkbox'
   | 'user_ref' | 'project_ref' | 'department_ref'
   | 'file' | 'table' | 'signature' | 'formula'
-  | 'paragraph' | 'static_text' | 'serial' | 'reference' | 'group' | 'link_ref';
+  | 'paragraph' | 'static_text' | 'serial' | 'reference' | 'group' | 'link_ref'
+  | 'budget_line_ref' | 'supplier_quotes';
+
+/** Сравнительная таблица поставщиков: строки — позиции из `items_field`,
+ *  колонки — поставщики, в клетках цены ЗА ЕДИНИЦУ. `total`,
+ *  `supplier_name` и `totals` считает сервер при сохранении
+ *  (`approvals/services/quotes.py`) — клиент их не шлёт и не показывает как
+ *  ввод, иначе по разным числам утверждали бы деньги. */
+export interface SupplierQuote {
+  name?: string;
+  note?: string;
+  prices?: (string | number | null)[];
+}
+
+export interface SupplierQuotesValue {
+  suppliers?: SupplierQuote[];
+  chosen?: number | null;
+  totals?: string[];
+  total?: string;
+  supplier_name?: string;
+}
 
 export interface FormFieldBase {
   key: string;
   label: string;
   required?: boolean;
   type: FormFieldType;
+  /** Кто заполняет. `approver` — согласующий на своём рабочем шаге, уже на
+   *  согласовании (поставщик, сумма у заявки на закуп): инициатору поле не
+   *  показывается и при подаче не требуется. По умолчанию — инициатор. */
+  filled_by?: 'initiator' | 'approver';
+  /** Значение обязано совпадать с другим полем формы — путь `key` или
+   *  `группа.key`. Правило для сумм: «Сумма по счёту» = «Согласованная
+   *  сумма». Проверяет сервер; клиент лишь повторяет проверку до отправки. */
+  must_equal?: string | null;
 }
 
 export interface MoneyField extends FormFieldBase {
@@ -99,6 +127,12 @@ export interface LinkRefField extends FormFieldBase {
   template_slug?: string;
   multiple?: boolean;
 }
+/** Строка бюджета из раздела «Договоры» (`apps.contracts`). Значение —
+ *  один `budget_line_id`: строка это уже «администратор × год × программа»,
+ *  а каскад «администратор → программа» существует только в UI. Настроек нет. */
+export interface BudgetLineRefField extends FormFieldBase {
+  type: 'budget_line_ref';
+}
 export interface GroupField extends FormFieldBase {
   type: 'group';
   fields: FormField[];
@@ -109,13 +143,13 @@ export interface GroupField extends FormFieldBase {
 export type FormField =
   | MoneyField | NumberField | TextField | DropdownField | FormulaField
   | AmountField | ParagraphField | StaticTextField | SerialField
-  | ReferenceField | LinkRefField | GroupField
+  | ReferenceField | LinkRefField | BudgetLineRefField | GroupField
   | (FormFieldBase & {
       type: Exclude<
         FormFieldType,
         'money' | 'number' | 'text' | 'dropdown' | 'formula'
         | 'amount' | 'paragraph' | 'static_text' | 'serial'
-        | 'reference' | 'link_ref' | 'group'
+        | 'reference' | 'link_ref' | 'budget_line_ref' | 'group'
       >;
     });
 
@@ -248,6 +282,9 @@ export interface RequestInstance {
   initiator_id: number;
   title: string;
   status: RequestStatus;
+  /** Ось согласования — ведёт signoff (`Approvable`): draft | pending |
+   *  approved | rejected | rework. Отдельно от доменного `status`. */
+  approval_state: 'draft' | 'pending' | 'approved' | 'rejected' | 'rework';
   current_node_id: string | null;
   form_values_json: Record<string, unknown>;
   total_amount: string | number | null;

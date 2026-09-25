@@ -126,3 +126,37 @@ def test_fan_out_keeps_going_after_one_company_fails(two_company_schemas):
     assert task.calls == [beta]
     assert result["dispatched"] == [beta]
     assert result["failed"] == [alpha]
+
+
+@pytest.mark.django_db
+def test_archived_company_task_is_skipped():
+    """Задача, поставленная до архивации, не должна дописать данные в архив
+    (спека архива §8.2). Пропуск — штатный, не fallback."""
+    from apps.companies.models import Company, CompanyKind, CompanyStatus
+
+    Company.objects.create(slug="dead", name="Архив", kind=CompanyKind.SERVICE,
+                           status=CompanyStatus.ARCHIVED)
+    ran = []
+
+    @company_task
+    def _task():
+        ran.append(current_company_or_none())
+        return "done"
+
+    assert _task(company_slug="dead") is None
+    assert ran == []
+
+
+@pytest.mark.django_db
+def test_unknown_company_task_still_runs():
+    """Незаведённый slug — не архив: пропустить его молча значило бы
+    спрятать опечатку. Тело выполняется в контексте этого slug."""
+    ran = []
+
+    @company_task
+    def _task():
+        ran.append(current_company_or_none())
+        return "done"
+
+    assert _task(company_slug="no-such") == "done"
+    assert ran == ["no-such"]

@@ -32,6 +32,27 @@ class UnitType(models.TextChoices):
     DEPARTMENT = "department", "Отдел"
     DIVISION = "division", "Управление"
     GROUP = "group", "Группа"
+    # Оргструктура группы (10.09.2026): три дирекции головной компании.
+    DIRECTORATE = "directorate", "Дирекция"
+
+
+class ExternalHierarchy(models.TextChoices):
+    """Участвует ли руководящая должность во ВНЕШНЕЙ иерархии.
+
+    Внешняя иерархия не хранится и не редактируется — она выводится из дерева
+    владения компаниями (``companies.Company.parent``): сотрудник вышестоящей
+    компании является начальником сотрудников нижестоящих. Хранить её отдельной
+    таблицей нельзя — два источника правды о подчинении разъедутся при первой
+    же реорганизации, причём молча.
+
+    Поле отвечает на единственный вопрос, который деревом не выводится:
+    командует ли ЭТА руководящая должность нижестоящими компаниями. Главный
+    бухгалтер холдинга руководит своим отделом и никем в дочерних — это
+    выбирается, а не следует из факта руководства.
+    """
+
+    INHERIT = "inherit", "Участвует"
+    NONE = "none", "Не участвует"
 
 
 class EmployeeStatus(models.TextChoices):
@@ -103,9 +124,60 @@ class Position(HrBase):
     # Системные должности — базовые оргединицы (сидируются): их нельзя
     # переименовать/удалить через UI, но вес/отдел/права редактируемы.
     is_system = models.BooleanField(default=False, db_default=False, db_index=True)
-    # Явная матрица прав; когда задана, приоритетнее эвристики по названию
-    # должности (app/auth/hr_access.py в исходнике).
-    # Форма: {"hr_level": "junior|middle|senior|lead", "permissions": [str, ...]}
+    # Руководящая ли должность. Вместе с external_hierarchy включает внешнюю
+    # иерархию (apps/access/services/hierarchy.py::_is_external_manager).
+    # Умолчание False и НИКАКОГО бэкфилла: угадать руководителя по весу или
+    # названию значило бы раздать видимость чужих компаний молча.
+    is_manager = models.BooleanField(default=False, db_default=False, db_index=True)
+    # Действует только у is_manager=True. Пара «не руководитель + inherit» —
+    # законное состояние по умолчанию, поэтому ограничения в БД здесь нет:
+    # оба условия проверяет разрешение прав, а не схема.
+    external_hierarchy = models.CharField(
+        max_length=16,
+        choices=ExternalHierarchy.choices,
+        default=ExternalHierarchy.INHERIT,
+        db_default=ExternalHierarchy.INHERIT.value,
+    )
+    # Обслуживает ли должность дочерние компании: её роли действуют во всех
+    # компаниях ниже по дереву владения (apps/access/services/inheritance.py).
+    #
+    # Отдельно от is_manager СОЗНАТЕЛЬНО, решением заказчика: «начальник людей»
+    # и «работает на всю группу» — разные вещи. В холдинге обслуживают
+    # дочерние компании 8 менеджеров из 12 человек, и ни один из них не
+    # руководит сотрудниками ДО; переиспользовать is_manager значило бы либо
+    # не дать прав бухгалтеру, либо соврать во внешней иерархии блока B.
+    #
+    # Умолчание False и никакого бэкфилла: догадка «кто обслуживает» раздала
+    # бы права в чужих компаниях молча.
+    serves_subsidiaries = models.BooleanField(
+        default=False, db_default=False, db_index=True,
+    )
+    # Бывшая явная матрица прав (app/auth/hr_access.py в исходнике) — с
+    # задачи 9 блока I «Единая модель прав» МЕРТВА для авторизации: права
+    # кадрового домена считает apps.hr.rbac по узлам apps.access, эту
+    # колонку не читая. Живых читателей ровно два: apps.hr.interface.
+    # user_has_permission (контракт с apps.contracts до их перехода на узлы
+    # access) и эвристика переноса apps.hr.access.classify_hr_level (только
+    # ключ "hr_level", только для access_backfill_positions) — см. докстринг
+    # apps/hr/tests/test_single_rbac_guards.py.
+    #
+    # Задача 10 блока I.2 закрыла запись hr_level: кадровый уровень доступа
+    # живёт ТОЛЬКО в ролях apps.access (hr-junior…hr-lead), эта колонка ему
+    # не второй источник истины. API должностей (apps/hr/schemas.py::
+    # PositionPermissions, PositionCreate/PositionUpdate.permissions) с этой
+    # задачи не объявляет поле hr_level вовсе — присланный ключ молча
+    # отбрасывается (Pydantic v2 default extra="ignore"), пишется только
+    # "permissions" (список ключей ради contracts.*). django-admin
+    # (apps/hr/admin.py::PositionAdmin) тем же приёмом отбрасывает hr_level
+    # при сохранении (фикс-раунд 1 той же задачи) — записать его через
+    # платформу больше негде. hr_level в строках, заведённых ДО задачи 10
+    # (или попавших в колонку напрямую через ORM/сид/ETL мимо обоих замков),
+    # остаётся READ-ONLY: отдаётся ответом API
+    # (position_service._serialize_permissions) и служит только эвристике
+    # переноса; PATCH/PUT, тронувший ключ "permissions", перезаписывает
+    # словарь ЦЕЛИКОМ и потому стирает унаследованный hr_level даже без
+    # намерения — см. докстринг position_service.update_position.
+    # Форма: {"hr_level": "junior|middle|senior|lead" | null, "permissions": [str, ...]}
     permissions = models.JSONField(null=True, blank=True)
 
     class Meta:
@@ -323,6 +395,90 @@ class ReportingRelation(HrBase):
 
     def __str__(self) -> str:
         return f"<ReportingRelation(sup={self.superior_position_id}, sub={self.subordinate_position_id}, type='{self.relation_type}')>"
+
+
+class SubstitutionKind(models.TextChoices):
+    PRIMARY = "primary", "Основной"
+    RESERVE = "reserve", "Резервный"
+
+
+class Substitution(HrBase):
+    """Строка матрицы замещения ключевых должностей (HR-FRM-006).
+
+    Замещающий — ДОЛЖНОСТЬ, а не сотрудник: документ руководства составлен
+    по должностям, и только так правило переживает смену держателя —
+    назначили нового главбуха, и матрица не устарела. Кто именно замещает
+    сегодня, потребитель резолвит сам (``hr.interface.resolve_position_users``).
+
+    Это ПРАВИЛО, а не событие отсутствия. ``valid_from``/``valid_to``
+    описывают период действия самого правила (приказ подписан — приказ
+    отменён), а не отпуск держателя: модели отсутствий в домене нет вовсе,
+    и вопрос «болеет ли он сегодня» этой таблицей не решается.
+
+    ``basis`` — колонка документа «Порядок оформления замещения» («Приказ
+    ГД», «Приказ ГД; доверенность на банк»): в платформе замещение только
+    отражается, юридическую силу ему даёт приказ, и ссылка на него обязана
+    храниться рядом с правилом. ``note`` — колонка «Примечание» («Право
+    первой подписи по доверенности»), она ограничивает то, что замещающий
+    вправе делать, и теряться не должна.
+
+    ``on_delete=CASCADE`` у обоих FK — как у ``ReportingRelation``: правило
+    между двумя должностями не переживает ни одну из них. Практически
+    удалить занятую должность и так нельзя (``Employee.position`` —
+    ``PROTECT``).
+    """
+
+    position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="substitutions",
+    )
+    substitute_position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="substitutes_in",
+    )
+    kind = models.CharField(
+        max_length=16,
+        choices=SubstitutionKind.choices,
+        default=SubstitutionKind.PRIMARY,
+        db_default=SubstitutionKind.PRIMARY.value,
+    )
+    basis = models.CharField(max_length=255)
+    note = models.CharField(max_length=255, null=True, blank=True)
+    valid_from = models.DateField()
+    valid_to = models.DateField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Замещение"
+        verbose_name_plural = "Матрица замещения"
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(position=models.F("substitute_position")),
+                name="ck_no_self_substitution",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(valid_to__isnull=True)
+                | models.Q(valid_to__gte=models.F("valid_from")),
+                # Суффикс "dates" — не "range": сторож
+                # test_date_pairs_table_matches_the_database_constraints
+                # (apps/core/tests/test_invariants.py) находит новые пары
+                # дат ИМЕННО по ``ck_*dates``, иначе не заметит эту пару.
+                name="ck_substitution_dates",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(kind__in=list(SubstitutionKind.values)),
+                name="ck_substitution_kind",
+            ),
+            # Точное совпадение (должность, вид, дата начала) — ошибка ввода.
+            # ПЕРЕСЕЧЕНИЯ периодов ловит substitution_service: выразить их
+            # ограничением БД без EXCLUDE-констрейнта нельзя, а EXCLUDE
+            # потребовал бы расширения btree_gist ради одной таблицы.
+            models.UniqueConstraint(
+                fields=["position", "kind", "valid_from"],
+                name="uq_substitution_start",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (f"<Substitution(pos={self.position_id}, "
+                f"sub={self.substitute_position_id}, kind='{self.kind}')>")
 
 
 class EmployeeReportingOverride(HrBase):
@@ -746,14 +902,38 @@ class TimeEntry(HrBase):
         return f"<TimeEntry(id={self.id}, employee_id={self.employee_id}, date={self.date})>"
 
 
-class StaffingPosition(HrBase):
+# Сосед — только через interface (apps/core/tests/test_app_isolation.py).
+# Из signoff здесь берётся ровно один класс — абстрактная примесь.
+#
+# Импорт НЕ в шапке файла (как у apps.contracts.models — там цикла нет),
+# а здесь, НИЖЕ Department/Position/Employee/EmployeeStatus: у ``signoff``
+# ЭТИ ЖЕ классы — рантайм-зависимость (``services/engine.py`` резолвит
+# согласующих по HR-должности через ``apps.hr.interface``), поэтому импорт
+# в шапку замкнул бы цикл apps.hr.models → apps.signoff.interface →
+# apps.signoff.services.engine → apps.hr.interface → apps.hr.models (ещё не
+# доисполненный) и падал бы ImportError на самом импорте Department. К
+# моменту этой строки нужные классы уже определены в модуле, и
+# apps.hr.interface получает их без проблем.
+from apps.signoff import interface as signoff
+
+
+class StaffingPosition(signoff.Approvable, HrBase):
     """Строка штатного расписания — порт models/staffing.py.
 
     Таблица — дефолтное имя Django: hr_staffingposition (не
     hr_staffing_positions исходника, решение D2). Оба FK исходник объявляет
     с явным ``index=True`` — дефолтное индексирование Django FK уже
     воспроизводит это без дополнительных пометок.
+
+    Блок G: строка 2 матрицы полномочий HR-FRM-004 («Утверждение и
+    изменение штатного расписания УК»). Согласуется СТРОКА, а не расписание
+    целиком: контейнера «штатное расписание» в домене нет, а приказ на
+    практике меняет конкретную позицию — добавить единицу, изменить оклад.
+    Примесь добавляет колонку ``approval_state`` в ЭТУ таблицу; межаппного
+    FK при этом не возникает.
     """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.staffing_position"
 
     position = models.ForeignKey(
         Position, on_delete=models.CASCADE, related_name="staffing_lines",
@@ -822,8 +1002,34 @@ class PersonnelHistory(HrBase):
         related_name="personnel_history_to_position",
     )
 
-    order_number = models.CharField(max_length=64, default="", db_default="")
+    # 255, а не 64 исходника: утверждённый кадровый приказ пишет сюда своё
+    # основание (``PersonnelOrder.basis``, тоже 255), и на обычном тексте
+    # «Приказ ГД № 123-К от 01.10.2026 «О приёме…»» короткая колонка роняла
+    # решение согласующего целиком — колбэк идёт внутри транзакции движка
+    # (миграция 0034).
+    order_number = models.CharField(max_length=255, default="", db_default="")
     comment = models.TextField(default="", db_default="")
+
+    # Приказ, из которого запись родилась. Заполнен только у записей,
+    # созданных АВТОМАТИЧЕСКИ при утверждении приказа (блок G); всё, что
+    # кадровик завёл руками через ``personnel_history_service``, остаётся с
+    # NULL, и старые строки миграция не трогает.
+    #
+    # Связь нужна не ради навигации, а ради ЕДИНСТВЕННОСТИ. Утвердить один и
+    # тот же приказ можно дважды штатным путём: согласующий возвращает
+    # завершённый процесс на доработку (``engine.reopen``), приказ правят и
+    # отправляют ЗАНОВО, новым процессом. Без этой связи колбэк искал бы
+    # прежнюю запись по самим данным события — и после правки даты или
+    # должности не нашёл бы её, оставив УСТАРЕВШУЮ запись рядом с новой.
+    # ``OneToOne`` ставит единственность на уровне БД, а не договорённости:
+    # одна запись истории на приказ, что бы в нём ни поправили.
+    #
+    # ``SET_NULL``, а не ``CASCADE``: удалённый документ не должен стирать
+    # кадровую историю человека — она переживает приказ.
+    source_order = models.OneToOneField(
+        "PersonnelOrder", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="history_entry",
+    )
 
     # D10-подобное решение (см. AuditLog.changed_by выше): TokenPayload.user_id
     # платформенного пользователя (то же ID-пространство, что Employee.user_id,
@@ -838,6 +1044,256 @@ class PersonnelHistory(HrBase):
 
     def __str__(self) -> str:
         return f"<PersonnelHistory(id={self.id}, employee_id={self.employee_id}, event={self.event_type})>"
+
+
+class PersonnelOrderKind(models.TextChoices):
+    HIRE = "hire", "Приём"
+    DISMISS = "dismiss", "Увольнение"
+    TRANSFER = "transfer", "Перевод"
+
+
+class PersonnelOrder(signoff.Approvable, HrBase):
+    """Кадровый приказ — строки 5, 6, 7 матрицы HR-FRM-004.
+
+    Согласуется ПРИКАЗ, а не запись кадровой истории (решение заказчика
+    16.09.2026): ``PersonnelHistory`` остаётся журналом состоявшегося, и её
+    читателям — карточке сотрудника, стажу, отчётам — не нужно знать про
+    состояние согласования. Запись в журнал появляется в момент утверждения
+    (``approval_hooks._personnel_order_on_approved``).
+
+    Три строки матрицы — один тип предмета. Приём специалиста (5), приём
+    руководителя блока (6) и назначение директора дочернего общества (7)
+    различаются не действием, а КАТЕГОРИЕЙ должности и компанией, и маршрут
+    ветвится по фактам ``is_manager``/``position_level``/
+    ``target_company_slug``. Три модели с одинаковыми полями лишили бы
+    маршрут возможности сказать «для руководителей блоков — такой-то этап».
+
+    ``employee`` и ``candidate_name`` — «или/или»: увольнение и перевод про
+    существующего человека, приём — про того, чьей карточки ещё нет.
+    Заводить карточку по приказу автоматически нельзя: имя строкой не
+    содержит ни почты, ни даты рождения, ни документов, и «сотрудник,
+    созданный из приказа» оказался бы наполовину пустым.
+
+    ``target_company_slug`` пуст для приказов своей компании. Он не FK и не
+    проверяется на существование: компании живут в ``public``, кадры — в
+    схеме компании, и межаппных FK в платформе нет; резолвит его маршрут
+    через ``companies.interface`` уже на своей стороне.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.personnel_order"
+
+    kind = models.CharField(
+        max_length=16, choices=PersonnelOrderKind.choices,
+        default=PersonnelOrderKind.HIRE, db_default=PersonnelOrderKind.HIRE.value,
+        db_index=True,
+    )
+    employee = models.ForeignKey(
+        Employee, null=True, blank=True, on_delete=models.CASCADE,
+        related_name="personnel_orders",
+    )
+    candidate_name = models.CharField(max_length=255, default="", db_default="")
+    position = models.ForeignKey(
+        Position, on_delete=models.PROTECT, related_name="personnel_orders",
+    )
+    department = models.ForeignKey(
+        Department, on_delete=models.PROTECT, related_name="personnel_orders",
+    )
+    target_company_slug = models.CharField(
+        max_length=63, null=True, blank=True, db_index=True,
+    )
+    effective_date = models.DateField()
+    salary = models.DecimalField(max_digits=12, decimal_places=2, default=0, db_default=0)
+    basis = models.CharField(max_length=255, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "Кадровый приказ"
+        verbose_name_plural = "Кадровые приказы"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(employee__isnull=False) | ~models.Q(candidate_name=""),
+                name="ck_personnel_order_subject",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<PersonnelOrder(id={self.id}, kind='{self.kind}', pos={self.position_id})>"
+
+
+class BonusKind(models.TextChoices):
+    KPI = "kpi", "По KPI"
+    ONE_TIME = "one_time", "Разовая"
+    ANNUAL = "annual", "Годовая"
+
+
+class Bonus(signoff.Approvable, HrBase):
+    """Премирование работника — строка 8 матрицы HR-FRM-004.
+
+    Примечание документа: «По KPI и Положению о премировании» — отсюда
+    ``kind`` и ``basis``: маршрут отличает премию по KPI от разовой, а
+    ссылка на положение хранится рядом с суммой.
+
+    Сумма — главный факт этого предмета (roadmap §6.2 называет её первой из
+    трёх), поэтому она обязательна и строго положительна: «премия на 0 ₸» —
+    ошибка ввода, а не решение, и согласовывать её нечего.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.bonus"
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="bonuses")
+    kind = models.CharField(
+        max_length=16, choices=BonusKind.choices,
+        default=BonusKind.ONE_TIME, db_default=BonusKind.ONE_TIME.value)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    period = models.CharField(max_length=32, default="", db_default="")
+    basis = models.CharField(max_length=255, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "Премия"
+        verbose_name_plural = "Премии"
+        constraints = [
+            models.CheckConstraint(condition=models.Q(amount__gt=0),
+                                   name="ck_bonus_amount_positive"),
+        ]
+
+    def __str__(self) -> str:
+        return f"<Bonus(id={self.id}, employee_id={self.employee_id}, amount={self.amount})>"
+
+
+class ReprimandSeverity(models.TextChoices):
+    REMARK = "remark", "Замечание"
+    REPRIMAND = "reprimand", "Выговор"
+    SEVERE = "severe", "Строгий выговор"
+
+
+class Reprimand(signoff.Approvable, HrBase):
+    """Дисциплинарное взыскание — строка 9 матрицы HR-FRM-004.
+
+    ``severity`` — не украшение: маршрут по нему ветвится (замечание и
+    строгий выговор проходят разный круг согласования), и это тот самый
+    случай, ради которого у предмета вообще есть факты.
+
+    Автоматических последствий у утверждения нет (решение 11 плана блока G):
+    взыскание объявляет приказ, а не платформа.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.reprimand"
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="reprimands")
+    severity = models.CharField(
+        max_length=16, choices=ReprimandSeverity.choices,
+        default=ReprimandSeverity.REMARK, db_default=ReprimandSeverity.REMARK.value,
+        db_index=True)
+    event_date = models.DateField()
+    reason = models.TextField()
+    basis = models.CharField(max_length=255, default="", db_default="")
+
+    class Meta:
+        verbose_name = "Дисциплинарное взыскание"
+        verbose_name_plural = "Дисциплинарные взыскания"
+
+    def __str__(self) -> str:
+        return f"<Reprimand(id={self.id}, employee_id={self.employee_id}, severity='{self.severity}')>"
+
+
+class LeaveKind(models.TextChoices):
+    ANNUAL = "annual", "Ежегодный оплачиваемый"
+    UNPAID = "unpaid", "Без содержания"
+    SICK = "sick", "По болезни"
+    STUDY = "study", "Учебный"
+    PARENTAL = "parental", "По уходу за ребёнком"
+
+
+class LeaveRequest(signoff.Approvable, HrBase):
+    """Заявление на отпуск — строка 10б матрицы HR-FRM-004.
+
+    Заказчик развёл строку 10 на три предмета (решение 16.09.2026): график,
+    отпуск и командировка ведут себя слишком по-разному, чтобы быть одной
+    моделью с необязательными полями. Эта модель — только отпуск.
+
+    Срок отпуска (roadmap §6.2 называет его вторым из трёх поимённых
+    фактов) считается ``(date_to - date_from).days + 1`` — границы
+    включительные, отпуск с 1-го по 1-е число это ОДИН день, а не ноль.
+    Считается в ``approval_hooks._leave_request_facts``, а не хранится
+    полем: хранимое разъехалось бы с датами при первой же правке.
+
+    Утверждение не имеет автоматических последствий (решение 11 плана
+    блока G — единственный такой эффект во всём блоке принадлежит
+    кадровому приказу): отпуск не проставляет отсутствие в календаре и не
+    трогает табель, это отдельное действие кадровика.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.leave_request"
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="leave_requests")
+    kind = models.CharField(
+        max_length=16, choices=LeaveKind.choices,
+        default=LeaveKind.ANNUAL, db_default=LeaveKind.ANNUAL.value,
+        db_index=True)
+    date_from = models.DateField()
+    date_to = models.DateField()
+    basis = models.CharField(max_length=255, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "Заявление на отпуск"
+        verbose_name_plural = "Заявления на отпуск"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(date_to__gte=models.F("date_from")),
+                name="ck_leaverequest_dates",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<LeaveRequest(id={self.id}, employee_id={self.employee_id}, kind='{self.kind}')>"
+
+
+class BusinessTrip(signoff.Approvable, HrBase):
+    """Командировка — строка 10в матрицы HR-FRM-004.
+
+    ``country`` — двухбуквенный код; пусто значит «своя страна» (внутренняя
+    командировка). Сумма командировки (``estimated_cost``) — тоже факт
+    маршрута: согласование ветвится по ней так же, как по сумме премии у
+    строки 8.
+
+    Срок командировки считается в фактах тем же способом и по той же
+    причине, что и срок отпуска у ``LeaveRequest`` — см. её докстринг.
+
+    Утверждение не имеет автоматических последствий (решение 11 плана
+    блока G): проездные документы и приказ на командировку оформляет
+    кадровик, платформа их не порождает.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.business_trip"
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="business_trips")
+    destination = models.CharField(max_length=255)
+    country = models.CharField(max_length=2, default="", db_default="")
+    purpose = models.CharField(max_length=255, default="", db_default="")
+    date_from = models.DateField()
+    date_to = models.DateField()
+    estimated_cost = models.DecimalField(max_digits=12, decimal_places=2,
+                                         default=0, db_default=0)
+    basis = models.CharField(max_length=255, default="", db_default="")
+
+    class Meta:
+        verbose_name = "Командировка"
+        verbose_name_plural = "Командировки"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(date_to__gte=models.F("date_from")),
+                name="ck_businesstrip_dates",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"<BusinessTrip(id={self.id}, employee_id={self.employee_id}, destination='{self.destination}')>"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1615,3 +2071,178 @@ class IdentityApprover(HrBase):
 
     def __str__(self) -> str:
         return f"<IdentityApprover(user_id={self.user_id})>"
+
+
+class VacationSchedule(signoff.Approvable, HrBase):
+    """Годовой график отпусков — строка 10, часть а матрицы HR-FRM-004.
+
+    Согласуется ЦЕЛИКОМ: график утверждают раз в год на всю компанию, и
+    согласовать половину графика нельзя — в этом и смысл контейнера. Строки
+    (``VacationScheduleLine``) поэтому НЕ являются предметом согласования и
+    в реестре не регистрируются.
+
+    Отдельное заявление на отпуск (``LeaveRequest``) — другой предмет с
+    другим маршрутом: график планирует год вперёд, заявление отпускает
+    человека на конкретные даты. Документ соединяет их в одной строке, но
+    это две разные процедуры (решение заказчика 2).
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.vacation_schedule"
+
+    year = models.IntegerField(unique=True)
+    basis = models.CharField(max_length=255, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "График отпусков"
+        verbose_name_plural = "Графики отпусков"
+
+    def __str__(self) -> str:
+        return f"<VacationSchedule(id={self.id}, year={self.year})>"
+
+
+class VacationScheduleLine(HrBase):
+    """Строка годового графика отпусков — период отпуска одного сотрудника.
+
+    Обычная ``HrBase``-модель: БЕЗ ``signoff.Approvable``, БЕЗ
+    ``SIGNOFF_SUBJECT_TYPE``. Предметом согласования является график
+    целиком (``VacationSchedule``, см. её докстринг) — согласовать
+    отдельную строку в отрыве от остального графика нельзя, поэтому строка
+    не регистрируется в ``SUBJECT_MODELS``/``SUBJECT_SPECS``.
+
+    ``days`` не хранится, как и у ``LeaveRequest``/``BusinessTrip`` — число
+    дней строки считается запросом в ``approval_hooks`` вместе с фактами
+    всего графика, а не полем на модели: хранимое разъехалось бы с датами
+    при первой же правке.
+    """
+
+    schedule = models.ForeignKey(
+        VacationSchedule, on_delete=models.CASCADE, related_name="lines")
+    employee = models.ForeignKey(
+        Employee, on_delete=models.PROTECT, related_name="vacation_schedule_lines")
+    date_from = models.DateField()
+    date_to = models.DateField()
+
+    class Meta:
+        verbose_name = "Строка графика отпусков"
+        verbose_name_plural = "Строки графика отпусков"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(date_to__gte=models.F("date_from")),
+                name="ck_vacationscheduleline_dates",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (f"<VacationScheduleLine(id={self.id}, "
+                f"schedule_id={self.schedule_id}, employee_id={self.employee_id})>")
+
+
+class PolicyKind(models.TextChoices):
+    REGULATION = "regulation", "Положение"
+    POLICY = "policy", "Политика"
+    INSTRUCTION = "instruction", "Инструкция"
+    ORDER = "order", "Приказ"
+
+
+class Policy(signoff.Approvable, HrBase):
+    """Локальный нормативный акт — строка 3 матрицы HR-FRM-004.
+
+    Своя модель, а не ``Document``: тот привязан к СОТРУДНИКУ
+    (``Document.employee``), а политика компании ничьей карточке не
+    принадлежит. Переиспользовать его значило бы завести «документ ничей» и
+    сломать смысл поля.
+
+    Примечание документа к строке 3 — «Юр. экспертиза — юрконсультант»:
+    это этап маршрута, а не поле модели; здесь он не отражается ничем, и
+    это правильно — состав согласующих настраивается, а не зашивается.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.policy"
+
+    kind = models.CharField(max_length=16, choices=PolicyKind.choices,
+                            default=PolicyKind.POLICY, db_default=PolicyKind.POLICY.value)
+    title = models.CharField(max_length=255)
+    version = models.CharField(max_length=32)
+    effective_from = models.DateField()
+    file_key = models.CharField(max_length=500, default="", db_default="")
+    comment = models.TextField(default="", db_default="")
+
+    class Meta:
+        verbose_name = "Локальный нормативный акт"
+        verbose_name_plural = "Локальные нормативные акты"
+        constraints = [
+            models.UniqueConstraint(fields=["kind", "version"], name="uq_policy_version"),
+        ]
+
+
+class JobDescription(signoff.Approvable, HrBase):
+    """Должностная инструкция — строка 4 матрицы HR-FRM-004.
+
+    Своя модель, а не поле ``Position.description``: инструкция
+    утверждается ВЕРСИЯМИ и живёт своей историей, а описание должности —
+    редактируемый текст карточки, который правят когда угодно и без
+    согласования.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.job_description"
+
+    position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="job_descriptions")
+    version = models.CharField(max_length=32)
+    effective_from = models.DateField()
+    body = models.TextField(default="", db_default="")
+    file_key = models.CharField(max_length=500, default="", db_default="")
+
+    class Meta:
+        verbose_name = "Должностная инструкция"
+        verbose_name_plural = "Должностные инструкции"
+        constraints = [
+            models.UniqueConstraint(fields=["position", "version"],
+                                    name="uq_job_description_version"),
+        ]
+
+
+class OrgChangeKind(models.TextChoices):
+    CREATE_UNIT = "create_unit", "Создать подразделение"
+    RENAME_UNIT = "rename_unit", "Переименовать подразделение"
+    MOVE_UNIT = "move_unit", "Перенести подразделение"
+    CLOSE_UNIT = "close_unit", "Закрыть подразделение"
+    CREATE_POSITION = "create_position", "Ввести должность"
+    CLOSE_POSITION = "close_position", "Сократить должность"
+    OTHER = "other", "Другое"
+
+
+class OrgChangeRequest(signoff.Approvable, HrBase):
+    """Заявка на изменение оргструктуры — строка 1 матрицы HR-FRM-004.
+
+    Согласовать «дерево» нельзя: у дерева нет ни версии, ни момента. Эта
+    модель — приказ: что меняем, с какой даты, кто инициатор, чем
+    обосновано. После утверждения изменение вносит кадровик руками, и
+    автоматического применения тут нет намеренно (решение 6 плана блока G):
+    применение диффа оргструктуры — отдельный крупный проект, а
+    «полуавтомат», молча правящий дерево по текстовому описанию, опаснее
+    ручной работы.
+
+    ``description`` — что именно меняется, словами. Это не слабость модели,
+    а её честная граница: поля, достаточного для машинного применения
+    любого из семи видов изменений, не существует.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "hr.org_change"
+
+    kind = models.CharField(max_length=20, choices=OrgChangeKind.choices,
+                            default=OrgChangeKind.OTHER, db_default=OrgChangeKind.OTHER.value)
+    department = models.ForeignKey(
+        Department, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="org_change_requests")
+    description = models.TextField()
+    headcount_delta = models.IntegerField(default=0, db_default=0)
+    effective_date = models.DateField()
+
+    class Meta:
+        verbose_name = "Заявка на изменение оргструктуры"
+        verbose_name_plural = "Заявки на изменение оргструктуры"
+
+    def __str__(self) -> str:
+        return f"<OrgChangeRequest(id={self.id}, kind='{self.kind}', department_id={self.department_id})>"

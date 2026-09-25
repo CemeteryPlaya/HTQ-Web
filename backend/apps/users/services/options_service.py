@@ -1,8 +1,10 @@
 """Active-user picker options — ``GET users/options/``.
 
 Ported from ``services/user/app/api/v1/users.py`` (the FastAPI original).
-Drives any "pick a colleague" UI: any authenticated user may call this
-(no admin gate), and the result excludes suspended/pending/rejected
+Drives any "pick a colleague" UI: no admin gate (с задачи 4 блока I у ручки
+есть входной гейт модуля — ``module="users", level="read"``, см.
+``apps/users/views.py::list_user_options``), and the result excludes
+suspended/pending/rejected
 accounts — only ``UserStatus.ACTIVE``. ``query`` filters case-insensitively
 across first/last name, email, username, and display_name — the same five
 columns the source ORs together.

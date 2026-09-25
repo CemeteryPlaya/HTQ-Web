@@ -14,6 +14,7 @@ export const lazyPages = {
   NewsDetail: React.lazy(() => import('@/pages/NewsDetail')),
   Login: React.lazy(() => import('@/pages/Login')),
   Register: React.lazy(() => import('@/pages/Register')),
+  CompanyPicker: React.lazy(() => import('@/pages/CompanyPicker')),
   MyProfile: React.lazy(() => import('@/pages/MyProfile')),
   MyEmployeeCard: React.lazy(() => import('@/pages/MyEmployeeCard')),
   Settings: React.lazy(() => import('@/pages/Settings')),
@@ -50,6 +51,9 @@ export const lazyPages = {
   ContractsCompletionActList: React.lazy(() => import('@/pages/contracts/CompletionActList')),
   ContractsCompletionActCreate: React.lazy(() => import('@/pages/contracts/CompletionActCreate')),
   ContractsCompletionActDetail: React.lazy(() => import('@/pages/contracts/CompletionActDetail')),
+  ContractsGoodsInvoiceList: React.lazy(() => import('@/pages/contracts/GoodsInvoiceList')),
+  ContractsGoodsInvoiceCreate: React.lazy(() => import('@/pages/contracts/GoodsInvoiceCreate')),
+  ContractsGoodsInvoiceDetail: React.lazy(() => import('@/pages/contracts/GoodsInvoiceDetail')),
 
   // Универсальное согласование (apps.signoff). Не путать с Requests* —
   // те страницы обслуживают apps.approvals, другой домен.
@@ -94,10 +98,12 @@ export const lazyPages = {
   HRPMO: React.lazy(() => import('@/pages/hr/HRPMO')),
   HRShareLinks: React.lazy(() => import('@/pages/hr/HRShareLinks')),
   HRPositions: React.lazy(() => import('@/pages/hr/HRPositions')),
-  HRAccessLevels: React.lazy(() => import('@/pages/hr/HRAccessLevels')),
   // Каталог ролей (стадия 2 «Доступ и роли»). Плоский список, без диаграммы:
   // иерархию несёт должность, а не роль.
   AccessRoleCatalog: React.lazy(() => import('@/pages/access/RoleCatalog')),
+  CompanyRegistry: React.lazy(() => import('@/pages/companies/CompanyRegistry')),
+  // Сводка по группе (блок H): headcount + работы по всем компаниям холдинга.
+  GroupSummary: React.lazy(() => import('@/pages/holding/GroupSummary')),
   // Standalone-обёртки (HRLayout вокруг голого фрагмента-вкладки) — по
   // прямому URL эти страницы раньше открывались без шапки и навигации,
   // см. src/pages/hr/recruitmentStandalone.tsx.

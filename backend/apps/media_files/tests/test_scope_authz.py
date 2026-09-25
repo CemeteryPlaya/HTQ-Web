@@ -29,6 +29,7 @@ import pytest
 from django.core.exceptions import PermissionDenied
 from django.test import Client
 
+from apps.access.tests.helpers import gate_company
 from apps.media_files import interface
 from apps.media_files.models import FileMetadata
 from apps.media_files.services import upload_service
@@ -42,6 +43,10 @@ from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/media/v1/files/"
+
+#: Блок L, задача 4: загрузка стоит под ``api_view(module="media",
+#: level="write")`` — гейту нужны компания запроса (заголовок + claim) и роль.
+COMPANY = "t-media-gate"
 
 
 # ─── fixtures (mirrors test_upload_api.py) ──────────────────────────────────
@@ -97,8 +102,13 @@ def elevated_user(db):
 
 
 def _auth(user) -> dict:
-    token = issue_token_pair(user)["access"]
-    return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+    """Заголовки вызывающего под гейтом ``media:write`` (уровень
+    ``employee-basic``). Уровень один и у ``user``, и у ``elevated_user``:
+    403 в тестах ниже обязан давать ``authorize_scope_write`` (признак
+    ``is_elevated`` токена), а не гейт модуля."""
+    gate_company(COMPANY, {user.id: {"media": "write"}})
+    token = issue_token_pair(user, company_slug=COMPANY)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": COMPANY}
 
 
 def _upload(client, user, *, filename, content, content_type, scope):

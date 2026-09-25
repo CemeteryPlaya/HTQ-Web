@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
 import { accessApi } from '@/api/access';
+import { getAccessToken } from '@/lib/auth/profileStorage';
 import {
   depthFor,
   hasDepth,
@@ -19,8 +20,11 @@ import type { AccessMe } from '@/types/access';
 /**
  * Права текущего пользователя в компании запроса (`/access/v1/me`, §4.5).
  *
- * Заменяет ролевые проверки во фронте. `useHRLevel` **не заменяет** — тот
- * относится к внутренней модели HR и живёт своей жизнью (§1.6 спеки).
+ * Заменяет ролевые проверки во фронте — и кадровые тоже: с задачи 10 блока
+ * I `useHRLevel` — лишь обёртка над этим хуком, оставленная ради
+ * `src/pages/contracts/*` до их перевода (см. его докстринг и сторож
+ * `hooks/__tests__/useHRLevelImporters.test.ts`); отдельной кадровой модели
+ * прав во фронте больше нет.
  *
  * **Отказ в закрытую.** Пока ответа нет — загрузка, ошибка сети, отсутствие
  * контекста компании — карта прав пуста, а значит разрешено ровно ничего.
@@ -56,6 +60,18 @@ export interface Permissions {
   pageHidden: (route: string) => boolean;
   /** Компании ниже по внешней иерархии. Только отображение (§7). */
   subordinateCompanies: string[];
+  /**
+   * Компании выше по дереву владения, чья обслуживающая должность дала часть
+   * прав выше (задача 6 блока C). Права, приехавшие из другой компании,
+   * обязаны быть объяснимы — этот список и есть объяснение.
+   */
+  inheritedFrom: string[];
+  /**
+   * Компания запроса в архиве — только чтение. Уровни в `level`/`atLeast` уже
+   * понижены сервером; флаг — для баннера и кнопок, которые идут не по уровню
+   * (платформенные операции реестра).
+   */
+  companyArchived: boolean;
   isLoading: boolean;
   /**
    * Права НЕ УДАЛОСЬ получить — это не то же самое, что «прав нет».
@@ -76,9 +92,15 @@ const EMPTY: PermissionMap = {};
 const EMPTY_DEPTH: DepthMap = {};
 
 export function usePermissions(): Permissions {
+  // Без токена запрос не уходит: у анонима прав нет по определению, а
+  // `/access/v1/me` ответил бы 401, который клиент трактует как «сессия
+  // протухла» и уводит на /login. Хук стоит в Header, то есть и на публичном
+  // лендинге, — гость на главной оказывался на форме входа.
+  const isLoggedIn = Boolean(getAccessToken());
   const { data, isLoading, isError, refetch } = useQuery<AccessMe>({
     queryKey: ['access', 'me'],
     queryFn: () => accessApi.getMe(),
+    enabled: isLoggedIn,
     // Тот же горизонт, что у useHRLevel: права меняются редко, а запрос
     // висит на каждой защищённой странице.
     staleTime: 5 * 60 * 1000,
@@ -98,6 +120,8 @@ export function usePermissions(): Permissions {
       can: (node, flag) => hasDepth(depthMap, node, flag),
       pageHidden: (route) => hiddenPages.includes(route),
       subordinateCompanies: data?.subordinate_companies ?? [],
+      inheritedFrom: data?.inherited_from ?? [],
+      companyArchived: data?.company_archived ?? false,
       isLoading,
       isError,
       refetch: () => { void refetch(); },

@@ -21,7 +21,9 @@ filter on the returned is_active themselves"), и заводить второй 
 
 from __future__ import annotations
 
-from apps.users.interface import get_user_brief, list_users_brief
+from django.db import transaction
+
+from apps.users.interface import get_user_brief, get_users_brief, list_users_brief
 
 from ..models import Company, CompanyMembership
 
@@ -64,9 +66,82 @@ def grant_membership(company: Company, user_id: int, *,
     вторую строку — ``get_or_create`` по тому же ключу, что несёт
     ``uniq_membership``. Возвращает ``True``, если строка создана заново,
     ``False`` — если членство уже было.
+
+    Новое членство сразу получает базовую роль ``employee-basic``
+    (``apps.access.interface.ensure_basic_role``, рулинг M финальной волны
+    блока I): это ЕДИНСТВЕННАЯ точка ЛОГИКИ создания членства — через неё
+    идут ``company_grant``, ``tenancy_bootstrap --grant-all``, экран
+    участников (``POST companies/<slug>/memberships``), ``seed_group_demo``
+    и ``CompanyMembershipAdmin.save_model`` (блок I.2, задача 9 — раньше
+    админка создавала строку напрямую, в обход сервиса), — и без роли новый
+    участник получал бы 403 на подбор коллег и весь ``tasks``.
+    Одной транзакцией: членство без роли не остаётся, если выдача упала.
+    Уже существующему членству роль не довыдаётся — это делал перенос
+    ``access_backfill_basic``, а снятую человеком роль повторный grant
+    возвращать не должен.
     """
-    _, created = CompanyMembership.objects.get_or_create(
-        company=company, user_id=user_id,
-        defaults={"is_default": is_default},
-    )
+    from apps.access import interface as access
+
+    with transaction.atomic():
+        _, created = CompanyMembership.objects.get_or_create(
+            company=company, user_id=user_id,
+            defaults={"is_default": is_default},
+        )
+        if created:
+            access.ensure_basic_role(company.slug, user_id)
     return created
+
+
+def user_ids_missing_membership(company: Company, user_ids) -> list[int]:
+    """Из ``user_ids`` — те, у кого ЕЩЁ нет членства в ``company``.
+
+    Для печати разрыва «обслуживающая должность есть, членства нет» в
+    ``manage.py company_create`` (задача 8 блока C) сразу после заведения
+    компании: список держателей приходит через
+    ``apps.access.interface.serving_holders``, а сверка с фактическим
+    членством — тут же, одним запросом, без импорта модели соседней аппки
+    в саму команду.
+    """
+    ids = list(user_ids)
+    if not ids:
+        return []
+    existing = set(
+        CompanyMembership.objects.filter(company=company, user_id__in=ids)
+        .values_list("user_id", flat=True)
+    )
+    return sorted(uid for uid in ids if uid not in existing)
+
+
+def list_memberships(company: Company) -> list[dict]:
+    """Участники компании с данными учётки.
+
+    Учётка может быть удалена, а строка членства — остаться: такую строку
+    показываем с пустыми полями учётки, а не прячем — спрятанную нельзя
+    отозвать.
+    """
+    rows = list(
+        CompanyMembership.objects.filter(company=company)
+        .order_by("-is_default", "user_id")
+        .values("user_id", "is_default")
+    )
+    briefs = {b["id"]: b for b in get_users_brief([r["user_id"] for r in rows])}
+    out = []
+    for row in rows:
+        brief = briefs.get(row["user_id"], {})
+        out.append({
+            "user_id": row["user_id"],
+            "username": brief.get("username", ""),
+            "full_name": brief.get("full_name", ""),
+            "email": brief.get("email", ""),
+            "is_active": bool(brief.get("is_active", False)),
+            "is_default": row["is_default"],
+        })
+    return out
+
+
+def revoke_membership(company: Company, user_id: int) -> bool:
+    """Снять членство. ``True`` — строка была и удалена, ``False`` — её не было."""
+    deleted, _ = CompanyMembership.objects.filter(
+        company=company, user_id=user_id,
+    ).delete()
+    return deleted > 0

@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { translatedMap } from '@/lib/i18n/translatedMap';
 import { useTranslation } from 'react-i18next';
 
@@ -63,7 +63,20 @@ function PMOCard({ pmo, onSelect, selected }: { pmo: PMO; onSelect: () => void; 
 const HRPMO = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Создание PMO и правка его состава — на бэкенде под
+  // `admin=True` + `module="hr", level="admin"` (apps/hr/views.py), поэтому
+  // кнопки показываются по уровню модуля `hr`, который проверяет сервер.
+  // Старый `isSenior` (write + область company) был шире и показывал кнопку
+  // тому, кому сервер ответил бы 403.
+  // ⚠️ Паритет с сервером — только по УРОВНЮ МОДУЛЯ. Те же ручки стоят ещё и
+  // под `admin=True` (`token.is_elevated`: is_staff/is_admin/is_superuser,
+  // htqweb/http.py), а этого флага в `usePermissions` нет — hr-lead без
+  // платформенного admin увидит кнопки и получит 403. Дыра pre-existing
+  // (старый `isSenior` её не закрывал) и здесь честно не закрыта: зеркала
+  // `is_elevated` во фронтовых правах нет, тянуть `useActiveProfile` ради
+  // него — отдельное решение (ревью задачи 10, minor 2).
+  const hrAdmin = permissions.atLeast('hr', 'admin');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
@@ -146,7 +159,7 @@ const HRPMO = () => {
         <div className="w-72 flex-shrink-0 flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-muted-foreground">{t('hr.pmo.listCount', { count: pmos.length })}</span>
-            {isSenior && (
+            {hrAdmin && (
               <Dialog open={createOpen} onOpenChange={setCreateOpen}>
                 <DialogTrigger asChild>
                   <Button size="sm">{t('hr.pmo.create')}</Button>
@@ -209,7 +222,7 @@ const HRPMO = () => {
 
               <TabsContent value="members" className="flex-1 overflow-y-auto">
                 <div className="flex justify-end mb-3">
-                  {isSenior && (
+                  {hrAdmin && (
                     <Dialog open={addMemberOpen} onOpenChange={setAddMemberOpen}>
                       <DialogTrigger asChild>
                         <Button size="sm">{t('hr.pmo.addMemberShort')}</Button>
@@ -305,11 +318,11 @@ const HRPMO = () => {
                                 updateMemberMutation.mutate({ memberId: m.id, patch: { allocation_percent: next } });
                               }
                             }}
-                            disabled={!isSenior || updateMemberMutation.isPending}
+                            disabled={!hrAdmin || updateMemberMutation.isPending}
                           />
                           <span className="text-xs text-muted-foreground">%</span>
                         </div>
-                        {isSenior && (
+                        {hrAdmin && (
                           <label className="flex items-center gap-2 text-xs text-muted-foreground">
                             <Checkbox
                               checked={m.is_primary}
@@ -323,7 +336,7 @@ const HRPMO = () => {
                           </label>
                         )}
                         <Badge variant="outline" className="text-xs shrink-0">{MEMBER_TYPE_LABELS[m.membership_type] ?? m.membership_type}</Badge>
-                        {isSenior && (
+                        {hrAdmin && (
                           <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive shrink-0" onClick={() => removeMemberMutation.mutate(m.id)}>×</Button>
                         )}
                       </div>

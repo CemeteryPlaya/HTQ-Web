@@ -166,13 +166,20 @@ FastAPI-сервисами.
 ./.venv/Scripts/python.exe manage.py migrate
 ./.venv/Scripts/python.exe manage.py service <имя> --on|--off [--message "..."]
 ./.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR]
-./.venv/Scripts/python.exe manage.py seed_tasks_demo [--purge|--wipe]
+./.venv/Scripts/python.exe manage.py seed_hr_demo [--company SLUG]
+./.venv/Scripts/python.exe manage.py seed_employee_accounts [--company SLUG]
+./.venv/Scripts/python.exe manage.py seed_tasks_demo [--company SLUG] [--purge|--wipe]
+./.venv/Scripts/python.exe manage.py seed_group_demo [--skip-tasks]
 ./.venv/Scripts/python.exe manage.py create_user --email ... --name ...
 ```
 
 `service` — рубильник домена (см. [01-conventions.md](01-conventions.md),
 раздел 5). `mail_check` — первое, что запускают при проблемах с почтой
 (см. [flows/mail-imap-to-ui.md](flows/mail-imap-to-ui.md)).
+
+`seed_group_demo` — единственный способ увидеть группу локально: заводит
+холдинг и три ДО, сеет утверждённую оргструктуру каждого вида компании,
+заводит учётки (`demo12345`), выдаёт членства и наполняет задачи.
 
 `seed_tasks_demo` наполняет всю пятиуровневую иерархию демо-данными, но
 **требует, чтобы сначала отработал `seed_hr_demo`**: он читает отделы и

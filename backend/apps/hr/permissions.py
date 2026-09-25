@@ -1,14 +1,16 @@
 """HR permission keys + level presets — данные, порт services/hr/app/auth/permissions.py.
 
-Ключи — авторитетная единица HR-авторизации (проверяется в HRAccess.has /
-require_permission исходника). ``hr_level`` — UI/миграционный пресет: выбор
-уровня заполняет ``permissions[]`` должности соответствующим пресетом.
-
-Этот модуль сейчас используется только для статического permissions-catalog
-эндпойнта positions (``LEVEL_PRESETS``). ``ALL_KEYS``/``expand_level``
-переносятся как данные вместе с остальным файлом по прямому указанию брифа —
-их потребитель (``app/auth/hr_access.py``) относится к под-модулю employees
-и переносится отдельной задачей.
+Ключи остаются авторитетной единицей HR-авторизации, но с задачи 9 блока I
+«Единая модель прав» проверяются НЕ через них напрямую: вьюхи зовут
+``apps.hr.rbac.NodeAccess.has(key)``, который раскрывает ключ в узел реестра
+``apps.access`` + набор признаков через ``legacy_roles.KEY_TO_NODE`` и
+проверяет их там. ``hr_level``/``LEVEL_PRESETS`` живут дальше как:
+UI-пресет позиций (``_PERMISSION_CATALOG`` в ``apps/hr/views.py``) и
+единственный источник для эвристики переноса
+(``apps.hr.access.classify_hr_level`` → ``access_backfill_positions``,
+задача 2 того же блока). ``ALL_KEYS``/``expand_level`` живых читателей
+больше не имеют (их звал только снятый резолвер ``resolve_hr_access``) и
+остаются как данные без нагрузки — удалять не входит в объём задачи 9.
 """
 
 from __future__ import annotations

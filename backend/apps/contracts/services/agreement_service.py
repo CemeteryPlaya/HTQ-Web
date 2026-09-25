@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 
 from django.db import transaction
 from django.http import Http404
@@ -30,11 +31,14 @@ from apps.contracts.models import (
     BudgetStatus,
     Counterparty,
     CounterpartyStatus,
+    PaymentType,
 )
 from apps.contracts.services import advance_payment_service as advance_payment_svc
+from apps.contracts.services import agreement_items as items_svc
 from apps.contracts.services import budget_calc
 from apps.contracts.services.counterparty_service import get_counterparty_or_404
 from apps.contracts.services.reference_service import ReferenceConflict, conflict_as
+from apps.contracts.services.request_link import check_request_link, log_link
 # Единственный сосед, к которому обращается этот модуль, и только через его
 # interface — прямой импорт apps.media_files.models/services запрещён
 # (apps/core/tests/test_app_isolation.py).
@@ -46,6 +50,45 @@ logger = logging.getLogger(__name__)
 
 class AgreementRuleViolation(Exception):
     """Договор нарушает доменное правило (валюта, статус, состояние справочника)."""
+
+
+def _assert_not_duplicate(*, counterparty, number: str, signed_date,
+                          exclude_pk: int | None = None) -> None:
+    """BR-032: «контрагент + номер + дата договора» уникальны.
+
+    Проверяется ЗАРАНЕЕ, хотя в БД стоит ``uq_contracts_agr_cp_number_date``:
+    ограничение ответило бы IntegrityError, а человеку нужен текст — какой
+    именно договор уже заведён.
+    """
+    duplicate = (Agreement.objects
+                 .filter(counterparty=counterparty, number=number,
+                         signed_date=signed_date)
+                 .exclude(pk=exclude_pk).first())
+    if duplicate is None:
+        return
+    dated = f" от {signed_date:%d.%m.%Y}" if signed_date else " без даты"
+    raise AgreementRuleViolation(
+        f"Договор № {number}{dated} с контрагентом «{counterparty.name}» уже "
+        f"существует — откройте существующий, а не заводите второй"
+    )
+
+
+def payment_type_from_advance(has_advance: bool, advance_percentage) -> str:
+    """Предоплата / постоплата / поэтапно — из условий аванса договора.
+
+    Форма договора этот тип больше не спрашивает: «тип оплаты» у заказчика —
+    это «стандартный / открытый» (``contract_type``). Но ``payment_type``
+    живёт дальше — по нему ветвятся маршруты согласования и его пишет импорт
+    реестра, — поэтому он ВЫВОДИТСЯ, тем же правилом, что
+    ``cashflow_import.derive_payment_type`` из доли аванса: нет аванса —
+    постоплата, аванс 100% — предоплата, всё между — поэтапно. Аванс
+    включён без процента — это тоже «часть вперёд», то есть поэтапно.
+    """
+    if not has_advance:
+        return PaymentType.POSTPAYMENT
+    if advance_percentage is not None and Decimal(advance_percentage) >= 100:
+        return PaymentType.PREPAYMENT
+    return PaymentType.STAGED
 
 
 # Разрешённые переходы статуса. Чего здесь нет — то запрещено; «исполнен» и
@@ -180,7 +223,8 @@ def _validate_context(line: BudgetLine, counterparty, currency: str, *,
 def list_agreements(*, budget_id: int | None = None, budget_line_id: int | None = None,
                     counterparty_id: int | None = None,
                     administrator_id: int | None = None, program_id: int | None = None,
-                    status: str | None = None, period_year: int | None = None):
+                    status: str | None = None, period_year: int | None = None,
+                    request_id: int | None = None):
     """``budget_id`` фильтрует по бюджету ЦЕЛИКОМ (все его программы),
     ``budget_line_id`` — по одной программе. Нужны оба: карточка бюджета
     показывает договоры всех своих строк, карточка строки — только свои."""
@@ -188,7 +232,7 @@ def list_agreements(*, budget_id: int | None = None, budget_line_id: int | None 
         "budget_line", "budget_line__program", "budget_line__budget",
         "budget_line__budget__administrator",
         "budget_line__budget__administrator__country", "counterparty",
-    )
+    ).prefetch_related("items")
     if budget_id is not None:
         query = query.filter(budget_line__budget_id=budget_id)
     if budget_line_id is not None:
@@ -203,6 +247,8 @@ def list_agreements(*, budget_id: int | None = None, budget_line_id: int | None 
         query = query.filter(status=status)
     if period_year is not None:
         query = query.filter(budget_line__budget__period_year=period_year)
+    if request_id is not None:
+        query = query.filter(request_id=request_id)
     return list(query)
 
 
@@ -212,6 +258,7 @@ def get_agreement_or_404(agreement_id: int) -> Agreement:
         "budget_line__budget__administrator",
         "budget_line__budget__administrator__country", "counterparty",
                            )
+           .prefetch_related("items")
            .filter(pk=agreement_id).first())
     if row is None:
         raise Http404("Договор не найден")
@@ -293,6 +340,8 @@ def serialize_agreement(agreement: Agreement) -> dict:
         "signed_date": agreement.signed_date,
         "status": agreement.status,
         "approval_state": agreement.approval_state,
+        "request_id": agreement.request_id,
+        "items": items_svc.serialize_items(agreement),
         "created_by": agreement.created_by,
         "created_at": agreement.created_at,
         "updated_at": agreement.updated_at,
@@ -302,7 +351,7 @@ def serialize_agreement(agreement: Agreement) -> dict:
 @transaction.atomic
 def create_agreement(*, number: str, name: str, budget_line_id: int,
                      counterparty_id: int,
-                     amount, payment_type: str = "postpayment",
+                     amount, payment_type: str | None = None,
                      direction: str | None = None,
                      kind: str | None = None,
                      contract_type: str | None = None,
@@ -325,14 +374,36 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
                      term_comment: str = "",
                      currency: str = "KZT",
                      signed_date=None, status: str | None = None,
+                     request_id: int | None = None,
+                     items: list[dict] | None = None,
                      created_by: int | None = None) -> Agreement:
     line = _lock_line(budget_line_id)
     counterparty = get_counterparty_or_404(counterparty_id)
     _validate_context(line, counterparty, currency)
+    _assert_not_duplicate(counterparty=counterparty, number=number,
+                          signed_date=signed_date)
+    # Заявка, по которой заключается договор, — до записи: она обязана быть
+    # одобрена под эту же строку бюджета (см. request_link).
+    check_request_link(request_id, budget_line_id=line.pk)
 
     status = status or AgreementStatus.DRAFT
     if status not in AgreementStatus.values:
         raise AgreementRuleViolation(f"Неизвестный статус договора: {status}")
+    if status == AgreementStatus.ON_REVIEW:
+        # «На согласовании» — не состояние, которое объявляют, а следствие
+        # запущенного процесса: в него договор переводит
+        # ``approval_hooks._agreement_on_started`` из транзакции движка.
+        # Создание договора сразу в нём разводит две оси: процесса нет,
+        # ``approval_state`` остаётся ``draft`` — фронтенд по нему рисует
+        # кнопку «На согласование», а ``submit_for_approval`` отвечает на неё
+        # 409 «отправляется черновик». Вернуть такой договор в ``draft``
+        # можно только через ``/status`` руками. Остальные непроектные
+        # статусы (``approved``/``signed``) остаются разрешёнными намеренно:
+        # это заведение задним числом договора, согласованного вне системы.
+        raise AgreementRuleViolation(
+            "Статус «На согласовании» ставит само согласование: заведите "
+            "черновик и отправьте его на согласование"
+        )
 
     direction = direction or AgreementDirection.EXPENSE
     if direction not in AgreementDirection.values:
@@ -346,13 +417,19 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
     if contract_type not in AgreementType.values:
         raise AgreementRuleViolation(f"Неизвестный тип договора: {contract_type}")
 
+    # Явно переданный тип оплаты уважается (API, старые клиенты); форма его
+    # не шлёт — тогда он следует из аванса.
+    payment_type = payment_type or payment_type_from_advance(
+        has_advance, advance_percentage)
+
     # Черновик лимит не проверяет — он его и не занимает.
     # Договоры направления «Поступление» (доходные) также не уменьшают расходный бюджет.
     if direction == AgreementDirection.EXPENSE and status in budget_calc.COMMITTING_STATUSES:
         budget_calc.check_capacity(
             line, budget_calc.agreement_commitment(contract_type, amount))
 
-    with conflict_as(f"Договор с номером {number} уже зарегистрирован"):
+    with conflict_as(f"Договор № {number} с этим контрагентом и этой датой "
+                     f"уже зарегистрирован"):
         # Объектами, а не id: обе записи уже загружены проверками выше
         # (`_lock_line` тянет и бюджет с администратором и страной), и ответ
         # соберётся из закэшированных связей, а не новыми запросами.
@@ -378,6 +455,7 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
             "start_date": start_date,
             "end_date": end_date,
             "status": status,
+            "request_id": request_id,
             "created_by": created_by,
         }
         # Необязательные поля подставляются только заданными: договор,
@@ -403,14 +481,30 @@ def create_agreement(*, number: str, name: str, budget_line_id: int,
         if retention_amount is not None:
             kwargs["retention_amount"] = retention_amount
 
-        return Agreement.objects.create(**kwargs)
+        agreement = Agreement.objects.create(**kwargs)
+    # После создания, а не до: позиции из заявки сверяются с остатком, и
+    # договору нужен pk, чтобы его собственные строки не считались «чужими».
+    # Нарушение откатывает и сам договор — транзакция одна.
+    if items:
+        try:
+            items_svc.replace_items(agreement, items)
+        except items_svc.AgreementItemsViolation as exc:
+            raise AgreementRuleViolation(str(exc)) from exc
+    log_link(request_id, kind="agreement", document_id=agreement.pk,
+             title=f"Договор {agreement.number} — {agreement.name}",
+             url=f"/contracts/agreements/{agreement.pk}", actor_id=created_by)
+    return agreement
 
 
 @transaction.atomic
 def update_agreement(agreement_id: int, **fields) -> Agreement:
     """Правка договора. Смена статуса здесь НЕ принимается — для неё есть
     ``change_status`` с проверкой перехода; иначе PATCH стал бы обходным
-    путём мимо ``ALLOWED_TRANSITIONS``."""
+    путём мимо ``ALLOWED_TRANSITIONS``.
+
+    ``items`` — ПОЛНЫЙ новый список позиций (замена целиком, со сверкой их
+    суммы с суммой договора); ``None`` — позиции не трогаются."""
+    items = fields.pop("items", None)
     agreement = get_agreement_or_404(agreement_id)
     # Своя машина статусов запирает только терминальные состояния, а на
     # согласовании договор живёт в ``on_review`` — под неё он не попадает.
@@ -433,6 +527,20 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
     _validate_context(line, counterparty, currency,
                       check_budget_status=budget_changed,
                       check_counterparty_status=counterparty_changed)
+    number = fields.get("number") or agreement.number
+    signed_date = (fields["signed_date"] if fields.get("signed_date") is not None
+                   else agreement.signed_date)
+    if (counterparty_changed or number != agreement.number
+            or signed_date != agreement.signed_date):
+        _assert_not_duplicate(counterparty=counterparty, number=number,
+                              signed_date=signed_date, exclude_pk=agreement.pk)
+    # Связь с заявкой перепроверяется и при смене строки бюджета: договор,
+    # уведённый на другую строку, перестал бы исполнять свою заявку.
+    request_id = fields.get("request_id")
+    request_changed = request_id is not None and request_id != agreement.request_id
+    if request_changed or (budget_changed and agreement.request_id is not None):
+        check_request_link(request_id if request_changed else agreement.request_id,
+                           budget_line_id=line.pk)
 
     # Тип, который у договора БУДЕТ после этой правки: от него зависят обе
     # проверки ниже — и что занимает строку бюджета, и есть ли сумма, которую
@@ -473,6 +581,21 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
                 f"Сумма договора {amount} меньше уже проведённых по нему платежей: {paid}"
             )
 
+    # Тип оплаты следует за авансом, но только когда аванс РЕАЛЬНО поменяли:
+    # форма шлёт условия аванса при каждой правке, а у договоров из импорта
+    # тип выведен из ``advance_share`` при ``has_advance=False`` — пересчёт
+    # «на всякий случай» молча превращал бы их «поэтапно» в «постоплату».
+    advance_changed = any(
+        fields.get(key) is not None and fields[key] != getattr(agreement, key)
+        for key in ("has_advance", "advance_percentage"))
+    if fields.get("payment_type") is None and advance_changed:
+        has_advance = (fields["has_advance"] if fields.get("has_advance") is not None
+                       else agreement.has_advance)
+        percentage = (fields["advance_percentage"]
+                      if fields.get("advance_percentage") is not None
+                      else agreement.advance_percentage)
+        fields["payment_type"] = payment_type_from_advance(has_advance, percentage)
+
     changed = [key for key, value in fields.items() if value is not None]
     for key in changed:
         setattr(agreement, key, fields[key])
@@ -480,8 +603,27 @@ def update_agreement(agreement_id: int, **fields) -> Agreement:
     # лежит она в строке. Здесь состояние уже слито — см. htqweb/date_rules.py.
     date_rules.assert_instance_ordered(agreement)
     if changed:
-        with conflict_as("Договор с таким номером уже зарегистрирован"):
+        with conflict_as("Договор с таким номером и датой для этого контрагента "
+                         "уже зарегистрирован"):
             agreement.save()
+    try:
+        if items is not None:
+            items_svc.replace_items(agreement, items)
+        elif request_changed and any(row["request_item_key"]
+                                     for row in items_svc.current_items(agreement)):
+            raise items_svc.AgreementItemsViolation(
+                "Договор привязан к другой заявке — позиции прежней заявки к нему "
+                "больше не относятся; обновите позиции договора")
+        # Сумму с СОХРАНЁННЫМИ позициями здесь не сверяем: черновик по ТЗ
+        # сохраняется «по формату», и PATCH одной суммы не должен падать из-за
+        # позиций, которые поправят следующим шагом. Сверка — при отправке на
+        # согласование (``submit_for_approval``), где разойтись уже нельзя.
+    except items_svc.AgreementItemsViolation as exc:
+        raise AgreementRuleViolation(str(exc)) from exc
+    if request_changed:
+        log_link(request_id, kind="agreement", document_id=agreement.pk,
+                 title=f"Договор {agreement.number} — {agreement.name}",
+                 url=f"/contracts/agreements/{agreement.pk}", actor_id=None)
     return agreement
 
 
@@ -597,6 +739,13 @@ def submit_for_approval(agreement_id: int, *, actor_id: int | None = None) -> di
             line,
             budget_calc.agreement_commitment(agreement.contract_type, agreement.amount),
             exclude_agreement_id=agreement.pk)
+    # Позиции сверяются именно здесь, а не при каждом сохранении: черновик
+    # можно сохранить недозаполненным (ТЗ 9.4), а согласующие подписывают то,
+    # что покупается, — расхождение суммы с позициями им подписывать нельзя.
+    try:
+        items_svc.assert_ready_for_approval(agreement)
+    except items_svc.AgreementItemsViolation as exc:
+        raise AgreementRuleViolation(str(exc)) from exc
 
     # enrich=True: карточка уходит прямо в HTTP-ответ, и фронтенду после
     # отправки нужно показать «кто согласует», а не голые user_id.

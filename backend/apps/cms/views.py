@@ -6,8 +6,9 @@ in ``apps.cms.services.{contact_requests_service,news_service,
 taxonomy_service}``.
 
 Several URLs are shared by more than one HTTP method with *different* auth
-requirements (e.g. ``POST /news/`` is admin-only, ``GET /news/`` is public;
-the ``{id}`` detail URLs are GET-public/PATCH-admin/DELETE-admin) —
+requirements (e.g. ``POST /news/`` is gated ``module="cms", level="write"``
+— block L, formerly ``admin=True`` — while ``GET /news/`` is public; the
+``{id}`` detail URLs are GET-public / PATCH and DELETE ``cms:write``) —
 ``htqweb.http.api_view`` binds one auth mode per decorated function, so each
 shared URL gets a small plain dispatcher that picks the right decorated
 function by ``request.method`` and falls back to a 405 envelope, matching
@@ -96,7 +97,7 @@ def _create_contact_request(request, data: schemas.ContactRequestCreate):
     return schemas.ContactRequestRead.model_validate(entry)
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="cms", level="write")
 def _list_contact_requests(request):
     try:
         query = schemas.ContactRequestListQuery.model_validate(dict(request.GET.items()))
@@ -117,7 +118,7 @@ def contact_requests_collection(request, *args, **kwargs):
 
 # ── GET /stats (+ /stats/ alias), admin ─────────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="cms", level="write")
 def contact_request_stats(request):
     unhandled = svc.contact_request_stats()
     return schemas.ContactRequestStats(unhandled=unhandled)
@@ -125,13 +126,13 @@ def contact_request_stats(request):
 
 # ── GET/PATCH/DELETE /{id}, admin — detail ──────────────────────────────────
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="cms", level="write")
 def _get_contact_request(request, contact_id: int):
     entry = svc.get_contact_request_or_404(contact_id)
     return schemas.ContactRequestRead.model_validate(entry)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.ContactRequestUpdate, admin=True)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.ContactRequestUpdate, module="cms", level="write")
 def _update_contact_request(request, contact_id: int, data: schemas.ContactRequestUpdate):
     entry = svc.get_contact_request_or_404(contact_id)
     changes = data.model_dump(exclude_unset=True)
@@ -147,7 +148,7 @@ def _update_contact_request(request, contact_id: int, data: schemas.ContactReque
     return schemas.ContactRequestRead.model_validate(entry)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", module="cms", level="write")
 def _delete_contact_request(request, contact_id: int):
     entry = svc.get_contact_request_or_404(contact_id)
     email = entry.email
@@ -177,7 +178,7 @@ def contact_request_detail(request, contact_id: int, *args, **kwargs):
 
 # ── POST /{id}/reply, admin ─────────────────────────────────────────────────
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.ContactRequestReply, admin=True)
+@api_view(methods=("POST",), auth="jwt", body=schemas.ContactRequestReply, module="cms", level="write")
 def reply_contact_request(request, contact_id: int, data: schemas.ContactRequestReply):
     entry = svc.get_contact_request_or_404(contact_id)
     entry = svc.reply_to_contact_request(
@@ -195,6 +196,13 @@ def reply_contact_request(request, contact_id: int, data: schemas.ContactRequest
 
 
 # ── GET /conference/config (+ /conference/config/ alias) ────────────────────
+#
+# Без гейта модуля намеренно (SELF_SERVICE["cms"]["conference_config"] =
+# "open", финальное ревью блока L, I-1): рантайм-конфиг звонка (ICE/TURN,
+# адрес и отпечаток WebTransport) без данных пользователя, и до блока L у
+# него не было проверок, кроме входа. Его зовёт комната /room/<id>, которая
+# открывается и на голом домене — туда ведёт ссылка-приглашение, — а без
+# компании гейт дал бы none и 403: звонок без TURN.
 
 @api_view(methods=("GET",), auth="jwt")
 def conference_config(request):
@@ -230,7 +238,7 @@ def _list_news(request):
     return schemas.Page[schemas.NewsRead].model_validate(page)
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.NewsCreate, status=201, admin=True)
+@api_view(methods=("POST",), auth="jwt", body=schemas.NewsCreate, status=201, module="cms", level="write")
 def _create_news(request, data: schemas.NewsCreate):
     values = data.model_dump(exclude={"tag_ids"})
     if values.get("author_id") is None:
@@ -277,7 +285,7 @@ def _get_news(request, news_id: int):
     return schemas.NewsRead.model_validate(news_svc.serialize_news(news))
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.NewsUpdate, admin=True)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.NewsUpdate, module="cms", level="write")
 def _update_news(request, news_id: int, data: schemas.NewsUpdate):
     news = news_svc.get_news_for_admin_or_404(news_id)
     raw_changes = data.model_dump(exclude_unset=True)
@@ -296,7 +304,7 @@ def _update_news(request, news_id: int, data: schemas.NewsUpdate):
     return schemas.NewsRead.model_validate(news_svc.serialize_news(news))
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", module="cms", level="write")
 def _delete_news(request, news_id: int):
     news = news_svc.get_news_for_admin_or_404(news_id)
     slug = news.slug
@@ -313,7 +321,7 @@ def _delete_news(request, news_id: int):
 
 
 @api_view(methods=("POST",), auth="jwt", body=schemas.NewsTranslateRequest,
-          status=202, admin=True)
+          status=202, module="cms", level="write")
 def translate_news(request, news_id: int, data: schemas.NewsTranslateRequest):
     """Порт ``services/cms/app/api/v1/news.py::translate_news`` — единственный
     роут news.py, не перенесённый в фазу cutover'а: сама фоновая работа
@@ -323,7 +331,8 @@ def translate_news(request, news_id: int, data: schemas.NewsTranslateRequest):
     оставался недостижим.
 
     Контракт источника воспроизведён как есть: ``require_admin`` ->
-    ``admin=True``, 404 на несуществующую новость, 202 + ``{task_id, news_id,
+    ``admin=True`` (с блока L — ``module="cms", level="write"``, как вся
+    правка контента), 404 на несуществующую новость, 202 + ``{task_id, news_id,
     target, status}``. Ответ ОСОЗНАННО асинхронный (никакого
     ``translated_title``/``translated_content`` в теле) — ровно как у
     источника; фронт эту ветку уже умеет («Перевод поставлен в очередь»)."""
@@ -357,7 +366,7 @@ def _list_categories(request):
     return [schemas.CategoryRead.model_validate(row) for row in rows]
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.CategoryCreate, status=201, admin=True)
+@api_view(methods=("POST",), auth="jwt", body=schemas.CategoryCreate, status=201, module="cms", level="write")
 def _create_category(request, data: schemas.CategoryCreate):
     try:
         cat = tax_svc.create_category(data.model_dump())
@@ -385,7 +394,7 @@ def categories_collection(request, *args, **kwargs):
 
 # ── Categories: PATCH /{id} (admin) + DELETE /{id} (admin) — detail ─────────
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.CategoryUpdate, admin=True)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.CategoryUpdate, module="cms", level="write")
 def _update_category(request, category_id: int, data: schemas.CategoryUpdate):
     cat = tax_svc.get_category_or_404(category_id)
     changes = data.model_dump(exclude_unset=True)
@@ -404,7 +413,7 @@ def _update_category(request, category_id: int, data: schemas.CategoryUpdate):
     return schemas.CategoryRead.model_validate(cat)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", module="cms", level="write")
 def _delete_category(request, category_id: int):
     cat = tax_svc.get_category_or_404(category_id)
     slug = cat.slug
@@ -437,7 +446,7 @@ def _list_tags(request):
     return [schemas.TagRead.model_validate(row) for row in rows]
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.TagCreate, status=201, admin=True)
+@api_view(methods=("POST",), auth="jwt", body=schemas.TagCreate, status=201, module="cms", level="write")
 def _create_tag(request, data: schemas.TagCreate):
     try:
         tag = tax_svc.create_tag(data.model_dump())
@@ -465,7 +474,7 @@ def tags_collection(request, *args, **kwargs):
 
 # ── Tags: PATCH /{id} (admin) + DELETE /{id} (admin) — detail ───────────────
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.TagUpdate, admin=True)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.TagUpdate, module="cms", level="write")
 def _update_tag(request, tag_id: int, data: schemas.TagUpdate):
     tag = tax_svc.get_tag_or_404(tag_id)
     changes = data.model_dump(exclude_unset=True)
@@ -484,7 +493,7 @@ def _update_tag(request, tag_id: int, data: schemas.TagUpdate):
     return schemas.TagRead.model_validate(tag)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", module="cms", level="write")
 def _delete_tag(request, tag_id: int):
     tag = tax_svc.get_tag_or_404(tag_id)
     slug = tag.slug
@@ -517,8 +526,8 @@ def tag_detail(request, tag_id: int, *args, **kwargs):
 # заголовков было бы странно. Отдаём только видимые секции и уже локализованные
 # строки — скрытая секция не должна утекать в ответ, даже пустая.
 #
-# Запись — admin=True, как у новостей и contact-requests рядом: это тот же
-# редакторский контур.
+# Запись — ``module="cms", level="write"`` (блок L; до него ``admin=True``),
+# как у новостей и contact-requests рядом: это тот же редакторский контур.
 
 @api_view(methods=("GET",), auth=None)
 def home_sections_public(request):
@@ -526,12 +535,12 @@ def home_sections_public(request):
     return [schemas.HomeSectionPublic(**s) for s in home_svc.public_sections(lang)]
 
 
-@api_view(methods=("GET",), auth="jwt", admin=True)
+@api_view(methods=("GET",), auth="jwt", module="cms", level="write")
 def _list_home_sections_admin(request):
     return [schemas.HomeSectionAdmin(**s) for s in home_svc.admin_sections()]
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.HomeSectionCreate, status=201, admin=True)
+@api_view(methods=("POST",), auth="jwt", body=schemas.HomeSectionCreate, status=201, module="cms", level="write")
 def _create_home_section(request, data: schemas.HomeSectionCreate):
     section = home_svc.create_section(data.model_dump(), user_id=request.token.user_id)
     audit.record_action(
@@ -553,7 +562,7 @@ def home_sections_admin(request):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", module="cms", level="write")
 def _delete_home_section(request, section_id: int):
     try:
         home_svc.delete_section(section_id)
@@ -576,7 +585,7 @@ def _delete_home_section(request, section_id: int):
     return HttpResponse(status=204)
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.HomeSectionUpdate, admin=True)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.HomeSectionUpdate, module="cms", level="write")
 def _update_home_section(request, section_id: int, data: schemas.HomeSectionUpdate):
     patch = data.model_dump(exclude_unset=True)
     try:
@@ -602,13 +611,13 @@ def home_section_detail(request, section_id: int):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.HomeReorder, admin=True)
+@api_view(methods=("POST",), auth="jwt", body=schemas.HomeReorder, module="cms", level="write")
 def home_sections_reorder(request, data: schemas.HomeReorder):
     home_svc.reorder_sections(data.ids)
     return {"ok": True}
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.HomeItemUpsert, status=201, admin=True)
+@api_view(methods=("POST",), auth="jwt", body=schemas.HomeItemUpsert, status=201, module="cms", level="write")
 def home_items_collection(request, section_id: int, data: schemas.HomeItemUpsert):
     try:
         item = home_svc.create_item(section_id, data.model_dump())
@@ -617,7 +626,7 @@ def home_items_collection(request, section_id: int, data: schemas.HomeItemUpsert
     return schemas.HomeItemAdmin(**item)
 
 
-@api_view(methods=("POST",), auth="jwt", body=schemas.HomeReorder, admin=True)
+@api_view(methods=("POST",), auth="jwt", body=schemas.HomeReorder, module="cms", level="write")
 def home_items_reorder(request, section_id: int, data: schemas.HomeReorder):
     try:
         home_svc.get_section(section_id)
@@ -627,7 +636,7 @@ def home_items_reorder(request, section_id: int, data: schemas.HomeReorder):
     return {"ok": True}
 
 
-@api_view(methods=("PATCH",), auth="jwt", body=schemas.HomeItemUpdate, admin=True)
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.HomeItemUpdate, module="cms", level="write")
 def _update_home_item(request, item_id: int, data: schemas.HomeItemUpdate):
     try:
         item = home_svc.update_item(item_id, data.model_dump(exclude_unset=True))
@@ -636,7 +645,7 @@ def _update_home_item(request, item_id: int, data: schemas.HomeItemUpdate):
     return schemas.HomeItemAdmin(**item)
 
 
-@api_view(methods=("DELETE",), auth="jwt", admin=True)
+@api_view(methods=("DELETE",), auth="jwt", module="cms", level="write")
 def _delete_home_item(request, item_id: int):
     try:
         home_svc.delete_item(item_id)
@@ -688,7 +697,13 @@ def _origin(request) -> str:
 
     return f"{request.scheme}://{request.get_host()}"
 
-@api_view(methods=("POST",), body=schemas.ConferenceInviteCreate, status=201)
+# Приглашения — ``level="read"``, а не ``write``: ``write`` в модуле ``cms``
+# занят правкой контента (инвариант L1 блока L), а ссылку в свою встречу
+# создаёт любой сотрудник. Чужие ссылки закрывает не гейт, а
+# ``conference_invite_service.may_manage_invites`` (спека блока L §7).
+
+@api_view(methods=("POST",), body=schemas.ConferenceInviteCreate, status=201,
+          module="cms", level="read")
 def _create_conference_invite(request, data: schemas.ConferenceInviteCreate):
     try:
         invite = conference_invite_service.create_invite(
@@ -703,15 +718,28 @@ def _create_conference_invite(request, data: schemas.ConferenceInviteCreate):
         conference_invite_service.serialize(invite, base_url=_origin(request)))
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="cms", level="read")
 def _list_conference_invites(request):
     room_id = request.GET.get("room_id", "")
     if not room_id:
         return json_error("room_id is required", 422)
+    # Фильтр, а не 403: список организатора — его ссылки и ссылки его
+    # встречи; чужие (с токенами входа) в ответ не попадают. Права и
+    # календарь считаются один раз на запрос (manageable_invites), роли —
+    # те, что гейт уже положил в request.access_resolution.
+    from htqweb.tenancy.context import current_company_or_none
+
+    cached = getattr(request, "access_resolution", None)
+    resolution = (cached[2] if cached is not None
+                  and cached[0] == current_company_or_none()
+                  and cached[1] == request.token.user_id else None)
+    invites = conference_invite_service.manageable_invites(
+        request.token, room_id, conference_invite_service.list_for_room(room_id),
+        resolution=resolution)
     return [
         schemas.ConferenceInviteRead.model_validate(
             conference_invite_service.serialize(inv, base_url=_origin(request)))
-        for inv in conference_invite_service.list_for_room(room_id)
+        for inv in invites
     ]
 
 
@@ -723,8 +751,14 @@ def conference_invites(request):
     return json_error("Method not allowed", 405)
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="cms", level="read")
 def conference_invite_revoke(request, invite_id: int):
+    # Чужое приглашение — 404, как несуществующее (по образцу
+    # conference.services.access.may_view): не выдавать факт существования.
+    invite = ConferenceInvite.objects.filter(pk=invite_id).first()
+    if invite is None or not conference_invite_service.may_manage_invites(
+            request.token, invite.room_id, invite):
+        return json_error("Приглашение не найдено", 404)
     try:
         conference_invite_service.revoke(invite_id)
     except conference_invite_service.InviteInvalid as exc:
@@ -779,11 +813,13 @@ def conference_invite_guest_token(request, token: str,
     return schemas.ConferenceGuestToken.model_validate(payload)
 
 
-@api_view(methods=("POST",), body=schemas.ConferenceInviteSend)
+@api_view(methods=("POST",), body=schemas.ConferenceInviteSend,
+          module="cms", level="read")
 def conference_invite_send(request, invite_id: int, data: schemas.ConferenceInviteSend):
     """Отправить ссылку почтой и/или уведомлением в мессенджер."""
     invite = ConferenceInvite.objects.filter(pk=invite_id).first()
-    if invite is None:
+    if invite is None or not conference_invite_service.may_manage_invites(
+            request.token, invite.room_id, invite):
         return json_error("Приглашение не найдено", 404)
     if not data.emails and not data.user_ids:
         return json_error("Некому отправлять: укажите адреса или сотрудников", 422)

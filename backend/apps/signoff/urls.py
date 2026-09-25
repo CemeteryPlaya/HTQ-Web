@@ -50,6 +50,8 @@ urlpatterns = [
     # и дала 404 вместо маршрута.
     path("tasks/mine", views.InboxView.as_view()),
     path("tasks/mine/", views.InboxView.as_view()),
+    path("tasks/batch-decision", views.TaskBatchDecisionView.as_view()),
+    path("tasks/batch-decision/", views.TaskBatchDecisionView.as_view()),
     path("tasks/<int:task_id>/decision", views.TaskDecisionView.as_view()),
     path("tasks/<int:task_id>/decision/", views.TaskDecisionView.as_view()),
     # Документ прикладывается ДО решения, отдельным запросом — см. докстринг

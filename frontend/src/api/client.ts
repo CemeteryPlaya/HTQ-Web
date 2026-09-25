@@ -21,6 +21,7 @@ import {
 import { apiPath } from '@/api/endpoints';
 import { emitServiceDisabled } from '@/lib/serviceUnavailableBus';
 import i18next from '@/i18n';
+import { toast } from 'sonner';
 
 // ---------------------------------------------------------------------------
 // Конфигурация
@@ -44,6 +45,12 @@ const AUTH_ENDPOINTS = [
   apiPath('users', 'token/'),
   apiPath('users', 'register/'),
 ];
+
+/**
+ * Метка на ошибке 403 `company_archived`: тост уже показан интерцептором
+ * ниже. `reportApiError` (`lib/apiError.ts`) проверяет её и не дублирует тост.
+ */
+type ArchivedReportedError = { archivedReported: true };
 
 const client = axios.create({
   baseURL: API_BASE,
@@ -84,6 +91,21 @@ let _isRefreshing = false;
 let _refreshPromise: Promise<string> | null = null;
 
 /**
+ * Когда 403-ветка последний раз обновляла токен.
+ *
+ * 403 — это «ты опознан, но тебе нельзя», и обновление токена помогает ровно в
+ * одном случае: права выдали уже после выпуска токена, и в нём устаревшие
+ * claims. Такое бывает раз за сессию. А вот НАСТОЯЩИЙ запрет повторяется на
+ * каждом показе экрана, и без этой отсечки каждый такой ответ гнал свой
+ * запрос на обновление токена — десятки за минуту, каждый со своей новой парой
+ * токенов поверх предыдущей. Отсюда и расшатанная сессия у согласующего без
+ * прав на HR. Одной попытки в минуту хватает, чтобы подхватить выданные права,
+ * и достаточно, чтобы отказ оставался просто отказом.
+ */
+const FORBIDDEN_REFRESH_COOLDOWN_MS = 60_000;
+let _lastForbiddenRefreshAt = 0;
+
+/**
  * Выполняет одну попытку обновления токена через /api/users/v1/token/refresh/.
  * Возвращает новый access-токен или выбрасывает ошибку.
  */
@@ -106,6 +128,26 @@ async function doTokenRefresh(): Promise<string> {
   setAuthTokens({ access: nextAccess, refresh: res?.data?.refresh });
   client.defaults.headers.common['Authorization'] = `Bearer ${nextAccess}`;
   return nextAccess;
+}
+
+/**
+ * Обменять refresh-токен на новый access — ОДИН запрос на всех: если обмен уже
+ * идёт (параллельные 401 интерцептора или восстановление сессии в
+ * RequireAuth), вызывающий ждёт тот же промис, а не шлёт второй.
+ *
+ * Это единственная точка обмена в приложении; интерцептор ниже и
+ * `lib/auth/sessionRestore.ts` ходят через неё.
+ */
+export function refreshAccessToken(): Promise<string> {
+  if (_isRefreshing && _refreshPromise) {
+    return _refreshPromise;
+  }
+  _isRefreshing = true;
+  _refreshPromise = doTokenRefresh().finally(() => {
+    _isRefreshing = false;
+    _refreshPromise = null;
+  });
+  return _refreshPromise;
 }
 
 /**
@@ -234,14 +276,8 @@ client.interceptors.response.use(
       }
 
       // Запускаем единственный refresh-запрос
-      _isRefreshing = true;
-      _refreshPromise = doTokenRefresh().finally(() => {
-        _isRefreshing = false;
-        _refreshPromise = null;
-      });
-
       try {
-        const newToken = await _refreshPromise;
+        const newToken = await refreshAccessToken();
         const retryConfig = {
           ...config,
           headers: { ...config.headers, Authorization: `Bearer ${newToken}` },
@@ -254,13 +290,46 @@ client.interceptors.response.use(
       }
     }
 
+    // ── 403 company_archived: запись в архивную компанию (спека архива §7.2) ──
+    // Не устаревшие claims: обновлять токен и повторять бессмысленно — сервер
+    // ответит тем же. Тост вместо молчаливого отказа.
+    if (status === 403) {
+      const data = error.response?.data as { code?: string } | undefined;
+      if (data?.code === 'company_archived') {
+        toast.error(i18next.t('companies.archiveMode.writeRefused',
+          'Нельзя изменить: компания в архиве — только чтение'));
+        // Помечаем, что тост уже показан здесь: большинство вызывающих ловят
+        // ошибку через `reportApiError` (`lib/apiError.ts`), у которой на 403
+        // свой текст сервера — без метки пользователь увидел бы тост дважды.
+        return Promise.reject(Object.assign(error, { archivedReported: true } satisfies ArchivedReportedError));
+      }
+    }
+
     // ── 403: возможно устаревшие claims — одна попытка обновления ──
+    // Обновление идёт через тот же замок, что и в 401-ветке: иначе десять
+    // параллельных 403 запускали десять refresh'ей разом, и запрос мог
+    // уехать с токеном, который уже перезаписан соседним ответом.
     if (status === 403 && !config._retry403 && !isAuthEndpoint) {
       config._retry403 = true;
+      const joinable = _isRefreshing && _refreshPromise;
+      if (!joinable
+          && Date.now() - _lastForbiddenRefreshAt < FORBIDDEN_REFRESH_COOLDOWN_MS) {
+        // Недавно уже пробовали — значит это настоящий запрет, а не claims.
+        return Promise.reject(error);
+      }
       try {
-        const newToken = _isRefreshing && _refreshPromise
-          ? await _refreshPromise
-          : await doTokenRefresh();
+        let newToken: string;
+        if (joinable) {
+          newToken = await _refreshPromise!;
+        } else {
+          _lastForbiddenRefreshAt = Date.now();
+          _isRefreshing = true;
+          _refreshPromise = doTokenRefresh().finally(() => {
+            _isRefreshing = false;
+            _refreshPromise = null;
+          });
+          newToken = await _refreshPromise;
+        }
         const retryConfig = {
           ...config,
           headers: { ...config.headers, Authorization: `Bearer ${newToken}` },

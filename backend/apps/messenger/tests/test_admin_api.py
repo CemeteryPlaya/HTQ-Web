@@ -7,8 +7,10 @@
   POST /admin/history/archive?days=       — trigger_history_archive
 
 Авторизация: ``require_admin`` исходника -> ``api_view(auth="jwt",
-admin=True)`` — единый платформенный admin-гейт (см. apps/messenger/views.py
-докстринг секции). Никакого participant-scoping — admin видит все комнаты.
+module="messenger", level="admin")`` (блок L; до него — ``admin=True``).
+Администратор модерации в тестах — ``messenger:full``, рядовой —
+``messenger:write`` (уровень ``employee-basic``): 403 ему даёт гейт модуля.
+Никакого participant-scoping — admin видит все комнаты.
 """
 from __future__ import annotations
 
@@ -18,8 +20,8 @@ import pytest
 from django.test import Client
 
 from apps.messenger.models import Message, Room, RoomParticipant
+from apps.messenger.tests.helpers import auth_header
 from apps.users.models import User, UserStatus
-from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/messenger/v1/admin"
 
@@ -45,12 +47,12 @@ def plain_user(db):
 
 @pytest.fixture
 def admin_auth(admin_user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(admin_user)['access']}"}
+    return auth_header(admin_user, "full")
 
 
 @pytest.fixture
 def plain_auth(plain_user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(plain_user)['access']}"}
+    return auth_header(plain_user)
 
 
 def _room(**kw):

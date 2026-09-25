@@ -21,14 +21,24 @@ export const ACCESS_ME_FIXTURE: AccessMe = {
     tasks: { level: 'write', scope: { kind: 'department', id: 3 } },
     contracts: { level: 'read', scope: { kind: 'company', id: null } },
   },
+  depth: {
+    hr: ['view', 'create', 'edit', 'delete'],
+    tasks: ['view', 'create', 'edit'],
+    contracts: ['view'],
+  },
+  hidden_pages: [],
   subordinate_companies: ['kurly-kg', 'htq-uz'],
+  inherited_from: [],
 };
 
 /** Ответ вне контекста компании — тоже из §4.5, и это не ошибка. */
 export const ACCESS_ME_NO_COMPANY: AccessMe = {
   company: null,
   permissions: {},
+  depth: {},
+  hidden_pages: [],
   subordinate_companies: [],
+  inherited_from: [],
 };
 
 /** Включён ли режим фикстуры. Только явный флаг, никакой автоподстановки. */

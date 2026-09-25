@@ -6,7 +6,7 @@ the wire formatting is a pure function, and the event source is injected.
 
 Why SSE and not polling: an approver needs to see "your step is ready" while
 sitting on the page, and the dispatch path already publishes to Redis for
-this exact purpose (``dispatch.publish_sse``).
+this exact purpose (``publish_sse`` below, fed by signoff's ``on_event``).
 
 **The token travels in the query string.** ``EventSource`` cannot set request
 headers, so the browser has no way to send ``Authorization`` — the original
@@ -26,6 +26,36 @@ import logging
 from django.conf import settings
 
 from htqweb.authn.jwt import AuthError, decode_token
+
+logger_pub = logging.getLogger(__name__ + ".publish")
+
+
+def sse_channel(user_id: int) -> str:
+    return f"requests:user:{user_id}"
+
+
+def publish_sse(user_id: int | None, kind: str, payload: dict) -> None:
+    """Best-effort publish to the user's SSE channel.
+
+    Failures are logged and swallowed: an unavailable Redis must not fail an
+    approval that has already been written. Зовётся из ``on_event``-колбэка
+    signoff (``approval_hooks``), то есть уже после коммита решения.
+    """
+    if user_id is None:
+        return
+    try:
+        import redis
+
+        client = redis.Redis.from_url(
+            getattr(settings, "REDIS_URL", "redis://localhost:6379/0"))
+        try:
+            client.publish(sse_channel(int(user_id)),
+                           json.dumps({"event": kind, **payload}))
+        finally:
+            client.close()
+    except Exception as exc:  # noqa: BLE001
+        logger_pub.warning("sse_publish_failed user=%s kind=%s err=%s",
+                           user_id, kind, exc)
 
 logger = logging.getLogger(__name__)
 

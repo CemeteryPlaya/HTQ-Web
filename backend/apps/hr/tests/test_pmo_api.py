@@ -37,6 +37,7 @@ import pytest
 from django.db import connection
 from django.db.utils import IntegrityError
 from django.test import Client
+from django.utils import timezone
 
 from apps.hr.models import Department, Employee, PMO, PMODepartment, PMOMember, PMOPosition, Position
 from apps.users.models import User, UserStatus
@@ -44,7 +45,7 @@ from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/hr/v1/pmo"
 EBASE = "/api/hr/v1/employees"
-TODAY = datetime.date.today()
+TODAY = timezone.localdate()
 
 
 @pytest.fixture
@@ -85,15 +86,29 @@ def auth(db):
 
 
 @pytest.fixture
-def admin_auth(db):
-    """is_staff=True — elevated, требуется для writes (require_hr_write)."""
+def admin_auth(db, company_row):
+    """is_staff=True — elevated, требуется для writes (require_hr_write).
+
+    Блок I задача 5: ``GET employees/{id}/pmos`` стоит под ``module="hr",
+    level="read"`` — ``is_staff`` сам по себе НОВЫЙ гейт не проходит
+    (единственный бесплатный обход там — ``is_superuser``), роль ``hr-lead``
+    выдана явно, чтобы ``test_employee_pmos_endpoint_reflects_pmo_
+    membership`` не упёрся в гейт раньше вьюхи.
+    """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
     user = User.objects.create(
         username="pmo-admin", email="pmo-admin@htq.test", password="x", status=UserStatus.ACTIVE,
         is_staff=True,
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    RoleAssignment.objects.create(
+        company_slug=company_row, user_id=user.id, role=Role.objects.get(code="hr-lead"),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 def _pmo(**kw):

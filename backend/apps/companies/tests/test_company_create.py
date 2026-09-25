@@ -9,12 +9,16 @@ django_db откатил бы половину сделанного между �
 тест чем откатывается.
 """
 
+import datetime
+from io import StringIO
+
 import pytest
 from django.core.management import CommandError, call_command
 from django.db import connection
 
 from apps.companies.models import Company, CompanyKind
 from apps.companies.services import holding_views, migration_service, schema_service
+from htqweb.tenancy.db import use_company
 
 
 @pytest.fixture(autouse=True)
@@ -182,3 +186,55 @@ def test_rebuilds_holding_views_after_success():
         # чтобы запрос не падал "relation does not exist": это доказывает,
         # что ветка UNION ALL по t-new физически присутствует.
         cur.fetchall()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_prints_serving_gap_after_creation(company_schema):
+    """Задача 8 блока C: сразу после заведения компании с предком, у
+    которого есть обслуживающая должность, команда обязана напечатать
+    размер разрыва и назвать команду, которая его закрывает — но НЕ завести
+    членство сама (решение заказчика 3)."""
+    from apps.access.models import PositionRole, Role
+    from apps.access.tests.helpers import grant as grant_permission
+    from apps.companies.models import CompanyMembership
+    from apps.hr.models import Department, Employee, Position
+    from apps.users.models import User, UserStatus
+
+    parent_slug = company_schema["slug"]
+
+    role = Role.objects.create(code="r-create-gap", title="Роль главбуха")
+    grant_permission(role, "hr", "read")
+
+    User.objects.create(id=7001, username="u7001", email="u7001@htq.test",
+                        password="x", status=UserStatus.ACTIVE)
+    with use_company(parent_slug):
+        dep = Department.objects.create(name="Отдел", path="root-gap")
+        pos = Position.objects.create(title="Главбух", department=dep, weight=1,
+                                      serves_subsidiaries=True)
+        Employee.objects.create(
+            first_name="Имя", last_name="Фамилия", email="e7001@htq.test",
+            department=dep, position=pos,
+            hire_date=datetime.date(2024, 1, 9), user_id=7001,
+        )
+        PositionRole.objects.create(company_slug=parent_slug, position_id=pos.id, role=role)
+
+    out = StringIO()
+    call_command("company_create", "t-new", name="Новая", kind="service",
+                 parent=parent_slug, stdout=out)
+
+    text = out.getvalue()
+    assert "1" in text
+    assert "manage.py company_grant --company t-new --serving" in text
+    # Печатает, а не заводит.
+    assert not CompanyMembership.objects.filter(company__slug="t-new").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_silent_about_the_gap_without_a_parent():
+    """Компания без родителя (или чей родитель без обслуживающих должностей)
+    не должна печатать ничего о разрыве — молчание здесь не подмена, а факт:
+    держателей взять неоткуда."""
+    out = StringIO()
+    call_command("company_create", "t-new", name="Новая", kind="service", stdout=out)
+
+    assert "company_grant" not in out.getvalue()

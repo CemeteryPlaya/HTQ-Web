@@ -72,12 +72,17 @@ urlpatterns = [
     path("positions/<int:id>/", views.position_detail),
     path("positions/<int:id>", views.position_detail),
 
+    # Матрица замещения (блок E). Обе формы пути — APPEND_SLASH=False.
+    path("positions/<int:id>/substitutions", views.position_substitutions),
+    path("positions/<int:id>/substitutions/", views.position_substitutions),
+    path("substitutions/<int:sub_id>", views.substitution_detail),
+    path("substitutions/<int:sub_id>/", views.substitution_detail),
+
     # ── employees ─────────────────────────────────────────────────────────
-    # Литеральные роуты (hr-level/, me/) — ДО /<int:id>/, ровно как в
-    # роутере исходника (users/ тоже был бы здесь, но эндпойнт отложен —
-    # см. tests/test_employees_api.py растяжку).
-    path("employees/hr-level/", views.employee_hr_level),
-    path("employees/hr-level", views.employee_hr_level),
+    # Литеральный роут (me/) — ДО /<int:id>/, ровно как в роутере исходника
+    # (users/ тоже был бы здесь, но эндпойнт отложен — см.
+    # tests/test_employees_api.py растяжку). ``hr-level/`` снята задачей 9
+    # блока I — свой уровень вызывающий узнаёт из ``/api/access/v1/me``.
 
     path("employees/me/", views.my_employee),
     path("employees/me", views.my_employee),
@@ -409,4 +414,14 @@ urlpatterns = [
     # резолвит руководителя через apps.hr.interface напрямую
     # (assignee_resolver._supervisor_of), без HTTP. Живых потребителей у
     # роута не было (grep по backend+frontend перед сносом — пусто).
+
+    # Отправка кадрового предмета на согласование (блок G). Тип предмета в
+    # пути, а не в теле: он часть адреса ресурса, и по нему же роутится
+    # реестр signoff.
+    path("approvals/<str:subject_type>/<int:subject_id>/submit", views.submit_subject),
+    path("approvals/<str:subject_type>/<int:subject_id>/submit/", views.submit_subject),
+
+    # ── holding — сводка по группе (блок H) ──────────────────────────────────
+    path("holding/headcount", views.holding_headcount),
+    path("holding/headcount/", views.holding_headcount),
 ]

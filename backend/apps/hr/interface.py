@@ -14,6 +14,10 @@ ServiceDisabled (api_view → 503), а не молчаливый неверны�
 """
 from __future__ import annotations
 
+from datetime import date
+
+from django.utils import timezone
+
 from apps.core.services import require_service
 
 from apps.hr.models import Department, Employee, EmployeeStatus, Position
@@ -35,15 +39,34 @@ def get_departments_brief(department_ids: list[int]) -> list[dict]:
     return list(Department.objects.filter(id__in=ids).values(*_BRIEF_FIELDS))
 
 
-def get_employee_brief(user_id: int) -> dict | None:
-    """Карточка сотрудника по user_id из JWT. Мягко удалённые не отдаются."""
+_EMPLOYEE_BRIEF_VALUES = (
+    "id", "first_name", "last_name", "department_id",
+    "position_id", "position__title", "status",
+    "position__is_manager", "position__external_hierarchy",
+    "position__serves_subsidiaries",
+)
+
+
+def get_employee_brief(user_id: int, *, email: str | None = None) -> dict | None:
+    """Карточка сотрудника по user_id из JWT. Мягко удалённые не отдаются.
+
+    ``email`` (финальная волна блока I, рулинг L) — второй ключ поиска для
+    карточки, привязанной к учётке только почтой (``user_id`` пуст): так
+    искал карточку старый кадровый резолвер (``1f69716:backend/apps/hr/
+    access.py::resolve_hr_access`` — ``Q(user_id) | Q(email)``) и так же
+    ищет её до сих пор самообслуживание ``/employees/me``
+    (``employee_service.get_my_employee``). Без него держатель такой
+    карточки терял бы должностные роли (``apps.access.services.resolve``),
+    сохраняя анкету. Сравнение точное, как в обоих источниках. Карточка по
+    ``user_id`` приоритетнее: почтой ищется, только если её нет.
+    Без ``email`` — поведение прежнее, другие вызывающие его не передают.
+    """
     require_service("hr")
-    row = (
-        Employee.objects.filter(user_id=user_id, is_deleted=False)
-        .values("id", "first_name", "last_name", "department_id",
-                "position_id", "position__title", "status")
-        .first()
-    )
+    alive = Employee.objects.filter(is_deleted=False)
+    row = alive.filter(user_id=user_id).values(*_EMPLOYEE_BRIEF_VALUES).first()
+    if row is None and email:
+        row = (alive.filter(email=email).order_by("id")
+               .values(*_EMPLOYEE_BRIEF_VALUES).first())
     if row is None:
         return None
     return {
@@ -56,6 +79,16 @@ def get_employee_brief(user_id: int) -> dict | None:
         # Ключ добавлен АДДИТИВНО — остальные читает действующий фронт.
         "position_id": row["position_id"],
         "position_title": row["position__title"],
+        # Второй шов стадии 2 с кадровым доменом: внешнюю иерархию включают
+        # два поля ДОЛЖНОСТИ, а читает их apps.access, который моделей HR не
+        # импортирует (apps/access/services/hierarchy.py::_is_external_manager).
+        # Ключи добавлены АДДИТИВНО — остальные читает действующий фронт.
+        "is_manager": row["position__is_manager"],
+        "external_hierarchy": row["position__external_hierarchy"],
+        # Третий шов: «обслуживает дочерние компании» — читает apps.access
+        # (roadmap §5.C), тем же способом, что и пара полей внешней иерархии
+        # выше. Ключ добавлен АДДИТИВНО — остальные читает действующий фронт.
+        "serves_subsidiaries": row["position__serves_subsidiaries"],
         "status": row["status"],
     }
 
@@ -132,22 +165,167 @@ def get_positions_brief(position_ids: list[int]) -> list[dict]:
     Inactive positions are returned too: an administrator must be able to see
     and repair an old route rather than have its reference disappear from the
     editor.
+
+    ``serves_subsidiaries`` was added additively (block C, task 7): apps.access
+    already knows a position's *own* serving flag one at a time via
+    ``get_employee_brief`` (``inheritance.inherit``); the external-holders
+    listing (``apps.access.services.holders.external_holders``) instead starts
+    from a batch of position ids that already hold a granted role
+    (``PositionRole``) and needs the flag for all of them at once, without a
+    second bespoke bulk function. Existing callers destructure specific keys
+    and are unaffected by the extra one.
     """
     require_service("hr")
     ids = list(dict.fromkeys(position_ids))
     if not ids:
         return []
     rows = (Position.objects.filter(id__in=ids).select_related("department")
-            .values("id", "title", "department__name", "is_active"))
+            .values("id", "title", "department__name", "is_active",
+                    "serves_subsidiaries"))
     return [
         {
             "id": row["id"],
             "title": row["title"],
             "department_name": row["department__name"],
             "is_active": row["is_active"],
+            "serves_subsidiaries": row["serves_subsidiaries"],
         }
         for row in rows
     ]
+
+
+def list_positions_hr_levels() -> list[dict]:
+    """Должности текущей компании плюс их HR-уровень — для переноса ролей.
+
+    Единственный потребитель — ``apps.access`` (команда переноса кадровых
+    уровней в роли должностей, ``access_backfill_positions``, блок I задача
+    2): сама эвристика уровня (``apps.hr.access.classify_hr_level``) — это
+    HR-домен, и соседняя аппка не вправе ни импортировать её напрямую
+    (``apps/core/tests/test_app_isolation.py``), ни повторить у себя — риск
+    задачи явно требует не изобретать свою эвристику.
+
+    Без лимита/пагинации НАМЕРЕННО (раунд правок 1 задачи 2): единственный
+    вызывающий — одноразовый перенос данных, и для него полнота — это
+    единственная гарантия, ради которой он написан. Обрезанный молча список
+    напечатал бы честную на вид сводку по НЕПОЛНОМУ множеству должностей —
+    перенос выглядел бы завершённым, не будучи им. Функция внутренняя
+    (``apps.hr.interface``, не публичный HTTP-путь), зовётся один раз за
+    прогон команды на одну компанию — постранично тут нечего разбивать.
+
+    ``hr_level`` каждой должности посчитан ТЕМ ЖЕ порядком, каким ДО задачи 9
+    блока I ``resolve_hr_access`` резолвил его для живого токена (резолвер
+    снят вместе со старой моделью прав — порядок сохранён здесь буквально,
+    ради него ``apps.hr.access`` и не удалён целиком, см. его докстринг):
+
+    1. Явный ``Position.permissions["hr_level"]`` — действует и без
+       держателя вовсе (должность ещё не занята, но уровень уже назначен).
+    2. Иначе — один из держателей должности (действующая, не мягко
+       удалённая запись ``Employee``; при нескольких — первый по ``id``,
+       детерминированно) и по НЕЙ ``classify_hr_level``, которая сама
+       повторяет п.1 для карточки держателя и только потом падает на
+       эвристику по названию должности/отдела — тот же порядок, каким жил
+       старый резолвер.
+
+    ``None``, если ни explicit-переопределения, ни держателя, по которому
+    угадать, нет — перенос не должен выдумывать доступ там, где сегодня его
+    ни у кого нет.
+
+    ``divergent``/``holder_levels`` (раунд правок 1 задачи 2): ``Employee.
+    department`` — независимый FK, не связанный с ``Position.department``, а
+    ``classify_hr_level`` смотрит в том числе на отдел ДЕРЖАТЕЛЯ — то есть до
+    задачи 9 (пока резолвер ещё жил на каждый запрос) два держателя ОДНОЙ
+    должности МОГЛИ иметь разные уровни, каждый по своей карточке. Перенос
+    ставит должности ОДНУ
+    роль (по правилу «первый держатель по id» — правило не меняется), но обязан
+    сделать расхождение ВИДИМЫМ, а не проглотить его: ``divergent=True`` и
+    ``holder_levels`` (отсортированный кортеж всех различных уровней,
+    встретившихся среди держателей этой должности, включая ``None``) — если
+    и только если у должности больше одного держателя и они дают больше
+    одного различного уровня. Пусто/``False`` иначе — в т.ч. всегда при
+    explicit-переопределении: оно не зависит от держателя, поэтому все
+    держатели такой должности неизбежно дают один и тот же уровень.
+
+    ``explicit_list``/``explicit_keys`` (финальная волна блока I, рулинг K):
+    ТРЕТИЙ источник старой модели. До задачи 9 непустой список
+    ``Position.permissions["permissions"]`` ЗАМЕНЯЛ пресет уровня целиком —
+    права держателя были ровно ``список ∩ ALL_KEYS``, а уровень решал только
+    «есть ли доступ вообще» (``1f69716:backend/apps/hr/access.py::
+    resolve_hr_access``). ``explicit_list`` — список непуст (именно это
+    условие проверял старый резолвер, до пересечения); ``explicit_keys`` —
+    отсортированное пересечение с ``apps.hr.permissions.ALL_KEYS``, пустое,
+    если списка нет (``apps.hr.access._explicit_keys_from_permissions``).
+    Решение, во что список переносится, — за вызывающим
+    (``access_backfill_positions``): здесь только данные.
+
+    Действует в контексте ТЕКУЩЕЙ компании, как ``substitutes_for``/
+    ``participant_position``: вызывающий сам входит в схему нужной компании
+    через ``htqweb.tenancy.db.use_company``.
+    """
+    require_service("hr")
+    from apps.hr.access import (
+        _explicit_keys_from_permissions,
+        _level_from_permissions,
+        classify_hr_level,
+    )
+
+    positions = list(Position.objects.all().order_by("id"))
+    if not positions:
+        return []
+
+    holders_by_position: dict[int, list[Employee]] = {}
+    holders = (
+        Employee.objects.filter(
+            is_deleted=False, position_id__in=[p.id for p in positions],
+        )
+        .select_related("department", "position")
+        .order_by("position_id", "id")
+    )
+    for employee in holders:
+        holders_by_position.setdefault(employee.position_id, []).append(employee)
+
+    result = []
+    for position in positions:
+        position_holders = holders_by_position.get(position.id, [])
+        if position_holders:
+            level = classify_hr_level(position_holders[0])
+            holder_levels = tuple(sorted(
+                {classify_hr_level(holder) for holder in position_holders},
+                key=lambda value: (value is None, value),
+            ))
+        else:
+            level = _level_from_permissions(position)
+            holder_levels = ()
+
+        divergent = len(holder_levels) > 1
+        explicit_list, explicit_keys = _explicit_keys_from_permissions(position)
+        result.append({
+            "id": position.id,
+            "title": position.title,
+            "is_active": position.is_active,
+            "hr_level": level,
+            "divergent": divergent,
+            "holder_levels": holder_levels if divergent else (),
+            "explicit_list": explicit_list,
+            "explicit_keys": explicit_keys,
+        })
+    return result
+
+
+def legacy_key_nodes() -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Старый кадровый ключ → (узел реестра прав, признаки глубины).
+
+    Копия ``apps.hr.legacy_roles.KEY_TO_NODE`` для ``apps.access`` — тот
+    раскладывает явный список ключей должности в именную роль
+    (``access_backfill_positions``, рулинг K финальной волны блока I) и
+    импортировать ``legacy_roles`` напрямую не вправе
+    (``apps/core/tests/test_app_isolation.py``). Ключи ``DEFERRED_KEYS``
+    (чужой ключ ``contracts``) в таблице отсутствуют — ровно как в
+    ``KEY_TO_NODE``: вызывающий узнаёт отложенный ключ по его отсутствию.
+    """
+    require_service("hr")
+    from apps.hr.legacy_roles import KEY_TO_NODE
+
+    return {key: (node, tuple(flags)) for key, (node, flags) in KEY_TO_NODE.items()}
 
 
 def resolve_position_users(position_ids: list[int]) -> dict[int, list[int]]:
@@ -249,3 +427,63 @@ def notice_user_profile_changed(user_id: int) -> None:
     if employee_id is None:
         return
     identity_sync_service.sync_employee(employee_id)
+
+
+def substitutes_for(position_id: int, on_date: date | None = None) -> list[dict]:
+    """Кто по регламенту замещает эту должность на эту дату (HR-FRM-006).
+
+    Контракт для соседнего домена, зафиксированный в
+    docs/plans/2026-09-14-group-structure-roadmap.md §6.1: РОВНО три ключа —
+    ``position_id`` (должность замещающего), ``kind`` (``primary``/``reserve``),
+    ``basis`` (чем оформлено: «Приказ ГД», «Приказ ГД; доверенность на банк»).
+    Форма согласована с разработчиком signoff; расширять её в одиночку
+    нельзя — лишний ключ здесь становится лишним ключом в чужом коде.
+
+    Отвечает на вопрос «кто ВПРАВЕ подменить», а не «кто подменяет прямо
+    сейчас»: отсутствие держателя (отпуск, болезнь) домен `hr` не
+    моделирует вовсе, и решение «пора ли звать замещающего» принимает
+    вызывающий.
+
+    Действует в контексте ТЕКУЩЕЙ компании, как и остальные функции этого
+    модуля: матрица замещения лежит в схеме компании. Чтобы спросить про
+    должность другой компании, вызывающий сам входит в её схему через
+    ``htqweb.tenancy.db.use_company`` — так же, как он уже делает ради
+    ``get_positions_brief``.
+
+    Неизвестная должность — пустой список, а не ошибка: «в этой компании
+    такой должности нет» и «замещающих не назначено» для потребителя один и
+    тот же ответ «звать некого».
+    """
+    require_service("hr")
+    from apps.hr.services import substitution_service
+
+    rows = substitution_service.active_for_position(position_id, on_date or timezone.localdate())
+    return [{"position_id": row.substitute_position_id,
+             "kind": row.kind,
+             "basis": row.basis}
+            for row in rows]
+
+
+def participant_position() -> dict | None:
+    """Должность «Участник (ОСУ)» в ТЕКУЩЕЙ компании — или ``None``.
+
+    Общее собрание участников утверждает назначение директора ДО, бюджет
+    группы и крупные сделки (HR-FRM-004, п. 7, 11, 14); маршрут
+    согласования ссылается на него обычным ``position_id`` — этим и берёт.
+    Держателей резолвит ``resolve_position_users``, как для любой должности.
+
+    Сосед не хардкодит название: оно закреплено ``is_system``, но знать его
+    соседу незачем. ``None`` — законный ответ: у дочерних компаний органа
+    владельцев в платформе нет, там «участник» — сам холдинг, и решение
+    принимает его генеральный директор (кросс-компанейский этап, roadmap §6.2).
+
+    Ровно три ключа — форма закреплена в roadmap §6.1.
+    """
+    require_service("hr")
+    from apps.hr.services import participant_service
+
+    position = participant_service.find_participant()
+    if position is None:
+        return None
+    return {"id": position.id, "title": position.title,
+            "is_active": position.is_active}

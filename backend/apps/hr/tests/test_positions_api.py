@@ -55,15 +55,28 @@ def auth(db):
 
 
 @pytest.fixture
-def admin_auth(db):
-    """is_staff=True — elevated, требуется для writes (require_hr_write)."""
+def admin_auth(db, company_row):
+    """is_staff=True — elevated, требуется для writes (require_hr_write).
+
+    Блок I задача 5: writes стоят ещё и под ``module="hr", level="admin"``
+    (гейт добавлен ПОВЕРХ ``admin=True``, не вместо — см. докстринг секции
+    ``/positions/*`` в ``apps/hr/views.py``). ``is_staff`` в НОВОЙ модели
+    прав ничего не даёт сам по себе (единственный бесплатный обход —
+    ``is_superuser``, см. ``apps.access.services.resolve.permissions_for``),
+    поэтому фикстура ЯВНО выдаёт роль на модуль ``hr`` — иначе все writes
+    этого файла упёрлись бы в 403 от гейта раньше, чем в саму вьюху.
+    """
+    from apps.access.tests.helpers import assign
+
     user = User.objects.create(
         username="hr-admin", email="hr-admin@htq.test", password="x", status=UserStatus.ACTIVE,
         is_staff=True,
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    assign(company_row, user.id, "hr", "full")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 def _pos(title, dep, weight, **kw):
@@ -123,6 +136,7 @@ def test_list_returns_paginated_envelope_ordered_by_weight(admin_auth, dep):
     assert [p["title"] for p in body["items"]] == ["Первый", "Второй"]
     assert {"id", "title", "department_id", "grade", "description", "requirements",
             "is_active", "weight", "permissions", "level", "is_system",
+            "is_manager", "external_hierarchy", "serves_subsidiaries",
             "created_at", "updated_at"} == set(body["items"][0])
 
 
@@ -198,7 +212,79 @@ def test_create_roundtrips_permissions_matrix(admin_auth, dep):
         content_type="application/json", **admin_auth,
     )
     assert resp.status_code == 201
-    assert resp.json()["permissions"] == {"hr_level": "senior", "permissions": ["hr.employees.view"]}
+    # hr_level больше не пишется (задача 10 блока I.2, R4) — только список
+    # ключей. Присланный hr_level молча отброшен схемой (extra="ignore"),
+    # а не сохранён: ответ несёт None, см. test_position_api_ignores_hr_level.
+    assert resp.json()["permissions"] == {"hr_level": None, "permissions": ["hr.employees.view"]}
+
+
+@pytest.mark.django_db
+def test_position_api_ignores_hr_level(admin_auth, dep):
+    """hr_level больше не принимается: уровень живёт в ролях (блок I.2, R4).
+
+    Иначе значение, выставленное уже ПОСЛЕ переноса, подхватил бы повторный
+    access_backfill_positions.
+    """
+    resp = Client().post(
+        f"{BASE}/",
+        data={
+            "title": "Кадровик", "department_id": dep.id,
+            "permissions": {"hr_level": "lead", "permissions": []},
+        },
+        content_type="application/json", **admin_auth,
+    )
+
+    assert resp.status_code in (200, 201), resp.content
+    position = Position.objects.get(id=resp.json()["id"])
+    assert (position.permissions or {}).get("hr_level") is None
+
+
+@pytest.mark.django_db
+def test_update_permissions_key_wipes_inherited_hr_level(admin_auth, dep):
+    """PATCH, тронувший ``permissions``, стирает унаследованный hr_level.
+
+    Намеренное следствие (фикс-раунд 1, находка I-2 ревью): колонка
+    перезаписывается ЦЕЛИКОМ, а не мержится, и схема больше не умеет
+    принять hr_level обратно — см. докстринг position_service.update_position.
+    Ключ contracts.* при этом доезжает нетронутым.
+    """
+    contracts_key = "contracts.advance_payment.record_payment"
+    pos = _pos(
+        "Кадровик с наследием", dep, weight=40,
+        permissions={"hr_level": "lead", "permissions": [contracts_key]},
+    )
+
+    resp = Client().patch(
+        f"{BASE}/{pos.id}/",
+        data={"permissions": {"permissions": [contracts_key]}},
+        content_type="application/json", **admin_auth,
+    )
+
+    assert resp.status_code == 200
+    pos.refresh_from_db()
+    assert (pos.permissions or {}).get("hr_level") is None
+    assert pos.permissions["permissions"] == [contracts_key]
+
+
+@pytest.mark.django_db
+def test_update_without_permissions_key_keeps_inherited_hr_level(admin_auth, dep):
+    """PATCH, НЕ тронувший ``permissions``, унаследованный hr_level не трогает."""
+    contracts_key = "contracts.advance_payment.record_payment"
+    pos = _pos(
+        "Кадровик с наследием 2", dep, weight=41,
+        permissions={"hr_level": "senior", "permissions": [contracts_key]},
+    )
+
+    resp = Client().patch(
+        f"{BASE}/{pos.id}/",
+        data={"title": "Кадровик с наследием 2 (правлено)"},
+        content_type="application/json", **admin_auth,
+    )
+
+    assert resp.status_code == 200
+    pos.refresh_from_db()
+    assert pos.title == "Кадровик с наследием 2 (правлено)"
+    assert pos.permissions == {"hr_level": "senior", "permissions": [contracts_key]}
 
 
 @pytest.mark.django_db
@@ -334,7 +420,9 @@ def test_update_system_position_allows_weight_grade_permissions(admin_auth, dep)
     body = resp.json()
     assert body["grade"] == 5
     assert body["weight"] == 150
-    assert body["permissions"]["hr_level"] == "lead"
+    # hr_level в присланном permissions игнорируется схемой — не сохраняется
+    # даже у системной должности (задача 10 блока I.2, R4).
+    assert body["permissions"]["hr_level"] is None
 
 
 # ── DELETE /{id}/ ─────────────────────────────────────────────────────────

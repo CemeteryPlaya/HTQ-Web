@@ -16,6 +16,10 @@ ORGANISER = 7
 INVITEE = 8
 OUTSIDER = 9
 
+# 21:30 UTC — в Алматы уже 02:30 следующего дня: «сегодня» в поясе платформы
+# и в UTC здесь разные дни.
+BOUNDARY = dt.datetime(2026, 9, 24, 21, 30, tzinfo=dt.timezone.utc)
+
 
 def _event(room_id: str, *, start=None, invitees=(), creator=ORGANISER) -> CalendarEvent:
     start = start or timezone.now()
@@ -40,6 +44,11 @@ def _day_window(day: dt.date) -> tuple[dt.datetime, dt.datetime]:
     return start, start + dt.timedelta(days=1)
 
 
+def _utc_today() -> dt.date:
+    """День по UTC — тот же, в котором ``_day_window`` строит сутки."""
+    return timezone.now().astimezone(dt.timezone.utc).date()
+
+
 @pytest.mark.django_db
 def test_event_for_room_returns_invitees_with_creator():
     _event("room-1", invitees=[INVITEE])
@@ -56,9 +65,11 @@ def test_event_for_unknown_room_is_none():
     assert interface.get_conference_event_for_room("nope") is None
 
 
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Almaty"])
 @pytest.mark.django_db
-def test_user_events_include_invitations_and_own():
-    today = timezone.localdate()
+def test_user_events_include_invitations_and_own(tz, pinned_clock):
+    pinned_clock(BOUNDARY, tz)
+    today = _utc_today()
     period_start, period_end = _day_window(today)
     _event("room-own", invitees=[])
     _event("room-invited", invitees=[INVITEE], creator=OUTSIDER)
@@ -69,9 +80,11 @@ def test_user_events_include_invitations_and_own():
     assert [row["room_id"] for row in mine] == ["room-invited"]
 
 
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Almaty"])
 @pytest.mark.django_db
-def test_admin_sees_every_conference_of_the_day():
-    today = timezone.localdate()
+def test_admin_sees_every_conference_of_the_day(tz, pinned_clock):
+    pinned_clock(BOUNDARY, tz)
+    today = _utc_today()
     period_start, period_end = _day_window(today)
     _event("room-a")
     _event("room-b", creator=OUTSIDER)
@@ -94,9 +107,11 @@ def test_cancelled_occurrence_is_hidden():
         INVITEE, period_start=period_start, period_end=period_end) == []
 
 
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Almaty"])
 @pytest.mark.django_db
-def test_events_of_other_days_are_out_of_range():
-    today = timezone.localdate()
+def test_events_of_other_days_are_out_of_range(tz, pinned_clock):
+    pinned_clock(BOUNDARY, tz)
+    today = _utc_today()
     tomorrow = today + dt.timedelta(days=1)
     _event("room-tomorrow", start=timezone.now() + dt.timedelta(days=1),
            invitees=[INVITEE])

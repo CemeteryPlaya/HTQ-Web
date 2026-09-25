@@ -38,6 +38,14 @@ export interface PositionRolesDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Правка доступна не всем: у гейта на бэкенде свои правила. */
   canEdit?: boolean;
+  /**
+   * Должность помечена обслуживающей дочерние компании (`apps.hr`,
+   * `serves_subsidiaries`) — роль, добавленная здесь, подействует и там.
+   * Защита от отложенного сценария: роль добавляют через полгода, и
+   * предупреждение обязано появиться в тот самый момент, а не только в
+   * карточке должности, где решение принималось.
+   */
+  servesSubsidiaries?: boolean;
 }
 
 export function PositionRolesDialog({
@@ -46,6 +54,7 @@ export function PositionRolesDialog({
   open,
   onOpenChange,
   canEdit = true,
+  servesSubsidiaries = false,
 }: PositionRolesDialogProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -114,6 +123,16 @@ export function PositionRolesDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {servesSubsidiaries && (
+          <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            {t(
+              'access.positionRoles.servesSubsidiariesWarning',
+              'Эта должность обслуживает дочерние компании — добавленная роль начнёт '
+              + 'действовать и в них.',
+            )}
+          </p>
+        )}
+
         {isLoading ? (
           <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -135,6 +154,18 @@ export function PositionRolesDialog({
                     <span className="block truncate text-sm font-medium">{role.title}</span>
                     <span className="block truncate text-xs text-muted-foreground">
                       {role.code}
+                      {/* Именная роль другой компании: суперпользователь видит её
+                          здесь наравне с общими (спека R2), метка не даёт принять
+                          её за общую и получить 422 при сохранении. */}
+                      {role.company_slug && (
+                        <>
+                          {' · '}
+                          {t('access.companyBadge', {
+                            company: role.company_slug,
+                            defaultValue: 'Компания: {{company}}',
+                          })}
+                        </>
+                      )}
                     </span>
                   </label>
                 </li>

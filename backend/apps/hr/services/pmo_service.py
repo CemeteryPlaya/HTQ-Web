@@ -20,6 +20,7 @@ from datetime import date
 
 from django.db import transaction
 from django.db.models import BooleanField, Case, Q, Sum, Value, When
+from django.utils import timezone
 
 from apps.hr.models import Employee, PMO, PMOMember
 
@@ -161,7 +162,7 @@ def delete_pmo(id: int) -> None:
     pmo = get_pmo(id)
     pmo.status = "closed"
     pmo.save(update_fields=["status"])
-    today = date.today()
+    today = timezone.localdate()
     members = list(
         PMOMember.objects.select_for_update().filter(pmo_id=id).filter(_active_member_q(today))
     )
@@ -211,7 +212,7 @@ def _validate_member_dates(from_date: date, to_date: date | None) -> None:
 
 
 def _assert_no_active_duplicate(*, pmo_id: int, employee_id: int, exclude_member_id: int | None = None) -> None:
-    today = date.today()
+    today = timezone.localdate()
     qs = (
         PMOMember.objects.select_for_update()
         .filter(pmo_id=pmo_id, employee_id=employee_id)
@@ -224,7 +225,7 @@ def _assert_no_active_duplicate(*, pmo_id: int, employee_id: int, exclude_member
 
 
 def _assert_no_active_primary(*, pmo_id: int, exclude_member_id: int | None = None) -> None:
-    today = date.today()
+    today = timezone.localdate()
     qs = (
         PMOMember.objects.select_for_update()
         .filter(pmo_id=pmo_id, is_primary=True)
@@ -251,10 +252,10 @@ def add_member(pmo_id: int, data: dict, *, actor_user_id: int | None = None) -> 
     if not Employee.objects.filter(id=data["employee_id"]).exists():
         raise EmployeeNotFound
 
-    from_date = data.get("from_date") or date.today()
+    from_date = data.get("from_date") or timezone.localdate()
     to_date = data.get("to_date")
     _validate_member_dates(from_date, to_date)
-    today = date.today()
+    today = timezone.localdate()
     if from_date <= today and (to_date is None or to_date >= today):
         _assert_no_active_duplicate(pmo_id=pmo_id, employee_id=data["employee_id"])
         if data.get("is_primary", False):
@@ -287,7 +288,7 @@ def update_member(
     to_date = data.get("to_date", member.to_date)
     _validate_member_dates(from_date, to_date)
 
-    today = date.today()
+    today = timezone.localdate()
     will_be_active = from_date <= today and (to_date is None or to_date >= today)
     if will_be_active:
         _assert_no_active_duplicate(pmo_id=pmo_id, employee_id=employee_id, exclude_member_id=member_id)
@@ -305,14 +306,14 @@ def update_member(
 @transaction.atomic
 def remove_member(pmo_id: int, member_id: int) -> None:
     member = _get_member(pmo_id, member_id)
-    today = date.today()
+    today = timezone.localdate()
     if member.to_date is None or member.to_date >= today:
         member.to_date = today if member.from_date <= today else member.from_date
         member.save(update_fields=["to_date"])
 
 
 def employee_total_allocation(employee_id: int) -> int:
-    today = date.today()
+    today = timezone.localdate()
     total = (
         PMOMember.objects.filter(employee_id=employee_id, pmo__status="active")
         .filter(_active_member_q(today))
@@ -324,7 +325,7 @@ def employee_total_allocation(employee_id: int) -> int:
 def get_employee_pmos(employee_id: int) -> list[dict]:
     if not Employee.objects.filter(id=employee_id).exists():
         raise EmployeeNotFound
-    today = date.today()
+    today = timezone.localdate()
     qs = (
         PMOMember.objects.filter(employee_id=employee_id, pmo__status="active")
         .filter(_active_member_q(today))

@@ -56,6 +56,29 @@ class ContractorRef(BaseModel):
     name: str
 
 
+class CounterpartyRef(BaseModel):
+    """Контрагент из «Договоров» в карточке партнёра — бейдж со ссылкой.
+
+    ``status``/``approval_state`` — строками, а не enum'ами ``apps.contracts``:
+    импортировать чужие модели нельзя, а сверять значения здесь незачем."""
+
+    id: int
+    name: str
+    bin_iin: str
+    status: str
+    approval_state: str
+
+
+class AgreementRef(BaseModel):
+    """Договор из «Договоров» в строке привлечения — номер и ссылка."""
+
+    id: int
+    number: str
+    name: str
+    status: str
+    approval_state: str
+
+
 # ── labels ──────────────────────────────────────────────────────────────
 
 class LabelCreate(BaseModel):
@@ -230,6 +253,9 @@ class ContractorCreate(BaseModel):
     address: str | None = Field(None, max_length=500)
     notes: str = Field(default="", max_length=5000)
     status: ContractorStatus = Field(default=ContractorStatus.ACTIVE)
+    # Та же организация в «Договорах». Необязательно — см. докстринг
+    # ``models.Contractor``; проверки — ``contractor_service``.
+    counterparty_id: int | None = None
 
 
 class ContractorUpdate(BaseModel):
@@ -243,6 +269,8 @@ class ContractorUpdate(BaseModel):
     address: str | None = Field(None, max_length=500)
     notes: str | None = Field(None, max_length=5000)
     status: ContractorStatus | None = None
+    # ``null`` снимает связь (PATCH разбирается с exclude_unset).
+    counterparty_id: int | None = None
 
 
 class ContractorResponse(BaseModel):
@@ -256,6 +284,8 @@ class ContractorResponse(BaseModel):
     address: str | None = None
     notes: str
     status: ContractorStatus
+    counterparty_id: int | None = None
+    counterparty: CounterpartyRef | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -313,7 +343,10 @@ class ContractorEngagementCreate(OrderedDates):
     # Привлечение на один пакет работ: «развозку валов отдали партнёру,
     # монтаж делаем сами». Третья стрелка в «Партнёр» на схеме.
     roadmap_id: int | None = None
-    contract_no: str | None = Field(None, max_length=64)
+    contract_no: str | None = Field(None, max_length=100)
+    # Договор из «Договоров» с контрагентом этого партнёра; при выборе его
+    # номер перекрывает ``contract_no`` (см. ``contractor_service``).
+    agreement_id: int | None = None
     scope: str = Field(default="", max_length=5000)
     start_date: date | None = None
     end_date: date | None = None
@@ -331,7 +364,8 @@ class ContractorEngagementUpdate(OrderedDates):
     project_id: int | None = None
     site_id: int | None = None
     roadmap_id: int | None = None
-    contract_no: str | None = Field(None, max_length=64)
+    contract_no: str | None = Field(None, max_length=100)
+    agreement_id: int | None = None
     scope: str | None = Field(None, max_length=5000)
     start_date: date | None = None
     end_date: date | None = None
@@ -349,6 +383,8 @@ class ContractorEngagementResponse(BaseModel):
     roadmap_id: int | None = None
     roadmap_name: str | None = None
     contract_no: str | None = None
+    agreement_id: int | None = None
+    agreement: AgreementRef | None = None
     scope: str
     start_date: date | None = None
     end_date: date | None = None
@@ -1659,3 +1695,37 @@ class ProductionDayResponse(BaseModel):
     note: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+# ── сводка по группе (блок H) — GET /holding/projects ───────────────────────
+
+class HoldingCompanyRow(BaseModel):
+    """Одна строка сводки — действующая компания группы.
+
+    Форма — 1:1 с ``apps.tasks.services.holding_service.projects_by_company()``
+    плюс ``company_name`` из реестра (сервис отдаёт только слаг, имена не его
+    забота). ``reports_last_date`` — ``None`` у компании без отчётов, и это
+    НЕ ноль и не сегодняшняя дата."""
+
+    company_slug: str
+    company_name: str
+    projects_active: int
+    sites_active: int
+    tasks_open: int
+    tasks_overdue: int
+    reports_last_date: date | None
+
+
+class HoldingTotals(BaseModel):
+    """Сумма строк сводки. Только счётчики — дату последнего отчёта
+    складывать бессмысленно, поэтому в totals её нет."""
+
+    projects_active: int
+    sites_active: int
+    tasks_open: int
+    tasks_overdue: int
+
+
+class HoldingProjectsOut(BaseModel):
+    companies: list[HoldingCompanyRow]
+    totals: HoldingTotals

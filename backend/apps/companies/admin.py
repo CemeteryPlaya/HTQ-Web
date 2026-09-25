@@ -27,13 +27,14 @@ from .models import (
     CompanySchemaVersion,
     CompanyServiceLink,
 )
+from .services import membership_service
 
 
 @admin.register(Company)
 class CompanyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
-    list_display = ("name", "slug", "kind", "status", "parent", "country")
+    list_display = ("name", "slug", "subdomain", "kind", "status", "parent", "country")
     list_filter = ("kind", "status")
-    search_fields = ("name", "slug")
+    search_fields = ("name", "slug", "subdomain")
     # slug задаёт имя схемы Postgres (co_<slug>, дефис заменяется на
     # подчёркивание — htqweb.tenancy.context.schema_for). Смена slug в этой
     # форме означала бы переименование уже существующей схемы, а эта форма
@@ -68,6 +69,41 @@ class CompanyMembershipAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     # задача оператора.
     list_filter = ("company", "is_default")
     search_fields = ("user_id",)
+
+    def save_model(self, request, obj, form, change):
+        """Новая строка — через сервис: он же выдаёт базовую роль.
+
+        Находка n1 финального ревью блока I.2 (задача 9): раньше эта форма
+        сохраняла ``obj`` напрямую (``ModelAdmin.save_model`` по умолчанию —
+        простой ``obj.save()``), в обход ``membership_service.grant_membership``
+        — единственного места, которое после сохранения строки выдаёт
+        участнику базовую роль ``employee-basic``
+        (``apps.access.interface.ensure_basic_role``). Без неё человек
+        состоит в компании, но получает 403 на ``users/options`` и на весь
+        ``tasks`` (блок I.2, R3). Правка существующей строки идёт обычным
+        путём — членство уже есть, роль выдавать заново не нужно (повторный
+        ``grant_membership`` её и не выдал бы — см. его докстринг).
+
+        ``grant_membership`` идемпотентен через ``get_or_create`` и создаёт
+        строку САМ, возвращая ``bool`` (создано/уже было), а не саму строку —
+        переданный сюда ``obj`` после вызова остаётся несохранённым, с
+        ``pk=None``. Django использует ``obj.pk`` сразу после ``save_model``
+        для сообщения "добавлено успешно" и редиректа
+        (``ModelAdmin.response_add``), поэтому pk (и остальные поля, которые
+        сервис мог довыставить/оставить по умолчанию — здесь только
+        ``is_default``, если строка уже была) переносятся обратно в ``obj``
+        явным чтением только что созданной/найденной строки.
+        """
+        if change:
+            super().save_model(request, obj, form, change)
+            return
+        membership_service.grant_membership(
+            obj.company, obj.user_id, is_default=obj.is_default,
+        )
+        row = CompanyMembership.objects.get(company=obj.company, user_id=obj.user_id)
+        obj.pk = row.pk
+        obj.is_default = row.is_default
+        obj.created_at = row.created_at
 
 
 @admin.register(CompanyModule)

@@ -76,3 +76,50 @@ def grant(role, node: str, level_or_preset: str = "full"):
     row.set_flags(depth.flags_of(preset))
     row.save()
     return row
+
+
+def assign(company_slug: str, user_id: int, node: str, level_or_preset: str = "full"):
+    """Выдать ПОЛЬЗОВАТЕЛЮ право на узел в компании — роль плюс назначение.
+
+    Появилась с задачей 4 блока I «Единая модель прав»: ручки переведённых
+    аппок стоят под ``api_view(module=…, level=…)``, и почти каждому тесту,
+    который дёргает их по HTTP, нужна ровно эта тройка — роль, глубина на
+    узле, личное назначение в компании запроса. Живёт здесь, а не копией в
+    каждом файле, и её зовут в том числе тесты СОСЕДНИХ аппок: их каталог
+    ``tests`` выведен из-под правила «сосед только через interface»
+    (``apps/core/tests/test_app_isolation.py`` пропускает пути с ``tests``),
+    а модель прав принадлежит именно этой аппке.
+
+    Идемпотентна по паре (узел, уровень): второй вызов с теми же аргументами
+    переиспользует роль и назначение, а не роняет тест на уникальности кода.
+    """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    code = f"t-{node}-{level_or_preset}".replace(".", "-").replace("_", "-")
+    role, created = Role.objects.get_or_create(
+        code=code, defaults={"title": f"{node}: {level_or_preset}"})
+    if created:
+        grant(role, node, level_or_preset)
+    RoleAssignment.objects.get_or_create(
+        company_slug=company_slug, user_id=user_id, role=role,
+        scope_kind=ScopeKind.COMPANY, scope_id=None)
+    return role
+
+
+def gate_company(slug: str, grants: dict[int, dict[str, str]]) -> str:
+    """Компания и роли для тестов ручек под гейтом модуля.
+
+    ``grants``: user_id -> {модуль: уровень|пресет} (см. ``assign``; узлом
+    служит корень модуля, уровень модуля — агрегат по поддереву). Зовётся
+    лениво, из ``auth()`` тестов аппки, а не автофикстурой: действующая
+    компания в реестре мешала бы тестам веера по компаниям (см. докстринг
+    ``apps/tasks/tests/helpers.py``). Идемпотентна.
+    """
+    from apps.companies.models import Company, CompanyKind
+
+    Company.objects.get_or_create(
+        slug=slug, defaults={"name": slug, "kind": CompanyKind.SERVICE})
+    for user_id, modules in grants.items():
+        for module, level in modules.items():
+            assign(slug, user_id, module, level)
+    return slug

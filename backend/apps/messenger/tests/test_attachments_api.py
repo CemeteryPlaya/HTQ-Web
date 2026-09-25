@@ -32,8 +32,8 @@ from django.test import Client
 from PIL import Image
 
 from apps.messenger.models import ChatAttachment, Room, RoomParticipant
+from apps.messenger.tests.helpers import auth_header
 from apps.users.models import User, UserStatus
-from htqweb.authn.jwt import issue_token_pair
 from htqweb.storage import signed_query
 
 BASE = "/api/messenger/v1/attachments"
@@ -82,7 +82,7 @@ def _user_auth(username: str):
     )
     user.set_password("S3cret!Pass1")
     user.save()
-    return user, {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    return user, auth_header(user)
 
 
 @pytest.fixture
@@ -99,12 +99,12 @@ def other_user(db):
 
 @pytest.fixture
 def auth(user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    return auth_header(user)
 
 
 @pytest.fixture
 def other_auth(other_user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(other_user)['access']}"}
+    return auth_header(other_user)
 
 
 @pytest.fixture

@@ -20,8 +20,17 @@ BASE = "/api/hr/v1/employees/users"
 
 
 @pytest.fixture
-def senior_auth(db):
-    """Senior HR — уровень, у которого есть hr.users.list."""
+def senior_auth(db, company_row):
+    """Senior HR — уровень, у которого есть hr.users.list.
+
+    Блок I задача 5: ``module="hr", level="read"`` стоит ПОВЕРХ
+    ``can_list_user_options`` — роль ``hr-senior`` (засеянная,
+    ``access/migrations/0005``) выдана явно, иначе гейт отказывал бы
+    раньше, чем запрос доходит до старой проверки.
+    """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+    from htqweb.authn.jwt import issue_token_pair
+
     dep = Department.objects.create(name="HR", path="hr")
     pos = Position.objects.create(title="Senior HR Manager", department=dep, weight=30)
     user = make_user("hr-senior-prefill@htq.test")
@@ -30,7 +39,12 @@ def senior_auth(db):
         hire_date=datetime.date(2024, 1, 9), user_id=user.id,
         first_name="С", last_name="К",
     )
-    return auth_headers(user)
+    RoleAssignment.objects.create(
+        company_slug=company_row, user_id=user.id, role=Role.objects.get(code="hr-senior"),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 @pytest.fixture

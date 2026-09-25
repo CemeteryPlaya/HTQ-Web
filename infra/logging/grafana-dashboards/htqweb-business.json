@@ -19,7 +19,22 @@
     "list": []
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "company",
+        "label": "Компания",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(htqweb_hr_terminated_still_active, company)",
+        "query": { "query": "label_values(htqweb_hr_terminated_still_active, company)", "refId": "company" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "sort": 1
+      }
+    ]
   },
   "panels": [
     {
@@ -75,7 +90,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_tasks_overdue",
+          "expr": "sum without (company) (htqweb_tasks_overdue{company=~\"$company\"})",
           "refId": "A"
         }
       ],
@@ -307,7 +322,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_tasks",
+          "expr": "sum without (company) (htqweb_tasks{company=~\"$company\"})",
           "refId": "A",
           "legendFormat": "{{status}}"
         }
@@ -407,7 +422,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_daily_reports_today",
+          "expr": "sum without (company) (htqweb_daily_reports_today{company=~\"$company\"})",
           "refId": "A",
           "legendFormat": "отчётов сегодня"
         },
@@ -416,7 +431,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_daily_report_staleness_days",
+          "expr": "max without (company) (htqweb_daily_report_staleness_days{company=~\"$company\"})",
           "refId": "B",
           "legendFormat": "дней с последнего"
         }
@@ -577,7 +592,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_projects_active",
+          "expr": "sum without (company) (htqweb_projects_active{company=~\"$company\"})",
           "refId": "A"
         }
       ],

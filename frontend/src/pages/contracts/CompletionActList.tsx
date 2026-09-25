@@ -7,6 +7,7 @@ import { contractsApi } from '@/api/contracts';
 import { CollectionPageHeader, CollectionPagination, CollectionSearch, CollectionTable } from '@/components/contracts/CollectionPage';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { formatAmount } from '@/components/contracts/format';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -56,7 +57,7 @@ export default function CompletionActList() {
             <TableCell className="text-right tabular-nums whitespace-nowrap">{formatAmount(row.amount)} {row.currency}</TableCell>
             <TableCell><Badge>{approvalLabel[row.approval_state] ?? row.approval_state}</Badge></TableCell>
             <TableCell><Badge variant={row.status === 'closed' ? 'default' : 'secondary'}>{statusLabel[row.status] ?? row.status}</Badge></TableCell>
-            <TableCell className="text-right"><SubmitForApproval subjectType="contracts.completion_act" subjectId={row.id} state={row.approval_state} submit={contractsApi.submitCompletionAct} invalidate={[['contracts', 'completion-acts']]} showState={false} /></TableCell>
+            <TableCell className="text-right"><SubmitForApproval subjectType="contracts.completion_act" subjectId={row.id} state={row.approval_state} submit={contractsApi.submitCompletionAct} blockedReason={draftOnlySubmitBlock(row.status, statusLabel[row.status] ?? row.status, 'акт')} invalidate={[['contracts', 'completion-acts']]} showState={false} /></TableCell>
           </TableRow>)}</TableBody>
         </Table>
       </CollectionTable>

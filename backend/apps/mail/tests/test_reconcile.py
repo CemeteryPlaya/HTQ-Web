@@ -17,7 +17,8 @@ from apps.mail.services.provisioning.base import (
     RemoteMailbox,
 )
 from apps.users.models import User, UserStatus
-from htqweb.authn.jwt import issue_token_pair
+
+from .conftest import gate_auth
 
 BASE = "/api/email/v1/mailboxes"
 
@@ -30,7 +31,8 @@ def admin_auth(db):
     )
     u.set_password("Adm1n!Pass")
     u.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(u)['access']}"}
+    # Ящики — под гейтом ``mail:admin`` (блок L): нужна роль, не ``is_staff``.
+    return gate_auth(u, "full")
 
 
 def _mailbox(**kw) -> ProvisionedMailbox:
@@ -382,7 +384,9 @@ def test_reconcile_requires_admin(db):
     )
     u.set_password("Pass!2345")
     u.save()
-    auth = {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(u)['access']}"}
+    # Уровень ``employee-basic`` в ``mail`` (``read``): 403 даёт гейт
+    # ``mail:admin`` (блок L), а не отсутствие компании или роли.
+    auth = gate_auth(u, "read")
     assert Client().get(f"{BASE}/reconcile/", **auth).status_code == 403
 
 

@@ -26,7 +26,8 @@ from apps.mail.services import mailbox_service as mbx_svc
 from apps.mail.services.crypto import crypto_service
 from apps.mail.services.provisioning.base import ProvisioningError
 from apps.users.models import User, UserStatus
-from htqweb.authn.jwt import issue_token_pair
+
+from .conftest import gate_auth
 
 BASE = "/api/email/v1/mailboxes"
 
@@ -39,7 +40,8 @@ def admin_auth(db):
     )
     u.set_password("Adm1n!Pass")
     u.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(u)['access']}"}
+    # Ящики — под гейтом ``mail:admin`` (блок L): нужна роль, не ``is_staff``.
+    return gate_auth(u, "full")
 
 
 class _RecordingProvisioner:

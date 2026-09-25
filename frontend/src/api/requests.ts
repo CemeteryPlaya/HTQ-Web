@@ -1,6 +1,7 @@
 /* Requests microservice — typed HTTP client. Mirrors services/requests/app/api/v1. */
 
 import api from '@/api/client';
+import type { ApprovalProcess } from '@/types/signoff';
 import { API_ENDPOINTS } from '@/api/endpoints';
 import type {
   DataTable, FormTemplate, FormTemplateVersion, Project, ProjectMember, RequestInstance,
@@ -15,6 +16,35 @@ function unwrap<T>(data: unknown): T[] {
     return (data as any).results as T[];
   }
   return [];
+}
+
+/** Рабочий шаг пользователя по заявке — то, что рисует панель «Ваш шаг».
+ *  `keys` — блок(и) этого шага; `task_id` — задача signoff, которую панель
+ *  закрывает; `requires_*` — чего этап ждёт от решения. */
+export interface StageStep {
+  keys: string[];
+  required_keys: string[];
+  task_id: number | null;
+  stage_name: string;
+  requires_attachment: boolean;
+  requires_comment: boolean;
+  file_id: string | null;
+  /** Подписанная ссылка и имя приложенного документа: человек должен
+   *  увидеть, ЧТО приложено, — иначе не заметит, что ушёл не тот счёт. */
+  file_url: string | null;
+  file_name: string;
+}
+
+/** Личная аналитика по заявкам (`GET stats/mine`). Суммы — строки:
+ *  Decimal с бэкенда, через float их терять нельзя. */
+export interface MyStats {
+  submitted: number;
+  drafts: number;
+  amount: string;
+  currency: string;
+  by_status: Record<string, { count: number; amount: string }>;
+  by_template: { template_id: number | null; name: string; count: number; amount: string }[];
+  items: { name: string; unit: string; quantity: string; requests: number }[];
 }
 
 export const requestsApi = {
@@ -86,9 +116,11 @@ export const requestsApi = {
       const { data } = await api.get(`${BASE}templates/${template_id}/versions/${version_id}/`);
       return data;
     },
-    async publishVersion(template_id: number, schema_json: unknown, workflow_json: unknown): Promise<FormTemplateVersion> {
+    /** Публикуется ФОРМА. Маршрут согласования версией не публикуется — он
+     *  живёт в signoff (область `template:<id>`) и правится отдельно. */
+    async publishVersion(template_id: number, schema_json: unknown): Promise<FormTemplateVersion> {
       const { data } = await api.post(`${BASE}templates/${template_id}/versions/`, {
-        schema_json, workflow_json,
+        schema_json,
       });
       return data;
     },
@@ -108,6 +140,16 @@ export const requestsApi = {
       const { data } = await api.get(`${BASE}instances/${id}/`);
       return data;
     },
+    /** Поля согласующего: что этот пользователь может заполнить в заявке
+     *  ПРЯМО СЕЙЧАС (его рабочий шаг идёт) и без чего шаг не закроется. */
+    async stageFillable(id: number): Promise<StageStep> {
+      const { data } = await api.get(`${BASE}instances/${id}/stage-values/`);
+      return data;
+    },
+    async fillStageValues(id: number, values: Record<string, unknown>): Promise<RequestInstance> {
+      const { data } = await api.patch(`${BASE}instances/${id}/stage-values/`, { values });
+      return data;
+    },
     async create(payload: {
       template_id: number; title?: string; project_id?: number | null;
       form_values?: Record<string, unknown>;
@@ -119,38 +161,33 @@ export const requestsApi = {
       const { data } = await api.patch(`${BASE}instances/${id}/`, payload);
       return data;
     },
-    async submit(id: number): Promise<RequestInstance> {
+    /** Отправка на согласование. Отдаёт КАРТОЧКУ ПРОЦЕССА signoff (тот же
+     *  контракт, что у `submit` в contracts), а не заявку: статус заявки
+     *  меняет колбэк движка, и клиент её перечитывает.
+     *
+     *  `submitRaw` — та же ручка сырым axios-ответом: в этой форме её ждёт
+     *  общая кнопка `SubmitForApproval`, одна на договоры и на заявки. */
+    submitRaw(id: number) {
+      return api.post<ApprovalProcess>(`${BASE}instances/${id}/submit/`);
+    },
+    async submit(id: number): Promise<ApprovalProcess> {
       const { data } = await api.post(`${BASE}instances/${id}/submit/`);
       return data;
     },
-    async resubmit(id: number): Promise<RequestInstance> {
+    async resubmit(id: number): Promise<ApprovalProcess> {
       const { data } = await api.post(`${BASE}instances/${id}/resubmit/`);
-      return data;
-    },
-  },
-
-  /* ─── actions ───────────────────────────────────────────────────────── */
-  actions: {
-    async approve(id: number, comment = ''): Promise<RequestInstance> {
-      const { data } = await api.post(`${BASE}instances/${id}/approve/`, { comment });
-      return data;
-    },
-    async reject(id: number, comment = ''): Promise<RequestInstance> {
-      const { data } = await api.post(`${BASE}instances/${id}/reject/`, { comment });
-      return data;
-    },
-    async requestChanges(id: number, comment = ''): Promise<RequestInstance> {
-      const { data } = await api.post(`${BASE}instances/${id}/request-changes/`, { comment });
-      return data;
-    },
-    async cancel(id: number): Promise<RequestInstance> {
-      const { data } = await api.post(`${BASE}instances/${id}/cancel/`, { comment: '' });
       return data;
     },
   },
 
   /* ─── stats ─────────────────────────────────────────────────────────── */
   stats: {
+    /** Личная сводка: только заявки вызывающего. Параметра «чья» нет —
+     *  пользователь берётся из токена на сервере. */
+    async mine(since?: string): Promise<MyStats> {
+      const { data } = await api.get(`${BASE}stats/mine`, { params: { since } });
+      return data;
+    },
     async overview(from?: string, to?: string): Promise<StatsOverview> {
       const { data } = await api.get(`${BASE}stats/overview`, { params: { from, to } });
       return data;

@@ -20,21 +20,29 @@ import { ExternalHierarchy } from './ExternalHierarchy';
 import { HierarchySwitch } from './HierarchySwitch';
 
 const permissions = vi.fn();
+const tree = vi.fn();
 
 vi.mock('@/hooks/usePermissions', () => ({
   usePermissions: () => permissions(),
 }));
+vi.mock('@/api/companies', () => ({ companiesApi: { tree: () => tree() } }));
 
 beforeEach(() => {
   vi.clearAllMocks();
   permissions.mockReturnValue({
     company: 'hi-tech-qazaqstan',
     subordinateCompanies: [],
+    inheritedFrom: [],
     isLoading: false,
     level: () => 'none',
     atLeast: () => false,
     scope: () => null,
   });
+  // По умолчанию реестр компаний недоступен (403): часть тестов ниже
+  // намеренно проверяет именно деградацию до списка слагов, а не дерево
+  // из реестра. `ExternalHierarchy` теперь ждёт оседания этого запроса
+  // (см. ExternalHierarchy.test.tsx), поэтому проверки в этом файле — async.
+  tree.mockRejectedValue({ response: { status: 403 } });
 });
 
 describe('HierarchySwitch', () => {
@@ -62,39 +70,42 @@ describe('HierarchySwitch', () => {
 });
 
 describe('ExternalHierarchy', () => {
-  it('перечисляет подчинённые компании', () => {
+  it('перечисляет подчинённые компании', async () => {
     permissions.mockReturnValue({
       company: 'htq-holding',
       subordinateCompanies: ['htq-kz', 'kurly-kg'],
+      inheritedFrom: [],
       isLoading: false,
     });
     renderWithProviders(<ExternalHierarchy />);
 
-    expect(screen.getByText('htq-holding')).toBeInTheDocument();
+    expect(await screen.findByText('htq-holding')).toBeInTheDocument();
     expect(screen.getByText('htq-kz')).toBeInTheDocument();
     expect(screen.getByText('kurly-kg')).toBeInTheDocument();
   });
 
-  it('пустой список объясняется словами, а не выглядит сбоем загрузки', () => {
+  it('пустой список объясняется словами, а не выглядит сбоем загрузки', async () => {
     renderWithProviders(<ExternalHierarchy />);
 
-    expect(screen.getByText(/это не ошибка\s+загрузки/i)).toBeInTheDocument();
+    expect(await screen.findByText(/это не ошибка\s+загрузки/i)).toBeInTheDocument();
   });
 
-  it('говорит, что дерево не редактируется', () => {
+  it('говорит, что дерево не редактируется', async () => {
     renderWithProviders(<ExternalHierarchy />);
 
-    expect(screen.getByText(/не редактируется/i)).toBeInTheDocument();
+    expect(await screen.findByText(/не редактируется/i)).toBeInTheDocument();
   });
 
-  it('не предлагает ни одного действия по правке', () => {
+  it('не предлагает ни одного действия по правке', async () => {
     permissions.mockReturnValue({
       company: 'htq-holding',
       subordinateCompanies: ['htq-kz'],
+      inheritedFrom: [],
       isLoading: false,
     });
     renderWithProviders(<ExternalHierarchy />);
 
+    expect(await screen.findByText('htq-kz')).toBeInTheDocument();
     expect(screen.queryAllByRole('button')).toHaveLength(0);
   });
 });

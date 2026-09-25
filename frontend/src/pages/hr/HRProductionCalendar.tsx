@@ -3,19 +3,24 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import HRLayout from '@/components/hr/HRLayout';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { fetchWeekTemplates, setDefaultTemplate, fetchCalendarYear, fetchShiftPatterns, deleteShiftPattern, createShiftPattern, type WeekTemplate, type CalendarDay, type ShiftPattern } from '@/api/hr';
 import { useTranslation } from 'react-i18next';
 
 const HRProductionCalendar = () => {
   const { t } = useTranslation();
-  const { hasPerm } = useHRLevel();
+  // Узел `hr.production_calendar` — тот же, что проверяет бэкенд
+  // (CALENDAR_VIEW → view; CALENDAR_MANAGE → полный CRUD, apps/hr/
+  // legacy_roles.py): шаблоны недели, импорт года, шаблоны смен — всё под
+  // «управлением», а различающий признак у него `delete`.
+  const permissions = usePermissions();
   const qc = useQueryClient();
   const [year, setYear] = useState(new Date().getFullYear());
-  const canManage = hasPerm('hr.calendar.manage');
+  const canView = permissions.can('hr.production_calendar', 'view');
+  const canManage = permissions.can('hr.production_calendar', 'delete');
 
-  const { data: templates } = useQuery({ queryKey: ['week-templates'], queryFn: fetchWeekTemplates, enabled: hasPerm('hr.calendar.view') });
-  const { data: days } = useQuery({ queryKey: ['calendar-year', year], queryFn: () => fetchCalendarYear(year), enabled: hasPerm('hr.calendar.view') });
+  const { data: templates } = useQuery({ queryKey: ['week-templates'], queryFn: fetchWeekTemplates, enabled: canView });
+  const { data: days } = useQuery({ queryKey: ['calendar-year', year], queryFn: () => fetchCalendarYear(year), enabled: canView });
 
   const makeDefault = useMutation({
     mutationFn: (id: number) => setDefaultTemplate(id),
@@ -66,8 +71,8 @@ const HRProductionCalendar = () => {
 function ShiftPatternsSection({ canManage }: { canManage: boolean }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const { hasPerm } = useHRLevel();
-  const { data: patterns } = useQuery({ queryKey: ['shift-patterns'], queryFn: fetchShiftPatterns, enabled: hasPerm('hr.calendar.view') });
+  const permissions = usePermissions();
+  const { data: patterns } = useQuery({ queryKey: ['shift-patterns'], queryFn: fetchShiftPatterns, enabled: permissions.can('hr.production_calendar', 'view') });
   const [name, setName] = useState('');
   const create = useMutation({
     mutationFn: () => createShiftPattern(name || '2/2',
