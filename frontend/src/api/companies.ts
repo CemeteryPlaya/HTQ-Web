@@ -10,6 +10,7 @@
 import api from './client';
 import { apiPath } from './endpoints';
 import type {
+  BankruptResult,
   Company,
   CompanyMembership,
   CompanyModule,
@@ -34,6 +35,9 @@ export const companiesApi = {
   /** 409 `last_active` — единственную действующую компанию архивировать нельзя. */
   archive: (slug: string) => api.post<Company>(path(`companies/${slug}/archive`)),
   restore: (slug: string) => api.post<Company>(path(`companies/${slug}/restore`)),
+  /** Банкротство с преемником; `dry_run: true` — предпросмотр без изменений. */
+  bankrupt: (slug: string, body: { successor: string; dry_run: boolean }) =>
+    api.post<BankruptResult>(path(`companies/${slug}/bankrupt`), body),
 
   modules: (slug: string) => api.get<CompanyModule[]>(path(`companies/${slug}/modules`)),
   /** 409 — модуль ядра; 422 — неизвестный модуль. */

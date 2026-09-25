@@ -15,12 +15,14 @@ const tree = vi.fn();
 const list = vi.fn();
 const archive = vi.fn();
 const restore = vi.fn();
+const bankrupt = vi.fn();
 vi.mock('@/api/companies', () => ({
   companiesApi: {
     tree: () => tree(),
     list: () => list(),
     archive: (slug: string) => archive(slug),
     restore: (slug: string) => restore(slug),
+    bankrupt: (slug: string, body: unknown) => bankrupt(slug, body),
     modules: vi.fn(), setModule: vi.fn(), memberships: vi.fn(),
     grantMembership: vi.fn(), revokeMembership: vi.fn(), patch: vi.fn(), get: vi.fn(),
     myCompanies: vi.fn(),
@@ -56,6 +58,7 @@ describe('CompanyRegistry', () => {
     tree.mockResolvedValue({ data: TREE });
     list.mockResolvedValue({ data: LIST });
     archive.mockReset();
+    bankrupt.mockReset();
     toastError.mockReset();
     companyArchived.mockReturnValue(false);
   });
@@ -98,5 +101,57 @@ describe('CompanyRegistry', () => {
     expect(screen.queryByRole('button', { name: /В архив/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Изменить/ })).toBeNull();
     expect(screen.getByText(/Восстановить компанию можно из реестра/)).toBeInTheDocument();
+  });
+
+  it('банкротство: предпросмотр с dry_run, затем подтверждение', async () => {
+    roles.mockReturnValue(['admin']);
+    bankrupt.mockImplementation((_slug: string, body: { dry_run?: boolean }) => Promise.resolve({ data: {
+      company: { ...LIST[1], status: body.dry_run ? 'active' : 'archived', successor_slug: body.dry_run ? null : 'hi-tech-group' },
+      successor: LIST[0], members_total: 3, members_granted: 2, members_already: 1,
+      archived: !body.dry_run, dry_run: !!body.dry_run,
+    } }));
+    renderWithProviders(<CompanyRegistry />);
+    await userEvent.click(await screen.findByText('Hi-Tech Qazaqstan'));
+    await userEvent.click(screen.getByRole('button', { name: /Банкротство/ }));
+    await userEvent.selectOptions(screen.getByLabelText(/Преемник/), 'hi-tech-group');
+    await userEvent.click(screen.getByRole('button', { name: /Проверить/ }));
+    expect(bankrupt).toHaveBeenCalledWith('hi-tech-qazaqstan', { successor: 'hi-tech-group', dry_run: true });
+    expect(await screen.findByText(/2 сотрудник/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Подтвердить банкротство/ }));
+    expect(bankrupt).toHaveBeenLastCalledWith('hi-tech-qazaqstan', { successor: 'hi-tech-group', dry_run: false });
+  });
+
+  it('показывает преемника у закрытой компании', async () => {
+    roles.mockReturnValue(['admin']);
+    // Архивная компания в дерево не входит (бэкенд строит его по действующим) —
+    // её находят в блоке «В архиве», который рисуется из list.
+    tree.mockResolvedValue({ data: [{ ...TREE[0], children: [] }] });
+    list.mockResolvedValue({ data: [LIST[0], { ...LIST[1], status: 'archived', successor_slug: 'hi-tech-group' }] });
+    renderWithProviders(<CompanyRegistry />);
+    await userEvent.click(await screen.findByText('Hi-Tech Qazaqstan'));
+    expect(screen.getByText(/Преемник/)).toBeInTheDocument();
+  });
+
+  it('предпросмотр, пришедший после смены преемника, подтвердить не даёт', async () => {
+    roles.mockReturnValue(['admin']);
+    const third = { id: 3, slug: 'hi-tech-service', name: 'Hi-Tech Service', kind: 'service', status: 'active',
+                    country: 'KZ', parent_slug: 'hi-tech-group', archived_at: null };
+    list.mockResolvedValue({ data: [...LIST, third] });
+    let resolveDryRun: (v: unknown) => void = () => {};
+    bankrupt.mockImplementation(() => new Promise((r) => { resolveDryRun = r; }));
+    renderWithProviders(<CompanyRegistry />);
+    await userEvent.click(await screen.findByText('Hi-Tech Qazaqstan'));
+    await userEvent.click(screen.getByRole('button', { name: /Банкротство/ }));
+    await userEvent.selectOptions(screen.getByLabelText(/Преемник/), 'hi-tech-group');
+    await userEvent.click(screen.getByRole('button', { name: /Проверить/ }));
+    // Пока ответ dry_run в пути, выбран другой преемник.
+    await userEvent.selectOptions(screen.getByLabelText(/Преемник/), 'hi-tech-service');
+    resolveDryRun({ data: {
+      company: { ...LIST[1] }, successor: LIST[0], members_total: 3, members_granted: 2, members_already: 1,
+      archived: false, dry_run: true,
+    } });
+    expect(await screen.findByRole('button', { name: /Проверить/ })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /Подтвердить банкротство/ })).toBeNull();
+    expect(screen.queryByText(/2 сотрудник/)).toBeNull();
   });
 });

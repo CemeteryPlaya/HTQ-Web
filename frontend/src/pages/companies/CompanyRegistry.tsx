@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, Building2, CornerDownRight, Pencil, Terminal } from 'lucide-react';
+import { Archive, ArchiveRestore, Building2, CornerDownRight, Handshake, Pencil, Terminal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -17,7 +17,7 @@ import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 import { isPlatformAdmin } from '@/lib/auth/roles';
-import { COMPANY_KIND_LABELS, type Company, type CompanyTreeNode } from '@/types/companies';
+import { COMPANY_KIND_LABELS, type BankruptResult, type Company, type CompanyTreeNode } from '@/types/companies';
 
 function TreeBranch({ node, depth, selected, onSelect }: {
   node: CompanyTreeNode; depth: number; selected: string | null; onSelect: (slug: string) => void;
@@ -55,7 +55,9 @@ const CompanyRegistry = () => {
   const canWrite = platformAdmin && !companyArchived;
 
   const [selected, setSelected] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<'archive' | 'restore' | null>(null);
+  const [confirm, setConfirm] = useState<'archive' | 'restore' | 'bankrupt' | null>(null);
+  const [successor, setSuccessor] = useState('');
+  const [preview, setPreview] = useState<BankruptResult | null>(null);
   const [editing, setEditing] = useState(false);
   const [panel, setPanel] = useState<'modules' | 'members'>('modules');
 
@@ -67,6 +69,21 @@ const CompanyRegistry = () => {
   const archived = (listQuery.data ?? []).filter((c) => c.status === 'archived');
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['companies'] });
+  // Ответ dry_run может прийти уже после смены преемника или компании —
+  // устаревший предпросмотр не показываем и подтвердить по нему не даём:
+  // выданные членства банкротство не отзывает.
+  const currentPreview = preview && company
+    && preview.company.slug === company.slug && preview.successor.slug === successor
+    ? preview : null;
+
+  // Смена выбранной компании сбрасывает начатое банкротство: преемник и
+  // предпросмотр относятся к прежней компании.
+  const select = (slug: string) => {
+    setSelected(slug);
+    setConfirm(null);
+    setSuccessor('');
+    setPreview(null);
+  };
 
   const archiveMut = useMutation({
     mutationFn: (slug: string) => companiesApi.archive(slug),
@@ -79,6 +96,17 @@ const CompanyRegistry = () => {
     onSuccess: () => { toast.success(t('companies.restored', 'Компания возвращена из архива')); invalidate(); },
     onError: (e) => reportApiError(e, t('companies.restoreFailed', 'Не удалось восстановить')),
     onSettled: () => setConfirm(null),
+  });
+  const previewMut = useMutation({
+    mutationFn: (slug: string) => companiesApi.bankrupt(slug, { successor, dry_run: true }),
+    onSuccess: (res) => setPreview(res.data),
+    onError: (e) => reportApiError(e, t('companies.bankruptcy.previewFailed', 'Не удалось проверить')),
+  });
+  const bankruptMut = useMutation({
+    mutationFn: (slug: string) => companiesApi.bankrupt(slug, { successor, dry_run: false }),
+    onSuccess: () => { toast.success(t('companies.bankruptcy.done', 'Компания закрыта, дела переданы преемнику')); invalidate(); },
+    onError: (e) => reportApiError(e, t('companies.bankruptcy.failed', 'Не удалось провести банкротство')),
+    onSettled: () => { setConfirm(null); setPreview(null); setSuccessor(''); },
   });
 
   return (
@@ -106,7 +134,7 @@ const CompanyRegistry = () => {
           <section className="rounded-xl border bg-card p-3">
             <ul data-testid="company-tree" className="space-y-0.5">
               {(treeQuery.data ?? []).map((node) => (
-                <TreeBranch key={node.slug} node={node} depth={0} selected={selected} onSelect={setSelected} />
+                <TreeBranch key={node.slug} node={node} depth={0} selected={selected} onSelect={select} />
               ))}
             </ul>
             {archived.length > 0 && (
@@ -115,7 +143,7 @@ const CompanyRegistry = () => {
                 <ul className="space-y-0.5">
                   {archived.map((c) => (
                     <li key={c.slug}>
-                      <button type="button" onClick={() => setSelected(c.slug)}
+                      <button type="button" onClick={() => select(c.slug)}
                         className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-accent ${selected === c.slug ? 'bg-accent' : ''}`}>
                         <Archive className="h-4 w-4" /><span>{c.name}</span>
                       </button>
@@ -142,6 +170,10 @@ const CompanyRegistry = () => {
                   <dt className="text-muted-foreground">slug</dt><dd className="font-mono">{company.slug}</dd>
                   <dt className="text-muted-foreground">{t('companies.field.country', 'Страна')}</dt><dd>{company.country || '—'}</dd>
                   <dt className="text-muted-foreground">{t('companies.field.parent', 'Вышестоящая')}</dt><dd>{company.parent_slug ?? '—'}</dd>
+                  {company.successor_slug && (<>
+                    <dt className="text-muted-foreground">{t('companies.bankruptcy.successor', 'Преемник')}</dt>
+                    <dd>{bySlug.get(company.successor_slug)?.name ?? company.successor_slug}</dd>
+                  </>)}
                 </dl>
 
                 {canWrite && (
@@ -149,11 +181,14 @@ const CompanyRegistry = () => {
                     <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
                       <Pencil className="mr-1 h-4 w-4" />{t('companies.edit', 'Изменить')}
                     </Button>
-                    {company.status === 'active' ? (
+                    {company.status === 'active' ? (<>
                       <Button variant="destructive" size="sm" onClick={() => setConfirm('archive')}>
                         <Archive className="mr-1 h-4 w-4" />{t('companies.archive', 'В архив')}
                       </Button>
-                    ) : (
+                      <Button variant="outline" size="sm" onClick={() => setConfirm('bankrupt')}>
+                        <Handshake className="mr-1 h-4 w-4" />{t('companies.bankruptcy.button', 'Банкротство…')}
+                      </Button>
+                    </>) : (
                       <Button variant="outline" size="sm" onClick={() => setConfirm('restore')}>
                         <ArchiveRestore className="mr-1 h-4 w-4" />{t('companies.restore', 'Вернуть из архива')}
                       </Button>
@@ -167,7 +202,7 @@ const CompanyRegistry = () => {
                   </p>
                 )}
 
-                {confirm && (
+                {(confirm === 'archive' || confirm === 'restore') && (
                   <div role="alertdialog" className="rounded-lg border border-amber-300/70 bg-amber-50/70 p-3 text-sm dark:border-amber-800/70 dark:bg-amber-950/30">
                     <p>
                       {confirm === 'archive'
@@ -180,6 +215,39 @@ const CompanyRegistry = () => {
                         {t('common.confirm', 'Подтвердить')}
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => setConfirm(null)}>{t('common.cancel', 'Отмена')}</Button>
+                    </div>
+                  </div>
+                )}
+
+                {confirm === 'bankrupt' && (
+                  <div role="alertdialog" className="space-y-2 rounded-lg border border-amber-300/70 bg-amber-50/70 p-3 text-sm dark:border-amber-800/70 dark:bg-amber-950/30">
+                    <label className="flex items-center gap-2">
+                      <span>{t('companies.bankruptcy.successor', 'Преемник')}</span>
+                      <select className="rounded-md border px-2 py-1"
+                        value={successor} onChange={(e) => { setSuccessor(e.target.value); setPreview(null); }}>
+                        <option value="">—</option>
+                        {(listQuery.data ?? []).filter((c) => c.status === 'active' && c.slug !== company.slug)
+                          .map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
+                      </select>
+                    </label>
+                    {currentPreview && (
+                      <p>{t('companies.bankruptcy.preview',
+                        '{{count}} сотрудник(ов) получат доступ к «{{name}}» (уже там: {{already}}); компания уйдёт в архив (только чтение). Карточки сотрудников, техника и договоры не переносятся.',
+                        { count: currentPreview.members_granted, name: currentPreview.successor.name, already: currentPreview.members_already })}</p>
+                    )}
+                    <div className="flex gap-2">
+                      {!currentPreview ? (
+                        <Button size="sm" disabled={!successor || previewMut.isPending} onClick={() => previewMut.mutate(company.slug)}>
+                          {t('companies.bankruptcy.check', 'Проверить')}
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="destructive" disabled={bankruptMut.isPending} onClick={() => bankruptMut.mutate(company.slug)}>
+                          {t('companies.bankruptcy.confirm', 'Подтвердить банкротство')}
+                        </Button>
+                      )}
+                      <Button size="sm" variant="ghost" onClick={() => { setConfirm(null); setPreview(null); setSuccessor(''); }}>
+                        {t('common.cancel', 'Отмена')}
+                      </Button>
                     </div>
                   </div>
                 )}

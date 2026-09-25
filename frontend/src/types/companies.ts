@@ -22,6 +22,8 @@ export interface Company {
   status: CompanyStatus;
   country: string;
   parent_slug: string | null;
+  /** Преемник компании, закрытой банкротством; `null` — преемника нет. */
+  successor_slug?: string | null;
   archived_at: string | null;
   /**
    * Задача 7 блока C, решение заказчика 4: показывать ли дочерней компании
@@ -30,6 +32,17 @@ export interface Company {
    * тот же гейт, что у остальных полей).
    */
   show_external_holders: boolean;
+}
+
+/** Ответ `POST companies/<slug>/bankrupt` (и предпросмотра `dry_run`). */
+export interface BankruptResult {
+  company: Company;
+  successor: Company;
+  members_total: number;
+  members_granted: number;
+  members_already: number;
+  archived: boolean;
+  dry_run: boolean;
 }
 
 export interface CompanyTreeNode {

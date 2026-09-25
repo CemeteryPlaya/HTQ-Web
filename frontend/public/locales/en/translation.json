@@ -4895,6 +4895,16 @@
       "writeRefused": "Cannot change: the company is archived — read only",
       "restoreElsewhere": "Restore the company from the registry on an active company's subdomain."
     },
+    "bankruptcy": {
+      "button": "Bankruptcy…",
+      "successor": "Successor",
+      "check": "Check",
+      "confirm": "Confirm bankruptcy",
+      "preview": "{{count}} employee(s) will get access to “{{name}}” (already there: {{already}}); the company will be archived (read only). Employee cards, equipment and contracts are not transferred.",
+      "done": "Company closed, affairs handed to the successor",
+      "failed": "Bankruptcy failed",
+      "previewFailed": "Check failed"
+    },
     "picker": {
       "title": "Choose a company",
       "subtitle": "You have access to several companies of the group. Choose the one to work in.",
